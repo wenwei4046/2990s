@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.turbo/
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# Logs
+*.log
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+
+# Test
+coverage/
+playwright-report/
+test-results/
+
+# Prototype working artifacts (not canonical spec)
+prototype/uploads/
+prototype/screenshots/
+prototype/_test/

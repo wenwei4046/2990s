@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 110" width="160" height="110">
+<title>HOUZS Sofa Module — 2A-L — 2 Seater + Left Armrest (LAF)</title>
+<desc>HOUZS Venture modular sofa — top-down plan view of 2A-L. Body fill = seat cushion, darker fill = backrest, darkest fill = armrest.</desc>
+<g transform="translate(20,20)">
+<rect x="0" y="0" width="120" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"></rect><rect x="0" y="0" width="120" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"></rect><rect x="0" y="0" width="12" height="70" fill="#B89972" stroke="#2C2C2A" stroke-width="0.8"></rect><line x1="60.0" y1="0" x2="60.0" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"></line>
+</g>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="2990&#39;s mark">
+  
+  <circle cx="100" cy="100" r="98" fill="currentColor"></circle>
+  <text x="100" y="138" class="wm" font-size="120" text-anchor="middle" fill="#FFF9EB">2990</text>
+  <circle cx="155" cy="60" r="14" fill="none" stroke="#FFF9EB" stroke-width="3"></circle>
+  <text x="155" y="66" class="wm" font-size="20" text-anchor="middle" fill="#FFF9EB">S</text>
+</svg>
