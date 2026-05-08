@@ -385,3 +385,218 @@ export const computeSofaPrice = (
   const total = groupPrices.reduce((sum, g) => sum + g.finalPrice, 0);
   return { groups: groupPrices, total };
 };
+
+/* ─── Snap math (drag UI) ──────────────────────────────────────────── */
+
+/** Threshold in cm — drag releases snap to a neighbour edge if within this. */
+export const SNAP_CM = 20;
+
+export interface SnapDelta { dx: number; dy: number }
+
+/**
+ * Best-effort drag snap: given a candidate bbox (where the dragged cell would
+ * land if released raw) and the rest of the cells, compute a (dx, dy) shift
+ * that aligns the dragged cell's edges to the nearest neighbour within
+ * `SNAP_CM`. Returns {0,0} if nothing is close enough.
+ *
+ * The X-axis snap only fires when the cells overlap on Y (so we're snapping a
+ * horizontal seam, not snapping past a remote piece). Same logic mirrored on Y.
+ */
+export const findSnap = (
+  draggedBbox: Bbox,
+  otherCells: Cell[],
+  ignoreId: string | undefined,
+  depth: Depth,
+): SnapDelta => {
+  let bestDx = 0, bestDy = 0;
+  let bestX = SNAP_CM, bestY = SNAP_CM;
+  const ax1 = draggedBbox.x, ax2 = draggedBbox.x + draggedBbox.w;
+  const ay1 = draggedBbox.y, ay2 = draggedBbox.y + draggedBbox.h;
+
+  for (const c of otherCells) {
+    if (ignoreId !== undefined && c.id === ignoreId) continue;
+    const b = cellBbox(c, depth);
+    if (!b) continue;
+    const bx1 = b.x, bx2 = b.x + b.w;
+    const by1 = b.y, by2 = b.y + b.h;
+
+    const yOverlap = Math.min(ay2, by2) - Math.max(ay1, by1);
+    if (yOverlap > -SNAP_CM) {
+      let d = bx1 - ax2; if (Math.abs(d) < bestX) { bestX = Math.abs(d); bestDx = d; }
+      d = bx2 - ax1;     if (Math.abs(d) < bestX) { bestX = Math.abs(d); bestDx = d; }
+      d = bx1 - ax1;     if (Math.abs(d) < bestX) { bestX = Math.abs(d); bestDx = d; }
+      d = bx2 - ax2;     if (Math.abs(d) < bestX) { bestX = Math.abs(d); bestDx = d; }
+    }
+
+    const xOverlap = Math.min(ax2, bx2) - Math.max(ax1, bx1);
+    if (xOverlap > -SNAP_CM) {
+      let d = by1 - ay2; if (Math.abs(d) < bestY) { bestY = Math.abs(d); bestDy = d; }
+      d = by2 - ay1;     if (Math.abs(d) < bestY) { bestY = Math.abs(d); bestDy = d; }
+      d = by1 - ay1;     if (Math.abs(d) < bestY) { bestY = Math.abs(d); bestDy = d; }
+      d = by2 - ay2;     if (Math.abs(d) < bestY) { bestY = Math.abs(d); bestDy = d; }
+    }
+  }
+
+  return {
+    dx: bestX < SNAP_CM ? bestDx : 0,
+    dy: bestY < SNAP_CM ? bestDy : 0,
+  };
+};
+
+/* ─── Sofa analysis (closure / arm violations) ─────────────────────── */
+
+export type ViolationReason = 'Arm-to-arm' | 'Arm blocked by module';
+export interface ArmViolation { aId: string; bId: string; reason: ViolationReason }
+
+export type ClosureFailure =
+  | 'Arms colliding'
+  | 'No arms on either end'
+  | 'Left end has no arm'
+  | 'Right end has no arm'
+  | 'Top end has no arm'
+  | 'Bottom end has no arm'
+  | 'Console needs a sofa next to it';
+
+export interface SofaAnalysis {
+  violations: ArmViolation[];
+  closed: boolean;
+  reason: ClosureFailure | null;
+  leftArm: boolean;
+  rightArm: boolean;
+}
+
+const cellKey = (c: Cell, idx: number): string => c.id ?? `__cell_${idx}`;
+
+/**
+ * Quick check used by the drop-to-mirror UI: would `cell` have any
+ * arm-touching-anything contact with the rest of `allCells`? Cheaper than
+ * the full analyzeSofa pass.
+ */
+export const hasArmConflict = (cell: Cell, allCells: Cell[], depth: Depth): boolean => {
+  const myEdges = cellEdges(cell);
+  for (const other of allCells) {
+    if (other === cell) continue;
+    if (cell.id !== undefined && other.id === cell.id) continue;
+    const cs = edgeContacts(cell, other, depth);
+    if (!cs.length) continue;
+    const oEdges = cellEdges(other);
+    for (const { edgeA, edgeB } of cs) {
+      const tA = myEdges[edgeA];
+      const tB = oEdges[edgeB];
+      if (tA === 'arm' || tB === 'arm') return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Validate one sofa group: collect arm-arm / arm-blocked-by-module
+ * violations, decide closure (must have an arm at each end of the dominant
+ * axis, treating an L-module's outer edge as a self-closing cap).
+ */
+export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
+  const violations: ArmViolation[] = [];
+  const ids = group.map(cellKey);
+  const contactsByCell: Record<string, { otherId: string; myEdge: EdgeIdx; myType: EdgeType; otherType: EdgeType }[]> = {};
+  ids.forEach((id) => { contactsByCell[id] = []; });
+
+  for (let i = 0; i < group.length; i++) {
+    for (let j = i + 1; j < group.length; j++) {
+      const a = group[i]!;
+      const b = group[j]!;
+      const cs = edgeContacts(a, b, depth);
+      if (!cs.length) continue;
+      const aEdges = cellEdges(a);
+      const bEdges = cellEdges(b);
+      const aId = ids[i]!;
+      const bId = ids[j]!;
+      cs.forEach(({ edgeA, edgeB }) => {
+        const tA = aEdges[edgeA]!;
+        const tB = bEdges[edgeB]!;
+        contactsByCell[aId]!.push({ otherId: bId, myEdge: edgeA, myType: tA, otherType: tB });
+        contactsByCell[bId]!.push({ otherId: aId, myEdge: edgeB, myType: tB, otherType: tA });
+        if (tA === 'arm' && tB === 'arm') {
+          violations.push({ aId, bId, reason: 'Arm-to-arm' });
+        } else if (tA === 'arm' || tB === 'arm') {
+          violations.push({ aId, bId, reason: 'Arm blocked by module' });
+        }
+      });
+    }
+  }
+
+  const outwardArms: { edge: EdgeIdx; lCap?: boolean }[] = [];
+  group.forEach((c, i) => {
+    const id = ids[i]!;
+    const edges = cellEdges(c);
+    const myContacts = contactsByCell[id]!;
+    const isL = c.moduleId.startsWith('L-');
+
+    let lCapEdge: EdgeIdx | -1 = -1;
+    if (isL) {
+      // L-R mates on W → outer cap on E. L-L mates on E → outer cap on W.
+      // CW rotation rotates the edge index by +1 mod 4 per 90°.
+      const baseCap: EdgeIdx = c.moduleId === 'L-R' ? EDGE_E : EDGE_W;
+      const r = ((c.rot % 360) + 360) % 360;
+      const steps = r / 90;
+      lCapEdge = ((baseCap + steps) % 4) as EdgeIdx;
+    }
+
+    ([EDGE_W, EDGE_N, EDGE_E, EDGE_S] as EdgeIdx[]).forEach((e) => {
+      const hasNeighbour = myContacts.some((co) => co.myEdge === e);
+      if (hasNeighbour) return;
+      if (isL && e === lCapEdge) {
+        outwardArms.push({ edge: e, lCap: true });
+        return;
+      }
+      const t = edges[e];
+      if (t === 'arm') outwardArms.push({ edge: e });
+    });
+  });
+
+  // Bounding box → dominant axis.
+  let bbW = 0, bbH = 0;
+  if (group.length > 0) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of group) {
+      const b = cellBbox(c, depth);
+      if (!b) continue;
+      if (b.x < minX) minX = b.x;
+      if (b.y < minY) minY = b.y;
+      if (b.x + b.w > maxX) maxX = b.x + b.w;
+      if (b.y + b.h > maxY) maxY = b.y + b.h;
+    }
+    if (Number.isFinite(minX)) {
+      bbW = maxX - minX;
+      bbH = maxY - minY;
+    }
+  }
+
+  let headArm = false;
+  let tailArm = false;
+  if (group.length > 0) {
+    const horizontalDominant = bbW >= bbH;
+    if (horizontalDominant) {
+      headArm = outwardArms.some((a) => a.edge === EDGE_W);
+      tailArm = outwardArms.some((a) => a.edge === EDGE_E);
+    } else {
+      headArm = outwardArms.some((a) => a.edge === EDGE_N);
+      tailArm = outwardArms.some((a) => a.edge === EDGE_S);
+    }
+  }
+
+  const ends = headArm && tailArm;
+  let closed = violations.length === 0 && ends;
+  let reason: ClosureFailure | null = null;
+  if (violations.length > 0) reason = 'Arms colliding';
+  else if (!headArm && !tailArm) reason = 'No arms on either end';
+  else if (!headArm) reason = bbW >= bbH ? 'Left end has no arm' : 'Top end has no arm';
+  else if (!tailArm) reason = bbW >= bbH ? 'Right end has no arm' : 'Bottom end has no arm';
+
+  const allAccessories = group.length > 0 && group.every((c) => isAccessoryModule(c.moduleId));
+  if (allAccessories) {
+    closed = false;
+    reason = 'Console needs a sofa next to it';
+  }
+
+  return { violations, closed, reason, leftArm: headArm, rightArm: tailArm };
+};

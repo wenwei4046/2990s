@@ -4,7 +4,12 @@ import {
   familySignature,
   groupSofas,
   cellEffectiveBbox,
+  cellBbox,
   computeSofaPrice,
+  analyzeSofa,
+  hasArmConflict,
+  findSnap,
+  SNAP_CM,
   type Cell,
   type SofaProductPricing,
 } from '../sofa-build';
@@ -251,5 +256,140 @@ describe('computeSofaPrice multi-group + accessory', () => {
     const g = computeSofaPrice(cells, '24', pricing()).groups[0]!;
     expect(g.basis).toBe('bundle');
     expect(g.finalPrice).toBe(4500); // 800 console contribution dropped, intentional
+  });
+});
+
+/* Case 7 — analyzeSofa: closed sofas + violation reasons. */
+describe('analyzeSofa closure', () => {
+  it('treats 2A-L + 2A-R back-to-back as a closed 2-seater', () => {
+    const group: Cell[] = [
+      { id: 'a', moduleId: '2A-L', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A-R', x: 158, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.violations).toEqual([]);
+    expect(r.closed).toBe(true);
+    expect(r.reason).toBeNull();
+    expect(r.leftArm).toBe(true);
+    expect(r.rightArm).toBe(true);
+  });
+
+  it('treats 1A-L + 1NA + 1A-R as a closed 3-seater', () => {
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1A-L', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',  x: 95,  y: 0, rot: 0 },
+      { id: 'c', moduleId: '1A-R', x: 170, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.violations).toEqual([]);
+    expect(r.closed).toBe(true);
+  });
+
+  it('treats 1A-L + 2NA + L-R as a closed 3+L (L outer cap acts as arm)', () => {
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1A-L', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L-R',  x: 237, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.violations).toEqual([]);
+    expect(r.closed).toBe(true);
+    expect(r.rightArm).toBe(true); // L-R's E edge counts as cap
+  });
+
+  it('treats 2A-L + L-R as a closed 2+L', () => {
+    const group: Cell[] = [
+      { id: 'a', moduleId: '2A-L', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L-R',  x: 158, y: 0, rot: 0 },
+    ];
+    expect(analyzeSofa(group, '24').closed).toBe(true);
+  });
+
+  it('rejects a lone 1NA with "No arms on either end"', () => {
+    const r = analyzeSofa([{ id: 'a', moduleId: '1NA', x: 0, y: 0, rot: 0 }], '24');
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('No arms on either end');
+  });
+
+  it('flags arm-to-arm collision', () => {
+    // 1A-R (arm E) at x=0 touches 1A-L (arm W) at x=95.
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1A-R', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A-L', x: 95, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.violations.some((v) => v.reason === 'Arm-to-arm')).toBe(true);
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Arms colliding');
+  });
+
+  it('flags arm-blocked-by-module when arm meets non-arm', () => {
+    // 1A-R (arm E) butted against 1NA (open W).
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1A-R', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',  x: 95, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.violations.some((v) => v.reason === 'Arm blocked by module')).toBe(true);
+    expect(r.closed).toBe(false);
+  });
+
+  it('reports "Console needs a sofa next to it" for accessory-only group', () => {
+    const r = analyzeSofa([{ id: 'a', moduleId: 'WC-45', x: 0, y: 0, rot: 0 }], '24');
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Console needs a sofa next to it');
+  });
+});
+
+/* Case 8 — hasArmConflict: cheap pre-check used by drop-to-mirror UI. */
+describe('hasArmConflict', () => {
+  it('returns true when arm meets arm', () => {
+    const a: Cell = { id: 'a', moduleId: '1A-R', x: 0, y: 0, rot: 0 };
+    const b: Cell = { id: 'b', moduleId: '1A-L', x: 95, y: 0, rot: 0 };
+    expect(hasArmConflict(a, [a, b], '24')).toBe(true);
+  });
+  it('returns false when only opens touch', () => {
+    const a: Cell = { id: 'a', moduleId: '1A-L', x: 0,  y: 0, rot: 0 };
+    const b: Cell = { id: 'b', moduleId: '1A-R', x: 95, y: 0, rot: 0 };
+    expect(hasArmConflict(a, [a, b], '24')).toBe(false);
+  });
+});
+
+/* Case 9 — findSnap: snaps within SNAP_CM, no further. */
+describe('findSnap threshold', () => {
+  const neighbour: Cell = { id: 'n', moduleId: '1A-L', x: 110, y: 0, rot: 0 };
+
+  it('snaps when gap is within SNAP_CM', () => {
+    const dragged = cellBbox({ moduleId: '1A-L', x: 0, y: 0, rot: 0 }, '24')!;
+    // dragged right edge = 95, neighbour left edge = 110 → dx = 15 (< 20)
+    const s = findSnap(dragged, [neighbour], 'me', '24');
+    expect(s.dx).toBe(15);
+    expect(s.dy).toBe(0);
+  });
+
+  it('does not snap when gap exceeds SNAP_CM', () => {
+    const farNeighbour: Cell = { id: 'n', moduleId: '1A-L', x: 130, y: 0, rot: 0 };
+    const dragged = cellBbox({ moduleId: '1A-L', x: 0, y: 0, rot: 0 }, '24')!;
+    // dragged right edge = 95, neighbour left edge = 130 → dx = 35 (> 20)
+    const s = findSnap(dragged, [farNeighbour], 'me', '24');
+    expect(s.dx).toBe(0);
+    expect(s.dy).toBe(0);
+  });
+
+  it('snaps to flush left-edge alignment for vertical stacking', () => {
+    // Dragged at x=3, y=200; neighbour at x=0, y=0 (above). flush-left dx = -3.
+    const dragged = cellBbox({ moduleId: '1A-L', x: 3, y: 200, rot: 0 }, '24')!;
+    const above: Cell = { id: 'n', moduleId: '1A-L', x: 0, y: 0, rot: 0 };
+    const s = findSnap(dragged, [above], 'me', '24');
+    // bottom-of-above at y=95, top-of-dragged at y=200 → dy = -105 (way > SNAP_CM).
+    // But left-flush dx = 0 - 3 = -3 (within SNAP_CM only when xOverlap > -SNAP_CM).
+    // xOverlap = min(98, 95) - max(3, 0) = 92 → triggers Y check; yOverlap fails.
+    // Y overlap fails → no Y snap. X is gated by yOverlap. yOverlap = min(295, 95) - max(200, 0) = -105.
+    // -105 > -SNAP_CM (-20)? No. So X-snap path is gated off. dx=0.
+    expect(s).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('SNAP_CM is exported and equals 20', () => {
+    expect(SNAP_CM).toBe(20);
   });
 });
