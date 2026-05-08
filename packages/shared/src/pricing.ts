@@ -1,10 +1,9 @@
 // Pricing math. SOLE source of truth — server side recompute on POST /orders
 // imports the same functions as the client (per CLAUDE.md non-negotiable +
 // PORT_DESIGN.md §5.2). DO NOT duplicate this logic anywhere.
-//
-// Phase 1 lift target: full implementations of computeSofaPrice, computeMattressPrice,
-// computeBedframePrice, computeOrderTotal. Stubs below match prototype function
-// signatures from prototype/pos-sofa-config.jsx + pos-handover.jsx.
+
+// computeSofaPrice lives in sofa-build.ts (re-exported via index). Types only:
+import type { Cell, Depth, SofaPriceResult, SofaProductPricing } from './sofa-build';
 
 /** Addon "lift access" formula. Codex P2.7 audit: POS prototype version is canonical
  *  (customer-visible at handover). Backend drawer's `floors * items * 50` was a bug. */
@@ -26,65 +25,84 @@ export const addonPrice = (
   }
 };
 
-// --- Stubs below — port from prototype during Phase 1 ---
+/* ─── Sofa ─────────────────────────────────────────────────────────── */
+// Real implementation lives in sofa-build.ts; re-exported via index.ts. Aliased
+// type re-exports are used here for legacy `SofaCell` / `SofaDepth` import sites.
 
-export interface SofaCell {
-  moduleId: string;
-  x: number;
-  y: number;
-  rot: 0 | 90 | 180 | 270;
-  recliners?: { seatIdx: number; open: boolean }[];
-}
+export type SofaCell = Cell;
+export type SofaDepth = Depth;
+export type { SofaProductPricing, SofaPriceResult };
 
-export interface SofaProductPricing {
-  compartments: { compartmentId: string; price: number; active: boolean }[];
-  bundles: { bundleId: string; price: number; active: boolean; signature: string }[];
-  reclinerUpgradePrice: number;
-}
-
-export interface SofaPriceResult {
-  groups: {
-    closed: boolean;
-    reason?: string;
-    bundle?: { id: string; price: number };
-    bundlePrice: number;
-    aLaCarteTotal: number;
-    reclinerCount: number;
-    reclinerExtra: number;
-    finalPrice: number;
-  }[];
-  total: number;
-}
-
-export const computeSofaPrice = (
-  _cells: SofaCell[],
-  _pricing: SofaProductPricing,
-): SofaPriceResult => {
-  // TODO: port from prototype/pos-sofa-config.jsx — group detection, closure check,
-  // arm-collision validation, bundle auto-detect, recliner upgrades.
-  // Phase 1 acceptance gate (PORT_DESIGN.md §10.10 → Phase 1 redefined).
-  throw new Error('computeSofaPrice: not yet implemented (Phase 1)');
-};
+/* ─── Mattress ─────────────────────────────────────────────────────── */
 
 export interface MattressPricing {
   variants: { sizeId: string; price: number; active: boolean }[];
+  /** Optional per-mattress extra-pillow price; falls back to a flat default if not set. */
+  extraPillowPrice?: number;
 }
 
+export interface MattressPriceResult {
+  base: number;
+  pillowExtra: number;
+  total: number;
+  breakdown: string[];
+}
+
+const DEFAULT_EXTRA_PILLOW_PRICE = 80;
+
 export const computeMattressPrice = (
-  _sizeId: string,
-  _freePillows: number,
-  _extraPillows: number,
-  _pricing: MattressPricing,
-): { base: number; pillowExtra: number; total: number; breakdown: string[] } => {
-  throw new Error('computeMattressPrice: not yet implemented (Phase 1)');
+  sizeId: string,
+  freePillows: number,
+  extraPillows: number,
+  pricing: MattressPricing,
+): MattressPriceResult => {
+  const variant = pricing.variants.find((v) => v.sizeId === sizeId);
+  if (!variant) {
+    return { base: 0, pillowExtra: 0, total: 0, breakdown: [`Unknown size '${sizeId}'`] };
+  }
+  if (!variant.active) {
+    return {
+      base: 0,
+      pillowExtra: 0,
+      total: 0,
+      breakdown: [`Size '${sizeId}' is inactive on this Model`],
+    };
+  }
+  const base = variant.price;
+  const pricePerExtra = pricing.extraPillowPrice ?? DEFAULT_EXTRA_PILLOW_PRICE;
+  const pillowExtra = Math.max(0, extraPillows) * pricePerExtra;
+  const total = base + pillowExtra;
+  const breakdown = [
+    `Mattress · ${sizeId}: RM ${base.toLocaleString('en-MY')}`,
+  ];
+  if (freePillows > 0) breakdown.push(`Free pillows × ${freePillows}: RM 0`);
+  if (extraPillows > 0) {
+    breakdown.push(`Extra pillows × ${extraPillows} @ RM ${pricePerExtra}: RM ${pillowExtra.toLocaleString('en-MY')}`);
+  }
+  return { base, pillowExtra, total, breakdown };
 };
 
+/* ─── Bedframe ─────────────────────────────────────────────────────── */
+
+export interface BedframePricing {
+  variants: { sizeId: string; price: number; active: boolean }[];
+}
+
 export const computeBedframePrice = (
-  _sizeId: string,
-  _pricing: { variants: { sizeId: string; price: number; active: boolean }[] },
-): { total: number } => {
-  throw new Error('computeBedframePrice: not yet implemented (Phase 1)');
+  sizeId: string,
+  pricing: BedframePricing,
+): { total: number; breakdown: string[] } => {
+  const variant = pricing.variants.find((v) => v.sizeId === sizeId);
+  if (!variant || !variant.active) {
+    return { total: 0, breakdown: [`Bedframe size '${sizeId}' unavailable`] };
+  }
+  return {
+    total: variant.price,
+    breakdown: [`Bedframe · ${sizeId}: RM ${variant.price.toLocaleString('en-MY')}`],
+  };
 };
+
+/* ─── Whole-order recompute (TODO — Phase 2 step C) ────────────────── */
 
 export interface OrderTotalResult {
   subtotal: number;
@@ -100,5 +118,8 @@ export const computeOrderTotal = (
   _addonsState: any,
   /* eslint-enable */
 ): OrderTotalResult => {
-  throw new Error('computeOrderTotal: not yet implemented (Phase 1)');
+  // Wires together computeSofaPrice / computeMattressPrice / computeBedframePrice /
+  // addonPrice for every cart item. Lands when POST /orders does server-side
+  // recompute (PORT_DESIGN §5.2). Phase 2 step C.
+  throw new Error('computeOrderTotal: not yet implemented (Phase 2 step C)');
 };
