@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { productSchema } from '@2990s/shared/schemas';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -26,4 +27,39 @@ products.get('/', async (c) => {
 
   if (error) return c.json({ error: error.message }, 500);
   return c.json({ products: data ?? [] });
+});
+
+// POST /products — create a new product + per-product pricing rows in one
+// atomic transaction (migration 0004 wraps the inserts in a Postgres function).
+// Admin-only via the function's RLS-gated INSERTs (`products_admin_write` etc).
+// Used by the Backend SkuMaster drawer; will also be used by any future tooling
+// that seeds the catalogue.
+products.post('/', async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const parsed = productSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      { error: 'validation_failed', issues: parsed.error.issues.map((i) => ({ path: i.path, message: i.message })) },
+      400,
+    );
+  }
+
+  const supabase = c.get('supabase');
+  const { data, error } = await supabase.rpc('create_product_with_pricing', { p: parsed.data });
+
+  if (error) {
+    // Permission denied → 403; everything else → 500.
+    if (error.code === '42501' || /permission denied/i.test(error.message)) {
+      return c.json({ error: 'forbidden', reason: error.message }, 403);
+    }
+    return c.json({ error: 'create_failed', reason: error.message }, 500);
+  }
+
+  return c.json({ id: data as string }, 201);
 });

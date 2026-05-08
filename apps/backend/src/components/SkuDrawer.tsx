@@ -224,73 +224,72 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
 
     const valid = productSchema.parse(cleaned);
 
-    // Step 3 of Phase 1 will move this into POST /api/products. For step 2,
-    // we write directly via Supabase — admin RLS already gates this.
-    let productId = product?.id ?? null;
-
-    const productRow = {
-      sku: valid.sku,
-      category_id: valid.categoryId,
-      series_id: valid.seriesId,
-      pricing_kind: valid.pricingKind,
-      name: valid.name,
-      detail: valid.detail,
-      size_display: valid.sizeDisplay,
-      img_key: valid.imgKey,
-      thumb_key: valid.thumbKey,
-      stock: valid.stock,
-      low_at: valid.lowAt,
-      visible: valid.visible,
-      flat_price: valid.pricingKind === 'flat' ? valid.flatPrice : null,
-      recliner_upgrade_price: valid.pricingKind === 'sofa_build' ? valid.reclinerUpgradePrice : null,
-    };
-
     if (mode === 'create') {
-      const { data, error } = await supabase
-        .from('products')
-        .insert(productRow)
-        .select('id')
-        .single();
-      if (error) throw new Error(error.message);
-      productId = data.id;
-    } else if (productId) {
-      const { error } = await supabase.from('products').update(productRow).eq('id', productId);
-      if (error) throw new Error(error.message);
-    }
+      // POST /api/products — atomic via the create_product_with_pricing RPC.
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('Not authenticated');
 
-    if (!productId) throw new Error('No product id after upsert');
+      const apiUrl = import.meta.env.VITE_API_URL as string | undefined;
+      if (!apiUrl) throw new Error('VITE_API_URL is not set in .env');
 
-    // Per-product pricing rows
-    if (valid.pricingKind === 'sofa_build') {
-      const comps = valid.compartments.map((c) => ({
-        product_id: productId,
-        compartment_id: c.compartmentId,
-        active: c.active,
-        price: c.price,
-      }));
-      const bundles = valid.bundles.map((b) => ({
-        product_id: productId,
-        bundle_id: b.bundleId,
-        active: b.active,
-        price: b.price,
-      }));
-      const [r1, r2] = await Promise.all([
-        supabase.from('product_compartments').upsert(comps, { onConflict: 'product_id,compartment_id' }),
-        supabase.from('product_bundles').upsert(bundles, { onConflict: 'product_id,bundle_id' }),
-      ]);
-      if (r1.error) throw new Error(r1.error.message);
-      if (r2.error) throw new Error(r2.error.message);
-    } else if (valid.pricingKind === 'size_variants') {
-      const sizes = valid.sizes.map((s) => ({
-        product_id: productId,
-        size_id: s.sizeId,
-        active: s.active,
-        price: s.price,
-      }));
-      const r = await supabase
-        .from('product_size_variants')
-        .upsert(sizes, { onConflict: 'product_id,size_id' });
-      if (r.error) throw new Error(r.error.message);
+      const res = await fetch(`${apiUrl}/products`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(valid),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `POST /products failed (${res.status})`);
+      }
+    } else if (product?.id) {
+      // EDIT path stays on direct Supabase upsert for now. Step 3 only ports
+      // the CREATE flow to API; an UPDATE RPC + handler can land in step 3.5
+      // without blocking POS catalog work.
+      const productRow = {
+        sku: valid.sku,
+        category_id: valid.categoryId,
+        series_id: valid.seriesId,
+        pricing_kind: valid.pricingKind,
+        name: valid.name,
+        detail: valid.detail,
+        size_display: valid.sizeDisplay,
+        img_key: valid.imgKey,
+        thumb_key: valid.thumbKey,
+        stock: valid.stock,
+        low_at: valid.lowAt,
+        visible: valid.visible,
+        flat_price: valid.pricingKind === 'flat' ? valid.flatPrice : null,
+        recliner_upgrade_price: valid.pricingKind === 'sofa_build' ? valid.reclinerUpgradePrice : null,
+      };
+      const { error } = await supabase.from('products').update(productRow).eq('id', product.id);
+      if (error) throw new Error(error.message);
+
+      if (valid.pricingKind === 'sofa_build') {
+        const comps = valid.compartments.map((c) => ({
+          product_id: product.id, compartment_id: c.compartmentId, active: c.active, price: c.price,
+        }));
+        const bundles = valid.bundles.map((b) => ({
+          product_id: product.id, bundle_id: b.bundleId, active: b.active, price: b.price,
+        }));
+        const [r1, r2] = await Promise.all([
+          supabase.from('product_compartments').upsert(comps, { onConflict: 'product_id,compartment_id' }),
+          supabase.from('product_bundles').upsert(bundles, { onConflict: 'product_id,bundle_id' }),
+        ]);
+        if (r1.error) throw new Error(r1.error.message);
+        if (r2.error) throw new Error(r2.error.message);
+      } else if (valid.pricingKind === 'size_variants') {
+        const sizes = valid.sizes.map((s) => ({
+          product_id: product.id, size_id: s.sizeId, active: s.active, price: s.price,
+        }));
+        const r = await supabase
+          .from('product_size_variants')
+          .upsert(sizes, { onConflict: 'product_id,size_id' });
+        if (r.error) throw new Error(r.error.message);
+      }
     }
 
     await qc.invalidateQueries({ queryKey: ['products'] });
