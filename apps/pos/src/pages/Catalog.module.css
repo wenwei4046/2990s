@@ -108,6 +108,8 @@
   color: var(--fg-muted);
 }
 
+.configLink { text-decoration: none; }
+
 .tbc {
   display: inline-flex;
   align-items: center;

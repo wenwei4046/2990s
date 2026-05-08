@@ -65,3 +65,97 @@ export const useCatalogRealtime = () => {
     };
   }, [qc]);
 };
+
+/* ─── Per-product pricing (configurator screens) ───────────────────── */
+
+export interface ProductBundleRow { bundleId: string; active: boolean; price: number }
+export interface ProductCompartmentRow { compartmentId: string; active: boolean; price: number }
+export interface ProductSizeRow { sizeId: string; active: boolean; price: number }
+
+export const useProduct = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['product', productId],
+    queryFn: async () => {
+      if (!productId) throw new Error('no productId');
+      const { data, error } = await supabase
+        .from('products')
+        .select(
+          'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, stock, low_at, visible, category_id, series_id, updated_at',
+        )
+        .eq('id', productId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('not_found');
+      return data;
+    },
+  });
+
+export const useProductBundles = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['product', productId, 'bundles'],
+    queryFn: async (): Promise<ProductBundleRow[]> => {
+      if (!productId) throw new Error('no productId');
+      const { data, error } = await supabase
+        .from('product_bundles')
+        .select('bundle_id, active, price')
+        .eq('product_id', productId);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        bundleId: r.bundle_id,
+        active: r.active,
+        price: r.price,
+      }));
+    },
+  });
+
+export const useProductCompartments = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['product', productId, 'compartments'],
+    queryFn: async (): Promise<ProductCompartmentRow[]> => {
+      if (!productId) throw new Error('no productId');
+      const { data, error } = await supabase
+        .from('product_compartments')
+        .select('compartment_id, active, price')
+        .eq('product_id', productId);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        compartmentId: r.compartment_id,
+        active: r.active,
+        price: r.price,
+      }));
+    },
+  });
+
+// Realtime invalidate any product_bundles / product_compartments / product_size_variants
+// row matching this productId. Used inside Configurator so Backend price tweaks
+// land within ~300ms.
+export const useProductPricingRealtime = (productId: string | undefined) => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!productId) return;
+    const channel = supabase
+      .channel(`product-pricing-${productId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_bundles', filter: `product_id=eq.${productId}` },
+        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'bundles'] }),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_compartments', filter: `product_id=eq.${productId}` },
+        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'compartments'] }),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products', filter: `id=eq.${productId}` },
+        () => void qc.invalidateQueries({ queryKey: ['product', productId] }),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [qc, productId]);
+};

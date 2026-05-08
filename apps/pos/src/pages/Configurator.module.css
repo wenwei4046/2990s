@@ -1,0 +1,172 @@
+.shell {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: var(--space-5) var(--space-6);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.heading {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-32);
+  margin: 4px 0 0;
+}
+
+.detail {
+  font-size: var(--fs-14);
+  color: var(--fg-muted);
+  margin: 4px 0 4px;
+}
+
+.sku {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  letter-spacing: 0.04em;
+  color: var(--fg-soft);
+  align-self: flex-start;
+  background: var(--bg-alt);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  width: fit-content;
+}
+
+.empty {
+  padding: var(--space-7);
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.section {
+  margin-bottom: var(--space-6);
+}
+
+.sectionHead {
+  margin-bottom: var(--space-4);
+}
+
+.sectionTitle {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-24);
+  line-height: 1.3;
+  margin: 0 0 4px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+.card {
+  appearance: none;
+  background: var(--c-cream);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-family: inherit;
+  color: var(--fg);
+  min-height: 160px;
+  transition: border-color 150ms, transform 80ms, box-shadow 150ms;
+}
+.card:hover { border-color: var(--c-orange); transform: translateY(-1px); box-shadow: var(--shadow-2); }
+.card:active { transform: translateY(0); }
+
+.cardPicked {
+  border-color: var(--c-orange);
+  background: linear-gradient(0deg, rgba(232,107,58,0.08), rgba(232,107,58,0.02));
+  box-shadow: var(--shadow-2);
+}
+
+.cardInactive {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cardInactive:hover { transform: none; box-shadow: none; border-color: var(--line); }
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.cardCode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  letter-spacing: 0.04em;
+  color: var(--fg-accent-deep);
+  background: var(--bg-alt);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.cardLabel {
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-15);
+}
+
+.cardSig {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+}
+
+.cardPrice {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+}
+
+.unavailable {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  color: var(--fg-soft);
+}
+
+.actions {
+  margin-top: var(--space-5);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tbcCard, .flatCard {
+  background: var(--bg-alt);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+}
+
+.flatCard { flex-direction: column; align-items: flex-start; gap: var(--space-3); }
+
+.footer {
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  color: var(--fg-soft);
+}

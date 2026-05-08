@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { LogOut, Hourglass } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -75,9 +76,13 @@ const ProductCard = ({ p }: { p: CatalogProduct }) => {
             {p.pricing_kind === 'sofa_build' ? 'Configurable · per build' : 'Configurable · by size'}
           </span>
         )}
-        <Button variant="ghost" size="sm" disabled>
-          Configure (Phase 2)
-        </Button>
+        {p.pricing_kind === 'tbc' ? (
+          <Button variant="ghost" size="sm" disabled>Configure</Button>
+        ) : (
+          <Link to={`/configure/${p.id}`} className={styles.configLink}>
+            <Button variant="ghost" size="sm">Configure →</Button>
+          </Link>
+        )}
       </div>
       <div className={styles.stock}>
         Stock: <strong>{p.stock}</strong>{p.stock <= p.low_at && p.stock > 0 && <span className={styles.stockLow}> · low</span>}
