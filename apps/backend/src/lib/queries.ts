@@ -1,7 +1,8 @@
 // Server-cache hooks. Library tables stale-forever (rarely change), products
 // stale-30s (Realtime invalidates this in Phase 1.5).
 
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
 export interface Category {
@@ -280,3 +281,89 @@ export const useProductPricing = (productId: string | null, pricingKind: Product
       };
     },
   });
+
+/* ─── Orders board (Phase 2 step G — list-only; Phase 3 swaps in 6-lane) ─── */
+
+export type OrderLane =
+  | 'received'
+  | 'proceed'
+  | 'logistics'
+  | 'ready'
+  | 'dispatched'
+  | 'delivered'
+  | 'cancelled';
+
+export interface OrderListRow {
+  id: string;
+  placedAt: string;
+  customerName: string;
+  customerPhone: string | null;
+  total: number;
+  lane: OrderLane;
+  paymentMethod: string;
+  showroomId: string;
+}
+
+export const useOrders = () =>
+  useQuery({
+    queryKey: ['orders'],
+    queryFn: async (): Promise<OrderListRow[]> => {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('id, placed_at, customer_name, customer_phone, total, lane, payment_method, showroom_id')
+        .order('placed_at', { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        placedAt: r.placed_at,
+        customerName: r.customer_name,
+        customerPhone: r.customer_phone,
+        total: r.total,
+        lane: r.lane as OrderLane,
+        paymentMethod: r.payment_method,
+        showroomId: r.showroom_id,
+      }));
+    },
+    staleTime: 5_000,
+  });
+
+/**
+ * Realtime subscription on `orders`. Any INSERT/UPDATE/DELETE invalidates
+ * the orders list query. Returns the latest payload of an INSERT so the
+ * page can highlight a row or pop a toast — null in steady state.
+ *
+ * Requires migration 0007_orders_realtime.sql to add `orders` to the
+ * supabase_realtime publication.
+ */
+export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const channel = supabase
+      .channel('orders-board')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        (payload) => {
+          void qc.invalidateQueries({ queryKey: ['orders'] });
+          if (payload.eventType === 'INSERT' && onInsert) {
+            const r = payload.new as Record<string, unknown>;
+            onInsert({
+              id: String(r.id),
+              placedAt: String(r.placed_at),
+              customerName: String(r.customer_name),
+              customerPhone: (r.customer_phone as string) ?? null,
+              total: Number(r.total),
+              lane: r.lane as OrderLane,
+              paymentMethod: String(r.payment_method),
+              showroomId: String(r.showroom_id),
+            });
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [qc, onInsert]);
+};

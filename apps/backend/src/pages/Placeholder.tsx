@@ -18,14 +18,6 @@ export const Placeholder = ({ title, phase, hint }: PlaceholderProps) => (
   </div>
 );
 
-export const Orders = () => (
-  <Placeholder
-    title="Orders"
-    phase="Phase 3"
-    hint="6-lane board (Received → Proceed → Logistics → Ready → Dispatched → Delivered) with drawer + history audit. Ports from prototype/backend-orders.jsx + backend-drawer.jsx."
-  />
-);
-
 export const VerifySlips = () => (
   <Placeholder
     title="Verify slips"
