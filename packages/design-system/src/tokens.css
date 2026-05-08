@@ -1,0 +1,291 @@
+/* =====================================================================
+   2990's — Color & Type tokens
+   Source: 2990s_V10.pdf (Brand Identity Guidelines, Dec 2025)
+   1:1 port of prototype/assets/colors_and_type.css. DO NOT refactor —
+   class names and CSS variables are the contract every app reads from.
+   ---------------------------------------------------------------------
+   Imagery follows a 6:3:1 ratio — neutral base / secondary / orange.
+   Treat orange as an ACCENT, not a flood. Beige + cream are the canvas.
+   ===================================================================== */
+
+/* ---------- Webfonts (Google Fonts — see fonts/README) ---------------
+   Title       → Merriweather (serif)
+   Body        → Poppins      (geometric sans)
+   Button/Link → Raleway      (elegant sans)
+   Hand-written→ Mistrully (paid script) — SUBSTITUTED with Caveat
+   Display 2990 wordmark → Archivo Black (logotype only)
+   ------------------------------------------------------------------ */
+@import url("https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700;900&family=Poppins:wght@300;400;500;600;700&family=Raleway:wght@400;500;600;700;800&family=Caveat:wght@400;500;600;700&family=Archivo:wght@900&display=swap");
+
+:root {
+  /* ------------------------------------------------------------------
+     PRIMARY PALETTE — warm, clean, inviting
+     ------------------------------------------------------------------ */
+  --c-cream:        #FFF9EB;   /* primary canvas — soft warm white     */
+  --c-beige:        #E3D0A6;   /* primary tan — packaging, blocks      */
+  --c-orange:       #E86B3A;   /* primary brand orange — accent only   */
+  --c-burnt:        #A6471E;   /* deep burnt orange — emphasis, type   */
+  --c-paper:        #F4F3F2;   /* studio white — backdrops, photo bg   */
+  --c-ink:          #221F20;   /* near-black — body type, contrast     */
+
+  /* Secondary, season-driven (swap A/B per campaign) */
+  --c-secondary-a:  #2F5D4F;   /* default earth: forest/teal           */
+  --c-secondary-b:  #1F3A8A;   /* default earth: trend blue            */
+  --c-festive-a:    #1F4A36;   /* Christmas green                       */
+  --c-festive-b:    #B8331F;   /* Christmas red-orange                  */
+
+  /* ------------------------------------------------------------------
+     SEMANTIC FG / BG / SURFACE
+     ------------------------------------------------------------------ */
+  --bg:             var(--c-cream);
+  --bg-alt:         var(--c-paper);
+  --bg-warm:        var(--c-beige);
+  --bg-deep:        var(--c-burnt);
+  --bg-ink:         var(--c-ink);
+
+  --fg:             var(--c-ink);
+  --fg-muted:       #5C5455;       /* warm grey, for secondary copy    */
+  --fg-soft:        #8B7E6A;       /* faded earthy grey                */
+  --fg-on-orange:   var(--c-cream);
+  --fg-on-ink:      var(--c-cream);
+  --fg-accent:      var(--c-orange);
+  --fg-accent-deep: var(--c-burnt);
+
+  --line:           rgba(34,31,32,0.12);
+  --line-strong:    rgba(34,31,32,0.28);
+
+  /* ------------------------------------------------------------------
+     RADII — consistently rounded, soft.
+     ------------------------------------------------------------------ */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 36px;
+  --radius-pill: 999px;
+
+  /* ------------------------------------------------------------------
+     SHADOWS — soft, low-contrast, never glossy.
+     ------------------------------------------------------------------ */
+  --shadow-1: 0 1px 2px rgba(34,31,32,0.04), 0 2px 6px rgba(34,31,32,0.04);
+  --shadow-2: 0 4px 12px rgba(34,31,32,0.06), 0 1px 3px rgba(34,31,32,0.04);
+  --shadow-3: 0 12px 32px rgba(34,31,32,0.08), 0 2px 6px rgba(34,31,32,0.04);
+  --shadow-press: inset 0 1px 2px rgba(34,31,32,0.10);
+
+  /* ------------------------------------------------------------------
+     SPACING — 4px base, generous on large surfaces.
+     ------------------------------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+  --space-10: 128px;
+
+  /* ------------------------------------------------------------------
+     TYPOGRAPHY
+     Primary: Archivo (SemiBold for display; Light for long-form).
+     Display "2990": Archivo Black + condensed (logo only); we use
+     Archivo Black w/ font-stretch when SVG isn't available.
+     Chinese: Hiragino Sans GB → falls back to PingFang/Noto Sans SC.
+     ------------------------------------------------------------------ */
+  /* Body / paragraphs / general UI text */
+  --font-sans:    "Poppins", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  /* Titles / headings (serif, sets the editorial tone) */
+  --font-title:   "Merriweather", Georgia, "Times New Roman", serif;
+  /* Buttons, links, navigation, eyebrows */
+  --font-button:  "Raleway", "Poppins", system-ui, sans-serif;
+  /* Hand-written touches (offers, scribbled accents) */
+  --font-script:  "Caveat", "Mistrully", "Brush Script MT", cursive;
+  /* The 2990 logotype — rounded condensed display, used only on the wordmark */
+  --font-mark:    "Archivo", "Arial Black", system-ui, sans-serif;
+  /* Backwards-compat alias — some old components still reference --font-display */
+  --font-display: var(--font-mark);
+  --font-cn:      "Hiragino Sans GB", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono:    ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* Base size */
+  --fs-base: 16px;
+
+  /* Type scale — modular, tuned for warmth */
+  --fs-12: 12px;     --lh-12: 1.4;
+  --fs-13: 13px;     --lh-13: 1.45;
+  --fs-14: 14px;     --lh-14: 1.5;
+  --fs-15: 15px;     --lh-15: 1.55;
+  --fs-16: 16px;     --lh-16: 1.6;
+  --fs-18: 18px;     --lh-18: 1.55;
+  --fs-20: 20px;     --lh-20: 1.5;
+  --fs-24: 24px;     --lh-24: 1.4;
+  --fs-32: 32px;     --lh-32: 1.2;
+  --fs-40: 40px;     --lh-40: 1.15;
+  --fs-56: 56px;     --lh-56: 1.05;
+  --fs-72: 72px;     --lh-72: 1.0;
+  --fs-104: 104px;   --lh-104: 0.95;
+
+  /* Tracking */
+  --tk-tight:   -0.02em;
+  --tk-base:     0;
+  --tk-wide:    0.06em;
+  --tk-loud:    0.18em;  /* ALL-CAPS eyebrows */
+
+  /* Weights */
+  --w-light:    300;
+  --w-regular:  400;
+  --w-medium:   500;
+  --w-semibold: 600;
+  --w-bold:     700;
+  --w-black:    900;
+}
+
+/* =====================================================================
+   SEMANTIC TYPE — drop these on real elements.
+   Always set body to base first; headings inherit the family.
+   ===================================================================== */
+body {
+  font-family: var(--font-sans);
+  font-size:   var(--fs-base);
+  font-weight: var(--w-regular);
+  line-height: var(--lh-16);
+  color:       var(--fg);
+  background:  var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.t-display, h1.display {
+  font-family: var(--font-mark);
+  font-weight: var(--w-black);
+  font-size:   var(--fs-104);
+  line-height: var(--lh-104);
+  letter-spacing: var(--tk-tight);
+  font-stretch: 80%;
+  text-wrap: balance;
+}
+
+/* Headings: Merriweather (serif), settles the editorial tone */
+.t-h1, h1 {
+  font-family: var(--font-title);
+  font-weight: var(--w-black);     /* Merriweather Black 900 */
+  font-size:   var(--fs-56);
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.t-h2, h2 {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size:   var(--fs-40);
+  line-height: 1.12;
+  letter-spacing: -0.005em;
+  text-wrap: balance;
+}
+.t-h3, h3 {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size:   var(--fs-32);
+  line-height: 1.18;
+}
+.t-h4, h4 {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size:   var(--fs-24);
+  line-height: 1.25;
+}
+.t-h5, h5 {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size:   var(--fs-20);
+  line-height: 1.3;
+}
+
+.t-lede {
+  font-family: var(--font-sans);   /* Poppins */
+  font-weight: var(--w-light);
+  font-size:   var(--fs-24);
+  line-height: 1.5;
+  color:       var(--fg-muted);
+  text-wrap: pretty;
+}
+
+.t-body, p {
+  font-family: var(--font-sans);
+  font-weight: var(--w-regular);
+  font-size:   var(--fs-16);
+  line-height: var(--lh-16);
+  text-wrap: pretty;
+}
+.t-body-lg {
+  font-size: var(--fs-18);
+  line-height: var(--lh-18);
+}
+.t-body-sm {
+  font-size: var(--fs-14);
+  line-height: var(--lh-14);
+}
+
+.t-eyebrow {
+  font-family: var(--font-button);   /* Raleway */
+  font-weight: var(--w-semibold);
+  font-size:   var(--fs-12);
+  line-height: 1;
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-accent-deep);
+}
+
+/* Buttons / links / nav share Raleway. Apply via .t-button or directly. */
+.t-button, button, .t-link {
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.02em;
+}
+
+/* Hand-written accent — subtle, sparing. Pair with .t-h1/.t-h2. */
+.t-script {
+  font-family: var(--font-script);   /* Caveat (substitute for Mistrully) */
+  font-weight: var(--w-regular);
+  font-size:   var(--fs-40);
+  line-height: 1;
+  color: var(--fg-accent);
+  letter-spacing: 0.01em;
+}
+
+.t-caption, small {
+  font-family: var(--font-sans);
+  font-weight: var(--w-regular);
+  font-size:   var(--fs-12);
+  line-height: var(--lh-12);
+  color: var(--fg-muted);
+}
+
+.t-price {
+  /* The hero of the brand. RM2,990. Always confident. */
+  font-family: var(--font-mark);
+  font-weight: var(--w-black);
+  font-size:   var(--fs-72);
+  line-height: 1;
+  letter-spacing: var(--tk-tight);
+  font-stretch: 80%;
+  color: var(--fg-accent-deep);
+}
+
+.t-cn {
+  font-family: var(--font-cn);
+  font-weight: var(--w-regular);
+  letter-spacing: 0.02em;
+}
+
+/* Helpers */
+.fg-accent       { color: var(--fg-accent); }
+.fg-accent-deep  { color: var(--fg-accent-deep); }
+.fg-muted        { color: var(--fg-muted); }
+.bg-cream        { background: var(--c-cream);  color: var(--fg); }
+.bg-beige        { background: var(--c-beige);  color: var(--fg); }
+.bg-paper        { background: var(--c-paper);  color: var(--fg); }
+.bg-orange       { background: var(--c-orange); color: var(--fg-on-orange); }
+.bg-burnt        { background: var(--c-burnt);  color: var(--fg-on-orange); }
+.bg-ink          { background: var(--c-ink);    color: var(--fg-on-ink); }
