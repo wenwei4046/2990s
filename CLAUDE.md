@@ -167,7 +167,7 @@ See plan §9 for exit criteria per phase.
 2. **Don't redesign sofa configurator UI**. Even if you think a different layout is better. Loo finalised this through multiple design reviews. The 22 plan-view PNGs and the snap math are not negotiable.
 3. **Don't substitute the stack** in §Stack above. Tailwind, shadcn, react-dnd, Next.js — all rejected with reasons. Use the prototype's CSS classes + tokens.
 4. **Don't skip server-side pricing recompute** on `POST /orders`. The whole brand promise depends on it.
-5. **Don't seed pricing data** that conflicts with what's in `prototype/pos-data.jsx`. The 4 sofa Models (Noor / Tanah / Rumah / Petang) and 4 mattress / 3 bedframe SKUs already have hand-set per-Model pricing — port those, don't re-imagine them.
+5. **Production starts with EMPTY catalog** (per PORT_DESIGN.md §10 Decision 10, locked 2026-05-08). The 4 sofa Models (Noor / Tanah / Rumah / Petang), 4 mattresses, and 3 bedframes in `prototype/pos-data.jsx` are **testimony / reference for testing only** — Loo seeds real SKUs via the Backend SKU Master after deploy. Library tables (compartments, bundles, sizes, categories, series, showrooms, staff, drivers, my_localities) DO seed; only `products` and the per-product pricing tables (`product_compartments`, `product_bundles`, `product_size_variants`) start empty. Earlier guidance to "port prototype pricing as seed" was superseded by Decision 10.
 6. **Don't expose the Backend portal to non-staff**. RLS is restrictive by default; verify before deploy.
 
 ---

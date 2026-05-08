@@ -635,14 +635,29 @@ function computeAddonPrice(addon, def): number
 API `POST /orders` flow:
 1. Verify JWT, set Postgres role for RLS
 2. Validate Zod schema
-3. For each cart item, recompute total via pure functions
-4. Recompute addon totals
-5. If `|server.total - client.total| / server.total > 0.005`, **reject HTTP 400** with `{ diff: { server, client, perItem: [...] } }`
-6. Else INSERT INTO `orders` + `order_items` in TRANSACTION
-7. INSERT INTO `order_lane_history` with `from=null, to='received'`
-8. Generate `SO-XXXX` via `next_order_id()` sequence
-9. If `slipKey`, set `slip_state = 'pending'`, INSERT INTO `order_slip_events` event=`'uploaded'`
-10. Return order
+3. Read `app_config.pricing_version` — capture as `currentPricingVersion`
+4. For each cart item, recompute total via pure functions
+5. Recompute addon totals
+6. If `|server.total - client.total| / server.total > 0.005`, **return HTTP 409 Conflict** with `{ kind: 'pricing_drift', server: {subtotal, addonTotal, total}, client: {subtotal, addonTotal, total}, perItem: [{itemIdx, kind, title, server, client, breakdown}], pricingVersion: currentPricingVersion }`. **Do NOT 400** — the request format is valid; only the totals drifted.
+7. Else INSERT INTO `orders` + `order_items` in TRANSACTION (stamp `pricing_version = currentPricingVersion`)
+8. INSERT INTO `order_lane_history` with `from=null, to='received'`
+9. Generate `SO-XXXX` via `next_order_id()` sequence
+10. If `slipKey`, set `slip_state = 'pending'`, INSERT INTO `order_slip_events` event=`'uploaded'`
+11. Return order
+
+### 5.2.1 Client recovery flow on 409 (Codex P2.3 fold, 2026-05-08)
+
+Hard-rejecting a customer-facing transaction is operationally hostile. POS preserves the entire confirm step state (customer dto, payment method, signature data, slipKey, addon selections) and surfaces a `<PricingDriftModal>`:
+
+> "Pricing was updated while you were filling this in. New total: **RM 3,180**. Original total: **RM 2,990**. Differences: SOF-001 1A-L 1500 → 1600 (+RM 100), SOF-001 2A-R 2100 → 2190 (+RM 90)."
+
+Modal CTAs:
+
+- **"Accept new total + place order"** — POS updates client cart totals from `server` payload, re-POSTs `/orders` immediately. State preserved. Server side this should now succeed (same `pricingVersion`).
+- **"Cancel — return to cart"** — customer/staff review changes, can drop or re-quote.
+- (Optional escape hatch, **admin only**, **NOT visible to sales**) "Override and force original total" — requires `staff.role IN ('admin','finance')` and writes `order.notes` with `[PRICE_OVERRIDE: original=2990 server=3180 by=ADMIN_X]`.
+
+Phase 1 acceptance gate: this flow must work end-to-end before order placement is considered complete. Unit test the modal, integration test the re-POST. Do not ship Phase 2 with TODO 'pricing drift recovery'.
 
 ### 5.3 Sofa-build pure functions
 
@@ -802,16 +817,16 @@ All 10 questions answered by Loo. These are now **non-negotiable** for Phase 0+.
 
 | # | Decision | Implementation impact |
 |---|---|---|
-| 1 | **Saved quotes** → Supabase `quotes` table | New Drizzle schema: `quotes (id 'Q-XXXX', customer snapshot, cart JSONB, subtotal, savedAt, createdBy → staff.id, showroomId)` + RLS scoped by `createdBy = auth.uid()` (sales staff only see their own quotes). POS reads/writes via TanStack Query. |
+| 1 | **Saved quotes** → Supabase `quotes` table | Drizzle schema in `schema.ts` (added 2026-05-08 post-codex): `quotes (id 'Q-XXXX', showroomId, createdBy, customer snapshot, cart JSONB, addons JSONB, subtotal/addonTotal/total, pricingVersion, expiresAt, promotedToOrderId, createdAt, updatedAt)`. **Server-recomputes totals on save** (not trusted from client). RLS: `createdBy = auth.uid()` for sales (own quotes only); admin/showroom_lead bypass — see §11.1 Issue 7. POS reads/writes via TanStack Query. |
 | 2 | **PDF receipt** → server-side render (Workers + Puppeteer) | Use Cloudflare **Browser Rendering API** (separate paid subsystem on Workers Paid plan). Endpoint `POST /receipts/{order_id}` returns signed PDF URL stored in R2 (`receipts/{order_id}.pdf`, 24h signed). Print-window remains in code as fallback for showroom printer. |
-| 3 | **Address** → state → city → postcode cascading dropdowns | New seed table `my_localities (state_code, state_name, city_name, postcode)`. Form behavior: select state → cities load → select city → postcodes load. Replace ALL free-text address inputs in `pos-handover.jsx` with the cascading component. Source data: Pos Malaysia public postcode list (one-time seed, not API-dependent at runtime). |
-| 4 | **Slip storage** → `slips/{order_id}/{uuid}.{ext}` private R2 | UUID per upload (replacement keeps old files for audit). Signed GET URL only when coordinator opens drawer (60s TTL). Server validates MIME = image/* on PUT. |
+| 3 | **Address** → state → city → postcode cascading dropdowns | Drizzle table `my_localities (id, postcode, city, state, stateCode)` in `schema.ts` (added 2026-05-08). Postcode is NOT unique — multiple cities share prefixes; queries filter by state→city→postcode. Form behavior: select state → cities load → select city → postcodes load. Replace ALL free-text address inputs in `pos-handover.jsx` with the cascading component. Source data: vetted public dataset (yusufusoff/malaysia-postcodes or equivalent MIT/CC0). RLS: SELECT for all authenticated; INSERT/UPDATE admin only. |
+| 4 | **Slip storage** → `slips/{order_id}/{uuid}.{ext}` private R2 | UUID per upload (replacement keeps old files for audit). Signed GET URL only when coordinator opens drawer (60s TTL). Server validates MIME on PUT (`image/jpeg \| image/png \| application/pdf` per Decision 7). Pre-order uploads tracked via `pending_slip_uploads` table with reaper lease (see §11.1 Issue 3) — full schema with status/contentHash/contentSize/retryCount/leaseExpiresAt fields in `schema.ts`. |
 | 5 | **PIN auto-lock** → NONE (manual logout only) | Match prototype behavior. No idle timer. Re-evaluate post-pilot if any incident. Sales staff use lockscreen on the tablet OS instead. |
 | 6 | **TweaksPanel** → DELETED | Hardcode `body[data-theme='cream']` + `body[data-density='calm']` directly in `apps/{pos,backend}/src/main.tsx`. Drop entire `<TweaksPanel>`/`<TweakSection>`/`<TweakRadio>`/`<TweakButton>`/`useTweaks` infrastructure. Confirmed locked values: **surface = cream · card density = calm**. |
 | 7 | **DO upload** → accept image (jpg/png) + PDF | API: `accept: 'image/jpeg, image/png, application/pdf'`. Driver phone camera produces image; office scanner produces PDF. Both must work. |
 | 8 | **Showroom topbar** → dynamic from `staff.showroom_id` → `showrooms.name` | Wire via TanStack Query at app load. When `staff.showroom_id IS NULL` (coordinator), show `"All showrooms"`. Phase 0 has 1 row ("Showroom KL") so dynamic just shows that string. |
 | 9 | **Currency display** → INTEGER RM, never `.00` anywhere | Hard rule across **every** surface (POS UI, Backend UI, print receipt, server-rendered PDF, email, WhatsApp confirmations). Format: `RM2,990` (with optional `<sup>RM</sup>2,990` for hero). Audit the codebase: replace any `.toLocaleString('en-MY')` that emits `2,990.00` with integer `2,990`. Print receipt's `RM ${fmtMoney(p.price)}` is currently OK; CSS `.summary__row .val` emits `.00` — needs fix. |
-| 10 | **Production starts with EMPTY catalog** — all prototype SKUs are testimony | The 4 sofa Models (Noor/Tanah/Rumah/Petang), 4 mattresses, 3 bedframes, dining/bathroom/kids/accessories — **all demo data**. Loo (admin role) seeds real SKUs via Backend SKU Master after deploy. Library tables (compartments/bundles/sizes/categories/series/showrooms/staff/drivers) DO seed; only `products` table starts empty. |
+| 10 | **Production starts with EMPTY catalog** — all prototype SKUs are testimony | The 4 sofa Models (Noor/Tanah/Rumah/Petang), 4 mattresses, 3 bedframes, dining/bathroom/kids/accessories — **all demo data**. Loo (admin role) seeds real SKUs via Backend SKU Master after deploy. Library tables (compartments/bundles/sizes/categories/series/showrooms/staff/drivers) DO seed; only `products` and per-product pricing tables (`product_compartments`, `product_bundles`, `product_size_variants`) start empty. **This decision supersedes** the earlier `CLAUDE.md` red line "Don't seed pricing data that conflicts with `prototype/pos-data.jsx` — port those." Prototype's hand-set per-Model pricing is now a **reference for testing only**, not seed data. CLAUDE.md updated 2026-05-08 to align. |
 
 ### Critical implication of Decision 10 — Phase 1 redefined
 
@@ -854,19 +869,19 @@ If any step breaks, Phase 1 isn't done.
 
 | # | Issue | Decision | Implementation impact |
 |---|---|---|---|
-| 1 | Phase 0 admin bootstrap chicken-and-egg | **Migration trigger**: when `auth.users` gets an INSERT with `email = $OWNER_EMAIL` env var, auto-create matching `staff` row (`role='admin'`, `staff_code='OWNER'`). | New migration file `0042_owner_bootstrap.sql`. Idempotent, runs once on first deploy. Phase 0 deploy procedure: set `OWNER_EMAIL=wenwei4046@gmail.com`, run `pnpm db:push`. |
+| 1 | Phase 0 admin bootstrap chicken-and-egg | **Migration trigger keyed on `app_config.owner_email` row** (NOT a CF/Vite env var — Postgres triggers cannot read those). Bootstrap migration seeds `app_config(key='owner_email', value=…)`; trigger on `auth.users INSERT` compares new row's email to `app_config.owner_email` and auto-creates matching `staff` row (`role='admin'`, `staff_code='OWNER'`). Admin can `UPDATE app_config` later (e.g. ownership transfer) without redeploy. | New migration `0042_owner_bootstrap.sql`. Idempotent. Phase 0 deploy: `INSERT INTO app_config(key,value) VALUES ('owner_email','wenwei4046@gmail.com')` then `pnpm db:push`. **Codex P1.8 fold (2026-05-08)**: original env-var design was fragile across dev/staging/prod and trigger-side env access. |
 | 2 | Pricing freshness across configurator session + SW cache | **Realtime push + SW stale-while-revalidate**. Configurator subscribes to `products` Realtime channel for the active product; on UPDATE, re-derive `lineItem` and show toast "Pricing updated". SW (vite-plugin-pwa Workbox) uses `StaleWhileRevalidate` for `/api/products*` — instant cache + background fetch. | New: `apps/pos/src/lib/realtime.ts` Realtime hooks. Workbox runtime caching config in `apps/pos/vite.config.ts`. |
-| 3 | Slip orphan on POST /orders failure | **Pending uploads table + TTL reaper**. New table `pending_slip_uploads (id, order_id?, r2_key, expires_at, promoted boolean)`. Inserted at `/uploads/slip-url`, promoted when `POST /orders` succeeds. Cron Worker every 10 min: for each row where `promoted=false AND expires_at < now()`, DELETE the R2 object + DELETE the row. | New table + Drizzle schema. New CF Worker `reaper-pending-slips.ts` deployed via `wrangler.toml` with cron trigger. |
+| 3 | Slip orphan on POST /orders failure | **`pending_slip_uploads` table with full upload state machine** (NOT just `promoted boolean`). Schema in `schema.ts`: `id, uploadSessionId UNIQUE (idempotency key), staffId, showroomId, r2Key, contentType, contentHash (sha256), contentSize, status enum (pending/uploaded/promoted/failed), retryCount, errorMsg, claimedBy, leaseExpiresAt, expiresAt, promotedAt, promotedToOrderId`. Flow: presigned PUT issues `pending` row → client confirms → API HEADs R2 + verifies hash + size → row goes `uploaded` → POST /orders promotes (`promoted` + sets promotedToOrderId) in same TX. Reaper: `SELECT FOR UPDATE SKIP LOCKED WHERE status IN ('pending','uploaded') AND expires_at < now() AND (claimed_by IS NULL OR lease_expires_at < now())`, set `claimed_by + lease_expires_at = now() + 1min`, then DELETE R2 object + DELETE row. **Lease prevents two reaper instances racing.** | Drizzle table done (2026-05-08). New CF Worker `reaper-pending-slips.ts` via `wrangler.toml` cron trigger (every 10 min). RLS: no client access — `service_role` only. |
 | 4 | Server-side PDF scope | **Defer Browser Rendering integration to Phase 5** (when email-receipt ships). Phase 1-3 use print-window only — both showroom counter ("Print receipt" CTA) AND backend coordinator ("Generate PDF" CTA). No Browser Rendering API cost during Phase 1-3. | Drop the "Workers + Puppeteer" wiring from Phase 0/1 scaffold. Print-window code in `pos-handover.jsx` (`PrintReceipt` component) and `backend-drawer.jsx` (`generatePDF`) ports as-is. |
 | 5 | Postcode seed source | **Vetted public GitHub dataset** (e.g., `yusufusoff/malaysia-postcodes` or equivalent MIT/CC0). License + completeness verified before seed. Coverage: 14 states + 3 federal territories, ~3000 entries. Free-text fallback for any postcode not found (rare). | One-time seed script: download CSV → transform to schema → INSERT into `my_localities`. Document the source URL + license + accessed date in `seed-libraries.sql`. |
 | 6 | API contract / Zod schema sharing | **drizzle-zod auto-generates DB-row schemas** + hand-written Zod for higher-level shapes (Cart, ConfiguratorState, Order POST body). Both client + server import from `packages/shared`. CI enforces via `pnpm typecheck`. | `packages/shared/src/schemas/index.ts` exports both auto-generated (`productSelectSchema = createSelectSchema(products)`) AND hand-written (`orderPostSchema`). drizzle-zod added to `packages/db/package.json`. |
-| 7 | RLS policies for new tables | **Spec'd up-front** in Phase 0 migrations: `quotes`: SELECT/INSERT/UPDATE/DELETE only `where created_by = auth.uid()` (sales staff own only); admin bypasses. `my_localities`: SELECT for all authenticated, INSERT/UPDATE only admin. `pending_slip_uploads`: no client access — only `service_role` (server / reaper Worker). | Add to `packages/db/src/migrations/` alongside table creation. Test in Phase 1 with RLS-enabled Supabase client. |
+| 7 | RLS policies for ALL tables (not just new ones) | **Phase 0 migration MUST include RLS policies** — *not* deferred to Phase 5 hardening. A staff portal storing customer PII / payment data without RLS at first deploy is a data-exposure risk. Per-table policy spec: **`quotes`** — sales: own (`created_by = auth.uid()`); showroom_lead/coordinator: same showroom; admin: all. **`my_localities`** — SELECT all authenticated; INSERT/UPDATE admin only. **`pending_slip_uploads`** — no client access (`service_role` only). **`payments`** — sales: read on own showroom orders only; finance/coordinator: read all + insert; admin: all. **`orders` / `order_items` / `order_lane_history` / `order_slip_events`** — sales: read own showroom; coordinator/finance: all; admin: all. **`products` / pricing tables** — SELECT all authenticated; INSERT/UPDATE admin only. **`staff` / `showrooms`** — read for authenticated, write admin only. **`app_config`** — read service_role only (sensitive for owner_email seed). | Add to `packages/db/src/migrations/` alongside table creation in **Phase 0**. Test with RLS-enabled Supabase client BEFORE Phase 1. **Codex P1.5 fold (2026-05-08)**: PORT_DESIGN.md previously deferred RLS implementation to Phase 5 — wrong order. |
 
 ### 11.2 Code quality (1 decision)
 
 | # | Issue | Decision | Implementation impact |
 |---|---|---|---|
-| 8 | Pure-function lift inventory was incomplete | **Expand §3.4 + §5.2**. Lift to `packages/shared/src/`: (a) `sofa-build.ts` — 18 fns from prototype `pos-sofa-config.jsx` (already listed); (b) `pricing.ts` — `addonPrice`, `computeOrderTotal`, `computeSofaPrice`, `computeMattressPrice`, `computeBedframePrice`; (c) `order-rules.ts` — `checkConditions`, `paidPct`, `pieceCount`; (d) `format.ts` — `fmtMoney`, `fmtDate`, `fmtTime`, `daysAgo`, `pricingRange`. **Critical**: `addonPrice` lift formula `Math.max(0, floors - 2) * items * 50` is the SOLE source of truth — no inline duplicate in client OR server. | Phase 1 acceptance: server-side recompute imports identical functions as client. |
+| 8 | Pure-function lift inventory was incomplete | **Expand §3.4 + §5.2**. Lift to `packages/shared/src/`: (a) `sofa-build.ts` — 18 fns from prototype `pos-sofa-config.jsx` (already listed); (b) `pricing.ts` — `addonPrice`, `computeOrderTotal`, `computeSofaPrice`, `computeMattressPrice`, `computeBedframePrice`; (c) `order-rules.ts` — `checkConditions`, `paidPct`, `pieceCount`; (d) `format.ts` — `fmtMoney`, `fmtDate`, `fmtTime`, `daysAgo`, `pricingRange`. **Codex P2.7 — addon formula divergence is a real bug, not just a lift target**: prototype POS uses `Math.max(0, floors - 2) * items * 50` (`pos-handover.jsx:260`, `:540`) — first 2 floors free, then RM 50 per floor·item. Prototype Backend drawer uses `floors * items * 50` (`backend-drawer.jsx:227`) — every floor charged. **POS version is canonical** (customer-visible at handover). Backend drawer port MUST match POS, not perpetuate the divergence. **Codex P2.6 — audit list of remaining inline price hardcodes** (must replace with per-Model pricing table reads during port): `prototype/pos-handover.jsx:481` ("one-time fees, added on top of the RM2,990 product price"), `:686` ("every piece is RM2,990"), `:738`, `:1190-1198` (pillow prices); `prototype/backend-drawer.jsx:105`, `:220`, `:247` (`BE_PRICE`, `RM2,990`). All must be sourced from `products.flatPrice` / `productCompartments.price` / `productSizeVariants.price` after Phase 1.5 wiring. | Phase 1 acceptance: server-side recompute imports identical functions as client. **Test**: assert addon formula gives identical results POS/Backend on inputs `(floors=1..5, items=1..3)`. **Audit**: grep production codebase for `2990` literal and `RM\s*\$\{?\s*\d` patterns before Phase 1 ships. |
 
 ### 11.3 Test coverage (1 decision)
 
@@ -880,6 +895,49 @@ If any step breaks, Phase 1 isn't done.
 |---|---|---|---|
 | 10 | 22 sofa-module PNGs first-paint | **SW pre-cache on install**: vite-plugin-pwa Workbox `precacheManifest` includes `/sofa-modules/png/*.png` (22 files, ~150KB). First app launch downloads all; subsequent opens are instant + offline-capable. | Workbox config in `apps/pos/vite.config.ts`. Verify cache size budget — should be <500KB for full app shell + assets. |
 | 11 | TanStack Query cache thrash on Realtime | **Granular keys + Realtime payload-merge**. Use `['products', productId]` per-SKU. Realtime UPDATE event includes `productId` → invalidate ONLY `['products', productId]` + merge new row into list `select`. Admin rapid-edits one SKU → only that one re-renders, list stays stable. | `apps/pos/src/lib/api.ts` adopts granular keys. List view uses `useQueries` or one master `['products']` with `select` projection that picks per-SKU rows from a normalized cache. |
-| 12 | PoScanModal aggregation | **Server-side endpoint `/api/po-aggregate`**. SQL aggregates logistics-lane orders without `po_issued`, joins `order_items` + product config, groups by supplier (from `product_supplier` table, see TODO in §11.5). Returns supplier-rolled-up SKU+qty list. Client just renders. | New API route. New Drizzle query. **Blocks on `suppliers` + `product_supplier` schema** (see TODOS.md). |
+| 12 | PoScanModal aggregation | **Server-side endpoint `/api/po-aggregate`**. SQL aggregates logistics-lane orders without `po_issued`, joins `order_items` + product config, groups by supplier (from `product_supplier` table, see TODO in §11.5). Returns supplier-rolled-up SKU+qty list. Client just renders. | New API route. New Drizzle query. **Blocks on `suppliers` + `product_supplier` schema** (TODOS.md T1). **Codex P1.4 note (2026-05-08)**: until T1 lands, prototype's `prototype/backend-orders.jsx:273-312` derives supplier by category via the inline `PO_SUPPLIER` constant. **This is a known temporary stub, not the production model.** Phase 4 cannot ship until T1 supplier schema is in place — do NOT port `PO_SUPPLIER` to production code as-is. |
+
+---
+
+## 12. Codex outside-voice review fold (2026-05-08)
+
+`/codex consult` against `PORT_DESIGN.md` after `/plan-eng-review` lock. 23 findings (8 P1 / 10 P2 / 5 P3). All 8 P1s decided; P2/P3 deferred to a separate pass. Full review artifact: `~/.gstack/projects/2990s/codex-review-20260508-port-design.md`.
+
+| # | Codex finding | Decision | Where applied |
+|---|---|---|---|
+| P1.1 | `schema.ts` missing `quotes` / `my_localities` / `pending_slip_uploads` | **FOLD** | `schema.ts`: 3 new tables added with full fields. §10 Decision 1 + 3 + 4 + §11.1 Issue 3 + 7 updated |
+| P1.2 | sofa config JSON storage missing geometry — server cannot recompute custom builds | **FOLD** | `schema.ts:orders.config` JSONB shape comment now mandates `customCells: [{moduleId, x, y, rot, recliners}]`. Aligns with §5.1 |
+| P1.3 | Seed data contradiction: §10.10 says empty catalog vs CLAUDE.md says port prototype | **FOLD** | §10 Decision 10 amended to call out supersession; `CLAUDE.md` red-line #5 rewritten to align |
+| P1.4 | Supplier schema missing but prototype `backend-orders.jsx:273-312` uses `PO_SUPPLIER` | **DEFER** | TODOS.md T1 still gates Phase 4. §11.4 Issue 12 now explicitly marks `PO_SUPPLIER` as a known temporary stub — must NOT be ported to production as-is |
+| P1.5 | RLS only aspirational; deferred to Phase 5 hardening | **FOLD** | §11.1 Issue 7 rewritten: RLS policies are **Phase 0 mandatory**, per-table spec covers all tables (orders, payments, products, etc.) — not just the new ones |
+| P1.6 | `pending_slip_uploads` lacks status / hash / lease fields, reaper races slow uploads | **FOLD (with P1.1)** | `schema.ts:pending_slip_uploads` includes `uploadSessionId`, `contentHash`, `contentSize`, `status` enum, `retryCount`, `claimedBy`, `leaseExpiresAt`. Reaper SELECT FOR UPDATE SKIP LOCKED pattern documented in §11.1 Issue 3 |
+| P1.7 | `orders.paid` is single integer; cannot record multiple payments | **FOLD** | `schema.ts:payments` audit table added with `kind`, `amount`, `method`, `slipKey`, `recordedBy`. `orders.paid` stays as denormalised running total |
+| P1.8 | `OWNER_EMAIL` env-var trigger fragile (Postgres can't read CF/Vite env) | **FOLD** | `schema.ts:app_config` table added. §11.1 Issue 1 rewritten: trigger reads `app_config.owner_email`, ALTER without redeploy |
+
+### P2 high-priority fold (also 2026-05-08)
+
+After P1 fold, 4 high-priority P2s also addressed:
+
+| # | Codex P2 finding | Decision | Where applied |
+|---|---|---|---|
+| P2.3 | `>0.5%` reject UX hostile to live customer | **FOLD** | §5.2 — flow now returns HTTP **409 Conflict** (not 400), client preserves customer/payment/slip state, surfaces `<PricingDriftModal>` with "Accept new total + place order" CTA. New §5.2.1 added |
+| P2.5 | Order rows missing `pricing_version` snapshot for audit | **FOLD** | `schema.ts:orders.pricing_version` text NOT NULL added. Server stamps from `app_config.pricing_version` (bumped by trigger on any pricing UPDATE) |
+| P2.6 | Other inline price hardcodes beyond `MODULE_PRICE` | **FOLD** | §11.2 Issue 8 expanded with explicit audit list: `pos-handover.jsx:481/686/738/1190`, `backend-drawer.jsx:105/220/247`. Phase 1 grep gate added |
+| P2.7 | POS uses `Math.max(0, floors-2)*items*50`; Backend uses `floors*items*50` (real bug) | **FOLD** | §11.2 Issue 8 declares POS version canonical (customer-visible). Backend drawer port MUST adopt POS formula. Test gate: identical results on inputs (floors=1..5, items=1..3) |
+| P2.10 | `quotes` RLS too narrow | **FOLD** (with P1.5) | §11.1 Issue 7 rewrite covers this: showroom_lead sees same-showroom quotes |
+
+### Pending P2/P3 (next pass)
+
+5 P2 + 5 P3 still open. Highlights:
+
+- **P2.1** Receipt UX inconsistency between §10.2 (server PDF locked) and §11.1 Issue 4 (deferred to Phase 5). Phases 1-4 need a defined interim receipt path (print only? browser save-as-PDF?) and copy fixes (`pos-handover.jsx:947` says "copy sent to email" but no email subsystem yet).
+- **P2.2** Integer MYR + tax. SST/GST is %-based — decide tax-inclusive vs exclusive vs rounded-to-nearest-RM. Schema may need `tax_total`, `tax_rate_bps`, `tax_inclusive` columns. Or punt to "all displayed prices are tax-inclusive RM" if scope allows.
+- **P2.4** Pricing freshness mid-configurator can thrash (admin edits while customer watches). Decide: live-price-always-wins vs lock-price-for-N-minutes via `pricingVersion`.
+- **P2.8** iOS PWA realism — Safari orientation lock not reliable, 7-day storage eviction, install flow for non-technical staff.
+- **P2.9** Slip upload idempotency / backoff (`uploadSessionId` already in schema for P1.6, but client-side retry policy + "resume / reselect slip" UX undefined).
+
+P3 nice-to-haves (PIN auto-lock, multi-showroom RLS test cases, copy deviation log, popup-blocker handling for print fallback, Phase 0 lane parallelism — Phase 0 lane parallelism caveat is partially addressed by §11.8's pure-fn lift sequencing).
+
+Schema impact of remaining P2/P3 pass: optional `tax_total` / `tax_rate_bps` / `tax_inclusive` columns on orders + payments **only if** tax decision lands in scope. No new tables expected.
 
 ---
