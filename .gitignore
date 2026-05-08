@@ -36,3 +36,6 @@ test-results/
 prototype/uploads/
 prototype/screenshots/
 prototype/_test/
+
+# claude-mem auto-generated context file (per-session, regenerates)
+AGENTS.md

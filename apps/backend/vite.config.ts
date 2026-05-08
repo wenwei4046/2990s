@@ -5,6 +5,8 @@ import react from '@vitejs/plugin-react';
 // Tablet ad-hoc only (sidebar already collapses at <1100 in prototype).
 export default defineConfig({
   plugins: [react()],
+  // Read .env from monorepo root so all apps share one source of truth.
+  envDir: '../../',
   server: { port: 5174, host: true },
   preview: { port: 4174 },
 });
