@@ -4,6 +4,7 @@
 
 // computeSofaPrice lives in sofa-build.ts (re-exported via index). Types only:
 import type { Cell, Depth, SofaPriceResult, SofaProductPricing } from './sofa-build';
+import { computeSofaPrice } from './sofa-build';
 
 /** Addon "lift access" formula. Codex P2.7 audit: POS prototype version is canonical
  *  (customer-visible at handover). Backend drawer's `floors * items * 50` was a bug. */
@@ -102,24 +103,143 @@ export const computeBedframePrice = (
   };
 };
 
-/* ─── Whole-order recompute (TODO — Phase 2 step C) ────────────────── */
+/* ─── Whole-order recompute (server-side on POST /orders) ──────────── */
 
-export interface OrderTotalResult {
+export type SofaLineConfig = {
+  kind: 'sofa';
+  productId: string;
+  bundleId?: string;
+  cells?: Cell[];
+  depth?: Depth;
+};
+export type SizeLineConfig = {
+  kind: 'size';
+  productId: string;
+  sizeId: string;
+};
+export type OrderLineConfig = SofaLineConfig | SizeLineConfig;
+
+export interface OrderLineInput {
+  qty: number;
+  config: OrderLineConfig;
+}
+
+export interface ServerProductInfo {
+  productId: string;
+  pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  flatPrice: number | null;
+  sofa?: SofaProductPricing;
+  sizes?: { sizeId: string; price: number; active: boolean }[];
+}
+
+export interface OrderLineResult {
+  productId: string;
+  qty: number;
+  unitPrice: number;
+  lineTotal: number;
+  configJson: OrderLineConfig;
+  breakdown: string[];
+}
+
+export interface OrderTotals {
+  lines: OrderLineResult[];
   subtotal: number;
   addonTotal: number;
   total: number;
-  perItem: { itemIdx: number; kind: string; title: string; total: number; breakdown: string[] }[];
 }
 
+export type OrderTotalError =
+  | { code: 'unknown_product'; productId: string }
+  | { code: 'wrong_pricing_kind'; productId: string; expected: string; got: string }
+  | { code: 'no_geometry_or_bundle'; productId: string }
+  | { code: 'inactive_bundle'; productId: string; bundleId: string }
+  | { code: 'inactive_size'; productId: string; sizeId: string }
+  | { code: 'unknown_size'; productId: string; sizeId: string };
+
+export class OrderPricingError extends Error {
+  detail: OrderTotalError;
+  constructor(detail: OrderTotalError) {
+    super(JSON.stringify(detail));
+    this.detail = detail;
+  }
+}
+
+/**
+ * Server-side recompute. Throws OrderPricingError on any catalog mismatch.
+ * Used by POST /orders BEFORE the client's clientTotal is trusted.
+ */
 export const computeOrderTotal = (
-  /* eslint-disable @typescript-eslint/no-explicit-any */
-  _order: any,
-  _productsState: any,
-  _addonsState: any,
-  /* eslint-enable */
-): OrderTotalResult => {
-  // Wires together computeSofaPrice / computeMattressPrice / computeBedframePrice /
-  // addonPrice for every cart item. Lands when POST /orders does server-side
-  // recompute (PORT_DESIGN §5.2). Phase 2 step C.
-  throw new Error('computeOrderTotal: not yet implemented (Phase 2 step C)');
+  lines: OrderLineInput[],
+  productInfoById: Map<string, ServerProductInfo>,
+): OrderTotals => {
+  const out: OrderLineResult[] = [];
+  for (const line of lines) {
+    const info = productInfoById.get(line.config.productId);
+    if (!info) throw new OrderPricingError({ code: 'unknown_product', productId: line.config.productId });
+
+    if (line.config.kind === 'sofa') {
+      const cfg: SofaLineConfig = line.config;
+      if (info.pricingKind !== 'sofa_build') {
+        throw new OrderPricingError({ code: 'wrong_pricing_kind', productId: info.productId, expected: 'sofa_build', got: info.pricingKind });
+      }
+      if (!info.sofa) throw new OrderPricingError({ code: 'wrong_pricing_kind', productId: info.productId, expected: 'sofa_build', got: 'no_pricing_loaded' });
+
+      let unitPrice = 0;
+      const breakdown: string[] = [];
+
+      if (cfg.cells && cfg.cells.length > 0) {
+        const result: SofaPriceResult = computeSofaPrice(cfg.cells, cfg.depth ?? '24', info.sofa);
+        unitPrice = result.total;
+        for (const g of result.groups) {
+          breakdown.push(`${g.signature || 'group'} · ${g.basis}: RM ${g.finalPrice.toLocaleString('en-MY')}`);
+        }
+      } else if (cfg.bundleId) {
+        const wantBundleId = cfg.bundleId;
+        const bundle = info.sofa.bundles.find((b) => b.bundleId === wantBundleId);
+        if (!bundle) throw new OrderPricingError({ code: 'inactive_bundle', productId: info.productId, bundleId: wantBundleId });
+        if (!bundle.active) throw new OrderPricingError({ code: 'inactive_bundle', productId: info.productId, bundleId: wantBundleId });
+        unitPrice = bundle.price;
+        breakdown.push(`Bundle ${bundle.bundleId}: RM ${bundle.price.toLocaleString('en-MY')}`);
+      } else {
+        throw new OrderPricingError({ code: 'no_geometry_or_bundle', productId: info.productId });
+      }
+
+      out.push({
+        productId: info.productId,
+        qty: line.qty,
+        unitPrice,
+        lineTotal: unitPrice * line.qty,
+        configJson: cfg,
+        breakdown,
+      });
+    } else {
+      // size_variants
+      const cfg: SizeLineConfig = line.config;
+      if (info.pricingKind !== 'size_variants') {
+        throw new OrderPricingError({ code: 'wrong_pricing_kind', productId: info.productId, expected: 'size_variants', got: info.pricingKind });
+      }
+      const wantSizeId = cfg.sizeId;
+      const variant = info.sizes?.find((s) => s.sizeId === wantSizeId);
+      if (!variant) throw new OrderPricingError({ code: 'unknown_size', productId: info.productId, sizeId: wantSizeId });
+      if (!variant.active) throw new OrderPricingError({ code: 'inactive_size', productId: info.productId, sizeId: wantSizeId });
+      out.push({
+        productId: info.productId,
+        qty: line.qty,
+        unitPrice: variant.price,
+        lineTotal: variant.price * line.qty,
+        configJson: cfg,
+        breakdown: [`Size ${cfg.sizeId}: RM ${variant.price.toLocaleString('en-MY')}`],
+      });
+    }
+  }
+
+  const subtotal = out.reduce((s, l) => s + l.lineTotal, 0);
+  return { lines: out, subtotal, addonTotal: 0, total: subtotal };
+};
+
+/** True when the client-submitted total drifts more than 0.5% from server. */
+export const pricingDriftExceeds = (clientTotal: number, serverTotal: number): boolean => {
+  if (serverTotal <= 0) return clientTotal !== 0;
+  const drift = Math.abs(clientTotal - serverTotal) / serverTotal;
+  return drift > 0.005;
 };

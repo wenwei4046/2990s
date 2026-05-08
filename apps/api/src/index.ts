@@ -4,6 +4,7 @@ import { logger } from 'hono/logger';
 import type { Env, Variables } from './env';
 import { health } from './routes/health';
 import { products } from './routes/products';
+import { orders } from './routes/orders';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -23,6 +24,7 @@ app.use('*', async (c, next) => {
 
 app.route('/health', health);
 app.route('/products', products);
+app.route('/orders', orders);
 
 app.notFound((c) => c.json({ error: 'not_found', path: c.req.path }, 404));
 
