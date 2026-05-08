@@ -1,1 +1,0 @@
-This folder contains the built output assets for the worker "2990s-api" generated at 2026-05-08T14:38:28.031Z.
