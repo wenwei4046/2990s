@@ -42,7 +42,7 @@ export const Cart = () => {
             </div>
             <div className={styles.actions}>
               <Button variant="ghost" onClick={clear}>Clear</Button>
-              <Button variant="primary" disabled>Checkout (Phase 2 step E)</Button>
+              <Button variant="primary" onClick={() => navigate('/handover')}>Continue to handover</Button>
             </div>
           </footer>
         </>
