@@ -1,0 +1,39 @@
+/* Minimal reset — tokens.css owns the typography + body styling. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+body {
+  min-height: 100vh;
+  overscroll-behavior: none;
+}
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* POS landscape-only fallback — Codex P2.8 placeholder. The PWA manifest sets
+   orientation: 'landscape' but iOS Safari may not respect it. Show rotate
+   prompt if portrait detected. Real impl pending. */
+@media (orientation: portrait) and (max-width: 900px) {
+  #root::after {
+    content: 'Please rotate to landscape';
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-button);
+    font-weight: var(--w-semibold);
+    z-index: 9999;
+  }
+}

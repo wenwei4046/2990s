@@ -1,0 +1,23 @@
+{
+  "name": "@2990s/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pricing": "./src/pricing.ts",
+    "./sofa-build": "./src/sofa-build.ts",
+    "./order-rules": "./src/order-rules.ts",
+    "./format": "./src/format.ts",
+    "./schemas": "./src/schemas/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
