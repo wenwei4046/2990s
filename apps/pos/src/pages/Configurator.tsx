@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Hourglass } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { BUNDLES, type BundleDef } from '@2990s/shared';
+import { BUNDLES, type BundleDef, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
+  useProductCompartments,
   useProductPricingRealtime,
 } from '../lib/queries';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
+import { CustomBuilder } from './CustomBuilder';
 import styles from './Configurator.module.css';
 
 export const Configurator = () => {
@@ -16,9 +18,18 @@ export const Configurator = () => {
   const navigate = useNavigate();
   const product = useProduct(productId);
   const bundles = useProductBundles(productId);
+  const compartments = useProductCompartments(productId);
   useProductPricingRealtime(productId);
 
   const [picked, setPicked] = useState<string | null>(null);
+  const [mode, setMode] = useState<'quick' | 'custom'>('quick');
+
+  // Build the SofaProductPricing struct that the shared pure functions expect.
+  const sofaPricing = useMemo<SofaProductPricing>(() => ({
+    compartments: compartments.data ?? [],
+    bundles: bundles.data ?? [],
+    reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
+  }), [compartments.data, bundles.data, product.data?.recliner_upgrade_price]);
 
   if (product.isLoading) return <p className={styles.empty}>Loading product…</p>;
   if (product.error || !product.data) {
@@ -52,15 +63,47 @@ export const Configurator = () => {
       </header>
 
       {isSofa && (
-        <SofaQuickPick
-          productId={p.id}
-          productName={p.name}
-          bundles={bundles.data ?? []}
-          isLoading={bundles.isLoading}
-          picked={picked}
-          onPick={setPicked}
-          onAdded={() => navigate('/catalog')}
-        />
+        <>
+          <div className={styles.tabs} role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'quick'}
+              className={`${styles.tab} ${mode === 'quick' ? styles.tabActive : ''}`}
+              onClick={() => setMode('quick')}
+            >
+              Quick-Pick
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'custom'}
+              className={`${styles.tab} ${mode === 'custom' ? styles.tabActive : ''}`}
+              onClick={() => setMode('custom')}
+            >
+              Custom build
+            </button>
+          </div>
+
+          {mode === 'quick' ? (
+            <SofaQuickPick
+              productId={p.id}
+              productName={p.name}
+              bundles={bundles.data ?? []}
+              isLoading={bundles.isLoading}
+              picked={picked}
+              onPick={setPicked}
+              onAdded={() => navigate('/catalog')}
+            />
+          ) : (
+            <CustomBuilder
+              productId={p.id}
+              productName={p.name}
+              pricing={sofaPricing}
+              onAdded={() => navigate('/catalog')}
+            />
+          )}
+        </>
       )}
 
       {isSize && (

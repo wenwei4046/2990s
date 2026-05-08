@@ -1,0 +1,291 @@
+.shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--space-5);
+  margin-top: var(--space-4);
+}
+
+/* ── Palette ──────────────────────────────────────────────────── */
+
+.palette {
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.paletteHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.hint {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
+
+.paletteList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.paletteGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.paletteGroupHead {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-soft);
+  margin-bottom: 2px;
+}
+
+.paletteItem {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 120ms, border-color 120ms;
+}
+.paletteItem:hover {
+  background: var(--bg-alt);
+  border-color: var(--c-burnt);
+}
+
+.paletteArt {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  background: var(--c-cream);
+  border-radius: var(--radius-xs);
+}
+.paletteArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.paletteInfo { min-width: 0; }
+.paletteCode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+}
+.paletteSub {
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.palettePrice {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+}
+
+.paletteAdd {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--c-burnt);
+  color: white;
+  font-weight: var(--w-bold);
+  font-size: var(--fs-16);
+}
+
+/* ── Canvas ───────────────────────────────────────────────────── */
+
+.canvasCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.canvasHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.canvasTitle {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-20);
+  margin: 4px 0 0;
+}
+
+.headTools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.depthChip,
+.bundlePill,
+.notMatchPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+}
+.depthChip { background: var(--bg-alt); color: var(--fg-muted); }
+.bundlePill { background: rgba(46, 125, 50, 0.12); color: #1b5e20; }
+.notMatchPill { background: rgba(211, 47, 47, 0.12); color: #b71c1c; }
+
+.clearBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font: inherit;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+  color: var(--fg);
+}
+.clearBtn:hover { background: var(--bg-alt); }
+
+.stage {
+  position: relative;
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background-image: linear-gradient(rgba(34, 31, 32, 0.05) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(34, 31, 32, 0.05) 1px, transparent 1px);
+  background-size: 50px 50px; /* 50cm grid */
+  touch-action: none;
+  user-select: none;
+}
+
+.tvAnchor {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-soft);
+  background: rgba(255, 255, 255, 0.8);
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+}
+
+.cell {
+  position: absolute;
+  cursor: grab;
+  border: 2px dashed transparent;
+  border-radius: 4px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+}
+.cell:active { cursor: grabbing; }
+.cellSelected {
+  border-color: var(--c-burnt);
+  z-index: 5;
+}
+.cellViolation {
+  border-color: #d32f2f;
+  background: rgba(211, 47, 47, 0.08);
+  z-index: 4;
+}
+
+.cellArt {
+  position: absolute;
+  pointer-events: none;
+  transform-origin: center center;
+}
+.cellArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.tools {
+  position: absolute;
+  top: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  z-index: 10;
+}
+
+.emptyOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  pointer-events: none;
+}
+.emptyTitle {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-20);
+}
+.emptyBody {
+  font-size: var(--fs-13);
+  text-align: center;
+}
+
+.priceBar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  gap: var(--space-3);
+}

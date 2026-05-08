@@ -54,6 +54,35 @@
   margin-bottom: var(--space-6);
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: var(--space-4);
+  background: var(--bg-alt);
+  border-radius: var(--radius-pill);
+  width: fit-content;
+}
+.tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  color: var(--fg-muted);
+  transition: background 120ms, color 120ms;
+}
+.tab:hover { color: var(--fg); }
+.tabActive {
+  background: var(--c-cream);
+  color: var(--fg);
+  box-shadow: var(--shadow-1);
+}
+
 .sectionHead {
   margin-bottom: var(--space-4);
 }
