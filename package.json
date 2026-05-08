@@ -1,0 +1,26 @@
+{
+  "name": "2990s-portal",
+  "private": true,
+  "version": "0.0.0",
+  "description": "2990's Home POS + Backend Portal",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "db:generate": "pnpm --filter @2990s/db generate",
+    "db:push": "pnpm --filter @2990s/db push",
+    "db:seed": "pnpm --filter @2990s/db seed",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}
