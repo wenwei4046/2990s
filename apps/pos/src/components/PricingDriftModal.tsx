@@ -12,14 +12,16 @@ interface Props {
 
 export const PricingDriftModal = ({ drift, submitting, onAccept, onCancel }: Props) => {
   const delta = drift.serverTotal - drift.clientTotal;
-  const direction = delta > 0 ? 'up' : 'down';
+  const movedHeading = delta === 0
+    ? 'Pricing reconciled'
+    : `Total moved ${delta > 0 ? 'up' : 'down'} by ${fmtRM(Math.abs(delta))}`;
 
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="drift-title">
       <div className={styles.card}>
         <span className={styles.eyebrow}>Pricing changed while you were configuring</span>
         <h2 id="drift-title" className={styles.title}>
-          Total moved {direction} by {fmtRM(Math.abs(delta))}
+          {movedHeading}
         </h2>
         <p className={styles.body}>
           Your customer was quoted <strong>{fmtRM(drift.clientTotal)}</strong>, but current

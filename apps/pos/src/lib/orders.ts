@@ -102,11 +102,16 @@ const submitOrder = async (input: OrderSubmitInput): Promise<OrderCreatedRespons
   });
 
   if (res.status === 409) {
-    const payload = (await res.json()) as PricingDriftPayload;
+    let payload: PricingDriftPayload;
+    try {
+      payload = (await res.json()) as PricingDriftPayload;
+    } catch {
+      throw new Error('POST /orders returned 409 with malformed body');
+    }
     throw new PricingDriftError(payload);
   }
   if (!res.ok) {
-    const text = await res.text();
+    const text = await res.text().catch(() => '<no body>');
     throw new Error(`POST /orders failed (${res.status}): ${text}`);
   }
   return (await res.json()) as OrderCreatedResponse;

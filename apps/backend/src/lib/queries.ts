@@ -1,7 +1,7 @@
 // Server-cache hooks. Library tables stale-forever (rarely change), products
 // stale-30s (Realtime invalidates this in Phase 1.5).
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
@@ -335,9 +335,17 @@ export const useOrders = () =>
  *
  * Requires migration 0007_orders_realtime.sql to add `orders` to the
  * supabase_realtime publication.
+ *
+ * onInsert is captured in a ref so callers don't need to memoize their
+ * callback to keep the channel stable. Subscribing once on mount is the
+ * intended behaviour — re-subscribing on every parent render would tear
+ * down + recreate the channel and miss in-flight INSERTs.
  */
 export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
   const qc = useQueryClient();
+  const onInsertRef = useRef(onInsert);
+  useEffect(() => { onInsertRef.current = onInsert; }, [onInsert]);
+
   useEffect(() => {
     const channel = supabase
       .channel('orders-board')
@@ -346,13 +354,13 @@ export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
         { event: '*', schema: 'public', table: 'orders' },
         (payload) => {
           void qc.invalidateQueries({ queryKey: ['orders'] });
-          if (payload.eventType === 'INSERT' && onInsert) {
+          if (payload.eventType === 'INSERT' && onInsertRef.current) {
             const r = payload.new as Record<string, unknown>;
-            onInsert({
+            onInsertRef.current({
               id: String(r.id),
               placedAt: String(r.placed_at),
               customerName: String(r.customer_name),
-              customerPhone: (r.customer_phone as string) ?? null,
+              customerPhone: (r.customer_phone as string | null) ?? null,
               total: Number(r.total),
               lane: r.lane as OrderLane,
               paymentMethod: String(r.payment_method),
@@ -365,5 +373,5 @@ export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [qc, onInsert]);
+  }, [qc]);
 };

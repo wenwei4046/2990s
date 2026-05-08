@@ -64,6 +64,7 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
   const [cells, setCells] = useState<Cell[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPos, setDraftPos] = useState<{ id: string; x: number; y: number } | null>(null);
+  const dragRef = useRef<{ id: string; pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const depth: Depth = '24'; // depth picker UI lands in a follow-up step
 
   const addConfigured = useCart((s) => s.addConfigured);
@@ -116,8 +117,6 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
       moved: false,
     };
   };
-
-  const dragRef = useRef<{ id: string; pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
 
   const onCellPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const s = dragRef.current;

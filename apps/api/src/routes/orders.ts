@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { orderV1PostSchema, type OrderLineDto } from '@2990s/shared/schemas';
+import { orderV1PostSchema } from '@2990s/shared/schemas';
 import {
   computeOrderTotal,
   pricingDriftExceeds,
@@ -14,12 +14,40 @@ export const orders = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 orders.use('*', supabaseAuth);
 
+// Roles allowed to place an order from the POS. Coordinator/finance use the
+// Backend portal — their `staff.showroom_id` is NULL so a POS submission would
+// silently fall back to the alphabetically-first showroom (migration 0006
+// failsafe). Reject early so the bug doesn't compound when a 2nd showroom
+// opens. CLAUDE.md "POS is sales-only" formalised at the auth boundary.
+const POS_ORDER_ROLES = new Set(['sales', 'showroom_lead', 'admin']);
+
 orders.post('/', async (c) => {
   let body: unknown;
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const supabaseForRole = c.get('supabase');
+  const userId = c.get('user').id;
+  const staffRes = await supabaseForRole
+    .from('staff')
+    .select('role, active')
+    .eq('id', userId)
+    .maybeSingle();
+  if (staffRes.error) {
+    return c.json({ error: 'role_lookup_failed', reason: staffRes.error.message }, 500);
+  }
+  if (!staffRes.data || !staffRes.data.active) {
+    return c.json({ error: 'forbidden', reason: 'no_active_staff' }, 403);
+  }
+  if (!POS_ORDER_ROLES.has(staffRes.data.role)) {
+    return c.json({
+      error: 'wrong_portal',
+      reason: 'POS order placement is sales-only. Coordinator/finance: use the Backend portal.',
+      role: staffRes.data.role,
+    }, 403);
   }
 
   const parsed = orderV1PostSchema.safeParse(body);
@@ -33,8 +61,7 @@ orders.post('/', async (c) => {
     );
   }
   const dto = parsed.data;
-
-  const supabase = c.get('supabase');
+  const supabase = supabaseForRole;
 
   // Gather every distinct productId in the cart, fetch product + per-product
   // pricing rows in parallel. RLS scopes everything to authenticated staff.
@@ -159,6 +186,9 @@ orders.post('/', async (c) => {
     return c.json({ error: 'create_failed', reason: error.message }, 500);
   }
 
+  // computeOrderTotal preserves input order, so totals.lines[i] aligns with
+  // dto.lines[i]. The kind is read from dto.lines so the response shape stays
+  // stable even if pricing.ts internals evolve (cells vs bundleId branches).
   return c.json({
     id: data as string,
     subtotal: totals.subtotal,
@@ -168,9 +198,7 @@ orders.post('/', async (c) => {
       qty: l.qty,
       unitPrice: l.unitPrice,
       lineTotal: l.lineTotal,
-      kind: lineKind(dto.lines[i]),
+      kind: dto.lines[i]?.config.kind ?? 'unknown',
     })),
   }, 201);
 });
-
-const lineKind = (l: OrderLineDto | undefined): string => l?.config.kind ?? 'unknown';
