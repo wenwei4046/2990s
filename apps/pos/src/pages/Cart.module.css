@@ -1,0 +1,115 @@
+.shell {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: var(--space-5) var(--space-6);
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.heading {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-32);
+  margin: 0;
+}
+
+.empty {
+  text-align: center;
+  padding: var(--space-7);
+  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.line {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.lineMain { min-width: 0; }
+.lineName {
+  font-family: var(--font-title);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-16);
+  margin: 0 0 2px;
+}
+.lineSummary {
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+
+.qtyBox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+.qtyBtn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  font-size: var(--fs-16);
+  cursor: pointer;
+}
+.qtyBtn:hover { background: var(--bg); }
+.qty {
+  min-width: 24px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-weight: var(--w-semibold);
+}
+
+.lineTotal {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-16);
+  min-width: 100px;
+  text-align: right;
+}
+
+.footer {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.subtotalRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}

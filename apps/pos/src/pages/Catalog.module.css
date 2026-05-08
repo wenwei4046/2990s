@@ -33,6 +33,23 @@
   color: var(--fg-muted);
 }
 
+.cartBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  text-decoration: none;
+  color: var(--fg);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-13);
+  transition: background 150ms;
+}
+.cartBadge:hover { background: var(--bg-alt); }
+
 .empty {
   padding: var(--space-7);
   text-align: center;

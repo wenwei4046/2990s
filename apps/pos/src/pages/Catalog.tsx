@@ -1,14 +1,19 @@
 import { Link } from 'react-router';
-import { LogOut, Hourglass } from 'lucide-react';
+import { LogOut, Hourglass, ShoppingCart } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
+import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useCatalog, useCatalogRealtime, type CatalogProduct } from '../lib/queries';
+import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
 import styles from './Catalog.module.css';
 
 export const Catalog = () => {
   const { user, signOut } = useAuth();
   const catalog = useCatalog();
   useCatalogRealtime();
+  const lines = useCart((s) => s.lines);
+  const count = cartItemCount(lines);
+  const subtotal = cartSubtotal(lines);
 
   return (
     <main className={styles.app}>
@@ -18,6 +23,10 @@ export const Catalog = () => {
           <h1 className={styles.heading}>Catalog</h1>
         </div>
         <div className={styles.headerRight}>
+          <Link to="/cart" className={styles.cartBadge} aria-label="Cart">
+            <ShoppingCart size={18} strokeWidth={1.75} />
+            <span>{count > 0 ? `${count} · ${fmtRM(subtotal)}` : 'Cart empty'}</span>
+          </Link>
           <span className={styles.email}>{user?.email}</span>
           <IconButton
             icon={<LogOut size={20} strokeWidth={1.75} />}

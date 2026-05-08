@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Hourglass, Package } from 'lucide-react';
+import { ArrowLeft, Hourglass } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { BUNDLES, type BundleDef } from '@2990s/shared';
 import {
@@ -8,6 +8,7 @@ import {
   useProductBundles,
   useProductPricingRealtime,
 } from '../lib/queries';
+import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import styles from './Configurator.module.css';
 
 export const Configurator = () => {
@@ -53,10 +54,12 @@ export const Configurator = () => {
       {isSofa && (
         <SofaQuickPick
           productId={p.id}
+          productName={p.name}
           bundles={bundles.data ?? []}
           isLoading={bundles.isLoading}
           picked={picked}
           onPick={setPicked}
+          onAdded={() => navigate('/catalog')}
         />
       )}
 
@@ -95,13 +98,16 @@ export const Configurator = () => {
 
 interface SofaQuickPickProps {
   productId: string;
+  productName: string;
   bundles: { bundleId: string; active: boolean; price: number }[];
   isLoading: boolean;
   picked: string | null;
   onPick: (id: string) => void;
+  onAdded: () => void;
 }
 
-const SofaQuickPick = ({ bundles, isLoading, picked, onPick }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ productId, productName, bundles, isLoading, picked, onPick, onAdded }: SofaQuickPickProps) => {
+  const addConfigured = useCart((s) => s.addConfigured);
   if (isLoading) return <p className={styles.empty}>Loading bundles…</p>;
 
   // Render every bundle the catalog defines, but ones inactive for this Model
@@ -114,6 +120,23 @@ const SofaQuickPick = ({ bundles, isLoading, picked, onPick }: SofaQuickPickProp
       active: row?.active ?? false,
     };
   });
+
+  const pickedRow = rows.find((r) => r.bundle.id === picked);
+  const canAdd = pickedRow != null && pickedRow.active && pickedRow.price != null;
+
+  const handleAdd = () => {
+    if (!canAdd || pickedRow == null || pickedRow.price == null) return;
+    const snapshot: SofaConfigSnapshot = {
+      kind: 'sofa',
+      productId,
+      productName,
+      bundleId: pickedRow.bundle.id,
+      total: pickedRow.price,
+      summary: `${pickedRow.bundle.id} · ${pickedRow.bundle.label}`,
+    };
+    addConfigured(snapshot);
+    onAdded();
+  };
 
   return (
     <section className={styles.section}>
@@ -150,10 +173,12 @@ const SofaQuickPick = ({ bundles, isLoading, picked, onPick }: SofaQuickPickProp
         })}
       </div>
       <div className={styles.actions}>
-        <Button variant="primary" disabled={!picked}>
-          {picked
-            ? `Add ${picked} to cart (Phase 2 step C)`
-            : 'Pick a bundle to continue'}
+        <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
+          {canAdd
+            ? `Add ${pickedRow!.bundle.label} to cart`
+            : picked
+              ? 'Bundle not on this Model'
+              : 'Pick a bundle to continue'}
         </Button>
       </div>
     </section>
