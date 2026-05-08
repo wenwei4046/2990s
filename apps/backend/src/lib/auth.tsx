@@ -70,8 +70,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!newSession) {
+        setSession(null);
+        setStaff(null);
+        return;
+      }
+      // Fetch staff BEFORE setting session so Layout sees user+staff together
+      // — otherwise the gap flashes to /no-access during the staff round-trip.
+      const newStaff = await fetchStaff(newSession.user.id);
       setSession(newSession);
-      setStaff(newSession ? await fetchStaff(newSession.user.id) : null);
+      setStaff(newStaff);
     });
 
     return () => {
