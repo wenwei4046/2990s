@@ -2,7 +2,8 @@ import { createBrowserRouter, Navigate } from 'react-router';
 import { Layout, NoAccess } from './components/Layout';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
-import { Orders, SkuMaster, VerifySlips, Addons, Customers, Settings } from './pages/Placeholder';
+import { SkuMaster } from './pages/SkuMaster';
+import { Orders, VerifySlips, Addons, Customers, Settings } from './pages/Placeholder';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },

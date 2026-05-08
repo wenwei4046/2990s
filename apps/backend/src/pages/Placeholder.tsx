@@ -26,14 +26,6 @@ export const Orders = () => (
   />
 );
 
-export const SkuMaster = () => (
-  <Placeholder
-    title="SKU Master"
-    phase="Phase 1 (next session)"
-    hint="Admin-only. List products + 'New SKU' drawer with category-aware PricingEditor. POST /products → server validates Zod → INSERTs in transaction. Realtime push to POS."
-  />
-);
-
 export const VerifySlips = () => (
   <Placeholder
     title="Verify slips"

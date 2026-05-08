@@ -31,6 +31,10 @@ Thumbs.db
 coverage/
 playwright-report/
 test-results/
+.playwright-mcp/
+
+# Debug screenshots at repo root (not source assets — prototype/assets/ stays in)
+/*.png
 
 # Prototype working artifacts (not canonical spec)
 prototype/uploads/
