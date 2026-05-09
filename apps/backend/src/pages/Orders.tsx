@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { Inbox, RefreshCw } from 'lucide-react';
 import { fmtRM, fmtTime, daysAgo } from '@2990s/shared';
 import { useOrders, useOrdersRealtime, type OrderLane, type OrderListRow } from '../lib/queries';
 import { OrderDrawer } from '../components/OrderDrawer';
+import { PoScanModal } from '../components/PoScanModal';
 import styles from './Orders.module.css';
 
 const LANE_LABEL: Record<OrderLane, string> = {
@@ -27,6 +29,24 @@ export const Orders = () => {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const openOrderId = searchParams.get('orderId');
+  const [poScanOpen, setPoScanOpen] = useState(false);
+  const queryClient = useQueryClient();
+
+  // Logistics-lane orders for the Scan PO modal. Cart shape is empty
+  // until catalog seeds with supplier_id-bearing products exist
+  // (Task 4.1 in the Suppliers+PO sub-project). Until then the modal
+  // renders the "All POs already issued" empty state — feature ships
+  // dormant per spec §1.3.
+  const logisticsOrdersForScan = useMemo(() => {
+    const list = (orders.data ?? []).filter(
+      (o) => o.lane === 'logistics' && !(o as { poIssued?: boolean }).poIssued,
+    );
+    return list.map((o) => ({
+      id: o.id,
+      customerName: o.customerName ?? '—',
+      cart: [] as never[], // rollup data wiring deferred to Task 4.1
+    }));
+  }, [orders.data]);
 
   const openDrawer = (id: string) => {
     setSearchParams({ orderId: id }, { replace: true });
@@ -66,15 +86,36 @@ export const Orders = () => {
             Realtime list of placed orders. Phase 3 turns this into the 6-lane drag-and-drop board.
           </p>
         </div>
-        <button
-          type="button"
-          className={styles.refresh}
-          onClick={() => void orders.refetch()}
-          disabled={orders.isFetching}
-        >
-          <RefreshCw size={14} strokeWidth={1.75} className={orders.isFetching ? styles.spinning : ''} />
-          Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {logisticsOrdersForScan.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setPoScanOpen(true)}
+              style={{
+                background: 'var(--c-burnt, #B87800)',
+                color: 'white',
+                border: 0,
+                padding: '8px 14px',
+                borderRadius: 'var(--radius-pill)',
+                fontFamily: 'var(--font-button)',
+                fontSize: 'var(--fs-13)',
+                fontWeight: 'var(--w-semibold)',
+                cursor: 'pointer',
+              }}
+            >
+              Scan PO ({logisticsOrdersForScan.length})
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.refresh}
+            onClick={() => void orders.refetch()}
+            disabled={orders.isFetching}
+          >
+            <RefreshCw size={14} strokeWidth={1.75} className={orders.isFetching ? styles.spinning : ''} />
+            Refresh
+          </button>
+        </div>
       </header>
 
       {orders.isLoading ? (
@@ -128,6 +169,16 @@ export const Orders = () => {
       </div>
 
       <OrderDrawer orderId={openOrderId} onClose={closeDrawer} />
+
+      {poScanOpen && (
+        <PoScanModal
+          orders={logisticsOrdersForScan}
+          onClose={() => setPoScanOpen(false)}
+          onIssued={() => {
+            void queryClient.invalidateQueries({ queryKey: ['orders'] });
+          }}
+        />
+      )}
     </div>
   );
 };
