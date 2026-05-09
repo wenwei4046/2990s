@@ -5,6 +5,8 @@ import { useOrderDetail } from '../lib/queries';
 import { patchOrderLane } from '../lib/slip';
 import { LaneStepper, type Lane } from './LaneStepper';
 import { SlipSection } from './SlipSection';
+import { DriverPickerSection } from './DriverPickerSection';
+import { DispatchSection } from './DispatchSection';
 import styles from './OrderDrawer.module.css';
 
 interface Props {
@@ -94,6 +96,30 @@ export function OrderDrawer({ orderId, onClose }: Props) {
               slipFlagReason={order.slipFlagReason}
               onUpdated={refresh}
             />
+
+            {order.lane === 'ready' && (
+              <DriverPickerSection
+                orderId={orderId}
+                driverId={order.driverId}
+                confirmedDeliveryDate={order.confirmedDeliveryDate}
+                confirmedWith={order.confirmedWith}
+                customerExpectedDate={order.deliveryDate}
+                onSaved={refresh}
+              />
+            )}
+
+            {(order.lane === 'dispatched' || order.lane === 'delivered') && (
+              <DispatchSection
+                orderId={orderId}
+                lane={order.lane as 'dispatched' | 'delivered'}
+                driverId={order.driverId}
+                confirmedWith={order.confirmedWith}
+                dispatchedAt={order.dispatchedAt}
+                deliveredAt={order.deliveredAt}
+                doKey={order.doKey}
+                onUpdated={refresh}
+              />
+            )}
           </div>
         )}
       </aside>
