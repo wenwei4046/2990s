@@ -52,6 +52,7 @@ export function OrderDrawer({ orderId, onClose }: Props) {
           <div className={styles.body}>
             <LaneStepper
               current={order.lane as Lane}
+              poIssued={order.poIssued}
               onAdvance={async (next) => {
                 try {
                   await patchOrderLane(orderId, next);

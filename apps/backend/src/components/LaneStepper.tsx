@@ -15,9 +15,10 @@ interface Props {
   current: Lane;
   onAdvance: (next: Lane) => void;
   busy?: boolean;
+  poIssued?: boolean;
 }
 
-export function LaneStepper({ current, onAdvance, busy = false }: Props) {
+export function LaneStepper({ current, onAdvance, busy = false, poIssued = false }: Props) {
   const currentIdx = LANES.findIndex((l) => l.id === current);
 
   return (
@@ -25,9 +26,14 @@ export function LaneStepper({ current, onAdvance, busy = false }: Props) {
       {LANES.map((lane, i) => {
         const isCurrent = lane.id === current;
         const isPast = i < currentIdx;
+
+        // Gate: logistics → ready requires PO to be issued first.
+        const poGateBlocked =
+          current === 'logistics' && lane.id === 'ready' && !poIssued;
+
         // Allow click on any active lane that's NOT the current one,
         // forward or backward (coordinator can correct mistakes).
-        const isClickable = lane.enabled && !isCurrent && !busy;
+        const isClickable = lane.enabled && !isCurrent && !busy && !poGateBlocked;
         const className = [
           styles.step,
           isCurrent ? styles.current : '',
@@ -39,6 +45,7 @@ export function LaneStepper({ current, onAdvance, busy = false }: Props) {
             <button
               type="button"
               disabled={!isClickable}
+              title={poGateBlocked ? 'Issue PO via Scan first' : undefined}
               onClick={() => isClickable && onAdvance(lane.id)}
             >
               <span className={styles.num}>{lane.num}</span>
