@@ -213,6 +213,7 @@ export const products = pgTable('products', {
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   updatedBy:  uuid('updated_by').references(() => staff.id),
+  supplierId: uuid('supplier_id').references(() => suppliers.id, { onDelete: 'restrict' }),
 }, (t) => ({
   visibleIdx:  index('idx_products_visible').on(t.visible).where(sql`${t.visible} = TRUE`),
   categoryIdx: index('idx_products_category').on(t.categoryId),
@@ -389,6 +390,11 @@ export const orders = pgTable('orders', {
   notes:     text('notes'),
   stockNote: text('stock_note'),
 
+  // Phase 4-D PO additions (migration 0016):
+  poIssued:    boolean('po_issued').notNull().default(false),
+  poIssuedAt:  timestamp('po_issued_at', { withTimezone: true }),
+  poIssuedBy:  uuid('po_issued_by').references(() => staff.id, { onDelete: 'restrict' }),
+
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -564,6 +570,40 @@ export const pendingSlipUploads = pgTable('pending_slip_uploads', {
   staffIdx:   index('idx_pending_slip_staff').on(t.staffId),
   sessionIdx: index('idx_pending_slip_session').on(t.uploadSessionId),
 }));
+
+// ────────────────────────────────────────────────────────────────────
+// Phase 4-D · Suppliers + Purchase Orders (migrations 0014, 0015)
+// ────────────────────────────────────────────────────────────────────
+
+export const suppliers = pgTable('suppliers', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  code:           text('code').notNull().unique(),
+  name:           text('name').notNull(),
+  whatsappNumber: text('whatsapp_number'),
+  email:          text('email'),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const purchaseOrders = pgTable('purchase_orders', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  poNumber:   text('po_number').notNull().unique(),
+  supplierId: uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:  uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+});
+
+export const purchaseOrderLines = pgTable('purchase_order_lines', {
+  id:               uuid('id').primaryKey().defaultRandom(),
+  purchaseOrderId:  uuid('purchase_order_id').notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
+  orderId:          text('order_id').notNull().references(() => orders.id, { onDelete: 'restrict' }),
+  sku:              text('sku').notNull(),
+  name:             text('name').notNull(),
+  size:             text('size'),
+  colour:           text('colour'),
+  qty:              integer('qty').notNull(),
+  createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /* ─────────────────────────── Type helpers ───────────────────────────── */
 
