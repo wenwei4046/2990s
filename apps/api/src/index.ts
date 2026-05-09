@@ -1,12 +1,15 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { createClient } from '@supabase/supabase-js';
+import type { ScheduledEvent, ExecutionContext } from '@cloudflare/workers-types';
 import type { Env, Variables } from './env';
 import { health } from './routes/health';
 import { products } from './routes/products';
 import { orders } from './routes/orders';
 import { slipRoutes } from './routes/slips';
 import { supabaseAuth } from './middleware/auth';
+import { reapOnce } from './lib/reaper';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -40,4 +43,30 @@ app.onError((err, c) => {
   return c.json({ error: 'internal_error', message: err.message }, 500);
 });
 
-export default app;
+// CF Workers entrypoint with both fetch + scheduled handlers.
+// scheduled() runs on the cron triggers in wrangler.toml ("*/10 * * * *").
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    const workerId = `cron-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    ctx.waitUntil((async () => {
+      try {
+        const result = await reapOnce(supabase, env, workerId);
+        console.log(JSON.stringify({
+          ts: new Date().toISOString(),
+          event: 'reaper_run',
+          workerId,
+          ...result,
+        }));
+      } catch (err) {
+        console.error(JSON.stringify({
+          ts: new Date().toISOString(),
+          event: 'reaper_error',
+          workerId,
+          message: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    })());
+  },
+};
