@@ -56,4 +56,27 @@ BEGIN
     5990, 0, 5990, 5990, '0', 'transfer', 'verified', 'slips/2026/05/test-logistics.jpg',
     v_staff_s01, now())
   ON CONFLICT (id) DO NOTHING;
+
+  -- Order 6: dispatched, driver assigned, no DO yet (test the gate to delivered)
+  INSERT INTO orders (id, staff_id, showroom_id, lane, customer_name, customer_phone,
+    subtotal, addon_total, total, paid, pricing_version, payment_method, slip_state,
+    driver_id, confirmed_delivery_date, confirmed_with, dispatched_at)
+  VALUES ('SO-9006', v_staff_s01, v_showroom, 'dispatched', 'Test Customer 6 (dispatched)', '+60123456006',
+    7990, 0, 7990, 7990, '0', 'transfer', 'verified',
+    (SELECT id FROM drivers WHERE driver_code = 'DRV-01'),
+    CURRENT_DATE + INTERVAL '1 day', 'Phoned 2pm window', now() - INTERVAL '2 hours')
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Order 7: delivered with DO
+  INSERT INTO orders (id, staff_id, showroom_id, lane, customer_name, customer_phone,
+    subtotal, addon_total, total, paid, pricing_version, payment_method, slip_state,
+    driver_id, confirmed_delivery_date, confirmed_with,
+    dispatched_at, delivered_at, do_signed, do_key)
+  VALUES ('SO-9007', v_staff_s01, v_showroom, 'delivered', 'Test Customer 7 (delivered)', '+60123456007',
+    8990, 0, 8990, 8990, '0', 'transfer', 'verified',
+    (SELECT id FROM drivers WHERE driver_code = 'DRV-02'),
+    CURRENT_DATE - INTERVAL '1 day', 'WhatsApp confirmed',
+    now() - INTERVAL '1 day', now() - INTERVAL '12 hours', true,
+    'dos/2026/05/test-delivered.jpg')
+  ON CONFLICT (id) DO NOTHING;
 END $$;
