@@ -1,0 +1,224 @@
+// Admin queries + mutations for the Settings page (Phase 4 sub-project E).
+// Lives separately from queries.ts to avoid colliding with sibling subagent
+// work on the Verify Slips page.
+//
+// RLS gates (verified 2026-05-09):
+//   - showrooms: SELECT for all staff, write admin-only
+//   - staff:     SELECT for all staff, write admin-only
+//   - drivers:   SELECT for all staff, write coordinator-or-above
+//   - app_config: SELECT for all staff, write admin-only
+//   - suppliers: RLS disabled (open access; admin-gating done in UI)
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { supabase } from './supabase';
+
+/* ─── Showrooms ─── */
+
+export interface ShowroomRow {
+  id: string;
+  showroomCode: string;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  active: boolean;
+  sortOrder: number;
+}
+
+export const useShowrooms = () =>
+  useQuery({
+    queryKey: ['showrooms'],
+    queryFn: async (): Promise<ShowroomRow[]> => {
+      const { data, error } = await supabase
+        .from('showrooms')
+        .select('id, showroom_code, name, address, phone, active, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        showroomCode: r.showroom_code,
+        name: r.name,
+        address: r.address,
+        phone: r.phone,
+        active: r.active,
+        sortOrder: r.sort_order,
+      }));
+    },
+    staleTime: 60_000,
+  });
+
+/* ─── Staff ─── */
+
+export type StaffRoleValue = 'sales' | 'showroom_lead' | 'coordinator' | 'finance' | 'admin';
+
+export interface StaffRow {
+  id: string;
+  staffCode: string;
+  name: string;
+  role: StaffRoleValue;
+  showroomId: string | null;
+  initials: string;
+  color: string;
+  active: boolean;
+  email: string | null;
+  phone: string | null;
+}
+
+export const useStaff = () =>
+  useQuery({
+    queryKey: ['staff'],
+    queryFn: async (): Promise<StaffRow[]> => {
+      const { data, error } = await supabase
+        .from('staff')
+        .select('id, staff_code, name, role, showroom_id, initials, color, active, email, phone')
+        .order('staff_code');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        staffCode: r.staff_code,
+        name: r.name,
+        role: r.role as StaffRoleValue,
+        showroomId: r.showroom_id,
+        initials: r.initials,
+        color: r.color,
+        active: r.active,
+        email: r.email,
+        phone: r.phone,
+      }));
+    },
+    staleTime: 60_000,
+  });
+
+export const useUpdateStaffActive = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
+      const { error } = await supabase.from('staff').update({ active }).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff'] });
+    },
+  });
+};
+
+/* ─── App config ─── */
+
+export interface AppConfigRow {
+  key: string;
+  value: string;
+  description: string | null;
+}
+
+export const useAppConfig = () =>
+  useQuery({
+    queryKey: ['app-config'],
+    queryFn: async (): Promise<AppConfigRow[]> => {
+      const { data, error } = await supabase
+        .from('app_config')
+        .select('key, value, description')
+        .order('key');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        key: r.key,
+        value: r.value,
+        description: r.description,
+      }));
+    },
+    staleTime: 60_000,
+  });
+
+/* ─── Supplier mutations ─── */
+
+export interface SupplierUpsert {
+  code: string;
+  name: string;
+  whatsappNumber: string | null;
+  email: string | null;
+}
+
+export const useUpdateSupplier = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Partial<SupplierUpsert> }) => {
+      const dbPatch: Record<string, unknown> = {};
+      if (patch.code !== undefined) dbPatch.code = patch.code;
+      if (patch.name !== undefined) dbPatch.name = patch.name;
+      if (patch.whatsappNumber !== undefined) dbPatch.whatsapp_number = patch.whatsappNumber;
+      if (patch.email !== undefined) dbPatch.email = patch.email;
+      const { error } = await supabase.from('suppliers').update(dbPatch).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['suppliers'] });
+    },
+  });
+};
+
+export const useCreateSupplier = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: SupplierUpsert) => {
+      const { error } = await supabase.from('suppliers').insert({
+        code: input.code,
+        name: input.name,
+        whatsapp_number: input.whatsappNumber,
+        email: input.email,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['suppliers'] });
+    },
+  });
+};
+
+/* ─── Driver mutations ─── */
+
+export interface DriverUpsert {
+  driverCode: string;
+  name: string;
+  phone: string;
+  icNumber: string | null;
+  vehicle: string | null;
+  active: boolean;
+}
+
+export const useUpdateDriver = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Partial<DriverUpsert> }) => {
+      const dbPatch: Record<string, unknown> = {};
+      if (patch.driverCode !== undefined) dbPatch.driver_code = patch.driverCode;
+      if (patch.name !== undefined) dbPatch.name = patch.name;
+      if (patch.phone !== undefined) dbPatch.phone = patch.phone;
+      if (patch.icNumber !== undefined) dbPatch.ic_number = patch.icNumber;
+      if (patch.vehicle !== undefined) dbPatch.vehicle = patch.vehicle;
+      if (patch.active !== undefined) dbPatch.active = patch.active;
+      const { error } = await supabase.from('drivers').update(dbPatch).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['drivers'] });
+    },
+  });
+};
+
+export const useCreateDriver = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: DriverUpsert) => {
+      const { error } = await supabase.from('drivers').insert({
+        driver_code: input.driverCode,
+        name: input.name,
+        phone: input.phone,
+        ic_number: input.icNumber,
+        vehicle: input.vehicle,
+        active: input.active,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['drivers'] });
+    },
+  });
+};

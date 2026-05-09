@@ -1,0 +1,201 @@
+.page {
+  padding: var(--space-5) var(--space-6);
+  max-width: 1280px;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.title {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-32);
+  margin: 4px 0 6px;
+}
+
+.lede {
+  max-width: 60ch;
+}
+
+.readOnlyBanner {
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+  margin-bottom: var(--space-4);
+}
+.readOnlyBanner strong { color: var(--fg); font-weight: var(--w-semibold); }
+
+.tableCard {
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.empty {
+  padding: var(--space-7) var(--space-5);
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table thead th {
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-12);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-soft);
+  text-align: left;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--line);
+}
+.table tbody td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-14);
+  vertical-align: middle;
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover {
+  background: var(--bg-alt);
+}
+
+.rowDisabled td {
+  color: var(--fg-soft);
+}
+.rowDisabled .addonName {
+  color: var(--fg-soft);
+}
+
+.addonCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.addonName { font-weight: var(--w-semibold); }
+.addonDesc {
+  color: var(--fg-muted);
+  font-size: var(--fs-12);
+  line-height: var(--lh-12);
+}
+
+.idCode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.kindPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+}
+
+.priceCol {
+  width: 160px;
+  text-align: right;
+}
+.priceCol thead .priceCol,
+thead .priceCol { /* keep header right-aligned */ }
+.table thead th.priceCol { text-align: right; }
+
+.priceLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+
+.priceInput {
+  width: 96px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  text-align: right;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  transition: border-color 120ms;
+}
+.priceInput:hover {
+  border-color: var(--line-strong);
+}
+.priceInput:focus {
+  outline: none;
+  border-color: var(--c-ink);
+}
+/* Hide the spinner buttons — admin scrubs by typing, not clicking. */
+.priceInput::-webkit-outer-spin-button,
+.priceInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.priceInput[type='number'] { -moz-appearance: textfield; }
+
+.toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+  transition: background 140ms, border-color 140ms;
+}
+.toggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  transition: left 140ms;
+}
+.toggleOn {
+  background: var(--c-ink);
+  border-color: var(--c-ink);
+}
+.toggleOn .toggleKnob {
+  left: 20px;
+}
+.toggle:focus-visible {
+  outline: 2px solid var(--c-ink);
+  outline-offset: 2px;
+}
+
+.statYes, .statNo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+}
+.statYes { color: var(--fg); }
+.statNo  { color: var(--fg-soft); }

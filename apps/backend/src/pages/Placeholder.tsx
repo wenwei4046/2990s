@@ -18,26 +18,10 @@ export const Placeholder = ({ title, phase, hint }: PlaceholderProps) => (
   </div>
 );
 
-export const Addons = () => (
-  <Placeholder
-    title="Add-ons"
-    phase="Phase 1"
-    hint="Manage the 6 seeded add-ons (dispose-mattress, lift, assemble, wrap, pillow-set, dispose-bedframe). Edit pricing, toggle enabled."
-  />
-);
-
 export const Customers = () => (
   <Placeholder
     title="Customers"
     phase="Phase 5"
     hint="Read-only directory. Look up by phone, see order history. Sales staff cannot delete (RLS blocks)."
-  />
-);
-
-export const Settings = () => (
-  <Placeholder
-    title="Settings"
-    phase="Phase 1+"
-    hint="Showrooms, staff, drivers, app_config (owner_email, pricing_version)."
   />
 );

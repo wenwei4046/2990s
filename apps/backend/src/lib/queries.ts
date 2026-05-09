@@ -670,3 +670,53 @@ export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
     };
   }, [qc]);
 };
+
+/* ─── Addons admin (Phase 1 leftover) ─── */
+
+export type AddonKind = 'qty' | 'floors_items';
+
+export interface AddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: AddonKind;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  defaultQty: number;
+  stock: number | null;
+  enabled: boolean;
+  sortOrder: number;
+  updatedAt: string;
+}
+
+export const useAddons = () =>
+  useQuery({
+    queryKey: ['addons'],
+    queryFn: async (): Promise<AddonRow[]> => {
+      const { data, error } = await supabase
+        .from('addons')
+        .select(
+          'id, label, description, icon, kind, price, per_floor_item, unit, default_qty, stock, enabled, sort_order, updated_at',
+        )
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        id: r.id,
+        label: r.label,
+        description: r.description,
+        icon: r.icon,
+        kind: r.kind as AddonKind,
+        price: r.price,
+        perFloorItem: r.per_floor_item,
+        unit: r.unit,
+        defaultQty: r.default_qty,
+        stock: r.stock,
+        enabled: r.enabled,
+        sortOrder: r.sort_order,
+        updatedAt: r.updated_at,
+      }));
+    },
+    staleTime: 60_000,
+  });

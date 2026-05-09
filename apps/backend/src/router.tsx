@@ -5,7 +5,9 @@ import { Dashboard } from './pages/Dashboard';
 import { SkuMaster } from './pages/SkuMaster';
 import { Orders } from './pages/Orders';
 import { VerifySlips } from './pages/VerifySlips';
-import { Addons, Customers, Settings } from './pages/Placeholder';
+import { Addons } from './pages/Addons';
+import { Settings } from './pages/Settings';
+import { Customers } from './pages/Placeholder';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
