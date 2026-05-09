@@ -6,6 +6,91 @@
   margin: 0 auto;
 }
 
+.savedBanner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--c-success-bg);
+  color: var(--c-success);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  margin-bottom: var(--space-3);
+}
+.savedBanner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.quotePanel {
+  background: var(--c-cream);
+  border: 1px solid var(--c-burnt);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin: var(--space-3) 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.quotePanelTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-15);
+  color: var(--c-burnt);
+}
+.quotePanelHint {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
+.quoteFields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+.quoteField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.quoteField span {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-soft);
+}
+.quoteField input {
+  font: inherit;
+  font-size: var(--fs-14);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.quoteField input:focus { outline: none; border-color: var(--c-burnt); }
+.quoteErr {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-error);
+}
+.quoteActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .quoteFields { grid-template-columns: 1fr; }
+}
+
 .header {
   display: flex;
   align-items: center;

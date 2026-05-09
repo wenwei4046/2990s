@@ -37,14 +37,14 @@
 }
 
 .statusDone {
-  color: #2F5D4F;
+  color: var(--c-success);
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .statusError {
-  color: #B33;
+  color: var(--c-error);
   display: flex;
   flex-direction: column;
   gap: 8px;

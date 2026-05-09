@@ -163,8 +163,8 @@
   font-weight: var(--w-semibold);
 }
 .depthChip { background: var(--bg-alt); color: var(--fg-muted); }
-.bundlePill { background: rgba(46, 125, 50, 0.12); color: #1b5e20; }
-.notMatchPill { background: rgba(211, 47, 47, 0.12); color: #b71c1c; }
+.bundlePill { background: var(--c-success-bg); color: var(--c-success); }
+.notMatchPill { background: var(--c-error-bg); color: var(--c-error); }
 
 .clearBtn {
   display: inline-flex;
@@ -228,8 +228,8 @@
   z-index: 5;
 }
 .cellViolation {
-  border-color: #d32f2f;
-  background: rgba(211, 47, 47, 0.08);
+  border-color: var(--c-error);
+  background: var(--c-error-bg);
   z-index: 4;
 }
 

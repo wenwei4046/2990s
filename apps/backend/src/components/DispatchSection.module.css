@@ -32,7 +32,7 @@
 .dropContent { color: var(--fg-muted); font-size: 14px; }
 .uploaded { display: flex; flex-direction: column; gap: 8px; }
 .uploadedHead { display: flex; justify-content: space-between; align-items: center; }
-.uploadedName { font-weight: 500; color: #2F5D4F; }
+.uploadedName { font-weight: 500; color: var(--c-success); }
 .replace {
   background: white;
   border: 1px solid var(--c-line);
@@ -51,4 +51,4 @@
   border: 1px solid var(--c-line);
 }
 .muted { color: var(--fg-muted); font-style: italic; }
-.error { color: #B33; }
+.error { color: var(--c-error); }

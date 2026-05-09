@@ -5,6 +5,8 @@ import { Configurator } from './pages/Configurator';
 import { Cart } from './pages/Cart';
 import { Handover } from './pages/Handover';
 import { OrderConfirmed } from './pages/OrderConfirmed';
+import { OrderStatus } from './pages/OrderStatus';
+import { Quotes } from './pages/Quotes';
 import { AuthGate } from './components/AuthGate';
 
 export const router = createBrowserRouter([
@@ -14,6 +16,8 @@ export const router = createBrowserRouter([
   { path: '/cart', element: <AuthGate><Cart /></AuthGate> },
   { path: '/handover', element: <AuthGate><Handover /></AuthGate> },
   { path: '/orders/:orderId', element: <AuthGate><OrderConfirmed /></AuthGate> },
+  { path: '/my-orders', element: <AuthGate><OrderStatus /></AuthGate> },
+  { path: '/quotes', element: <AuthGate><Quotes /></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
 ]);

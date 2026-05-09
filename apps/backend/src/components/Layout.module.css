@@ -5,7 +5,15 @@
   min-height: 100vh;
 }
 
+.col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100vh;
+}
+
 .main {
+  flex: 1;
   min-width: 0;
   overflow: auto;
   padding: var(--space-6) var(--space-7);

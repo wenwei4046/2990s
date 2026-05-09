@@ -246,13 +246,13 @@
   color: var(--fg);
   white-space: nowrap;
 }
-.laneReceived   { background: #E7E0F4; color: #4B3A86; }
-.laneProceed    { background: #FBE9CF; color: #8C5A1B; }
-.laneLogistics  { background: #FBE9CF; color: #8C5A1B; }
-.laneReady      { background: #DDEFE2; color: #2F5D4F; }
-.laneDispatched { background: #D6E6F3; color: #2A557A; }
-.laneDelivered  { background: #DDEFE2; color: #2F5D4F; }
-.laneCancelled  { background: var(--bg-alt); color: var(--fg-muted); }
+.laneReceived   { background: var(--lane-received-bg);   color: var(--lane-received-fg); }
+.laneProceed    { background: var(--lane-proceed-bg);    color: var(--lane-proceed-fg); }
+.laneLogistics  { background: var(--lane-logistics-bg);  color: var(--lane-logistics-fg); }
+.laneReady      { background: var(--lane-ready-bg);      color: var(--lane-ready-fg); }
+.laneDispatched { background: var(--lane-dispatched-bg); color: var(--lane-dispatched-fg); }
+.laneDelivered  { background: var(--lane-delivered-bg);  color: var(--lane-delivered-fg); }
+.laneCancelled  { background: var(--lane-cancelled-bg);  color: var(--lane-cancelled-fg); }
 
 .openLink {
   font-family: var(--font-button);

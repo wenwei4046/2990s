@@ -12,7 +12,7 @@
   color: var(--c-ink);
 }
 .muted { color: var(--fg-muted); margin: 0; }
-.error { color: #B33; margin: 0; }
+.error { color: var(--c-error); margin: 0; }
 .empty {
   padding: 16px;
   background: rgba(179, 51, 51, 0.05);
@@ -40,7 +40,7 @@
   margin: 0;
 }
 .card.selected {
-  border-color: #2F5D4F;
+  border-color: var(--c-success);
   background: rgba(47, 93, 79, 0.06);
 }
 .cardMain { flex: 1; display: flex; flex-direction: column; gap: 2px; }
@@ -63,7 +63,7 @@
 .override {
   padding: 8px 12px;
   background: rgba(255, 165, 0, 0.08);
-  border-left: 3px solid #B87800;
+  border-left: 3px solid var(--c-burnt);
   font-size: 13px;
   color: var(--c-ink);
 }

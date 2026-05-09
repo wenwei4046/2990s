@@ -106,13 +106,13 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.lane-received   { background: rgba(232, 107, 58, 0.15); color: var(--c-burnt); }
-.lane-proceed    { background: rgba(33, 150, 243, 0.12); color: #1565c0; }
-.lane-logistics  { background: rgba(156, 39, 176, 0.12); color: #6a1b9a; }
-.lane-ready      { background: rgba(255, 193, 7, 0.18); color: #b76b00; }
-.lane-dispatched { background: rgba(0, 150, 136, 0.14); color: #00695c; }
-.lane-delivered  { background: rgba(46, 125, 50, 0.14); color: #1b5e20; }
-.lane-cancelled  { background: rgba(120, 120, 120, 0.18); color: #555; }
+.lane-received   { background: var(--lane-received-bg);   color: var(--lane-received-fg); }
+.lane-proceed    { background: var(--lane-proceed-bg);    color: var(--lane-proceed-fg); }
+.lane-logistics  { background: var(--lane-logistics-bg);  color: var(--lane-logistics-fg); }
+.lane-ready      { background: var(--lane-ready-bg);      color: var(--lane-ready-fg); }
+.lane-dispatched { background: var(--lane-dispatched-bg); color: var(--lane-dispatched-fg); }
+.lane-delivered  { background: var(--lane-delivered-bg);  color: var(--lane-delivered-fg); }
+.lane-cancelled  { background: var(--lane-cancelled-bg);  color: var(--lane-cancelled-fg); }
 
 .toastTray {
   position: fixed;

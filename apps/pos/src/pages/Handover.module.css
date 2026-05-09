@@ -2,7 +2,7 @@
   min-height: 100vh;
   background: var(--bg);
   padding: var(--space-5) var(--space-6);
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-4);
 }
 
 .heading {
@@ -26,10 +26,82 @@
   color: var(--fg-muted);
 }
 
-.grid {
+/* ─── Step nav ─── */
+.stepNav {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-5);
+}
+
+.stepNavItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-medium);
+  color: var(--fg-muted);
+  position: relative;
+}
+
+.stepNavNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  color: var(--fg-muted);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-bold);
+  flex-shrink: 0;
+}
+
+.stepNavLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stepNavItemCurrent {
+  background: var(--c-burnt);
+  color: var(--c-cream);
+  border-color: var(--c-burnt);
+}
+.stepNavItemCurrent .stepNavNum {
+  background: rgba(255, 249, 235, 0.2);
+  color: var(--c-cream);
+}
+
+.stepNavItemPast {
+  color: var(--c-success);
+  border-color: var(--c-success);
+}
+.stepNavItemPast .stepNavNum {
+  background: var(--c-success);
+  color: var(--c-cream);
+}
+
+/* ─── Layout ─── */
+.layout {
   display: grid;
   grid-template-columns: 1fr 360px;
   gap: var(--space-5);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .section {
@@ -40,17 +112,37 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  margin-bottom: var(--space-4);
 }
-.section + .section { margin-top: 0; }
 
 .sectionTitle {
   font-family: var(--font-title);
   font-weight: var(--w-bold);
-  font-size: var(--fs-18);
+  font-size: var(--fs-20);
   margin: 0 0 var(--space-2);
 }
 
+.subTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-soft);
+}
+
+.subTitleHint {
+  margin-left: 4px;
+  font-weight: var(--w-medium);
+  color: var(--fg-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ─── Field ─── */
 .field {
   display: flex;
   flex-direction: column;
@@ -84,13 +176,202 @@
   outline: none;
   border-color: var(--c-burnt);
 }
+.field select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
-.row {
+.fieldRow {
   display: grid;
-  grid-template-columns: 110px 1fr 110px;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+.fieldRow3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: var(--space-2);
 }
 
+.checkboxRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+  user-select: none;
+}
+.checkboxRow input { width: auto; cursor: pointer; }
+
+/* ─── Payment presets ─── */
+.presetGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  transition: border-color 120ms, background 120ms, transform 120ms;
+}
+.preset:hover { border-color: var(--c-burnt); }
+.presetActive {
+  border-color: var(--c-burnt);
+  background: var(--c-cream);
+  box-shadow: var(--shadow-1);
+}
+.presetLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.presetAmount {
+  font-family: var(--font-mark);
+  font-weight: var(--w-black);
+  font-stretch: 80%;
+  font-size: var(--fs-24);
+  letter-spacing: var(--tk-tight);
+  color: var(--c-burnt);
+  line-height: 1;
+}
+.presetHint {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-medium);
+  color: var(--fg-soft);
+}
+
+/* ─── Method buttons ─── */
+.methodGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+.method {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg);
+  transition: border-color 120ms, background 120ms;
+}
+.method:hover { border-color: var(--c-burnt); }
+.methodActive {
+  border-color: var(--c-burnt);
+  background: var(--c-cream);
+  color: var(--c-burnt);
+}
+
+/* ─── Signature pad ─── */
+.signHint {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.sign {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 2px dashed var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  background: var(--bg-alt);
+}
+
+.signCanvas {
+  width: 100%;
+  height: 200px;
+  background: var(--c-cream);
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.signActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-2);
+}
+.signGuide {
+  font-family: var(--font-script);
+  font-size: var(--fs-15);
+  color: var(--fg-soft);
+}
+.signClearBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.signClearBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.signClearBtn:hover:not(:disabled) { color: var(--c-burnt); }
+
+.signEmpty {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--c-warn);
+}
+.signOk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--c-success);
+}
+
+/* ─── Step footer ─── */
+.stepFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  margin-top: var(--space-2);
+}
+
+/* ─── Summary sidebar ─── */
 .summary {
   background: var(--c-cream);
   border: 1px solid var(--line);
@@ -150,10 +431,21 @@
   padding-top: var(--space-3);
 }
 
+.summaryHint {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 8px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-sm);
+}
+.summaryHint strong { color: var(--c-burnt); font-weight: var(--w-bold); }
+
 .error {
-  background: rgba(211, 47, 47, 0.08);
+  background: var(--c-error-bg);
   border: 1px solid rgba(211, 47, 47, 0.4);
-  color: #b71c1c;
+  color: var(--c-error);
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   font-size: var(--fs-13);
@@ -161,7 +453,11 @@
 }
 
 @media (max-width: 880px) {
-  .grid { grid-template-columns: 1fr; }
+  .layout { grid-template-columns: 1fr; }
   .summary { position: static; }
-  .row { grid-template-columns: 1fr; }
+  .fieldRow, .fieldRow3 { grid-template-columns: 1fr; }
+  .presetGrid { grid-template-columns: 1fr; }
+  .methodGrid { grid-template-columns: 1fr; }
+  .stepNav { grid-template-columns: repeat(2, 1fr); }
+  .stepNavLabel { display: none; }
 }

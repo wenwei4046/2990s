@@ -45,8 +45,8 @@
 
 .past button {
   background: rgba(47, 93, 79, 0.08);
-  border-color: #2F5D4F;
-  color: #2F5D4F;
+  border-color: var(--c-success);
+  color: var(--c-success);
 }
 
 .disabled button {

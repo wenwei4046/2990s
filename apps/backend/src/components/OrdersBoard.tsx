@@ -1,37 +1,10 @@
-import { useMemo, useState } from 'react';
-import {
-  LayoutGrid,
-  Search,
-  ScanLine,
-  Inbox,
-  Send,
-  Truck,
-  PackageCheck,
-  CheckCircle2,
-  Forklift,
-} from 'lucide-react';
-import type { OrderListRow, OrderLane } from '../lib/queries';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
+import { LayoutGrid, Search, ScanLine } from 'lucide-react';
+import type { OrderListRow } from '../lib/queries';
+import { LANES, isLaneId, type LaneDef } from '../lib/lanes';
 import { OrderCard } from './OrderCard';
 import styles from './OrdersBoard.module.css';
-
-/* ─── Lane metadata for the board (mirrors LaneStepper but adds icon + sub) ─── */
-interface LaneDef {
-  id: Exclude<OrderLane, 'cancelled'>;
-  num: string;
-  title: string;
-  sub: string;
-  Icon: typeof Inbox;
-  terminal?: boolean;
-}
-
-const LANES: ReadonlyArray<LaneDef> = [
-  { id: 'received',   num: '01', title: 'Received',          sub: 'New from POS',          Icon: Inbox },
-  { id: 'proceed',    num: '02', title: 'Proceed requested', sub: 'Slip + customer ready', Icon: Send },
-  { id: 'logistics',  num: '03', title: 'Awaiting logistics', sub: 'PO & supplier coord',   Icon: Forklift },
-  { id: 'ready',      num: '04', title: 'Ready to dispatch', sub: 'Goods in, scheduled',   Icon: PackageCheck },
-  { id: 'dispatched', num: '05', title: 'Dispatched',        sub: 'Driver assigned, OTW',  Icon: Truck },
-  { id: 'delivered',  num: '06', title: 'Delivered',         sub: 'Signed, complete',      Icon: CheckCircle2, terminal: true },
-] as const;
 
 type ViewState = 'overall' | LaneDef['id'];
 type FilterTab = 'all' | 'late' | 'today';
@@ -53,9 +26,27 @@ export function OrdersBoard({
   isFetching = false,
   onRefresh,
 }: Props) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialLane = searchParams.get('lane');
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<FilterTab>('all');
-  const [view, setView] = useState<ViewState>('overall');
+  const [view, setView] = useState<ViewState>(
+    initialLane && isLaneId(initialLane) ? initialLane : 'overall',
+  );
+
+  // If URL ?lane= changes (e.g. coming back from Dashboard tile), sync view.
+  useEffect(() => {
+    if (initialLane && isLaneId(initialLane) && view !== initialLane) {
+      setView(initialLane);
+    }
+    // Clean up the param once consumed so refresh-back doesn't re-pin it.
+    if (initialLane) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('lane');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialLane]);
 
   // Drop cancelled orders entirely — not shown as a lane in the prototype.
   const liveOrders = useMemo(

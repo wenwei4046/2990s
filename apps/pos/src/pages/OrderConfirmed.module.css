@@ -51,8 +51,8 @@
 }
 
 .error {
-  background: rgba(211, 47, 47, 0.08);
-  color: #b71c1c;
+  background: var(--c-error-bg);
+  color: var(--c-error);
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   font-size: var(--fs-13);

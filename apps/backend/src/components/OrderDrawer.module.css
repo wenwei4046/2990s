@@ -91,5 +91,63 @@
 }
 
 .errorMsg {
-  color: #B33;
+  color: var(--c-burnt);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 20px;
+  border-top: 1px solid var(--line);
+  background: var(--c-cream);
+  position: sticky;
+  bottom: 0;
+}
+
+.footerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.footerBtn:hover {
+  background: var(--bg-alt);
+  border-color: var(--line-strong);
+}
+.footerBtnGhost {
+  background: transparent;
+  color: var(--fg-muted);
+  margin-left: auto;
+}
+
+.poSection {
+  padding: 16px;
+  border-top: 1px solid var(--line);
+}
+.poHeading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.poBody {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--fg);
+}
+.poMuted { color: var(--fg-muted); }
+.poHint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
 }

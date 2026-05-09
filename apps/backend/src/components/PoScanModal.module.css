@@ -31,7 +31,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--c-burnt, #B87800);
+  color: var(--c-burnt);
 }
 .title { margin: 4px 0 6px; font-size: 22px; font-weight: 600; color: var(--c-ink); }
 .sub { font-size: 13px; color: var(--fg-muted); }
@@ -121,7 +121,7 @@
   display: inline-block;
 }
 .actionBtn:hover { border-color: var(--c-ink); }
-.error { color: #B33; padding: 8px 16px; margin: 0; font-size: 13px; }
+.error { color: var(--c-error); padding: 8px 16px; margin: 0; font-size: 13px; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .table th, .table td {
   padding: 8px 12px;

@@ -53,6 +53,53 @@
 
   --line:           rgba(34,31,32,0.12);
   --line-strong:    rgba(34,31,32,0.28);
+  /* Backward-compat alias — some early components used --c-line; keep it
+     mapped to --line so they don't fall back to currentColor. */
+  --c-line:         var(--line);
+
+  /* ------------------------------------------------------------------
+     SEMANTIC STATUS — error / success / warning. Use these in pills,
+     banners, form errors, and any other state UI. Don't hardcode.
+     ------------------------------------------------------------------ */
+  --c-error:        #B71C1C;
+  --c-error-bg:     rgba(211, 47, 47, 0.08);
+  --c-success:      var(--c-secondary-a);  /* #2F5D4F */
+  --c-success-bg:   rgba(47, 93, 79, 0.08);
+  --c-warn:         #B76B00;
+  --c-warn-bg:      rgba(255, 193, 7, 0.16);
+
+  /* ------------------------------------------------------------------
+     ANIMATION — durations and easings. Use vars in transitions so the
+     whole product has one tempo.
+     ------------------------------------------------------------------ */
+  --duration-quick: 80ms;
+  --duration-fast:  120ms;
+  --duration-base:  200ms;
+  --duration-slow:  320ms;
+  --ease-out:       cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ------------------------------------------------------------------
+     LANE STATUS — order workflow colors (used by Orders, Customers,
+     OrderCard, and any other view that pills a lane). Each lane gets a
+     distinct color family so coordinator can scan a board fast. Burnt
+     orange (received) and forest green (delivered) sit on brand;
+     logistics/ready/dispatched are functional colors not in the brand
+     palette. Use these tokens — never hardcode a lane color.
+     ------------------------------------------------------------------ */
+  --lane-received-bg:   rgba(232, 107, 58, 0.15);
+  --lane-received-fg:   var(--c-burnt);
+  --lane-proceed-bg:    rgba(33, 150, 243, 0.12);
+  --lane-proceed-fg:    #1565c0;
+  --lane-logistics-bg:  rgba(156, 39, 176, 0.12);
+  --lane-logistics-fg:  #6a1b9a;
+  --lane-ready-bg:      rgba(255, 193, 7, 0.18);
+  --lane-ready-fg:      #b76b00;
+  --lane-dispatched-bg: rgba(0, 150, 136, 0.14);
+  --lane-dispatched-fg: #00695c;
+  --lane-delivered-bg:  rgba(47, 93, 79, 0.14);
+  --lane-delivered-fg:  var(--c-secondary-a);
+  --lane-cancelled-bg:  var(--bg-alt);
+  --lane-cancelled-fg:  var(--fg-muted);
 
   /* ------------------------------------------------------------------
      RADII — consistently rounded, soft.

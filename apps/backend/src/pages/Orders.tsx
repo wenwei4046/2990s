@@ -7,16 +7,12 @@ import { useOrders, useOrdersRealtime, type OrderListRow } from '../lib/queries'
 import { OrderDrawer } from '../components/OrderDrawer';
 import { PoScanModal } from '../components/PoScanModal';
 import { OrdersBoard } from '../components/OrdersBoard';
+import { useToast } from '../components/Toast';
 import styles from '../components/OrdersBoard.module.css';
-
-interface Toast {
-  id: string;
-  message: string;
-}
 
 export const Orders = () => {
   const orders = useOrders();
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toast = useToast();
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const openOrderId = searchParams.get('orderId');
@@ -46,21 +42,13 @@ export const Orders = () => {
   };
 
   const onInsert = useCallback((row: OrderListRow) => {
-    setToasts((cur) => [...cur, {
-      id: `t-${row.id}-${Date.now()}`,
-      message: `New order ${row.id} · ${row.customerName} · ${fmtRM(row.total)}`,
-    }]);
+    toast(`New order ${row.id} · ${row.customerName} · ${fmtRM(row.total)}`);
     setHighlightId(row.id);
-  }, []);
+  }, [toast]);
 
   useOrdersRealtime(onInsert);
 
-  // Toast auto-dismiss after 4s, highlight after 5s.
-  useEffect(() => {
-    if (toasts.length === 0) return;
-    const t = setTimeout(() => setToasts((cur) => cur.slice(1)), 4000);
-    return () => clearTimeout(t);
-  }, [toasts]);
+  // Highlight fades after 5s.
   useEffect(() => {
     if (!highlightId) return;
     const t = setTimeout(() => setHighlightId(null), 5000);
@@ -98,10 +86,6 @@ export const Orders = () => {
           onRefresh={refresh}
         />
       )}
-
-      <div className={styles.toastTray} role="status" aria-live="polite">
-        {toasts.map((t) => <div key={t.id} className={styles.toast}>{t.message}</div>)}
-      </div>
 
       <OrderDrawer orderId={openOrderId} onClose={closeDrawer} />
 

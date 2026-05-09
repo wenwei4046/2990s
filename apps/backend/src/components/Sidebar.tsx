@@ -1,46 +1,128 @@
+import type { ReactNode } from 'react';
 import { NavLink } from 'react-router';
-import { LayoutDashboard, ListOrdered, Boxes, FileCheck2, Plus, Users, Settings, LogOut } from 'lucide-react';
+import {
+  LayoutDashboard,
+  Inbox,
+  ShieldCheck,
+  Package,
+  PlusCircle,
+  UsersRound,
+  Settings,
+  LogOut,
+} from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { useOrders, useSlipQueue } from '../lib/queries';
 import styles from './Sidebar.module.css';
 
-const navItems = [
-  { to: '/dashboard', icon: <LayoutDashboard size={20} strokeWidth={1.75} />, label: 'Dashboard' },
-  { to: '/orders', icon: <ListOrdered size={20} strokeWidth={1.75} />, label: 'Orders' },
-  { to: '/sku-master', icon: <Boxes size={20} strokeWidth={1.75} />, label: 'SKU master' },
-  { to: '/verify-slips', icon: <FileCheck2 size={20} strokeWidth={1.75} />, label: 'Verify slips' },
-  { to: '/addons', icon: <Plus size={20} strokeWidth={1.75} />, label: 'Add-ons' },
-  { to: '/customers', icon: <Users size={20} strokeWidth={1.75} />, label: 'Customers' },
-  { to: '/settings', icon: <Settings size={20} strokeWidth={1.75} />, label: 'Settings' },
-];
+type NavRow =
+  | { kind: 'group'; label: string }
+  | {
+      kind: 'link';
+      to: string;
+      icon: ReactNode;
+      label: string;
+      badge?: number;
+      badgeMuted?: boolean;
+    };
+
+const ICON_PROPS = { size: 20, strokeWidth: 1.75 } as const;
+
+const formatRole = (role?: string | null): string => {
+  if (!role) return 'Backend';
+  const map: Record<string, string> = {
+    sales: 'Sales',
+    showroom_lead: 'Showroom Lead',
+    coordinator: 'Order Coordinator',
+    finance: 'Finance',
+    admin: 'Administrator',
+  };
+  return map[role] ?? role;
+};
 
 export const Sidebar = () => {
   const { staff, signOut } = useAuth();
+  const { data: orders } = useOrders();
+  const { data: slipQueue } = useSlipQueue();
+
+  const ordersBadge =
+    orders?.filter((o) => o.lane === 'received' || o.lane === 'proceed').length ?? 0;
+  const slipsBadge = slipQueue?.length ?? 0;
+
+  const items: NavRow[] = [
+    { kind: 'group', label: 'Workspace' },
+    { kind: 'link', to: '/dashboard', icon: <LayoutDashboard {...ICON_PROPS} />, label: 'Dashboard' },
+    {
+      kind: 'link',
+      to: '/orders',
+      icon: <Inbox {...ICON_PROPS} />,
+      label: 'Orders',
+      badge: ordersBadge,
+    },
+    {
+      kind: 'link',
+      to: '/verify-slips',
+      icon: <ShieldCheck {...ICON_PROPS} />,
+      label: 'Verify slips',
+      badge: slipsBadge,
+      badgeMuted: slipsBadge === 0,
+    },
+    { kind: 'group', label: 'Catalog' },
+    { kind: 'link', to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
+    { kind: 'link', to: '/addons', icon: <PlusCircle {...ICON_PROPS} />, label: 'Add-on products' },
+    { kind: 'group', label: 'Reference' },
+    { kind: 'link', to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
+    { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
+  ];
+
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brand}>
-        <span className="t-eyebrow">2990's · Backend</span>
+        <span className={styles.wordmark}>
+          2990<span className={styles.wordmarkRing}>S</span>
+        </span>
+      </div>
+      <div className={styles.roleHint}>
+        Backend portal
+        <strong>{formatRole(staff?.role)}</strong>
       </div>
 
       <nav className={styles.nav}>
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) => (isActive ? `${styles.navItem} ${styles.active}` : styles.navItem)}
-          >
-            {item.icon}
-            <span className={styles.navLabel}>{item.label}</span>
-          </NavLink>
-        ))}
+        {items.map((it, i) =>
+          it.kind === 'group' ? (
+            <div key={`g-${i}`} className={styles.navGroup}>
+              {it.label}
+            </div>
+          ) : (
+            <NavLink
+              key={it.to}
+              to={it.to}
+              className={({ isActive }) =>
+                isActive ? `${styles.navItem} ${styles.active}` : styles.navItem
+              }
+            >
+              {it.icon}
+              <span className={styles.navLabel}>{it.label}</span>
+              {it.badge != null && it.badge > 0 && (
+                <span
+                  className={`${styles.navBadge} ${it.badgeMuted ? styles.navBadgeGhost : ''}`}
+                >
+                  {it.badge}
+                </span>
+              )}
+            </NavLink>
+          ),
+        )}
       </nav>
 
       <div className={styles.footer}>
         {staff && (
           <div className={styles.user}>
-            <span className={styles.avatar} style={{ background: staff.color }}>{staff.initials}</span>
+            <span className={styles.avatar} style={{ background: staff.color }}>
+              {staff.initials}
+            </span>
             <div className={styles.userMeta}>
               <strong className="t-body-sm">{staff.name}</strong>
-              <small className="t-caption">{staff.role}</small>
+              <small className="t-caption">{formatRole(staff.role)}</small>
             </div>
           </div>
         )}

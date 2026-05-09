@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { ArrowLeft, Trash2, BookmarkPlus, Check } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, type CartLine } from '../state/cart';
+import { useSaveQuote } from '../lib/quotes';
 import styles from './Cart.module.css';
 
 export const Cart = () => {
@@ -12,6 +14,38 @@ export const Cart = () => {
   const setQty = useCart((s) => s.setQty);
   const clear = useCart((s) => s.clear);
   const subtotal = cartSubtotal(lines);
+  const saveQuote = useSaveQuote();
+
+  const [savingQuote, setSavingQuote] = useState(false);
+  const [quoteName, setQuoteName] = useState('');
+  const [quotePhone, setQuotePhone] = useState('');
+  const [savedConfirm, setSavedConfirm] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  const submitSaveQuote = async () => {
+    if (!quoteName.trim()) {
+      setSaveErr('Customer name is required');
+      return;
+    }
+    setSaveErr(null);
+    try {
+      await saveQuote.mutateAsync({
+        customerName: quoteName.trim(),
+        customerPhone: quotePhone.trim() || undefined,
+        cart: lines,
+        subtotal,
+        total: subtotal,
+      });
+      clear();
+      setSavingQuote(false);
+      setQuoteName('');
+      setQuotePhone('');
+      setSavedConfirm(true);
+      setTimeout(() => setSavedConfirm(false), 2400);
+    } catch (err) {
+      setSaveErr(err instanceof Error ? err.message : 'Failed to save quote');
+    }
+  };
 
   return (
     <main className={styles.shell}>
@@ -24,6 +58,13 @@ export const Cart = () => {
         <h1 className={styles.heading}>Cart</h1>
       </header>
 
+      {savedConfirm && (
+        <div className={styles.savedBanner}>
+          <Check size={16} strokeWidth={1.75} />
+          Quote saved. Open <Link to="/quotes">Saved quotes</Link> to load it later.
+        </div>
+      )}
+
       {lines.length === 0 ? (
         <div className={styles.empty}>
           <p>Cart is empty.</p>
@@ -35,6 +76,57 @@ export const Cart = () => {
             {lines.map((l) => <Line key={l.key} line={l} onRemove={remove} onSetQty={setQty} />)}
           </ul>
 
+          {savingQuote && (
+            <section className={styles.quotePanel}>
+              <h3 className={styles.quotePanelTitle}>
+                <BookmarkPlus size={14} strokeWidth={1.75} />
+                Save as quote
+              </h3>
+              <p className={styles.quotePanelHint}>
+                Saves the cart so a sales colleague (or you later) can load it back.
+              </p>
+              <div className={styles.quoteFields}>
+                <label className={styles.quoteField}>
+                  <span>Customer name *</span>
+                  <input
+                    type="text"
+                    value={quoteName}
+                    onChange={(e) => setQuoteName(e.target.value)}
+                    autoFocus
+                  />
+                </label>
+                <label className={styles.quoteField}>
+                  <span>Phone (optional)</span>
+                  <input
+                    type="tel"
+                    value={quotePhone}
+                    onChange={(e) => setQuotePhone(e.target.value)}
+                  />
+                </label>
+              </div>
+              {saveErr && <p className={styles.quoteErr}>{saveErr}</p>}
+              <div className={styles.quoteActions}>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setSavingQuote(false);
+                    setSaveErr(null);
+                  }}
+                  disabled={saveQuote.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={submitSaveQuote}
+                  disabled={saveQuote.isPending || !quoteName.trim()}
+                >
+                  {saveQuote.isPending ? 'Saving…' : 'Save quote'}
+                </Button>
+              </div>
+            </section>
+          )}
+
           <footer className={styles.footer}>
             <div className={styles.subtotalRow}>
               <span className="t-eyebrow">Subtotal</span>
@@ -42,7 +134,19 @@ export const Cart = () => {
             </div>
             <div className={styles.actions}>
               <Button variant="ghost" onClick={clear}>Clear</Button>
-              <Button variant="primary" onClick={() => navigate('/handover')}>Continue to handover</Button>
+              {!savingQuote && (
+                <Button
+                  variant="ghost"
+                  onClick={() => setSavingQuote(true)}
+                  disabled={lines.length === 0}
+                >
+                  <BookmarkPlus size={14} strokeWidth={1.75} />
+                  Save quote
+                </Button>
+              )}
+              <Button variant="primary" onClick={() => navigate('/handover')}>
+                Continue to handover
+              </Button>
             </div>
           </footer>
         </>

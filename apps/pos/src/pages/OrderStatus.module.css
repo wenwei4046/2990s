@@ -1,0 +1,343 @@
+/* ─── PIN Gate ─── */
+.gate {
+  min-height: 100vh;
+  background: var(--bg);
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+}
+
+.gateCard {
+  width: 100%;
+  max-width: 480px;
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: center;
+  text-align: center;
+  box-shadow: var(--shadow-2);
+}
+
+.gateIcon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--c-burnt);
+  color: var(--c-cream);
+  display: grid;
+  place-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.gateTitle {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-32);
+  margin: 0;
+}
+
+.gateBody {
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.pinRow {
+  display: flex;
+  gap: 8px;
+  margin: var(--space-3) 0;
+}
+
+.pinInput {
+  width: 48px;
+  height: 60px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-24);
+  font-weight: var(--w-bold);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  outline: none;
+  transition: border-color 120ms;
+}
+.pinInput:focus {
+  border-color: var(--c-burnt);
+}
+
+.gateError {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--c-error);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+}
+
+.gateBack {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-medium);
+  color: var(--fg-muted);
+  text-decoration: none;
+  margin-top: var(--space-2);
+}
+.gateBack:hover { color: var(--fg); }
+
+.gateHint {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-11);
+  color: var(--fg-soft);
+}
+.gateHint code {
+  font-family: var(--font-mono);
+  background: var(--bg-alt);
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  color: var(--fg-muted);
+}
+
+/* ─── Shell ─── */
+.shell {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: var(--space-5) var(--space-6);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.heading {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-32);
+  margin: 4px 0 0;
+}
+
+.headerRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lockBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms;
+}
+.lockBtn:hover { background: var(--bg-alt); color: var(--fg); }
+
+.empty {
+  padding: var(--space-7);
+  text-align: center;
+  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* ─── 3-lane board ─── */
+.lanes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+}
+
+.lane {
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+
+.laneHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.laneNum {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-bold);
+  color: var(--c-burnt);
+  letter-spacing: var(--tk-loud);
+}
+
+.laneInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.laneTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-14);
+  color: var(--fg);
+}
+
+.laneSub {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-medium);
+  color: var(--fg-muted);
+}
+
+.laneCount {
+  font-family: var(--font-mark);
+  font-weight: var(--w-black);
+  font-stretch: 80%;
+  font-size: var(--fs-24);
+  color: var(--c-burnt);
+  letter-spacing: var(--tk-tight);
+  line-height: 1;
+}
+
+.laneBody {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1;
+}
+
+.laneEmpty {
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--fg-soft);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-style: italic;
+}
+
+/* ─── Order tile ─── */
+.tile {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tileHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.tileId {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-bold);
+  color: var(--c-burnt);
+  letter-spacing: 0.04em;
+}
+.tileWhen {
+  margin-left: auto;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  color: var(--fg-soft);
+}
+
+.tileName {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-14);
+  color: var(--fg);
+}
+
+.tileMeta {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.tileMetaItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+}
+
+.tileTotalRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.tileTotal {
+  font-family: var(--font-mark);
+  font-weight: var(--w-black);
+  font-stretch: 80%;
+  font-size: var(--fs-18);
+  color: var(--fg);
+  letter-spacing: var(--tk-tight);
+}
+.tileTotal sup {
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+  margin-right: 2px;
+}
+.tilePaid {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  color: var(--fg-muted);
+}
+
+.tilePaidBar {
+  height: 4px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.tilePaidBarFill {
+  height: 100%;
+  background: var(--c-success);
+  transition: width 200ms;
+}
+
+@media (max-width: 880px) {
+  .lanes { grid-template-columns: 1fr; }
+}

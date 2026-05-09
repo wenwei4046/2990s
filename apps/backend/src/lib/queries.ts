@@ -302,6 +302,7 @@ export interface CartItem {
   size: string | null;
   colour: string | null;
   qty: number;
+  imgKey: string | null;
 }
 
 export interface OrderListRow {
@@ -309,11 +310,19 @@ export interface OrderListRow {
   placedAt: string;
   customerName: string;
   customerPhone: string | null;
+  customerAddress: string | null;
+  customerCity: string | null;
   total: number;
+  paid: number;
   lane: OrderLane;
   paymentMethod: string;
   showroomId: string;
   poIssued: boolean;
+  slipState: 'none' | 'pending' | 'verified' | 'flagged';
+  deliveryDate: string | null;
+  staffName: string;
+  staffInitials: string;
+  staffColor: string;
   cart: CartItem[];
 }
 
@@ -324,11 +333,14 @@ export const useOrders = () =>
       const { data, error } = await supabase
         .from('orders')
         .select(`
-          id, placed_at, customer_name, customer_phone, total, lane, payment_method, showroom_id,
-          po_issued,
+          id, placed_at, customer_name, customer_phone,
+          customer_address, customer_city,
+          total, paid, lane, payment_method, showroom_id,
+          po_issued, slip_state, delivery_date,
+          staff:staff_id ( name, initials, color ),
           order_items (
             qty, kind, config,
-            products ( id, name, category_id, supplier_id, sku )
+            products ( id, name, category_id, supplier_id, sku, img_key, thumb_key )
           )
         `)
         .order('placed_at', { ascending: false })
@@ -339,11 +351,19 @@ export const useOrders = () =>
         placedAt: r.placed_at,
         customerName: r.customer_name,
         customerPhone: r.customer_phone,
+        customerAddress: r.customer_address ?? null,
+        customerCity: r.customer_city ?? null,
         total: r.total,
+        paid: r.paid ?? 0,
         lane: r.lane as OrderLane,
         paymentMethod: r.payment_method,
         showroomId: r.showroom_id,
         poIssued: r.po_issued ?? false,
+        slipState: (r.slip_state ?? 'none') as OrderListRow['slipState'],
+        deliveryDate: r.delivery_date ?? null,
+        staffName: r.staff?.name ?? '—',
+        staffInitials: r.staff?.initials ?? '?',
+        staffColor: r.staff?.color ?? '#999999',
         cart: ((r.order_items ?? []) as any[])
           .filter((it) => it.kind === 'product' && it.products)
           .map((it) => ({
@@ -355,6 +375,7 @@ export const useOrders = () =>
             size: it.config?.size ?? null,
             colour: it.config?.colour ?? null,
             qty: it.qty,
+            imgKey: it.products.thumb_key ?? it.products.img_key ?? null,
           })),
       }));
     },
@@ -654,11 +675,19 @@ export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
               placedAt: String(r.placed_at),
               customerName: String(r.customer_name),
               customerPhone: (r.customer_phone as string | null) ?? null,
+              customerAddress: (r.customer_address as string | null) ?? null,
+              customerCity: (r.customer_city as string | null) ?? null,
               total: Number(r.total),
+              paid: Number(r.paid ?? 0),
               lane: r.lane as OrderLane,
               paymentMethod: String(r.payment_method),
               showroomId: String(r.showroom_id),
               poIssued: Boolean(r.po_issued ?? false),
+              slipState: ((r.slip_state as string) ?? 'none') as OrderListRow['slipState'],
+              deliveryDate: (r.delivery_date as string | null) ?? null,
+              staffName: '—',
+              staffInitials: '?',
+              staffColor: '#999999',
               cart: [],
             });
           }
