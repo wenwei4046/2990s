@@ -18,10 +18,3 @@ export const Placeholder = ({ title, phase, hint }: PlaceholderProps) => (
   </div>
 );
 
-export const Customers = () => (
-  <Placeholder
-    title="Customers"
-    phase="Phase 5"
-    hint="Read-only directory. Look up by phone, see order history. Sales staff cannot delete (RLS blocks)."
-  />
-);

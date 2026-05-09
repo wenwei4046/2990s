@@ -7,7 +7,7 @@ import { Orders } from './pages/Orders';
 import { VerifySlips } from './pages/VerifySlips';
 import { Addons } from './pages/Addons';
 import { Settings } from './pages/Settings';
-import { Customers } from './pages/Placeholder';
+import { Customers } from './pages/Customers';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
