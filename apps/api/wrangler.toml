@@ -6,17 +6,24 @@ compatibility_flags = ["nodejs_compat"]
 # Public env (non-secrets). Secrets set via `wrangler secret put`:
 #   wrangler secret put SUPABASE_ANON_KEY
 #   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+#   wrangler secret put R2_ACCESS_KEY_ID
+#   wrangler secret put R2_SECRET_ACCESS_KEY
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
 # Allowed CORS origins (dev + prod). Update when domain is set.
 ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175"
 
-# R2 bindings for slip + receipt storage (Phase 4 wires these up):
-# [[r2_buckets]]
-# binding = "SLIPS"
-# bucket_name = "2990s-slips"
+# R2 bucket settings — fill R2_ENDPOINT after CF account ID is known
+# (CF dashboard → top-right account dropdown → Account ID).
+R2_BUCKET_NAME = "2990s-slips"
+R2_ENDPOINT = "https://REPLACE-WITH-ACCOUNT-ID.r2.cloudflarestorage.com"
 
-# Cron triggers for the slip-orphan reaper (Phase 4):
-# [triggers]
-# crons = ["*/10 * * * *"]
+# R2 binding for slip storage (Slip MVP).
+[[r2_buckets]]
+binding = "SLIPS"
+bucket_name = "2990s-slips"
+
+# Cron triggers for the slip-orphan reaper (every 10 min).
+[triggers]
+crons = ["*/10 * * * *"]
