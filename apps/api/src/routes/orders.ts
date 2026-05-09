@@ -431,3 +431,121 @@ orders.patch('/:id/slip', async (c) => {
     slipVerifiedAt: now,
   });
 });
+
+orders.patch('/:id/dispatch-prep', async (c) => {
+  const role = await loadStaffRole(c);
+  if (!role || !COORDINATOR_ROLES.has(role)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const orderId = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const driverId = body?.driverId === null ? null : (typeof body?.driverId === 'string' ? body.driverId : undefined);
+  const confirmedDeliveryDate = body?.confirmedDeliveryDate === null
+    ? null
+    : (typeof body?.confirmedDeliveryDate === 'string' ? body.confirmedDeliveryDate : undefined);
+  const confirmedWith = typeof body?.confirmedWith === 'string' ? body.confirmedWith : undefined;
+
+  if (driverId !== null && driverId !== undefined) {
+    const { data: drv, error: drvErr } = await supabase
+      .from('drivers')
+      .select('id, active')
+      .eq('id', driverId)
+      .maybeSingle();
+    if (drvErr) return c.json({ error: 'db_fetch_failed', detail: drvErr.message }, 500);
+    if (!drv || !drv.active) return c.json({ error: 'driver_not_found_or_inactive' }, 404);
+  }
+
+  if (confirmedDeliveryDate !== null && confirmedDeliveryDate !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(confirmedDeliveryDate)) {
+      return c.json({ error: 'invalid_date_format' }, 400);
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (confirmedDeliveryDate < today) {
+      return c.json({ error: 'confirmed_date_in_past' }, 400);
+    }
+  }
+
+  if (confirmedWith !== undefined && confirmedWith.length > 200) {
+    return c.json({ error: 'confirmed_with_too_long' }, 400);
+  }
+
+  const updateFields: Record<string, any> = {};
+  if (driverId !== undefined) updateFields.driver_id = driverId;
+  if (confirmedDeliveryDate !== undefined) updateFields.confirmed_delivery_date = confirmedDeliveryDate;
+  if (confirmedWith !== undefined) updateFields.confirmed_with = confirmedWith;
+
+  if (Object.keys(updateFields).length === 0) {
+    return c.json({ error: 'empty_update' }, 400);
+  }
+
+  const { data: row, error: updateErr } = await supabase
+    .from('orders')
+    .update(updateFields)
+    .eq('id', orderId)
+    .select('id, driver_id, confirmed_delivery_date, confirmed_with')
+    .maybeSingle();
+  if (updateErr) return c.json({ error: 'db_update_failed', detail: updateErr.message }, 500);
+  if (!row) return c.json({ error: 'order_not_found' }, 404);
+
+  return c.json({
+    orderId: row.id,
+    driverId: row.driver_id,
+    confirmedDeliveryDate: row.confirmed_delivery_date,
+    confirmedWith: row.confirmed_with,
+  });
+});
+
+orders.patch('/:id/do', async (c) => {
+  const role = await loadStaffRole(c);
+  if (!role || !COORDINATOR_ROLES.has(role)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const orderId = c.req.param('id');
+  const staffId = c.get('user').id;
+  const supabase = c.get('supabase');
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const doKey = body?.doKey;
+  if (typeof doKey !== 'string' || !isValidDoKey(doKey)) {
+    return c.json({ error: 'invalid_do_key_format' }, 400);
+  }
+
+  // Verify file exists in storage via signed URL with 1s TTL.
+  const { data: signedUrl, error: signErr } = await supabase.storage
+    .from('dos')
+    .createSignedUrl(doKey, 1);
+  if (signErr || !signedUrl) {
+    return c.json({ error: 'do_file_not_in_storage', detail: signErr?.message }, 404);
+  }
+
+  const { data: prevRow } = await supabase
+    .from('orders')
+    .select('do_key')
+    .eq('id', orderId)
+    .maybeSingle();
+  const previousKey = prevRow?.do_key ?? null;
+
+  const uploadedAt = new Date().toISOString();
+  const { error: updateErr } = await supabase
+    .from('orders')
+    .update({ do_key: doKey })
+    .eq('id', orderId);
+  if (updateErr) return c.json({ error: 'db_update_failed', detail: updateErr.message }, 500);
+
+  await supabase.from('order_slip_events').insert({
+    order_id: orderId,
+    event: 'do_uploaded',
+    actor_id: staffId,
+    meta: { do_key: doKey, replaces: previousKey },
+  });
+
+  return c.json({ orderId, doKey, uploadedAt });
+});
