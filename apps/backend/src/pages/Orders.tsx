@@ -32,19 +32,15 @@ export const Orders = () => {
   const [poScanOpen, setPoScanOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  // Logistics-lane orders for the Scan PO modal. Cart shape is empty
-  // until catalog seeds with supplier_id-bearing products exist
-  // (Task 4.1 in the Suppliers+PO sub-project). Until then the modal
-  // renders the "All POs already issued" empty state — feature ships
-  // dormant per spec §1.3.
+  // Logistics-lane orders awaiting PO issuance — feed the Scan PO modal.
   const logisticsOrdersForScan = useMemo(() => {
     const list = (orders.data ?? []).filter(
-      (o) => o.lane === 'logistics' && !(o as { poIssued?: boolean }).poIssued,
+      (o) => o.lane === 'logistics' && !o.poIssued,
     );
     return list.map((o) => ({
       id: o.id,
       customerName: o.customerName ?? '—',
-      cart: [] as never[], // rollup data wiring deferred to Task 4.1
+      cart: o.cart,
     }));
   }, [orders.data]);
 

@@ -293,6 +293,17 @@ export type OrderLane =
   | 'delivered'
   | 'cancelled';
 
+export interface CartItem {
+  productId: string;
+  productName: string;
+  productCat: string;
+  supplierId: string | null;
+  sku: string;
+  size: string | null;
+  colour: string | null;
+  qty: number;
+}
+
 export interface OrderListRow {
   id: string;
   placedAt: string;
@@ -302,6 +313,8 @@ export interface OrderListRow {
   lane: OrderLane;
   paymentMethod: string;
   showroomId: string;
+  poIssued: boolean;
+  cart: CartItem[];
 }
 
 export const useOrders = () =>
@@ -310,11 +323,18 @@ export const useOrders = () =>
     queryFn: async (): Promise<OrderListRow[]> => {
       const { data, error } = await supabase
         .from('orders')
-        .select('id, placed_at, customer_name, customer_phone, total, lane, payment_method, showroom_id')
+        .select(`
+          id, placed_at, customer_name, customer_phone, total, lane, payment_method, showroom_id,
+          po_issued,
+          order_items (
+            qty, kind, config,
+            products ( id, name, category_id, supplier_id, sku )
+          )
+        `)
         .order('placed_at', { ascending: false })
         .limit(100);
       if (error) throw error;
-      return (data ?? []).map((r) => ({
+      return (data ?? []).map((r: any) => ({
         id: r.id,
         placedAt: r.placed_at,
         customerName: r.customer_name,
@@ -323,6 +343,19 @@ export const useOrders = () =>
         lane: r.lane as OrderLane,
         paymentMethod: r.payment_method,
         showroomId: r.showroom_id,
+        poIssued: r.po_issued ?? false,
+        cart: ((r.order_items ?? []) as any[])
+          .filter((it) => it.kind === 'product' && it.products)
+          .map((it) => ({
+            productId: it.products.id,
+            productName: it.products.name,
+            productCat: it.products.category_id,
+            supplierId: it.products.supplier_id,
+            sku: it.products.sku,
+            size: it.config?.size ?? null,
+            colour: it.config?.colour ?? null,
+            qty: it.qty,
+          })),
       }));
     },
     staleTime: 5_000,
@@ -573,6 +606,8 @@ export const useOrdersRealtime = (onInsert?: (row: OrderListRow) => void) => {
               lane: r.lane as OrderLane,
               paymentMethod: String(r.payment_method),
               showroomId: String(r.showroom_id),
+              poIssued: Boolean(r.po_issued ?? false),
+              cart: [],
             });
           }
         },
