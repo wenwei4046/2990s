@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Pencil, Eye, EyeOff, Hourglass } from 'lucide-react';
+import { Plus, Pencil, Eye, EyeOff, Hourglass, AlertTriangle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { useCategories, useProducts, type ProductRow } from '../lib/queries';
@@ -84,7 +84,14 @@ export const SkuMaster = () => {
                 <tr key={p.id}>
                   <td>
                     <div className={styles.productCell}>
-                      <span className={styles.productName}>{p.name}</span>
+                      <span className={styles.productName}>
+                        {p.name}
+                        {p.pricingKind === 'sofa_build' && (p.reclinerUpgradePrice ?? 0) === 0 && (
+                          <span className={styles.unpricedBadge} title="Sofa build prices not yet set">
+                            <AlertTriangle size={11} strokeWidth={1.75} /> unpriced
+                          </span>
+                        )}
+                      </span>
                       {p.detail && <span className={styles.productDetail}>{p.detail}</span>}
                     </div>
                   </td>

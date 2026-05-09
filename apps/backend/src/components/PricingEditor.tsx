@@ -54,19 +54,26 @@ interface PriceInputProps {
   onChange: (v: number) => void;
   disabled?: boolean;
 }
-const PriceInput = ({ value, onChange, disabled }: PriceInputProps) => (
-  <div className={`${styles.price} ${disabled ? styles.priceDisabled : ''}`}>
-    <span className={styles.priceUnit}>RM</span>
-    <input
-      type="number"
-      min={0}
-      step={10}
-      value={Number.isFinite(value) ? value : 0}
-      disabled={disabled}
-      onChange={(e) => onChange(Math.max(0, parseInt(e.target.value, 10) || 0))}
-    />
-  </div>
-);
+const PriceInput = ({ value, onChange, disabled }: PriceInputProps) => {
+  // value === 0 is treated as "unset" — show empty input so coordinator
+  // sees a placeholder, not a misleading "RM 0" (which looks like a free product).
+  // Saving without entering a value preserves 0 (current behaviour).
+  const displayValue = Number.isFinite(value) && value !== 0 ? String(value) : '';
+  return (
+    <div className={`${styles.price} ${disabled ? styles.priceDisabled : ''}`}>
+      <span className={styles.priceUnit}>RM</span>
+      <input
+        type="number"
+        min={0}
+        step={10}
+        value={displayValue}
+        placeholder="—"
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value, 10) || 0))}
+      />
+    </div>
+  );
+};
 
 /* ─── sofa: compartments grouped + bundles + recliner ──────────────── */
 
@@ -270,12 +277,21 @@ const SizeEditor = ({ catLabel }: { catLabel: string }) => {
         <div className={styles.rows}>
           {sizes.map((s, i) => {
             const def = lib.find((l) => l.id === s.sizeId);
+            // Sofa depth sizes are encoded as width === length (e.g. s-24 = 61×61).
+            // Showing "61×61 cm" misleads — the label ("24-inch depth") is the
+            // truthful render. For mattress/bedframe (w !== l), keep dimension math.
+            const isSquareDepth = !!def && def.widthCm === def.lengthCm;
+            const dimLabel = def
+              ? isSquareDepth
+                ? def.label
+                : `${def.widthCm}×${def.lengthCm} cm`
+              : '';
             return (
               <div key={s.sizeId} className={`${styles.row} ${s.active ? '' : styles.rowOff}`}>
                 <ActiveToggle value={s.active} onChange={(v) => setSizeField(i, { active: v })} />
                 <code className={styles.rowId}>{def?.label ?? s.sizeId}</code>
                 <span className={`${styles.rowLabel} ${styles.rowLabelDim}`}>
-                  {def ? `${def.widthCm}×${def.lengthCm} cm` : ''}
+                  {dimLabel}
                 </span>
                 <PriceInput value={s.price} onChange={(v) => setSizeField(i, { price: v })} disabled={!s.active} />
               </div>

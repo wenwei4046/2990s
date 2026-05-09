@@ -87,7 +87,21 @@
   flex-direction: column;
   gap: 2px;
 }
-.productName { font-weight: var(--w-semibold); }
+.productName { font-weight: var(--w-semibold); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.unpricedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-button);
+  font-size: var(--fs-11, 11px);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--bg-alt);
+  color: var(--c-burnt);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
 .productDetail {
   color: var(--fg-muted);
   font-size: var(--fs-12);
