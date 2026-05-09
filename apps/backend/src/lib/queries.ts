@@ -353,6 +353,15 @@ export interface OrderDetail {
   slipVerifiedBy: string | null;
   slipVerifiedAt: string | null;
   slipFlagReason: string | null;
+  // Phase 4-C dispatch fields
+  driverId: string | null;
+  confirmedDeliveryDate: string | null;  // ISO date 'YYYY-MM-DD' or null
+  confirmedWith: string | null;
+  dispatchedAt: string | null;
+  deliveredAt: string | null;
+  doSigned: boolean;
+  doKey: string | null;
+  deliveryDate: string | null;  // customer's expected — needed for override warning
 }
 
 export const useOrderDetail = (orderId: string | null) =>
@@ -368,7 +377,9 @@ export const useOrderDetail = (orderId: string | null) =>
           'customer_address, customer_postcode, customer_city, customer_state, ' +
           'subtotal, addon_total, total, paid, ' +
           'payment_method, approval_code, notes, ' +
-          'slip_key, slip_state, slip_verified_by, slip_verified_at, slip_flag_reason'
+          'slip_key, slip_state, slip_verified_by, slip_verified_at, slip_flag_reason, ' +
+          'driver_id, confirmed_delivery_date, confirmed_with, ' +
+          'dispatched_at, delivered_at, do_signed, do_key, delivery_date'
         )
         .eq('id', orderId!)
         .single();
@@ -399,8 +410,48 @@ export const useOrderDetail = (orderId: string | null) =>
         slipVerifiedBy: r.slip_verified_by,
         slipVerifiedAt: r.slip_verified_at,
         slipFlagReason: r.slip_flag_reason,
+        driverId: r.driver_id,
+        confirmedDeliveryDate: r.confirmed_delivery_date,
+        confirmedWith: r.confirmed_with,
+        dispatchedAt: r.dispatched_at,
+        deliveredAt: r.delivered_at,
+        doSigned: r.do_signed,
+        doKey: r.do_key,
+        deliveryDate: r.delivery_date,
       };
     },
+  });
+
+export interface DriverRow {
+  id: string;
+  driverCode: string;
+  name: string;
+  phone: string;
+  icNumber: string | null;
+  vehicle: string | null;
+  active: boolean;
+}
+
+export const useDrivers = () =>
+  useQuery({
+    queryKey: ['drivers'],
+    queryFn: async (): Promise<DriverRow[]> => {
+      const { data, error } = await supabase
+        .from('drivers')
+        .select('id, driver_code, name, phone, ic_number, vehicle, active')
+        .order('driver_code');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        driverCode: r.driver_code,
+        name: r.name,
+        phone: r.phone,
+        icNumber: r.ic_number,
+        vehicle: r.vehicle,
+        active: r.active,
+      }));
+    },
+    staleTime: 60_000,
   });
 
 /**
