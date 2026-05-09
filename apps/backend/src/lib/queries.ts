@@ -362,6 +362,9 @@ export interface OrderDetail {
   doSigned: boolean;
   doKey: string | null;
   deliveryDate: string | null;  // customer's expected — needed for override warning
+  poIssued: boolean;
+  poIssuedAt: string | null;     // ISO timestamp or null
+  poIssuedBy: string | null;     // staff id or null
 }
 
 export const useOrderDetail = (orderId: string | null) =>
@@ -379,7 +382,8 @@ export const useOrderDetail = (orderId: string | null) =>
           'payment_method, approval_code, notes, ' +
           'slip_key, slip_state, slip_verified_by, slip_verified_at, slip_flag_reason, ' +
           'driver_id, confirmed_delivery_date, confirmed_with, ' +
-          'dispatched_at, delivered_at, do_signed, do_key, delivery_date'
+          'dispatched_at, delivered_at, do_signed, do_key, delivery_date, ' +
+          'po_issued, po_issued_at, po_issued_by'
         )
         .eq('id', orderId!)
         .single();
@@ -418,6 +422,9 @@ export const useOrderDetail = (orderId: string | null) =>
         doSigned: r.do_signed,
         doKey: r.do_key,
         deliveryDate: r.delivery_date,
+        poIssued: r.po_issued,
+        poIssuedAt: r.po_issued_at,
+        poIssuedBy: r.po_issued_by,
       };
     },
   });
@@ -430,6 +437,35 @@ export interface DriverRow {
   icNumber: string | null;
   vehicle: string | null;
   active: boolean;
+}
+
+export interface Supplier {
+  id: string;
+  code: string;
+  name: string;
+  whatsappNumber: string | null;
+  email: string | null;
+}
+
+export interface PurchaseOrderLine {
+  id: string;
+  purchaseOrderId: string;
+  orderId: string;
+  sku: string;
+  name: string;
+  size: string | null;
+  colour: string | null;
+  qty: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  poNumber: string;
+  supplier: Supplier;
+  createdAt: string;
+  createdBy: { id: string; name: string };
+  lines: PurchaseOrderLine[];
+  referencedOrderIds: string[];
 }
 
 export const useDrivers = () =>
@@ -452,6 +488,52 @@ export const useDrivers = () =>
       }));
     },
     staleTime: 60_000,
+  });
+
+export const useSuppliers = () =>
+  useQuery({
+    queryKey: ['suppliers'],
+    queryFn: async (): Promise<Supplier[]> => {
+      const { data, error } = await supabase
+        .from('suppliers')
+        .select('id, code, name, whatsapp_number, email')
+        .order('code');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        code: r.code,
+        name: r.name,
+        whatsappNumber: r.whatsapp_number,
+        email: r.email,
+      }));
+    },
+    staleTime: 60_000,
+  });
+
+export const usePurchaseOrders = (orderId: string | null) =>
+  useQuery({
+    queryKey: ['purchase-orders', 'by-order', orderId],
+    enabled: !!orderId,
+    queryFn: async (): Promise<{ id: string; poNumber: string; createdAt: string }[]> => {
+      if (!orderId) return [];
+      // Fetch via purchase_order_lines → purchase_orders join
+      const { data, error } = await supabase
+        .from('purchase_order_lines')
+        .select('purchase_orders ( id, po_number, created_at )')
+        .eq('order_id', orderId);
+      if (error) throw error;
+      const seen = new Set<string>();
+      const result: { id: string; poNumber: string; createdAt: string }[] = [];
+      for (const row of data ?? []) {
+        const po = (row as any).purchase_orders;
+        if (po && !seen.has(po.id)) {
+          seen.add(po.id);
+          result.push({ id: po.id, poNumber: po.po_number, createdAt: po.created_at });
+        }
+      }
+      return result;
+    },
+    staleTime: 30_000,
   });
 
 /**
