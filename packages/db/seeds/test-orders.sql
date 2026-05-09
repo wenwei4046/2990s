@@ -80,3 +80,77 @@ BEGIN
     'dos/2026/05/test-delivered.jpg')
   ON CONFLICT (id) DO NOTHING;
 END $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Sub-project D · Suppliers + PO test data
+-- 2 supplier-tagged products + SO-9008 (cross-supplier) + SO-9009 (single supplier)
+-- Both orders sit in the `logistics` lane to exercise the PO scanning workflow.
+-- Self-contained DO block: re-derives staff/showroom/supplier IDs locally so
+-- it can run even if the block above was skipped.
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  v_staff_s01  uuid;
+  v_showroom   uuid;
+  v_sup_slp    uuid;
+  v_sup_kfa    uuid;
+  -- Stable UUIDs for the test products so the seed is idempotent and the
+  -- order_items inserts can reference them by literal.
+  v_prod_mat   uuid := 'dddddddd-dddd-dddd-dddd-dddddddd0001';
+  v_prod_sof   uuid := 'dddddddd-dddd-dddd-dddd-dddddddd0002';
+BEGIN
+  SELECT id INTO v_staff_s01 FROM staff       WHERE staff_code = 'S01' LIMIT 1;
+  SELECT id INTO v_showroom  FROM showrooms   ORDER BY id LIMIT 1;
+  SELECT id INTO v_sup_slp   FROM suppliers   WHERE code = 'SLP'       LIMIT 1;
+  SELECT id INTO v_sup_kfa   FROM suppliers   WHERE code = 'KFA'       LIMIT 1;
+
+  IF v_staff_s01 IS NULL OR v_showroom IS NULL OR v_sup_slp IS NULL OR v_sup_kfa IS NULL THEN
+    RAISE NOTICE 'Skip Sub-project D seed: missing staff S01, showroom, or suppliers SLP/KFA';
+    RETURN;
+  END IF;
+
+  -- Test product 1: SLP-supplied mattress (flat-priced for simplicity)
+  INSERT INTO products (id, sku, category_id, pricing_kind, name, detail,
+    visible, flat_price, supplier_id)
+  VALUES (v_prod_mat, 'MAT-CLOUD', 'mattress', 'flat', 'Cloud mattress (test)',
+    'Test SKU for Sub-project D PO scanning', true, 2990, v_sup_slp)
+  ON CONFLICT (id) DO UPDATE SET supplier_id = EXCLUDED.supplier_id;
+
+  -- Test product 2: KFA-supplied sofa (flat-priced for simplicity — real sofas
+  -- use sofa_build, but for exercising the PO rollup a flat product suffices)
+  INSERT INTO products (id, sku, category_id, pricing_kind, name, detail,
+    visible, flat_price, recliner_upgrade_price, supplier_id)
+  VALUES (v_prod_sof, 'SOF-NOOR', 'sofa', 'flat', 'Noor sofa (test)',
+    'Test SKU for Sub-project D PO scanning', true, 2990, 0, v_sup_kfa)
+  ON CONFLICT (id) DO UPDATE SET supplier_id = EXCLUDED.supplier_id;
+
+  -- Order 8: in logistics, cart spans BOTH suppliers (SLP mattress + KFA sofa)
+  -- Total: 2990 + 2990 = 5980
+  INSERT INTO orders (id, staff_id, showroom_id, lane, customer_name, customer_phone,
+    subtotal, addon_total, total, paid, pricing_version, payment_method, slip_state)
+  VALUES ('SO-9008', v_staff_s01, v_showroom, 'logistics',
+    'Test Customer 8 (cross-supplier)', '+60123456008',
+    5980, 0, 5980, 5980, '0', 'transfer', 'verified')
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Order 9: in logistics, cart = single supplier (SLP mattress only)
+  INSERT INTO orders (id, staff_id, showroom_id, lane, customer_name, customer_phone,
+    subtotal, addon_total, total, paid, pricing_version, payment_method, slip_state)
+  VALUES ('SO-9009', v_staff_s01, v_showroom, 'logistics',
+    'Test Customer 9 (single-supplier)', '+60123456009',
+    2990, 0, 2990, 2990, '0', 'transfer', 'verified')
+  ON CONFLICT (id) DO NOTHING;
+
+  -- Cart line items (order_items table is the source of truth — schema.ts §407)
+  -- SO-9008: SLP mattress + KFA sofa (cross-supplier rollup test)
+  INSERT INTO order_items (order_id, kind, product_id, qty, unit_price, line_total)
+  VALUES
+    ('SO-9008', 'product', v_prod_mat, 1, 2990, 2990),
+    ('SO-9008', 'product', v_prod_sof, 1, 2990, 2990)
+  ON CONFLICT DO NOTHING;
+
+  -- SO-9009: SLP mattress only
+  INSERT INTO order_items (order_id, kind, product_id, qty, unit_price, line_total)
+  VALUES ('SO-9009', 'product', v_prod_mat, 1, 2990, 2990)
+  ON CONFLICT DO NOTHING;
+END $$;
