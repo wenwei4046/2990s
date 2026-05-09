@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { fmtRM, fmtTime } from '@2990s/shared';
-import { useOrderDetail } from '../lib/queries';
+import { useOrderDetail, usePurchaseOrders } from '../lib/queries';
 import { patchOrderLane } from '../lib/slip';
 import { LaneStepper, type Lane } from './LaneStepper';
 import { SlipSection } from './SlipSection';
@@ -97,6 +97,14 @@ export function OrderDrawer({ orderId, onClose }: Props) {
               onUpdated={refresh}
             />
 
+            {order.lane === 'logistics' && (
+              <PoStatusSection
+                orderId={orderId}
+                poIssued={order.poIssued}
+                poIssuedAt={order.poIssuedAt}
+              />
+            )}
+
             {order.lane === 'ready' && (
               <DriverPickerSection
                 orderId={orderId}
@@ -124,5 +132,42 @@ export function OrderDrawer({ orderId, onClose }: Props) {
         )}
       </aside>
     </>
+  );
+}
+
+function PoStatusSection({
+  orderId,
+  poIssued,
+  poIssuedAt,
+}: {
+  orderId: string;
+  poIssued: boolean;
+  poIssuedAt: string | null;
+}) {
+  const pos = usePurchaseOrders(orderId);
+  const firstPo = pos.data?.[0];
+
+  const formattedDate = poIssuedAt
+    ? new Date(poIssuedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+    : null;
+
+  return (
+    <section style={{ padding: 16, borderTop: '1px solid var(--c-line)' }}>
+      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--c-ink)' }}>
+        Purchase order
+      </h3>
+      <div style={{ marginTop: 8, fontSize: 14, color: 'var(--c-ink)' }}>
+        {poIssued && firstPo
+          ? <><strong>{firstPo.poNumber}</strong> · issued {formattedDate ?? '—'}</>
+          : poIssued
+            ? <>PO issued {formattedDate ? `on ${formattedDate}` : ''}</>
+            : <span style={{ color: 'var(--fg-muted)' }}>Awaiting PO scan</span>}
+      </div>
+      {!poIssued && (
+        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--fg-muted)' }}>
+          Open the &quot;Scan PO&quot; modal from the logistics lane to issue this order&apos;s PO.
+        </div>
+      )}
+    </section>
   );
 }
