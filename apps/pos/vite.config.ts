@@ -38,6 +38,6 @@ export default defineConfig({
     }),
   ],
   envDir: '../../',
-  server: { port: 5173, host: true },
-  preview: { port: 4173 },
+  server: { port: 6273, host: true, strictPort: false },
+  preview: { port: 4273 },
 });

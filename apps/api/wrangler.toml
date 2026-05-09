@@ -12,7 +12,7 @@ compatibility_flags = ["nodejs_compat"]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
 # Allowed CORS origins (dev + prod). Update when domain is set.
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://127.0.0.1:5174"
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:6273,http://localhost:6274,http://localhost:6275,http://localhost:6276,http://127.0.0.1:5174,http://127.0.0.1:6273,http://127.0.0.1:6274,http://127.0.0.1:6275,http://127.0.0.1:6276"
 
 # R2 bucket settings — fill R2_ENDPOINT after CF account ID is known
 # (CF dashboard → top-right account dropdown → Account ID).

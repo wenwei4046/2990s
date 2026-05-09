@@ -7,6 +7,6 @@ export default defineConfig({
   plugins: [react()],
   // Read .env from monorepo root so all apps share one source of truth.
   envDir: '../../',
-  server: { port: 5174, host: true },
-  preview: { port: 4174 },
+  server: { port: 6274, host: true, strictPort: false },
+  preview: { port: 4274 },
 });
