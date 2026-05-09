@@ -44,6 +44,8 @@ export interface OrderSubmitInput {
   lines: CartLine[];
   /** When true, override the drift check by sending the server's total back. */
   acceptedServerTotal?: number;
+  /** Slip MVP: required when paymentMethod='transfer'. */
+  uploadSessionId?: string;
 }
 
 const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
@@ -82,6 +84,7 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     ...(input.notes ? { notes: input.notes } : {}),
     lines,
     clientTotal,
+    ...(input.uploadSessionId ? { uploadSessionId: input.uploadSessionId } : {}),
   };
 };
 

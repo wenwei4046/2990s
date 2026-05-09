@@ -6,6 +6,7 @@ import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
 import { PricingDriftModal } from '../components/PricingDriftModal';
+import { SlipUploadStep } from '../components/SlipUploadStep';
 import styles from './Handover.module.css';
 
 type PaymentMethod = 'credit' | 'debit' | 'installment' | 'transfer';
@@ -36,6 +37,7 @@ export const Handover = () => {
   const [form, setForm] = useState<FormValues>(empty);
   const [drift, setDrift] = useState<PricingDriftPayload | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [uploadSessionId, setUploadSessionId] = useState<string | null>(null);
 
   const createOrder = useCreateOrder();
 
@@ -77,6 +79,7 @@ export const Handover = () => {
         notes: form.notes.trim() || undefined,
         lines,
         acceptedServerTotal,
+        uploadSessionId: uploadSessionId ?? undefined,
       });
       clear();
       navigate(`/orders/${encodeURIComponent(result.id)}`);
@@ -94,7 +97,9 @@ export const Handover = () => {
     void submit();
   };
 
-  const canSubmit = form.name.trim().length > 0;
+  // Slip required for transfer; for other payment methods, slip is N/A.
+  const slipReady = form.paymentMethod !== 'transfer' || uploadSessionId !== null;
+  const canSubmit = form.name.trim().length > 0 && slipReady;
 
   return (
     <main className={styles.shell}>
@@ -187,6 +192,12 @@ export const Handover = () => {
               />
             </Field>
           )}
+          {form.paymentMethod === 'transfer' && (
+            <SlipUploadStep
+              onConfirmed={setUploadSessionId}
+              onCleared={() => setUploadSessionId(null)}
+            />
+          )}
           <Field label="Notes">
             <textarea
               rows={2}
@@ -225,7 +236,11 @@ export const Handover = () => {
             disabled={!canSubmit || createOrder.isPending}
             fullWidth
           >
-            {createOrder.isPending ? 'Placing order…' : 'Place order'}
+            {createOrder.isPending
+              ? 'Placing order…'
+              : !slipReady
+                ? 'Upload slip first'
+                : 'Place order'}
           </Button>
         </aside>
       </form>
