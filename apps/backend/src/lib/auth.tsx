@@ -62,16 +62,46 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     let mounted = true;
 
-    void supabase.auth.getSession().then(async ({ data }) => {
+    // Hard ceiling on Loading state. If supabase.auth.getSession() ever hangs
+    // (known issue: navigator-locks deadlock under StrictMode + HMR, see
+    // supabase/supabase-js#42505), the UI must still recover within 7s by
+    // dropping to "no session" — better to show the login form than to wedge
+    // forever. onAuthStateChange will still fire later if/when getSession
+    // resolves and supersede this fallback.
+    const failsafe = setTimeout(() => {
       if (!mounted) return;
-      if (data.session) {
-        const initialStaff = await fetchStaff(data.session.user.id);
+      setLoading((prev) => {
+        if (prev) {
+          console.warn(
+            '[auth] getSession() did not resolve within 7s — releasing Loading state. ' +
+              'Likely a stuck navigator-locks acquisition.',
+          );
+        }
+        return false;
+      });
+    }, 7000);
+
+    supabase.auth
+      .getSession()
+      .then(async ({ data }) => {
         if (!mounted) return;
-        setStaff(initialStaff);
-      }
-      setSession(data.session);
-      setLoading(false);
-    });
+        if (data.session) {
+          const initialStaff = await fetchStaff(data.session.user.id);
+          if (!mounted) return;
+          setStaff(initialStaff);
+        }
+        setSession(data.session);
+        setLoading(false);
+      })
+      .catch((err) => {
+        // Don't let a getSession() rejection (lock timeout, network hiccup,
+        // malformed token) wedge the UI on Loading… forever.
+        if (!mounted) return;
+        console.error('[auth] getSession() rejected:', err);
+        setSession(null);
+        setStaff(null);
+        setLoading(false);
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       if (!mounted) return;
@@ -92,6 +122,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     return () => {
       mounted = false;
+      clearTimeout(failsafe);
       sub.subscription.unsubscribe();
     };
   }, []);
