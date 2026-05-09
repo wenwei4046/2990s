@@ -5,8 +5,8 @@ const LANES = [
   { id: 'proceed',     num: '02', label: 'Proceed',    enabled: true },
   { id: 'logistics',   num: '03', label: 'Logistics',  enabled: true },
   { id: 'ready',       num: '04', label: 'Ready',      enabled: true },
-  { id: 'dispatched',  num: '05', label: 'Dispatched', enabled: false, tip: 'Driver assignment coming next iteration' },
-  { id: 'delivered',   num: '06', label: 'Delivered',  enabled: false, tip: 'Driver assignment coming next iteration' },
+  { id: 'dispatched',  num: '05', label: 'Dispatched', enabled: true },
+  { id: 'delivered',   num: '06', label: 'Delivered',  enabled: true },
 ] as const;
 
 export type Lane = (typeof LANES)[number]['id'];
@@ -34,9 +34,8 @@ export function LaneStepper({ current, onAdvance, busy = false }: Props) {
           isPast ? styles.past : '',
           !lane.enabled ? styles.disabled : '',
         ].filter(Boolean).join(' ');
-        const tip = 'tip' in lane ? lane.tip : '';
         return (
-          <li key={lane.id} className={className} title={tip}>
+          <li key={lane.id} className={className}>
             <button
               type="button"
               disabled={!isClickable}
