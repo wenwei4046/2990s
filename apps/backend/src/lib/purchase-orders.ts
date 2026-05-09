@@ -72,15 +72,34 @@ export async function createPO(input: CreatePoInput): Promise<PurchaseOrder> {
   };
 }
 
-/** URL of the printable HTML view. Caller passes this to window.open. */
+/** URL of the printable HTML view. Caller fetches with auth header (window.open can't carry Bearer). */
 export function getPrintUrl(poId: string): string {
   if (!API_URL) throw new Error('VITE_API_URL is not set');
   return `${API_URL}/purchase-orders/${encodeURIComponent(poId)}/print`;
 }
 
-/** Open the print view in a new tab. Returns the WindowProxy or null if blocked by popup blocker. */
-export function openPrintWindow(poId: string): Window | null {
-  return window.open(getPrintUrl(poId), '_blank');
+/**
+ * Open the print view in a new tab. Fetches HTML with Authorization header
+ * (window.open() alone cannot carry Bearer tokens), then writes the response
+ * into the new window. Returns the WindowProxy or null if popup blocker fires.
+ */
+export async function openPrintWindow(poId: string): Promise<Window | null> {
+  if (!API_URL) throw new Error('VITE_API_URL is not set');
+  const token = await getToken();
+  const res = await fetch(getPrintUrl(poId), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '<no body>');
+    throw new Error(`print view failed (${res.status}): ${text}`);
+  }
+  const html = await res.text();
+  const win = window.open('', '_blank');
+  if (!win) return null;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  return win;
 }
 
 /** Build a wa.me share URL with a pre-filled greeting. Coordinator manually attaches the PDF. */

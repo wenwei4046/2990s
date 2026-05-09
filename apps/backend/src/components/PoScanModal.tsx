@@ -148,13 +148,18 @@ export function PoScanModal({ orders, onClose, onIssued }: Props) {
           sourceOrderCount: sourceOrderIds.size,
         },
       }));
-      // Open print view in new tab immediately
-      const win = openPrintWindow(po.id);
-      if (!win) {
-        setErrors((e) => ({
-          ...e,
-          [group.supplier.id]: 'Print window blocked. Click "Open print view" below.',
-        }));
+      // Open print view in new tab immediately (fetches with auth + writes HTML)
+      try {
+        const win = await openPrintWindow(po.id);
+        if (!win) {
+          setErrors((e) => ({
+            ...e,
+            [group.supplier.id]: 'Print window blocked. Click "Open print view" below.',
+          }));
+        }
+      } catch (printErr) {
+        const printMsg = printErr instanceof Error ? printErr.message : 'Print view failed';
+        setErrors((e) => ({ ...e, [group.supplier.id]: printMsg }));
       }
       onIssued?.(Array.from(sourceOrderIds));
     } catch (err) {
@@ -237,7 +242,7 @@ export function PoScanModal({ orders, onClose, onIssued }: Props) {
                     <div className={styles.issuedActions}>
                       <button
                         className={styles.actionBtn}
-                        onClick={() => openPrintWindow(issued.poId)}
+                        onClick={() => { void openPrintWindow(issued.poId); }}
                       >
                         Open print view
                       </button>
