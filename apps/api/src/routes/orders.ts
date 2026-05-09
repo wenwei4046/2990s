@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { orderV1PostSchema } from '@2990s/shared/schemas';
+import { orderV1PostSchema, SlipVerifyRequestSchema } from '@2990s/shared/schemas';
 import {
   computeOrderTotal,
   pricingDriftExceeds,
@@ -8,6 +8,8 @@ import {
   type OrderLineInput,
 } from '@2990s/shared/pricing';
 import { supabaseAuth } from '../middleware/auth';
+import { presign, type SlipMime } from '../lib/r2';
+import { slipBindings } from '../lib/slip';
 import type { Env, Variables } from '../env';
 
 export const orders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -20,6 +22,18 @@ orders.use('*', supabaseAuth);
 // failsafe). Reject early so the bug doesn't compound when a 2nd showroom
 // opens. CLAUDE.md "POS is sales-only" formalised at the auth boundary.
 const POS_ORDER_ROLES = new Set(['sales', 'showroom_lead', 'admin']);
+const COORDINATOR_ROLES = new Set(['coordinator', 'finance', 'admin']);
+
+function mimeFromKey(key: string): SlipMime {
+  const ext = key.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'png': return 'image/png';
+    case 'webp': return 'image/webp';
+    case 'pdf': return 'application/pdf';
+    default: throw new Error(`unknown slip extension: ${key}`);
+  }
+}
 
 orders.post('/', async (c) => {
   let body: unknown;
@@ -201,4 +215,115 @@ orders.post('/', async (c) => {
       kind: dto.lines[i]?.config.kind ?? 'unknown',
     })),
   }, 201);
+});
+
+// ─── Coordinator slip endpoints ────────────────────────────────────────────
+// Authorization is enforced inline by checking staff.role; only coordinator+
+// roles can read slip URLs or verify/flag.
+
+async function loadStaffRole(c: any): Promise<string | null> {
+  const supabase = c.get('supabase');
+  const userId = c.get('user').id;
+  const { data, error } = await supabase
+    .from('staff')
+    .select('role, active')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error || !data || !data.active) return null;
+  return data.role;
+}
+
+orders.get('/:id/slip-url', async (c) => {
+  const role = await loadStaffRole(c);
+  if (!role || !COORDINATOR_ROLES.has(role)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const orderId = c.req.param('id');
+  const supabase = c.get('supabase');
+  const bindings = slipBindings(c.env);
+
+  const { data: row, error } = await supabase
+    .from('orders')
+    .select('slip_key')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  if (error) return c.json({ error: 'db_fetch_failed', detail: error.message }, 500);
+  if (!row) return c.json({ error: 'order_not_found' }, 404);
+  if (!row.slip_key) return c.json({ error: 'no_slip_attached' }, 400);
+
+  const contentType = mimeFromKey(row.slip_key);
+  const url = await presign({
+    bucket: bindings.bucketName,
+    region: 'auto',
+    accessKeyId: bindings.accessKeyId,
+    secretAccessKey: bindings.secretAccessKey,
+    endpoint: bindings.endpoint,
+    key: row.slip_key,
+    method: 'GET',
+    expiresInSeconds: 5 * 60,
+  });
+
+  return c.json({
+    url,
+    contentType,
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+  });
+});
+
+orders.patch('/:id/slip', async (c) => {
+  const role = await loadStaffRole(c);
+  if (!role || !COORDINATOR_ROLES.has(role)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const orderId = c.req.param('id');
+  const staffId = c.get('user').id;
+  const supabase = c.get('supabase');
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const parsed = SlipVerifyRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'reason_required', issues: parsed.error.issues }, 400);
+  }
+
+  const { data: row, error: fetchErr } = await supabase
+    .from('orders')
+    .select('id, slip_state')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  if (fetchErr) return c.json({ error: 'db_fetch_failed', detail: fetchErr.message }, 500);
+  if (!row) return c.json({ error: 'order_not_found' }, 404);
+  if (row.slip_state !== 'pending') {
+    return c.json({ error: 'invalid_state', currentSlipState: row.slip_state }, 400);
+  }
+
+  const now = new Date().toISOString();
+  const updateFields = parsed.data.state === 'verified'
+    ? { slip_state: 'verified', slip_verified_by: staffId, slip_verified_at: now, slip_flag_reason: null }
+    : { slip_state: 'flagged',  slip_verified_by: staffId, slip_verified_at: now, slip_flag_reason: parsed.data.reason };
+
+  const { error: updateErr } = await supabase
+    .from('orders')
+    .update(updateFields)
+    .eq('id', orderId);
+  if (updateErr) return c.json({ error: 'db_update_failed', detail: updateErr.message }, 500);
+
+  await supabase.from('order_slip_events').insert({
+    order_id: orderId,
+    event: parsed.data.state,
+    actor_id: staffId,
+    meta: parsed.data.state === 'flagged' ? { reason: parsed.data.reason } : {},
+  });
+
+  return c.json({
+    orderId,
+    slipState: parsed.data.state,
+    slipVerifiedBy: staffId,
+    slipVerifiedAt: now,
+  });
 });
