@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { Inbox, RefreshCw } from 'lucide-react';
 import { fmtRM, fmtTime, daysAgo } from '@2990s/shared';
 import { useOrders, useOrdersRealtime, type OrderLane, type OrderListRow } from '../lib/queries';
+import { OrderDrawer } from '../components/OrderDrawer';
 import styles from './Orders.module.css';
 
 const LANE_LABEL: Record<OrderLane, string> = {
@@ -23,6 +25,15 @@ export const Orders = () => {
   const orders = useOrders();
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openOrderId = searchParams.get('orderId');
+
+  const openDrawer = (id: string) => {
+    setSearchParams({ orderId: id }, { replace: true });
+  };
+  const closeDrawer = () => {
+    setSearchParams({}, { replace: true });
+  };
 
   const onInsert = useCallback((row: OrderListRow) => {
     setToasts((cur) => [...cur, {
@@ -89,7 +100,11 @@ export const Orders = () => {
           </thead>
           <tbody>
             {orders.data!.map((o) => (
-              <tr key={o.id} className={highlightId === o.id ? styles.highlight : ''}>
+              <tr
+                key={o.id}
+                className={`${styles.clickable} ${highlightId === o.id ? styles.highlight : ''}`}
+                onClick={() => openDrawer(o.id)}
+              >
                 <td className={styles.cellId}>{o.id}</td>
                 <td>
                   <div className={styles.cellMain}>{o.customerName}</div>
@@ -111,6 +126,8 @@ export const Orders = () => {
       <div className={styles.toastTray} role="status" aria-live="polite">
         {toasts.map((t) => <div key={t.id} className={styles.toast}>{t.message}</div>)}
       </div>
+
+      <OrderDrawer orderId={openOrderId} onClose={closeDrawer} />
     </div>
   );
 };

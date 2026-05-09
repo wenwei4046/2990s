@@ -31,6 +31,15 @@
 .spinning {
   animation: spin 0.8s linear infinite;
 }
+
+.clickable {
+  cursor: pointer;
+  transition: background 80ms;
+}
+.clickable:hover {
+  background: var(--bg-alt);
+}
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
