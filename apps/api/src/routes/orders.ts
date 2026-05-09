@@ -10,6 +10,7 @@ import {
 import { supabaseAuth } from '../middleware/auth';
 import { presign, type SlipMime } from '../lib/r2';
 import { slipBindings } from '../lib/slip';
+import { isValidDoKey, isValidLaneTransition, type Lane } from '../lib/dispatch';
 import type { Env, Variables } from '../env';
 
 export const orders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -282,6 +283,8 @@ orders.get('/:id/slip-url', async (c) => {
 
 const VALID_LANES = new Set(['received', 'proceed', 'logistics', 'ready', 'dispatched', 'delivered', 'cancelled']);
 
+const FORWARD_LANE_ORDER = ['received', 'proceed', 'logistics', 'ready', 'dispatched', 'delivered'] as const;
+
 orders.patch('/:id/lane', async (c) => {
   const role = await loadStaffRole(c);
   if (!role || !COORDINATOR_ROLES.has(role)) {
@@ -295,39 +298,82 @@ orders.patch('/:id/lane', async (c) => {
   let body: any;
   try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
 
-  const lane = body?.lane;
+  const lane = body?.lane as Lane;
   if (typeof lane !== 'string' || !VALID_LANES.has(lane)) {
     return c.json({ error: 'invalid_lane' }, 400);
   }
 
-  // Block 'dispatched' / 'delivered' until driver feature ships.
-  if (lane === 'dispatched' || lane === 'delivered') {
-    return c.json({ error: 'lane_not_yet_supported', detail: 'driver assignment not yet built' }, 400);
-  }
-
+  // Fetch order — need lane + dispatch fields for gate validation
   const { data: row, error: fetchErr } = await supabase
     .from('orders')
-    .select('lane')
+    .select('lane, driver_id, confirmed_delivery_date, do_key, dispatched_at, delivered_at')
     .eq('id', orderId)
     .maybeSingle();
   if (fetchErr) return c.json({ error: 'db_fetch_failed', detail: fetchErr.message }, 500);
   if (!row) return c.json({ error: 'order_not_found' }, 404);
 
-  const fromLane = row.lane;
+  // Validate transition is allowed structurally
+  if (!isValidLaneTransition(row.lane as Lane, lane)) {
+    return c.json({ error: 'invalid_transition', from: row.lane, to: lane }, 400);
+  }
+
+  // Determine if forward (gate-relevant) vs backward (no gates)
+  const fromIdx = (FORWARD_LANE_ORDER as readonly string[]).indexOf(row.lane);
+  const toIdx = (FORWARD_LANE_ORDER as readonly string[]).indexOf(lane);
+  const isForward = fromIdx !== -1 && toIdx !== -1 && toIdx > fromIdx;
+
+  // Gate validation (only on forward transitions to dispatched/delivered)
+  if (isForward && lane === 'dispatched') {
+    const missing: string[] = [];
+    if (!row.driver_id) missing.push('driver_id');
+    if (!row.confirmed_delivery_date) missing.push('confirmed_delivery_date');
+    if (missing.length > 0) {
+      return c.json({ error: 'lane_gate_failed', missing }, 422);
+    }
+  }
+  if (isForward && lane === 'delivered') {
+    if (!row.do_key) {
+      return c.json({ error: 'lane_gate_failed', missing: ['do_key'] }, 422);
+    }
+  }
+
+  // Auto-stamp timestamps on first forward entry (idempotent for step-back/forward)
+  const updateFields: any = { lane };
+  let dispatchedAt: string | undefined;
+  let deliveredAt: string | undefined;
+  let doSignedSet: boolean | undefined;
+  if (isForward && lane === 'dispatched' && !row.dispatched_at) {
+    dispatchedAt = new Date().toISOString();
+    updateFields.dispatched_at = dispatchedAt;
+  }
+  if (isForward && lane === 'delivered' && !row.delivered_at) {
+    deliveredAt = new Date().toISOString();
+    updateFields.delivered_at = deliveredAt;
+    updateFields.do_signed = true;
+    doSignedSet = true;
+  }
+
   const { error: updateErr } = await supabase
     .from('orders')
-    .update({ lane })
+    .update(updateFields)
     .eq('id', orderId);
   if (updateErr) return c.json({ error: 'db_update_failed', detail: updateErr.message }, 500);
 
   await supabase.from('order_lane_history').insert({
     order_id: orderId,
-    from_lane: fromLane,
+    from_lane: row.lane,
     to_lane: lane,
     changed_by: staffId,
   });
 
-  return c.json({ orderId, lane, fromLane });
+  return c.json({
+    orderId,
+    lane,
+    fromLane: row.lane,
+    ...(dispatchedAt ? { dispatchedAt } : {}),
+    ...(deliveredAt ? { deliveredAt } : {}),
+    ...(doSignedSet !== undefined ? { doSigned: doSignedSet } : {}),
+  });
 });
 
 orders.patch('/:id/slip', async (c) => {
