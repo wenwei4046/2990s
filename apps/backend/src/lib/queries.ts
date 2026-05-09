@@ -328,6 +328,81 @@ export const useOrders = () =>
     staleTime: 5_000,
   });
 
+export interface OrderDetail {
+  id: string;
+  placedAt: string;
+  staffId: string;
+  showroomId: string;
+  lane: OrderLane;
+  customerName: string;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  customerAddress: string | null;
+  customerPostcode: string | null;
+  customerCity: string | null;
+  customerState: string | null;
+  subtotal: number;
+  addonTotal: number;
+  total: number;
+  paid: number;
+  paymentMethod: string;
+  approvalCode: string | null;
+  notes: string | null;
+  slipKey: string | null;
+  slipState: 'none' | 'pending' | 'verified' | 'flagged';
+  slipVerifiedBy: string | null;
+  slipVerifiedAt: string | null;
+  slipFlagReason: string | null;
+}
+
+export const useOrderDetail = (orderId: string | null) =>
+  useQuery({
+    enabled: !!orderId,
+    queryKey: ['order', orderId],
+    queryFn: async (): Promise<OrderDetail> => {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(
+          'id, placed_at, staff_id, showroom_id, lane, ' +
+          'customer_name, customer_phone, customer_email, ' +
+          'customer_address, customer_postcode, customer_city, customer_state, ' +
+          'subtotal, addon_total, total, paid, ' +
+          'payment_method, approval_code, notes, ' +
+          'slip_key, slip_state, slip_verified_by, slip_verified_at, slip_flag_reason'
+        )
+        .eq('id', orderId!)
+        .single();
+      if (error || !data) throw error ?? new Error('order_not_found');
+      const r = data as any;
+      return {
+        id: r.id,
+        placedAt: r.placed_at,
+        staffId: r.staff_id,
+        showroomId: r.showroom_id,
+        lane: r.lane as OrderLane,
+        customerName: r.customer_name,
+        customerPhone: r.customer_phone,
+        customerEmail: r.customer_email,
+        customerAddress: r.customer_address,
+        customerPostcode: r.customer_postcode,
+        customerCity: r.customer_city,
+        customerState: r.customer_state,
+        subtotal: r.subtotal,
+        addonTotal: r.addon_total,
+        total: r.total,
+        paid: r.paid,
+        paymentMethod: r.payment_method,
+        approvalCode: r.approval_code,
+        notes: r.notes,
+        slipKey: r.slip_key,
+        slipState: r.slip_state,
+        slipVerifiedBy: r.slip_verified_by,
+        slipVerifiedAt: r.slip_verified_at,
+        slipFlagReason: r.slip_flag_reason,
+      };
+    },
+  });
+
 /**
  * Realtime subscription on `orders`. Any INSERT/UPDATE/DELETE invalidates
  * the orders list query. Returns the latest payload of an INSERT so the

@@ -280,6 +280,56 @@ orders.get('/:id/slip-url', async (c) => {
   });
 });
 
+const VALID_LANES = new Set(['received', 'proceed', 'logistics', 'ready', 'dispatched', 'delivered', 'cancelled']);
+
+orders.patch('/:id/lane', async (c) => {
+  const role = await loadStaffRole(c);
+  if (!role || !COORDINATOR_ROLES.has(role)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const orderId = c.req.param('id');
+  const staffId = c.get('user').id;
+  const supabase = c.get('supabase');
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const lane = body?.lane;
+  if (typeof lane !== 'string' || !VALID_LANES.has(lane)) {
+    return c.json({ error: 'invalid_lane' }, 400);
+  }
+
+  // Block 'dispatched' / 'delivered' until driver feature ships.
+  if (lane === 'dispatched' || lane === 'delivered') {
+    return c.json({ error: 'lane_not_yet_supported', detail: 'driver assignment not yet built' }, 400);
+  }
+
+  const { data: row, error: fetchErr } = await supabase
+    .from('orders')
+    .select('lane')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (fetchErr) return c.json({ error: 'db_fetch_failed', detail: fetchErr.message }, 500);
+  if (!row) return c.json({ error: 'order_not_found' }, 404);
+
+  const fromLane = row.lane;
+  const { error: updateErr } = await supabase
+    .from('orders')
+    .update({ lane })
+    .eq('id', orderId);
+  if (updateErr) return c.json({ error: 'db_update_failed', detail: updateErr.message }, 500);
+
+  await supabase.from('order_lane_history').insert({
+    order_id: orderId,
+    from_lane: fromLane,
+    to_lane: lane,
+    changed_by: staffId,
+  });
+
+  return c.json({ orderId, lane, fromLane });
+});
+
 orders.patch('/:id/slip', async (c) => {
   const role = await loadStaffRole(c);
   if (!role || !COORDINATOR_ROLES.has(role)) {
