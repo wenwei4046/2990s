@@ -4,7 +4,8 @@ import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { SkuMaster } from './pages/SkuMaster';
 import { Orders } from './pages/Orders';
-import { VerifySlips, Addons, Customers, Settings } from './pages/Placeholder';
+import { VerifySlips } from './pages/VerifySlips';
+import { Addons, Customers, Settings } from './pages/Placeholder';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },

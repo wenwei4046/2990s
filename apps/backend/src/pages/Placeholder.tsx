@@ -18,14 +18,6 @@ export const Placeholder = ({ title, phase, hint }: PlaceholderProps) => (
   </div>
 );
 
-export const VerifySlips = () => (
-  <Placeholder
-    title="Verify slips"
-    phase="Phase 4"
-    hint="Coordinator queue. Inspect uploaded payment slips, verify/flag/replace. Driver assignment + DO upload → delivery dispatched."
-  />
-);
-
 export const Addons = () => (
   <Placeholder
     title="Add-ons"

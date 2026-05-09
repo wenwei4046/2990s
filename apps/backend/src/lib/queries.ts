@@ -462,6 +462,58 @@ export const useOrderDetail = (orderId: string | null) =>
     },
   });
 
+/* ─── Slip verification queue (Phase 4 sub-project B) ─── */
+
+export interface SlipQueueRow {
+  id: string;                       // order id (SO-XXXX)
+  placedAt: string;
+  customerName: string;
+  customerPhone: string | null;
+  total: number;
+  paymentMethod: string;
+  showroomId: string;
+  slipKey: string | null;
+  slipState: 'none' | 'pending' | 'verified' | 'flagged';
+  slipVerifiedBy: string | null;
+  slipVerifiedAt: string | null;
+  slipFlagReason: string | null;
+}
+
+// Coordinator queue: every order whose slip is awaiting human review.
+// Excludes cancelled lanes — coordinator shouldn't burn cycles on dead orders.
+export const useSlipQueue = () =>
+  useQuery({
+    queryKey: ['slip-queue'],
+    queryFn: async (): Promise<SlipQueueRow[]> => {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(
+          'id, placed_at, customer_name, customer_phone, total, payment_method, showroom_id, ' +
+          'slip_key, slip_state, slip_verified_by, slip_verified_at, slip_flag_reason',
+        )
+        .eq('slip_state', 'pending')
+        .neq('lane', 'cancelled')
+        .order('placed_at', { ascending: true })
+        .limit(100);
+      if (error) throw error;
+      return (data ?? []).map((r: any) => ({
+        id: r.id,
+        placedAt: r.placed_at,
+        customerName: r.customer_name,
+        customerPhone: r.customer_phone,
+        total: r.total,
+        paymentMethod: r.payment_method,
+        showroomId: r.showroom_id,
+        slipKey: r.slip_key,
+        slipState: r.slip_state,
+        slipVerifiedBy: r.slip_verified_by,
+        slipVerifiedAt: r.slip_verified_at,
+        slipFlagReason: r.slip_flag_reason,
+      }));
+    },
+    staleTime: 5_000,
+  });
+
 export interface DriverRow {
   id: string;
   driverCode: string;
