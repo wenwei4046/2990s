@@ -1,22 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Inbox, RefreshCw } from 'lucide-react';
-import { fmtRM, fmtTime, daysAgo } from '@2990s/shared';
-import { useOrders, useOrdersRealtime, type OrderLane, type OrderListRow } from '../lib/queries';
+import { Inbox } from 'lucide-react';
+import { fmtRM } from '@2990s/shared';
+import { useOrders, useOrdersRealtime, type OrderListRow } from '../lib/queries';
 import { OrderDrawer } from '../components/OrderDrawer';
 import { PoScanModal } from '../components/PoScanModal';
-import styles from './Orders.module.css';
-
-const LANE_LABEL: Record<OrderLane, string> = {
-  received:   'Received',
-  proceed:    'Proceed',
-  logistics:  'Logistics',
-  ready:      'Ready',
-  dispatched: 'Dispatched',
-  delivered:  'Delivered',
-  cancelled:  'Cancelled',
-};
+import { OrdersBoard } from '../components/OrdersBoard';
+import styles from '../components/OrdersBoard.module.css';
 
 interface Toast {
   id: string;
@@ -44,9 +35,12 @@ export const Orders = () => {
     }));
   }, [orders.data]);
 
-  const openDrawer = (id: string) => {
-    setSearchParams({ orderId: id }, { replace: true });
-  };
+  const openDrawer = useCallback(
+    (id: string) => {
+      setSearchParams({ orderId: id }, { replace: true });
+    },
+    [setSearchParams],
+  );
   const closeDrawer = () => {
     setSearchParams({}, { replace: true });
   };
@@ -73,91 +67,36 @@ export const Orders = () => {
     return () => clearTimeout(t);
   }, [highlightId]);
 
-  return (
-    <div className={styles.page}>
-      <header className={styles.header}>
-        <div>
-          <h2 className="t-h2">Orders</h2>
-          <p className="t-body fg-muted">
-            Realtime list of placed orders. Phase 3 turns this into the 6-lane drag-and-drop board.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {logisticsOrdersForScan.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setPoScanOpen(true)}
-              style={{
-                background: 'var(--c-burnt, #B87800)',
-                color: 'white',
-                border: 0,
-                padding: '8px 14px',
-                borderRadius: 'var(--radius-pill)',
-                fontFamily: 'var(--font-button)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 'var(--w-semibold)',
-                cursor: 'pointer',
-              }}
-            >
-              Scan PO ({logisticsOrdersForScan.length})
-            </button>
-          )}
-          <button
-            type="button"
-            className={styles.refresh}
-            onClick={() => void orders.refetch()}
-            disabled={orders.isFetching}
-          >
-            <RefreshCw size={14} strokeWidth={1.75} className={orders.isFetching ? styles.spinning : ''} />
-            Refresh
-          </button>
-        </div>
-      </header>
+  const refresh = useCallback(() => {
+    void orders.refetch();
+  }, [orders]);
 
+  return (
+    <>
       {orders.isLoading ? (
-        <p className={styles.empty}>Loading orders…</p>
+        <div className={styles.page}>
+          <p className={styles.empty}>Loading orders…</p>
+        </div>
       ) : orders.error ? (
-        <p className={styles.empty}>Failed to load: {String(orders.error)}</p>
+        <div className={styles.page}>
+          <p className={styles.empty}>Failed to load: {String(orders.error)}</p>
+        </div>
       ) : (orders.data?.length ?? 0) === 0 ? (
-        <div className={styles.empty}>
-          <Inbox size={32} strokeWidth={1.5} />
-          <p>No orders yet. POS sales land here within ~300ms via Realtime.</p>
+        <div className={styles.page}>
+          <div className={styles.empty}>
+            <Inbox size={32} strokeWidth={1.5} />
+            <p>No orders yet. POS sales land here within ~300ms via Realtime.</p>
+          </div>
         </div>
       ) : (
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Order</th>
-              <th>Customer</th>
-              <th>Lane</th>
-              <th>Payment</th>
-              <th className={styles.right}>Total</th>
-              <th>Placed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orders.data!.map((o) => (
-              <tr
-                key={o.id}
-                className={`${styles.clickable} ${highlightId === o.id ? styles.highlight : ''}`}
-                onClick={() => openDrawer(o.id)}
-              >
-                <td className={styles.cellId}>{o.id}</td>
-                <td>
-                  <div className={styles.cellMain}>{o.customerName}</div>
-                  {o.customerPhone && <div className={styles.cellSub}>{o.customerPhone}</div>}
-                </td>
-                <td><LaneBadge lane={o.lane} /></td>
-                <td className={styles.cellPay}>{o.paymentMethod.replace('_', ' ')}</td>
-                <td className={`${styles.right} ${styles.cellMoney}`}>{fmtRM(o.total)}</td>
-                <td>
-                  <div className={styles.cellMain}>{daysAgo(o.placedAt)}</div>
-                  <div className={styles.cellSub}>{fmtTime(o.placedAt)}</div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <OrdersBoard
+          orders={orders.data!}
+          onOpenOrder={openDrawer}
+          onOpenScanPo={() => setPoScanOpen(true)}
+          highlightId={highlightId}
+          isFetching={orders.isFetching}
+          onRefresh={refresh}
+        />
       )}
 
       <div className={styles.toastTray} role="status" aria-live="polite">
@@ -175,10 +114,6 @@ export const Orders = () => {
           }}
         />
       )}
-    </div>
+    </>
   );
 };
-
-const LaneBadge = ({ lane }: { lane: OrderLane }) => (
-  <span className={`${styles.lane} ${styles[`lane-${lane}`]}`}>{LANE_LABEL[lane]}</span>
-);
