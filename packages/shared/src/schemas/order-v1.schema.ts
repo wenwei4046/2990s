@@ -56,6 +56,10 @@ export const orderV1PostSchema = z.object({
   // Client-submitted total — server recomputes and rejects with 409 if drift
   // exceeds 0.5%. Never trusted as the actual saved amount.
   clientTotal: z.number().int().nonnegative(),
+
+  // Slip MVP (Phase 4): present iff paymentMethod=transfer. Server-side RPC
+  // validates session ownership + status='uploaded' and promotes atomically.
+  uploadSessionId: z.string().uuid().optional(),
 });
 
 export type OrderV1PostBody = z.infer<typeof orderV1PostSchema>;

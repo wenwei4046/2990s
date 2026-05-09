@@ -187,17 +187,25 @@ orders.post('/', async (c) => {
       lineTotal: l.lineTotal,
       config: l.configJson,
     })),
+    // Slip MVP — null when not transfer or no session
+    uploadSessionId: dto.uploadSessionId ?? null,
   };
 
   const { data, error } = await supabase.rpc('create_order_with_items', { p: rpcPayload });
   if (error) {
-    if (error.code === '42501' || /permission denied/i.test(error.message)) {
-      return c.json({ error: 'forbidden', reason: error.message }, 403);
+    const msg = error.message ?? '';
+    // Slip-specific RAISE EXCEPTION codes from migration 0010
+    if (msg.includes('slip_required_for_transfer'))    return c.json({ error: 'slip_required_for_transfer' }, 400);
+    if (msg.includes('slip_not_ready'))                return c.json({ error: 'slip_not_ready' }, 409);
+    if (msg.includes('slip_session_not_found'))        return c.json({ error: 'slip_session_not_found' }, 404);
+    if (msg.includes('not_session_owner'))             return c.json({ error: 'not_session_owner' }, 403);
+    if (error.code === '42501' || /permission denied/i.test(msg)) {
+      return c.json({ error: 'forbidden', reason: msg }, 403);
     }
-    if (/unauthenticated/i.test(error.message)) {
-      return c.json({ error: 'unauthorized', reason: error.message }, 401);
+    if (/unauthenticated/i.test(msg)) {
+      return c.json({ error: 'unauthorized', reason: msg }, 401);
     }
-    return c.json({ error: 'create_failed', reason: error.message }, 500);
+    return c.json({ error: 'create_failed', reason: msg }, 500);
   }
 
   // computeOrderTotal preserves input order, so totals.lines[i] aligns with
