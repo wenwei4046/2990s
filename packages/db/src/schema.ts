@@ -375,6 +375,8 @@ export const orders = pgTable('orders', {
   deliverySlot:  text('delivery_slot'),               // '09:00 – 12:00'
   deliveryTbd:   boolean('delivery_tbd').notNull().default(false),
   deliveryNotes: text('delivery_notes'),
+  // Phase 4-C dispatch additions (migration 0012):
+  confirmedDeliveryDate: date('confirmed_delivery_date'),  // coordinator-confirmed actual date
 
   // Dispatch
   driverId:      uuid('driver_id').references(() => drivers.id),
@@ -382,6 +384,7 @@ export const orders = pgTable('orders', {
   dispatchedAt:  timestamp('dispatched_at', { withTimezone: true }),
   deliveredAt:   timestamp('delivered_at', { withTimezone: true }),
   doSigned:      boolean('do_signed').notNull().default(false),
+  doKey:         text('do_key'),                       // Supabase Storage path (bucket 'dos')
 
   notes:     text('notes'),
   stockNote: text('stock_note'),
