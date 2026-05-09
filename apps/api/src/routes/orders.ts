@@ -306,7 +306,7 @@ orders.patch('/:id/lane', async (c) => {
   // Fetch order — need lane + dispatch fields for gate validation
   const { data: row, error: fetchErr } = await supabase
     .from('orders')
-    .select('lane, driver_id, confirmed_delivery_date, do_key, dispatched_at, delivered_at')
+    .select('lane, driver_id, confirmed_delivery_date, do_key, dispatched_at, delivered_at, po_issued')
     .eq('id', orderId)
     .maybeSingle();
   if (fetchErr) return c.json({ error: 'db_fetch_failed', detail: fetchErr.message }, 500);
@@ -323,6 +323,12 @@ orders.patch('/:id/lane', async (c) => {
   const isForward = fromIdx !== -1 && toIdx !== -1 && toIdx > fromIdx;
 
   // Gate validation (only on forward transitions to dispatched/delivered)
+
+  // Sub-project D gate: logistics → ready requires po_issued
+  if (isForward && lane === 'ready' && row.lane === 'logistics' && !row.po_issued) {
+    return c.json({ error: 'po_required', message: 'Issue PO via Scan first' }, 400);
+  }
+
   if (isForward && lane === 'dispatched') {
     const missing: string[] = [];
     if (!row.driver_id) missing.push('driver_id');
