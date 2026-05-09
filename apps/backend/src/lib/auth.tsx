@@ -60,30 +60,38 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   useEffect(() => {
-    let cancelled = false;
+    let mounted = true;
 
     void supabase.auth.getSession().then(async ({ data }) => {
-      if (cancelled) return;
+      if (!mounted) return;
+      if (data.session) {
+        const initialStaff = await fetchStaff(data.session.user.id);
+        if (!mounted) return;
+        setStaff(initialStaff);
+      }
       setSession(data.session);
-      if (data.session) setStaff(await fetchStaff(data.session.user.id));
       setLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!mounted) return;
       if (!newSession) {
         setSession(null);
         setStaff(null);
+        setLoading(false);
         return;
       }
       // Fetch staff BEFORE setting session so Layout sees user+staff together
       // — otherwise the gap flashes to /no-access during the staff round-trip.
       const newStaff = await fetchStaff(newSession.user.id);
+      if (!mounted) return;
       setSession(newSession);
       setStaff(newStaff);
+      setLoading(false);
     });
 
     return () => {
-      cancelled = true;
+      mounted = false;
       sub.subscription.unsubscribe();
     };
   }, []);
