@@ -1,22 +1,27 @@
+/* Match the configurator's `.previewArea` / `.railSection` panel treatment:
+   white surface on the cream page, soft drop shadow, larger radius. Keeps
+   visual hierarchy consistent — Catalog (cream page) → CartRail (white panel)
+   → cart lines (cream cards inside). */
 .rail {
-  background: var(--bg);
+  background: #fff;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   position: sticky;
   top: var(--space-3);
   max-height: calc(100vh - var(--space-7));
   overflow-y: auto;
+  box-shadow: var(--shadow-1);
 }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-2) var(--space-2);
+  padding: 0 0 var(--space-3);
   border-bottom: 1px solid var(--line);
 }
 
