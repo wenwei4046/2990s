@@ -64,4 +64,16 @@ describe('useMediaQuery', () => {
     unmount();
     expect(listeners.length).toBe(0);
   });
+
+  it('re-subscribes when query changes', () => {
+    const { rerender } = renderHook(
+      ({ query }: { query: string }) => useMediaQuery(query),
+      { initialProps: { query: '(min-width: 1280px)' } },
+    );
+    expect(listeners.length).toBe(1);
+
+    // Change the query — old listener should be cleaned up, new one installed.
+    rerender({ query: '(min-width: 768px)' });
+    expect(listeners.length).toBe(1);
+  });
 });

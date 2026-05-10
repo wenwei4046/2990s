@@ -12,6 +12,9 @@ import { useEffect, useState } from 'react';
  * The combined query is intentional: hover/pointer guards exclude iPad Pro
  * 12.9" (1366×1024) without a Magic Keyboard from desktop layout. See spec
  * §2.1 for the device matrix.
+ *
+ * Pass a stable string reference. Template literals computed inline re-allocate
+ * each render and force re-subscription via the [query] dependency.
  */
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState<boolean>(() => {
