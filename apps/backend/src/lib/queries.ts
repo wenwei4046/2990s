@@ -535,6 +535,27 @@ export const useSlipQueue = () =>
     staleTime: 5_000,
   });
 
+// Realtime invalidate slip-queue on any orders row INSERT/UPDATE. The 5s
+// staleTime above stays as a backstop in case the channel disconnects, but
+// the live subscription means new uploads land instantly + verifies/flags
+// remove the row in ~300ms instead of up to 5s. (T21 deferred work)
+export const useSlipQueueRealtime = () => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const channel = supabase
+      .channel('slip-queue')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        () => void qc.invalidateQueries({ queryKey: ['slip-queue'] }),
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [qc]);
+};
+
 export interface DriverRow {
   id: string;
   driverCode: string;

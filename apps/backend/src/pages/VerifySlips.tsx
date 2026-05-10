@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import { Inbox, ExternalLink } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
-import { useSlipQueue, type SlipQueueRow } from '../lib/queries';
+import { useSlipQueue, useSlipQueueRealtime, type SlipQueueRow } from '../lib/queries';
 import { SlipSection } from '../components/SlipSection';
 import styles from './VerifySlips.module.css';
 
@@ -18,6 +18,7 @@ import styles from './VerifySlips.module.css';
 // API level today.
 export const VerifySlips = () => {
   const queue = useSlipQueue();
+  useSlipQueueRealtime();
   const qc = useQueryClient();
 
   const onUpdated = useCallback(() => {
