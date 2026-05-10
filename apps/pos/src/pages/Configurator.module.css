@@ -670,3 +670,174 @@
   text-align: center;
   color: var(--fg);
 }
+
+/* ─────────────── Sofa Quick-Pick — toward prototype parity (Batch 1) ─── */
+
+/* Depth toggle (24" / 28") inside the topbar action slot. Mirrors the size
+   cards' visual weight but smaller — pill group with a single picked tab. */
+.depthTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-alt);
+  border-radius: var(--radius-pill);
+}
+.depthTab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.depthTab:hover { color: var(--fg); }
+.depthTabActive {
+  background: var(--c-cream);
+  color: var(--fg);
+  box-shadow: var(--shadow-1);
+}
+
+/* Section eyebrow above "Quick-Pick bundles" — matches the prototype's
+   "QUICK PICK · BASIC" small caps lead-in. */
+.sectionEyebrow {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* Bundle grid — explicit 2-col on the centered 1100px shell, like the
+   prototype. Cards with sofa plan-view illustration. */
+.bundleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+@media (max-width: 760px) {
+  .bundleGrid { grid-template-columns: 1fr; }
+}
+
+.bundleCard {
+  appearance: none;
+  background: var(--c-cream);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-family: inherit;
+  color: var(--fg);
+  min-height: 200px;
+  transition: border-color 150ms, transform 80ms, box-shadow 150ms, background 150ms;
+}
+.bundleCard:hover:not(:disabled) {
+  border-color: var(--c-orange);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+}
+.bundleCardPicked {
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 1px var(--c-orange) inset, var(--shadow-2);
+}
+.bundleCardInactive {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.bundleCardInactive:hover { transform: none; box-shadow: none; border-color: var(--line); }
+
+.bundleHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: relative;
+}
+.bundleCode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  letter-spacing: 0.04em;
+  color: var(--fg-accent-deep);
+  background: var(--bg-alt);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+.bundleLabel {
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-15);
+}
+
+/* L | R flip pill on L-shape bundles when picked — small chip group at the
+   right edge of the card head row. Click events stop-propagation so the
+   parent card's onClick doesn't fire. */
+.bundleFlip {
+  margin-left: auto;
+  display: inline-flex;
+  background: rgba(34, 31, 32, 0.06);
+  border-radius: var(--radius-pill);
+  padding: 2px;
+  gap: 0;
+}
+.bundleFlipBtn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-bold);
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms, color 120ms;
+}
+.bundleFlipBtn:hover { color: var(--fg); }
+.bundleFlipBtnActive {
+  background: var(--c-burnt);
+  color: var(--c-cream);
+}
+
+.bundleArt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--c-paper);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  min-height: 96px;
+}
+.bundleArt img {
+  display: block;
+  max-width: 100%;
+  max-height: 96px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.bundleSig {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  letter-spacing: 0.04em;
+  color: var(--fg-soft);
+}
+
+.bundlePrice {
+  display: flex;
+  align-items: center;
+}

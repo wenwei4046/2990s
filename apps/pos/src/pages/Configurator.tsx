@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, type BundleDef, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, type BundleDef, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -44,6 +44,12 @@ export const Configurator = () => {
   const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
   const [pillowExtras, setPillowExtras] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<'quick' | 'custom'>('quick');
+  // Sofa Quick-Pick toolbar state. quickFlip controls the L/R orientation of
+  // L-shape bundles (2+L, 3+L); activeDepth toggles 24"/28" seat depth which
+  // affects per-cushion footprint (~10cm wider per cushion at 28"). Both
+  // surface in the topbar action slot per UI_REFERENCE.md.
+  const [quickFlip, setQuickFlip] = useState<'L' | 'R'>('R');
+  const [activeDepth, setActiveDepth] = useState<Depth>('24');
 
   const sizes = useProductSizes(productId);
   const sizeLib = useSizeLibrary();
@@ -173,6 +179,35 @@ export const Configurator = () => {
     });
   };
 
+  // ─── Sofa Quick-Pick state lifted from <SofaQuickPick> so the topbar action
+  // slot can show the picked bundle + LIVE TOTAL and own the Add-to-Cart CTA.
+  const sofaBundleRows = BUNDLES.map((b) => {
+    const row = (bundles.data ?? []).find((r) => r.bundleId === b.id);
+    return { bundle: b, price: row?.price ?? null, active: row?.active ?? false };
+  });
+  const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
+  const sofaTotal = pickedSofaRow?.price ?? 0;
+  const canAddSofa = pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null;
+  const isLShape = (id: string | null) => id === '2+L' || id === '3+L';
+
+  const handleAddSofa = () => {
+    if (!canAddSofa || pickedSofaRow == null || pickedSofaRow.price == null) return;
+    const lShape = isLShape(pickedSofaRow.bundle.id);
+    const snapshot: SofaConfigSnapshot = {
+      kind: 'sofa',
+      productId: p.id,
+      productName: p.name,
+      bundleId: pickedSofaRow.bundle.id,
+      depth: activeDepth,
+      total: pickedSofaRow.price,
+      summary: lShape
+        ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"`
+        : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"`,
+    };
+    addConfigured(snapshot);
+    navigate('/catalog');
+  };
+
   // Topbar action slot for size_variants: product chip + LIVE TOTAL +
   // Cancel + Add to Cart. Sofa + flat keep the default Quotes/My orders
   // pills (their flows are full-page with a footer button).
@@ -220,9 +255,70 @@ export const Configurator = () => {
     </span>
   ) : undefined;
 
+  // Topbar action slot for sofa Quick-Pick: depth toggle (24"/28") +
+  // Model+bundle chip + LIVE TOTAL + Cancel + Add to Cart. Mirrors the
+  // size_variants treatment so both flows feel uniform.
+  const sofaTopbarSlot = isSofa && mode === 'quick' ? (
+    <span className={styles.topbarActions}>
+      <span className={styles.depthTabs} role="tablist" aria-label="Seat depth">
+        {(['24', '28'] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            role="tab"
+            aria-selected={activeDepth === d}
+            className={`${styles.depthTab} ${activeDepth === d ? styles.depthTabActive : ''}`}
+            onClick={() => setActiveDepth(d)}
+          >
+            {d}&quot;
+          </button>
+        ))}
+      </span>
+      <span className={styles.topbarChip}>
+        <span className={styles.topbarChipEyebrow}>
+          {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
+        </span>
+        <span className={styles.topbarChipName}>
+          {pickedSofaRow
+            ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
+            : p.name}
+        </span>
+        {pickedSofaRow && (
+          <span className={styles.topbarChipSub}>
+            Quick Pick{isLShape(pickedSofaRow.bundle.id) ? ` · ${quickFlip}-facing` : ''}
+          </span>
+        )}
+      </span>
+      <span className={styles.topbarTotal}>
+        <span className={styles.topbarTotalLbl}>LIVE TOTAL</span>
+        <span className={styles.topbarTotalAmt}>
+          <sup>RM</sup>
+          {sofaTotal > 0 ? sofaTotal.toLocaleString('en-MY') : '—'}
+        </span>
+        <span className={styles.topbarTotalNote}>Delivery &amp; assembly included</span>
+      </span>
+      <button
+        type="button"
+        className={styles.topbarBtnGhost}
+        onClick={() => navigate('/catalog')}
+      >
+        <X size={14} strokeWidth={1.75} />
+        Cancel
+      </button>
+      <button
+        type="button"
+        className={styles.topbarBtnPrimary}
+        disabled={!canAddSofa}
+        onClick={handleAddSofa}
+      >
+        + Add to Cart
+      </button>
+    </span>
+  ) : undefined;
+
   return (
     <>
-    <Topbar step="cart" rightSlot={sizeTopbarSlot} />
+    <Topbar step="cart" rightSlot={sofaTopbarSlot ?? sizeTopbarSlot} />
     <main className={isSize ? styles.shellWide : styles.shell}>
       {!isSize && (
         <header className={styles.header}>
@@ -282,13 +378,12 @@ export const Configurator = () => {
 
           {mode === 'quick' ? (
             <SofaQuickPick
-              productId={p.id}
-              productName={p.name}
-              bundles={bundles.data ?? []}
               isLoading={bundles.isLoading}
+              rows={sofaBundleRows}
               picked={picked}
               onPick={setPicked}
-              onAdded={() => navigate('/catalog')}
+              quickFlip={quickFlip}
+              onFlipChange={setQuickFlip}
             />
           ) : (
             <CustomBuilder
@@ -652,89 +747,97 @@ const FlatAddToCart = ({ productId, productName, flatPrice, onAdded }: FlatAddTo
 };
 
 interface SofaQuickPickProps {
-  productId: string;
-  productName: string;
-  bundles: { bundleId: string; active: boolean; price: number }[];
   isLoading: boolean;
+  rows: { bundle: BundleDef; price: number | null; active: boolean }[];
   picked: string | null;
   onPick: (id: string) => void;
-  onAdded: () => void;
+  quickFlip: 'L' | 'R';
+  onFlipChange: (flip: 'L' | 'R') => void;
 }
 
-const SofaQuickPick = ({ productId, productName, bundles, isLoading, picked, onPick, onAdded }: SofaQuickPickProps) => {
-  const addConfigured = useCart((s) => s.addConfigured);
+// Maps a bundle id (+ flip orientation for L-shape variants) to the public
+// plan-view PNG. Files live in apps/pos/public/sofa-modules/ — non-L bundles
+// only ship a single composite (1S.png, 2S.png, 3S.png).
+const bundleArtSrc = (bundleId: string, flip: 'L' | 'R'): string => {
+  if (bundleId === '2+L' || bundleId === '3+L') {
+    return `/sofa-modules/${bundleId}-${flip}.png`;
+  }
+  return `/sofa-modules/${bundleId}.png`;
+};
+
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange }: SofaQuickPickProps) => {
   if (isLoading) return <p className={styles.empty}>Loading bundles…</p>;
-
-  // Render every bundle the catalog defines, but ones inactive for this Model
-  // are dimmed + non-clickable (gives staff "this Model doesn't ship that" UX).
-  const rows: { bundle: BundleDef; price: number | null; active: boolean }[] = BUNDLES.map((b) => {
-    const row = bundles.find((r) => r.bundleId === b.id);
-    return {
-      bundle: b,
-      price: row?.price ?? null,
-      active: row?.active ?? false,
-    };
-  });
-
-  const pickedRow = rows.find((r) => r.bundle.id === picked);
-  const canAdd = pickedRow != null && pickedRow.active && pickedRow.price != null;
-
-  const handleAdd = () => {
-    if (!canAdd || pickedRow == null || pickedRow.price == null) return;
-    const snapshot: SofaConfigSnapshot = {
-      kind: 'sofa',
-      productId,
-      productName,
-      bundleId: pickedRow.bundle.id,
-      total: pickedRow.price,
-      summary: `${pickedRow.bundle.id} · ${pickedRow.bundle.label}`,
-    };
-    addConfigured(snapshot);
-    onAdded();
-  };
 
   return (
     <section className={styles.section}>
       <header className={styles.sectionHead}>
-        <h2 className={styles.sectionTitle}>Quick-Pick bundles</h2>
+        <span className={styles.sectionEyebrow}>Quick Pick · Basic</span>
+        <h2 className={styles.sectionTitle}>Pre-built configurations</h2>
         <p className="t-body fg-muted">
-          5 pre-built configurations · price per this Model's rules. Custom build coming Phase 2 step B.
+          5 layouts · price per this Model's rules. Pick one, see the LIVE TOTAL, add to cart.
         </p>
       </header>
-      <div className={styles.grid}>
+      <div className={styles.bundleGrid}>
         {rows.map(({ bundle, price, active }) => {
           const isPicked = picked === bundle.id;
           const inactive = !active || price == null;
+          const lShape = bundle.id === '2+L' || bundle.id === '3+L';
           return (
             <button
               key={bundle.id}
               type="button"
-              className={`${styles.card} ${isPicked ? styles.cardPicked : ''} ${inactive ? styles.cardInactive : ''}`}
+              className={`${styles.bundleCard} ${isPicked ? styles.bundleCardPicked : ''} ${inactive ? styles.bundleCardInactive : ''}`}
               disabled={inactive}
               onClick={() => onPick(bundle.id)}
             >
-              <div className={styles.cardHead}>
-                <code className={styles.cardCode}>{bundle.id}</code>
-                <span className={styles.cardLabel}>{bundle.label}</span>
+              <div className={styles.bundleHead}>
+                <code className={styles.bundleCode}>{bundle.id}</code>
+                <span className={styles.bundleLabel}>{bundle.label}</span>
+                {lShape && isPicked && (
+                  <span
+                    className={styles.bundleFlip}
+                    role="group"
+                    aria-label="Chaise orientation"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {(['L', 'R'] as const).map((side) => (
+                      <span
+                        key={side}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={quickFlip === side}
+                        className={`${styles.bundleFlipBtn} ${quickFlip === side ? styles.bundleFlipBtnActive : ''}`}
+                        onClick={(e) => { e.stopPropagation(); onFlipChange(side); }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onFlipChange(side);
+                          }
+                        }}
+                      >
+                        {side}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </div>
-              <div className={styles.cardSig}>{bundle.signature}</div>
-              <div className={styles.cardPrice}>
+              <div className={styles.bundleArt}>
+                <img
+                  src={bundleArtSrc(bundle.id, quickFlip)}
+                  alt={`${bundle.label} plan view`}
+                  loading="lazy"
+                />
+              </div>
+              <div className={styles.bundleSig}>{bundle.signature}</div>
+              <div className={styles.bundlePrice}>
                 {inactive
                   ? <span className={styles.unavailable}>Not on this Model</span>
-                  : <PriceTag amount={price} size="lg" />}
+                  : <PriceTag amount={price} size="md" />}
               </div>
             </button>
           );
         })}
-      </div>
-      <div className={styles.actions}>
-        <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
-          {canAdd
-            ? `Add ${pickedRow!.bundle.label} to cart`
-            : picked
-              ? 'Bundle not on this Model'
-              : 'Pick a bundle to continue'}
-        </Button>
       </div>
     </section>
   );
