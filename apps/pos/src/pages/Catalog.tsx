@@ -19,6 +19,8 @@ import {
 import { Button, PriceTag } from '@2990s/design-system';
 import { useCatalog, useCatalogRealtime, type CatalogProduct } from '../lib/queries';
 import { Topbar } from '../components/Topbar';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { CartRail } from '../components/CartRail';
 import styles from './Catalog.module.css';
 
 const CAT_ICON: Record<string, LucideIcon> = {
@@ -53,6 +55,10 @@ export const Catalog = () => {
   const [activeCat, setActiveCat] = useState<string>('all');
   const [activeSeries, setActiveSeries] = useState<string>('all');
   const [query, setQuery] = useState('');
+
+  const isDesktop = useMediaQuery(
+    '(min-width: 1280px) and (hover: hover) and (pointer: fine)',
+  );
 
   const products = catalog.data ?? [];
 
@@ -131,7 +137,7 @@ export const Catalog = () => {
           No products yet. Ask your admin to seed the catalogue via the Backend SKU Master.
         </p>
       ) : (
-        <div className={styles.layout}>
+        <div className={`${styles.layout} ${isDesktop ? styles.layoutDesktop : ''}`}>
           {/* ─── Left rail ─── */}
           <aside className={styles.sidebar}>
             <div className={styles.sideHeading}>Categories</div>
@@ -241,6 +247,9 @@ export const Catalog = () => {
               </div>
             )}
           </section>
+
+          {/* ─── Cart rail (desktop only) ─── */}
+          {isDesktop && <CartRail />}
         </div>
       )}
 

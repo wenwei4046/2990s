@@ -441,3 +441,11 @@
   .sideItem { padding: 6px 10px; }
   .sideFooter { display: none; }
 }
+
+/* ─── Desktop layout (≥1280 + hover + fine pointer) ─── */
+@media (min-width: 1280px) and (hover: hover) and (pointer: fine) {
+  .layoutDesktop {
+    grid-template-columns: 240px 1fr 320px;
+    gap: var(--space-5);
+  }
+}
