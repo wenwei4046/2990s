@@ -2,8 +2,10 @@
 -- 11 mock catalog SKUs for Phase 1+ — unblocks PoScanModal + Catalog page UI work.
 -- Sourced from prototype/pos-data.jsx (canonical reference).
 --
--- - Sofas (4): pricing_kind = 'flat', flat_price = 2990 (real production will
---   use sofa_build with compartments + bundles seeded via Backend SKU Master).
+-- - Sofas (4): seeded as flat for early testing, now HIDDEN (visible=false).
+--   Real sofas live in hookka-sofa-catalog.sql with proper sofa_build structure.
+--   Kept as soft-deleted rows so future PoScan / inventory tests still resolve
+--   the SKU codes (s-noor / s-tanah / s-rumah / s-petang) without orphan FKs.
 -- - Mattresses (4): pricing_kind = 'size_variants' with all 4 sizes active.
 --   Demonstrates the size + addon picker flow in Configurator.tsx for staff.
 -- - Bedframes (3): pricing_kind = 'size_variants' with queen + king active.
@@ -24,18 +26,18 @@ BEGIN
     RETURN;
   END IF;
 
-  -- ─── Sofas (4 KFA-supplied) ────────────────────────────────────────────────
+  -- ─── Sofas (4 KFA-supplied, HIDDEN — superseded by hookka-sofa-catalog.sql) ─
   INSERT INTO products (id, sku, category_id, pricing_kind, name, detail,
     size_display, visible, stock, flat_price, recliner_upgrade_price, supplier_id)
   VALUES
     ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0001', 's-noor', 'sofa', 'flat',
-      'Noor', 'Boucle Cream', '210cm · 3-seat', true, 99, 2990, 0, v_sup_kfa),
+      'Noor', 'Boucle Cream', '210cm · 3-seat', false, 99, 2990, 0, v_sup_kfa),
     ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0002', 's-tanah', 'sofa', 'flat',
-      'Tanah', 'Linen Sand', '260cm · L-shape', true, 99, 2990, 0, v_sup_kfa),
+      'Tanah', 'Linen Sand', '260cm · L-shape', false, 99, 2990, 0, v_sup_kfa),
     ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0003', 's-rumah', 'sofa', 'flat',
-      'Rumah', 'Leather Walnut', '160cm · 2-seat', true, 99, 2990, 0, v_sup_kfa),
+      'Rumah', 'Leather Walnut', '160cm · 2-seat', false, 99, 2990, 0, v_sup_kfa),
     ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0004', 's-petang', 'sofa', 'flat',
-      'Petang', 'Wool Cream', '78cm · armchair', true, 99, 2990, 0, v_sup_kfa)
+      'Petang', 'Wool Cream', '78cm · armchair', false, 99, 2990, 0, v_sup_kfa)
   ON CONFLICT (id) DO UPDATE SET
     sku = EXCLUDED.sku,
     name = EXCLUDED.name,
