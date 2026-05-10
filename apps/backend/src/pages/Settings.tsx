@@ -12,7 +12,10 @@ import {
   useUpdateDriver,
   useCreateDriver,
   useUpdateStaffActive,
+  useCreateStaff,
   type StaffRow,
+  type StaffRoleValue,
+  type ShowroomRow,
 } from '../lib/admin-queries';
 import styles from './Settings.module.css';
 
@@ -608,12 +611,23 @@ const ShowroomsTab = () => {
   );
 };
 
-/* ─── Staff (list + activate/deactivate; no create/edit at MVP) ─── */
+/* ─── Staff (list + activate/deactivate + invite new) ─── */
+
+const STAFF_AVATAR_COLORS = ['#E86B3A', '#A6471E', '#2F5D4F', '#1F3A8A', '#221F20'];
+
+const STAFF_ROLE_OPTIONS: { value: StaffRoleValue; label: string }[] = [
+  { value: 'sales',         label: 'Sales' },
+  { value: 'showroom_lead', label: 'Showroom lead' },
+  { value: 'coordinator',   label: 'Coordinator' },
+  { value: 'finance',       label: 'Finance' },
+  { value: 'admin',         label: 'Admin' },
+];
 
 const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
   const staffList = useStaff();
   const showrooms = useShowrooms();
   const updateActive = useUpdateStaffActive();
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const showroomName = (id: string | null) =>
     id ? showrooms.data?.find((s) => s.id === id)?.name ?? '—' : 'All showrooms';
@@ -621,8 +635,16 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
   return (
     <>
       <div className={styles.readOnlyBanner}>
-        <strong>Limited admin at MVP.</strong> Only activate/deactivate is wired here.
-        Adding new staff still goes through Supabase Studio (auth signup + staff row); a fuller form lands later.
+        <strong>Heads up.</strong> New staff get a magic-link invite at the email you enter — they set their own password and can sign in to the backend portal. PIN reset for POS sales still requires Supabase Studio.
+      </div>
+
+      <div className={styles.actionsRow} style={{ marginBottom: 'var(--space-3)' }}>
+        {canEdit && (
+          <Button variant="primary" size="md" onClick={() => setDrawerOpen(true)}>
+            <Plus size={16} strokeWidth={1.75} />
+            New staff
+          </Button>
+        )}
       </div>
 
       <div className={styles.tableCard}>
@@ -679,7 +701,190 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
           </table>
         )}
       </div>
+
+      {drawerOpen && (
+        <StaffDrawer
+          showrooms={showrooms.data ?? []}
+          onClose={() => setDrawerOpen(false)}
+        />
+      )}
     </>
+  );
+};
+
+const StaffDrawer = ({
+  showrooms,
+  onClose,
+}: {
+  showrooms: ShowroomRow[];
+  onClose: () => void;
+}) => {
+  const [staffCode, setStaffCode] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<StaffRoleValue>('sales');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [initials, setInitials] = useState('');
+  const [color, setColor] = useState<string>(STAFF_AVATAR_COLORS[0] ?? '#E86B3A');
+  const [showroomId, setShowroomId] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+  const createStaff = useCreateStaff();
+  const saving = createStaff.isPending;
+
+  const onSave = async () => {
+    setError(null);
+    if (!staffCode.trim() || !name.trim() || !email.trim() || !initials.trim()) {
+      setError('Code, name, email and initials are required.');
+      return;
+    }
+    try {
+      await createStaff.mutateAsync({
+        staffCode:  staffCode.trim().toUpperCase(),
+        name:       name.trim(),
+        role,
+        email:      email.trim().toLowerCase(),
+        initials:   initials.trim().toUpperCase(),
+        color,
+        showroomId: showroomId || null,
+        phone:      phone.trim() || null,
+      });
+      onClose();
+    } catch (err) {
+      setError(String((err as Error).message ?? err));
+    }
+  };
+
+  return (
+    <div className={styles.scrim} onClick={onClose}>
+      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
+        <header className={styles.drawerHead}>
+          <div>
+            <div className="t-eyebrow">New staff</div>
+            <h3 className={styles.drawerTitle}>Add a staff member</h3>
+            <div className={styles.drawerSub}>
+              They'll get a magic-link invite at the email you enter, set their own password, and can sign in once active.
+            </div>
+          </div>
+          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
+            <X size={18} strokeWidth={1.75} />
+          </button>
+        </header>
+
+        <div className={styles.drawerBody}>
+          {error && <div className={styles.errorBanner}>{error}</div>}
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Staff code</span>
+            <input
+              className={styles.input}
+              value={staffCode}
+              onChange={(e) => setStaffCode(e.target.value)}
+              placeholder="e.g. AW"
+              maxLength={8}
+            />
+            <span className={styles.fieldHint}>Short uppercase identifier shown in topbar avatars and history.</span>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Full name</span>
+            <input
+              className={styles.input}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Aisha Wong"
+            />
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Email</span>
+            <input
+              className={styles.input}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="aisha@example.com"
+            />
+            <span className={styles.fieldHint}>Magic-link invite is sent here. Required even for sales (PIN reset uses email).</span>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Role</span>
+            <select
+              className={styles.input}
+              value={role}
+              onChange={(e) => setRole(e.target.value as StaffRoleValue)}
+            >
+              {STAFF_ROLE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className={styles.fieldHint}>Sales sign in to POS via PIN; everyone else uses the backend portal.</span>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Showroom</span>
+            <select
+              className={styles.input}
+              value={showroomId}
+              onChange={(e) => setShowroomId(e.target.value)}
+            >
+              <option value="">All showrooms (oversees every location)</option>
+              {showrooms.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Initials</span>
+            <input
+              className={styles.input}
+              value={initials}
+              onChange={(e) => setInitials(e.target.value)}
+              placeholder="e.g. AW"
+              maxLength={4}
+            />
+            <span className={styles.fieldHint}>Shown in topbar avatar circle. 1–4 characters.</span>
+          </label>
+
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Avatar color</span>
+            <div className={styles.swatchRow}>
+              {STAFF_AVATAR_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={c === color ? `${styles.swatch} ${styles.swatchOn}` : styles.swatch}
+                  style={{ background: c }}
+                  onClick={() => setColor(c)}
+                  aria-label={`Color ${c}`}
+                  aria-pressed={c === color}
+                />
+              ))}
+            </div>
+          </div>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Phone (optional)</span>
+            <input
+              className={styles.input}
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+60 12 345 6789"
+            />
+          </label>
+        </div>
+
+        <footer className={styles.drawerFoot}>
+          <div className={styles.grow} />
+          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button variant="primary" onClick={() => void onSave()} disabled={saving}>
+            <Save size={16} strokeWidth={1.75} />
+            {saving ? 'Inviting…' : 'Send invite'}
+          </Button>
+        </footer>
+      </div>
+    </div>
   );
 };
 

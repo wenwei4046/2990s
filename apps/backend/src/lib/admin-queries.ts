@@ -12,6 +12,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+
+async function getToken(): Promise<string> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  return token;
+}
+
 /* ─── Showrooms ─── */
 
 export interface ShowroomRow {
@@ -94,6 +103,72 @@ export const useUpdateStaffActive = () => {
     mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
       const { error } = await supabase.from('staff').update({ active }).eq('id', id);
       if (error) throw error;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff'] });
+    },
+  });
+};
+
+export interface StaffUpsert {
+  staffCode:  string;
+  name:       string;
+  role:       StaffRoleValue;
+  email:      string;
+  initials:   string;
+  color:      string;
+  showroomId: string | null;
+  phone:      string | null;
+}
+
+// Goes through the API Worker because creating an auth.users row needs the
+// service role key — which never touches the browser. Worker validates that
+// the caller is an active admin, sends the magic-link invite, and inserts
+// the staff row atomically (rolling back the auth user on failure).
+export const useCreateStaff = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: StaffUpsert): Promise<StaffRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/admin/staff`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '<no body>');
+        throw new Error(`createStaff failed (${res.status}): ${text}`);
+      }
+      const json = (await res.json()) as {
+        staff: {
+          id: string;
+          staff_code: string;
+          name: string;
+          role: StaffRoleValue;
+          showroom_id: string | null;
+          initials: string;
+          color: string;
+          active: boolean;
+          email: string | null;
+          phone: string | null;
+        };
+      };
+      return {
+        id:         json.staff.id,
+        staffCode:  json.staff.staff_code,
+        name:       json.staff.name,
+        role:       json.staff.role,
+        showroomId: json.staff.showroom_id,
+        initials:   json.staff.initials,
+        color:      json.staff.color,
+        active:     json.staff.active,
+        email:      json.staff.email,
+        phone:      json.staff.phone,
+      };
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['staff'] });

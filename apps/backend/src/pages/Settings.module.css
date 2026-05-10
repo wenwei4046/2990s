@@ -413,3 +413,28 @@
   gap: var(--space-2);
   justify-content: flex-end;
 }
+
+/* Staff drawer color swatches */
+.swatchRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.swatch {
+  appearance: none;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 80ms ease;
+}
+
+.swatch:hover { transform: scale(1.08); }
+
+.swatchOn {
+  border-color: var(--fg);
+  box-shadow: 0 0 0 2px var(--bg);
+}
