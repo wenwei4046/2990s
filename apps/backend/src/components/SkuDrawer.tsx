@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from 'react';
-import { useForm, FormProvider, Controller } from 'react-hook-form';
+import { useForm, FormProvider, Controller, useFieldArray, useFormContext } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { X, Save, Plus, Trash2, Image as ImageIcon, Info } from 'lucide-react';
+import { X, Save, Plus, Trash2, Image as ImageIcon, Info, Minus, PackagePlus } from 'lucide-react';
 
 // Brand-library demo set. Swap to a Supabase Storage join (table:
 // brand_assets) when Loo seeds real product photography.
@@ -29,6 +29,7 @@ import { Button } from '@2990s/design-system';
 import { productSchema } from '@2990s/shared/schemas';
 import { supabase } from '../lib/supabase';
 import {
+  useAddons,
   useBundleLibrary,
   useCategories,
   useCompartmentLibrary,
@@ -55,6 +56,8 @@ interface SkuFormData {
   stock: number;
   lowAt: number;
   visible: boolean;
+  /** Per-Model free add-ons (e.g. mattress includes 2 free Memory foam pillows). */
+  includedAddons: { addonId: string; qty: number }[];
   reclinerUpgradePrice?: number;
   compartments?: { compartmentId: string; active: boolean; price: number }[];
   bundles?: { bundleId: string; active: boolean; price: number }[];
@@ -151,6 +154,7 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
       stock: product?.stock ?? 0,
       lowAt: product?.lowAt ?? 5,
       visible: product?.visible ?? true,
+      includedAddons: product?.includedAddons ?? [],
       reclinerUpgradePrice: product?.reclinerUpgradePrice ?? 0,
       compartments: editComps,
       bundles: editBundles,
@@ -233,6 +237,7 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
       stock: raw.stock,
       lowAt: raw.lowAt,
       visible: raw.visible,
+      includedAddons: (raw.includedAddons ?? []).filter((e) => e.addonId && e.qty > 0),
     };
     if (raw.pricingKind === 'sofa_build') {
       cleaned.reclinerUpgradePrice = raw.reclinerUpgradePrice ?? 0;
@@ -284,6 +289,7 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
         stock: valid.stock,
         low_at: valid.lowAt,
         visible: valid.visible,
+        included_addons: valid.includedAddons,
         flat_price: valid.pricingKind === 'flat' ? valid.flatPrice : null,
         recliner_upgrade_price: valid.pricingKind === 'sofa_build' ? valid.reclinerUpgradePrice : null,
       };
@@ -483,6 +489,9 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
             {/* Pricing — category-aware */}
             <PricingEditor />
 
+            {/* Included free add-ons (e.g. mattress includes 2 free pillows) */}
+            <IncludedAddonsSection />
+
             {/* Visibility */}
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>Showroom visibility</h3>
@@ -535,5 +544,79 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
         </aside>
       </div>
     </FormProvider>
+  );
+};
+
+/* ─── Included free add-ons editor ─────────────────────────────────── */
+// Per-Model free add-ons. POS reads products.included_addons jsonb and
+// renders the PILLOWS section in the size_variants Configurator. Only
+// addons table rows can be selected — picker is filtered by enabled.
+const IncludedAddonsSection = () => {
+  const addons = useAddons();
+  const { control, register } = useFormContext<SkuFormData>();
+  const { fields, append, remove } = useFieldArray<SkuFormData, 'includedAddons', 'rhfId'>({
+    control,
+    name: 'includedAddons',
+    keyName: 'rhfId',
+  });
+
+  const enabledAddons = (addons.data ?? []).filter((a) => a.enabled);
+
+  return (
+    <section className={styles.section}>
+      <h3 className={styles.sectionTitle}>Included free add-ons</h3>
+      <p className={styles.includedHint}>
+        Ships free with every unit of this Model. Doesn&apos;t affect price — POS
+        shows them as &quot;× N INCLUDED&quot; pills in the configurator.
+      </p>
+
+      {fields.length === 0 ? (
+        <div className={styles.includedEmpty}>None — this Model ships without bundled add-ons.</div>
+      ) : (
+        <div className={styles.includedList}>
+          {fields.map((row, idx) => (
+            <div key={row.rhfId} className={styles.includedRow}>
+              <select
+                className={styles.includedPick}
+                {...register(`includedAddons.${idx}.addonId` as const)}
+              >
+                <option value="">— pick add-on —</option>
+                {enabledAddons.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}{a.category ? ` · ${a.category}` : ''}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                step={1}
+                className={styles.includedQty}
+                aria-label="Quantity"
+                {...register(`includedAddons.${idx}.qty` as const, { valueAsNumber: true })}
+              />
+              <button
+                type="button"
+                className={styles.includedRemove}
+                onClick={() => remove(idx)}
+                aria-label="Remove"
+              >
+                <Minus size={14} strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button
+        type="button"
+        className={styles.includedAdd}
+        onClick={() => append({ addonId: '', qty: 1 })}
+      >
+        <PackagePlus size={14} strokeWidth={1.75} />
+        Add another bundled add-on
+      </button>
+    </section>
   );
 };

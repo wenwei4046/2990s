@@ -295,3 +295,95 @@
   color: var(--c-warn);
   flex-shrink: 0;
 }
+
+/* ─── Included free add-ons editor ─────────────────────────────────── */
+.includedHint {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  margin: 0 0 var(--space-3);
+  line-height: 1.45;
+}
+
+.includedEmpty {
+  padding: var(--space-3);
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+  background: var(--bg-alt);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+}
+
+.includedList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.includedRow {
+  display: grid;
+  grid-template-columns: 1fr 80px 36px;
+  gap: 8px;
+  align-items: center;
+}
+
+.includedPick,
+.includedQty {
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--c-cream);
+  color: var(--fg);
+  outline: none;
+  transition: border-color 120ms;
+}
+.includedPick:focus,
+.includedQty:focus {
+  border-color: var(--c-orange);
+}
+.includedQty {
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.includedRemove {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: 120ms;
+}
+.includedRemove:hover {
+  background: rgba(166, 71, 30, 0.08);
+  color: var(--c-burnt);
+  border-color: var(--c-burnt);
+}
+
+.includedAdd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1.5px dashed var(--line-strong);
+  color: var(--fg-muted);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+  transition: 120ms;
+}
+.includedAdd:hover {
+  border-color: var(--c-orange);
+  color: var(--c-burnt);
+}

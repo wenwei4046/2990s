@@ -68,6 +68,7 @@ export interface ProductRow {
   visible: boolean;
   flatPrice: number | null;
   reclinerUpgradePrice: number | null;
+  includedAddons: { addonId: string; qty: number }[];
   updatedAt: string;
 }
 
@@ -187,7 +188,7 @@ export const useProducts = () =>
       const { data, error } = await supabase
         .from('products')
         .select(
-          'id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, stock, low_at, visible, flat_price, recliner_upgrade_price, updated_at',
+          'id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, stock, low_at, visible, flat_price, recliner_upgrade_price, included_addons, updated_at',
         )
         .order('updated_at', { ascending: false });
       if (error) throw error;
@@ -207,6 +208,7 @@ export const useProducts = () =>
         visible: r.visible,
         flatPrice: r.flat_price,
         reclinerUpgradePrice: r.recliner_upgrade_price,
+        includedAddons: (r.included_addons ?? []) as { addonId: string; qty: number }[],
         updatedAt: r.updated_at,
       }));
     },
@@ -752,6 +754,7 @@ export interface AddonRow {
   description: string | null;
   icon: string;
   kind: AddonKind;
+  category: string | null;
   price: number;
   perFloorItem: number | null;
   unit: string | null;
@@ -769,7 +772,7 @@ export const useAddons = () =>
       const { data, error } = await supabase
         .from('addons')
         .select(
-          'id, label, description, icon, kind, price, per_floor_item, unit, default_qty, stock, enabled, sort_order, updated_at',
+          'id, label, description, icon, kind, category, price, per_floor_item, unit, default_qty, stock, enabled, sort_order, updated_at',
         )
         .order('sort_order');
       if (error) throw error;
@@ -779,6 +782,7 @@ export const useAddons = () =>
         description: r.description,
         icon: r.icon,
         kind: r.kind as AddonKind,
+        category: r.category,
         price: r.price,
         perFloorItem: r.per_floor_item,
         unit: r.unit,

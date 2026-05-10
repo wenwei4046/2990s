@@ -15,19 +15,29 @@ const skuCode = z
   .max(40)
   .regex(/^[A-Z0-9-]+$/, 'SKU must be uppercase letters, digits, hyphens');
 
+// Per-Model add-ons that ship FREE with the product (e.g. mattress includes
+// 2 memory foam pillows). POS reads this from products.included_addons jsonb
+// and renders the PILLOWS section in the Configurator. NOT priced — the
+// addon is a free extra; total stays at the size base price.
+const includedAddon = z.object({
+  addonId: z.string().min(1),
+  qty:     z.number().int().min(1).max(20),
+});
+
 // Identity + inventory + visibility — fields shared by every pricing variant.
 const productBase = z.object({
-  sku:          skuCode,
-  categoryId:   z.string().min(1),
-  seriesId:     z.string().min(1).nullable(),
-  name:         z.string().min(1).max(120),
-  detail:       z.string().max(280).nullable(),
-  sizeDisplay:  z.string().max(80).nullable(),
-  imgKey:       z.string().max(200).nullable(),
-  thumbKey:     z.string().max(200).nullable(),
-  stock:        z.number().int().min(0),
-  lowAt:        z.number().int().min(0),
-  visible:      z.boolean(),
+  sku:             skuCode,
+  categoryId:      z.string().min(1),
+  seriesId:        z.string().min(1).nullable(),
+  name:            z.string().min(1).max(120),
+  detail:          z.string().max(280).nullable(),
+  sizeDisplay:     z.string().max(80).nullable(),
+  imgKey:          z.string().max(200).nullable(),
+  thumbKey:        z.string().max(200).nullable(),
+  stock:           z.number().int().min(0),
+  lowAt:           z.number().int().min(0),
+  visible:         z.boolean(),
+  includedAddons:  z.array(includedAddon).max(20).default([]),
 });
 
 // Sofa: 13 compartments + 5 bundles + 1 recliner upgrade price.
