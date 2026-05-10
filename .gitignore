@@ -46,3 +46,9 @@ AGENTS.md
 
 # Brainstorming visual companion (mockups, server state)
 .superpowers/
+
+# Supabase CLI link config (per-machine, not part of repo state)
+supabase/
+
+# Local mockup HTML for visual companion / screenshot-only exploration
+verify-*.html
