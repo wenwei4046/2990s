@@ -32,6 +32,12 @@ const sizeLineConfigSchema = z.object({
   kind: z.literal('size'),
   productId: z.string().uuid(),
   sizeId: z.string(),
+  // Paid-extra add-ons attached to this configured line (e.g. extra pillows
+  // beyond the included free ones). Server recomputes these against the
+  // current addons table — drifted prices reject with 422.
+  addonExtras: z
+    .array(z.object({ addonId: z.string(), qty: z.number().int().positive() }))
+    .optional(),
 });
 
 // Flat-priced products (mattresses with single price, sofas without modular

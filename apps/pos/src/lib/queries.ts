@@ -81,13 +81,54 @@ export const useProduct = (productId: string | undefined) =>
       const { data, error } = await supabase
         .from('products')
         .select(
-          'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, stock, low_at, visible, category_id, series_id, updated_at',
+          'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
         )
         .eq('id', productId)
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('not_found');
-      return data;
+      return data as typeof data & { included_addons: { addonId: string; qty: number }[] };
+    },
+  });
+
+/* ─── Add-ons (used by Configurator's PILLOWS + ADD-ON sections) ───── */
+
+export interface AddonRow {
+  id: string;
+  label: string;
+  description: string | null;
+  icon: string;
+  kind: 'qty' | 'floors_items' | 'flat';
+  category: string | null;
+  price: number;
+  perFloorItem: number | null;
+  unit: string | null;
+  enabled: boolean;
+}
+
+export const useAddons = () =>
+  useQuery({
+    queryKey: ['addons'],
+    staleTime: 5 * 60_000,
+    queryFn: async (): Promise<AddonRow[]> => {
+      const { data, error } = await supabase
+        .from('addons')
+        .select('id, label, description, icon, kind, category, price, per_floor_item, unit, enabled')
+        .eq('enabled', true)
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        label: r.label,
+        description: r.description,
+        icon: r.icon,
+        kind: r.kind,
+        category: r.category,
+        price: r.price,
+        perFloorItem: r.per_floor_item,
+        unit: r.unit,
+        enabled: r.enabled,
+      }));
     },
   });
 

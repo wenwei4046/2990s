@@ -80,9 +80,20 @@ orders.post('/', async (c) => {
 
   // Gather every distinct productId in the cart, fetch product + per-product
   // pricing rows in parallel. RLS scopes everything to authenticated staff.
+  // Addon prices are loaded once and passed to computeOrderTotal so paid
+  // pillow extras on size lines are recomputed against current addons table.
   const productIds = Array.from(new Set(dto.lines.map((l) => l.config.productId)));
+  const addonIds = Array.from(
+    new Set(
+      dto.lines.flatMap((l) =>
+        l.config.kind === 'size' && l.config.addonExtras
+          ? l.config.addonExtras.map((e) => e.addonId)
+          : [],
+      ),
+    ),
+  );
 
-  const [productsRes, compartmentsRes, bundlesRes, sizesRes] = await Promise.all([
+  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes] = await Promise.all([
     supabase
       .from('products')
       .select('id, pricing_kind, flat_price, recliner_upgrade_price')
@@ -99,9 +110,12 @@ orders.post('/', async (c) => {
       .from('product_size_variants')
       .select('product_id, size_id, active, price')
       .in('product_id', productIds),
+    addonIds.length > 0
+      ? supabase.from('addons').select('id, price').in('id', addonIds)
+      : Promise.resolve({ data: [] as { id: string; price: number }[], error: null }),
   ]);
 
-  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes]) {
+  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes]) {
     if (r.error) return c.json({ error: 'pricing_fetch_failed', reason: r.error.message }, 500);
   }
 
@@ -109,6 +123,8 @@ orders.post('/', async (c) => {
   const compartments = compartmentsRes.data ?? [];
   const bundles = bundlesRes.data ?? [];
   const sizes = sizesRes.data ?? [];
+  const addonPricesById = new Map<string, number>();
+  for (const a of addonsRes.data ?? []) addonPricesById.set(a.id, a.price);
 
   // Build per-product ServerProductInfo for the shared recompute.
   const infoById = new Map<string, ServerProductInfo>();
@@ -138,7 +154,7 @@ orders.post('/', async (c) => {
   const lineInputs: OrderLineInput[] = dto.lines.map((l) => ({ qty: l.qty, config: l.config }));
   let totals;
   try {
-    totals = computeOrderTotal(lineInputs, infoById);
+    totals = computeOrderTotal(lineInputs, infoById, addonPricesById);
   } catch (err) {
     if (err instanceof OrderPricingError) {
       return c.json({ error: 'pricing_invalid', detail: err.detail }, 422);

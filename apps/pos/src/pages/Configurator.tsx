@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Hourglass, X } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, type BundleDef, type SofaProductPricing } from '@2990s/shared';
 import {
@@ -10,6 +10,8 @@ import {
   useProductSizes,
   useSizeLibrary,
   useProductPricingRealtime,
+  useAddons,
+  type AddonRow,
 } from '../lib/queries';
 import {
   useCart,
@@ -40,10 +42,12 @@ export const Configurator = () => {
 
   const [picked, setPicked] = useState<string | null>(null);
   const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
+  const [pillowExtras, setPillowExtras] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<'quick' | 'custom'>('quick');
 
   const sizes = useProductSizes(productId);
   const sizeLib = useSizeLibrary();
+  const addons = useAddons();
   const addConfigured = useCart((s) => s.addConfigured);
 
   // Build the SofaProductPricing struct that the shared pure functions expect.
@@ -76,8 +80,48 @@ export const Configurator = () => {
   }, [sizeLib.data, sizes.data]);
 
   const pickedSize = sizeRows.find((r) => r.id === pickedSizeId) ?? null;
-  const sizeTotal = pickedSize?.price ?? 0;
+  const sizeBase = pickedSize?.price ?? 0;
   const canAddSize = pickedSize != null && pickedSize.active && pickedSize.price != null;
+
+  // Lookup map for addon details (used by both PILLOWS and ADD-ON sections).
+  const addonsById = useMemo(() => {
+    const m = new Map<string, AddonRow>();
+    for (const a of addons.data ?? []) m.set(a.id, a);
+    return m;
+  }, [addons.data]);
+
+  // Pillows that ship FREE with this Model (configured in Backend SKU Master
+  // → products.included_addons jsonb). Lookup full addon details for display.
+  const includedPillows = useMemo(() => {
+    const arr = (product.data?.included_addons ?? []) as { addonId: string; qty: number }[];
+    return arr
+      .map((entry) => {
+        const addon = addonsById.get(entry.addonId);
+        if (!addon) return null;
+        return { addon, qty: entry.qty };
+      })
+      .filter((v): v is { addon: AddonRow; qty: number } => v != null);
+  }, [product.data, addonsById]);
+
+  // Addon extras the staff can attach (e.g. extra pillows beyond the free
+  // pair). Filter to category=pillow for mattress configurator.
+  const pillowAddOns = useMemo(
+    () => (addons.data ?? []).filter((a) => a.category === 'pillow' && a.unit === 'pillow'),
+    [addons.data],
+  );
+
+  // Live total = size base + sum(extra qty × addon price).
+  const extrasTotal = useMemo(() => {
+    let sum = 0;
+    for (const [addonId, qty] of Object.entries(pillowExtras)) {
+      const addon = addonsById.get(addonId);
+      if (!addon || qty < 1) continue;
+      sum += addon.price * qty;
+    }
+    return sum;
+  }, [pillowExtras, addonsById]);
+
+  const sizeTotal = sizeBase + extrasTotal;
 
   if (product.isLoading) return <p className={styles.empty}>Loading product…</p>;
   if (product.error || !product.data) {
@@ -99,16 +143,34 @@ export const Configurator = () => {
 
   const handleAddSize = () => {
     if (!canAddSize || pickedSize == null || pickedSize.price == null) return;
+    const extrasArr = Object.entries(pillowExtras)
+      .filter(([, qty]) => qty > 0)
+      .map(([addonId, qty]) => ({ addonId, qty }));
+    const extraSummary = extrasArr.length > 0
+      ? ` + ${extrasArr.reduce((s, e) => s + e.qty, 0)} extra pillow${extrasArr.reduce((s, e) => s + e.qty, 0) > 1 ? 's' : ''}`
+      : '';
     const snapshot: SizeConfigSnapshot = {
       kind: 'size',
       productId: p.id,
       productName: p.name,
       sizeId: pickedSize.id,
-      total: pickedSize.price,
-      summary: pickedSize.label,
+      total: sizeTotal,
+      summary: `${pickedSize.label}${extraSummary}`,
+      addonExtras: extrasArr.length > 0 ? extrasArr : undefined,
     };
     addConfigured(snapshot);
     navigate('/catalog');
+  };
+
+  const bumpExtra = (addonId: string, delta: number) => {
+    setPillowExtras((prev) => {
+      const next = { ...prev };
+      const cur = next[addonId] ?? 0;
+      const updated = Math.max(0, cur + delta);
+      if (updated === 0) delete next[addonId];
+      else next[addonId] = updated;
+      return next;
+    });
   };
 
   // Topbar action slot for size_variants: product chip + LIVE TOTAL +
@@ -291,6 +353,74 @@ export const Configurator = () => {
                 <span className={styles.seriesEyebrow}>{formatSeries(p.series_id)}</span>
               )}
             </RailSection>
+
+            {includedPillows.length > 0 && (
+              <RailSection
+                title="Pillows · included free"
+                sub={`${includedPillows.reduce((s, x) => s + x.qty, 0)} complimentary`}
+              >
+                <p className={styles.aboutText}>
+                  Every {p.category_id} comes with {includedPillows.reduce((s, x) => s + x.qty, 0)}{' '}
+                  {includedPillows.length === 1 ? includedPillows[0]!.addon.label.toLowerCase() : ''}
+                  {' '}pillow{includedPillows.reduce((s, x) => s + x.qty, 0) > 1 ? 's' : ''}.
+                </p>
+                {includedPillows.map(({ addon, qty }) => (
+                  <div key={addon.id} className={styles.pillowRow}>
+                    <span className={styles.pillowIcon}>
+                      <Sparkles size={16} strokeWidth={1.75} />
+                    </span>
+                    <span className={styles.pillowMeta}>
+                      <span className={styles.pillowName}>{addon.label}</span>
+                      {addon.description && (
+                        <span className={styles.pillowDesc}>{addon.description}</span>
+                      )}
+                    </span>
+                    <span className={styles.includedPill}>× {qty} INCLUDED</span>
+                  </div>
+                ))}
+              </RailSection>
+            )}
+
+            {pillowAddOns.length > 0 && (
+              <RailSection title="Add-on · need more pillows?" sub="Add extras at piece price">
+                {pillowAddOns.map((addon) => {
+                  const qty = pillowExtras[addon.id] ?? 0;
+                  return (
+                    <div key={addon.id} className={styles.pillowRow}>
+                      <span className={styles.pillowIcon}>
+                        <Package size={16} strokeWidth={1.75} />
+                      </span>
+                      <span className={styles.pillowMeta}>
+                        <span className={styles.pillowName}>{addon.label}</span>
+                        <span className={styles.pillowDesc}>
+                          {fmtRM(addon.price)} each
+                        </span>
+                      </span>
+                      <span className={styles.stepper}>
+                        <button
+                          type="button"
+                          className={styles.stepperBtn}
+                          onClick={() => bumpExtra(addon.id, -1)}
+                          disabled={qty === 0}
+                          aria-label={`Decrease ${addon.label}`}
+                        >
+                          <Minus size={12} strokeWidth={2} />
+                        </button>
+                        <span className={styles.stepperVal}>{qty}</span>
+                        <button
+                          type="button"
+                          className={styles.stepperBtn}
+                          onClick={() => bumpExtra(addon.id, +1)}
+                          aria-label={`Increase ${addon.label}`}
+                        >
+                          <Plus size={12} strokeWidth={2} />
+                        </button>
+                      </span>
+                    </div>
+                  );
+                })}
+              </RailSection>
+            )}
           </aside>
         </div>
       )}

@@ -557,3 +557,103 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* ─── Pillow rows (PILLOWS + ADD-ON sections) ─────────────────────── */
+.pillowRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.pillowIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--bg-alt);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-burnt);
+  flex-shrink: 0;
+}
+
+.pillowMeta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pillowName {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-14);
+  color: var(--fg);
+  line-height: 1.2;
+}
+.pillowDesc {
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
+
+.includedPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  flex-shrink: 0;
+}
+
+/* -/+ stepper (port from prototype .be-step) */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.stepperBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 120ms;
+}
+.stepperBtn:hover:not(:disabled) {
+  background: var(--c-orange);
+  color: var(--c-cream);
+}
+.stepperBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.stepperVal {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  font-weight: var(--w-bold);
+  min-width: 18px;
+  text-align: center;
+  color: var(--fg);
+}

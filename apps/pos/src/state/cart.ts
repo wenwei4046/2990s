@@ -25,6 +25,10 @@ export interface SizeConfigSnapshot {
   sizeId: string;
   total: number;
   summary: string;       // e.g. "Queen"
+  /** Paid-extra add-ons attached to this configured line (e.g. extra pillows
+   *  beyond the included free ones). NOT included_addons — those are derived
+   *  from product.included_addons server-side and don't add to the price. */
+  addonExtras?: { addonId: string; qty: number }[];
 }
 
 // Flat-priced products (single price per product — mattresses, bedframes, sofas

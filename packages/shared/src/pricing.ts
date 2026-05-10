@@ -116,6 +116,9 @@ export type SizeLineConfig = {
   kind: 'size';
   productId: string;
   sizeId: string;
+  /** Paid extras attached to this size line (e.g. extra pillows beyond the
+   *  free included ones). Server multiplies addons[id].price × qty. */
+  addonExtras?: { addonId: string; qty: number }[];
 };
 export type FlatLineConfig = {
   kind: 'flat';
@@ -159,6 +162,7 @@ export type OrderTotalError =
   | { code: 'inactive_bundle'; productId: string; bundleId: string }
   | { code: 'inactive_size'; productId: string; sizeId: string }
   | { code: 'unknown_size'; productId: string; sizeId: string }
+  | { code: 'unknown_addon'; productId: string; addonId: string }
   | { code: 'flat_price_missing'; productId: string };
 
 export class OrderPricingError extends Error {
@@ -176,6 +180,10 @@ export class OrderPricingError extends Error {
 export const computeOrderTotal = (
   lines: OrderLineInput[],
   productInfoById: Map<string, ServerProductInfo>,
+  /** Optional addon price map, keyed by addon id. Required only when at least
+   *  one size line submits addonExtras — the API loads addons table once and
+   *  passes the price map here so the math stays purely functional. */
+  addonPricesById?: Map<string, number>,
 ): OrderTotals => {
   const out: OrderLineResult[] = [];
   for (const line of lines) {
@@ -227,13 +235,30 @@ export const computeOrderTotal = (
       const variant = info.sizes?.find((s) => s.sizeId === wantSizeId);
       if (!variant) throw new OrderPricingError({ code: 'unknown_size', productId: info.productId, sizeId: wantSizeId });
       if (!variant.active) throw new OrderPricingError({ code: 'inactive_size', productId: info.productId, sizeId: wantSizeId });
+
+      // Add paid extras (e.g. pillow upgrades). Empty / missing → just the size base.
+      let extrasTotal = 0;
+      const breakdown = [`Size ${cfg.sizeId}: RM ${variant.price.toLocaleString('en-MY')}`];
+      if (cfg.addonExtras && cfg.addonExtras.length > 0) {
+        for (const e of cfg.addonExtras) {
+          const price = addonPricesById?.get(e.addonId);
+          if (price == null) {
+            throw new OrderPricingError({ code: 'unknown_addon', productId: info.productId, addonId: e.addonId });
+          }
+          const lineExtra = price * e.qty;
+          extrasTotal += lineExtra;
+          breakdown.push(`Add-on ${e.addonId} × ${e.qty} @ RM ${price}: RM ${lineExtra.toLocaleString('en-MY')}`);
+        }
+      }
+
+      const unitPrice = variant.price + extrasTotal;
       out.push({
         productId: info.productId,
         qty: line.qty,
-        unitPrice: variant.price,
-        lineTotal: variant.price * line.qty,
+        unitPrice,
+        lineTotal: unitPrice * line.qty,
         configJson: cfg,
-        breakdown: [`Size ${cfg.sizeId}: RM ${variant.price.toLocaleString('en-MY')}`],
+        breakdown,
       });
     } else {
       // flat — single price per product. (Bug #2)

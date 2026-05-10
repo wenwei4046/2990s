@@ -75,6 +75,9 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
           kind: 'size' as const,
           productId: l.config.productId,
           sizeId: l.config.sizeId,
+          ...(l.config.addonExtras && l.config.addonExtras.length > 0
+            ? { addonExtras: l.config.addonExtras }
+            : {}),
         },
       };
     }
