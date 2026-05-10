@@ -31,49 +31,55 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+// Module-scope so the reference is stable — keeps the staff-fetch effect from
+// re-running on every render of AuthProvider.
+const fetchStaff = async (userId: string): Promise<StaffProfile | null> => {
+  const { data, error } = await supabase
+    .from('staff')
+    .select('id, staff_code, name, role, showroom_id, initials, color, active')
+    .eq('id', userId)
+    .eq('active', true)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return {
+    id: data.id,
+    staffCode: data.staff_code,
+    name: data.name,
+    role: data.role,
+    showroomId: data.showroom_id,
+    initials: data.initials,
+    color: data.color,
+  };
+};
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [loading, setLoading] = useState(true);
+  // Bug #5: split loading into session + staff phases so Layout can wait for
+  // BOTH to resolve before deciding whether to redirect. The previous flat
+  // `loading` flag flipped false as soon as the session was known, opening a
+  // window where Layout saw user + null-staff and bounced to /no-access (or
+  // /login on a re-mount) before the staff round-trip landed.
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [staffLoading, setStaffLoading] = useState(true);
   const [session, setSession] = useState<Session | null>(null);
   const [staff, setStaff] = useState<StaffProfile | null>(null);
+  const userId = session?.user?.id ?? null;
 
-  // Fetch the staff row matching auth.uid(). Returns null if no matching
-  // staff row exists (e.g. the user signed up but the bootstrap trigger
-  // didn't fire — owner_email mismatch).
-  const fetchStaff = async (userId: string): Promise<StaffProfile | null> => {
-    const { data, error } = await supabase
-      .from('staff')
-      .select('id, staff_code, name, role, showroom_id, initials, color, active')
-      .eq('id', userId)
-      .eq('active', true)
-      .maybeSingle();
-
-    if (error || !data) return null;
-    return {
-      id: data.id,
-      staffCode: data.staff_code,
-      name: data.name,
-      role: data.role,
-      showroomId: data.showroom_id,
-      initials: data.initials,
-      color: data.color,
-    };
-  };
-
+  // Effect 1: own session — initial fetch + auth-change subscription.
+  // Token refreshes fire onAuthStateChange with the same user.id — Effect 2's
+  // dep array means we won't re-query the staff row in that case.
   useEffect(() => {
     let mounted = true;
 
-    // Hard ceiling on Loading state. If supabase.auth.getSession() ever hangs
-    // (known issue: navigator-locks deadlock under StrictMode + HMR, see
-    // supabase/supabase-js#42505), the UI must still recover within 7s by
-    // dropping to "no session" — better to show the login form than to wedge
-    // forever. onAuthStateChange will still fire later if/when getSession
-    // resolves and supersede this fallback.
+    // Hard ceiling on session-loading. If supabase.auth.getSession() ever
+    // hangs (navigator-locks deadlock under StrictMode + HMR), drop to
+    // "no session" within 7s rather than wedging the UI forever.
     const failsafe = setTimeout(() => {
       if (!mounted) return;
-      setLoading((prev) => {
+      setSessionLoading((prev) => {
         if (prev) {
           console.warn(
-            '[auth] getSession() did not resolve within 7s — releasing Loading state. ' +
+            '[auth] getSession() did not resolve within 7s — releasing sessionLoading. ' +
               'Likely a stuck navigator-locks acquisition.',
           );
         }
@@ -83,41 +89,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     supabase.auth
       .getSession()
-      .then(async ({ data }) => {
+      .then(({ data }) => {
         if (!mounted) return;
-        if (data.session) {
-          const initialStaff = await fetchStaff(data.session.user.id);
-          if (!mounted) return;
-          setStaff(initialStaff);
-        }
         setSession(data.session);
-        setLoading(false);
+        setSessionLoading(false);
       })
       .catch((err) => {
-        // Don't let a getSession() rejection (lock timeout, network hiccup,
-        // malformed token) wedge the UI on Loading… forever.
         if (!mounted) return;
         console.error('[auth] getSession() rejected:', err);
         setSession(null);
-        setStaff(null);
-        setLoading(false);
+        setSessionLoading(false);
       });
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
-      if (!mounted) return;
-      if (!newSession) {
-        setSession(null);
-        setStaff(null);
-        setLoading(false);
-        return;
-      }
-      // Fetch staff BEFORE setting session so Layout sees user+staff together
-      // — otherwise the gap flashes to /no-access during the staff round-trip.
-      const newStaff = await fetchStaff(newSession.user.id);
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
-      setStaff(newStaff);
-      setLoading(false);
+      setSessionLoading(false);
     });
 
     return () => {
@@ -126,6 +113,48 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       sub.subscription.unsubscribe();
     };
   }, []);
+
+  // Effect 2: own staff — fires only after session has resolved and only
+  // when the authenticated user identity changes (login, logout, account
+  // switch). Gating on sessionLoading avoids a render gap where userId
+  // flips null→real but staffLoading is still false from the not-yet-logged-in
+  // branch — Layout would otherwise see (user, staff=null, loading=false)
+  // for one frame and bounce to /no-access. Crucially does NOT re-fire on
+  // token refresh, which previously could overwrite a valid staff with null
+  // if the refresh-fetch hit a transient RLS hiccup.
+  useEffect(() => {
+    if (sessionLoading) return;
+
+    if (userId === null) {
+      setStaff(null);
+      setStaffLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setStaffLoading(true);
+
+    fetchStaff(userId)
+      .then((profile) => {
+        if (cancelled) return;
+        setStaff(profile);
+        setStaffLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('[auth] fetchStaff() rejected:', err);
+        // Transient failure: keep prior staff value rather than wiping it.
+        // The user identity hasn't changed, so the prior value is still
+        // semantically valid and beats a spurious /no-access bounce.
+        setStaffLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, sessionLoading]);
+
+  const loading = sessionLoading || staffLoading;
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
