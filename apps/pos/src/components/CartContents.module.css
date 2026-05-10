@@ -53,6 +53,18 @@
   background: var(--c-cream);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
+  transition: border-color 150ms, box-shadow 150ms, transform 150ms;
+}
+
+/* Desktop pointer hover affordance — matches the size-card hover treatment in
+   Configurator. Mouse-only (hover/pointer guards exclude touchscreens, where
+   the press-and-release would flicker the burnt ring on tap). */
+@media (hover: hover) and (pointer: fine) {
+  .line:hover {
+    border-color: var(--c-burnt);
+    box-shadow: 0 0 0 1px var(--c-burnt) inset;
+    transform: translateY(-1px);
+  }
 }
 
 .lineRail {
