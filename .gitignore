@@ -43,3 +43,6 @@ prototype/_test/
 
 # claude-mem auto-generated context file (per-session, regenerates)
 AGENTS.md
+
+# Brainstorming visual companion (mockups, server state)
+.superpowers/
