@@ -57,7 +57,9 @@ export const CartContents = ({ variant, onContinue }: Props) => {
     return (
       <div className={styles.empty}>
         <p>Cart is empty.</p>
-        <Link to="/catalog"><Button variant="primary">Browse catalog</Button></Link>
+        {variant === 'page' && (
+          <Link to="/catalog"><Button variant="primary">Browse catalog</Button></Link>
+        )}
       </div>
     );
   }
