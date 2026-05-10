@@ -32,24 +32,30 @@ INSERT INTO series (id, label, active) VALUES
   ('kids-zone',    'Kids Zone',    TRUE)
 ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label, active = EXCLUDED.active;
 
--- ─── Compartment library (13 modules) ───────────────────────────────────────
+-- ─── Compartment library (15 modules — supplier convention: LHF/RHF) ───────
 -- Carries the structural definition (group, dimensions, art, default price).
 -- Per-product pricing lives in product_compartments — DON'T edit here for a
 -- specific Sofa Model.
+-- LHF/RHF = left/right hand facing (Hookka / industry naming).
+-- CNR = single corner SKU; canvas rotation orients NW/NE/SE/SW.
+-- 1B/2B = wide-arm variants (10–12 cm wider than 1A/2A).
+-- STOOL = ottoman accessory; not yet wired into frontend palette.
 INSERT INTO compartment_library (id, comp_group, label, width_cm, depth_cm, cushions, default_price, art_filename, is_accessory, sort_order) VALUES
-  ('1A-L',  '1-seater',  '1A · Left arm',         95, 95, 1, 1490, '1A-L.png',  FALSE,  1),
-  ('1A-R',  '1-seater',  '1A · Right arm',        95, 95, 1, 1490, '1A-R.png',  FALSE,  2),
-  ('1NA',   '1-seater',  '1NA · No arms',         75, 95, 1,  990, '1NA.png',   FALSE,  3),
-  ('2A-L',  '2-seater',  '2A · Left arm',        158, 95, 2, 1990, '2A-L.png',  FALSE,  4),
-  ('2A-R',  '2-seater',  '2A · Right arm',       158, 95, 2, 1990, '2A-R.png',  FALSE,  5),
-  ('2NA',   '2-seater',  '2NA · No arms',        142, 95, 2, 1490, '2NA.png',   FALSE,  6),
-  ('1C-NW', 'Corner',    '1C · NW corner',        95, 95, 1, 1490, '1C-NW.png', FALSE,  7),
-  ('1C-NE', 'Corner',    '1C · NE corner',        95, 95, 1, 1490, '1C-NE.png', FALSE,  8),
-  ('1C-SE', 'Corner',    '1C · SE corner',        95, 95, 1, 1490, '1C-SE.png', FALSE,  9),
-  ('1C-SW', 'Corner',    '1C · SW corner',        95, 95, 1, 1490, '1C-SW.png', FALSE, 10),
-  ('L-L',   'L-Shape',   'L · Left',              95, 165, 1, 1490, 'L-L.png',   FALSE, 11),
-  ('L-R',   'L-Shape',   'L · Right',             95, 165, 1, 1490, 'L-R.png',   FALSE, 12),
-  ('WC-45', 'Accessory', 'Wood console · 45cm',   45, 95, 0,  590, 'WC-45.png', TRUE,  13)
+  ('1A-LHF', '1-seater',  '1A · Left hand facing',           95,  95, 1, 1490, '1A-LHF.png', FALSE,  1),
+  ('1A-RHF', '1-seater',  '1A · Right hand facing',          95,  95, 1, 1490, '1A-RHF.png', FALSE,  2),
+  ('1B-LHF', '1-seater',  '1B · Left hand facing (wide arm)',105,  95, 1, 1490, '1B-LHF.png', FALSE,  3),
+  ('1B-RHF', '1-seater',  '1B · Right hand facing (wide arm)',105, 95, 1, 1490, '1B-RHF.png', FALSE,  4),
+  ('1NA',    '1-seater',  '1NA · No arms',                   75,  95, 1,  990, '1NA.png',    FALSE,  5),
+  ('2A-LHF', '2-seater',  '2A · Left hand facing',          158,  95, 2, 1990, '2A-LHF.png', FALSE,  6),
+  ('2A-RHF', '2-seater',  '2A · Right hand facing',         158,  95, 2, 1990, '2A-RHF.png', FALSE,  7),
+  ('2B-LHF', '2-seater',  '2B · Left hand facing (wide arm)',170, 95, 2, 1990, '2B-LHF.png', FALSE,  8),
+  ('2B-RHF', '2-seater',  '2B · Right hand facing (wide arm)',170, 95, 2, 1990, '2B-RHF.png', FALSE,  9),
+  ('2NA',    '2-seater',  '2NA · No arms',                  142,  95, 2, 1490, '2NA.png',    FALSE, 10),
+  ('CNR',    'Corner',    'Corner piece',                    95,  95, 1, 1490, 'CNR.png',    FALSE, 11),
+  ('L-LHF',  'L-Shape',   'L · Left hand facing chaise',     95, 165, 1, 1490, 'L-LHF.png',  FALSE, 12),
+  ('L-RHF',  'L-Shape',   'L · Right hand facing chaise',    95, 165, 1, 1490, 'L-RHF.png',  FALSE, 13),
+  ('WC-45',  'Accessory', 'Wood console · 45cm',             45,  95, 0,  590, 'WC-45.png',  TRUE,  14),
+  ('STOOL',  'Accessory', 'Ottoman / stool',                 75,  75, 0,  490, 'STOOL.png',  TRUE,  15)
 ON CONFLICT (id) DO UPDATE SET
   label = EXCLUDED.label, width_cm = EXCLUDED.width_cm, depth_cm = EXCLUDED.depth_cm,
   default_price = EXCLUDED.default_price, art_filename = EXCLUDED.art_filename,

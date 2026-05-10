@@ -80,25 +80,26 @@ export interface SofaPriceResult {
 // 24″ baseline. 28″ depth adds 10cm × cushions to the .w (length) axis only.
 
 export const SOFA_MODULES: readonly SofaModuleSpec[] = [
-  // 1-seaters
-  { id: '1A-L',  group: '1-seater',  label: '1A · Left arm',  w: 95,  d: 95,  cushions: 1 },
-  { id: '1A-R',  group: '1-seater',  label: '1A · Right arm', w: 95,  d: 95,  cushions: 1 },
-  { id: '1NA',   group: '1-seater',  label: '1NA · No arms',  w: 75,  d: 95,  cushions: 1 },
+  // 1-seaters (LHF/RHF = left/right hand facing — supplier convention)
+  { id: '1A-LHF', group: '1-seater',  label: '1A · Left hand facing',  w: 95,  d: 95,  cushions: 1 },
+  { id: '1A-RHF', group: '1-seater',  label: '1A · Right hand facing', w: 95,  d: 95,  cushions: 1 },
+  { id: '1B-LHF', group: '1-seater',  label: '1B · Left hand facing (wide arm)',  w: 105, d: 95, cushions: 1 },
+  { id: '1B-RHF', group: '1-seater',  label: '1B · Right hand facing (wide arm)', w: 105, d: 95, cushions: 1 },
+  { id: '1NA',    group: '1-seater',  label: '1NA · No arms',          w: 75,  d: 95,  cushions: 1 },
   // 2-seaters
-  { id: '2A-L',  group: '2-seater',  label: '2A · Left arm',  w: 158, d: 95,  cushions: 2 },
-  { id: '2A-R',  group: '2-seater',  label: '2A · Right arm', w: 158, d: 95,  cushions: 2 },
-  { id: '2NA',   group: '2-seater',  label: '2NA · No arms',  w: 142, d: 95,  cushions: 2 },
-  // Corners — 1C arm sides keyed in id (NW = arms on N+W, etc).
-  { id: '1C-NW', group: 'Corner',    label: '1C · NW corner', w: 95,  d: 95,  cushions: 1 },
-  { id: '1C-NE', group: 'Corner',    label: '1C · NE corner', w: 95,  d: 95,  cushions: 1 },
-  { id: '1C-SE', group: 'Corner',    label: '1C · SE corner', w: 95,  d: 95,  cushions: 1 },
-  { id: '1C-SW', group: 'Corner',    label: '1C · SW corner', w: 95,  d: 95,  cushions: 1 },
+  { id: '2A-LHF', group: '2-seater',  label: '2A · Left hand facing',  w: 158, d: 95,  cushions: 2 },
+  { id: '2A-RHF', group: '2-seater',  label: '2A · Right hand facing', w: 158, d: 95,  cushions: 2 },
+  { id: '2B-LHF', group: '2-seater',  label: '2B · Left hand facing (wide arm)',  w: 170, d: 95, cushions: 2 },
+  { id: '2B-RHF', group: '2-seater',  label: '2B · Right hand facing (wide arm)', w: 170, d: 95, cushions: 2 },
+  { id: '2NA',    group: '2-seater',  label: '2NA · No arms',          w: 142, d: 95,  cushions: 2 },
+  // Corner — single SKU per supplier; canvas rotation orients NW/NE/SE/SW.
+  { id: 'CNR',    group: 'Corner',    label: 'Corner piece',           w: 95,  d: 95,  cushions: 1 },
   // L-shape chaise
-  { id: 'L-R',   group: 'L-Shape',   label: 'L · Right',      w: 95,  d: 165, cushions: 1 },
-  { id: 'L-L',   group: 'L-Shape',   label: 'L · Left',       w: 95,  d: 165, cushions: 1 },
+  { id: 'L-LHF',  group: 'L-Shape',   label: 'L · Left hand facing chaise',  w: 95, d: 165, cushions: 1 },
+  { id: 'L-RHF',  group: 'L-Shape',   label: 'L · Right hand facing chaise', w: 95, d: 165, cushions: 1 },
   // Accessory — 45cm wood console. Slots between sofa pieces; doesn't count
   // toward bundles or closure.
-  { id: 'WC-45', group: 'Accessory', label: 'Wood console · 45cm', w: 45, d: 95, cushions: 0, accessory: true },
+  { id: 'WC-45',  group: 'Accessory', label: 'Wood console · 45cm',    w: 45,  d: 95,  cushions: 0, accessory: true },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -109,7 +110,7 @@ export const isAccessoryModule = (id: string): boolean => MODULE_BY_ID.get(id)?.
 
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
 
-const RECLINER_RE = /^(1A-[LR]|1NA|2A-[LR]|2NA)$/;
+const RECLINER_RE = /^(1[AB]-[LR]HF|1NA|2[AB]-[LR]HF|2NA)$/;
 export const reclinerEligible = (modId: string): boolean => RECLINER_RE.test(modId);
 export const seatCount = (modId: string): number => {
   if (!reclinerEligible(modId)) return 0;
@@ -117,7 +118,7 @@ export const seatCount = (modId: string): number => {
 };
 
 /* ─── Bundle catalogue + auto-detect ───────────────────────────────── */
-// Family = the part before the last "-" (1A-L → 1A). Used for the multiset
+// Family = the part before the last "-" (1A-LHF → 1A). Used for the multiset
 // signature that bundles match against. Accessories drop out before signing.
 
 export const moduleFamily = (id: string): string => {
@@ -155,19 +156,21 @@ export const EDGE_E: EdgeIdx = 2;
 export const EDGE_S: EdgeIdx = 3;
 
 const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]> = {
-  '1A-L': ['arm',  'back', 'open', 'front'],
-  '1A-R': ['open', 'back', 'arm',  'front'],
-  '1NA':  ['open', 'back', 'open', 'front'],
-  '2A-L': ['arm',  'back', 'open', 'front'],
-  '2A-R': ['open', 'back', 'arm',  'front'],
-  '2NA':  ['open', 'back', 'open', 'front'],
-  '1C-NW': ['arm',  'arm',  'open', 'open'],
-  '1C-NE': ['open', 'arm',  'arm',  'open'],
-  '1C-SE': ['open', 'open', 'arm',  'arm'],
-  '1C-SW': ['arm',  'open', 'open', 'arm'],
-  'L-R':   ['open', 'back', 'open', 'front'],
-  'L-L':   ['open', 'back', 'open', 'front'],
-  'WC-45': ['open', 'open', 'open', 'open'],
+  '1A-LHF': ['arm',  'back', 'open', 'front'],
+  '1A-RHF': ['open', 'back', 'arm',  'front'],
+  '1B-LHF': ['arm',  'back', 'open', 'front'],
+  '1B-RHF': ['open', 'back', 'arm',  'front'],
+  '1NA':    ['open', 'back', 'open', 'front'],
+  '2A-LHF': ['arm',  'back', 'open', 'front'],
+  '2A-RHF': ['open', 'back', 'arm',  'front'],
+  '2B-LHF': ['arm',  'back', 'open', 'front'],
+  '2B-RHF': ['open', 'back', 'arm',  'front'],
+  '2NA':    ['open', 'back', 'open', 'front'],
+  // CNR base orientation = NW (arms on N+W). Other orientations come from canvas rot.
+  'CNR':    ['arm',  'arm',  'open', 'open'],
+  'L-LHF':  ['open', 'back', 'open', 'front'],
+  'L-RHF':  ['open', 'back', 'open', 'front'],
+  'WC-45':  ['open', 'open', 'open', 'open'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -533,9 +536,9 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
 
     let lCapEdge: EdgeIdx | -1 = -1;
     if (isL) {
-      // L-R mates on W → outer cap on E. L-L mates on E → outer cap on W.
+      // L-RHF mates on W → outer cap on E. L-LHF mates on E → outer cap on W.
       // CW rotation rotates the edge index by +1 mod 4 per 90°.
-      const baseCap: EdgeIdx = c.moduleId === 'L-R' ? EDGE_E : EDGE_W;
+      const baseCap: EdgeIdx = c.moduleId === 'L-RHF' ? EDGE_E : EDGE_W;
       const r = ((c.rot % 360) + 360) % 360;
       const steps = r / 90;
       lCapEdge = ((baseCap + steps) % 4) as EdgeIdx;

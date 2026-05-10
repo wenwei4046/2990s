@@ -28,18 +28,18 @@ const SCALE = 1;         // 1 px = 1 cm. Stage is 600×480 px, fits a tablet col
 
 const ASSET_BASE = '/sofa-modules';
 
-/** Mirror map for arm-side flips: 1A-L ↔ 1A-R, 2A-L ↔ 2A-R. */
+/** Mirror map for arm-side flips: LHF ↔ RHF for 1A/1B/2A/2B/L. CNR is single-SKU (no mirror). */
 const MIRROR_PAIR: Record<string, string> = {
-  '1A-L': '1A-R',
-  '1A-R': '1A-L',
-  '2A-L': '2A-R',
-  '2A-R': '2A-L',
-  'L-L':  'L-R',
-  'L-R':  'L-L',
-  '1C-NW': '1C-NE',
-  '1C-NE': '1C-NW',
-  '1C-SE': '1C-SW',
-  '1C-SW': '1C-SE',
+  '1A-LHF': '1A-RHF',
+  '1A-RHF': '1A-LHF',
+  '1B-LHF': '1B-RHF',
+  '1B-RHF': '1B-LHF',
+  '2A-LHF': '2A-RHF',
+  '2A-RHF': '2A-LHF',
+  '2B-LHF': '2B-RHF',
+  '2B-RHF': '2B-LHF',
+  'L-LHF':  'L-RHF',
+  'L-RHF':  'L-LHF',
 };
 
 interface CustomBuilderProps {
