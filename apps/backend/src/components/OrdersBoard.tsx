@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { LayoutGrid, Search, ScanLine } from 'lucide-react';
+import { LayoutGrid, ScanLine, SlidersHorizontal, Download } from 'lucide-react';
 import type { OrderListRow } from '../lib/queries';
 import { LANES, isLaneId, type LaneDef } from '../lib/lanes';
 import { OrderCard } from './OrderCard';
@@ -28,7 +28,9 @@ export function OrdersBoard({
 }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialLane = searchParams.get('lane');
-  const [query, setQuery] = useState('');
+  // Search query lives in URL ?q= (driven by Topbar input). OrdersBoard reads
+  // it here so the topbar search is the single source of truth across the page.
+  const query = searchParams.get('q') ?? '';
   const [tab, setTab] = useState<FilterTab>('all');
   const [view, setView] = useState<ViewState>(
     initialLane && isLaneId(initialLane) ? initialLane : 'overall',
@@ -155,23 +157,22 @@ export function OrdersBoard({
           </button>
         </div>
 
-        <div className={styles.search}>
-          <Search size={14} strokeWidth={1.75} />
-          <input
-            type="search"
-            placeholder="Order ID, name, phone…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
-
         <div className={styles.toolbarRight}>
+          <button type="button" className={styles.toolBtn} aria-label="Filter">
+            <SlidersHorizontal size={14} strokeWidth={1.75} />
+            Filter
+          </button>
+          <button type="button" className={styles.toolBtn} aria-label="Export">
+            <Download size={14} strokeWidth={1.75} />
+            Export
+          </button>
           {onRefresh && (
             <button
               type="button"
-              className={styles.refresh}
+              className={styles.toolBtn}
               onClick={onRefresh}
               disabled={isFetching}
+              aria-label="Refresh"
             >
               <span className={isFetching ? styles.spinning : ''}>↻</span>
               Refresh
