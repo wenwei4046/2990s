@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import {
+  Plus,
+  PlusCircle,
+  History,
+  Pencil,
+  Recycle,
+  ArrowUpFromLine,
+  Wrench,
+  Package,
+  Sparkles,
+  type LucideIcon,
+} from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../lib/auth';
 import { useAddons, type AddonRow } from '../lib/queries';
@@ -11,6 +22,19 @@ interface AddonPatch {
   perFloorItem?: number | null;
   enabled?: boolean;
 }
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  recycle: Recycle,
+  'arrow-up-from-line': ArrowUpFromLine,
+  wrench: Wrench,
+  package: Package,
+  sparkles: Sparkles,
+};
+
+const iconFor = (name: string): LucideIcon => ICON_MAP[name] ?? Package;
+
+const fmtStock = (stock: number | null): string =>
+  stock == null ? '∞' : stock.toLocaleString('en-MY');
 
 export const Addons = () => {
   const { staff } = useAuth();
@@ -28,7 +52,6 @@ export const Addons = () => {
       const { error } = await supabase.from('addons').update(update).eq('id', id);
       if (error) throw error;
     },
-    // Optimistic: write to cache immediately, roll back on error.
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: ['addons'] });
       const prev = qc.getQueryData<AddonRow[]>(['addons']);
@@ -56,17 +79,22 @@ export const Addons = () => {
 
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <div>
-          <div className="t-eyebrow">Delivery extras · per addon</div>
-          <h2 className={styles.title}>Add-ons</h2>
-          <p className={`t-body fg-muted ${styles.lede}`}>
-            The 6 seeded delivery add-ons. Sales staff attach these at checkout — disable an add-on
-            here and it disappears from POS immediately. Lift access uses per-floor·item pricing;
-            the rest are flat per piece.
-          </p>
+      <div className={styles.banner}>
+        <div className={styles.bannerIcon} style={{ background: 'var(--c-secondary-a)' }}>
+          <PlusCircle size={18} strokeWidth={1.75} />
         </div>
-      </header>
+        <div className={styles.bannerCopy}>
+          <div className={styles.bannerTitle}>Add-on products &amp; services</div>
+          <div className={styles.bannerSub}>
+            Edit pricing, units and availability for things sold alongside furniture — disposal,
+            lift access, assembly, accessories.
+          </div>
+        </div>
+        <button type="button" className={styles.btnPrimary} disabled={!isAdmin} title={isAdmin ? 'Add a new add-on' : 'Admin only'}>
+          <Plus size={14} strokeWidth={2} />
+          New add-on
+        </button>
+      </div>
 
       {!isAdmin && (
         <div className={styles.readOnlyBanner}>
@@ -75,57 +103,51 @@ export const Addons = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        {addons.isLoading ? (
-          <div className={styles.empty}>Loading add-ons…</div>
-        ) : addons.error ? (
-          <div className={styles.empty}>Failed to load add-ons: {String(addons.error)}</div>
-        ) : (addons.data?.length ?? 0) === 0 ? (
-          <div className={styles.empty}>No add-ons seeded yet.</div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Add-on</th>
-                <th>ID</th>
-                <th>Pricing</th>
-                <th className={styles.priceCol}>Base price (RM)</th>
-                <th className={styles.priceCol}>Per floor·item (RM)</th>
-                <th>Enabled</th>
-              </tr>
-            </thead>
-            <tbody>
-              {addons.data!.map((a) => (
-                <AddonRowView
-                  key={a.id}
-                  addon={a}
-                  isAdmin={isAdmin}
-                  onSave={(patch) => mutation.mutate({ id: a.id, patch })}
-                />
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {addons.isLoading ? (
+        <div className={styles.empty}>Loading add-ons…</div>
+      ) : addons.error ? (
+        <div className={styles.empty}>Failed to load add-ons: {String(addons.error)}</div>
+      ) : (addons.data?.length ?? 0) === 0 ? (
+        <div className={styles.empty}>No add-ons seeded yet.</div>
+      ) : (
+        <div className={styles.grid}>
+          {addons.data!.map((a) => (
+            <AddonCard
+              key={a.id}
+              addon={a}
+              isAdmin={isAdmin}
+              onSave={(patch) => mutation.mutate({ id: a.id, patch })}
+            />
+          ))}
+
+          <button type="button" className={styles.cardPlaceholder} disabled={!isAdmin} title={isAdmin ? 'Add a new add-on' : 'Admin only'}>
+            <span className={styles.placeholderIcon}>
+              <Plus size={18} strokeWidth={1.75} />
+            </span>
+            <span className={styles.placeholderName}>Add a new add-on</span>
+            <span className={styles.placeholderDesc}>
+              Disposal, lift access, assembly — anything sold alongside.
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };
 
-interface AddonRowViewProps {
+interface AddonCardProps {
   addon: AddonRow;
   isAdmin: boolean;
   onSave: (patch: AddonPatch) => void;
 }
 
-const AddonRowView = ({ addon, isAdmin, onSave }: AddonRowViewProps) => {
-  // Local draft state for inline number inputs. We commit on blur or Enter
-  // so admins can scrub a value without spamming the API on every keystroke.
+const AddonCard = ({ addon, isAdmin, onSave }: AddonCardProps) => {
+  const Icon = iconFor(addon.icon);
   const [priceDraft, setPriceDraft] = useState(String(addon.price));
   const [floorDraft, setFloorDraft] = useState(
     addon.perFloorItem == null ? '' : String(addon.perFloorItem),
   );
 
-  // Re-sync when query data changes (e.g. after invalidation following mutation).
   useEffect(() => {
     setPriceDraft(String(addon.price));
   }, [addon.price]);
@@ -176,82 +198,72 @@ const AddonRowView = ({ addon, isAdmin, onSave }: AddonRowViewProps) => {
     }
   };
 
+  // Lift uses the per-floor·item rate as its primary price knob; everything
+  // else uses base price. Show the right one inline so the card stays compact.
+  const isFloors = addon.kind === 'floors_items';
+  const primaryDraft = isFloors ? floorDraft : priceDraft;
+  const setPrimaryDraft = isFloors ? setFloorDraft : setPriceDraft;
+  const commitPrimary = isFloors ? commitFloor : commitPrice;
+  const onPrimaryKey = isFloors ? onFloorKey : onPriceKey;
+  const primaryValue = isFloors ? addon.perFloorItem ?? 0 : addon.price;
+  const unitLabel = isFloors ? `per floor·${addon.unit ?? 'item'}` : `per ${addon.unit ?? 'piece'}`;
+
   return (
-    <tr className={addon.enabled ? '' : styles.rowDisabled}>
-      <td>
-        <div className={styles.addonCell}>
-          <span className={styles.addonName}>{addon.label}</span>
-          {addon.description && <span className={styles.addonDesc}>{addon.description}</span>}
-        </div>
-      </td>
-      <td><code className={styles.idCode}>{addon.id}</code></td>
-      <td>
-        <span className={styles.kindPill}>
-          {addon.kind === 'floors_items' ? 'per floor·item' : `per ${addon.unit ?? 'piece'}`}
+    <div className={`${styles.card} ${addon.enabled ? '' : styles.cardDisabled}`}>
+      <div className={styles.head}>
+        <span className={styles.icon}>
+          <Icon size={18} strokeWidth={1.75} />
         </span>
-      </td>
-      <td className={styles.priceCol}>
+        <div className={styles.headCopy}>
+          <div className={styles.name}>{addon.label}</div>
+          {addon.description && <div className={styles.desc}>{addon.description}</div>}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={addon.enabled}
+          aria-label={`${addon.enabled ? 'Disable' : 'Enable'} ${addon.label}`}
+          disabled={!isAdmin}
+          className={`${styles.toggle} ${addon.enabled ? styles.toggleOn : ''} ${!isAdmin ? styles.toggleReadonly : ''}`}
+          onClick={() => isAdmin && onSave({ enabled: !addon.enabled })}
+        />
+      </div>
+
+      <div className={styles.priceRow}>
         {isAdmin ? (
-          <input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            step={1}
-            className={styles.priceInput}
-            value={priceDraft}
-            onChange={(e) => setPriceDraft(e.target.value)}
-            onBlur={commitPrice}
-            onKeyDown={onPriceKey}
-            aria-label={`${addon.label} base price`}
-          />
-        ) : (
-          <span className={styles.priceLabel}>RM {addon.price.toLocaleString('en-MY')}</span>
-        )}
-      </td>
-      <td className={styles.priceCol}>
-        {addon.kind === 'floors_items' ? (
-          isAdmin ? (
+          <div className={styles.priceInput}>
+            <span>RM</span>
             <input
               type="number"
               inputMode="numeric"
               min={0}
               step={1}
-              className={styles.priceInput}
-              value={floorDraft}
-              onChange={(e) => setFloorDraft(e.target.value)}
-              onBlur={commitFloor}
-              onKeyDown={onFloorKey}
-              aria-label={`${addon.label} per floor·item price`}
+              value={primaryDraft}
+              onChange={(e) => setPrimaryDraft(e.target.value)}
+              onBlur={commitPrimary}
+              onKeyDown={onPrimaryKey}
+              aria-label={`${addon.label} price`}
             />
-          ) : (
-            <span className={styles.priceLabel}>
-              {addon.perFloorItem == null
-                ? '—'
-                : `RM ${addon.perFloorItem.toLocaleString('en-MY')}`}
-            </span>
-          )
+          </div>
         ) : (
-          <span className={styles.priceLabel}>—</span>
+          <span className={styles.priceLabel}>RM {primaryValue.toLocaleString('en-MY')}</span>
         )}
-      </td>
-      <td>
-        {isAdmin ? (
-          <button
-            type="button"
-            role="switch"
-            aria-checked={addon.enabled}
-            aria-label={`${addon.enabled ? 'Disable' : 'Enable'} ${addon.label}`}
-            className={`${styles.toggle} ${addon.enabled ? styles.toggleOn : ''}`}
-            onClick={() => onSave({ enabled: !addon.enabled })}
-          >
-            <span className={styles.toggleKnob} />
+        <span className={styles.unit}>{unitLabel}</span>
+      </div>
+
+      <div className={styles.foot}>
+        <span className={styles.stock}>
+          Stock · <strong>{fmtStock(addon.stock)}</strong>
+        </span>
+        <span className={styles.actions}>
+          <button type="button" className={styles.iconBtn} aria-label="History" title="History">
+            <History size={14} strokeWidth={1.75} />
           </button>
-        ) : addon.enabled ? (
-          <span className={styles.statYes}><Check size={14} strokeWidth={1.75} /> Enabled</span>
-        ) : (
-          <span className={styles.statNo}><X size={14} strokeWidth={1.75} /> Disabled</span>
-        )}
-      </td>
-    </tr>
+          <button type="button" className={styles.iconBtn} aria-label="Edit" title="Edit" disabled={!isAdmin}>
+            <Pencil size={14} strokeWidth={1.75} />
+          </button>
+        </span>
+      </div>
+    </div>
   );
 };
