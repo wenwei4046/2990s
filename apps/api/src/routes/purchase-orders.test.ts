@@ -199,16 +199,26 @@ describe('POST /purchase-orders', () => {
     expect(json.detail).toEqual(['o1']);
   });
 
-  it('rejects when order is already PO-issued → 409 already_issued', async () => {
+  it('rejects when (order_id, sku) already covered by an existing PO line → 409 already_purchased', async () => {
+    // Cross-supplier split-PO semantics: order-level po_issued=true is no
+    // longer a blanket reject (an order with a partial PO can still receive
+    // additional supplier POs). Reject only when the submitted line already
+    // appears in purchase_order_lines.
     const supabase = createMockSupabase({
       staff: () => ({ data: coordinatorStaffRow, error: null }),
       suppliers: () => ({ data: supplierRow, error: null }),
       orders: (op: any) => {
         if (op.kind === 'select') {
-          return { data: [{ id: 'o1', lane: 'logistics', po_issued: true }], error: null };
+          return { data: [{ id: 'o1', lane: 'logistics', po_issued: false }], error: null };
         }
         return { data: null, error: null };
       },
+      // The pre-check fetches existing PO lines for the orderIds; return one
+      // matching the submitted line so the route returns 409.
+      purchase_order_lines: () => ({
+        data: [{ order_id: 'o1', sku: 'X' }],
+        error: null,
+      }),
     });
     const app = buildApp(supabase);
     const res = await app.request('/purchase-orders', {
@@ -221,12 +231,17 @@ describe('POST /purchase-orders', () => {
     }, baseEnv);
     expect(res.status).toBe(409);
     const json = await res.json() as any;
-    expect(json.error).toBe('already_issued');
-    expect(json.detail).toEqual(['o1']);
+    expect(json.error).toBe('already_purchased');
+    expect(json.detail).toEqual([{ order_id: 'o1', sku: 'X' }]);
   });
 
-  it('happy path: creates PO + lines + flips po_issued → 201', async () => {
+  it('happy path: creates PO + lines + flips po_issued (fully covered) → 201', async () => {
     const captured: { poInsert?: any; linesInsert?: any; flagUpdate?: any } = {};
+
+    // Track purchase_order_lines SELECT call order: 1st = pre-check
+    // (line-level duplicate guard, expect empty), 2nd = post-insert coverage
+    // check (expect the inserted line so the order is "fully covered").
+    let polSelectCount = 0;
 
     const supabase = createMockSupabase({
       // loadStaffRole (first staff call) + coordinator name fetch (last staff call)
@@ -241,6 +256,15 @@ describe('POST /purchase-orders', () => {
           return { data: null, error: null };
         }
         return { data: null, error: null };
+      },
+      // For the post-insert coverage check: route fetches order_items joined
+      // with products(sku) for affected orders. Return the single item with
+      // sku='X' so the coverage check sees full coverage after Step 5.
+      order_items: (op: any) => {
+        if (op.kind === 'select') {
+          return { data: [{ order_id: 'o1', products: { sku: 'X' } }], error: null };
+        }
+        return { data: [], error: null };
       },
       purchase_orders: (op: any) => {
         if (op.kind === 'insert') {
@@ -274,6 +298,13 @@ describe('POST /purchase-orders', () => {
             }],
             error: null,
           };
+        }
+        if (op.kind === 'select') {
+          polSelectCount += 1;
+          // 1st SELECT = duplicate pre-check (no existing lines yet)
+          if (polSelectCount === 1) return { data: [], error: null };
+          // 2nd SELECT = coverage check post-insert (the line we just added)
+          return { data: [{ order_id: 'o1', sku: 'X' }], error: null };
         }
         return { data: [], error: null };
       },

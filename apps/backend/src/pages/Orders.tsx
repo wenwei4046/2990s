@@ -19,15 +19,21 @@ export const Orders = () => {
   const [poScanOpen, setPoScanOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  // Logistics-lane orders awaiting PO issuance — feed the Scan PO modal.
+  // Logistics-lane orders with at least one item not yet covered by a PO.
+  // Cross-supplier orders flow through here once per supplier (via cart.purchased
+  // on each line) until every line is purchased, at which point the API flips
+  // po_issued. Filtering on `!c.purchased` instead of `!o.poIssued` is what
+  // unlocks the second-supplier PO for SO-9008-shaped cross-supplier orders.
   const logisticsOrdersForScan = useMemo(() => {
     const list = (orders.data ?? []).filter(
-      (o) => o.lane === 'logistics' && !o.poIssued,
+      (o) => o.lane === 'logistics' && o.cart.some((c) => !c.purchased),
     );
     return list.map((o) => ({
       id: o.id,
       customerName: o.customerName ?? '—',
-      cart: o.cart,
+      // Only feed unpurchased items to the modal so the rollup excludes
+      // already-purchased lines on the next pass.
+      cart: o.cart.filter((c) => !c.purchased),
     }));
   }, [orders.data]);
 

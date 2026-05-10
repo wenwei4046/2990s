@@ -303,6 +303,10 @@ export interface CartItem {
   colour: string | null;
   qty: number;
   imgKey: string | null;
+  /** True when this (order_id, sku) already has a purchase_order_lines row.
+   *  Used to skip already-purchased items in the PO scan modal so cross-supplier
+   *  orders can be split across multiple POs. (Cross-supplier split-PO fix) */
+  purchased: boolean;
 }
 
 export interface OrderListRow {
@@ -330,22 +334,38 @@ export const useOrders = () =>
   useQuery({
     queryKey: ['orders'],
     queryFn: async (): Promise<OrderListRow[]> => {
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          id, placed_at, customer_name, customer_phone,
-          customer_address, customer_city,
-          total, paid, lane, payment_method, showroom_id,
-          po_issued, slip_state, delivery_date,
-          staff:staff_id ( name, initials, color ),
-          order_items (
-            qty, kind, config,
-            products ( id, name, category_id, supplier_id, sku, img_key, thumb_key )
-          )
-        `)
-        .order('placed_at', { ascending: false })
-        .limit(100);
+      // Two parallel reads: orders + their items, and the universe of
+      // purchase_order_lines so we can mark each cart item as purchased or not.
+      // RLS scopes both to authenticated coordinators.
+      const [{ data, error }, { data: poLineRows, error: poErr }] = await Promise.all([
+        supabase
+          .from('orders')
+          .select(`
+            id, placed_at, customer_name, customer_phone,
+            customer_address, customer_city,
+            total, paid, lane, payment_method, showroom_id,
+            po_issued, slip_state, delivery_date,
+            staff:staff_id ( name, initials, color ),
+            order_items (
+              qty, kind, config,
+              products ( id, name, category_id, supplier_id, sku, img_key, thumb_key )
+            )
+          `)
+          .order('placed_at', { ascending: false })
+          .limit(100),
+        supabase
+          .from('purchase_order_lines')
+          .select('order_id, sku'),
+      ]);
       if (error) throw error;
+      if (poErr) throw poErr;
+
+      // Set of "{order_id}|{sku}" already covered by some PO. Used per-cart-item
+      // to mark `purchased: true`, which the PO scan modal then filters out.
+      const purchased = new Set<string>(
+        (poLineRows ?? []).map((l: any) => `${l.order_id}|${l.sku}`),
+      );
+
       return (data ?? []).map((r: any) => ({
         id: r.id,
         placedAt: r.placed_at,
@@ -376,6 +396,7 @@ export const useOrders = () =>
             colour: it.config?.colour ?? null,
             qty: it.qty,
             imgKey: it.products.thumb_key ?? it.products.img_key ?? null,
+            purchased: purchased.has(`${r.id}|${it.products.sku}`),
           })),
       }));
     },

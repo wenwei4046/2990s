@@ -74,9 +74,22 @@ purchaseOrders.post('/', async (c) => {
   if (notInLogistics.length > 0) {
     return c.json({ error: 'order_not_in_logistics', detail: notInLogistics }, 400);
   }
-  const alreadyIssued = (orderRows ?? []).filter((r) => r.po_issued).map((r) => r.id);
-  if (alreadyIssued.length > 0) {
-    return c.json({ error: 'already_issued', detail: alreadyIssued }, 409);
+
+  // Line-level duplicate check (cross-supplier split-PO support). An order can
+  // legitimately have multiple POs across different suppliers, so we cannot
+  // reject by `po_issued=true` at the order level. Reject only if a submitted
+  // (order_id, sku) pair is already covered by an existing PO line.
+  const { data: existingLines, error: existingErr } = await supabase
+    .from('purchase_order_lines')
+    .select('order_id, sku')
+    .in('order_id', orderIds);
+  if (existingErr) return c.json({ error: 'db_fetch_failed', detail: existingErr.message }, 500);
+  const existingSet = new Set((existingLines ?? []).map((l) => `${l.order_id}|${l.sku}`));
+  const duplicates = items
+    .filter((it) => existingSet.has(`${it.order_id}|${it.sku}`))
+    .map((it) => ({ order_id: it.order_id, sku: it.sku }));
+  if (duplicates.length > 0) {
+    return c.json({ error: 'already_purchased', detail: duplicates }, 409);
   }
 
   // Step 4 — insert PO header
@@ -108,18 +121,67 @@ purchaseOrders.post('/', async (c) => {
     return c.json({ error: 'db_insert_lines_failed', detail: linesErr.message }, 500);
   }
 
-  // Step 6 — flip po_issued on referenced orders (cached flag)
-  const { error: flagErr } = await supabase
-    .from('orders')
-    .update({
-      po_issued: true,
-      po_issued_at: new Date().toISOString(),
-      po_issued_by: staffId,
-    })
-    .in('id', orderIds);
-  if (flagErr) {
-    // Best-effort cleanup; flag will be inconsistent but PO + lines exist
-    return c.json({ error: 'db_flag_update_failed', detail: flagErr.message }, 500);
+  // Step 6 — flip po_issued only for orders whose every item is now covered.
+  // Cross-supplier order: the first PO covers some items but not all, so
+  // po_issued stays false until the second-supplier PO lands. Lane gate
+  // `logistics → ready requires po_issued` (orders.ts) thus correctly waits
+  // for full coverage.
+  //
+  // Compute coverage per affected order:
+  // - Refetch every (order_id, sku) the order has via order_items × products
+  // - Refetch every (order_id, sku) now in purchase_order_lines (incl. the
+  //   rows we just inserted in Step 5)
+  // - For each orderId, fully covered ⇔ all skus appear in PO lines
+  const [{ data: itemsRows, error: itemsErr }, { data: allPoLines, error: poLinesErr }] =
+    await Promise.all([
+      supabase
+        .from('order_items')
+        .select('order_id, products(sku)')
+        .in('order_id', orderIds),
+      supabase
+        .from('purchase_order_lines')
+        .select('order_id, sku')
+        .in('order_id', orderIds),
+    ]);
+  if (itemsErr) return c.json({ error: 'db_fetch_failed', detail: itemsErr.message }, 500);
+  if (poLinesErr) return c.json({ error: 'db_fetch_failed', detail: poLinesErr.message }, 500);
+
+  const itemsByOrder = new Map<string, Set<string>>();
+  for (const row of itemsRows ?? []) {
+    const sku = (row as any).products?.sku;
+    if (!sku) continue;
+    let set = itemsByOrder.get(row.order_id);
+    if (!set) { set = new Set(); itemsByOrder.set(row.order_id, set); }
+    set.add(sku);
+  }
+  const coveredByOrder = new Map<string, Set<string>>();
+  for (const line of allPoLines ?? []) {
+    let set = coveredByOrder.get(line.order_id);
+    if (!set) { set = new Set(); coveredByOrder.set(line.order_id, set); }
+    set.add(line.sku);
+  }
+
+  const fullyCoveredOrderIds: string[] = [];
+  for (const orderId of orderIds) {
+    const itemSkus = itemsByOrder.get(orderId) ?? new Set();
+    const coveredSkus = coveredByOrder.get(orderId) ?? new Set();
+    if (itemSkus.size > 0 && [...itemSkus].every((sku) => coveredSkus.has(sku))) {
+      fullyCoveredOrderIds.push(orderId);
+    }
+  }
+
+  if (fullyCoveredOrderIds.length > 0) {
+    const { error: flagErr } = await supabase
+      .from('orders')
+      .update({
+        po_issued: true,
+        po_issued_at: new Date().toISOString(),
+        po_issued_by: staffId,
+      })
+      .in('id', fullyCoveredOrderIds);
+    if (flagErr) {
+      return c.json({ error: 'db_flag_update_failed', detail: flagErr.message }, 500);
+    }
   }
 
   // Step 7 — fetch coordinator name for response (can be derived later but cheaper now)
