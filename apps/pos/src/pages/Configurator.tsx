@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Hourglass } from 'lucide-react';
+import { ArrowLeft, Hourglass, X } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { BUNDLES, type BundleDef, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, type BundleDef, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -21,6 +21,15 @@ import { CustomBuilder } from './CustomBuilder';
 import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
 
+interface SizeRow {
+  id: string;
+  label: string;
+  widthCm: number;
+  lengthCm: number;
+  price: number | null;
+  active: boolean;
+}
+
 export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
@@ -30,7 +39,12 @@ export const Configurator = () => {
   useProductPricingRealtime(productId);
 
   const [picked, setPicked] = useState<string | null>(null);
+  const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
   const [mode, setMode] = useState<'quick' | 'custom'>('quick');
+
+  const sizes = useProductSizes(productId);
+  const sizeLib = useSizeLibrary();
+  const addConfigured = useCart((s) => s.addConfigured);
 
   // Build the SofaProductPricing struct that the shared pure functions expect.
   const sofaPricing = useMemo<SofaProductPricing>(() => ({
@@ -38,6 +52,32 @@ export const Configurator = () => {
     bundles: bundles.data ?? [],
     reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
   }), [compartments.data, bundles.data, product.data?.recliner_upgrade_price]);
+
+  // Build size rows once per data refresh (used by isSize render + topbar
+  // action slot). Rows are derived from the size library so staff see a
+  // stable grid of all four sizes; rows where this Model is inactive land
+  // dimmed + non-clickable, same as SofaQuickPick.
+  const sizeRows = useMemo<SizeRow[]>(() => {
+    const lib = sizeLib.data ?? [];
+    const variants = sizes.data ?? [];
+    return lib
+      .filter((l) => l.sortOrder < 100)
+      .map((l) => {
+        const variant = variants.find((v) => v.sizeId === l.id);
+        return {
+          id: l.id,
+          label: l.label,
+          widthCm: l.widthCm,
+          lengthCm: l.lengthCm,
+          price: variant?.price ?? null,
+          active: variant?.active ?? false,
+        };
+      });
+  }, [sizeLib.data, sizes.data]);
+
+  const pickedSize = sizeRows.find((r) => r.id === pickedSizeId) ?? null;
+  const sizeTotal = pickedSize?.price ?? 0;
+  const canAddSize = pickedSize != null && pickedSize.active && pickedSize.price != null;
 
   if (product.isLoading) return <p className={styles.empty}>Loading product…</p>;
   if (product.error || !product.data) {
@@ -57,23 +97,103 @@ export const Configurator = () => {
   const isSofa = p.pricing_kind === 'sofa_build';
   const isSize = p.pricing_kind === 'size_variants';
 
+  const handleAddSize = () => {
+    if (!canAddSize || pickedSize == null || pickedSize.price == null) return;
+    const snapshot: SizeConfigSnapshot = {
+      kind: 'size',
+      productId: p.id,
+      productName: p.name,
+      sizeId: pickedSize.id,
+      total: pickedSize.price,
+      summary: pickedSize.label,
+    };
+    addConfigured(snapshot);
+    navigate('/catalog');
+  };
+
+  // Topbar action slot for size_variants: product chip + LIVE TOTAL +
+  // Cancel + Add to Cart. Sofa + flat keep the default Quotes/My orders
+  // pills (their flows are full-page with a footer button).
+  const sizeTopbarSlot = isSize ? (
+    <span className={styles.topbarActions}>
+      <span className={styles.topbarChip}>
+        <span className={styles.topbarChipEyebrow}>
+          {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
+        </span>
+        <span className={styles.topbarChipName}>
+          {p.name}
+          {pickedSize ? ` · ${pickedSize.label}` : ''}
+        </span>
+        {pickedSize && (
+          <span className={styles.topbarChipSub}>
+            {pickedSize.widthCm}×{pickedSize.lengthCm} cm
+            {p.series_id ? ` · ${formatSeries(p.series_id)}` : ''}
+          </span>
+        )}
+      </span>
+      <span className={styles.topbarTotal}>
+        <span className={styles.topbarTotalLbl}>LIVE TOTAL</span>
+        <span className={styles.topbarTotalAmt}>
+          <sup>RM</sup>
+          {sizeTotal > 0 ? sizeTotal.toLocaleString('en-MY') : '—'}
+        </span>
+        <span className={styles.topbarTotalNote}>Delivery &amp; assembly included</span>
+      </span>
+      <button
+        type="button"
+        className={styles.topbarBtnGhost}
+        onClick={() => navigate('/catalog')}
+      >
+        <X size={14} strokeWidth={1.75} />
+        Cancel
+      </button>
+      <button
+        type="button"
+        className={styles.topbarBtnPrimary}
+        disabled={!canAddSize}
+        onClick={handleAddSize}
+      >
+        + Add to Cart
+      </button>
+    </span>
+  ) : undefined;
+
   return (
     <>
-    <Topbar step="cart" />
-    <main className={styles.shell}>
-      <header className={styles.header}>
-        <IconButton
-          icon={<ArrowLeft size={20} strokeWidth={1.75} />}
-          aria-label="Back"
-          onClick={() => navigate('/catalog')}
-        />
-        <div className={styles.title}>
-          <span className="t-eyebrow">{p.category_id}</span>
-          <h1 className={styles.heading}>{p.name}</h1>
-          {p.detail && <p className={styles.detail}>{p.detail}</p>}
-          <code className={styles.sku}>{p.sku}</code>
-        </div>
-      </header>
+    <Topbar step="cart" rightSlot={sizeTopbarSlot} />
+    <main className={isSize ? styles.shellWide : styles.shell}>
+      {!isSize && (
+        <header className={styles.header}>
+          <IconButton
+            icon={<ArrowLeft size={20} strokeWidth={1.75} />}
+            aria-label="Back"
+            onClick={() => navigate('/catalog')}
+          />
+          <div className={styles.title}>
+            <span className="t-eyebrow">{p.category_id}</span>
+            <h1 className={styles.heading}>{p.name}</h1>
+            {p.detail && <p className={styles.detail}>{p.detail}</p>}
+            <code className={styles.sku}>{p.sku}</code>
+          </div>
+        </header>
+      )}
+
+      {isSize && (
+        <header className={styles.headerWide}>
+          <div>
+            <span className="t-eyebrow">{p.category_id}</span>
+            <h1 className={styles.heading}>
+              {p.name}
+              {pickedSize ? ` · ${pickedSize.label}` : ''}
+            </h1>
+          </div>
+          <span className={styles.footprintLbl}>
+            {pickedSize
+              ? `Footprint ${pickedSize.widthCm} × ${pickedSize.lengthCm} cm`
+              : 'Pick a size to set footprint'}
+          </span>
+        </header>
+      )}
 
       {isSofa && (
         <>
@@ -120,11 +240,59 @@ export const Configurator = () => {
       )}
 
       {isSize && (
-        <SizeConfigurator
-          productId={p.id}
-          productName={p.name}
-          onAdded={() => navigate('/catalog')}
-        />
+        <div className={styles.twoCol}>
+          <div className={styles.previewArea}>
+            {pickedSize ? (
+              <FootprintPreview
+                widthCm={pickedSize.widthCm}
+                lengthCm={pickedSize.lengthCm}
+                label={pickedSize.label}
+              />
+            ) : (
+              <div className={styles.previewEmpty}>
+                <span>Pick a size on the right to preview the footprint.</span>
+              </div>
+            )}
+          </div>
+          <aside className={styles.rail}>
+            <RailSection title="Size" sub={pickedSize ? `${pickedSize.label} · ${pickedSize.widthCm}×${pickedSize.lengthCm} cm` : undefined}>
+              <div className={styles.sizeGrid}>
+                {sizeRows.map((r) => {
+                  const isPicked = pickedSizeId === r.id;
+                  const inactive = !r.active || r.price == null;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`${styles.sizeCard} ${isPicked ? styles.sizeCardPicked : ''} ${inactive ? styles.sizeCardInactive : ''}`}
+                      disabled={inactive}
+                      onClick={() => setPickedSizeId(r.id)}
+                    >
+                      <span className={styles.sizeCardName}>{r.label}</span>
+                      <span className={styles.sizeCardDim}>
+                        {r.widthCm}×{r.lengthCm} cm
+                      </span>
+                      <span className={styles.sizeCardPrice}>
+                        {inactive ? 'Not on this Model' : fmtRM(r.price ?? 0)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </RailSection>
+
+            <RailSection title={`About this ${p.category_id}`}>
+              {p.detail ? (
+                <p className={styles.aboutText}>{p.detail}</p>
+              ) : (
+                <p className={styles.aboutText}>No description set yet — add via SKU Master.</p>
+              )}
+              {p.series_id && (
+                <span className={styles.seriesEyebrow}>{formatSeries(p.series_id)}</span>
+              )}
+            </RailSection>
+          </aside>
+        </div>
       )}
 
       {p.pricing_kind === 'flat' && p.flat_price != null && (
@@ -153,108 +321,58 @@ export const Configurator = () => {
   );
 };
 
-interface SizeConfiguratorProps {
-  productId: string;
-  productName: string;
-  onAdded: () => void;
+// Series id like "white-series" → "WHITE SERIES" eyebrow. Used in the
+// configurator About panel + topbar product chip until we join the series
+// table for a proper label.
+const formatSeries = (seriesId: string): string =>
+  seriesId.toUpperCase().replace(/[-_]/g, ' ');
+
+interface FootprintPreviewProps {
+  widthCm: number;
+  lengthCm: number;
+  label: string;
 }
-
-const SizeConfigurator = ({ productId, productName, onAdded }: SizeConfiguratorProps) => {
-  const sizes = useProductSizes(productId);
-  const library = useSizeLibrary();
-  const addConfigured = useCart((s) => s.addConfigured);
-  const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
-
-  // Render every size from the library so staff see a stable grid (4 mattress
-  // sizes today). Inactive sizes for this Model are dimmed + non-clickable —
-  // same UX pattern as SofaQuickPick.
-  const rows = useMemo(() => {
-    const lib = library.data ?? [];
-    const variants = sizes.data ?? [];
-    // Mattress/bedframe sizes only (sort_order < 100). The s-24/28/30 rows
-    // are sofa-depth pseudo-sizes that don't belong on a size variant grid.
-    return lib
-      .filter((l) => l.sortOrder < 100)
-      .map((l) => {
-        const variant = variants.find((v) => v.sizeId === l.id);
-        return {
-          id: l.id,
-          label: l.label,
-          widthCm: l.widthCm,
-          lengthCm: l.lengthCm,
-          price: variant?.price ?? null,
-          active: variant?.active ?? false,
-        };
-      });
-  }, [library.data, sizes.data]);
-
-  const pickedRow = rows.find((r) => r.id === pickedSizeId);
-  const canAdd = pickedRow != null && pickedRow.active && pickedRow.price != null;
-
-  const handleAdd = () => {
-    if (!canAdd || pickedRow == null || pickedRow.price == null) return;
-    const snapshot: SizeConfigSnapshot = {
-      kind: 'size',
-      productId,
-      productName,
-      sizeId: pickedRow.id,
-      total: pickedRow.price,
-      summary: pickedRow.label,
-    };
-    addConfigured(snapshot);
-    onAdded();
-  };
-
-  if (sizes.isLoading || library.isLoading) {
-    return <p className={styles.empty}>Loading sizes…</p>;
-  }
+// Scales (widthCm × lengthCm) into a preview box at most maxW × maxH px,
+// preserving aspect ratio. Width is the horizontal dimension, length the
+// vertical (taller dimension on most mattresses).
+const FootprintPreview = ({ widthCm, lengthCm, label }: FootprintPreviewProps) => {
+  const maxW = 320;
+  const maxH = 360;
+  const scale = Math.min(maxW / widthCm, maxH / lengthCm);
+  const pxW = Math.round(widthCm * scale);
+  const pxH = Math.round(lengthCm * scale);
 
   return (
-    <section className={styles.section}>
-      <header className={styles.sectionHead}>
-        <h2 className={styles.sectionTitle}>Pick a size</h2>
-        <p className="t-body fg-muted">
-          Per-Model pricing · pillows + addons land later.
-        </p>
-      </header>
-      <div className={styles.grid}>
-        {rows.map(({ id, label, widthCm, lengthCm, price, active }) => {
-          const isPicked = pickedSizeId === id;
-          const inactive = !active || price == null;
-          return (
-            <button
-              key={id}
-              type="button"
-              className={`${styles.card} ${isPicked ? styles.cardPicked : ''} ${inactive ? styles.cardInactive : ''}`}
-              disabled={inactive}
-              onClick={() => setPickedSizeId(id)}
-            >
-              <div className={styles.cardHead}>
-                <code className={styles.cardCode}>{id}</code>
-                <span className={styles.cardLabel}>{label}</span>
-              </div>
-              <div className={styles.cardSig}>{widthCm}×{lengthCm} cm</div>
-              <div className={styles.cardPrice}>
-                {inactive
-                  ? <span className={styles.unavailable}>Not on this Model</span>
-                  : <PriceTag amount={price!} size="lg" />}
-              </div>
-            </button>
-          );
-        })}
+    <div className={styles.fpWrap}>
+      <div className={styles.fpDimTop}>{widthCm} cm</div>
+      <div className={styles.fpStage}>
+        <div className={styles.fpDimSide}>{lengthCm}<br />cm</div>
+        <div className={styles.fpRect} style={{ width: pxW, height: pxH }} />
       </div>
-      <div className={styles.actions}>
-        <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
-          {canAdd
-            ? `Add ${pickedRow!.label} to cart`
-            : pickedSizeId
-              ? 'Size not on this Model'
-              : 'Pick a size to continue'}
-        </Button>
+      <div className={styles.fpFootprint}>
+        <span>{label} Footprint</span>
+        <span className={styles.fpFootprintCm}>
+          {widthCm} × {lengthCm} CM
+        </span>
       </div>
-    </section>
+    </div>
   );
 };
+
+interface RailSectionProps {
+  title: string;
+  sub?: string;
+  children: React.ReactNode;
+}
+const RailSection = ({ title, sub, children }: RailSectionProps) => (
+  <section className={styles.railSection}>
+    <header className={styles.railHead}>
+      <span className={styles.railTitle}>{title}</span>
+      {sub && <span className={styles.railSub}>{sub}</span>}
+    </header>
+    {children}
+  </section>
+);
 
 interface FlatAddToCartProps {
   productId: string;

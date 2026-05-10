@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Bookmark, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
@@ -16,9 +17,15 @@ const STEPS: { id: StepId; label: string }[] = [
 
 interface TopbarProps {
   step?: StepId;
+  /**
+   * When provided, replaces the default Quotes / My orders / Cart pills
+   * (used by Configurator to inject product info + LIVE TOTAL + Cancel +
+   * Add to Cart). Avatar + logout still render after the slot.
+   */
+  rightSlot?: ReactNode;
 }
 
-export function Topbar({ step }: TopbarProps) {
+export function Topbar({ step, rightSlot }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const lines = useCart((s) => s.lines);
@@ -54,19 +61,23 @@ export function Topbar({ step }: TopbarProps) {
       </div>
 
       <div className={styles.right}>
-        <Link to="/quotes" className={styles.pill} aria-label="Saved quotes">
-          <Bookmark size={13} strokeWidth={1.75} />
-          <span>Quotes</span>
-        </Link>
-        <Link to="/my-orders" className={styles.pill} aria-label="My orders">
-          <ListOrdered size={13} strokeWidth={1.75} />
-          <span>My orders</span>
-        </Link>
-        {count > 0 && (
-          <Link to="/cart" className={styles.cartChip} aria-label="Cart">
-            <ShoppingBag size={13} strokeWidth={1.75} />
-            {count} item{count > 1 ? 's' : ''} · {fmtRM(subtotal)}
-          </Link>
+        {rightSlot ?? (
+          <>
+            <Link to="/quotes" className={styles.pill} aria-label="Saved quotes">
+              <Bookmark size={13} strokeWidth={1.75} />
+              <span>Quotes</span>
+            </Link>
+            <Link to="/my-orders" className={styles.pill} aria-label="My orders">
+              <ListOrdered size={13} strokeWidth={1.75} />
+              <span>My orders</span>
+            </Link>
+            {count > 0 && (
+              <Link to="/cart" className={styles.cartChip} aria-label="Cart">
+                <ShoppingBag size={13} strokeWidth={1.75} />
+                {count} item{count > 1 ? 's' : ''} · {fmtRM(subtotal)}
+              </Link>
+            )}
+          </>
         )}
         {user && (
           <span className={styles.staffChip}>
