@@ -157,8 +157,30 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const loading = sessionLoading || staffLoading;
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error ? error.message : null };
+    // Bug #4: race against a 10s timeout so the UI never wedges on a stuck
+    // navigator-locks acquisition. The signin promise itself isn't aborted
+    // (Supabase has no AbortSignal hook), so it may still resolve later in
+    // the background — that's OK, onAuthStateChange will pick it up.
+    const TIMEOUT_MS = 10_000;
+    type SignInResult = Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<SignInResult>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('Sign-in timed out — clear browser data and retry')),
+        TIMEOUT_MS,
+      );
+    });
+    try {
+      const { error } = await Promise.race([
+        supabase.auth.signInWithPassword({ email, password }),
+        timeout,
+      ]);
+      return { error: error ? error.message : null };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'sign-in failed' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   };
 
   const signOut = async () => {
