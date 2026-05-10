@@ -2,7 +2,29 @@ import { useEffect, useMemo } from 'react';
 import { useForm, FormProvider, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
-import { X, Save, Plus, Trash2 } from 'lucide-react';
+import { X, Save, Plus, Trash2, Image as ImageIcon, Info } from 'lucide-react';
+
+// Brand-library demo set. Swap to a Supabase Storage join (table:
+// brand_assets) when Loo seeds real product photography.
+interface StockPhoto {
+  id: string;
+  url: string;
+  label: string;
+}
+const STOCK_PHOTOS: StockPhoto[] = [
+  { id: 'cloud-king', url: 'https://picsum.photos/seed/2990s-mattress-cloud-king/640/420', label: 'Cloud Series King' },
+  { id: 'cloud-queen', url: 'https://picsum.photos/seed/2990s-mattress-cloud-queen/640/420', label: 'Cloud Series Queen' },
+  { id: 'oak-king', url: 'https://picsum.photos/seed/2990s-mattress-oak-king/640/420', label: 'Oak Comfort King' },
+  { id: 'linen-day', url: 'https://picsum.photos/seed/2990s-mattress-linen-day/640/420', label: 'Linen Daybreak' },
+  { id: 'dusk-mem', url: 'https://picsum.photos/seed/2990s-mattress-dusk-memory/640/420', label: 'Dusk Memory' },
+  { id: 'noor-5', url: 'https://picsum.photos/seed/2990s-sofa-noor-5/640/420', label: 'Noor 5-seater' },
+  { id: 'tanah-mod', url: 'https://picsum.photos/seed/2990s-sofa-tanah-modular/640/420', label: 'Tanah Modular' },
+  { id: 'rumah-2', url: 'https://picsum.photos/seed/2990s-sofa-rumah-2/640/420', label: 'Rumah 2-seater' },
+  { id: 'petang-rec', url: 'https://picsum.photos/seed/2990s-sofa-petang-recliner/640/420', label: 'Petang Recliner' },
+  { id: 'oak-bed', url: 'https://picsum.photos/seed/2990s-bedframe-oak/640/420', label: 'Oak Bedframe' },
+  { id: 'walnut-bed', url: 'https://picsum.photos/seed/2990s-bedframe-walnut/640/420', label: 'Walnut Bedframe' },
+  { id: 'rattan-bed', url: 'https://picsum.photos/seed/2990s-bedframe-rattan/640/420', label: 'Rattan Bedframe' },
+];
 import { Button } from '@2990s/design-system';
 import { productSchema } from '@2990s/shared/schemas';
 import { supabase } from '../lib/supabase';
@@ -316,10 +338,16 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
             <div style={{ flex: 1 }}>
               <div className="t-eyebrow">{mode === 'create' ? 'New SKU' : 'Edit SKU'}</div>
               <h2 className={styles.title}>{name || (mode === 'create' ? 'Untitled piece' : 'Untitled')}</h2>
-              {mode === 'edit' && product && (
+              {mode === 'create' ? (
                 <div className={styles.sub}>
-                  {product.sku} · last updated {new Date(product.updatedAt).toLocaleString()}
+                  Add a piece to the catalogue. Price is fixed at <strong>RM 2,990</strong>.
                 </div>
+              ) : (
+                product && (
+                  <div className={styles.sub}>
+                    {product.sku} · last updated {new Date(product.updatedAt).toLocaleString()}
+                  </div>
+                )
               )}
             </div>
             <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
@@ -328,6 +356,57 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
           </header>
 
           <form onSubmit={onSubmit} className={styles.body} noValidate>
+            {/* Product photo */}
+            <section className={styles.section}>
+              <div className="t-eyebrow" style={{ marginBottom: 8 }}>Product photo</div>
+              <Controller
+                control={control}
+                name="imgKey"
+                render={({ field }) => {
+                  const selected = field.value ?? STOCK_PHOTOS[0]?.url ?? null;
+                  return (
+                    <>
+                      <div className={styles.photoHero}>
+                        {selected ? (
+                          <img src={selected} alt="Selected product" />
+                        ) : (
+                          <div className={styles.photoEmpty}>
+                            <ImageIcon size={32} strokeWidth={1.5} />
+                            <span>Pick a photo from the library</span>
+                          </div>
+                        )}
+                        <span className={styles.photoPricePill}>RM 2,990</span>
+                      </div>
+                      <div className={styles.photoGrid}>
+                        {STOCK_PHOTOS.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className={`${styles.photoThumb} ${selected === p.url ? styles.photoThumbActive : ''}`}
+                            onClick={() => {
+                              field.onChange(p.url);
+                              setValue('thumbKey', p.url, { shouldDirty: true });
+                            }}
+                            aria-label={p.label}
+                            title={p.label}
+                          >
+                            <img src={p.url} alt={p.label} />
+                          </button>
+                        ))}
+                      </div>
+                      <div className={styles.libraryBanner}>
+                        <Info size={14} strokeWidth={1.75} />
+                        <span>
+                          Photos are sourced from the brand library. To upload new photography,
+                          use Brand Assets.
+                        </span>
+                      </div>
+                    </>
+                  );
+                }}
+              />
+            </section>
+
             {/* Identity */}
             <section className={styles.section}>
               <h3 className={styles.sectionTitle}>Identity</h3>
