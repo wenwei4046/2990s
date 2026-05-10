@@ -9,7 +9,7 @@ import {
   useProductCompartments,
   useProductPricingRealtime,
 } from '../lib/queries';
-import { useCart, type SofaConfigSnapshot } from '../state/cart';
+import { useCart, type SofaConfigSnapshot, type FlatConfigSnapshot } from '../state/cart';
 import { CustomBuilder } from './CustomBuilder';
 import styles from './Configurator.module.css';
 
@@ -114,13 +114,12 @@ export const Configurator = () => {
       )}
 
       {p.pricing_kind === 'flat' && p.flat_price != null && (
-        <div className={styles.flatCard}>
-          <span className="t-eyebrow">Flat price</span>
-          <PriceTag amount={p.flat_price} size="lg" />
-          <Button variant="primary" disabled>
-            Add to cart (Phase 2 step C)
-          </Button>
-        </div>
+        <FlatAddToCart
+          productId={p.id}
+          productName={p.name}
+          flatPrice={p.flat_price}
+          onAdded={() => navigate('/catalog')}
+        />
       )}
 
       {p.pricing_kind === 'tbc' && (
@@ -136,6 +135,35 @@ export const Configurator = () => {
         </span>
       </footer>
     </main>
+  );
+};
+
+interface FlatAddToCartProps {
+  productId: string;
+  productName: string;
+  flatPrice: number;
+  onAdded: () => void;
+}
+
+const FlatAddToCart = ({ productId, productName, flatPrice, onAdded }: FlatAddToCartProps) => {
+  const addConfigured = useCart((s) => s.addConfigured);
+  const handleAdd = () => {
+    const snapshot: FlatConfigSnapshot = {
+      kind: 'flat',
+      productId,
+      productName,
+      total: flatPrice,
+      summary: 'Flat price',
+    };
+    addConfigured(snapshot);
+    onAdded();
+  };
+  return (
+    <div className={styles.flatCard}>
+      <span className="t-eyebrow">Flat price</span>
+      <PriceTag amount={flatPrice} size="lg" />
+      <Button variant="primary" onClick={handleAdd}>Add to cart</Button>
+    </div>
   );
 };
 

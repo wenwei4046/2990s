@@ -34,7 +34,19 @@ const sizeLineConfigSchema = z.object({
   sizeId: z.string(),
 });
 
-export const orderLineConfigSchema = z.discriminatedUnion('kind', [sofaLineConfigSchema, sizeLineConfigSchema]);
+// Flat-priced products (mattresses with single price, sofas without modular
+// configuration, bedframes). Server looks up products.flat_price for the
+// canonical amount; client only needs to identify the product. (Bug #2 fix)
+const flatLineConfigSchema = z.object({
+  kind: z.literal('flat'),
+  productId: z.string().uuid(),
+});
+
+export const orderLineConfigSchema = z.discriminatedUnion('kind', [
+  sofaLineConfigSchema,
+  sizeLineConfigSchema,
+  flatLineConfigSchema,
+]);
 
 export const orderLineSchema = z.object({
   qty: z.number().int().positive(),

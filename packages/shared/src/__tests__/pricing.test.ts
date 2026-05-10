@@ -37,6 +37,12 @@ const sizeInfo = (productId = 'mat-1'): ServerProductInfo => ({
   ],
 });
 
+const flatInfo = (productId = 'flat-1', flatPrice: number | null = 2990): ServerProductInfo => ({
+  productId,
+  pricingKind: 'flat',
+  flatPrice,
+});
+
 describe('computeOrderTotal', () => {
   it('prices a Quick-Pick bundle line via bundleId lookup', () => {
     const map = new Map([['sofa-1', sofaInfo()]]);
@@ -132,6 +138,50 @@ describe('computeOrderTotal', () => {
     expect(() =>
       computeOrderTotal(
         [{ qty: 1, config: { kind: 'sofa', productId: 'mat-1', bundleId: '1S' } }],
+        map,
+      ),
+    ).toThrow(OrderPricingError);
+  });
+
+  it('prices a flat-kind line via products.flat_price', () => {
+    const map = new Map([['flat-1', flatInfo()]]);
+    const lines: OrderLineInput[] = [
+      { qty: 1, config: { kind: 'flat', productId: 'flat-1' } },
+    ];
+    const t = computeOrderTotal(lines, map);
+    expect(t.subtotal).toBe(2990);
+    expect(t.total).toBe(2990);
+    expect(t.lines[0]!.unitPrice).toBe(2990);
+  });
+
+  it('multiplies flat-kind by qty', () => {
+    const map = new Map([['flat-1', flatInfo()]]);
+    const lines: OrderLineInput[] = [
+      { qty: 3, config: { kind: 'flat', productId: 'flat-1' } },
+    ];
+    expect(computeOrderTotal(lines, map).total).toBe(2990 * 3);
+  });
+
+  it('rejects flat-kind line when flat_price is null', () => {
+    const map = new Map([['flat-1', flatInfo('flat-1', null)]]);
+    const fn = () =>
+      computeOrderTotal(
+        [{ qty: 1, config: { kind: 'flat', productId: 'flat-1' } }],
+        map,
+      );
+    expect(fn).toThrow(OrderPricingError);
+    try {
+      fn();
+    } catch (e) {
+      expect((e as OrderPricingError).detail.code).toBe('flat_price_missing');
+    }
+  });
+
+  it('rejects pricing_kind mismatch (flat line against sofa product)', () => {
+    const map = new Map([['sofa-1', sofaInfo()]]);
+    expect(() =>
+      computeOrderTotal(
+        [{ qty: 1, config: { kind: 'flat', productId: 'sofa-1' } }],
         map,
       ),
     ).toThrow(OrderPricingError);

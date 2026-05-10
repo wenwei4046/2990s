@@ -68,12 +68,22 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
         },
       };
     }
+    if (l.config.kind === 'size') {
+      return {
+        qty: l.qty,
+        config: {
+          kind: 'size' as const,
+          productId: l.config.productId,
+          sizeId: l.config.sizeId,
+        },
+      };
+    }
+    // flat
     return {
       qty: l.qty,
       config: {
-        kind: 'size' as const,
+        kind: 'flat' as const,
         productId: l.config.productId,
-        sizeId: l.config.sizeId,
       },
     };
   });

@@ -27,7 +27,18 @@ export interface SizeConfigSnapshot {
   summary: string;       // e.g. "Queen"
 }
 
-export type CartConfig = SofaConfigSnapshot | SizeConfigSnapshot;
+// Flat-priced products (single price per product — mattresses, bedframes, sofas
+// without modular configuration). Server validates against products.flat_price.
+// (Bug #2 fix)
+export interface FlatConfigSnapshot {
+  kind: 'flat';
+  productId: string;
+  productName: string;
+  total: number;
+  summary: string;       // e.g. "Flat price"
+}
+
+export type CartConfig = SofaConfigSnapshot | SizeConfigSnapshot | FlatConfigSnapshot;
 
 export interface CartLine {
   key: string;

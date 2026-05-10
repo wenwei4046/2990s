@@ -117,7 +117,11 @@ export type SizeLineConfig = {
   productId: string;
   sizeId: string;
 };
-export type OrderLineConfig = SofaLineConfig | SizeLineConfig;
+export type FlatLineConfig = {
+  kind: 'flat';
+  productId: string;
+};
+export type OrderLineConfig = SofaLineConfig | SizeLineConfig | FlatLineConfig;
 
 export interface OrderLineInput {
   qty: number;
@@ -154,7 +158,8 @@ export type OrderTotalError =
   | { code: 'no_geometry_or_bundle'; productId: string }
   | { code: 'inactive_bundle'; productId: string; bundleId: string }
   | { code: 'inactive_size'; productId: string; sizeId: string }
-  | { code: 'unknown_size'; productId: string; sizeId: string };
+  | { code: 'unknown_size'; productId: string; sizeId: string }
+  | { code: 'flat_price_missing'; productId: string };
 
 export class OrderPricingError extends Error {
   detail: OrderTotalError;
@@ -212,7 +217,7 @@ export const computeOrderTotal = (
         configJson: cfg,
         breakdown,
       });
-    } else {
+    } else if (line.config.kind === 'size') {
       // size_variants
       const cfg: SizeLineConfig = line.config;
       if (info.pricingKind !== 'size_variants') {
@@ -229,6 +234,23 @@ export const computeOrderTotal = (
         lineTotal: variant.price * line.qty,
         configJson: cfg,
         breakdown: [`Size ${cfg.sizeId}: RM ${variant.price.toLocaleString('en-MY')}`],
+      });
+    } else {
+      // flat — single price per product. (Bug #2)
+      const cfg: FlatLineConfig = line.config;
+      if (info.pricingKind !== 'flat') {
+        throw new OrderPricingError({ code: 'wrong_pricing_kind', productId: info.productId, expected: 'flat', got: info.pricingKind });
+      }
+      if (info.flatPrice == null) {
+        throw new OrderPricingError({ code: 'flat_price_missing', productId: info.productId });
+      }
+      out.push({
+        productId: info.productId,
+        qty: line.qty,
+        unitPrice: info.flatPrice,
+        lineTotal: info.flatPrice * line.qty,
+        configJson: cfg,
+        breakdown: [`Flat: RM ${info.flatPrice.toLocaleString('en-MY')}`],
       });
     }
   }
