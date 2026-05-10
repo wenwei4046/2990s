@@ -13,6 +13,7 @@ import {
 import { Button, IconButton } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
+import { Topbar } from '../components/Topbar';
 import { useQuery } from '@tanstack/react-query';
 import styles from './OrderStatus.module.css';
 
@@ -250,6 +251,8 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
   }, [list]);
 
   return (
+    <>
+    <Topbar />
     <main className={styles.shell}>
       <header className={styles.header}>
         <Link to="/catalog">
@@ -318,6 +321,7 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
         </div>
       )}
     </main>
+    </>
   );
 };
 

@@ -18,6 +18,7 @@ import {
   type FlatConfigSnapshot,
 } from '../state/cart';
 import { CustomBuilder } from './CustomBuilder';
+import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
 
 export const Configurator = () => {
@@ -41,11 +42,14 @@ export const Configurator = () => {
   if (product.isLoading) return <p className={styles.empty}>Loading product…</p>;
   if (product.error || !product.data) {
     return (
+      <>
+      <Topbar step="cart" />
       <main className={styles.shell}>
         <p className={styles.empty}>
           Product not found. <Link to="/catalog">← Back to catalog</Link>
         </p>
       </main>
+      </>
     );
   }
 
@@ -54,6 +58,8 @@ export const Configurator = () => {
   const isSize = p.pricing_kind === 'size_variants';
 
   return (
+    <>
+    <Topbar step="cart" />
     <main className={styles.shell}>
       <header className={styles.header}>
         <IconButton
@@ -143,6 +149,7 @@ export const Configurator = () => {
         </span>
       </footer>
     </main>
+    </>
   );
 };
 

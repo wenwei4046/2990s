@@ -5,6 +5,7 @@ import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, type CartLine } from '../state/cart';
 import { useSaveQuote } from '../lib/quotes';
+import { Topbar } from '../components/Topbar';
 import styles from './Cart.module.css';
 
 export const Cart = () => {
@@ -48,6 +49,8 @@ export const Cart = () => {
   };
 
   return (
+    <>
+    <Topbar step="cart" />
     <main className={styles.shell}>
       <header className={styles.header}>
         <IconButton
@@ -152,6 +155,7 @@ export const Cart = () => {
         </>
       )}
     </main>
+    </>
   );
 };
 

@@ -4,6 +4,7 @@ import { Check, ShoppingCart } from 'lucide-react';
 import { Button, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { supabase } from '../lib/supabase';
+import { Topbar } from '../components/Topbar';
 import styles from './OrderConfirmed.module.css';
 
 interface OrderRow {
@@ -38,6 +39,8 @@ export const OrderConfirmed = () => {
   }, [orderId]);
 
   return (
+    <>
+    <Topbar step="confirm" />
     <main className={styles.shell}>
       <div className={styles.card}>
         <div className={styles.icon}><Check size={32} strokeWidth={2.25} /></div>
@@ -76,5 +79,6 @@ export const OrderConfirmed = () => {
         </div>
       </div>
     </main>
+    </>
   );
 };

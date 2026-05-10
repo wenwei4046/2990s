@@ -1,0 +1,190 @@
+/* Ported from prototype/pos-styles.css (.pos-topbar et al). White panel
+   over the cream page; stepper, staff chip, and pills as in spec. */
+
+.topbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 24px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+  z-index: 30;
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--c-burnt);
+  font-family: var(--font-mark);
+  font-weight: 900;
+  font-size: 22px;
+  letter-spacing: -0.04em;
+  font-stretch: 75%;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.wordmarkRing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 1.4px solid currentColor;
+  font-weight: 700;
+  font-size: 7px;
+  margin-top: 2px;
+}
+
+.crumb {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  border-left: 1px solid var(--line);
+  padding-left: 14px;
+  margin-left: 4px;
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-button);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.step {
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.stepActive {
+  background: var(--c-cream);
+  color: var(--c-burnt);
+}
+
+.stepIdx {
+  opacity: 0.55;
+  margin-right: 6px;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: transparent;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-button);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  cursor: pointer;
+  text-decoration: none;
+  transition: 120ms ease;
+}
+.pill:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
+}
+
+.pillBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: var(--c-orange);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+.cartChip {
+  font-family: var(--font-button);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.staffChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px 4px 4px;
+  background: var(--c-paper);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.staffMeta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.staffRole {
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.iconBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: 150ms ease;
+}
+.iconBtn:hover { background: rgba(34, 31, 32, 0.06); }

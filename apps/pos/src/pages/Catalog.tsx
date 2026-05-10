@@ -1,11 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  LogOut,
   Hourglass,
-  ShoppingCart,
-  ListOrdered,
-  Bookmark,
   Package,
   Sofa,
   Bed,
@@ -20,11 +16,9 @@ import {
   Check,
   type LucideIcon,
 } from 'lucide-react';
-import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM } from '@2990s/shared';
-import { useAuth } from '../lib/auth';
+import { Button, PriceTag } from '@2990s/design-system';
 import { useCatalog, useCatalogRealtime, type CatalogProduct } from '../lib/queries';
-import { useCart, cartItemCount, cartSubtotal } from '../state/cart';
+import { Topbar } from '../components/Topbar';
 import styles from './Catalog.module.css';
 
 const CAT_ICON: Record<string, LucideIcon> = {
@@ -53,12 +47,8 @@ interface SeriesLite {
 }
 
 export const Catalog = () => {
-  const { user, signOut } = useAuth();
   const catalog = useCatalog();
   useCatalogRealtime();
-  const lines = useCart((s) => s.lines);
-  const count = cartItemCount(lines);
-  const subtotal = cartSubtotal(lines);
 
   const [activeCat, setActiveCat] = useState<string>('all');
   const [activeSeries, setActiveSeries] = useState<string>('all');
@@ -129,34 +119,9 @@ export const Catalog = () => {
     catId ? CAT_ICON[catId] ?? Package : Package;
 
   return (
-    <main className={styles.app}>
-      <header className={styles.header}>
-        <div>
-          <span className="t-eyebrow">POS · Showroom KL</span>
-          <h1 className={styles.heading}>Catalog</h1>
-        </div>
-        <div className={styles.headerRight}>
-          <Link to="/quotes" className={styles.cartBadge} aria-label="Saved quotes">
-            <Bookmark size={16} strokeWidth={1.75} />
-            <span>Quotes</span>
-          </Link>
-          <Link to="/my-orders" className={styles.cartBadge} aria-label="My orders">
-            <ListOrdered size={16} strokeWidth={1.75} />
-            <span>My orders</span>
-          </Link>
-          <Link to="/cart" className={styles.cartBadge} aria-label="Cart">
-            <ShoppingCart size={18} strokeWidth={1.75} />
-            <span>{count > 0 ? `${count} · ${fmtRM(subtotal)}` : 'Cart empty'}</span>
-          </Link>
-          <span className={styles.email}>{user?.email}</span>
-          <IconButton
-            icon={<LogOut size={20} strokeWidth={1.75} />}
-            aria-label="Sign out"
-            onClick={() => void signOut()}
-          />
-        </div>
-      </header>
-
+    <>
+      <Topbar step="cart" />
+      <main className={styles.app}>
       {catalog.isLoading ? (
         <p className={styles.empty}>Loading catalog…</p>
       ) : catalog.error ? (
@@ -286,6 +251,7 @@ export const Catalog = () => {
         </span>
       </footer>
     </main>
+    </>
   );
 };
 

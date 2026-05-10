@@ -11,6 +11,7 @@ import { Button, IconButton } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useQuotes, useDeleteQuote, type QuoteRow } from '../lib/quotes';
 import { useCart } from '../state/cart';
+import { Topbar } from '../components/Topbar';
 import styles from './Quotes.module.css';
 
 const fmtAgo = (iso: string): string => {
@@ -37,6 +38,8 @@ export const Quotes = () => {
   };
 
   return (
+    <>
+    <Topbar step="cart" />
     <main className={styles.shell}>
       <header className={styles.header}>
         <Link to="/catalog">
@@ -134,5 +137,6 @@ export const Quotes = () => {
         </div>
       )}
     </main>
+    </>
   );
 };

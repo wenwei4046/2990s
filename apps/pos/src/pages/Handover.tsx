@@ -21,6 +21,7 @@ import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
 import { PricingDriftModal } from '../components/PricingDriftModal';
 import { SlipUploadStep } from '../components/SlipUploadStep';
+import { Topbar } from '../components/Topbar';
 import styles from './Handover.module.css';
 
 type PaymentMethod = 'credit' | 'debit' | 'installment' | 'transfer';
@@ -118,6 +119,8 @@ export const Handover = () => {
 
   if (lines.length === 0) {
     return (
+      <>
+      <Topbar step="customer" />
       <main className={styles.shell}>
         <header className={styles.header}>
           <IconButton
@@ -131,6 +134,7 @@ export const Handover = () => {
           Cart is empty. <Link to="/catalog">Back to catalog</Link>
         </p>
       </main>
+      </>
     );
   }
 
@@ -244,6 +248,8 @@ export const Handover = () => {
   const halfAmt = Math.round(subtotal / 2);
 
   return (
+    <>
+    <Topbar step="customer" />
     <main className={styles.shell}>
       <header className={styles.header}>
         <IconButton
@@ -609,6 +615,7 @@ export const Handover = () => {
         />
       )}
     </main>
+    </>
   );
 };
 
