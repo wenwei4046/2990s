@@ -188,3 +188,14 @@
   transition: 150ms ease;
 }
 .iconBtn:hover { background: rgba(34, 31, 32, 0.06); }
+
+/* ─── Desktop density (≥1280 + hover + fine pointer) ─── */
+@media (min-width: 1280px) and (hover: hover) and (pointer: fine) {
+  .iconBtn {
+    width: 32px;
+    height: 32px;
+  }
+  .staffRole {
+    font-size: 10px;
+  }
+}
