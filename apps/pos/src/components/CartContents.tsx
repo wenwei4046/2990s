@@ -138,7 +138,7 @@ export const CartContents = ({ variant, onContinue }: Props) => {
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" onClick={clear}>Clear</Button>
-          {!savingQuote && (
+          {!savingQuote && variant === 'page' && (
             <Button
               variant="ghost"
               onClick={() => setSavingQuote(true)}
