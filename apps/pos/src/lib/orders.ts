@@ -41,6 +41,10 @@ export interface OrderSubmitInput {
   paymentMethod: OrderV1PostBody['paymentMethod'];
   approvalCode?: string;
   notes?: string;
+  /** ISO YYYY-MM-DD; omit for "delivery TBD". */
+  deliveryDate?: string;
+  /** e.g. '12:00 – 15:00'. Only meaningful with deliveryDate. */
+  deliverySlot?: string;
   lines: CartLine[];
   /** When true, override the drift check by sending the server's total back. */
   acceptedServerTotal?: number;
@@ -82,6 +86,8 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     paymentMethod: input.paymentMethod,
     ...(input.approvalCode ? { approvalCode: input.approvalCode } : {}),
     ...(input.notes ? { notes: input.notes } : {}),
+    ...(input.deliveryDate ? { deliveryDate: input.deliveryDate } : {}),
+    ...(input.deliverySlot ? { deliverySlot: input.deliverySlot } : {}),
     lines,
     clientTotal,
     ...(input.uploadSessionId ? { uploadSessionId: input.uploadSessionId } : {}),

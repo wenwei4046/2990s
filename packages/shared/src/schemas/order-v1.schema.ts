@@ -1,7 +1,10 @@
 // Phase 2 step E first cut. Slimmer than order.schema.ts on purpose:
 // - No addons (cart UI doesn't have them yet)
-// - No emergency contact, slip, delivery date (handover UI ports later)
+// - No emergency contact, slip (handover UI ports later)
 // - No multi-payment audit trail
+//
+// delivery_date / delivery_slot land on the schema column (was previously
+// stuffed into orders.notes — fixed in Bug #7).
 //
 // Will replace the broader orderPostSchema as the canonical input once
 // handover UI catches up. Keeping both in tree avoids a flag day.
@@ -51,6 +54,10 @@ export const orderV1PostSchema = z.object({
   paymentMethod: z.enum(['credit', 'debit', 'installment', 'transfer']),
   approvalCode: z.string().optional(),
   notes: z.string().optional(),
+  // ISO YYYY-MM-DD; omit when customer wants delivery TBD.
+  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invalid_date_format').optional(),
+  // Free-form slot label, e.g. '12:00 – 15:00'. Only meaningful when deliveryDate present.
+  deliverySlot: z.string().max(64).optional(),
   lines: z.array(orderLineSchema).min(1),
 
   // Client-submitted total — server recomputes and rejects with 409 if drift

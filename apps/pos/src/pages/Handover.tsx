@@ -181,10 +181,10 @@ export const Handover = () => {
   const buildNotesFromForm = (): string => {
     const parts: string[] = [];
     if (form.notes.trim()) parts.push(form.notes.trim());
+    // Delivery date / slot are written to orders.delivery_date + .delivery_slot
+    // columns directly (Bug #7 fix). Only the "TBD" fallback stays in notes
+    // since there is no schema column for that signal.
     if (form.deliveryTbd) parts.push('Delivery date: TBD (further notice)');
-    else if (form.deliveryDate) {
-      parts.push(`Delivery date: ${form.deliveryDate}${form.deliverySlot ? ` · ${form.deliverySlot}` : ''}`);
-    }
     if (form.emergencyName.trim()) {
       const phone = form.emergencyPhone.trim() ? ` — ${form.emergencyPhone.trim()}` : '';
       const relation = form.emergencyRelation.trim() ? ` (${form.emergencyRelation.trim()})` : '';
@@ -214,6 +214,10 @@ export const Handover = () => {
         paymentMethod: form.paymentMethod,
         approvalCode: form.approvalCode.trim() || undefined,
         notes: buildNotesFromForm() || undefined,
+        deliveryDate: !form.deliveryTbd && form.deliveryDate ? form.deliveryDate : undefined,
+        deliverySlot: !form.deliveryTbd && form.deliveryDate && form.deliverySlot
+          ? form.deliverySlot
+          : undefined,
         lines,
         acceptedServerTotal,
         uploadSessionId: uploadSessionId ?? undefined,

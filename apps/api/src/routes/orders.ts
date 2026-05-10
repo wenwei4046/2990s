@@ -177,6 +177,8 @@ orders.post('/', async (c) => {
     paymentMethod: dto.paymentMethod,
     approvalCode: dto.approvalCode ?? '',
     notes: dto.notes ?? '',
+    deliveryDate: dto.deliveryDate ?? '',
+    deliverySlot: dto.deliverySlot ?? '',
     subtotal: totals.subtotal,
     addonTotal: totals.addonTotal,
     total: totals.total,
