@@ -7,9 +7,16 @@ import {
   useProduct,
   useProductBundles,
   useProductCompartments,
+  useProductSizes,
+  useSizeLibrary,
   useProductPricingRealtime,
 } from '../lib/queries';
-import { useCart, type SofaConfigSnapshot, type FlatConfigSnapshot } from '../state/cart';
+import {
+  useCart,
+  type SofaConfigSnapshot,
+  type SizeConfigSnapshot,
+  type FlatConfigSnapshot,
+} from '../state/cart';
 import { CustomBuilder } from './CustomBuilder';
 import styles from './Configurator.module.css';
 
@@ -107,10 +114,11 @@ export const Configurator = () => {
       )}
 
       {isSize && (
-        <p className={styles.tbcCard}>
-          <Hourglass size={16} strokeWidth={1.75} />
-          Size-variant configurator lands in Phase 2 step C — pick a size + pillows + addons.
-        </p>
+        <SizeConfigurator
+          productId={p.id}
+          productName={p.name}
+          onAdded={() => navigate('/catalog')}
+        />
       )}
 
       {p.pricing_kind === 'flat' && p.flat_price != null && (
@@ -135,6 +143,109 @@ export const Configurator = () => {
         </span>
       </footer>
     </main>
+  );
+};
+
+interface SizeConfiguratorProps {
+  productId: string;
+  productName: string;
+  onAdded: () => void;
+}
+
+const SizeConfigurator = ({ productId, productName, onAdded }: SizeConfiguratorProps) => {
+  const sizes = useProductSizes(productId);
+  const library = useSizeLibrary();
+  const addConfigured = useCart((s) => s.addConfigured);
+  const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
+
+  // Render every size from the library so staff see a stable grid (4 mattress
+  // sizes today). Inactive sizes for this Model are dimmed + non-clickable —
+  // same UX pattern as SofaQuickPick.
+  const rows = useMemo(() => {
+    const lib = library.data ?? [];
+    const variants = sizes.data ?? [];
+    // Mattress/bedframe sizes only (sort_order < 100). The s-24/28/30 rows
+    // are sofa-depth pseudo-sizes that don't belong on a size variant grid.
+    return lib
+      .filter((l) => l.sortOrder < 100)
+      .map((l) => {
+        const variant = variants.find((v) => v.sizeId === l.id);
+        return {
+          id: l.id,
+          label: l.label,
+          widthCm: l.widthCm,
+          lengthCm: l.lengthCm,
+          price: variant?.price ?? null,
+          active: variant?.active ?? false,
+        };
+      });
+  }, [library.data, sizes.data]);
+
+  const pickedRow = rows.find((r) => r.id === pickedSizeId);
+  const canAdd = pickedRow != null && pickedRow.active && pickedRow.price != null;
+
+  const handleAdd = () => {
+    if (!canAdd || pickedRow == null || pickedRow.price == null) return;
+    const snapshot: SizeConfigSnapshot = {
+      kind: 'size',
+      productId,
+      productName,
+      sizeId: pickedRow.id,
+      total: pickedRow.price,
+      summary: pickedRow.label,
+    };
+    addConfigured(snapshot);
+    onAdded();
+  };
+
+  if (sizes.isLoading || library.isLoading) {
+    return <p className={styles.empty}>Loading sizes…</p>;
+  }
+
+  return (
+    <section className={styles.section}>
+      <header className={styles.sectionHead}>
+        <h2 className={styles.sectionTitle}>Pick a size</h2>
+        <p className="t-body fg-muted">
+          Per-Model pricing · pillows + addons land later.
+        </p>
+      </header>
+      <div className={styles.grid}>
+        {rows.map(({ id, label, widthCm, lengthCm, price, active }) => {
+          const isPicked = pickedSizeId === id;
+          const inactive = !active || price == null;
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`${styles.card} ${isPicked ? styles.cardPicked : ''} ${inactive ? styles.cardInactive : ''}`}
+              disabled={inactive}
+              onClick={() => setPickedSizeId(id)}
+            >
+              <div className={styles.cardHead}>
+                <code className={styles.cardCode}>{id}</code>
+                <span className={styles.cardLabel}>{label}</span>
+              </div>
+              <div className={styles.cardSig}>{widthCm}×{lengthCm} cm</div>
+              <div className={styles.cardPrice}>
+                {inactive
+                  ? <span className={styles.unavailable}>Not on this Model</span>
+                  : <PriceTag amount={price!} size="lg" />}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div className={styles.actions}>
+        <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
+          {canAdd
+            ? `Add ${pickedRow!.label} to cart`
+            : pickedSizeId
+              ? 'Size not on this Model'
+              : 'Pick a size to continue'}
+        </Button>
+      </div>
+    </section>
   );
 };
 

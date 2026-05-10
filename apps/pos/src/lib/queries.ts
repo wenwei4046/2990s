@@ -129,6 +129,54 @@ export const useProductCompartments = (productId: string | undefined) =>
     },
   });
 
+export const useProductSizes = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['product', productId, 'sizes'],
+    queryFn: async (): Promise<ProductSizeRow[]> => {
+      if (!productId) throw new Error('no productId');
+      const { data, error } = await supabase
+        .from('product_size_variants')
+        .select('size_id, active, price')
+        .eq('product_id', productId);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        sizeId: r.size_id,
+        active: r.active,
+        price: r.price,
+      }));
+    },
+  });
+
+// size_library is small (7 rows) and changes rarely — cache aggressively so
+// every Configurator screen doesn't re-fetch.
+export interface SizeLibraryRow {
+  id: string;
+  label: string;
+  widthCm: number;
+  lengthCm: number;
+  sortOrder: number;
+}
+export const useSizeLibrary = () =>
+  useQuery({
+    queryKey: ['size_library'],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async (): Promise<SizeLibraryRow[]> => {
+      const { data, error } = await supabase
+        .from('size_library')
+        .select('id, label, width_cm, length_cm, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        label: r.label,
+        widthCm: r.width_cm,
+        lengthCm: r.length_cm,
+        sortOrder: r.sort_order,
+      }));
+    },
+  });
+
 // Realtime invalidate any product_bundles / product_compartments / product_size_variants
 // row matching this productId. Used inside Configurator so Backend price tweaks
 // land within ~300ms.
@@ -147,6 +195,11 @@ export const useProductPricingRealtime = (productId: string | undefined) => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'product_compartments', filter: `product_id=eq.${productId}` },
         () => void qc.invalidateQueries({ queryKey: ['product', productId, 'compartments'] }),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_size_variants', filter: `product_id=eq.${productId}` },
+        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'sizes'] }),
       )
       .on(
         'postgres_changes',
