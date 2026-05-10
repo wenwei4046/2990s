@@ -2,9 +2,11 @@
 -- 11 mock catalog SKUs for Phase 1+ — unblocks PoScanModal + Catalog page UI work.
 -- Sourced from prototype/pos-data.jsx (canonical reference).
 --
--- All products use pricing_kind = 'flat' with flat_price = 2990 (the brand promise).
--- Real catalog editor (SkuMaster.tsx) supports sofa_build / size_variants — when Loo
--- seeds production via the Backend, those richer pricing kinds will replace these.
+-- - Sofas (4): pricing_kind = 'flat', flat_price = 2990 (real production will
+--   use sofa_build with compartments + bundles seeded via Backend SKU Master).
+-- - Mattresses (4): pricing_kind = 'size_variants' with all 4 sizes active.
+--   Demonstrates the size + addon picker flow in Configurator.tsx for staff.
+-- - Bedframes (3): pricing_kind = 'size_variants' with queen + king active.
 --
 -- Stable UUIDs (eeeeeeee-eeee-eeee-eeee-eeeeeeee0001..0011) so future seeds don't
 -- collide. ON CONFLICT (id) DO UPDATE makes this idempotent.
@@ -47,22 +49,22 @@ BEGIN
     stock = EXCLUDED.stock,
     updated_at = now();
 
-  -- ─── Mattresses (4 SLP-supplied) ───────────────────────────────────────────
+  -- ─── Mattresses (4 SLP-supplied, size_variants — all 4 sizes active) ──────
   INSERT INTO products (id, sku, category_id, pricing_kind, name, detail,
     size_display, visible, stock, flat_price, supplier_id)
   VALUES
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0005', 'm-cloud', 'mattress', 'flat',
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0005', 'm-cloud', 'mattress', 'size_variants',
       'Cloud', 'Pocket spring · gel-infused memory foam · cool knit',
-      'Queen, 152x190', true, 99, 2990, v_sup_slp),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0006', 'm-oak', 'mattress', 'flat',
+      NULL, true, 99, NULL, v_sup_slp),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0006', 'm-oak', 'mattress', 'size_variants',
       'Oak', 'Hybrid latex · medium-firm · oeko-tex cover',
-      'King, 183x190', true, 99, 2990, v_sup_slp),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0007', 'm-linen', 'mattress', 'flat',
+      NULL, true, 99, NULL, v_sup_slp),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0007', 'm-linen', 'mattress', 'size_variants',
       'Linen', 'Soft top · breathable linen · 5-zone support',
-      'Single, 92x190', true, 99, 2990, v_sup_slp),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0008', 'm-dusk', 'mattress', 'flat',
+      NULL, true, 99, NULL, v_sup_slp),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0008', 'm-dusk', 'mattress', 'size_variants',
       'Dusk', 'Memory foam · medium · cooling cover',
-      'Queen, 152x190', true, 99, 2990, v_sup_slp)
+      NULL, true, 99, NULL, v_sup_slp)
   ON CONFLICT (id) DO UPDATE SET
     sku = EXCLUDED.sku,
     name = EXCLUDED.name,
@@ -75,19 +77,44 @@ BEGIN
     stock = EXCLUDED.stock,
     updated_at = now();
 
-  -- ─── Bedframes (3 KFA-supplied) ────────────────────────────────────────────
+  INSERT INTO product_size_variants (product_id, size_id, active, price) VALUES
+    -- Cloud — entry tier
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0005', 'single',       true, 1990),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0005', 'super-single', true, 2490),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0005', 'queen',        true, 2990),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0005', 'king',         true, 3490),
+    -- Oak — premium tier
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0006', 'single',       true, 2190),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0006', 'super-single', true, 2690),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0006', 'queen',        true, 3190),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0006', 'king',         true, 3690),
+    -- Linen — value tier
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0007', 'single',       true, 1790),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0007', 'super-single', true, 2290),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0007', 'queen',        true, 2790),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0007', 'king',         true, 3290),
+    -- Dusk — entry tier
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0008', 'single',       true, 1990),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0008', 'super-single', true, 2490),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0008', 'queen',        true, 2990),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0008', 'king',         true, 3490)
+  ON CONFLICT (product_id, size_id) DO UPDATE SET
+    active = EXCLUDED.active,
+    price = EXCLUDED.price;
+
+  -- ─── Bedframes (3 KFA-supplied, size_variants — queen + king only) ────────
   INSERT INTO products (id, sku, category_id, pricing_kind, name, detail,
     size_display, visible, stock, flat_price, supplier_id)
   VALUES
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0009', 'b-platform', 'bedframe', 'flat',
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0009', 'b-platform', 'bedframe', 'size_variants',
       'Platform', 'Solid ash · slatted base · low profile',
-      'Queen', true, 99, 2990, v_sup_kfa),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0010', 'b-storage', 'bedframe', 'flat',
+      NULL, true, 99, NULL, v_sup_kfa),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0010', 'b-storage', 'bedframe', 'size_variants',
       'Storage', 'Lift-up base · 240L storage · linen finish',
-      'Queen · storage', true, 99, 2990, v_sup_kfa),
-    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0011', 'b-wooden', 'bedframe', 'flat',
+      NULL, true, 99, NULL, v_sup_kfa),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0011', 'b-wooden', 'bedframe', 'size_variants',
       'Wooden', 'Quilted boucle · channel headboard · oak feet',
-      'King', true, 99, 2990, v_sup_kfa)
+      NULL, true, 99, NULL, v_sup_kfa)
   ON CONFLICT (id) DO UPDATE SET
     sku = EXCLUDED.sku,
     name = EXCLUDED.name,
@@ -99,4 +126,18 @@ BEGIN
     visible = EXCLUDED.visible,
     stock = EXCLUDED.stock,
     updated_at = now();
+
+  INSERT INTO product_size_variants (product_id, size_id, active, price) VALUES
+    -- Platform — minimal slatted base
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0009', 'queen', true, 1990),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0009', 'king',  true, 2190),
+    -- Storage — lift-up storage frame
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0010', 'queen', true, 2290),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0010', 'king',  true, 2490),
+    -- Wooden — quilted boucle headboard
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0011', 'queen', true, 2390),
+    ('eeeeeeee-eeee-eeee-eeee-eeeeeeee0011', 'king',  true, 2590)
+  ON CONFLICT (product_id, size_id) DO UPDATE SET
+    active = EXCLUDED.active,
+    price = EXCLUDED.price;
 END $$;
