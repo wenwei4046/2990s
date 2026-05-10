@@ -194,6 +194,26 @@ These are intentional changes from the prototype's current state. Anything not o
 - `idx_orders_showroom` index for per-showroom dashboards.
 **UI:** No change for pilot. The prototype's hardcoded "POS · Showroom KL" breadcrumb becomes dynamic from `staff.showroomId` lookup. When a 2nd showroom is added, sales staff log into their own showroom; coordinator drawer + dashboard get a showroom filter chip.
 
+### §3 · POS desktop layout (≥1280px hover-and-pointer:fine)
+
+**Approved on:** 2026-05-10
+**Status:** Implementation plan at `docs/superpowers/plans/2026-05-11-pos-desktop-view.md`. Spec at `docs/superpowers/specs/2026-05-10-pos-desktop-view-design.md`.
+
+**What changed:**
+- POS gains a desktop breakpoint at `min-width:1280px` with `hover:hover` + `pointer:fine` guards. iPad Pro 12.9" without keyboard stays on tablet layout; with Magic Keyboard (or any pointing device) triggers desktop.
+- Catalog: `<CartRail/>` mounts as a 320px right-side sticky panel at desktop. Layout grid changes from `240px 1fr` to `240px 1fr 320px`. Product grid auto-fills the middle lane.
+- Topbar: iconBtn shrinks from 36px to 32px at desktop. Avatar 28px and 44px touch targets preserved on tablet.
+- Cart route: refactored — `Cart.tsx` becomes a thin route wrapper around new `<CartContents variant="page"/>`. The same `<CartContents variant="rail"/>` powers the rail. No behavior change to `/cart` page.
+- Save-quote panel hidden in rail variant (form is two-column and won't fit 320px). Save-quote remains available on the `/cart` route.
+- Sofa configurator + CustomBuilder: explicitly untouched per `CLAUDE.md` red line #2. `1100px` max-width centered preserved on FHD.
+- Handover: already responsive (default `.fieldRow` is 2-col grid). No changes needed.
+
+**Resize edge case (acceptable for v1):** when the user crosses the 1280px breakpoint, `<CartRail/>` mounts/unmounts. CartContents local form state (e.g. mid-typed save-quote customer name) resets on unmount. Cart line items themselves persist via Zustand. If a user mid-quote-save resizes their window, they lose the typed name (not the cart). Acceptable trade-off; revisit if QA flags it.
+
+**New code:** `apps/pos/src/hooks/useMediaQuery.ts` (+ test), `apps/pos/src/components/CartContents.tsx` + `.module.css` (extracted from `Cart.tsx`), `apps/pos/src/components/CartRail.tsx` + `.module.css`. New vitest + jsdom + `@testing-library/react` test infra in `apps/pos`.
+
+**Not changed:** `prototype/` files (tablet-canonical and not desktop-aware), PWA manifest (`orientation: 'landscape'` is a no-op in desktop browsers), design tokens, routes, schema, API contracts.
+
 ---
 
 ## What NOT to do
