@@ -265,33 +265,46 @@
   gap: var(--space-3);
 }
 
-.fpDimTop {
+/* SVG technical-drawing-style mattress preview with dimension lines.
+   Replaced an earlier "blank rectangle + floating cm text" rendering. */
+.fpSvg {
+  display: block;
+  color: var(--fg-soft);  /* base color for dim lines / arrows */
+}
+
+.fpSvgRect {
+  fill: var(--c-cream);
+  stroke: var(--c-beige);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 2px 4px rgba(34, 31, 32, 0.06));
+}
+
+.fpSvgDim {
+  stroke: currentColor;
+  stroke-width: 1;
+  fill: none;
+}
+
+.fpSvgArrow {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Extension marks — thinner + lighter, hint at "this dimension snaps to here". */
+.fpSvgExt {
+  stroke: currentColor;
+  stroke-width: 0.75;
+  stroke-dasharray: 2 2;
+  opacity: 0.55;
+  fill: none;
+}
+
+.fpSvgLabel {
+  fill: var(--fg);
   font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0.04em;
-}
-
-.fpStage {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.fpDimSide {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--fg-muted);
-  text-align: right;
-  line-height: 1.2;
-  letter-spacing: 0.04em;
-}
-
-.fpRect {
-  background: var(--c-cream);
-  border: 1.5px solid var(--c-beige);
-  border-radius: 6px;
-  box-shadow: var(--shadow-1);
 }
 
 .fpFootprint {

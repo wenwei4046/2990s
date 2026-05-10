@@ -464,7 +464,10 @@ interface FootprintPreviewProps {
 }
 // Scales (widthCm × lengthCm) into a preview box at most maxW × maxH px,
 // preserving aspect ratio. Width is the horizontal dimension, length the
-// vertical (taller dimension on most mattresses).
+// vertical (taller dimension on most mattresses). Renders architectural-style
+// dimension lines (with arrows) above and to the right of the rectangle, so
+// the staff sees an actual "we are measuring this dimension" diagram instead
+// of a blank cream rectangle with floating numbers.
 const FootprintPreview = ({ widthCm, lengthCm, label }: FootprintPreviewProps) => {
   const maxW = 320;
   const maxH = 360;
@@ -472,13 +475,128 @@ const FootprintPreview = ({ widthCm, lengthCm, label }: FootprintPreviewProps) =
   const pxW = Math.round(widthCm * scale);
   const pxH = Math.round(lengthCm * scale);
 
+  // SVG canvas leaves room around the rectangle for dimension lines.
+  // Top gets 40px (line + label). Right gets 56px. Left/bottom each 16px.
+  const padTop = 40;
+  const padRight = 56;
+  const padLeft = 16;
+  const padBottom = 16;
+  const svgW = pxW + padLeft + padRight;
+  const svgH = pxH + padTop + padBottom;
+  const rectX = padLeft;
+  const rectY = padTop;
+
+  // Top horizontal dimension line — arrows + label centered above the rect.
+  const dimTopY = padTop - 18;        // 18 px above the rect
+  const dimTopLabelY = dimTopY - 6;   // text sits 6 px above the line
+
+  // Right vertical dimension line.
+  const dimRightX = rectX + pxW + 18;
+  const dimRightLabelX = dimRightX + 6;
+
   return (
     <div className={styles.fpWrap}>
-      <div className={styles.fpDimTop}>{widthCm} cm</div>
-      <div className={styles.fpStage}>
-        <div className={styles.fpDimSide}>{lengthCm}<br />cm</div>
-        <div className={styles.fpRect} style={{ width: pxW, height: pxH }} />
-      </div>
+      <svg
+        className={styles.fpSvg}
+        width={svgW}
+        height={svgH}
+        viewBox={`0 0 ${svgW} ${svgH}`}
+        role="img"
+        aria-label={`${label} mattress footprint, ${widthCm} by ${lengthCm} centimetres`}
+      >
+        {/* ─── Top width dimension ─── */}
+        <line
+          x1={rectX}
+          y1={dimTopY}
+          x2={rectX + pxW}
+          y2={dimTopY}
+          className={styles.fpSvgDim}
+        />
+        {/* arrowheads */}
+        <polygon
+          points={`${rectX},${dimTopY} ${rectX + 7},${dimTopY - 4} ${rectX + 7},${dimTopY + 4}`}
+          className={styles.fpSvgArrow}
+        />
+        <polygon
+          points={`${rectX + pxW},${dimTopY} ${rectX + pxW - 7},${dimTopY - 4} ${rectX + pxW - 7},${dimTopY + 4}`}
+          className={styles.fpSvgArrow}
+        />
+        {/* extension marks (short verticals at the ends, like architectural drawings) */}
+        <line
+          x1={rectX}
+          y1={dimTopY - 6}
+          x2={rectX}
+          y2={rectY}
+          className={styles.fpSvgExt}
+        />
+        <line
+          x1={rectX + pxW}
+          y1={dimTopY - 6}
+          x2={rectX + pxW}
+          y2={rectY}
+          className={styles.fpSvgExt}
+        />
+        {/* width label */}
+        <text
+          x={rectX + pxW / 2}
+          y={dimTopLabelY}
+          textAnchor="middle"
+          className={styles.fpSvgLabel}
+        >
+          {widthCm} cm
+        </text>
+
+        {/* ─── Right length dimension ─── */}
+        <line
+          x1={dimRightX}
+          y1={rectY}
+          x2={dimRightX}
+          y2={rectY + pxH}
+          className={styles.fpSvgDim}
+        />
+        <polygon
+          points={`${dimRightX},${rectY} ${dimRightX - 4},${rectY + 7} ${dimRightX + 4},${rectY + 7}`}
+          className={styles.fpSvgArrow}
+        />
+        <polygon
+          points={`${dimRightX},${rectY + pxH} ${dimRightX - 4},${rectY + pxH - 7} ${dimRightX + 4},${rectY + pxH - 7}`}
+          className={styles.fpSvgArrow}
+        />
+        <line
+          x1={rectX + pxW}
+          y1={rectY}
+          x2={dimRightX + 6}
+          y2={rectY}
+          className={styles.fpSvgExt}
+        />
+        <line
+          x1={rectX + pxW}
+          y1={rectY + pxH}
+          x2={dimRightX + 6}
+          y2={rectY + pxH}
+          className={styles.fpSvgExt}
+        />
+        <text
+          x={dimRightLabelX}
+          y={rectY + pxH / 2}
+          dominantBaseline="middle"
+          className={styles.fpSvgLabel}
+          transform={`rotate(90 ${dimRightLabelX} ${rectY + pxH / 2})`}
+        >
+          {lengthCm} cm
+        </text>
+
+        {/* ─── Mattress rectangle ─── */}
+        <rect
+          x={rectX}
+          y={rectY}
+          width={pxW}
+          height={pxH}
+          rx={6}
+          className={styles.fpSvgRect}
+        />
+      </svg>
+
       <div className={styles.fpFootprint}>
         <span>{label} Footprint</span>
         <span className={styles.fpFootprintCm}>
