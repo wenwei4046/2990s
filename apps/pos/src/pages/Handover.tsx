@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import {
   ArrowLeft,
@@ -19,6 +19,7 @@ import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
+import { useLocalities } from '../lib/queries';
 import { PricingDriftModal } from '../components/PricingDriftModal';
 import { SlipUploadStep } from '../components/SlipUploadStep';
 import { Topbar } from '../components/Topbar';
@@ -33,31 +34,6 @@ const STEP_LIST: ReadonlyArray<{ id: Step; label: string; Icon: typeof User }> =
   { id: 'delivery',  label: 'Delivery',  Icon: MapPin },
   { id: 'payment',   label: 'Payment',   Icon: Banknote },
   { id: 'signature', label: 'Sign-off',  Icon: PenLine },
-];
-
-interface MyState {
-  id: string;
-  label: string;
-  cities: string[];
-}
-
-const MY_STATES: ReadonlyArray<MyState> = [
-  { id: 'KL', label: 'Kuala Lumpur',  cities: ['KL City', 'Cheras', 'Mont Kiara', 'Setapak', 'Sentul', 'Bukit Bintang', 'Bangsar'] },
-  { id: 'SGR', label: 'Selangor',     cities: ['Petaling Jaya', 'Subang Jaya', 'Shah Alam', 'Klang', 'Kajang', 'Puchong', 'Cyberjaya', 'Damansara'] },
-  { id: 'PNG', label: 'Penang',       cities: ['Georgetown', 'Bayan Baru', 'Butterworth', 'Bukit Mertajam'] },
-  { id: 'JHR', label: 'Johor',        cities: ['Johor Bahru', 'Iskandar Puteri', 'Skudai', 'Muar', 'Kluang'] },
-  { id: 'PRK', label: 'Perak',        cities: ['Ipoh', 'Taiping', 'Sitiawan', 'Lumut'] },
-  { id: 'KDH', label: 'Kedah',        cities: ['Alor Setar', 'Sungai Petani', 'Kulim'] },
-  { id: 'KTN', label: 'Kelantan',     cities: ['Kota Bharu', 'Tanah Merah'] },
-  { id: 'TRG', label: 'Terengganu',   cities: ['Kuala Terengganu', 'Kemaman'] },
-  { id: 'PHG', label: 'Pahang',       cities: ['Kuantan', 'Temerloh', 'Bentong'] },
-  { id: 'NSN', label: 'Negeri Sembilan', cities: ['Seremban', 'Port Dickson', 'Nilai'] },
-  { id: 'MLK', label: 'Melaka',       cities: ['Melaka City', 'Alor Gajah', 'Jasin'] },
-  { id: 'PLS', label: 'Perlis',       cities: ['Kangar', 'Arau'] },
-  { id: 'SBH', label: 'Sabah',        cities: ['Kota Kinabalu', 'Sandakan', 'Tawau'] },
-  { id: 'SWK', label: 'Sarawak',      cities: ['Kuching', 'Miri', 'Sibu', 'Bintulu'] },
-  { id: 'LBN', label: 'Labuan',       cities: ['Labuan'] },
-  { id: 'PJY', label: 'Putrajaya',    cities: ['Putrajaya'] },
 ];
 
 const DELIVERY_SLOTS = [
@@ -116,6 +92,32 @@ export const Handover = () => {
   const [signed, setSigned] = useState(false);
 
   const createOrder = useCreateOrder();
+  const { data: localities = [] } = useLocalities();
+
+  // Derive the three cascading lists from the locality dataset. `form.state`
+  // stores the full state name (e.g. "Selangor") — the value the API expects.
+  const states = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const l of localities) if (!seen.has(l.state)) seen.set(l.state, l.stateCode);
+    return Array.from(seen, ([state, stateCode]) => ({ state, stateCode }))
+      .sort((a, b) => a.state.localeCompare(b.state));
+  }, [localities]);
+
+  const cities = useMemo(() => {
+    if (!form.state) return [] as string[];
+    const set = new Set<string>();
+    for (const l of localities) if (l.state === form.state) set.add(l.city);
+    return Array.from(set).sort();
+  }, [localities, form.state]);
+
+  const postcodeSuggestions = useMemo(() => {
+    if (!form.state || !form.city) return [] as string[];
+    const set = new Set<string>();
+    for (const l of localities) {
+      if (l.state === form.state && l.city === form.city) set.add(l.postcode);
+    }
+    return Array.from(set).sort();
+  }, [localities, form.state, form.city]);
 
   if (lines.length === 0) {
     return (
@@ -204,7 +206,6 @@ export const Handover = () => {
 
   const submit = async (acceptedServerTotal?: number) => {
     setServerError(null);
-    const stateLabel = MY_STATES.find((s) => s.id === form.state)?.label ?? form.state;
     try {
       const result = await createOrder.mutateAsync({
         customer: {
@@ -213,7 +214,7 @@ export const Handover = () => {
           address: form.address.trim() || undefined,
           postcode: form.postcode.trim() || undefined,
           city: form.city.trim() || undefined,
-          state: stateLabel || undefined,
+          state: form.state.trim() || undefined,
         },
         paymentMethod: form.paymentMethod,
         approvalCode: form.approvalCode.trim() || undefined,
@@ -241,8 +242,6 @@ export const Handover = () => {
     e.preventDefault();
     next();
   };
-
-  const cities = MY_STATES.find((s) => s.id === form.state)?.cities ?? [];
 
   const customAmt = Number(form.customAmount) || 0;
   const halfAmt = Math.round(subtotal / 2);
@@ -348,18 +347,22 @@ export const Handover = () => {
                     onChange={(e) => {
                       update('state', e.target.value);
                       update('city', '');
+                      update('postcode', '');
                     }}
                   >
                     <option value="">Select state…</option>
-                    {MY_STATES.map((s) => (
-                      <option key={s.id} value={s.id}>{s.label}</option>
+                    {states.map((s) => (
+                      <option key={s.stateCode} value={s.state}>{s.state}</option>
                     ))}
                   </select>
                 </Field>
                 <Field label="City *">
                   <select
                     value={form.city}
-                    onChange={(e) => update('city', e.target.value)}
+                    onChange={(e) => {
+                      update('city', e.target.value);
+                      update('postcode', '');
+                    }}
                     disabled={!form.state}
                   >
                     <option value="">{form.state ? 'Select city…' : 'Pick state first'}</option>
@@ -371,12 +374,18 @@ export const Handover = () => {
                 <Field label="Postcode">
                   <input
                     type="text"
+                    list="postcode-suggestions"
                     value={form.postcode}
                     onChange={(e) => update('postcode', e.target.value)}
                     inputMode="numeric"
                     autoComplete="postal-code"
                     maxLength={5}
                   />
+                  {postcodeSuggestions.length > 0 && (
+                    <datalist id="postcode-suggestions">
+                      {postcodeSuggestions.map((p) => <option key={p} value={p} />)}
+                    </datalist>
+                  )}
                 </Field>
               </div>
 

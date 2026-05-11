@@ -218,6 +218,47 @@ export const useSizeLibrary = () =>
     },
   });
 
+// my_localities is a static Malaysia postcode dataset (~3000 rows). Fetched
+// once and cached forever — the seed file regenerates only when the upstream
+// dataset is refreshed (see packages/db/scripts/build-my-localities-seed.mjs).
+// Used by Handover to drive cascading state → city → postcode dropdowns.
+//
+// Supabase PostgREST caps responses at 1000 rows; we page through with
+// .range() and stop when a batch returns short. Three round-trips on first
+// open, then served from cache for the rest of the session.
+export interface LocalityRow {
+  postcode: string;
+  city: string;
+  state: string;
+  stateCode: string;
+}
+const LOCALITY_PAGE = 1000;
+export const useLocalities = () =>
+  useQuery({
+    queryKey: ['my_localities'],
+    staleTime: Infinity,
+    gcTime: Infinity,
+    queryFn: async (): Promise<LocalityRow[]> => {
+      const all: LocalityRow[] = [];
+      for (let from = 0; ; from += LOCALITY_PAGE) {
+        const { data, error } = await supabase
+          .from('my_localities')
+          .select('postcode, city, state, state_code')
+          .order('state')
+          .order('city')
+          .order('postcode')
+          .range(from, from + LOCALITY_PAGE - 1);
+        if (error) throw error;
+        const page = data ?? [];
+        for (const r of page) {
+          all.push({ postcode: r.postcode, city: r.city, state: r.state, stateCode: r.state_code });
+        }
+        if (page.length < LOCALITY_PAGE) break;
+      }
+      return all;
+    },
+  });
+
 // Realtime invalidate any product_bundles / product_compartments / product_size_variants
 // row matching this productId. Used inside Configurator so Backend price tweaks
 // land within ~300ms.
