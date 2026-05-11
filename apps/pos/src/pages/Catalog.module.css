@@ -2,8 +2,10 @@
   min-height: 100vh;
   background: var(--bg);
   padding: var(--space-5) var(--space-6);
-  max-width: 1400px;
+  /* No max-width — catalog should fill the window at any viewport. The grid
+     uses auto-fill so cards tile naturally as the window resizes. */
   margin: 0 auto;
+  width: 100%;
 }
 
 .header {
@@ -487,16 +489,3 @@
   .sideFooter { display: none; }
 }
 
-/* ─── Desktop layout (≥1280 + hover + fine pointer) ─── */
-@media (min-width: 1280px) and (hover: hover) and (pointer: fine) {
-  .app {
-    /* widen from default 1400 — at FHD with sidebar+grid+rail (240+1fr+320),
-       1400 leaves only ~720 for the middle lane (2 cards). 1700 gives ~1060 →
-       4-up grid back to prototype parity. */
-    max-width: 1700px;
-  }
-  .layoutDesktop {
-    grid-template-columns: 240px 1fr 320px;
-    gap: var(--space-5);
-  }
-}

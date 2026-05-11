@@ -2,8 +2,8 @@
   min-height: 100vh;
   background: var(--bg);
   padding: var(--space-5) var(--space-6);
-  max-width: 1100px;
   margin: 0 auto;
+  width: 100%;
 }
 
 .header {
@@ -205,8 +205,8 @@
   min-height: 100vh;
   background: var(--bg);
   padding: var(--space-5) var(--space-6) var(--space-6);
-  max-width: 1320px;
   margin: 0 auto;
+  width: 100%;
 }
 
 .headerWide {
@@ -765,7 +765,9 @@
    prototype. Cards with sofa plan-view illustration. */
 .bundleGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* auto-fill so wide screens lay 3–4 cards per row instead of stretching
+     2 cards across 1800+px. minmax 360px keeps each card readable. */
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: var(--space-3);
 }
 @media (max-width: 760px) {

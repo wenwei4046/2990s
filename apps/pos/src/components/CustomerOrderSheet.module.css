@@ -1,0 +1,548 @@
+/* Customer order sheet — modal overlay opened from the CustomerOrderFab.
+   Port of `.cart.cart--pop` from prototype/pos-styles.css with the same
+   bottom-right anchored sheet, cream cart-item cards, SAME PRICE band,
+   and footer CTA row. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(34, 31, 32, 0.32);
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: var(--space-5);
+  animation: fadeIn 140ms ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Sheet auto-resizes to viewport. clamp keeps it readable on phones (min
+   360px) and prevents over-stretch on ultrawide monitors (max 580px), with
+   a viewport-relative target in between so the proportion to the screen
+   stays consistent across tablet / laptop / desktop. Height scales the
+   same way so the aspect feels stable as you resize. */
+.sheet {
+  width: clamp(360px, 42vw, 580px);
+  max-width: calc(100vw - var(--space-5) * 2);
+  height: clamp(520px, 78vh, 820px);
+  max-height: calc(100vh - var(--space-5) * 2);
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.30);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideIn 220ms cubic-bezier(.2, .8, .2, 1);
+}
+
+@keyframes slideIn {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ─── Head ──────────────────────────────────────────────────────── */
+
+.head {
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.titleRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.title {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-20);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.count {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  font-weight: var(--w-medium);
+}
+
+.close {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.close:hover {
+  background: var(--line);
+  color: var(--fg);
+}
+
+.customer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+
+.customerWalkin {
+  font-style: italic;
+}
+
+/* ─── Body ──────────────────────────────────────────────────────── */
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 18px;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: var(--space-6) var(--space-4);
+  color: var(--fg-muted);
+}
+
+.empty svg { opacity: 0.4; }
+
+.emptyTitle {
+  font-family: var(--font-title);
+  font-size: var(--fs-18);
+  color: var(--fg);
+  margin: 4px 0 0;
+}
+
+.emptyHint {
+  font-size: var(--fs-13);
+  max-width: 24ch;
+  margin: 0;
+}
+
+/* ─── Line item ─────────────────────────────────────────────────── */
+
+.item {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  gap: 12px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+.itemPhoto {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  background-color: #d8d2c4;
+  background-size: cover;
+  background-position: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-20);
+}
+
+.itemMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.itemNameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.itemName {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-15);
+  line-height: 1.25;
+}
+
+.itemEdit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: 120ms;
+}
+
+.itemEdit:hover {
+  color: var(--c-burnt);
+  border-color: var(--c-burnt);
+  background: rgba(166, 71, 30, 0.06);
+}
+
+.itemDetail {
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
+
+.itemQty {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  background: rgba(34, 31, 32, 0.06);
+  border-radius: var(--radius-pill);
+  padding: 2px;
+  width: fit-content;
+}
+
+.itemQty button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: 120ms;
+}
+
+.itemQty button:hover {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.itemQty span {
+  min-width: 20px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+}
+
+.itemRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.itemRemove {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: 120ms;
+}
+
+.itemRemove:hover {
+  color: var(--c-burnt);
+  background: rgba(166, 71, 30, 0.08);
+}
+
+.itemPrice {
+  font-family: var(--font-mark);
+  font-weight: 900;
+  font-stretch: 80%;
+  font-size: var(--fs-20);
+  letter-spacing: -0.02em;
+  color: var(--c-burnt);
+  line-height: 1;
+}
+
+.itemPrice sup {
+  font-size: 9px;
+  font-weight: var(--w-bold);
+  vertical-align: top;
+  margin-right: 2px;
+}
+
+/* ─── Foot ──────────────────────────────────────────────────────── */
+
+.foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  padding: 14px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg);
+}
+
+.samePriceNote {
+  background: var(--c-cream);
+  color: var(--c-burnt);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.line {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+
+.lineTotal {
+  color: var(--fg);
+  font-family: var(--font-button);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-14);
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  align-items: baseline;
+}
+
+.totalNum {
+  font-family: var(--font-mark);
+  font-weight: 900;
+  font-stretch: 80%;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  color: var(--c-burnt);
+  line-height: 1;
+}
+
+.totalNum sup {
+  font-size: 10px;
+  vertical-align: top;
+  margin-right: 2px;
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cta .ghost {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  background: transparent;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-13);
+  color: var(--fg);
+  cursor: pointer;
+  transition: 120ms;
+}
+
+.cta .ghost:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
+}
+
+.cta .primary {
+  flex-basis: 100%;
+  order: 99;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 18px;
+  border: 0;
+  background: var(--c-orange);
+  color: var(--c-cream);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-15);
+  cursor: pointer;
+  transition: 120ms;
+}
+
+.cta .primary:hover {
+  background: var(--c-burnt);
+}
+
+.cta .primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── Save-quote inline panel (re-used pattern from CartContents) ─── */
+
+.savedBanner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 18px 0;
+  padding: 10px 14px;
+  background: var(--c-success-bg, rgba(34, 139, 34, 0.08));
+  color: var(--c-success, #2d7a2d);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+}
+
+.savedBanner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.quotePanel {
+  margin: 12px 18px 0;
+  background: var(--c-cream);
+  border: 1px solid var(--c-burnt);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.quotePanelTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-15);
+  color: var(--c-burnt);
+}
+
+.quotePanelHint {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
+
+.quoteFields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.quoteField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quoteField span {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-soft, var(--fg-muted));
+}
+
+.quoteField input {
+  font: inherit;
+  font-size: var(--fs-14);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.quoteField input:focus {
+  outline: none;
+  border-color: var(--c-burnt);
+}
+
+.quoteErr {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--c-error, #b04a3a);
+}
+
+.quoteActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .quoteFields { grid-template-columns: 1fr; }
+}
+
+/* ─── Tablet ──────────────────────────────────────────────────────── */
+
+@media (max-width: 1279px) {
+  .backdrop { padding: 16px; }
+  /* Tablet: bias toward a larger sheet (~55vw) so it dominates the screen
+     in landscape iPad without going full-bleed. clamp keeps it readable on
+     small tablets and never wider than the viewport minus the 16px padding. */
+  .sheet {
+    width: clamp(360px, 55vw, 560px);
+    height: clamp(520px, 82vh, 820px);
+  }
+}
+
+@media (max-width: 560px) {
+  /* Phone: take over the whole screen. */
+  .backdrop {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+  .sheet {
+    width: 100%;
+    max-width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+}
