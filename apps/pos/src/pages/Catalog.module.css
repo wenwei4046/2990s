@@ -306,10 +306,14 @@
 .photo {
   position: relative;
   aspect-ratio: 4 / 3;
-  background: var(--bg-alt);
+  background-color: var(--bg-alt);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .photoFallback {
@@ -324,37 +328,69 @@
 
 .photoBadge {
   position: absolute;
-  top: 10px;
-  left: 10px;
+  top: 12px;
+  left: 12px;
   background: var(--c-cream);
   color: var(--c-burnt);
   font-family: var(--font-button);
   font-size: 10px;
   font-weight: var(--w-bold);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  padding: 3px 8px;
+  padding: 5px 10px;
   border-radius: var(--radius-pill);
+  box-shadow: 0 1px 3px rgba(34, 31, 32, 0.1);
 }
 
+/* Stock badge — top-right per prototype. Ample stock = dark pill with cream
+   checkmark (reads "all good"). Low/out = burnt-orange pill with alert icon. */
 .photoStock {
   position: absolute;
-  bottom: 10px;
-  left: 10px;
+  top: 12px;
+  right: 12px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: var(--c-cream);
-  color: var(--fg-muted);
+  background: var(--c-ink);
+  color: var(--c-cream);
   font-family: var(--font-button);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: var(--w-semibold);
   letter-spacing: 0.04em;
-  padding: 3px 8px;
+  padding: 5px 10px;
   border-radius: var(--radius-pill);
+  box-shadow: 0 1px 3px rgba(34, 31, 32, 0.15);
 }
-.photoStockLow { color: var(--c-burnt); }
-.photoStockOut { color: var(--c-burnt); background: rgba(166, 71, 30, 0.1); }
+.photoStockLow { background: var(--c-burnt); color: var(--c-cream); }
+.photoStockOut { background: var(--c-burnt); color: var(--c-cream); }
+
+/* Orange round configure button — bottom-right corner of the photo area.
+   Visual handle the staff can tap to skip into the configurator quickly. */
+.cardConfigBtn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--c-burnt);
+  color: var(--c-cream);
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(34, 31, 32, 0.18);
+  transition: transform 120ms ease, background 120ms ease;
+}
+.cardConfigBtn:hover {
+  background: var(--c-orange);
+  transform: scale(1.05);
+}
+.cardConfigBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 
 .body {
   padding: var(--space-3) var(--space-4) var(--space-4);

@@ -14,13 +14,16 @@ import {
   Sparkles,
   AlertTriangle,
   Check,
+  SlidersHorizontal,
+  Plus,
   type LucideIcon,
 } from 'lucide-react';
 import { Button, PriceTag } from '@2990s/design-system';
-import { useCatalog, useCatalogRealtime, type CatalogProduct } from '../lib/queries';
+import { useCatalog, useCatalogRealtime, useCategoriesAll, type CatalogProduct } from '../lib/queries';
 import { Topbar } from '../components/Topbar';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { CartRail } from '../components/CartRail';
+import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import styles from './Catalog.module.css';
 
 const CAT_ICON: Record<string, LucideIcon> = {
@@ -36,13 +39,6 @@ const CAT_ICON: Record<string, LucideIcon> = {
 const productInitial = (name: string): string =>
   name?.trim()?.charAt(0)?.toUpperCase() ?? '?';
 
-interface CatLite {
-  id: string;
-  label: string;
-  icon: string;
-  tbc: boolean;
-}
-
 interface SeriesLite {
   id: string;
   label: string;
@@ -51,6 +47,7 @@ interface SeriesLite {
 export const Catalog = () => {
   const catalog = useCatalog();
   useCatalogRealtime();
+  const allCategories = useCategoriesAll();
 
   const [activeCat, setActiveCat] = useState<string>('all');
   const [activeSeries, setActiveSeries] = useState<string>('all');
@@ -62,15 +59,11 @@ export const Catalog = () => {
 
   const products = catalog.data ?? [];
 
-  /* Derive categories + series from product list (since POS only has the
-     /products endpoint — no separate library queries here). */
-  const cats = useMemo<CatLite[]>(() => {
-    const m = new Map<string, CatLite>();
-    for (const p of products) {
-      if (p.category) m.set(p.category.id, p.category);
-    }
-    return Array.from(m.values());
-  }, [products]);
+  // Categories come from the categories table directly (not derived from
+  // products) so TBC ones still render even with zero products. Series still
+  // come from products since only series with at least one product are useful
+  // as a filter.
+  const cats = allCategories.data ?? [];
 
   const seriesList = useMemo<SeriesLite[]>(() => {
     const m = new Map<string, SeriesLite>();
@@ -197,6 +190,14 @@ export const Catalog = () => {
               <RotateCcw size={16} strokeWidth={1.75} />
               <span className={styles.sideLabel}>Reset filters</span>
             </button>
+            <button
+              type="button"
+              className={styles.sideItem}
+              onClick={() => setActiveCat('mattress')}
+            >
+              <Sparkles size={16} strokeWidth={1.75} />
+              <span className={styles.sideLabel}>Bestsellers</span>
+            </button>
 
             <div className={styles.sideFooter}>
               <div className={styles.sideBrand}>Honest pricing</div>
@@ -260,6 +261,7 @@ export const Catalog = () => {
         </span>
       </footer>
     </main>
+    <CustomerOrderFab />
     </>
   );
 };
@@ -277,22 +279,34 @@ const ProductCard = ({ p }: { p: CatalogProduct }) => {
       className={`${styles.card} ${tbc ? styles.cardDisabled : ''}`}
       onClick={(e) => { if (tbc) e.preventDefault(); }}
     >
-      <div className={styles.photo}>
-        <span className={styles.photoFallback}>{productInitial(p.name)}</span>
+      <div
+        className={styles.photo}
+        style={p.img_key ? { backgroundImage: `url(${p.img_key})` } : undefined}
+      >
+        {!p.img_key && (
+          <span className={styles.photoFallback}>{productInitial(p.name)}</span>
+        )}
         {p.series && (
           <span className={styles.photoBadge}>{p.series.label}</span>
         )}
         {!out && (
           <span className={`${styles.photoStock} ${lowStock ? styles.photoStockLow : ''}`}>
             {lowStock
-              ? <AlertTriangle size={10} strokeWidth={1.75} />
-              : <Check size={10} strokeWidth={1.75} />}
+              ? <AlertTriangle size={11} strokeWidth={2} />
+              : <Check size={11} strokeWidth={2} />}
             {p.stock} in stock
           </span>
         )}
         {out && (
           <span className={`${styles.photoStock} ${styles.photoStockOut}`}>
-            <AlertTriangle size={10} strokeWidth={1.75} /> Out of stock
+            <AlertTriangle size={11} strokeWidth={2} /> Out of stock
+          </span>
+        )}
+        {!tbc && (
+          <span className={styles.cardConfigBtn} aria-hidden="true">
+            {p.pricing_kind === 'flat'
+              ? <Plus size={16} strokeWidth={2} />
+              : <SlidersHorizontal size={16} strokeWidth={2} />}
           </span>
         )}
       </div>

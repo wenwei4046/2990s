@@ -218,6 +218,37 @@ export const useSizeLibrary = () =>
     },
   });
 
+// All categories — including the TBC ones (Dining/Bathroom/Kids zone/Accessories).
+// We can't derive these from the product list because TBC categories are by
+// definition empty. Catalog sidebar reads from here so the "To be confirmed"
+// section shows even when no products exist for those categories yet.
+export interface CategoryRow {
+  id: string;
+  label: string;
+  icon: string;
+  tbc: boolean;
+  sortOrder: number;
+}
+export const useCategoriesAll = () =>
+  useQuery({
+    queryKey: ['categories_all'],
+    staleTime: 5 * 60_000,
+    queryFn: async (): Promise<CategoryRow[]> => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, label, icon, tbc, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        label: r.label,
+        icon: r.icon,
+        tbc: r.tbc,
+        sortOrder: r.sort_order,
+      }));
+    },
+  });
+
 // my_localities is a static Malaysia postcode dataset (~3000 rows). Fetched
 // once and cached forever — the seed file regenerates only when the upstream
 // dataset is refreshed (see packages/db/scripts/build-my-localities-seed.mjs).
