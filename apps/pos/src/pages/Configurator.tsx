@@ -557,35 +557,49 @@ interface FootprintPreviewProps {
   lengthCm: number;
   label: string;
 }
-// Scales (widthCm × lengthCm) into a preview box at most maxW × maxH px,
-// preserving aspect ratio. Width is the horizontal dimension, length the
-// vertical (taller dimension on most mattresses). Renders architectural-style
-// dimension lines (with arrows) above and to the right of the rectangle, so
-// the staff sees an actual "we are measuring this dimension" diagram instead
-// of a blank cream rectangle with floating numbers.
+// Canvas is locked to King (183×190 cm) so it never resizes between
+// selections — switching from Queen to Single shouldn't reflow the whole
+// preview. The mattress rectangle scales inside this fixed frame, centered,
+// with a faint dashed King outline behind it as a visual reference.
+// Dimension lines anchor to the actual mattress edges so the cm labels
+// still read the selected size, not the reference.
+const KING_WIDTH_CM = 183;
+const KING_LENGTH_CM = 190;
 const FootprintPreview = ({ widthCm, lengthCm, label }: FootprintPreviewProps) => {
   const maxW = 320;
   const maxH = 360;
-  const scale = Math.min(maxW / widthCm, maxH / lengthCm);
+  const scale = Math.min(maxW / KING_WIDTH_CM, maxH / KING_LENGTH_CM);
+  const refPxW = Math.round(KING_WIDTH_CM * scale);
+  const refPxH = Math.round(KING_LENGTH_CM * scale);
   const pxW = Math.round(widthCm * scale);
   const pxH = Math.round(lengthCm * scale);
 
-  // SVG canvas leaves room around the rectangle for dimension lines.
+  // SVG canvas leaves room around the reference rectangle for dimension lines.
   // Top gets 40px (line + label). Right gets 56px. Left/bottom each 16px.
   const padTop = 40;
   const padRight = 56;
   const padLeft = 16;
   const padBottom = 16;
-  const svgW = pxW + padLeft + padRight;
-  const svgH = pxH + padTop + padBottom;
-  const rectX = padLeft;
-  const rectY = padTop;
+  const svgW = refPxW + padLeft + padRight;
+  const svgH = refPxH + padTop + padBottom;
+
+  // Reference (King) rectangle position — fills the inner area.
+  const refX = padLeft;
+  const refY = padTop;
+
+  // Mattress sits centered horizontally, bottom-aligned vertically (rests on
+  // the bottom of the King outline). The dim lines hang off the mattress
+  // edges, not the King frame.
+  const rectX = refX + Math.round((refPxW - pxW) / 2);
+  const rectY = refY + (refPxH - pxH);
 
   // Top horizontal dimension line — arrows + label centered above the rect.
-  const dimTopY = padTop - 18;        // 18 px above the rect
-  const dimTopLabelY = dimTopY - 6;   // text sits 6 px above the line
+  // Anchored to the mattress, NOT the reference frame, so the cm label
+  // reads the selected size.
+  const dimTopY = rectY - 18;
+  const dimTopLabelY = dimTopY - 6;
 
-  // Right vertical dimension line.
+  // Right vertical dimension line — also anchored to the mattress.
   const dimRightX = rectX + pxW + 18;
   const dimRightLabelX = dimRightX + 6;
 
@@ -599,6 +613,18 @@ const FootprintPreview = ({ widthCm, lengthCm, label }: FootprintPreviewProps) =
         role="img"
         aria-label={`${label} mattress footprint, ${widthCm} by ${lengthCm} centimetres`}
       >
+        {/* ─── King reference outline — faint dashed frame, drawn first so
+             it sits behind everything. Keeps the canvas size stable across
+             size selections and gives a visual scale anchor. ─── */}
+        <rect
+          x={refX}
+          y={refY}
+          width={refPxW}
+          height={refPxH}
+          rx={6}
+          className={styles.fpSvgRefRect}
+        />
+
         {/* ─── Top width dimension ─── */}
         <line
           x1={rectX}

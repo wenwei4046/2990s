@@ -279,6 +279,15 @@
   filter: drop-shadow(0 2px 4px rgba(34, 31, 32, 0.06));
 }
 
+/* King-size reference outline behind the selected mattress. Faint dashed
+   stroke so it reads as "scale anchor", not "another box". */
+.fpSvgRefRect {
+  fill: none;
+  stroke: rgba(34, 31, 32, 0.18);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
 .fpSvgDim {
   stroke: currentColor;
   stroke-width: 1;
