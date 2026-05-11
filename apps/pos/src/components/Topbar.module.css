@@ -55,6 +55,7 @@
   border-left: 1px solid var(--line);
   padding-left: 14px;
   margin-left: 4px;
+  white-space: nowrap;
 }
 
 .center {
@@ -105,6 +106,7 @@
   cursor: pointer;
   text-decoration: none;
   transition: 120ms ease;
+  white-space: nowrap;
 }
 .pill:hover {
   border-color: var(--c-burnt);
@@ -134,6 +136,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .staffChip {
@@ -151,6 +154,7 @@
   display: flex;
   flex-direction: column;
   line-height: 1.15;
+  white-space: nowrap;
 }
 
 .staffRole {
@@ -188,6 +192,38 @@
   transition: 150ms ease;
 }
 .iconBtn:hover { background: rgba(34, 31, 32, 0.06); }
+
+/* ─── Tablet density (≤1279px) — drop low-value items so pills stop wrapping.
+   The "POS · SHOWROOM KL" crumb is redundant when the 2990 wordmark already
+   shows the brand, and the staff role line eats vertical room with no real
+   payoff at sales-tablet density. ─── */
+@media (max-width: 1279px) {
+  .topbar {
+    gap: 14px;
+    padding: 10px 16px;
+  }
+  .crumb {
+    display: none;
+  }
+  .center {
+    gap: 6px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+  }
+  .step {
+    padding: 4px 8px;
+  }
+  .right {
+    gap: 8px;
+  }
+  .pill {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+  .staffRole {
+    display: none;
+  }
+}
 
 /* ─── Desktop density (≥1280 + hover + fine pointer) ─── */
 @media (min-width: 1280px) and (hover: hover) and (pointer: fine) {

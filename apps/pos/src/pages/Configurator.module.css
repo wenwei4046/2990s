@@ -488,18 +488,25 @@
   letter-spacing: 0.18em;
   color: var(--fg-muted);
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .topbarChipName {
   font-family: var(--font-title);
   font-weight: var(--w-bold);
   font-size: var(--fs-13);
   color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .topbarChipSub {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--fg-muted);
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .topbarTotal {
@@ -517,12 +524,14 @@
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--fg-muted);
+  white-space: nowrap;
 }
 .topbarTotalAmt {
   font-family: var(--font-title);
   font-weight: var(--w-bold);
   font-size: var(--fs-20);
   color: var(--c-burnt);
+  white-space: nowrap;
 }
 .topbarTotalAmt sup {
   font-size: 10px;
@@ -535,6 +544,7 @@
   font-size: 9px;
   color: var(--fg-muted);
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .topbarBtnGhost {
@@ -551,6 +561,7 @@
   font-weight: var(--w-semibold);
   cursor: pointer;
   transition: 120ms ease;
+  white-space: nowrap;
 }
 .topbarBtnGhost:hover {
   border-color: var(--c-orange);
@@ -571,6 +582,7 @@
   font-weight: var(--w-bold);
   cursor: pointer;
   transition: background 120ms;
+  white-space: nowrap;
 }
 .topbarBtnPrimary:hover:not(:disabled) {
   background: var(--c-burnt);
@@ -578,6 +590,30 @@
 .topbarBtnPrimary:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Tablet density (≤1279px): hide the "Delivery & assembly included" line and
+   shave gaps so the chip + total + buttons fit on one row without anything
+   word-wrapping. ChipName + ChipSub stay; ChipEyebrow + TotalNote drop. */
+@media (max-width: 1279px) {
+  .topbarActions {
+    gap: var(--space-2);
+  }
+  .topbarChip {
+    max-width: 180px;
+  }
+  .topbarChipEyebrow,
+  .topbarTotalNote {
+    display: none;
+  }
+  .topbarTotal {
+    padding: 2px var(--space-2);
+  }
+  .topbarBtnGhost,
+  .topbarBtnPrimary {
+    padding: 6px 12px;
+    font-size: var(--fs-12);
+  }
 }
 
 /* ─── Pillow rows (PILLOWS + ADD-ON sections) ─────────────────────── */
