@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
@@ -38,8 +38,8 @@ interface SizeRow {
 // because it's purely UI sizing for the hero plan-view canvas.
 const QUICK_PRESET_META: Record<string, { sub: string; cushions: number; baseW: number; baseD: number }> = {
   '1S':  { sub: 'Single seat',           cushions: 2, baseW: 190, baseD: 95 },
-  '2S':  { sub: 'Two seats',             cushions: 4, baseW: 316, baseD: 95 },
-  '3S':  { sub: 'Three seats',           cushions: 3, baseW: 265, baseD: 95 },
+  '2S':  { sub: 'Two seats',             cushions: 3, baseW: 265, baseD: 95 },
+  '3S':  { sub: 'Three seats',           cushions: 4, baseW: 316, baseD: 95 },
   '2+L': { sub: '2-seater with chaise',  cushions: 3, baseW: 253, baseD: 165 },
   '3+L': { sub: '3-seater with chaise',  cushions: 4, baseW: 360, baseD: 165 },
 };
@@ -859,7 +859,6 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
 
   const pickedRow = activeRows.find((r) => r.bundle.id === picked) ?? activeRows[0]!;
   const dims = quickPresetDims(pickedRow.bundle.id, depth);
-  const ar = dims.d > 0 ? dims.w / dims.d : 2;
 
   return (
     <>
@@ -921,10 +920,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
 
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
-          <div
-            className={styles.qpHeroBox}
-            style={{ '--qp-ar': ar } as CSSProperties}
-          >
+          <div className={styles.qpHeroBox}>
             <img
               src={bundleArtSrc(pickedRow.bundle.id, quickFlip)}
               alt={`${pickedRow.bundle.label} plan view`}
@@ -954,7 +950,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
         </div>
         <footer className={styles.qpHeroFoot}>
           <span className={styles.qpHeroFootEyebrow}>Plan view</span>
-          <span className={styles.qpHeroFootDim}>{depth}″ seat · to scale</span>
+          <span className={styles.qpHeroFootDim}>{depth}″ seat</span>
         </footer>
       </section>
     </>

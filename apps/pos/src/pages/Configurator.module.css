@@ -785,23 +785,22 @@
   position: relative;
   container-type: size;
 }
-/* Sized box matches the preset's W×D aspect ratio. height capped to 55% of
-   container, width derived from --qp-ar so wide bundles (2S, 3+L) stay
-   readable without overflowing horizontally. */
+/* Fixed 2:1 hero box — decoupled from the preset's physical W×D so wide
+   bundles (2S, 3+L) don't render as flat ribbons. Dim labels still show
+   real cm but are informational only, not to-scale. */
 .qpHeroBox {
   position: relative;
-  height: min(55cqh, calc(80cqw / var(--qp-ar, 2)));
+  height: min(55cqh, calc(80cqw / 2));
   width: auto;
-  aspect-ratio: var(--qp-ar, 2);
+  aspect-ratio: 2 / 1;
 }
 .qpHeroBox img {
   width: 100%;
   height: 100%;
-  /* object-fit: fill so the plan-view stretches to match the box's
-     aspect-ratio (set to the physical W × D in --qp-ar). The dim lines
-     anchor to the box edges — `contain` would letterbox the image and
-     leave the dim lines floating off the actual sofa silhouette. */
-  object-fit: fill;
+  /* object-fit: contain preserves the silhouette's natural drawn ratio so
+     wide bundles don't get vertically squashed into thin bands. Dim lines
+     anchor to box edges (intentionally decoupled from silhouette edges). */
+  object-fit: contain;
   filter: drop-shadow(0 16px 24px rgba(60, 40, 20, 0.12));
   user-select: none;
   -webkit-user-drag: none;
