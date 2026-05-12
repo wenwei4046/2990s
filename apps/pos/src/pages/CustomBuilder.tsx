@@ -12,6 +12,7 @@ import {
   computeSofaPrice,
   findSnap,
   hasArmConflict,
+  reclinerEligible,
   type Cell,
   type Depth,
   type Rot,
@@ -36,6 +37,55 @@ const TV_BOTTOM_MARGIN = 30;
 const TV_GAP = 40;
 
 const ASSET_BASE = '/sofa-modules';
+
+/** Approx arm-panel width in cm. The artwork's arm overhang varies by SKU
+ *  (1A vs 1B vs NA), but 32cm is the prototype's chosen visual midpoint. */
+const ARM_W_CM = 32;
+
+/**
+ * Per-seat rectangles in the module's NATIVE (un-rotated, 24"-baseline)
+ * coordinate space. Empty array for ineligible modules (corners, L-pieces,
+ * console). `x/y/w/h` is the seat-only strip (used for the +R button + the
+ * footrest); `visX/visW` extends out to the arm panel or cushion seam so
+ * the orange wash looks like a uniform state change, not a half-strip.
+ *
+ * Ported from prototype/pos-sofa-config.jsx → seatRectsCm.
+ */
+interface SeatRect { x: number; y: number; w: number; h: number; visX: number; visW: number }
+const seatRectsCm = (m: SofaModuleSpec, depth: Depth): SeatRect[] => {
+  const n = m.cushions || 1;
+  if (!reclinerEligible(m.id) || n < 1) return [];
+  let leftPad = 0;
+  let rightPad = 0;
+  if (/-LHF$/.test(m.id)) leftPad = ARM_W_CM;
+  if (/-RHF$/.test(m.id)) rightPad = ARM_W_CM;
+  // Width grows +10cm per cushion at 28" depth — match moduleFootprint.
+  const widthOffset = depth === '28' ? 10 : 0;
+  const effW = m.w + widthOffset * n;
+  const seatStripW = effW - leftPad - rightPad;
+  const seatW = seatStripW / n;
+  // For 2-seaters the visible cushion seam sits at the MODULE midpoint
+  // (not the seat-strip midpoint), so the orange wash stops on the dashed
+  // divider line in the artwork.
+  const seams: number[] = [];
+  if (n === 2) seams.push(effW / 2);
+  const rects: SeatRect[] = [];
+  for (let i = 0; i < n; i++) {
+    const isFirst = i === 0;
+    const isLast = i === n - 1;
+    const visLeft = isFirst ? 0 : seams[i - 1]!;
+    const visRight = isLast ? effW : seams[i]!;
+    rects.push({
+      x: leftPad + i * seatW,
+      y: 0,
+      w: seatW,
+      h: m.d,
+      visX: visLeft,
+      visW: visRight - visLeft,
+    });
+  }
+  return rects;
+};
 
 /** Mirror map for arm-side flips: LHF ↔ RHF for 1A/1B/2A/2B/L. CNR is single-SKU (no mirror). */
 const MIRROR_PAIR: Record<string, string> = {
@@ -136,6 +186,34 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     setCells((prev) => prev.map((c) =>
       c.id === id ? { ...c, rot: (((c.rot + 90) % 360) as Rot) } : c,
     ));
+  };
+
+  // Toggle a per-seat recliner upgrade on/off (the +RM 990/seat option).
+  // Removing an upgrade also forgets its open/closed state.
+  const toggleSeatRecliner = (cellId: string, seatIdx: number) => {
+    setCells((prev) => prev.map((c) => {
+      if (c.id !== cellId) return c;
+      const cur = c.recliners ?? [];
+      const has = cur.some((r) => r.seatIdx === seatIdx);
+      const next = has
+        ? cur.filter((r) => r.seatIdx !== seatIdx)
+        : [...cur, { seatIdx, open: false }];
+      return { ...c, recliners: next };
+    }));
+  };
+
+  // Open / close the footrest on an already-upgraded seat. Open seats add
+  // 35cm footrest + 25cm safety zone in the FRONT direction (handled by
+  // cellEffectiveBbox for math; rendered as overlay divs inside .cellArt).
+  const toggleSeatReclinerOpen = (cellId: string, seatIdx: number) => {
+    setCells((prev) => prev.map((c) => {
+      if (c.id !== cellId) return c;
+      const cur = c.recliners ?? [];
+      return {
+        ...c,
+        recliners: cur.map((r) => r.seatIdx === seatIdx ? { ...r, open: !r.open } : r),
+      };
+    }));
   };
 
   const clearAll = () => { setCells([]); setSelectedId(null); setSelectedGroupIds(null); };
@@ -545,6 +623,117 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                   }}
                 >
                   <img src={`${ASSET_BASE}/${c.moduleId}.png`} alt={m.label} draggable={false} />
+
+                  {/* Per-seat recliner overlays — render inside the rotated
+                      cellArt so wash + badge + footrest auto-orient with the
+                      module. Positioned in NATIVE module cm coords. */}
+                  {(() => {
+                    const rects = seatRectsCm(m, depth);
+                    const recs = c.recliners ?? [];
+                    return rects.map((rect, i) => {
+                      const recState = recs.find((r) => r.seatIdx === i);
+                      if (!recState) return null;
+                      const sx = rect.x * SCALE;
+                      const sy = rect.y * SCALE;
+                      const sw = rect.w * SCALE;
+                      const sh = rect.h * SCALE;
+                      const vx = rect.visX * SCALE;
+                      const vw = rect.visW * SCALE;
+                      return (
+                        <Fragment key={`rec-${i}`}>
+                          <div
+                            className={styles.reclineWash}
+                            aria-hidden
+                            style={{ left: vx, top: sy, width: vw, height: sh }}
+                          />
+                          <div
+                            className={styles.reclineBadge}
+                            aria-hidden
+                            style={{ left: sx + sw / 2, top: sy + sh / 2 }}
+                          >
+                            {recState.open ? 'RECLINED' : 'RECLINER'}
+                          </div>
+                          {recState.open && (
+                            <div
+                              className={styles.reclineFootrestWrap}
+                              aria-hidden
+                              style={{
+                                left: vx,
+                                top: sy + sh,
+                                width: vw,
+                                height: 35 * SCALE,
+                              }}
+                            >
+                              <div className={styles.reclineFootrest} />
+                              <div
+                                className={styles.reclineSafety}
+                                style={{ top: 35 * SCALE, height: 25 * SCALE }}
+                              >
+                                <span className={styles.reclineSafetyLabel}>Safety 25cm</span>
+                              </div>
+                            </div>
+                          )}
+                        </Fragment>
+                      );
+                    });
+                  })()}
+
+                  {/* Per-seat controls — only on the selected cell. Each
+                      eligible seat gets a +R upgrade button OR a R / R.O
+                      footrest toggle plus a ✕ to drop the upgrade. */}
+                  {isSelected && c.id != null && (() => {
+                    const rects = seatRectsCm(m, depth);
+                    const recs = c.recliners ?? [];
+                    const cid = c.id;
+                    return rects.map((rect, i) => {
+                      const recState = recs.find((r) => r.seatIdx === i);
+                      const isRec = recState != null;
+                      const isOpenSeat = recState?.open ?? false;
+                      const vx = rect.visX * SCALE;
+                      const vy = rect.y * SCALE;
+                      const vw = rect.visW * SCALE;
+                      const vh = rect.h * SCALE;
+                      return (
+                        <div
+                          key={`seatctl-${i}`}
+                          className={styles.seatCtl}
+                          style={{ left: vx, top: vy, width: vw, height: vh }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        >
+                          {!isRec && (
+                            <button
+                              type="button"
+                              className={`${styles.seatBtn} ${styles.seatBtnAdd}`}
+                              onClick={() => toggleSeatRecliner(cid, i)}
+                              title="Upgrade this seat to a power recliner (+RM 990)"
+                            >
+                              + R
+                            </button>
+                          )}
+                          {isRec && (
+                            <div className={styles.seatCtlStack}>
+                              <button
+                                type="button"
+                                className={`${styles.seatBtn} ${isOpenSeat ? styles.seatBtnOn : ''}`}
+                                onClick={() => toggleSeatReclinerOpen(cid, i)}
+                                title={isOpenSeat ? 'Close footrest' : 'Open footrest'}
+                              >
+                                {isOpenSeat ? 'R.O' : 'R'}
+                              </button>
+                              <button
+                                type="button"
+                                className={`${styles.seatBtn} ${styles.seatBtnRemove}`}
+                                onClick={() => toggleSeatRecliner(cid, i)}
+                                title="Remove recliner upgrade"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
                 {isSelected && (
                   <div className={styles.tools}>
