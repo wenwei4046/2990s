@@ -57,16 +57,36 @@ quotes.post('/', async (c) => {
     return c.json({ error: 'invalid_total' }, 400);
   }
 
-  // RLS check requires showroom_id = current_staff_showroom() — look it up.
+  // Resolve the showroom this quote belongs to.
+  //
+  // Sales / showroom_lead: their own staff.showroom_id (RLS enforces match).
+  // Admin / coordinator / finance: staff.showroom_id is NULL by design (per
+  // CLAUDE.md "coordinators with NULL oversee all showrooms"), but
+  // quotes.showroom_id is NOT NULL. Fall back to the first active showroom by
+  // sort_order so elevated roles can still save quotes when dogfooding the POS.
+  // The RLS policy already allows is_coordinator_or_above() to insert with any
+  // showroom_id, so this fallback isn't a privilege escalation.
   const { data: staffRow, error: staffErr } = await supabase
     .from('staff')
-    .select('showroom_id')
+    .select('showroom_id, role')
     .eq('id', userId)
     .maybeSingle();
   if (staffErr) {
     return c.json({ error: 'db_fetch_failed', detail: staffErr.message }, 500);
   }
-  if (!staffRow?.showroom_id) {
+  let showroomId: string | null = staffRow?.showroom_id ?? null;
+  const elevatedRoles = new Set(['admin', 'coordinator', 'finance']);
+  if (!showroomId && staffRow?.role && elevatedRoles.has(staffRow.role)) {
+    const { data: defaultRoom } = await supabase
+      .from('showrooms')
+      .select('id')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    showroomId = defaultRoom?.id ?? null;
+  }
+  if (!showroomId) {
     return c.json({ error: 'staff_showroom_missing' }, 400);
   }
 
@@ -77,7 +97,7 @@ quotes.post('/', async (c) => {
     .insert({
       id,
       created_by: userId,
-      showroom_id: staffRow.showroom_id,
+      showroom_id: showroomId,
       customer_name: customerName,
       customer_phone: customerPhone,
       customer_email: customerEmail,
