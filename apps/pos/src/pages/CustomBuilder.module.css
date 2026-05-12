@@ -227,11 +227,11 @@
   border-color: var(--c-burnt);
   z-index: 5;
 }
-.cellViolation {
-  border-color: var(--c-error);
-  background: var(--c-error-bg);
-  z-index: 4;
-}
+/* .cellViolation removed per Loo 2026-05-12 — the red dashed border + red
+   tinted background read as "error here" but the conditions (arms colliding,
+   open-end) already surface through the "Resolve ..." button copy + Provisional
+   RM 0. Class is still applied conditionally in TSX so the state survives if we
+   reintroduce a softer visual later (e.g. just a small icon). */
 
 .cellArt {
   position: absolute;
