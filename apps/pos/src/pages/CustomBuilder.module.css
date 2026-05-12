@@ -8,7 +8,9 @@
 /* ── Palette ──────────────────────────────────────────────────── */
 
 .palette {
-  background: var(--c-cream);
+  /* Matches sofa Custom Build main bg (#FAF6EC) so the palette column
+     blends with the warmer page canvas. */
+  background: #FAF6EC;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-3);
@@ -183,9 +185,24 @@
 }
 .clearBtn:hover { background: var(--bg-alt); }
 
+/* Viewport wraps the stage and grows to the canvas column width, keeping
+   the room's 5:4 aspect ratio (matches ROOM_W_CM:ROOM_H_CM = 600:480).
+   The stage itself stays at its real-cm 600×480 px frame for module
+   positioning math; visualScale (set in TSX via transform: scale) zooms it
+   to fit here. */
+.stageViewport {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 5 / 4;
+  overflow: hidden;
+}
+
 .stage {
   position: relative;
-  background: var(--c-cream);
+  /* Slightly warmer cream than --c-cream (#FFF9EB) — matches prototype
+     pos-styles.css :: .sof-cv__room. Gives module silhouettes a bit more
+     contrast against the canvas without leaving the brand palette. */
+  background: #FAF6EC;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -574,6 +591,10 @@
 .cellArt img {
   user-select: none;
   -webkit-user-drag: none;
+  /* Subtle silhouette pop — drop-shadow follows the PNG alpha so the sofa
+     outline reads against the warm stage background. Kept light so it
+     doesn't compete with the orange selection ring on .cellSelected. */
+  filter: drop-shadow(0 1px 1.5px rgba(34, 31, 32, 0.18));
 }
 
 .tools {

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type PointerEvent } from 'react';
-import { Trash2, RotateCw, Eraser } from 'lucide-react';
+import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import {
@@ -226,6 +226,38 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     });
   }, [cells]);
 
+  // Room scale — multiplier on the base 600×480cm room. 1× = single sofa
+  // layout (default), 2.5× = multi-sofa layout (visually ~40% per module).
+  // Staff toggle this via the canvas-head "Room" pill when they need to lay
+  // out more than one sofa set in the same view.
+  const [roomScale, setRoomScale] = useState(1);
+  const roomW = ROOM_W_CM * roomScale;
+  const roomH = ROOM_H_CM * roomScale;
+
+  // Visual scale — stage stays roomW×roomH px internally (1px=1cm, real-cm
+  // scale), but transform: scale(visualScale) zooms it to fit the
+  // viewport. ResizeObserver tracks the viewport so the room fills the
+  // canvas column without breaking module positioning math. Recomputes on
+  // roomScale changes so the bigger room stays fitted.
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [visualScale, setVisualScale] = useState(1);
+  const visualScaleRef = useRef(1);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (width <= 0 || height <= 0) return;
+      const s = Math.min(width / (roomW * SCALE), height / (roomH * SCALE));
+      visualScaleRef.current = s;
+      setVisualScale(s);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [roomW, roomH]);
+
   const addConfigured = useCart((s) => s.addConfigured);
 
   /* ─── Module-add (palette → canvas) ─────────────────────────────── */
@@ -234,9 +266,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     const m = findModule(modId);
     const fp = m ? moduleFootprint(m, 0, depth) : { w: 95, h: 95 };
     const bb = cellsBbox(cells, depth);
-    if (!bb) return { x: ROOM_W_CM / 2 - fp.w / 2, y: ROOM_H_CM / 2 - fp.h / 2 };
-    return { x: Math.min(bb.x + bb.w, ROOM_W_CM - fp.w), y: bb.y };
-  }, [cells, depth]);
+    if (!bb) return { x: roomW / 2 - fp.w / 2, y: roomH / 2 - fp.h / 2 };
+    return { x: Math.min(bb.x + bb.w, roomW - fp.w), y: bb.y };
+  }, [cells, depth, roomW, roomH]);
 
   const addCell = useCallback((modId: string) => {
     const pos = spawnPos(modId);
@@ -331,8 +363,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
   const onCellPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const s = dragRef.current;
     if (!s) return;
-    const dx = (e.clientX - s.sx) / SCALE;
-    const dy = (e.clientY - s.sy) / SCALE;
+    const vs = visualScaleRef.current || 1;
+    const dx = (e.clientX - s.sx) / SCALE / vs;
+    const dy = (e.clientY - s.sy) / SCALE / vs;
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) s.moved = true;
     setDraftDelta({ ids: s.group.map((g) => g.id), dx, dy });
   };
@@ -359,8 +392,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
       const snap = findSnap({ x: draftX, y: draftY, w: fp.w, h: fp.h }, cells, primary.id, depth);
       let finalX = draftX + snap.dx;
       let finalY = draftY + snap.dy;
-      finalX = Math.max(0, Math.min(finalX, ROOM_W_CM - fp.w));
-      finalY = Math.max(0, Math.min(finalY, ROOM_H_CM - fp.h));
+      finalX = Math.max(0, Math.min(finalX, roomW - fp.w));
+      finalY = Math.max(0, Math.min(finalY, roomH - fp.h));
 
       let flippedId: string | null = null;
       const swapId = MIRROR_PAIR[cell.moduleId];
@@ -391,8 +424,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     if (bb) {
       if (bb.x < 0) dxClamp = -bb.x;
       if (bb.y < 0) dyClamp = -bb.y;
-      if (bb.x + bb.w > ROOM_W_CM) dxClamp = ROOM_W_CM - (bb.x + bb.w);
-      if (bb.y + bb.h > ROOM_H_CM) dyClamp = ROOM_H_CM - (bb.y + bb.h);
+      if (bb.x + bb.w > roomW) dxClamp = roomW - (bb.x + bb.w);
+      if (bb.y + bb.h > roomH) dyClamp = roomH - (bb.y + bb.h);
     }
     setCells((prev) => prev.map((c) =>
       c.id != null && ids.has(c.id) ? { ...c, x: c.x + delta.dx + dxClamp, y: c.y + delta.dy + dyClamp } : c,
@@ -504,6 +537,18 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
           </div>
           <div className={styles.headTools}>
             <span className={styles.depthChip}>{depth}″ seat</span>
+            <button
+              type="button"
+              className={styles.clearBtn}
+              onClick={() => setRoomScale((s) => (s === 1 ? 1.5 : 1))}
+              title={roomScale === 1 ? 'Expand room (lay out multiple sofas)' : 'Reset to single-sofa room'}
+            >
+              {roomScale === 1 ? (
+                <><Maximize2 size={14} strokeWidth={1.75} /> Expand room</>
+              ) : (
+                <><Minimize2 size={14} strokeWidth={1.75} /> Reset room</>
+              )}
+            </button>
             {analyses.map((a, i) => {
               const g = priceResult.groups[i];
               if (!a.closed) return null;
@@ -526,7 +571,23 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
           </div>
         </header>
 
-        <div className={styles.stage} style={{ width: ROOM_W_CM * SCALE, height: ROOM_H_CM * SCALE }}>
+        <div ref={viewportRef} className={styles.stageViewport}>
+        <div
+          className={styles.stage}
+          style={{
+            width: roomW * SCALE,
+            height: roomH * SCALE,
+            transform: `scale(${visualScale})`,
+            transformOrigin: 'top left',
+          }}
+          onPointerDown={(e) => {
+            // Click on empty stage (not on a cell or group outline) — deselect.
+            if (e.target === e.currentTarget) {
+              setSelectedId(null);
+              setSelectedGroupIds(null);
+            }
+          }}
+        >
           {/* Closed sofa group outlines. Tap to select the whole sofa; when
               active, the outline becomes pointer-events:none so the inner
               modules receive drag events (and move together via the
@@ -835,8 +896,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
           <div
             className={styles.tv}
             style={{
-              left: ((ROOM_W_CM - TV_W) / 2) * SCALE,
-              top: (ROOM_H_CM - TV_H - TV_BOTTOM_MARGIN) * SCALE,
+              left: ((roomW - TV_W) / 2) * SCALE,
+              top: (roomH - TV_H - TV_BOTTOM_MARGIN) * SCALE,
               width: TV_W * SCALE,
               height: TV_H * SCALE,
             }}
@@ -851,11 +912,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
           <div
             className={styles.tvBeam}
             style={{
-              left: (ROOM_W_CM / 2 - 6) * SCALE,
-              top: (ROOM_H_CM - TV_H - TV_BOTTOM_MARGIN - 14) * SCALE,
+              left: (roomW / 2 - 6) * SCALE,
+              top: (roomH - TV_H - TV_BOTTOM_MARGIN - 14) * SCALE,
             }}
             aria-hidden
           />
+        </div>
         </div>
 
         <footer className={styles.priceBar}>

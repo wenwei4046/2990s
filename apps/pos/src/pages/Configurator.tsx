@@ -379,7 +379,10 @@ export const Configurator = () => {
       centerSlot={sofaCenterSlot}
       rightSlot={sofaTopbarSlot ?? sizeTopbarSlot}
     />
-    <main className={isSofa && mode === 'quick' ? styles.sofaShell : isSize ? styles.shellWide : styles.shell}>
+    <main
+      className={isSofa && mode === 'quick' ? styles.sofaShell : isSize ? styles.shellWide : styles.shell}
+      style={isSofa && mode === 'custom' ? { background: '#FAF6EC' } : undefined}
+    >
       {!isSize && !isSofa && (
         <header className={styles.header}>
           <IconButton
