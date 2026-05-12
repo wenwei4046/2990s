@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState, useCallback, type PointerEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type PointerEvent } from 'react';
 import { Trash2, RotateCw, Eraser } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
@@ -37,6 +37,80 @@ const TV_BOTTOM_MARGIN = 30;
 const TV_GAP = 40;
 
 const ASSET_BASE = '/sofa-modules';
+
+/** Silhouette bounding box within a PNG, expressed as fractions (0..1) of
+ *  the PNG's intrinsic width/height. l/t = top-left, r/b = bottom-right. */
+interface ArtBbox { l: number; t: number; r: number; b: number }
+
+// All sofa-module PNGs are 1024×1024 but their silhouettes occupy different
+// fractions of the canvas (2A's silhouette is ~77% × 49%, 1A's is more
+// square-ish, etc.). To make the rendered cell exactly match the module's
+// cm bbox, we measure each silhouette's alpha-channel bbox once and use the
+// fractions to scale + offset the img so the silhouette fills the cellArt.
+const ART_BBOX_FALLBACK: ArtBbox = { l: 0.10, t: 0.20, r: 0.90, b: 0.80 };
+const bboxCache = new Map<string, ArtBbox>();
+const bboxPending = new Map<string, Promise<ArtBbox>>();
+const measureArtBbox = (src: string): Promise<ArtBbox> => {
+  const cached = bboxCache.get(src);
+  if (cached) return Promise.resolve(cached);
+  const pending = bboxPending.get(src);
+  if (pending) return pending;
+  const p = new Promise<ArtBbox>((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        const ctx = c.getContext('2d');
+        if (!ctx) {
+          bboxCache.set(src, ART_BBOX_FALLBACK);
+          resolve(ART_BBOX_FALLBACK);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const d = ctx.getImageData(0, 0, img.width, img.height).data;
+        let minX = img.width;
+        let minY = img.height;
+        let maxX = 0;
+        let maxY = 0;
+        // Step by 2 px for ~4× speed; bbox precision still well under 1%.
+        for (let y = 0; y < img.height; y += 2) {
+          for (let x = 0; x < img.width; x += 2) {
+            const a = d[(y * img.width + x) * 4 + 3]!;
+            if (a > 16) {
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        const bbox: ArtBbox = maxX < minX || maxY < minY
+          ? ART_BBOX_FALLBACK
+          : {
+              l: minX / img.width,
+              t: minY / img.height,
+              r: maxX / img.width,
+              b: maxY / img.height,
+            };
+        bboxCache.set(src, bbox);
+        resolve(bbox);
+      } catch {
+        bboxCache.set(src, ART_BBOX_FALLBACK);
+        resolve(ART_BBOX_FALLBACK);
+      }
+    };
+    img.onerror = () => {
+      bboxCache.set(src, ART_BBOX_FALLBACK);
+      resolve(ART_BBOX_FALLBACK);
+    };
+    img.src = src;
+  });
+  bboxPending.set(src, p);
+  return p;
+};
 
 /** Approx arm-panel width in cm. The artwork's arm overhang varies by SKU
  *  (1A vs 1B vs NA), but 32cm is the prototype's chosen visual midpoint. */
@@ -141,6 +215,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     moved: boolean;
     group: { id: string; x: number; y: number }[];
   } | null>(null);
+  // Force a re-render once a PNG's silhouette bbox finishes measuring so the
+  // img can switch from the placeholder fit to the cropped-to-silhouette sizing.
+  const [, setBboxVer] = useState(0);
+  useEffect(() => {
+    const srcs = new Set(cells.map((c) => `${ASSET_BASE}/${c.moduleId}.png`));
+    srcs.forEach((src) => {
+      if (bboxCache.has(src)) return;
+      measureArtBbox(src).then(() => setBboxVer((v) => v + 1));
+    });
+  }, [cells]);
 
   const addConfigured = useCart((s) => s.addConfigured);
 
@@ -581,9 +665,32 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                     left: (w - nativeW) / 2,
                     top: (h - nativeH) / 2,
                     transform: `rotate(${c.rot}deg)`,
+                    // When a footrest is open, let the recliner overlay
+                    // extend BELOW the seat (out of the rotated cellArt box).
+                    overflow: (c.recliners ?? []).some((r) => r.open) ? 'visible' : 'hidden',
                   }}
                 >
-                  <img src={`${ASSET_BASE}/${c.moduleId}.png`} alt={m.label} draggable={false} />
+                  {(() => {
+                    const artSrc = `${ASSET_BASE}/${c.moduleId}.png`;
+                    const bbox = bboxCache.get(artSrc);
+                    let imgStyle: CSSProperties;
+                    if (bbox) {
+                      const bw = bbox.r - bbox.l;
+                      const bh = bbox.b - bbox.t;
+                      const imgW = nativeW / bw;
+                      const imgH = nativeH / bh;
+                      imgStyle = {
+                        position: 'absolute',
+                        width: imgW,
+                        height: imgH,
+                        left: -bbox.l * imgW,
+                        top: -bbox.t * imgH,
+                      };
+                    } else {
+                      imgStyle = { width: '100%', height: '100%', objectFit: 'contain' };
+                    }
+                    return <img src={artSrc} style={imgStyle} alt={m.label} draggable={false} />;
+                  })()}
 
                   {/* Per-seat recliner overlays — render inside the rotated
                       cellArt so wash + badge + footrest auto-orient with the

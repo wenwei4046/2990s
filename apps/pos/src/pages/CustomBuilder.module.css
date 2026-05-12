@@ -565,11 +565,15 @@
   position: absolute;
   pointer-events: none;
   transform-origin: center center;
+  /* Default to clipping so the silhouette-fills-cellArt math (which sizes
+     the img larger than the cellArt then offsets it via negative left/top)
+     produces a clean crop. Override to `overflow: visible` when an open
+     recliner needs to render its footrest below the seat. */
+  overflow: hidden;
 }
 .cellArt img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .tools {
