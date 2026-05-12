@@ -73,12 +73,29 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
 export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded }: CustomBuilderProps) => {
   const [cells, setCells] = useState<Cell[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draftPos, setDraftPos] = useState<{ id: string; x: number; y: number } | null>(null);
+  // Whole-sofa group selection — when set, dragging any cell inside moves all
+  // cells in the group together by the same delta. Tools above the outline let
+  // staff remove the whole sofa or exit group mode.
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[] | null>(null);
+  // draftDelta carries the live translation for the dragging cell OR group.
+  // `ids` is one cell id for single-cell drag, or the full group's ids for a
+  // group drag. Display applies (dx, dy) to each listed cell.
+  const [draftDelta, setDraftDelta] = useState<{ ids: string[]; dx: number; dy: number } | null>(null);
   // Snap preview ghost — set during pointermove when findSnap reports a non-zero
   // shift. Drawn behind the dragging cell as a dashed outline so staff can see
-  // "release now and it will land here" before they commit.
+  // "release now and it will land here" before they commit. Group drags don't
+  // snap (yet) so the ghost only appears on single-cell drags.
   const [snapPreview, setSnapPreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const dragRef = useRef<{ id: string; pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  // group: starting (x, y) of every cell moving with this drag. For single-cell
+  // drag, length is 1. For group drag, length matches selectedGroupIds.
+  const dragRef = useRef<{
+    id: string;
+    pid: number;
+    sx: number;
+    sy: number;
+    moved: boolean;
+    group: { id: string; x: number; y: number }[];
+  } | null>(null);
 
   const addConfigured = useCart((s) => s.addConfigured);
 
@@ -102,6 +119,17 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
   const removeCell = (id: string) => {
     setCells((prev) => prev.filter((c) => c.id !== id));
     if (selectedId === id) setSelectedId(null);
+    if (selectedGroupIds?.includes(id)) {
+      // Removing a cell mid-group-selection invalidates the selection.
+      setSelectedGroupIds(null);
+    }
+  };
+
+  const removeGroup = (ids: string[]) => {
+    const set = new Set(ids);
+    setCells((prev) => prev.filter((c) => c.id == null || !set.has(c.id)));
+    setSelectedId(null);
+    setSelectedGroupIds(null);
   };
 
   const rotateCell = (id: string) => {
@@ -110,25 +138,37 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     ));
   };
 
-  const clearAll = () => { setCells([]); setSelectedId(null); };
+  const clearAll = () => { setCells([]); setSelectedId(null); setSelectedGroupIds(null); };
 
   /* ─── Drag handling ────────────────────────────────────────────── */
 
   const onCellPointerDown = (id: string, e: PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest(`.${styles.tools}`)) return; // let buttons work
-    setSelectedId(id);
     const cell = cells.find((c) => c.id === id);
     if (!cell) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = {
-      id,
-      pid: e.pointerId,
-      sx: e.clientX,
-      sy: e.clientY,
-      ox: cell.x,
-      oy: cell.y,
-      moved: false,
-    };
+
+    // If the tapped cell is part of an active whole-group selection, drag the
+    // whole group. Otherwise drag the cell solo and clear any group selection.
+    const inActiveGroup = selectedGroupIds?.includes(id) ?? false;
+    if (inActiveGroup) {
+      const groupSet = new Set(selectedGroupIds!);
+      const group = cells
+        .filter((c) => c.id != null && groupSet.has(c.id))
+        .map((c) => ({ id: c.id as string, x: c.x, y: c.y }));
+      dragRef.current = { id, pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, group };
+    } else {
+      setSelectedId(id);
+      setSelectedGroupIds(null);
+      dragRef.current = {
+        id,
+        pid: e.pointerId,
+        sx: e.clientX,
+        sy: e.clientY,
+        moved: false,
+        group: [{ id, x: cell.x, y: cell.y }],
+      };
+    }
   };
 
   const onCellPointerMove = (e: PointerEvent<HTMLDivElement>) => {
@@ -137,23 +177,27 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     const dx = (e.clientX - s.sx) / SCALE;
     const dy = (e.clientY - s.sy) / SCALE;
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) s.moved = true;
-    const draftX = s.ox + dx;
-    const draftY = s.oy + dy;
-    setDraftPos({ id: s.id, x: draftX, y: draftY });
+    setDraftDelta({ ids: s.group.map((g) => g.id), dx, dy });
 
-    // Live snap-target preview. Use the SAME findSnap call as pointerup so the
-    // ghost lands exactly where the cell will commit. If snap delta is zero,
-    // no ghost — release would leave the cell at the raw cursor position.
-    const cell = cells.find((c) => c.id === s.id);
-    const m = cell ? findModule(cell.moduleId) : null;
-    if (cell && m) {
-      const fp = moduleFootprint(m, cell.rot, depth);
-      const snap = findSnap({ x: draftX, y: draftY, w: fp.w, h: fp.h }, cells, s.id, depth);
-      if (snap.dx !== 0 || snap.dy !== 0) {
-        setSnapPreview({ x: draftX + snap.dx, y: draftY + snap.dy, w: fp.w, h: fp.h });
-      } else {
-        setSnapPreview(null);
+    // Snap preview is single-cell only. Group drags don't snap this batch —
+    // the math would need to treat the whole group's bbox as the candidate.
+    if (s.group.length === 1) {
+      const primary = s.group[0]!;
+      const cell = cells.find((c) => c.id === primary.id);
+      const m = cell ? findModule(cell.moduleId) : null;
+      if (cell && m) {
+        const fp = moduleFootprint(m, cell.rot, depth);
+        const draftX = primary.x + dx;
+        const draftY = primary.y + dy;
+        const snap = findSnap({ x: draftX, y: draftY, w: fp.w, h: fp.h }, cells, primary.id, depth);
+        if (snap.dx !== 0 || snap.dy !== 0) {
+          setSnapPreview({ x: draftX + snap.dx, y: draftY + snap.dy, w: fp.w, h: fp.h });
+        } else {
+          setSnapPreview(null);
+        }
       }
+    } else {
+      setSnapPreview(null);
     }
   };
 
@@ -162,47 +206,73 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     if (!s) return;
     dragRef.current = null;
     try { e.currentTarget.releasePointerCapture(s.pid); } catch { /* swallow */ }
-    const draft = draftPos;
-    setDraftPos(null);
+    const delta = draftDelta;
+    setDraftDelta(null);
     setSnapPreview(null);
-    if (!draft || !s.moved) return;
+    if (!delta || !s.moved) return;
 
-    const cell = cells.find((c) => c.id === s.id);
-    if (!cell) return;
-    const m = findModule(cell.moduleId);
-    if (!m) return;
-    const fp = moduleFootprint(m, cell.rot, depth);
-    const proposedBbox = { x: draft.x, y: draft.y, w: fp.w, h: fp.h };
-    const snap = findSnap(proposedBbox, cells, s.id, depth);
-    let finalX = draft.x + snap.dx;
-    let finalY = draft.y + snap.dy;
-    finalX = Math.max(0, Math.min(finalX, ROOM_W_CM - fp.w));
-    finalY = Math.max(0, Math.min(finalY, ROOM_H_CM - fp.h));
+    // Single-cell drop: same as before — snap, clamp, auto-flip, commit.
+    if (s.group.length === 1) {
+      const primary = s.group[0]!;
+      const cell = cells.find((c) => c.id === primary.id);
+      if (!cell) return;
+      const m = findModule(cell.moduleId);
+      if (!m) return;
+      const fp = moduleFootprint(m, cell.rot, depth);
+      const draftX = primary.x + delta.dx;
+      const draftY = primary.y + delta.dy;
+      const snap = findSnap({ x: draftX, y: draftY, w: fp.w, h: fp.h }, cells, primary.id, depth);
+      let finalX = draftX + snap.dx;
+      let finalY = draftY + snap.dy;
+      finalX = Math.max(0, Math.min(finalX, ROOM_W_CM - fp.w));
+      finalY = Math.max(0, Math.min(finalY, ROOM_H_CM - fp.h));
 
-    // Auto-flip on drop: if the placed cell's arm collides, but the mirror
-    // variant would not, swap moduleId. Saves the user from hunting in the palette.
-    let flippedId: string | null = null;
-    const swapId = MIRROR_PAIR[cell.moduleId];
-    if (swapId) {
-      const placed = cells.map((c) => c.id === s.id ? { ...c, x: finalX, y: finalY } : c);
-      const cur = placed.find((c) => c.id === s.id)!;
-      if (hasArmConflict(cur, placed, depth) && !hasArmConflict({ ...cur, moduleId: swapId }, placed, depth)) {
-        flippedId = swapId;
+      let flippedId: string | null = null;
+      const swapId = MIRROR_PAIR[cell.moduleId];
+      if (swapId) {
+        const placed = cells.map((c) => c.id === primary.id ? { ...c, x: finalX, y: finalY } : c);
+        const cur = placed.find((c) => c.id === primary.id)!;
+        if (hasArmConflict(cur, placed, depth) && !hasArmConflict({ ...cur, moduleId: swapId }, placed, depth)) {
+          flippedId = swapId;
+        }
       }
+      setCells((prev) => prev.map((c) =>
+        c.id === primary.id
+          ? { ...c, x: finalX, y: finalY, ...(flippedId ? { moduleId: flippedId } : null) }
+          : c,
+      ));
+      return;
     }
 
+    // Group drop: translate every group cell by the same delta. No snap, no
+    // auto-flip — those would need to reason about the group bbox. Clamp the
+    // group as a whole so no cell leaves the room.
+    const ids = new Set(s.group.map((g) => g.id));
+    // Compute group bbox at draft positions for clamping.
+    const groupCells = cells.filter((c) => c.id != null && ids.has(c.id)).map((c) => ({ ...c, x: c.x + delta.dx, y: c.y + delta.dy }));
+    const bb = cellsBbox(groupCells, depth);
+    let dxClamp = 0;
+    let dyClamp = 0;
+    if (bb) {
+      if (bb.x < 0) dxClamp = -bb.x;
+      if (bb.y < 0) dyClamp = -bb.y;
+      if (bb.x + bb.w > ROOM_W_CM) dxClamp = ROOM_W_CM - (bb.x + bb.w);
+      if (bb.y + bb.h > ROOM_H_CM) dyClamp = ROOM_H_CM - (bb.y + bb.h);
+    }
     setCells((prev) => prev.map((c) =>
-      c.id === s.id
-        ? { ...c, x: finalX, y: finalY, ...(flippedId ? { moduleId: flippedId } : null) }
-        : c,
+      c.id != null && ids.has(c.id) ? { ...c, x: c.x + delta.dx + dxClamp, y: c.y + delta.dy + dyClamp } : c,
     ));
   };
 
   /* ─── Display cells (apply draft override during drag) ─────────── */
 
-  const displayCells = draftPos
-    ? cells.map((c) => c.id === draftPos.id ? { ...c, x: draftPos.x, y: draftPos.y } : c)
-    : cells;
+  const displayCells = useMemo(() => {
+    if (!draftDelta) return cells;
+    const ids = new Set(draftDelta.ids);
+    return cells.map((c) =>
+      c.id != null && ids.has(c.id) ? { ...c, x: c.x + draftDelta.dx, y: c.y + draftDelta.dy } : c,
+    );
+  }, [cells, draftDelta]);
 
   /* ─── Group + price + violations ───────────────────────────────── */
 
@@ -322,24 +392,67 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
         </header>
 
         <div className={styles.stage} style={{ width: ROOM_W_CM * SCALE, height: ROOM_H_CM * SCALE }}>
-          {/* Closed sofa group outlines — gray dashed rounded-rect around the
-              group's bbox. Selection / drag-as-whole-group lands in Batch 3. */}
+          {/* Closed sofa group outlines. Tap to select the whole sofa; when
+              active, the outline becomes pointer-events:none so the inner
+              modules receive drag events (and move together via the
+              selectedGroupIds membership check in onCellPointerDown). */}
           {analyses.map((a, gi) => {
             if (!a.closed) return null;
             const bb = cellsBbox(a.group, depth);
             if (!bb) return null;
+            // Cell.id is technically optional on the type but every cell we
+            // create goes through nextCellId(), so the filter is just a TS
+            // narrowing aid — it never actually drops anything.
+            const groupIds = a.group.map((c) => c.id).filter((id): id is string => id != null);
+            const groupSet = new Set(groupIds);
+            const isActive = selectedGroupIds != null
+              && selectedGroupIds.length === groupIds.length
+              && groupIds.every((id) => selectedGroupIds.includes(id));
             return (
               <div
                 key={`grp-${gi}`}
-                className={styles.groupOutline}
+                className={`${styles.groupOutline} ${isActive ? styles.groupOutlineActive : ''}`}
                 style={{
                   left: bb.x * SCALE - 6,
                   top: bb.y * SCALE - 6,
                   width: bb.w * SCALE + 12,
                   height: bb.h * SCALE + 12,
                 }}
-                aria-hidden
-              />
+                onPointerDown={(e) => {
+                  if (isActive) return; // pass through to inner module
+                  e.stopPropagation();
+                  setSelectedId(null);
+                  setSelectedGroupIds(groupIds);
+                }}
+                title={isActive ? 'Whole sofa selected — drag any module to move together' : 'Tap to select the whole sofa'}
+              >
+                {!isActive && (
+                  <div className={styles.groupBadge} aria-hidden>
+                    Whole sofa
+                  </div>
+                )}
+                {isActive && (
+                  <div className={styles.groupTools} onPointerDown={(e) => e.stopPropagation()}>
+                    <span className={styles.groupToolsLabel}>Whole sofa · drag to move</span>
+                    <button
+                      type="button"
+                      className={styles.groupToolsBtn}
+                      onClick={() => removeGroup(Array.from(groupSet))}
+                      title="Remove whole sofa"
+                      aria-label="Remove whole sofa"
+                    >
+                      <Trash2 size={12} strokeWidth={2} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.groupToolsBtn} ${styles.groupToolsBtnGhost}`}
+                      onClick={() => setSelectedGroupIds(null)}
+                    >
+                      Edit modules
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
 

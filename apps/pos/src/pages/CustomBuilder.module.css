@@ -270,15 +270,108 @@
 }
 
 /* Closed sofa group — gray dashed rounded-rect around the group's bbox.
-   Whole-group selection / drag-as-one lands in Batch 3; for now this is
-   visual only, telling staff "these modules form one sellable unit". */
+   Tap to select the whole sofa; active state turns the border orange and
+   becomes pointer-events:none so cells underneath receive drag events
+   (drag-while-active moves all cells together — see onCellPointerDown). */
 .groupOutline {
   position: absolute;
   border: 1.5px dashed rgba(34, 31, 32, 0.22);
   border-radius: 8px;
+  background: transparent;
   z-index: 2;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.groupOutline:hover:not(.groupOutlineActive) {
+  border-color: rgba(34, 31, 32, 0.4);
+  background: rgba(232, 107, 58, 0.04);
+}
+.groupOutlineActive {
+  border-color: var(--c-orange);
+  background: rgba(232, 107, 58, 0.06);
+  z-index: 6;
+  pointer-events: none;
+  cursor: default;
+}
+.groupOutlineActive .groupTools {
+  pointer-events: auto;
+}
+
+/* Idle badge — appears on hover to hint "tap to select the whole sofa". */
+.groupBadge {
+  position: absolute;
+  top: -10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0;
+  transition: opacity 120ms;
   pointer-events: none;
 }
+.groupOutline:hover .groupBadge { opacity: 1; }
+
+/* Active state tools — drag hint label + Remove + Edit modules buttons. */
+.groupTools {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: 0 4px 12px rgba(34, 31, 32, 0.1);
+  white-space: nowrap;
+}
+.groupToolsLabel {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.groupToolsBtn {
+  appearance: none;
+  border: none;
+  background: var(--bg-alt);
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-error);
+  cursor: pointer;
+  transition: 120ms ease;
+  padding: 0;
+}
+.groupToolsBtn:hover { background: var(--c-error); color: #fff; }
+.groupToolsBtnGhost {
+  width: auto;
+  padding: 0 10px;
+  height: 24px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+}
+.groupToolsBtnGhost:hover { background: rgba(34, 31, 32, 0.06); color: var(--fg); }
 
 /* Group dimension callouts — top length, right depth. Architectural-drawing
    styling: thin line + end ticks + cm label centered on top. */
