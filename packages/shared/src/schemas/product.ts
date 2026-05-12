@@ -84,12 +84,38 @@ export const tbcProductSchema = productBase.extend({
   pricingKind: z.literal('tbc'),
 });
 
+// At least one row must be active AND have a price > RM 0. Applied at the
+// outer discriminated-union level so the rule reaches the SKU drawer (via
+// zodResolver) and POST /api/products on the server. Mattress / bedframe
+// SKUs require ≥1 priced size; sofa SKUs require ≥1 priced Quick-Pick bundle.
+// Compartments are intentionally NOT checked — Custom Build is a secondary
+// flow, Quick-Pick is the primary POS entry point for sofas.
 export const productSchema = z.discriminatedUnion('pricingKind', [
   sofaProductSchema,
   sizeProductSchema,
   flatProductSchema,
   tbcProductSchema,
-]);
+]).superRefine((val, ctx) => {
+  if (val.pricingKind === 'size_variants') {
+    const ok = val.sizes.some((s) => s.active && s.price > 0);
+    if (!ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sizes'],
+        message: 'Activate at least one size and fill in its price.',
+      });
+    }
+  } else if (val.pricingKind === 'sofa_build') {
+    const ok = val.bundles.some((b) => b.active && b.price > 0);
+    if (!ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['bundles'],
+        message: 'Activate at least one Quick-Pick bundle and fill in its price.',
+      });
+    }
+  }
+});
 
 export type ProductInput      = z.infer<typeof productSchema>;
 export type SofaProductInput  = z.infer<typeof sofaProductSchema>;

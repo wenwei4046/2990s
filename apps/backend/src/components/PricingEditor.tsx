@@ -86,9 +86,12 @@ const COMP_GROUPS: CompartmentLibrary['compGroup'][] = [
 ];
 
 const SofaEditor = () => {
-  const { control, setValue } = useFormContext<SkuFormData>();
+  const { control, setValue, formState: { errors } } = useFormContext<SkuFormData>();
   const compartments = useWatch({ control, name: 'compartments' }) ?? [];
   const bundles = useWatch({ control, name: 'bundles' }) ?? [];
+  // Surfaces the superRefine() error from productSchema when admin tries to
+  // save with 0 active+priced bundles. Cleared automatically on next submit.
+  const bundlesErr = (errors as { bundles?: { message?: string } }).bundles?.message;
 
   const compLib = useCompartmentLibrary();
   const bundleLib = useBundleLibrary();
@@ -186,6 +189,7 @@ const SofaEditor = () => {
             <div className={styles.blockSub}>
               Pre-set combinations sold as a single SKU — usually a touch cheaper than à-la-carte.
             </div>
+            {bundlesErr && <div className={styles.error} style={{ marginTop: 6 }}>{bundlesErr}</div>}
           </div>
           <div className={styles.blockActions}>
             <button type="button" className={styles.miniBtn} onClick={() => bulkBundle(true)}>All on</button>
@@ -237,9 +241,12 @@ const SofaEditor = () => {
 /* ─── mattress / bedframe: 4 sizes ─────────────────────────────────── */
 
 const SizeEditor = ({ catLabel }: { catLabel: string }) => {
-  const { control, setValue } = useFormContext<SkuFormData>();
+  const { control, setValue, formState: { errors } } = useFormContext<SkuFormData>();
   const sizes = useWatch({ control, name: 'sizes' }) ?? [];
   const sizeLib = useSizeLibrary();
+  // Surfaces the superRefine() error from productSchema when admin tries to
+  // save with 0 active+priced sizes. Cleared automatically on next submit.
+  const sizesErr = (errors as { sizes?: { message?: string } }).sizes?.message;
 
   if (sizeLib.isLoading) return <section className={styles.section}><p className="t-body fg-muted">Loading library…</p></section>;
   if (sizeLib.error) return <section className={styles.section}><p className={styles.error}>Failed to load size library.</p></section>;
@@ -268,6 +275,7 @@ const SizeEditor = ({ catLabel }: { catLabel: string }) => {
             <div className={styles.blockSub}>
               Each size sells at its own price. Toggle off any size this {catLabel.toLowerCase()} doesn't ship in.
             </div>
+            {sizesErr && <div className={styles.error} style={{ marginTop: 6 }}>{sizesErr}</div>}
           </div>
           <div className={styles.blockActions}>
             <button type="button" className={styles.miniBtn} onClick={() => bulkSize(true)}>All on</button>
