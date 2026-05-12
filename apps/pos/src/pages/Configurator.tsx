@@ -429,6 +429,7 @@ export const Configurator = () => {
             productId={p.id}
             productName={p.name}
             pricing={sofaPricing}
+            depth={activeDepth}
             onAdded={() => navigate('/catalog')}
           />
         )

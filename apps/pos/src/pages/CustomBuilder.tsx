@@ -55,6 +55,7 @@ interface CustomBuilderProps {
   productId: string;
   productName: string;
   pricing: SofaProductPricing;
+  depth: Depth;
   onAdded: () => void;
 }
 
@@ -69,7 +70,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, onAdded }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded }: CustomBuilderProps) => {
   const [cells, setCells] = useState<Cell[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPos, setDraftPos] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -78,7 +79,6 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
   // "release now and it will land here" before they commit.
   const [snapPreview, setSnapPreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const dragRef = useRef<{ id: string; pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
-  const depth: Depth = '24'; // depth picker UI lands in a follow-up step
 
   const addConfigured = useCart((s) => s.addConfigured);
 
