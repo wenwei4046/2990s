@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback, type PointerEvent } from 'react';
+import { Fragment, useMemo, useRef, useState, useCallback, type PointerEvent } from 'react';
 import { Trash2, RotateCw, Eraser } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
@@ -6,7 +6,6 @@ import {
   SOFA_MODULES,
   findModule,
   moduleFootprint,
-  cellBbox,
   cellsBbox,
   groupSofas,
   analyzeSofa,
@@ -25,6 +24,16 @@ import styles from './CustomBuilder.module.css';
 const ROOM_W_CM = 600;   // 6 m wide
 const ROOM_H_CM = 480;   // 4.8 m deep
 const SCALE = 1;         // 1 px = 1 cm. Stage is 600×480 px, fits a tablet column.
+
+// TV anchors the room's "front" — sofas face the TV. Fixed 140×30 block,
+// 30cm from the bottom wall, horizontally centered. TV_GAP (40cm) is the
+// minimum clearance staff are expected to keep between the sofa's front
+// edge and the TV. We render the gap zone visually but don't enforce it
+// in clamping math yet (Batch 1 is visual-only).
+const TV_W = 140;
+const TV_H = 30;
+const TV_BOTTOM_MARGIN = 30;
+const TV_GAP = 40;
 
 const ASSET_BASE = '/sofa-modules';
 
@@ -313,7 +322,71 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
         </header>
 
         <div className={styles.stage} style={{ width: ROOM_W_CM * SCALE, height: ROOM_H_CM * SCALE }}>
-          <div className={styles.tvAnchor}>TV ↑ Front of room</div>
+          {/* Closed sofa group outlines — gray dashed rounded-rect around the
+              group's bbox. Selection / drag-as-whole-group lands in Batch 3. */}
+          {analyses.map((a, gi) => {
+            if (!a.closed) return null;
+            const bb = cellsBbox(a.group, depth);
+            if (!bb) return null;
+            return (
+              <div
+                key={`grp-${gi}`}
+                className={styles.groupOutline}
+                style={{
+                  left: bb.x * SCALE - 6,
+                  top: bb.y * SCALE - 6,
+                  width: bb.w * SCALE + 12,
+                  height: bb.h * SCALE + 12,
+                }}
+                aria-hidden
+              />
+            );
+          })}
+
+          {/* Per-group length × depth dim labels. Top callout = length (w),
+              right callout = depth (h). Skip the dragging cell's group while
+              dragging so the labels don't flicker every pointermove. */}
+          {groups.map((g, gi) => {
+            const bb = cellsBbox(g, depth);
+            if (!bb) return null;
+            return (
+              <Fragment key={`dim-${gi}`}>
+                <div
+                  className={`${styles.groupDim} ${styles.groupDimTop}`}
+                  style={{
+                    left: bb.x * SCALE,
+                    top: bb.y * SCALE - 30,
+                    width: bb.w * SCALE,
+                  }}
+                  aria-hidden
+                >
+                  <span className={styles.groupDimTickV} />
+                  <span className={styles.groupDimLine} />
+                  <span className={styles.groupDimLabel}>
+                    {Math.round(bb.w)}<span className={styles.groupDimUnit}>cm</span>
+                  </span>
+                  <span className={styles.groupDimTickV} />
+                </div>
+                <div
+                  className={`${styles.groupDim} ${styles.groupDimRight}`}
+                  style={{
+                    left: (bb.x + bb.w) * SCALE + 12,
+                    top: bb.y * SCALE,
+                    height: bb.h * SCALE,
+                  }}
+                  aria-hidden
+                >
+                  <span className={styles.groupDimTickH} />
+                  <span className={styles.groupDimLineV} />
+                  <span className={`${styles.groupDimLabel} ${styles.groupDimLabelV}`}>
+                    {Math.round(bb.h)}<span className={styles.groupDimUnit}>cm</span>
+                  </span>
+                  <span className={styles.groupDimTickH} />
+                </div>
+              </Fragment>
+            );
+          })}
+
           {snapPreview && (
             <div
               className={styles.snapGhost}
@@ -387,6 +460,32 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
               <div className={styles.emptyBody}>Pick modules from the left to start building.</div>
             </div>
           )}
+
+          {/* TV block — fixed 140×30 at bottom-center. Sofas face the TV. */}
+          <div
+            className={styles.tv}
+            style={{
+              left: ((ROOM_W_CM - TV_W) / 2) * SCALE,
+              top: (ROOM_H_CM - TV_H - TV_BOTTOM_MARGIN) * SCALE,
+              width: TV_W * SCALE,
+              height: TV_H * SCALE,
+            }}
+            aria-hidden
+            title="TV — sofas face this way"
+          >
+            <div className={styles.tvScreen} />
+            <div className={styles.tvLabel}>TV</div>
+          </div>
+          {/* Sight-line beam — small orange triangle above the TV, pointing up
+              at the sofa zone. Renders TV_GAP/2 above the TV's top edge. */}
+          <div
+            className={styles.tvBeam}
+            style={{
+              left: (ROOM_W_CM / 2 - 6) * SCALE,
+              top: (ROOM_H_CM - TV_H - TV_BOTTOM_MARGIN - 14) * SCALE,
+            }}
+            aria-hidden
+          />
         </div>
 
         <footer className={styles.priceBar}>
