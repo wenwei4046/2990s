@@ -62,17 +62,17 @@
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.step {
+  padding: 4px 10px;
+  border-radius: 999px;
   font-family: var(--font-button);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--fg-muted);
-}
-
-.step {
-  padding: 4px 10px;
-  border-radius: 999px;
 }
 
 .stepActive {
@@ -207,11 +207,11 @@
   }
   .center {
     gap: 6px;
-    font-size: 11px;
-    letter-spacing: 0.12em;
   }
   .step {
     padding: 4px 8px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
   }
   .right {
     gap: 8px;

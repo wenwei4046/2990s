@@ -23,9 +23,16 @@ interface TopbarProps {
    * Add to Cart). Avatar + logout still render after the slot.
    */
   rightSlot?: ReactNode;
+  /**
+   * When provided, replaces the CART / CUSTOMER / CONFIRMED step pills in
+   * the topbar's center area. Used by Configurator to inject back arrow,
+   * depth toggle, and mode tabs — step pills don't make sense while staff
+   * is mid-build of a single SKU.
+   */
+  centerSlot?: ReactNode;
 }
 
-export function Topbar({ step, rightSlot }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const lines = useCart((s) => s.lines);
@@ -49,7 +56,7 @@ export function Topbar({ step, rightSlot }: TopbarProps) {
       </div>
 
       <div className={styles.center}>
-        {STEPS.map((s, i) => (
+        {centerSlot ?? STEPS.map((s, i) => (
           <span
             key={s.id}
             className={`${styles.step} ${step === s.id ? styles.stepActive : ''}`}

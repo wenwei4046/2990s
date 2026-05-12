@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
@@ -31,6 +31,28 @@ interface SizeRow {
   price: number | null;
   active: boolean;
 }
+
+// Quick-Pick preset metadata — sub label + 24" baseline footprint (cm).
+// Width grows 10cm per cushion at 28" depth; depth stays constant.
+// Mirrors prototype/pos-sofa-config.jsx → QUICK_PRESETS, kept Configurator-local
+// because it's purely UI sizing for the hero plan-view canvas.
+const QUICK_PRESET_META: Record<string, { sub: string; cushions: number; baseW: number; baseD: number }> = {
+  '1S':  { sub: 'Single seat',           cushions: 2, baseW: 190, baseD: 95 },
+  '2S':  { sub: 'Two seats',             cushions: 4, baseW: 316, baseD: 95 },
+  '3S':  { sub: 'Three seats',           cushions: 3, baseW: 265, baseD: 95 },
+  '2+L': { sub: '2-seater with chaise',  cushions: 3, baseW: 253, baseD: 165 },
+  '3+L': { sub: '3-seater with chaise',  cushions: 4, baseW: 360, baseD: 165 },
+};
+
+const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number } => {
+  const m = QUICK_PRESET_META[bundleId];
+  if (!m) return { w: 0, d: 0 };
+  const offsetPerCushion = depth === '28' ? 10 : 0;
+  return { w: m.baseW + offsetPerCushion * m.cushions, d: m.baseD };
+};
+
+const isLShapeBundle = (id: string | null | undefined): boolean =>
+  id === '2+L' || id === '3+L';
 
 export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
@@ -188,11 +210,10 @@ export const Configurator = () => {
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
   const sofaTotal = pickedSofaRow?.price ?? 0;
   const canAddSofa = pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null;
-  const isLShape = (id: string | null) => id === '2+L' || id === '3+L';
 
   const handleAddSofa = () => {
     if (!canAddSofa || pickedSofaRow == null || pickedSofaRow.price == null) return;
-    const lShape = isLShape(pickedSofaRow.bundle.id);
+    const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -255,25 +276,10 @@ export const Configurator = () => {
     </span>
   ) : undefined;
 
-  // Topbar action slot for sofa Quick-Pick: depth toggle (24"/28") +
-  // Model+bundle chip + LIVE TOTAL + Cancel + Add to Cart. Mirrors the
-  // size_variants treatment so both flows feel uniform.
+  // Sofa right slot — chip + LIVE TOTAL + Cancel + Add to Cart. Depth toggle
+  // and mode tabs moved to centerSlot per prototype topbar layout.
   const sofaTopbarSlot = isSofa && mode === 'quick' ? (
     <span className={styles.topbarActions}>
-      <span className={styles.depthTabs} role="tablist" aria-label="Seat depth">
-        {(['24', '28'] as const).map((d) => (
-          <button
-            key={d}
-            type="button"
-            role="tab"
-            aria-selected={activeDepth === d}
-            className={`${styles.depthTab} ${activeDepth === d ? styles.depthTabActive : ''}`}
-            onClick={() => setActiveDepth(d)}
-          >
-            {d}&quot;
-          </button>
-        ))}
-      </span>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
           {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
@@ -285,7 +291,7 @@ export const Configurator = () => {
         </span>
         {pickedSofaRow && (
           <span className={styles.topbarChipSub}>
-            Quick Pick{isLShape(pickedSofaRow.bundle.id) ? ` · ${quickFlip}-facing` : ''}
+            Quick Pick{isLShapeBundle(pickedSofaRow.bundle.id) ? ` · ${quickFlip}-facing` : ''}
           </span>
         )}
       </span>
@@ -316,11 +322,65 @@ export const Configurator = () => {
     </span>
   ) : undefined;
 
+  // Sofa center slot — back arrow + 24"/28" depth toggle + Quick/Customize
+  // tabs. Renders for both Quick-Pick and Custom build modes. Step pills
+  // (CART/CUSTOMER/CONFIRMED) hide when this slot is present.
+  const sofaCenterSlot = isSofa ? (
+    <>
+      <button
+        type="button"
+        className={styles.topbarBack}
+        onClick={() => navigate('/catalog')}
+        aria-label="Back to catalog"
+      >
+        <ArrowLeft size={20} strokeWidth={1.75} />
+      </button>
+      <span className={styles.depthTabs} role="tablist" aria-label="Seat depth">
+        {(['24', '28'] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            role="tab"
+            aria-selected={activeDepth === d}
+            className={`${styles.depthTab} ${activeDepth === d ? styles.depthTabActive : ''}`}
+            onClick={() => setActiveDepth(d)}
+          >
+            {d}&quot;
+          </button>
+        ))}
+      </span>
+      <span className={styles.modeTabs} role="tablist" aria-label="Build mode">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'quick'}
+          className={`${styles.modeTab} ${mode === 'quick' ? styles.modeTabActive : ''}`}
+          onClick={() => setMode('quick')}
+        >
+          Quick Pick
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'custom'}
+          className={`${styles.modeTab} ${mode === 'custom' ? styles.modeTabActive : ''}`}
+          onClick={() => setMode('custom')}
+        >
+          Customize
+        </button>
+      </span>
+    </>
+  ) : undefined;
+
   return (
     <>
-    <Topbar step="cart" rightSlot={sofaTopbarSlot ?? sizeTopbarSlot} />
-    <main className={isSize ? styles.shellWide : styles.shell}>
-      {!isSize && (
+    <Topbar
+      step={isSofa ? undefined : 'cart'}
+      centerSlot={sofaCenterSlot}
+      rightSlot={sofaTopbarSlot ?? sizeTopbarSlot}
+    />
+    <main className={isSofa && mode === 'quick' ? styles.sofaShell : isSize ? styles.shellWide : styles.shell}>
+      {!isSize && !isSofa && (
         <header className={styles.header}>
           <IconButton
             icon={<ArrowLeft size={20} strokeWidth={1.75} />}
@@ -354,46 +414,24 @@ export const Configurator = () => {
       )}
 
       {isSofa && (
-        <>
-          <div className={styles.tabs} role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'quick'}
-              className={`${styles.tab} ${mode === 'quick' ? styles.tabActive : ''}`}
-              onClick={() => setMode('quick')}
-            >
-              Quick-Pick
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'custom'}
-              className={`${styles.tab} ${mode === 'custom' ? styles.tabActive : ''}`}
-              onClick={() => setMode('custom')}
-            >
-              Custom build
-            </button>
-          </div>
-
-          {mode === 'quick' ? (
-            <SofaQuickPick
-              isLoading={bundles.isLoading}
-              rows={sofaBundleRows}
-              picked={picked}
-              onPick={setPicked}
-              quickFlip={quickFlip}
-              onFlipChange={setQuickFlip}
-            />
-          ) : (
-            <CustomBuilder
-              productId={p.id}
-              productName={p.name}
-              pricing={sofaPricing}
-              onAdded={() => navigate('/catalog')}
-            />
-          )}
-        </>
+        mode === 'quick' ? (
+          <SofaQuickPick
+            isLoading={bundles.isLoading}
+            rows={sofaBundleRows}
+            picked={picked}
+            onPick={setPicked}
+            quickFlip={quickFlip}
+            onFlipChange={setQuickFlip}
+            depth={activeDepth}
+          />
+        ) : (
+          <CustomBuilder
+            productId={p.id}
+            productName={p.name}
+            pricing={sofaPricing}
+            onAdded={() => navigate('/catalog')}
+          />
+        )
       )}
 
       {isSize && (
@@ -536,11 +574,13 @@ export const Configurator = () => {
         </p>
       )}
 
-      <footer className={styles.footer}>
-        <span className="t-caption">
-          Realtime subscription on this product's pricing. Backend edits land here in ~300ms.
-        </span>
-      </footer>
+      {!(isSofa && mode === 'quick') && (
+        <footer className={styles.footer}>
+          <span className="t-caption">
+            Realtime subscription on this product's pricing. Backend edits land here in ~300ms.
+          </span>
+        </footer>
+      )}
     </main>
     </>
   );
@@ -779,6 +819,7 @@ interface SofaQuickPickProps {
   onPick: (id: string) => void;
   quickFlip: 'L' | 'R';
   onFlipChange: (flip: 'L' | 'R') => void;
+  depth: Depth;
 }
 
 // Maps a bundle id (+ flip orientation for L-shape variants) to the public
@@ -791,80 +832,130 @@ const bundleArtSrc = (bundleId: string, flip: 'L' | 'R'): string => {
   return `/sofa-modules/${bundleId}.png`;
 };
 
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange }: SofaQuickPickProps) => {
+// Two-column layout port from prototype: left rail = compact bundle cards,
+// right hero = big plan-view of the currently picked bundle with W × D
+// dimension lines. Only bundles that are active + priced on this Model show.
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth }: SofaQuickPickProps) => {
+  // Hide bundles not activated for this Model. The productSchema refine
+  // guarantees ≥1 active+priced bundle exists for every sofa SKU.
+  const activeRows = useMemo(
+    () => rows.filter((r) => r.active && r.price != null),
+    [rows],
+  );
+
+  // Auto-pick the first active bundle on first paint so the hero always
+  // has something to render. Staff can change it after.
+  useEffect(() => {
+    if (picked == null && activeRows.length > 0) {
+      onPick(activeRows[0]!.bundle.id);
+    }
+  }, [picked, activeRows, onPick]);
+
   if (isLoading) return <p className={styles.empty}>Loading bundles…</p>;
+  if (activeRows.length === 0) {
+    return <p className={styles.empty}>No Quick-Pick layouts activated for this Model yet.</p>;
+  }
+
+  const pickedRow = activeRows.find((r) => r.bundle.id === picked) ?? activeRows[0]!;
+  const dims = quickPresetDims(pickedRow.bundle.id, depth);
+  const ar = dims.d > 0 ? dims.w / dims.d : 2;
 
   return (
-    <section className={styles.section}>
-      <header className={styles.sectionHead}>
-        <span className={styles.sectionEyebrow}>Quick Pick · Basic</span>
-        <h2 className={styles.sectionTitle}>Pre-built configurations</h2>
-        <p className="t-body fg-muted">
-          5 layouts · price per this Model's rules. Pick one, see the LIVE TOTAL, add to cart.
-        </p>
-      </header>
-      <div className={styles.bundleGrid}>
-        {rows.map(({ bundle, price, active }) => {
-          const isPicked = picked === bundle.id;
-          const inactive = !active || price == null;
-          const lShape = bundle.id === '2+L' || bundle.id === '3+L';
-          return (
-            <button
-              key={bundle.id}
-              type="button"
-              className={`${styles.bundleCard} ${isPicked ? styles.bundleCardPicked : ''} ${inactive ? styles.bundleCardInactive : ''}`}
-              disabled={inactive}
-              onClick={() => onPick(bundle.id)}
-            >
-              <div className={styles.bundleHead}>
-                <code className={styles.bundleCode}>{bundle.id}</code>
-                <span className={styles.bundleLabel}>{bundle.label}</span>
+    <>
+      <aside className={styles.qpRail}>
+        <header className={styles.qpRailHead}>
+          <span className={styles.qpRailEyebrow}>Quick Pick · Basic</span>
+          <span className={styles.qpRailDetail}>{depth}″ seat · pricing per layout</span>
+        </header>
+        <div className={styles.qpGrid}>
+          {activeRows.map(({ bundle, price }) => {
+            const isPicked = bundle.id === pickedRow.bundle.id;
+            const lShape = isLShapeBundle(bundle.id);
+            const meta = QUICK_PRESET_META[bundle.id];
+            return (
+              <button
+                key={bundle.id}
+                type="button"
+                className={`${styles.qpCard} ${isPicked ? styles.qpCardPicked : ''}`}
+                onClick={() => onPick(bundle.id)}
+              >
+                <div className={styles.qpCardArt}>
+                  <img
+                    src={bundleArtSrc(bundle.id, quickFlip)}
+                    alt={`${bundle.label} plan view`}
+                    draggable={false}
+                    loading="lazy"
+                  />
+                </div>
+                <div className={styles.qpCardBody}>
+                  <span className={styles.qpCardLabel}>{bundle.label}</span>
+                  {meta?.sub && <span className={styles.qpCardSub}>{meta.sub}</span>}
+                  <span className={styles.qpCardPrice}>RM{(price ?? 0).toLocaleString('en-MY')}</span>
+                </div>
                 {lShape && isPicked && (
                   <span
-                    className={styles.bundleFlip}
+                    className={styles.qpFlip}
                     role="group"
                     aria-label="Chaise orientation"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {(['L', 'R'] as const).map((side) => (
-                      <span
+                      <button
                         key={side}
-                        role="button"
-                        tabIndex={0}
+                        type="button"
                         aria-pressed={quickFlip === side}
-                        className={`${styles.bundleFlipBtn} ${quickFlip === side ? styles.bundleFlipBtnActive : ''}`}
+                        className={`${styles.qpFlipBtn} ${quickFlip === side ? styles.qpFlipBtnActive : ''}`}
                         onClick={(e) => { e.stopPropagation(); onFlipChange(side); }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            onFlipChange(side);
-                          }
-                        }}
                       >
                         {side}
-                      </span>
+                      </button>
                     ))}
                   </span>
                 )}
-              </div>
-              <div className={styles.bundleArt}>
-                <img
-                  src={bundleArtSrc(bundle.id, quickFlip)}
-                  alt={`${bundle.label} plan view`}
-                  loading="lazy"
-                />
-              </div>
-              <div className={styles.bundleSig}>{bundle.signature}</div>
-              <div className={styles.bundlePrice}>
-                {inactive
-                  ? <span className={styles.unavailable}>Not on this Model</span>
-                  : <PriceTag amount={price} size="md" />}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </section>
+              </button>
+            );
+          })}
+        </div>
+      </aside>
+
+      <section className={styles.qpHero}>
+        <div className={styles.qpHeroFrame}>
+          <div
+            className={styles.qpHeroBox}
+            style={{ '--qp-ar': ar } as CSSProperties}
+          >
+            <img
+              src={bundleArtSrc(pickedRow.bundle.id, quickFlip)}
+              alt={`${pickedRow.bundle.label} plan view`}
+              draggable={false}
+            />
+            {/* Top width dim — vertical pins at the ends of a horizontal line,
+                with the cm label absolute-positioned over the middle. */}
+            <div className={`${styles.qpDim} ${styles.qpDimTop}`} aria-hidden="true">
+              <span className={styles.qpDimTickV} />
+              <span className={styles.qpDimLine} />
+              <span className={styles.qpDimTickV} />
+              <span className={styles.qpDimLabel}>
+                {dims.w}<span className={styles.qpDimUnit}>cm</span>
+              </span>
+            </div>
+            {/* Right depth dim — horizontal pins at the ends of a vertical
+                line, label centered over the middle. */}
+            <div className={`${styles.qpDim} ${styles.qpDimRight}`} aria-hidden="true">
+              <span className={styles.qpDimTickH} />
+              <span className={styles.qpDimLineV} />
+              <span className={styles.qpDimTickH} />
+              <span className={styles.qpDimLabel}>
+                {dims.d}<span className={styles.qpDimUnit}>cm</span>
+              </span>
+            </div>
+          </div>
+        </div>
+        <footer className={styles.qpHeroFoot}>
+          <span className={styles.qpHeroFootEyebrow}>Plan view</span>
+          <span className={styles.qpHeroFootDim}>{depth}″ seat · to scale</span>
+        </footer>
+      </section>
+    </>
   );
 };
