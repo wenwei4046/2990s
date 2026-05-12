@@ -233,6 +233,19 @@
    RM 0. Class is still applied conditionally in TSX so the state survives if we
    reintroduce a softer visual later (e.g. just a small icon). */
 
+/* Snap-target ghost — drawn during drag when findSnap reports a non-zero
+   shift. Shows "release now and the cell will land here" so staff don't
+   have to guess whether the 20cm threshold has been crossed. */
+.snapGhost {
+  position: absolute;
+  pointer-events: none;
+  border: 2px dashed var(--c-orange);
+  background: rgba(232, 107, 58, 0.12);
+  border-radius: 4px;
+  z-index: 3;
+  transition: left 80ms ease, top 80ms ease;
+}
+
 .cellArt {
   position: absolute;
   pointer-events: none;

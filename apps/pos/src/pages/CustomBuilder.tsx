@@ -64,6 +64,10 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
   const [cells, setCells] = useState<Cell[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftPos, setDraftPos] = useState<{ id: string; x: number; y: number } | null>(null);
+  // Snap preview ghost — set during pointermove when findSnap reports a non-zero
+  // shift. Drawn behind the dragging cell as a dashed outline so staff can see
+  // "release now and it will land here" before they commit.
+  const [snapPreview, setSnapPreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const dragRef = useRef<{ id: string; pid: number; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const depth: Depth = '24'; // depth picker UI lands in a follow-up step
 
@@ -124,7 +128,24 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
     const dx = (e.clientX - s.sx) / SCALE;
     const dy = (e.clientY - s.sy) / SCALE;
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) s.moved = true;
-    setDraftPos({ id: s.id, x: s.ox + dx, y: s.oy + dy });
+    const draftX = s.ox + dx;
+    const draftY = s.oy + dy;
+    setDraftPos({ id: s.id, x: draftX, y: draftY });
+
+    // Live snap-target preview. Use the SAME findSnap call as pointerup so the
+    // ghost lands exactly where the cell will commit. If snap delta is zero,
+    // no ghost — release would leave the cell at the raw cursor position.
+    const cell = cells.find((c) => c.id === s.id);
+    const m = cell ? findModule(cell.moduleId) : null;
+    if (cell && m) {
+      const fp = moduleFootprint(m, cell.rot, depth);
+      const snap = findSnap({ x: draftX, y: draftY, w: fp.w, h: fp.h }, cells, s.id, depth);
+      if (snap.dx !== 0 || snap.dy !== 0) {
+        setSnapPreview({ x: draftX + snap.dx, y: draftY + snap.dy, w: fp.w, h: fp.h });
+      } else {
+        setSnapPreview(null);
+      }
+    }
   };
 
   const onCellPointerUp = (e: PointerEvent<HTMLDivElement>) => {
@@ -134,6 +155,7 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
     try { e.currentTarget.releasePointerCapture(s.pid); } catch { /* swallow */ }
     const draft = draftPos;
     setDraftPos(null);
+    setSnapPreview(null);
     if (!draft || !s.moved) return;
 
     const cell = cells.find((c) => c.id === s.id);
@@ -292,6 +314,18 @@ export const CustomBuilder = ({ productId, productName, pricing, onAdded }: Cust
 
         <div className={styles.stage} style={{ width: ROOM_W_CM * SCALE, height: ROOM_H_CM * SCALE }}>
           <div className={styles.tvAnchor}>TV ↑ Front of room</div>
+          {snapPreview && (
+            <div
+              className={styles.snapGhost}
+              style={{
+                left: snapPreview.x * SCALE,
+                top: snapPreview.y * SCALE,
+                width: snapPreview.w * SCALE,
+                height: snapPreview.h * SCALE,
+              }}
+              aria-hidden
+            />
+          )}
           {displayCells.map((c) => {
             const m = findModule(c.moduleId);
             if (!m) return null;
