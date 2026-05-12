@@ -797,7 +797,11 @@
 .qpHeroBox img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  /* object-fit: fill so the plan-view stretches to match the box's
+     aspect-ratio (set to the physical W × D in --qp-ar). The dim lines
+     anchor to the box edges — `contain` would letterbox the image and
+     leave the dim lines floating off the actual sofa silhouette. */
+  object-fit: fill;
   filter: drop-shadow(0 16px 24px rgba(60, 40, 20, 0.12));
   user-select: none;
   -webkit-user-drag: none;
