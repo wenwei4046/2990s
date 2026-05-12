@@ -131,11 +131,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
   // `ids` is one cell id for single-cell drag, or the full group's ids for a
   // group drag. Display applies (dx, dy) to each listed cell.
   const [draftDelta, setDraftDelta] = useState<{ ids: string[]; dx: number; dy: number } | null>(null);
-  // Snap preview ghost — set during pointermove when findSnap reports a non-zero
-  // shift. Drawn behind the dragging cell as a dashed outline so staff can see
-  // "release now and it will land here" before they commit. Group drags don't
-  // snap (yet) so the ghost only appears on single-cell drags.
-  const [snapPreview, setSnapPreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   // group: starting (x, y) of every cell moving with this drag. For single-cell
   // drag, length is 1. For group drag, length matches selectedGroupIds.
   const dragRef = useRef<{
@@ -256,27 +251,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     const dy = (e.clientY - s.sy) / SCALE;
     if (Math.abs(dx) > 1 || Math.abs(dy) > 1) s.moved = true;
     setDraftDelta({ ids: s.group.map((g) => g.id), dx, dy });
-
-    // Snap preview is single-cell only. Group drags don't snap this batch —
-    // the math would need to treat the whole group's bbox as the candidate.
-    if (s.group.length === 1) {
-      const primary = s.group[0]!;
-      const cell = cells.find((c) => c.id === primary.id);
-      const m = cell ? findModule(cell.moduleId) : null;
-      if (cell && m) {
-        const fp = moduleFootprint(m, cell.rot, depth);
-        const draftX = primary.x + dx;
-        const draftY = primary.y + dy;
-        const snap = findSnap({ x: draftX, y: draftY, w: fp.w, h: fp.h }, cells, primary.id, depth);
-        if (snap.dx !== 0 || snap.dy !== 0) {
-          setSnapPreview({ x: draftX + snap.dx, y: draftY + snap.dy, w: fp.w, h: fp.h });
-        } else {
-          setSnapPreview(null);
-        }
-      }
-    } else {
-      setSnapPreview(null);
-    }
   };
 
   const onCellPointerUp = (e: PointerEvent<HTMLDivElement>) => {
@@ -286,7 +260,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     try { e.currentTarget.releasePointerCapture(s.pid); } catch { /* swallow */ }
     const delta = draftDelta;
     setDraftDelta(null);
-    setSnapPreview(null);
     if (!delta || !s.moved) return;
 
     // Single-cell drop: same as before — snap, clamp, auto-flip, commit.
@@ -578,18 +551,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             );
           })}
 
-          {snapPreview && (
-            <div
-              className={styles.snapGhost}
-              style={{
-                left: snapPreview.x * SCALE,
-                top: snapPreview.y * SCALE,
-                width: snapPreview.w * SCALE,
-                height: snapPreview.h * SCALE,
-              }}
-              aria-hidden
-            />
-          )}
           {displayCells.map((c) => {
             const m = findModule(c.moduleId);
             if (!m) return null;
