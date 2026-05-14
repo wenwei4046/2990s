@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, type BundleDef, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -66,6 +66,10 @@ export const Configurator = () => {
   const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
   const [pillowExtras, setPillowExtras] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<'quick' | 'custom'>('quick');
+  // Sofa Custom Build cells lifted here so they survive Quick Pick ⇄ Customize
+  // toggles within this Configurator session. Resets only when Configurator
+  // unmounts (Back button → leave the product page).
+  const [sofaCells, setSofaCells] = useState<Cell[]>([]);
   // Sofa Quick-Pick toolbar state. quickFlip controls the L/R orientation of
   // L-shape bundles (2+L, 3+L); activeDepth toggles 24"/28" seat depth which
   // affects per-cushion footprint (~10cm wider per cushion at 28"). Both
@@ -439,6 +443,8 @@ export const Configurator = () => {
             productName={p.name}
             pricing={sofaPricing}
             depth={activeDepth}
+            cells={sofaCells}
+            setCells={setSofaCells}
             onAdded={() => navigate('/catalog')}
           />
         )

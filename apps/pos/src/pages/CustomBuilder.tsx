@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type PointerEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type SetStateAction } from 'react';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
@@ -180,6 +180,11 @@ interface CustomBuilderProps {
   productName: string;
   pricing: SofaProductPricing;
   depth: Depth;
+  // cells lift to the parent Configurator so the canvas layout survives
+  // Quick Pick ⇄ Customize toggles within the same product page. The state
+  // resets only when the parent unmounts (Back button → leave the product).
+  cells: Cell[];
+  setCells: Dispatch<SetStateAction<Cell[]>>;
   onAdded: () => void;
 }
 
@@ -194,8 +199,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded }: CustomBuilderProps) => {
-  const [cells, setCells] = useState<Cell[]>([]);
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -303,6 +307,54 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     setCells((prev) => prev.map((c) =>
       c.id === id ? { ...c, rot: (((c.rot + 90) % 360) as Rot) } : c,
     ));
+  };
+
+  // Rotate every cell in a group 90° clockwise around the group's bbox center.
+  // Each cell's footprint may swap w/h after the rot change (1A's 95×95 stays;
+  // 2A-LHF's 190×95 → 95×190), so the new top-left re-derives from the
+  // post-rotation footprint and the new center to keep the group anchored at
+  // its original centroid. Auto-convert (canonical SKU swap) intentionally
+  // does NOT re-trigger on this — moduleIds don't change, only positions.
+  const rotateGroup = (ids: string[]) => {
+    const set = new Set(ids);
+    setCells((prev) => {
+      const groupCells = prev.filter((c) => c.id != null && set.has(c.id));
+      if (groupCells.length === 0) return prev;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const c of groupCells) {
+        const m = findModule(c.moduleId);
+        if (!m) continue;
+        const fp = moduleFootprint(m, c.rot, depth);
+        if (c.x < minX) minX = c.x;
+        if (c.y < minY) minY = c.y;
+        if (c.x + fp.w > maxX) maxX = c.x + fp.w;
+        if (c.y + fp.h > maxY) maxY = c.y + fp.h;
+      }
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      return prev.map((c) => {
+        if (c.id == null || !set.has(c.id)) return c;
+        const m = findModule(c.moduleId);
+        if (!m) return c;
+        const oldFp = moduleFootprint(m, c.rot, depth);
+        const oldCenterX = c.x + oldFp.w / 2;
+        const oldCenterY = c.y + oldFp.h / 2;
+        // Screen-coord 90° CW around (cx, cy): (x,y) → (cx+cy-y, cy-cx+x)
+        const newCenterX = cx + cy - oldCenterY;
+        const newCenterY = cy - cx + oldCenterX;
+        const newRot = (((c.rot + 90) % 360) as Rot);
+        const newFp = moduleFootprint(m, newRot, depth);
+        return {
+          ...c,
+          x: newCenterX - newFp.w / 2,
+          y: newCenterY - newFp.h / 2,
+          rot: newRot,
+        };
+      });
+    });
   };
 
   // Toggle a per-seat recliner upgrade on/off (the +RM 990/seat option).
@@ -761,6 +813,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                     <button
                       type="button"
                       className={styles.groupToolsBtn}
+                      onClick={() => rotateGroup(Array.from(groupSet))}
+                      title="Rotate whole sofa 90°"
+                      aria-label="Rotate whole sofa"
+                    >
+                      <RotateCw size={12} strokeWidth={2} />
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.groupToolsBtn}
                       onClick={() => removeGroup(Array.from(groupSet))}
                       title="Remove whole sofa"
                       aria-label="Remove whole sofa"
@@ -843,14 +904,19 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             const py = (c.y ?? 0) * SCALE;
             const w = fp.w * SCALE;
             const h = fp.h * SCALE;
-            // cellArt matches the rendered cell footprint (fp.w × fp.h) so the
-            // silhouette stretches with the 28" cushion extension instead of
-            // sitting padded inside a smaller box — adjacent cells now abut
-            // silhouette-to-silhouette with no visible seam between them. The
-            // physical cushion IS 10cm wider at 28", so a uniform 10% stretch
-            // is the truthful render.
-            const nativeW = w;
-            const nativeH = h;
+            // cellArt size & position depends on rotation:
+            //   rot 0 / 180: silhouette stretches to fill the cell (w × h) so
+            //     adjacent cells abut without the 5px-each-side padding gap
+            //     that the 28" depth extension would otherwise introduce.
+            //   rot 90 / 270: cellArt uses the PRE-rotation module dims
+            //     (m.w × m.d) so the silhouette PNG keeps its drawn aspect
+            //     when rotated by transform:rotate — otherwise stretching to
+            //     fp.w × fp.h would warp the silhouette before the CSS
+            //     rotation snaps it sideways. cellArt is centered inside the
+            //     cell so the rotation pivot stays at the cell center.
+            const isSideways = c.rot === 90 || c.rot === 270;
+            const nativeW = isSideways ? m.w * SCALE : w;
+            const nativeH = isSideways ? m.d * SCALE : h;
             return (
               <div
                 key={c.id}
@@ -1051,6 +1117,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             const isDraggingThisGroup =
               draftDelta != null && draftDelta.ids.some((id) => ids.has(id));
             if (isDraggingThisGroup) return null;
+            // Skip when the group is rotated — the composite PNG is painted
+            // for the horizontal orientation, so stretching it to fit a
+            // rotated bbox produces a wildly skewed image. Per-cell rotated
+            // silhouettes read fine on their own.
+            if (groupCells.some((c) => c.rot !== 0)) return null;
             const dispCells = displayCells.filter((c) => c.id != null && ids.has(c.id));
             const bb = cellsBbox(dispCells, depth);
             if (!bb) return null;
