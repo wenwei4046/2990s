@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Inbox } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useOrders, useOrdersRealtime, type OrderListRow } from '../lib/queries';
+import { useNotificationStore } from '../lib/notifications';
 import { OrderDrawer } from '../components/OrderDrawer';
 import { PoScanModal } from '../components/PoScanModal';
 import { OrdersBoard } from '../components/OrdersBoard';
@@ -18,6 +19,13 @@ export const Orders = () => {
   const openOrderId = searchParams.get('orderId');
   const [poScanOpen, setPoScanOpen] = useState(false);
   const queryClient = useQueryClient();
+  const markOrdersRead = useNotificationStore((s) => s.markOrdersRead);
+
+  // Clear the sidebar "Orders" badge whenever we view this page or fresh data
+  // arrives while viewing — visiting the lane board is the "read" event.
+  useEffect(() => {
+    if (orders.data) markOrdersRead(new Date().toISOString());
+  }, [orders.data, markOrdersRead]);
 
   // Logistics-lane orders with at least one item not yet covered by a PO.
   // Cross-supplier orders flow through here once per supplier (via cart.purchased

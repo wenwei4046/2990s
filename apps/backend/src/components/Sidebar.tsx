@@ -11,6 +11,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
+import { useNotificationStore } from '../lib/notifications';
 import { useOrders, useSlipQueue } from '../lib/queries';
 import styles from './Sidebar.module.css';
 
@@ -43,9 +44,14 @@ export const Sidebar = () => {
   const { staff, signOut } = useAuth();
   const { data: orders } = useOrders();
   const { data: slipQueue } = useSlipQueue();
+  const ordersReadAt = useNotificationStore((s) => s.ordersReadAt);
 
   const ordersBadge =
-    orders?.filter((o) => o.lane === 'received' || o.lane === 'proceed').length ?? 0;
+    orders?.filter((o) => {
+      if (o.lane !== 'received' && o.lane !== 'proceed') return false;
+      if (ordersReadAt && o.placedAt <= ordersReadAt) return false;
+      return true;
+    }).length ?? 0;
   const slipsBadge = slipQueue?.length ?? 0;
 
   const items: NavRow[] = [

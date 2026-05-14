@@ -79,19 +79,19 @@
 
 .navBadge {
   margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-block;
+  text-align: center;
   min-width: 22px;
   height: 22px;
-  padding: 0 8px;
+  padding: 0 6px;
   border-radius: var(--radius-pill);
   background: var(--c-burnt);
   color: var(--c-cream);
   font-family: var(--font-button);
-  font-size: var(--fs-11);
+  font-size: var(--fs-12);
   font-weight: var(--w-bold);
-  line-height: 1;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
 }
 .navBadgeGhost {
   background: var(--bg-alt);
