@@ -225,7 +225,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
   // img can switch from the placeholder fit to the cropped-to-silhouette sizing.
   const [, setBboxVer] = useState(0);
   useEffect(() => {
-    const srcs = new Set(cells.map((c) => `${ASSET_BASE}/${c.moduleId}.png`));
+    const srcs = new Set<string>(cells.map((c) => `${ASSET_BASE}/${c.moduleId}.png`));
     srcs.forEach((src) => {
       if (bboxCache.has(src)) return;
       measureArtBbox(src).then(() => setBboxVer((v) => v + 1));
@@ -456,6 +456,23 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
     [groups, depth],
   );
   const priceResult = useMemo(() => computeSofaPrice(cells, depth, pricing), [cells, depth, pricing]);
+
+  // Eagerly load bbox for any matched-bundle composite PNG so the overlay
+  // image scales correctly the moment it appears (avoids a fall-back-to-cells
+  // flicker between drop and overlay render).
+  useEffect(() => {
+    priceResult.groups.forEach((g, i) => {
+      if (!g.bundle) return;
+      const groupCells = analyses[i]?.group;
+      if (!groupCells) return;
+      const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+      const id = g.bundle.id;
+      const isLShape = id === '2+L' || id === '3+L';
+      const src = `${ASSET_BASE}/${id}${isLShape ? `-${flip}` : ''}.png`;
+      if (bboxCache.has(src)) return;
+      measureArtBbox(src).then(() => setBboxVer((v) => v + 1));
+    });
+  }, [priceResult, analyses]);
   const violationCellIds = useMemo(() => {
     const set = new Set<string>();
     for (const a of analyses) {
@@ -739,50 +756,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             // is the truthful render.
             const nativeW = w;
             const nativeH = h;
-
-            // Adjacency-aware silhouette overflow: each module's PNG paints a
-            // ~3-4px frame line along its silhouette edge. When two cells abut
-            // in cm-space their frame lines double up at the seam, which reads
-            // as a visible crack rather than a linked sofa. For every edge
-            // touching another cell, expand the silhouette by FRAME_PX so its
-            // own frame line falls just OUTSIDE the cellArt and gets clipped
-            // by overflow:hidden — adjacent cells then meet cushion-to-cushion
-            // (matching the unified look of the Quick Pick composite PNG).
-            // Adjacency is checked in cm-space; rotated cells (rare in custom
-            // build flow) still get the visual benefit on the side closest to
-            // their cm-neighbour, even if the silhouette frame they trim isn't
-            // exactly the side they think.
-            const FRAME_PX = 4;
-            const eps = 0.5;
-            const cx = c.x ?? 0;
-            const cy = c.y ?? 0;
-            const cRight = cx + fp.w;
-            const cBottom = cy + fp.h;
-            const adj = { l: false, r: false, t: false, b: false };
-            for (const c2 of displayCells) {
-              if (c2.id === c.id || c2.id == null) continue;
-              const m2 = findModule(c2.moduleId);
-              if (!m2) continue;
-              const fp2 = moduleFootprint(m2, c2.rot, depth);
-              const c2x = c2.x ?? 0;
-              const c2y = c2.y ?? 0;
-              const c2Right = c2x + fp2.w;
-              const c2Bottom = c2y + fp2.h;
-              const yOverlap = cy < c2Bottom - eps && cBottom > c2y + eps;
-              const xOverlap = cx < c2Right - eps && cRight > c2x + eps;
-              if (yOverlap) {
-                if (Math.abs(c2Right - cx) < eps) adj.l = true;
-                if (Math.abs(c2x - cRight) < eps) adj.r = true;
-              }
-              if (xOverlap) {
-                if (Math.abs(c2Bottom - cy) < eps) adj.t = true;
-                if (Math.abs(c2y - cBottom) < eps) adj.b = true;
-              }
-            }
-            const overflowL = adj.l ? FRAME_PX : 0;
-            const overflowR = adj.r ? FRAME_PX : 0;
-            const overflowT = adj.t ? FRAME_PX : 0;
-            const overflowB = adj.b ? FRAME_PX : 0;
             return (
               <div
                 key={c.id}
@@ -813,20 +786,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                     if (bbox) {
                       const bw = bbox.r - bbox.l;
                       const bh = bbox.b - bbox.t;
-                      const extendedW = nativeW + overflowL + overflowR;
-                      const extendedH = nativeH + overflowT + overflowB;
-                      const imgW = extendedW / bw;
-                      const imgH = extendedH / bh;
+                      const imgW = nativeW / bw;
+                      const imgH = nativeH / bh;
                       imgStyle = {
                         position: 'absolute',
                         width: imgW,
                         height: imgH,
-                        // Shift IMG so the silhouette content fills cellArt
-                        // and additionally bleeds overflowL/T past the left/
-                        // top edge (clipped by cellArt overflow:hidden — the
-                        // PNG's painted frame line goes with it).
-                        left: -bbox.l * imgW - overflowL,
-                        top: -bbox.t * imgH - overflowT,
+                        left: -bbox.l * imgW,
+                        top: -bbox.t * imgH,
                       };
                     } else {
                       imgStyle = { width: '100%', height: '100%', objectFit: 'contain' };
@@ -963,6 +930,62 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                   </div>
                 )}
               </div>
+            );
+          })}
+
+          {/* Bundle composite overlay — when a group of cells matches a known
+              bundle, drop the QP composite PNG on top so the build reads as
+              ONE continuous sofa (matching Quick Pick's artwork: continuous
+              top frame, internal cushion division lines, no module-to-module
+              double-frame crack). pointer-events:none lets drags fall through
+              to the cells underneath. Hidden during drag (so individual cells
+              show their silhouettes while moving) and during per-module edit
+              mode (where the user explicitly wants to see modules apart). */}
+          {priceResult.groups.map((g, i) => {
+            if (!g.bundle) return null;
+            const groupCells = analyses[i]?.group;
+            if (!groupCells || groupCells.length === 0) return null;
+            const ids = new Set(
+              groupCells.map((c) => c.id).filter((x): x is string => x != null),
+            );
+            // Skip while this group is being edited per-module — the point
+            // of edit mode is to see and manipulate individual silhouettes.
+            if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return null;
+            // Skip while dragging cells in this group so the user sees the
+            // individual silhouettes following their pointer.
+            const isDraggingThisGroup =
+              draftDelta != null && draftDelta.ids.some((id) => ids.has(id));
+            if (isDraggingThisGroup) return null;
+            const dispCells = displayCells.filter((c) => c.id != null && ids.has(c.id));
+            const bb = cellsBbox(dispCells, depth);
+            if (!bb) return null;
+            const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+            const isLShape = g.bundle.id === '2+L' || g.bundle.id === '3+L';
+            const compositeSrc = `${ASSET_BASE}/${g.bundle.id}${isLShape ? `-${flip}` : ''}.png`;
+            const compBbox = bboxCache.get(compositeSrc);
+            if (!compBbox) return null;
+            const bw = compBbox.r - compBbox.l;
+            const bh = compBbox.b - compBbox.t;
+            const targetW = bb.w * SCALE;
+            const targetH = bb.h * SCALE;
+            const imgW = targetW / bw;
+            const imgH = targetH / bh;
+            return (
+              <img
+                key={`composite-${i}`}
+                src={compositeSrc}
+                alt=""
+                draggable={false}
+                style={{
+                  position: 'absolute',
+                  left: bb.x * SCALE - compBbox.l * imgW,
+                  top: bb.y * SCALE - compBbox.t * imgH,
+                  width: imgW,
+                  height: imgH,
+                  pointerEvents: 'none',
+                  zIndex: 1,
+                }}
+              />
             );
           })}
 
