@@ -739,6 +739,50 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             // is the truthful render.
             const nativeW = w;
             const nativeH = h;
+
+            // Adjacency-aware silhouette overflow: each module's PNG paints a
+            // ~3-4px frame line along its silhouette edge. When two cells abut
+            // in cm-space their frame lines double up at the seam, which reads
+            // as a visible crack rather than a linked sofa. For every edge
+            // touching another cell, expand the silhouette by FRAME_PX so its
+            // own frame line falls just OUTSIDE the cellArt and gets clipped
+            // by overflow:hidden — adjacent cells then meet cushion-to-cushion
+            // (matching the unified look of the Quick Pick composite PNG).
+            // Adjacency is checked in cm-space; rotated cells (rare in custom
+            // build flow) still get the visual benefit on the side closest to
+            // their cm-neighbour, even if the silhouette frame they trim isn't
+            // exactly the side they think.
+            const FRAME_PX = 4;
+            const eps = 0.5;
+            const cx = c.x ?? 0;
+            const cy = c.y ?? 0;
+            const cRight = cx + fp.w;
+            const cBottom = cy + fp.h;
+            const adj = { l: false, r: false, t: false, b: false };
+            for (const c2 of displayCells) {
+              if (c2.id === c.id || c2.id == null) continue;
+              const m2 = findModule(c2.moduleId);
+              if (!m2) continue;
+              const fp2 = moduleFootprint(m2, c2.rot, depth);
+              const c2x = c2.x ?? 0;
+              const c2y = c2.y ?? 0;
+              const c2Right = c2x + fp2.w;
+              const c2Bottom = c2y + fp2.h;
+              const yOverlap = cy < c2Bottom - eps && cBottom > c2y + eps;
+              const xOverlap = cx < c2Right - eps && cRight > c2x + eps;
+              if (yOverlap) {
+                if (Math.abs(c2Right - cx) < eps) adj.l = true;
+                if (Math.abs(c2x - cRight) < eps) adj.r = true;
+              }
+              if (xOverlap) {
+                if (Math.abs(c2Bottom - cy) < eps) adj.t = true;
+                if (Math.abs(c2y - cBottom) < eps) adj.b = true;
+              }
+            }
+            const overflowL = adj.l ? FRAME_PX : 0;
+            const overflowR = adj.r ? FRAME_PX : 0;
+            const overflowT = adj.t ? FRAME_PX : 0;
+            const overflowB = adj.b ? FRAME_PX : 0;
             return (
               <div
                 key={c.id}
@@ -769,14 +813,20 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                     if (bbox) {
                       const bw = bbox.r - bbox.l;
                       const bh = bbox.b - bbox.t;
-                      const imgW = nativeW / bw;
-                      const imgH = nativeH / bh;
+                      const extendedW = nativeW + overflowL + overflowR;
+                      const extendedH = nativeH + overflowT + overflowB;
+                      const imgW = extendedW / bw;
+                      const imgH = extendedH / bh;
                       imgStyle = {
                         position: 'absolute',
                         width: imgW,
                         height: imgH,
-                        left: -bbox.l * imgW,
-                        top: -bbox.t * imgH,
+                        // Shift IMG so the silhouette content fills cellArt
+                        // and additionally bleeds overflowL/T past the left/
+                        // top edge (clipped by cellArt overflow:hidden — the
+                        // PNG's painted frame line goes with it).
+                        left: -bbox.l * imgW - overflowL,
+                        top: -bbox.t * imgH - overflowT,
                       };
                     } else {
                       imgStyle = { width: '100%', height: '100%', objectFit: 'contain' };
