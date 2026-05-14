@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "POS (Vite, tablet PWA)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@2990s/pos", "dev"],
+      "port": 6273
+    },
+    {
+      "name": "Backend (Vite, desktop)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@2990s/backend", "dev"],
+      "port": 6274
+    },
+    {
+      "name": "API (Hono on Wrangler)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@2990s/api", "dev"],
+      "port": 8787
+    }
+  ]
+}
