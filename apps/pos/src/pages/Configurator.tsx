@@ -381,6 +381,12 @@ export const Configurator = () => {
     />
     <main
       className={isSofa && mode === 'quick' ? styles.sofaShell : isSize ? styles.shellWide : styles.shell}
+      // Custom-build mode runs on a slightly warmer cream (#FAF6EC vs the app
+      // default #FFF9EB) so the "build space" feels distinct from Quick Pick's
+      // catalogue browse. The palette sits on top as an elevated white panel
+      // (see CustomBuilder.module.css) — same white-on-cream hierarchy as
+      // Quick Pick's qpRail, just contained as a card rather than a hard
+      // left-half color split.
       style={isSofa && mode === 'custom' ? { background: '#FAF6EC' } : undefined}
     >
       {!isSize && !isSofa && (

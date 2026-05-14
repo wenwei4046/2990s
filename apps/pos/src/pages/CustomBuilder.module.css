@@ -8,30 +8,37 @@
 /* ── Palette ──────────────────────────────────────────────────── */
 
 .palette {
-  /* Matches sofa Custom Build main bg (#FAF6EC) so the palette column
-     blends with the warmer page canvas. */
-  background: #FAF6EC;
-  border: 1px solid var(--line);
+  /* Elevated white panel floating on the warm cream page bg — same
+     white-on-cream hierarchy as Quick Pick's qpRail, expressed as a
+     contained card with soft warm shadow instead of a page-edge color
+     split (which read as two stitched pages, not one composition). Paper-
+     toned item cards inside add the third layer (cream page → white panel
+     → paper items → hover lift). */
+  background: #fff;
+  border: 1px solid rgba(34, 31, 32, 0.06);
   border-radius: var(--radius-md);
-  padding: var(--space-3);
+  padding: 18px 18px 24px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   max-height: 640px;
   overflow-y: auto;
+  box-shadow:
+    0 1px 2px rgba(60, 40, 20, 0.04),
+    0 8px 24px rgba(60, 40, 20, 0.06);
 }
 
 .paletteHead {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+  margin-bottom: 4px;
 }
 
 .hint {
-  font-size: var(--fs-12);
+  font-size: var(--fs-11);
   color: var(--fg-muted);
+  letter-spacing: 0.02em;
 }
 
 .paletteList {
@@ -43,7 +50,7 @@
 .paletteGroup {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .paletteGroupHead {
@@ -56,24 +63,28 @@
   margin-bottom: 2px;
 }
 
+/* Compact paper card mirroring the Quick Pick card depth — paper bg on
+   white rail, 14px radius, transparent border that hardens to burnt on
+   hover to advertise "tap to add" without bg flicker. */
 .paletteItem {
   display: grid;
   grid-template-columns: 56px 1fr auto;
   gap: var(--space-2);
   align-items: center;
-  padding: 8px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--c-paper);
+  border: 1.5px solid transparent;
+  border-radius: 14px;
   cursor: pointer;
   text-align: left;
   font: inherit;
   color: inherit;
-  transition: background 120ms, border-color 120ms;
+  transition: 140ms ease;
 }
 .paletteItem:hover {
-  background: var(--bg-alt);
+  background: #fff;
   border-color: var(--c-burnt);
+  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.14);
 }
 
 .paletteArt {
