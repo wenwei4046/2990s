@@ -171,7 +171,7 @@ export const BUNDLES: readonly BundleDef[] = [
   { id: '2S',  label: '2-Seater', signature: '2A',       canonicalModules: ['2A'] },
   { id: '3S',  label: '3-Seater', signature: '1A+2A',    canonicalModules: ['1A', '2A'] },
   { id: '2+L', label: '2 + L',    signature: '2A+L',     canonicalModules: ['2A', 'L'] },
-  { id: '3+L', label: '3 + L',    signature: '2A+1NA+L', canonicalModules: ['2A', '1NA', 'L'] },
+  { id: '3+L', label: '3 + L',    signature: '1NA+2A+L', canonicalModules: ['2A', '1NA', 'L'] },
 ];
 
 // Each entry is a signature → bundle. Multiple signatures map to the same
