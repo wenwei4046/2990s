@@ -602,10 +602,13 @@
 .cellArt img {
   user-select: none;
   -webkit-user-drag: none;
-  /* Subtle silhouette pop — drop-shadow follows the PNG alpha so the sofa
-     outline reads against the warm stage background. Kept light so it
-     doesn't compete with the orange selection ring on .cellSelected. */
-  filter: drop-shadow(0 1px 1.5px rgba(34, 31, 32, 0.18));
+  /* No filter: the PNG already paints its own dark outline; a drop-shadow on
+     top reads as a doubled line at the silhouette's bottom edge — especially
+     on assets where the silhouette is small relative to the 1024² canvas
+     (2A-LHF at 44.5% height scales up ~1.45× more than 1B-LHF at 64.8%,
+     making the shadow-vs-outline gap visible). Bundle-matched groups get
+     their visual pop from the composite PNG overlay; non-matched cells rely
+     on the PNG outline alone, which is plenty against the cream stage. */
 }
 
 .tools {
