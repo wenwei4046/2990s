@@ -53,8 +53,17 @@ export interface SofaProductPricing {
 export interface BundleDef {
   id: string;
   label: string;
-  /** Sorted family multiset signature, e.g. '1A+2NA+L'. */
+  /** Canonical detection signature — sorted family multiset, e.g. '2A+1NA+L'.
+   * Additional equivalent signatures (e.g. customer-assembled variants that
+   * form the same shape) are registered in BUNDLE_BY_SIG. */
   signature: string;
+  /** Canonical SKU composition for invoice / PO line items. When a customer's
+   * build matches this bundle, the cart represents the sofa as this list of
+   * compartments so the backend can issue a PO that the factory understands
+   * (each entry is a real orderable SKU, not the loose set of modules the
+   * customer happened to drag onto the canvas). Family ids only — actual
+   * LHF/RHF orientation is derived from the laid-out cells at swap time. */
+  canonicalModules: readonly string[];
 }
 
 export interface SofaGroupPrice {
@@ -133,18 +142,61 @@ export const familySignature = (modIds: string[]): string =>
     .sort()
     .join('+');
 
+// For bundle detection only: 1B (wide-arm 1-seater) and 1A are the same
+// shape, just different arm widths; same for 2B vs 2A. Collapsing them at
+// detection time lets a 1A+1B custom build match the 2S bundle without
+// listing every armed-variant combination explicitly.
+const BUNDLE_FAMILY_COLLAPSE: Record<string, string> = {
+  '1B': '1A',
+  '2B': '2A',
+};
+const bundleFamily = (id: string): string => {
+  const fam = moduleFamily(id);
+  return BUNDLE_FAMILY_COLLAPSE[fam] ?? fam;
+};
+const bundleSignature = (modIds: string[]): string =>
+  modIds
+    .filter((id) => !isAccessoryModule(id))
+    .map(bundleFamily)
+    .sort()
+    .join('+');
+
+// Canonical SKU composition per bundle. These are the line items the factory
+// orders against — same physical sofa as the customer's drag-out, but
+// expressed as the SKUs the supplier stocks. e.g. a customer who built a
+// 2-seater out of two armed 1-seaters (1A+1A) ships as one 2-seater
+// compartment (2A) on the PO.
 export const BUNDLES: readonly BundleDef[] = [
-  { id: '1S',  label: '1-Seater', signature: '1A' },
-  { id: '2S',  label: '2-Seater', signature: '2A' },
-  { id: '3S',  label: '3-Seater', signature: '1A+2A' },
-  { id: '2+L', label: '2 + L',    signature: '2A+L' },
-  { id: '3+L', label: '3 + L',    signature: '1A+2NA+L' },
+  { id: '1S',  label: '1-Seater', signature: '1A',       canonicalModules: ['1A'] },
+  { id: '2S',  label: '2-Seater', signature: '2A',       canonicalModules: ['2A'] },
+  { id: '3S',  label: '3-Seater', signature: '1A+2A',    canonicalModules: ['1A', '2A'] },
+  { id: '2+L', label: '2 + L',    signature: '2A+L',     canonicalModules: ['2A', 'L'] },
+  { id: '3+L', label: '3 + L',    signature: '2A+1NA+L', canonicalModules: ['2A', '1NA', 'L'] },
 ];
 
-const BUNDLE_BY_SIG = new Map<string, BundleDef>(BUNDLES.map((b) => [b.signature, b]));
+// Each entry is a signature → bundle. Multiple signatures map to the same
+// bundle when distinct compartment compositions form the same shape:
+//   - 2S: '2A' (canonical) OR '1A+1A' (two armed 1-seaters)
+//   - 3S: '1A+2A' (canonical) OR '1A+1A+1NA' (three 1-seaters, middle no-arm)
+//   - 3+L: '2A+1NA+L' (canonical) OR '1A+2NA+L' (legacy) OR '1A+1A+1NA+L'
+// Closure (proper arm at each end) is enforced separately by groupPrice via
+// analyzeSofa — invalid layouts like two LHF modules adjacent share the
+// '1A+1A' signature but fail closure and fall back to à la carte pricing.
+const BY_2S = '2S' as const;
+const BY_3S = '3S' as const;
+const BY_2L = '2+L' as const;
+const BY_3L = '3+L' as const;
+const BUNDLE_BY_SIG = new Map<string, BundleDef>([
+  ...BUNDLES.map((b) => [b.signature, b] as const),
+  ['1A+1A',         BUNDLES.find((b) => b.id === BY_2S)!],
+  ['1A+1A+1NA',     BUNDLES.find((b) => b.id === BY_3S)!],
+  ['1A+1A+L',       BUNDLES.find((b) => b.id === BY_2L)!],
+  ['1A+2NA+L',      BUNDLES.find((b) => b.id === BY_3L)!],  // legacy/equivalent shape
+  ['1A+1A+1NA+L',   BUNDLES.find((b) => b.id === BY_3L)!],
+]);
 
 export const detectBundle = (modIds: string[]): BundleDef | null =>
-  BUNDLE_BY_SIG.get(familySignature(modIds)) ?? null;
+  BUNDLE_BY_SIG.get(bundleSignature(modIds)) ?? null;
 
 /* ─── Edge typing & rotation ───────────────────────────────────────── */
 
@@ -313,7 +365,7 @@ const compRow = (pricing: SofaProductPricing, compartmentId: string): SofaProduc
 const bundleRow = (pricing: SofaProductPricing, bundleId: string): SofaProductPricingBundle | undefined =>
   pricing.bundles.find((b) => b.bundleId === bundleId);
 
-const groupPrice = (group: Cell[], pricing: SofaProductPricing): SofaGroupPrice => {
+const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): SofaGroupPrice => {
   const cellIds = group.map((c, i) => c.id ?? `__cell_${i}`);
   const modIds = group.map((c) => c.moduleId);
   const signature = familySignature(modIds);
@@ -327,7 +379,16 @@ const groupPrice = (group: Cell[], pricing: SofaProductPricing): SofaGroupPrice 
     aLaCarteTotal += row?.price ?? 0;
   }
 
-  // Bundle candidate — only if signature matches AND row is active AND bundle is cheaper.
+  // Bundle candidate — if the assembled shape matches a known bundle AND the
+  // bundle row is active AND the group is closed (proper arm at each end),
+  // use the bundle price as the canonical retail for that shape. The bundle
+  // is the "fixed complete sofa" price set in SKU master; à la carte sums of
+  // individual compartments are a fallback for shapes that DON'T match a
+  // bundle, not a price-shopping floor.
+  //
+  // Closure matters because the bundle-signature collapse (1B≡1A) means two
+  // wrong-orientation 1-seaters (e.g. LHF+LHF) still produce the '1A+1A'
+  // signature; closure rejects those layouts so they price à la carte.
   const candidate = detectBundle(modIds);
   let bundle: BundleDef | null = null;
   let bundlePrice: number | null = null;
@@ -335,7 +396,12 @@ const groupPrice = (group: Cell[], pricing: SofaProductPricing): SofaGroupPrice 
 
   if (candidate) {
     const row = bundleRow(pricing, candidate.id);
-    if (row && row.active && row.price < aLaCarteTotal) {
+    // Multi-module bundles need a closed layout (proper arm at each end) so
+    // a customer can't dodge into bundle pricing with a nonsense layout like
+    // two LHF modules adjacent. Single-module bundles ARE the module — a
+    // 1A-LHF is a left-armed 1-seater product, closed by definition.
+    const closed = group.length === 1 || analyzeSofa(group, depth).closed;
+    if (row && row.active && closed) {
       bundle = candidate;
       bundlePrice = row.price;
       basis = 'bundle';
@@ -384,7 +450,7 @@ export const computeSofaPrice = (
   pricing: SofaProductPricing,
 ): SofaPriceResult => {
   const groups = groupSofas(cells, depth);
-  const groupPrices = groups.map((g) => groupPrice(g, pricing));
+  const groupPrices = groups.map((g) => groupPrice(g, depth, pricing));
   const total = groupPrices.reduce((sum, g) => sum + g.finalPrice, 0);
   return { groups: groupPrices, total };
 };

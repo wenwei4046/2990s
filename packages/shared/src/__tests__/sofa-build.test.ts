@@ -129,10 +129,11 @@ describe('cellEffectiveBbox footrest extension', () => {
   });
 });
 
-/* Case 4 — computeSofaPrice: bundle wins when cheaper, à la carte wins otherwise. */
+/* Case 4 — computeSofaPrice: bundle is canonical when shape matches + active,
+   à la carte only when no bundle signature applies or the row is disabled. */
 describe('computeSofaPrice basis selection', () => {
-  it('uses bundle price when bundle < à la carte', () => {
-    // 3+L à la carte: 1500 + 2200 + 1900 = 5600 → bundle 4500 wins
+  it('uses bundle price when shape matches an active bundle', () => {
+    // 3+L à la carte: 1500 + 2200 + 1900 = 5600; bundle 4500 wins regardless.
     const cells: Cell[] = [
       { moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
       { moduleId: '2NA',  x: 95,  y: 0, rot: 0 },
@@ -149,8 +150,11 @@ describe('computeSofaPrice basis selection', () => {
     expect(result.total).toBe(4500);
   });
 
-  it('falls back to à la carte when bundle is more expensive', () => {
-    // Make the 3+L bundle 9999 — à la carte 5600 should win.
+  it('still uses bundle price when à la carte happens to sum to less', () => {
+    // Bundle is the canonical retail for the shape (set by management in SKU
+    // master). Even if the sum of individual compartments comes out cheaper
+    // — e.g. one compartment is priced at 0 placeholder — we charge the
+    // posted bundle price, not the lower sum.
     const p = pricing({
       bundles: [
         { bundleId: '1S',  active: true, price: 1400 },
@@ -166,8 +170,10 @@ describe('computeSofaPrice basis selection', () => {
       { moduleId: 'L-RHF',  x: 237, y: 0, rot: 0 },
     ];
     const g = computeSofaPrice(cells, '24', p).groups[0]!;
-    expect(g.basis).toBe('a_la_carte');
-    expect(g.finalPrice).toBe(5600);
+    expect(g.basis).toBe('bundle');
+    expect(g.bundlePrice).toBe(9999);
+    expect(g.aLaCarteTotal).toBe(5600);
+    expect(g.finalPrice).toBe(9999);
   });
 
   it('falls back to à la carte when bundle is inactive', () => {
