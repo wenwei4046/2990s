@@ -473,6 +473,101 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
       measureArtBbox(src).then(() => setBboxVer((v) => v + 1));
     });
   }, [priceResult, analyses]);
+
+  // Auto-convert to canonical bundle layout: when a closed group matches a
+  // known bundle but the cells aren't in the canonical SKU breakdown (e.g.
+  // user dragged 1A-LHF + 2NA + L-RHF, but the 3+L canonical is 2A-LHF +
+  // 1NA + L-RHF), replace the user's cells with the canonical layout at the
+  // same anchor. Skipped during drag and during per-module edit mode — both
+  // are explicit user-control moments where rewriting cells would feel like
+  // the system is fighting the user.
+  //
+  // Module-ID resolution: for L-shape bundles, the arm faces opposite the
+  // chaise side (L on right → arm on left → -LHF variants). For non-L
+  // bundles with multiple armed compartments, the first armed family in
+  // canonicalModules gets LHF, the last gets RHF. Single-armed bundles
+  // default LHF. NA families pass through unchanged.
+  useEffect(() => {
+    if (draftDelta) return; // don't rewrite mid-drag
+    type ConvertOp = { removeIds: Set<string>; addCells: Cell[] };
+    const ops: ConvertOp[] = [];
+    priceResult.groups.forEach((g, i) => {
+      if (!g.bundle) return;
+      const analysis = analyses[i];
+      if (!analysis?.closed) return;
+      const groupCells = analysis.group;
+      if (groupCells.length === 0) return;
+      const groupIds = new Set(
+        groupCells.map((c) => c.id).filter((x): x is string => x != null),
+      );
+      // Skip groups currently in per-module edit mode.
+      if (editingGroupIds && Array.from(groupIds).every((id) => editingGroupIds.has(id))) return;
+
+      const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+      const hasL = g.bundle.canonicalModules.includes('L');
+      const armedIdxs = g.bundle.canonicalModules
+        .map((f, idx) => (f === '1A' || f === '2A' ? idx : -1))
+        .filter((x) => x >= 0);
+      const resolveSku = (fam: string, idx: number): string => {
+        if (fam === '1NA' || fam === '2NA') return fam;
+        if (fam === 'L') return `L-${flip}HF`;
+        if (fam === '1A' || fam === '2A') {
+          let armSide: 'L' | 'R';
+          if (hasL) {
+            armSide = flip === 'R' ? 'L' : 'R';
+          } else if (armedIdxs.length > 1) {
+            armSide = idx === armedIdxs[0] ? 'L' : 'R';
+          } else {
+            armSide = 'L';
+          }
+          return `${fam}-${armSide}HF`;
+        }
+        return fam;
+      };
+      const orderedFams =
+        hasL && flip === 'L'
+          ? [...g.bundle.canonicalModules].reverse()
+          : g.bundle.canonicalModules;
+      const canonicalSkus = orderedFams.map((f, idx) => resolveSku(f, idx));
+
+      // Already canonical? Compare sorted multisets — order on canvas might
+      // differ but the SKU set is what matters for "is this the standard".
+      const userSorted = groupCells.map((c) => c.moduleId).sort();
+      const canonSorted = [...canonicalSkus].sort();
+      if (
+        userSorted.length === canonSorted.length &&
+        userSorted.every((id, j) => id === canonSorted[j])
+      ) {
+        return;
+      }
+
+      const bb = cellsBbox(groupCells, depth);
+      if (!bb) return;
+      let x = bb.x;
+      const y = bb.y;
+      const addCells: Cell[] = [];
+      for (const sku of canonicalSkus) {
+        const m = findModule(sku);
+        if (!m) continue;
+        const fp = moduleFootprint(m, 0, depth);
+        addCells.push({ id: nextCellId(), moduleId: sku, x, y, rot: 0 });
+        x += fp.w;
+      }
+      ops.push({ removeIds: groupIds, addCells });
+    });
+
+    if (ops.length === 0) return;
+    setCells((prev) => {
+      let next = prev;
+      for (const op of ops) {
+        next = next.filter((c) => c.id == null || !op.removeIds.has(c.id));
+        next = next.concat(op.addCells);
+      }
+      return next;
+    });
+    setSelectedId(null);
+    setSelectedGroupIds(null);
+  }, [priceResult, analyses, draftDelta, editingGroupIds, depth]);
   const violationCellIds = useMemo(() => {
     const set = new Set<string>();
     for (const a of analyses) {
