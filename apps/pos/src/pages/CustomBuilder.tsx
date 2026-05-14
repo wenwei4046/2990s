@@ -731,8 +731,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             const py = (c.y ?? 0) * SCALE;
             const w = fp.w * SCALE;
             const h = fp.h * SCALE;
-            const nativeW = m.w * SCALE;
-            const nativeH = m.d * SCALE;
+            // cellArt matches the rendered cell footprint (fp.w × fp.h) so the
+            // silhouette stretches with the 28" cushion extension instead of
+            // sitting padded inside a smaller box — adjacent cells now abut
+            // silhouette-to-silhouette with no visible seam between them. The
+            // physical cushion IS 10cm wider at 28", so a uniform 10% stretch
+            // is the truthful render.
+            const nativeW = w;
+            const nativeH = h;
             return (
               <div
                 key={c.id}
