@@ -836,6 +836,100 @@ const bundleArtSrc = (bundleId: string, flip: 'L' | 'R'): string => {
   return `/sofa-modules/${bundleId}.png`;
 };
 
+// Sofa-module PNGs are uniformly 1024×1024 with transparent padding around the
+// drawn silhouette. With the 2:1 hero box + object-fit:contain, the silhouette
+// ends up smaller than the box, so dim ticks anchored to box edges span empty
+// pixels next to the sofa. Scan alpha once per src, cache, expose box-relative
+// percentages via CSS vars so the dim lines snap to the silhouette.
+type SilhouetteBounds = { left: number; top: number; right: number; bottom: number };
+const silhouetteBoundsCache = new Map<string, SilhouetteBounds>();
+
+const useSilhouetteBounds = (src: string): SilhouetteBounds | null => {
+  const [bounds, setBounds] = useState<SilhouetteBounds | null>(
+    () => silhouetteBoundsCache.get(src) ?? null,
+  );
+  useEffect(() => {
+    const cached = silhouetteBoundsCache.get(src);
+    if (cached) {
+      setBounds(cached);
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.src = src;
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        const { data } = ctx.getImageData(0, 0, c.width, c.height);
+        const w = c.width;
+        const h = c.height;
+        let minX = w;
+        let maxX = -1;
+        let minY = h;
+        let maxY = -1;
+        for (let y = 0; y < h; y++) {
+          const rowBase = y * w * 4;
+          for (let x = 0; x < w; x++) {
+            if (data[rowBase + x * 4 + 3]! > 10) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < 0) return;
+        const result: SilhouetteBounds = {
+          left: minX / w,
+          top: minY / h,
+          right: 1 - (maxX + 1) / w,
+          bottom: 1 - (maxY + 1) / h,
+        };
+        silhouetteBoundsCache.set(src, result);
+        if (!cancelled) setBounds(result);
+      } catch {
+        // canvas tainted or decode error — leave bounds null, dim lines fall
+        // back to box edges via CSS var defaults.
+      }
+    };
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+  return bounds;
+};
+
+// Box is 2:1, PNG is 1:1 with object-fit:contain → the rendered PNG occupies
+// a boxH × boxH square centered horizontally inside the box (50% wide, 100%
+// tall, 25% left/right padding). When the seat depth toggle stretches the
+// image via transform:scaleX(k), the rendered content widens to k * boxH
+// while staying centered, so contentLeft/contentWidth scale with k. Translate
+// silhouette bounds (fractions of the PNG canvas) into box-relative CSS
+// percentages for dim-line anchoring.
+const heroAnchorStyle = (
+  bounds: SilhouetteBounds | null,
+  depthScale: number,
+): React.CSSProperties => {
+  if (!bounds) return {};
+  const contentLeft = 0.5 - depthScale / 4;
+  const contentWidth = depthScale / 2;
+  const silLeft = contentLeft + bounds.left * contentWidth;
+  const silWidth = (1 - bounds.left - bounds.right) * contentWidth;
+  const silRight = 1 - silLeft - silWidth;
+  return {
+    '--sil-left': `${silLeft * 100}%`,
+    '--sil-right': `${silRight * 100}%`,
+    '--sil-top': `${bounds.top * 100}%`,
+    '--sil-bottom': `${bounds.bottom * 100}%`,
+  } as React.CSSProperties;
+};
+
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
@@ -855,13 +949,24 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
     }
   }, [picked, activeRows, onPick]);
 
+  // Resolve hero pick up front so the silhouette-bounds hook is called on
+  // every render path. Hooks must not sit behind the loading/empty early
+  // returns — that'd violate the rules-of-hooks (see "rendered more hooks
+  // than during the previous render").
+  const pickedRow = activeRows.find((r) => r.bundle.id === picked) ?? activeRows[0] ?? null;
+  const heroSrc = pickedRow ? bundleArtSrc(pickedRow.bundle.id, quickFlip) : '';
+  const heroBounds = useSilhouetteBounds(heroSrc);
+
   if (isLoading) return <p className={styles.empty}>Loading bundles…</p>;
-  if (activeRows.length === 0) {
+  if (activeRows.length === 0 || !pickedRow) {
     return <p className={styles.empty}>No Quick-Pick layouts activated for this Model yet.</p>;
   }
 
-  const pickedRow = activeRows.find((r) => r.bundle.id === picked) ?? activeRows[0]!;
   const dims = quickPresetDims(pickedRow.bundle.id, depth);
+  // 28" seat widens each cushion by 10cm — stretch the silhouette by the
+  // same width ratio so the visual matches the cm label.
+  const baseW = QUICK_PRESET_META[pickedRow.bundle.id]?.baseW ?? dims.w;
+  const depthScale = baseW > 0 ? dims.w / baseW : 1;
 
   return (
     <>
@@ -923,11 +1028,12 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
 
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
-          <div className={styles.qpHeroBox}>
+          <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
             <img
-              src={bundleArtSrc(pickedRow.bundle.id, quickFlip)}
+              src={heroSrc}
               alt={`${pickedRow.bundle.label} plan view`}
               draggable={false}
+              style={{ transform: `scaleX(${depthScale})` }}
             />
             {/* Top width dim — vertical pins at the ends of a horizontal line,
                 with the cm label absolute-positioned over the middle. */}
