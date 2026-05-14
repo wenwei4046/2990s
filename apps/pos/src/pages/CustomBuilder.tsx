@@ -201,6 +201,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
   // cells in the group together by the same delta. Tools above the outline let
   // staff remove the whole sofa or exit group mode.
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[] | null>(null);
+  // When the "Edit modules" toolbar button fires, we stash the group's cell ids
+  // here. While the set is non-null and matches a closed group, the outline +
+  // dim labels are suppressed so individual cells receive pointer events and
+  // the per-cell rotate/remove toolbar can appear. Cleared by tapping empty
+  // canvas, mirroring the existing selection-clear behavior.
+  const [editingGroupIds, setEditingGroupIds] = useState<Set<string> | null>(null);
   // draftDelta carries the live translation for the dragging cell OR group.
   // `ids` is one cell id for single-cell drag, or the full group's ids for a
   // group drag. Display applies (dx, dy) to each listed cell.
@@ -585,6 +591,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
             if (e.target === e.currentTarget) {
               setSelectedId(null);
               setSelectedGroupIds(null);
+              setEditingGroupIds(null);
             }
           }}
         >
@@ -594,16 +601,25 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
               selectedGroupIds membership check in onCellPointerDown). */}
           {analyses.map((a, gi) => {
             if (!a.closed) return null;
-            const bb = cellsBbox(a.group, depth);
-            if (!bb) return null;
             // Cell.id is technically optional on the type but every cell we
             // create goes through nextCellId(), so the filter is just a TS
             // narrowing aid — it never actually drops anything.
             const groupIds = a.group.map((c) => c.id).filter((id): id is string => id != null);
             const groupSet = new Set(groupIds);
+            // Skip rendering the outline + toolbar while this group is in
+            // per-module edit mode — outline would otherwise block per-cell
+            // clicks (the whole point of the mode is to access cells).
+            if (editingGroupIds && groupIds.every((id) => editingGroupIds.has(id))) return null;
+            // Use displayCells (with draft drag delta applied) so the outline
+            // tracks the moving sofa instead of orphaning at the start position.
+            const displayedGroupCells = displayCells.filter((c) => c.id != null && groupSet.has(c.id));
+            const bb = cellsBbox(displayedGroupCells, depth);
+            if (!bb) return null;
             const isActive = selectedGroupIds != null
               && selectedGroupIds.length === groupIds.length
               && groupIds.every((id) => selectedGroupIds.includes(id));
+            const isDraggingThisGroup =
+              draftDelta != null && draftDelta.ids.some((id) => groupSet.has(id));
             return (
               <div
                 key={`grp-${gi}`}
@@ -627,7 +643,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                     Whole sofa
                   </div>
                 )}
-                {isActive && (
+                {isActive && !isDraggingThisGroup && (
                   <div className={styles.groupTools} onPointerDown={(e) => e.stopPropagation()}>
                     <span className={styles.groupToolsLabel}>Whole sofa · drag to move</span>
                     <button
@@ -642,7 +658,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
                     <button
                       type="button"
                       className={`${styles.groupToolsBtn} ${styles.groupToolsBtnGhost}`}
-                      onClick={() => setSelectedGroupIds(null)}
+                      onClick={() => {
+                        setEditingGroupIds(new Set(groupIds));
+                        setSelectedGroupIds(null);
+                      }}
                     >
                       Edit modules
                     </button>
@@ -653,10 +672,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, onAdded 
           })}
 
           {/* Per-group length × depth dim labels. Top callout = length (w),
-              right callout = depth (h). Skip the dragging cell's group while
-              dragging so the labels don't flicker every pointermove. */}
+              right callout = depth (h). bbox derived from displayCells so the
+              callouts track the live drag delta and stay glued to the sofa. */}
           {groups.map((g, gi) => {
-            const bb = cellsBbox(g, depth);
+            const ids = new Set(g.map((c) => c.id).filter((id): id is string => id != null));
+            // Suppress dim callouts while this group is in per-module edit
+            // mode — they belong to the "fixed complete sofa" view that the
+            // user has just stepped out of.
+            if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return null;
+            const displayedGroup = displayCells.filter((c) => c.id != null && ids.has(c.id));
+            const bb = cellsBbox(displayedGroup, depth);
             if (!bb) return null;
             return (
               <Fragment key={`dim-${gi}`}>
