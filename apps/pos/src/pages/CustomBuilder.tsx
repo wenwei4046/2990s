@@ -605,6 +605,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         addCells.push({ id: nextCellId(), moduleId: sku, x, y, rot: 0 });
         x += fp.w;
       }
+      // Guard: never auto-convert when the canonical SKU layout is itself NOT
+      // closed (e.g. 2S.canonicalModules = ['2A'] resolves to a single 2A-LHF
+      // with right end open). Otherwise we'd silently strip the user's
+      // closed sofa down to a half-open one — visually broken and triggering
+      // the "Right end has no arm" warning on a layout the user just built
+      // properly. This skip preserves the user's modules; the canonical SKU
+      // translation for PO purposes happens in the order layer instead.
+      const canonicalClosed = analyzeSofa(addCells, depth).closed;
+      if (!canonicalClosed) return;
       ops.push({ removeIds: groupIds, addCells });
     });
 
@@ -633,22 +642,37 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 
   const handleAdd = () => {
     if (!canAdd) return;
-    const summary = analyses.map((a, i) => {
-      const sig = priceResult.groups[i]?.signature ?? '';
-      return a.closed && priceResult.groups[i]?.bundle
-        ? `${priceResult.groups[i]!.bundle!.label} (${sig})`
+    // Split per sofa group → one cart line per physical sofa (Loo, 2026-05-16).
+    // A configurator session can place several adjacency-independent sofas in
+    // the same room view (e.g. a 2-Seater main piece + a corner Custom L
+    // alongside). Each one ships, prices, and pulls a PO line on its own, so
+    // they should land in the cart as separate items the customer can
+    // adjust (qty / remove) individually rather than as one merged blob.
+    const cellById = new Map<string, Cell>();
+    for (const c of cells) { if (c.id) cellById.set(c.id, c); }
+    for (let i = 0; i < priceResult.groups.length; i++) {
+      const g = priceResult.groups[i]!;
+      const a = analyses[i];
+      const groupCells = g.cellIds
+        .map((id) => cellById.get(id))
+        .filter((c): c is Cell => c != null)
+        .map((c) => ({ ...c }));
+      if (groupCells.length === 0) continue;
+      const sig = g.signature;
+      const summary = a?.closed && g.bundle
+        ? `${g.bundle.label} (${sig})`
         : `Custom (${sig})`;
-    }).join(' + ');
-    const snapshot: SofaConfigSnapshot = {
-      kind: 'sofa',
-      productId,
-      productName,
-      cells: cells.map((c) => ({ ...c })),
-      depth,
-      total: priceResult.total,
-      summary: summary || 'Custom build',
-    };
-    addConfigured(snapshot);
+      const snapshot: SofaConfigSnapshot = {
+        kind: 'sofa',
+        productId,
+        productName,
+        cells: groupCells,
+        depth,
+        total: g.finalPrice,
+        summary,
+      };
+      addConfigured(snapshot);
+    }
     onAdded();
   };
 
@@ -1122,6 +1146,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             // rotated bbox produces a wildly skewed image. Per-cell rotated
             // silhouettes read fine on their own.
             if (groupCells.some((c) => c.rot !== 0)) return null;
+            // Skip when any cell in the group has a per-seat recliner upgrade.
+            // The composite (zIndex 1) sits ABOVE the cells (zIndex auto = 0),
+            // so the reclineWash/reclineBadge overlays inside cellArt would be
+            // hidden under the bundle mask. Recliner state is the user's
+            // explicit customization — showing the modules with their
+            // upgrade indicators wins over the seamless mask here.
+            if (groupCells.some((c) => (c.recliners ?? []).length > 0)) return null;
             const dispCells = displayCells.filter((c) => c.id != null && ids.has(c.id));
             const bb = cellsBbox(dispCells, depth);
             if (!bb) return null;

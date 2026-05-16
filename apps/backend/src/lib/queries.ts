@@ -4,6 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
+import { BUNDLES, cellsToPoSkus, type Cell, type Depth } from '@2990s/shared';
 
 export interface Category {
   id: string;
@@ -350,7 +351,7 @@ export const useOrders = () =>
             staff:staff_id ( name, initials, color ),
             order_items (
               qty, kind, config,
-              products ( id, name, category_id, supplier_id, sku, img_key, thumb_key )
+              products ( id, name, category_id, supplier_id, sku, img_key, thumb_key, pricing_kind )
             )
           `)
           .order('placed_at', { ascending: false })
@@ -386,20 +387,72 @@ export const useOrders = () =>
         staffName: r.staff?.name ?? '—',
         staffInitials: r.staff?.initials ?? '?',
         staffColor: r.staff?.color ?? '#999999',
+        // PO line construction (Loo, 2026-05-16): for sofa_build products the
+        // line-level SKU is the BUNDLE id when cells form a recognised bundle
+        // (e.g. 1A-LHF+1A-RHF → "2S"), otherwise each cell's moduleId is its
+        // own line. Quick-Pick orders carry config.bundleId directly. All other
+        // pricing_kinds (size_variants, flat, tbc) still emit a single line
+        // with the product's catalog SKU. This is what reaches the factory's
+        // PO sheet — see packages/shared/src/sofa-build.ts::cellsToPoSkus.
         cart: ((r.order_items ?? []) as any[])
           .filter((it) => it.kind === 'product' && it.products)
-          .map((it) => ({
-            productId: it.products.id,
-            productName: it.products.name,
-            productCat: it.products.category_id,
-            supplierId: it.products.supplier_id,
-            sku: it.products.sku,
-            size: it.config?.size ?? null,
-            colour: it.config?.colour ?? null,
-            qty: it.qty,
-            imgKey: it.products.thumb_key ?? it.products.img_key ?? null,
-            purchased: purchased.has(`${r.id}|${it.products.sku}`),
-          })),
+          .flatMap((it) => {
+            const p = it.products;
+            const base = {
+              productId: p.id,
+              productName: p.name,
+              productCat: p.category_id,
+              supplierId: p.supplier_id,
+              imgKey: p.thumb_key ?? p.img_key ?? null,
+              qty: it.qty,
+            };
+            // Sofa Quick-Pick: config.bundleId is set directly.
+            if (p.pricing_kind === 'sofa_build' && it.config?.bundleId) {
+              const bundleId = it.config.bundleId as string;
+              const bundle = BUNDLES.find((b) => b.id === bundleId);
+              return [{
+                ...base,
+                sku: bundleId,
+                size: null,
+                colour: null,
+                productName: bundle ? `${p.name} · ${bundle.label}` : p.name,
+                purchased: purchased.has(`${r.id}|${bundleId}`),
+              }];
+            }
+            // Sofa Custom-build: translate cells via the shared helper.
+            if (p.pricing_kind === 'sofa_build' && Array.isArray(it.config?.cells)) {
+              const cells = it.config.cells as Cell[];
+              const depth = (it.config.depth ?? '24') as Depth;
+              const skuLines = cellsToPoSkus(cells, depth);
+              if (skuLines.length === 0) {
+                // Defensive: empty cells array shouldn't happen for a paid
+                // order, but fall back to the catalog SKU rather than dropping
+                // the line entirely.
+                return [{
+                  ...base,
+                  sku: p.sku,
+                  size: null, colour: null,
+                  purchased: purchased.has(`${r.id}|${p.sku}`),
+                }];
+              }
+              return skuLines.map((line) => ({
+                ...base,
+                sku: line.sku,
+                size: null,
+                colour: null,
+                productName: `${p.name} · ${line.label}`,
+                purchased: purchased.has(`${r.id}|${line.sku}`),
+              }));
+            }
+            // Non-sofa products (mattress / bedframe / flat): unchanged.
+            return [{
+              ...base,
+              sku: p.sku,
+              size: it.config?.size ?? null,
+              colour: it.config?.colour ?? null,
+              purchased: purchased.has(`${r.id}|${p.sku}`),
+            }];
+          }),
       }));
     },
     staleTime: 5_000,

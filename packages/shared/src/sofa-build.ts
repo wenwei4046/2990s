@@ -594,11 +594,22 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
   }
 
   const outwardArms: { edge: EdgeIdx; lCap?: boolean }[] = [];
+  // Tracks edges of type 'open' that face outward (no neighbour) and aren't
+  // covered by an arm or L-cap. Accessory cells (e.g. WC-45 console) are
+  // exempt — their faces are 'open' by design and never get armrests.
+  // An L-shape sofa whose bbox dominant axis is closed at both extremes can
+  // STILL have an unclosed open cushion edge protruding off-axis (e.g. the
+  // right end of an L's top row when the corner sits at the inside angle).
+  // We need to flag that as not-closed even though head/tail pass.
+  const unclosedByDir: Record<EdgeIdx, boolean> = {
+    [EDGE_W]: false, [EDGE_N]: false, [EDGE_E]: false, [EDGE_S]: false,
+  };
   group.forEach((c, i) => {
     const id = ids[i]!;
     const edges = cellEdges(c);
     const myContacts = contactsByCell[id]!;
     const isL = c.moduleId.startsWith('L-');
+    const isAcc = isAccessoryModule(c.moduleId);
 
     let lCapEdge: EdgeIdx | -1 = -1;
     if (isL) {
@@ -618,7 +629,14 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
         return;
       }
       const t = edges[e];
-      if (t === 'arm') outwardArms.push({ edge: e });
+      if (t === 'arm') {
+        outwardArms.push({ edge: e });
+      } else if (t === 'open' && !isAcc) {
+        // Outward 'open' edge with no arm/L-cap covering it. 'back' and
+        // 'front' faces are by-design exposed (wall-side and seating-side
+        // respectively) and don't fail closure.
+        unclosedByDir[e] = true;
+      }
     });
   });
 
@@ -654,12 +672,24 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
   }
 
   const ends = headArm && tailArm;
-  let closed = violations.length === 0 && ends;
+  const hasUnclosedOpen =
+    unclosedByDir[EDGE_W] || unclosedByDir[EDGE_N] ||
+    unclosedByDir[EDGE_E] || unclosedByDir[EDGE_S];
+  let closed = violations.length === 0 && ends && !hasUnclosedOpen;
   let reason: ClosureFailure | null = null;
   if (violations.length > 0) reason = 'Arms colliding';
   else if (!headArm && !tailArm) reason = 'No arms on either end';
   else if (!headArm) reason = bbW >= bbH ? 'Left end has no arm' : 'Top end has no arm';
   else if (!tailArm) reason = bbW >= bbH ? 'Right end has no arm' : 'Bottom end has no arm';
+  else if (hasUnclosedOpen) {
+    // Head/tail axis is fine but an off-axis open edge is exposed (typical
+    // L-shape with corner). Point the user at the first unclosed direction
+    // we found, using the same vocabulary as the on-axis reasons.
+    if (unclosedByDir[EDGE_W])      reason = 'Left end has no arm';
+    else if (unclosedByDir[EDGE_E]) reason = 'Right end has no arm';
+    else if (unclosedByDir[EDGE_N]) reason = 'Top end has no arm';
+    else if (unclosedByDir[EDGE_S]) reason = 'Bottom end has no arm';
+  }
 
   const allAccessories = group.length > 0 && group.every((c) => isAccessoryModule(c.moduleId));
   if (allAccessories) {
@@ -668,4 +698,72 @@ export const analyzeSofa = (group: Cell[], depth: Depth): SofaAnalysis => {
   }
 
   return { violations, closed, reason, leftArm: headArm, rightArm: tailArm };
+};
+
+/* ─── PO SKU translation ───────────────────────────────────────────── */
+
+/**
+ * One line item for the supplier's purchase order. `sku` is what the
+ * factory's SKU sheet uses; `label` is human-readable for the printable PO.
+ */
+export interface PoSkuLine {
+  sku: string;
+  label: string;
+  qty: number;
+}
+
+/**
+ * Translate a custom-build sofa's cells into PO line items.
+ *
+ * Bundle-first rule (per Loo, 2026-05-16): when a group of cells forms a
+ * recognised BUNDLE (`1S` / `2S` / `3S` / `2+L` / `3+L`, including alt-form
+ * compositions like `1A+1A → 2S`), the PO emits ONE line with the bundle
+ * id as the SKU — that's what the factory stocks as an assembled product.
+ * When the cells form an ad-hoc shape with no bundle match, each cell is
+ * emitted as its own SKU line so the factory can pick the right
+ * compartments and assemble.
+ *
+ * Multi-sofa carts: a single configurator session can place 2+ separate
+ * sofas in one room (e.g. main 3-seater + side 1-seater). Each
+ * adjacency-connected group becomes its own bundle/cell translation.
+ *
+ * Accessories (`WC-45` etc.) ship as their own SKU since they're standalone
+ * pieces that just happen to be adjacent to a sofa for layout purposes.
+ *
+ * @param cells   the SofaConfigSnapshot.cells from order_items.config
+ * @param depth   the configured seat depth (24″ or 28″)
+ * @returns       one PoSkuLine per bundle / per ad-hoc cell, qty always 1
+ *                (multiply by order_item.qty at the caller)
+ */
+export const cellsToPoSkus = (cells: Cell[], depth: Depth): PoSkuLine[] => {
+  if (cells.length === 0) return [];
+  const groups = groupSofas(cells, depth);
+  const out: PoSkuLine[] = [];
+  for (const group of groups) {
+    // Split off accessories first — they never count toward bundle signature
+    // and ship as their own SKU.
+    const sofaCells: Cell[] = [];
+    for (const c of group) {
+      if (isAccessoryModule(c.moduleId)) {
+        const m = findModule(c.moduleId);
+        out.push({ sku: c.moduleId, label: m?.label ?? c.moduleId, qty: 1 });
+      } else {
+        sofaCells.push(c);
+      }
+    }
+    if (sofaCells.length === 0) continue;
+
+    const modIds = sofaCells.map((c) => c.moduleId);
+    const bundle = detectBundle(modIds);
+    if (bundle) {
+      out.push({ sku: bundle.id, label: bundle.label, qty: 1 });
+    } else {
+      // Ad-hoc layout: emit each cell as its own SKU line.
+      for (const c of sofaCells) {
+        const m = findModule(c.moduleId);
+        out.push({ sku: c.moduleId, label: m?.label ?? c.moduleId, qty: 1 });
+      }
+    }
+  }
+  return out;
 };

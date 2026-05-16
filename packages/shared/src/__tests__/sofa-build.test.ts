@@ -9,6 +9,7 @@ import {
   analyzeSofa,
   hasArmConflict,
   findSnap,
+  cellsToPoSkus,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -394,5 +395,135 @@ describe('findSnap threshold', () => {
 
   it('SNAP_CM is exported and equals 20', () => {
     expect(SNAP_CM).toBe(20);
+  });
+});
+
+/* Case 9b — analyzeSofa: outward-open-edge check (off-axis exposure).
+ * Regression for the L-shape bug Loo found 2026-05-16: a CNR + 2NA top-row
+ * with a rotated 2A-LHF descending from the corner has arms at the dominant
+ * (vertical) bbox extremes but leaves the 2NA's right cushion edge exposed
+ * with no armrest. The old check only inspected head/tail of the dominant
+ * axis and missed it. */
+describe('analyzeSofa off-axis open-edge closure', () => {
+  it('flags an L-shape with an exposed right cushion edge as NOT closed', () => {
+    // Top row: CNR (arm on W+N) + 2NA. 2NA's E is 'open' with no neighbour.
+    // Vertical drop: 2A-LHF rotated 270° hangs below CNR with arm on screen-S.
+    // Dominant axis: vertical (bbH 253 > bbW 237). Head (N) and tail (S)
+    // both armed — but 2NA's E is uncovered. Must flag.
+    const group: Cell[] = [
+      { id: 'cnr', moduleId: 'CNR',    x: 0,  y: 0,  rot: 0   },
+      { id: '2na', moduleId: '2NA',    x: 95, y: 0,  rot: 0   },
+      { id: '2a',  moduleId: '2A-LHF', x: 0,  y: 95, rot: 270 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.closed).toBe(false);
+    expect(r.reason).toBe('Right end has no arm');
+  });
+
+  it('accepts an L-shape that does close every outward open edge', () => {
+    // 2A-LHF (W=arm) + L-RHF (L-cap on E). Standard 2+L bundle. No exposed
+    // open edges anywhere.
+    const group: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.closed).toBe(true);
+    expect(r.reason).toBeNull();
+  });
+
+  it('accessory open edges do NOT fail closure', () => {
+    // 1A-LHF + WC-45 + 1A-RHF — the console's N/S faces are 'open' by
+    // design. Closure must ignore them (else 3+L bundle pricing breaks).
+    const group: Cell[] = [
+      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'w', moduleId: 'WC-45',  x: 95,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A-RHF', x: 140, y: 0, rot: 0 },
+    ];
+    const r = analyzeSofa(group, '24');
+    expect(r.closed).toBe(true);
+    expect(r.reason).toBeNull();
+  });
+});
+
+/* Case 10 — cellsToPoSkus: bundle-first PO line translation. */
+describe('cellsToPoSkus', () => {
+  it('empty cells → empty', () => {
+    expect(cellsToPoSkus([], '24')).toEqual([]);
+  });
+
+  it('1A-LHF + 1A-RHF closed pair → ONE line of 2S (bundle wins)', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1A-LHF', x: 0,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A-RHF', x: 95, y: 0, rot: 0 },
+    ];
+    const skus = cellsToPoSkus(cells, '24');
+    expect(skus).toEqual([{ sku: '2S', label: '2-Seater', qty: 1 }]);
+  });
+
+  it('1A-LHF alone → 1S bundle (single-cell still bundle-matched)', () => {
+    const cells: Cell[] = [{ id: 'a', moduleId: '1A-LHF', x: 0, y: 0, rot: 0 }];
+    expect(cellsToPoSkus(cells, '24')).toEqual([{ sku: '1S', label: '1-Seater', qty: 1 }]);
+  });
+
+  it('canonical 3+L cells → ONE line of 3+L', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',    x: 158, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L-RHF',  x: 233, y: 0, rot: 0 },
+    ];
+    expect(cellsToPoSkus(cells, '24')).toEqual([{ sku: '3+L', label: '3 + L', qty: 1 }]);
+  });
+
+  it('1B-LHF + 2NA + 1A-RHF (ad-hoc, no bundle match) → 3 per-cell lines', () => {
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1B-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2NA',    x: 105, y: 0, rot: 0 },
+      { id: 'c', moduleId: '1A-RHF', x: 247, y: 0, rot: 0 },
+    ];
+    const skus = cellsToPoSkus(cells, '24');
+    expect(skus).toEqual([
+      { sku: '1B-LHF', label: '1B · Left hand facing (wide arm)', qty: 1 },
+      { sku: '2NA',    label: '2NA · No arms',                    qty: 1 },
+      { sku: '1A-RHF', label: '1A · Right hand facing',           qty: 1 },
+    ]);
+  });
+
+  it('two separated sofa groups → two bundle lines', () => {
+    const cells: Cell[] = [
+      // group A: 1A+1A → 2S, at origin
+      { id: 'a1', moduleId: '1A-LHF', x: 0,   y: 0,    rot: 0 },
+      { id: 'a2', moduleId: '1A-RHF', x: 95,  y: 0,    rot: 0 },
+      // group B: 1A alone → 1S, 500cm away (no edge contact)
+      { id: 'b',  moduleId: '1A-LHF', x: 1000, y: 0,   rot: 0 },
+    ];
+    const skus = cellsToPoSkus(cells, '24');
+    expect(skus).toEqual([
+      { sku: '2S', label: '2-Seater', qty: 1 },
+      { sku: '1S', label: '1-Seater', qty: 1 },
+    ]);
+  });
+
+  it('accessory (WC-45) wedged in a closed bundle → bundle line + accessory line', () => {
+    // 3+L canonical with a console wedged in — bundle still detects because
+    // signature ignores accessories. PO must still mention the WC-45.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'w', moduleId: 'WC-45',  x: 95,  y: 0, rot: 0 },
+      { id: 'b', moduleId: '2NA',    x: 140, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L-RHF',  x: 282, y: 0, rot: 0 },
+    ];
+    const skus = cellsToPoSkus(cells, '24');
+    // Order: accessories come out first (split-off pass), then the bundle line.
+    expect(skus).toEqual([
+      { sku: 'WC-45', label: 'Wood console · 45cm', qty: 1 },
+      { sku: '3+L',   label: '3 + L',               qty: 1 },
+    ]);
+  });
+
+  it('only-accessory group → accessory line, no bundle', () => {
+    const cells: Cell[] = [{ id: 'w', moduleId: 'WC-45', x: 0, y: 0, rot: 0 }];
+    const skus = cellsToPoSkus(cells, '24');
+    expect(skus).toEqual([{ sku: 'WC-45', label: 'Wood console · 45cm', qty: 1 }]);
   });
 });
