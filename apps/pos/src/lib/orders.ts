@@ -38,18 +38,25 @@ export class PricingDriftError extends Error {
 
 export interface OrderSubmitInput {
   customer: OrderV1PostBody['customer'];
-  paymentMethod: OrderV1PostBody['paymentMethod'];
+  paymentMethod: NonNullable<OrderV1PostBody['paymentMethod']>;
   approvalCode?: string;
   notes?: string;
   /** ISO YYYY-MM-DD; omit for "delivery TBD". */
   deliveryDate?: string;
-  /** e.g. '12:00 – 15:00'. Only meaningful with deliveryDate. */
-  deliverySlot?: string;
   lines: CartLine[];
   /** When true, override the drift check by sending the server's total back. */
   acceptedServerTotal?: number;
   /** Slip MVP: required when paymentMethod='transfer'. */
   uploadSessionId?: string;
+
+  // Handover-redesign (Phase 4.5) ─────────────────────────────────────
+  customerType?: 'new' | 'existing';
+  buildingType?: 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
+  billingSame?: boolean;
+  salespersonId?: string;
+  specialInstructions?: string;
+  addressLater?: boolean;
+  addons?: { addonId: string; qty?: number; floorsCount?: number; itemsCount?: number }[];
 }
 
 const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
@@ -100,7 +107,13 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     ...(input.approvalCode ? { approvalCode: input.approvalCode } : {}),
     ...(input.notes ? { notes: input.notes } : {}),
     ...(input.deliveryDate ? { deliveryDate: input.deliveryDate } : {}),
-    ...(input.deliverySlot ? { deliverySlot: input.deliverySlot } : {}),
+    ...(input.customerType ? { customerType: input.customerType } : {}),
+    ...(input.buildingType ? { buildingType: input.buildingType } : {}),
+    ...(input.billingSame !== undefined ? { billingSame: input.billingSame } : {}),
+    ...(input.salespersonId ? { salespersonId: input.salespersonId } : {}),
+    ...(input.specialInstructions ? { specialInstructions: input.specialInstructions } : {}),
+    ...(input.addressLater !== undefined ? { addressLater: input.addressLater } : {}),
+    ...(input.addons && input.addons.length > 0 ? { addons: input.addons } : {}),
     lines,
     clientTotal,
     ...(input.uploadSessionId ? { uploadSessionId: input.uploadSessionId } : {}),
