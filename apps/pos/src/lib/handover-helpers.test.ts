@@ -97,6 +97,16 @@ describe('validateConfirmPayment', () => {
     expect(validateConfirmPayment(f, subtotal, 0)).toBe(false);
     expect(validateConfirmPayment({ ...f, slipUploadSessionId: 'sess' }, subtotal, 0)).toBe(true);
   });
+  it('rejects when paymentMethod is empty (defense-in-depth)', () => {
+    const f: HandoverForm = {
+      ...baseForm,
+      paymentMethod: '',  // empty placeholder
+      amountPaid: 2990,
+      approvalCode: '123',
+      paymentRecorded: true,
+    };
+    expect(validateConfirmPayment(f, 2990, 0)).toBe(false);
+  });
 });
 
 describe('validateSign', () => {
@@ -134,6 +144,14 @@ describe('computeAddonTotal', () => {
   });
   it('ignores unselected addons', () => {
     expect(computeAddonTotal({ 'dispose-mattress': { selected: false, expanded: false, qty: 1 } }, infos)).toBe(0);
+  });
+  it('flat kind ignores qty (canonical: returns basePrice only)', () => {
+    const flatInfos: Record<string, AddonInfo> = {
+      'assemble': { kind: 'flat', price: 80, perFloorItem: 0 },
+    };
+    expect(computeAddonTotal({ assemble: { selected: true, expanded: true, qty: 3 } }, flatInfos)).toBe(80);
+    // qty: 1 should also be 80
+    expect(computeAddonTotal({ assemble: { selected: true, expanded: true, qty: 1 } }, flatInfos)).toBe(80);
   });
 });
 

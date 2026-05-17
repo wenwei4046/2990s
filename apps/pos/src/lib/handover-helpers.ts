@@ -69,6 +69,7 @@ export const validateAddonsPayment = (f: HandoverForm): boolean =>
   f.paymentMethod !== '';
 
 export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number): boolean => {
+  if (f.paymentMethod === '') return false;  // method must be chosen (defense-in-depth — orchestrator step 5 already gates this)
   const total = subtotal + addonTotal;
   const halfTotal = Math.round(total / 2);
   if (f.amountPaid < halfTotal || f.amountPaid > total) return false;
@@ -101,7 +102,11 @@ export const computeAddonTotal = (
     if (info.kind === 'floors_items') {
       // Canonical lift math: first 2 floors free (see packages/shared/src/pricing.ts:23)
       total += Math.max(0, (sel.floorsCount ?? 0) - 2) * (sel.itemsCount ?? 0) * info.perFloorItem;
+    } else if (info.kind === 'flat') {
+      // Canonical flat: basePrice, qty ignored (see packages/shared/src/pricing.ts:24-25)
+      total += info.price;
     } else {
+      // qty
       total += info.price * (sel.qty ?? 1);
     }
   }
