@@ -188,7 +188,6 @@ export const Handover = () => {
           phase={phase}
           steps={STEPS}
           currentIdx={idx}
-          validity={validity}
           onJump={(targetIdx) => { if (targetIdx <= idx) setIdx(targetIdx); }}
         />
 

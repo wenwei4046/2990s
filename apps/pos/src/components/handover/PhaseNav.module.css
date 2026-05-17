@@ -1,0 +1,70 @@
+.chips {
+  display: flex;
+  gap: var(--space-3);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.chip {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.chipBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+
+.chip.chipPast .chipBtn {
+  background: var(--c-success-bg);
+  color: var(--c-success);
+  cursor: pointer;
+}
+.chip.chipCurrent .chipBtn {
+  background: var(--bg);
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 1px var(--c-orange) inset;
+  color: var(--c-orange);
+  cursor: default;
+}
+
+.chipNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--line);
+  color: var(--fg-muted);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-12);
+  flex-shrink: 0;
+}
+.chipNumPast    { background: var(--c-success); color: var(--c-cream); }
+.chipNumCurrent { background: var(--c-orange);  color: var(--c-cream); }
+
+.chipLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-13);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
