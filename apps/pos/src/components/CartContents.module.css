@@ -50,7 +50,7 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  background: var(--c-cream);
+  background: var(--bg-alt);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   transition: border-color 150ms, box-shadow 150ms, transform 150ms;
