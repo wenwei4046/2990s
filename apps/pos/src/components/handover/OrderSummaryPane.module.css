@@ -1,0 +1,83 @@
+.pane {
+  position: sticky;
+  top: var(--space-4);
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: calc(100vh - var(--space-8));
+  overflow-y: auto;
+}
+
+.head { display: flex; flex-direction: column; gap: 4px; }
+.orderId { font-family: var(--font-mono); font-size: var(--fs-12); color: var(--fg-muted); }
+.title   { font-family: var(--font-title); font-weight: var(--w-bold); font-size: var(--fs-20); margin: 0; }
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.section:first-of-type { border-top: none; padding-top: 0; }
+
+.sectionHead {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-soft);
+}
+
+.itemCard {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  background: var(--c-cream);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+.itemPhoto {
+  width: 56px; height: 42px;
+  background: var(--bg-warm);
+  border-radius: var(--radius-xs);
+}
+.itemName   { font-weight: var(--w-semibold); }
+.itemDetail { font-size: var(--fs-12); color: var(--fg-muted); }
+.itemPrice  {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  color: var(--c-burnt);
+}
+.itemPriceUnit { font-size: var(--fs-11); margin-right: 4px; vertical-align: super; }
+
+.row { display: flex; justify-content: space-between; gap: 8px; }
+.rowLabel { color: var(--fg-muted); font-size: var(--fs-13); }
+.rowValue { font-size: var(--fs-13); text-align: right; }
+.rowItalic { font-style: italic; color: var(--fg-muted); }
+.rowValue em { font-style: italic; color: var(--fg-muted); }
+
+.placeholder {
+  font-style: italic;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.totalBar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.totalCaption {
+  font-size: var(--fs-11);
+  color: var(--fg-soft);
+  margin: 0;
+}
