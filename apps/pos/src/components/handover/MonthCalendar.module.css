@@ -1,0 +1,84 @@
+.cal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.monthLabel {
+  font-family: var(--font-title);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-16);
+}
+.nav {
+  background: transparent;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  color: var(--fg-muted);
+}
+.nav:hover:not(:disabled) { background: var(--bg); color: var(--fg); }
+.nav:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+.weekday {
+  text-align: center;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--fg-soft);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.day, .empty {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+}
+.day {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 50%;
+  color: var(--fg);
+}
+.day:hover:not(:disabled) { background: var(--bg); }
+.daySelected {
+  background: var(--c-orange) !important;
+  color: var(--c-cream);
+  font-weight: var(--w-semibold);
+}
+.dayDisabled { color: var(--line); cursor: not-allowed; }
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}
+.legendDot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--c-orange);
+}
+.legendNote { margin-left: auto; }
