@@ -250,3 +250,9 @@
   font-size: var(--fs-13);
   margin-top: var(--space-3);
 }
+
+.signCaption {
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+  margin: var(--space-3) 0;
+}
