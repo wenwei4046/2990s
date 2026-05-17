@@ -140,6 +140,7 @@ export const categories = pgTable('categories', {
   label:     text('label').notNull(),
   icon:      text('icon').notNull(),              // lucide icon name
   tbc:       boolean('tbc').notNull().default(false),
+  heroImageKey: text('hero_image_key'),
   sortOrder: integer('sort_order').notNull().default(0),
 });
 
@@ -343,6 +344,11 @@ export const orders = pgTable('orders', {
   customerPostcode: text('customer_postcode'),
   customerCity:     text('customer_city'),
   customerState:    text('customer_state'),
+
+  customerType:   text('customer_type'),   // 'new' | 'existing'
+  buildingType:   text('building_type'),   // 'condo'|'landed'|'apartment'|'office'|'shop'|'other'
+  billingSame:    boolean('billing_same').notNull().default(true),
+  salespersonId:  uuid('salesperson_id').references(() => staff.id),
 
   emergencyName:     text('emergency_name'),
   emergencyPhone:    text('emergency_phone'),
