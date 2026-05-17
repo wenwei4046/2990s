@@ -141,9 +141,10 @@ BEGIN
     a.price,                                                            -- server-side price
     CASE
       WHEN a.kind = 'floors_items' THEN
-        a.price
-        + a.per_floor_item
-          * COALESCE((ad->>'floorsCount')::int, 0)
+        -- Canonical lift formula (packages/shared/src/pricing.ts:23):
+        -- first 2 floors free; charge per_floor_item only for floors 3 and above
+        COALESCE(a.per_floor_item, 0)
+          * GREATEST(0, COALESCE((ad->>'floorsCount')::int, 0) - 2)
           * COALESCE((ad->>'itemsCount')::int, 0)
       ELSE a.price * COALESCE((ad->>'qty')::int, 1)
     END,
