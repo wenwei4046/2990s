@@ -69,3 +69,58 @@
     grid-template-columns: 1fr;
   }
 }
+
+:global(.field) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+:global(.fieldLabel) {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-soft);
+}
+:global(.field) input,
+:global(.field) select,
+:global(.field) textarea {
+  font: inherit;
+  font-size: var(--fs-14);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+:global(.field) input:focus,
+:global(.field) select:focus,
+:global(.field) textarea:focus {
+  outline: none;
+  border-color: var(--c-burnt);
+}
+:global(.fieldRow) {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+:global(.fieldRow3) {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: var(--space-3);
+}
+.stepBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.stepTitle {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-24);
+  margin: 0 0 4px;
+}
+.stepLead {
+  margin: 0 0 var(--space-3);
+  color: var(--fg-muted);
+}

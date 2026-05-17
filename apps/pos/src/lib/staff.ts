@@ -36,3 +36,21 @@ export function useStaff() {
     },
   });
 }
+
+export interface StaffOption { id: string; name: string; }
+
+export function useAllStaff() {
+  return useQuery<StaffOption[]>({
+    queryKey: ['staff', 'all'],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('staff')
+        .select('id, name')
+        .eq('active', true)
+        .order('name');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({ id: r.id, name: r.name }));
+    },
+  });
+}
