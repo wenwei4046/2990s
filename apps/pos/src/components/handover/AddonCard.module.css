@@ -1,0 +1,99 @@
+.card {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  transition: border-color 150ms;
+}
+.cardOn { border-color: var(--c-orange); }
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px; height: 48px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  color: var(--c-burnt);
+}
+.title  {
+  font-family: var(--font-title);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-16);
+  margin: 0;
+}
+.detail {
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+  margin: 4px 0 0;
+}
+
+.expand {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 12px;
+  align-items: center;
+  margin-top: var(--space-3);
+}
+.expandField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.expandField span {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-soft);
+}
+.expandField input {
+  width: 80px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  background: var(--bg);
+}
+.expandField input:focus { outline: none; border-color: var(--c-burnt); }
+.lineTotal {
+  font-family: var(--font-title);
+  font-weight: var(--w-semibold);
+  margin-left: auto;
+  color: var(--c-burnt);
+}
+
+.configLink {
+  background: transparent;
+  border: none;
+  color: var(--c-orange);
+  cursor: pointer;
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+}
+.configLink:hover { text-decoration: underline; }
+
+.check {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+.checkOn {
+  background: var(--c-orange);
+  color: var(--c-cream);
+  border-color: var(--c-orange);
+}

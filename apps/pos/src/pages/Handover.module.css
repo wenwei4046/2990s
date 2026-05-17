@@ -155,3 +155,57 @@
   font-size: var(--fs-18);
   margin: var(--space-3) 0;
 }
+
+.addonList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.methodBtn {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.methodBtnActive {
+  background: var(--bg);
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 1px var(--c-orange) inset;
+}
+
+.methodIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--c-burnt);
+}
+.methodBtnActive .methodIcon {
+  background: var(--c-orange);
+  color: var(--c-cream);
+}
+
+.methodLabel {
+  display: block;
+  font-family: var(--font-title);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-15);
+}
+
+.methodHint {
+  display: block;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  margin-top: 2px;
+}
