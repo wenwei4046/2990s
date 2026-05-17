@@ -156,6 +156,8 @@ export const Handover = () => {
             ...(s.floorsCount !== undefined ? { floorsCount: s.floorsCount } : {}),
             ...(s.itemsCount !== undefined ? { itemsCount: s.itemsCount } : {}),
           })),
+        addonTotal,
+        paid: form.amountPaid,
         lines,
         acceptedServerTotal,
         uploadSessionId: form.slipUploadSessionId ?? undefined,

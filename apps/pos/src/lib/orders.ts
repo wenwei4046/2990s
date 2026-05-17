@@ -57,6 +57,13 @@ export interface OrderSubmitInput {
   specialInstructions?: string;
   addressLater?: boolean;
   addons?: { addonId: string; qty?: number; floorsCount?: number; itemsCount?: number }[];
+  /** Total of handover addons computed client-side via shared addonPrice().
+   *  Sums into clientTotal so the server-side pricing drift check matches —
+   *  otherwise every order with selected addons fires a spurious 409. */
+  addonTotal?: number;
+  /** Amount actually collected at handover (MYR integer). Threaded to the
+   *  RPC's `paid` field; the Confirmed page surfaces this as "PAID RM X". */
+  paid?: number;
 }
 
 const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
@@ -98,8 +105,11 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     };
   });
 
+  // clientTotal must include handover addons so the server's drift check
+  // (subtotal + addonTotal) matches what we sent. acceptedServerTotal short-
+  // circuits this on the retry path after the user accepts a 409 drift.
   const clientTotal = input.acceptedServerTotal
-    ?? input.lines.reduce((s, l) => s + l.qty * l.config.total, 0);
+    ?? (input.lines.reduce((s, l) => s + l.qty * l.config.total, 0) + (input.addonTotal ?? 0));
 
   return {
     customer: input.customer,
@@ -114,6 +124,7 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     ...(input.specialInstructions ? { specialInstructions: input.specialInstructions } : {}),
     ...(input.addressLater !== undefined ? { addressLater: input.addressLater } : {}),
     ...(input.addons && input.addons.length > 0 ? { addons: input.addons } : {}),
+    ...(input.paid !== undefined ? { paid: input.paid } : {}),
     lines,
     clientTotal,
     ...(input.uploadSessionId ? { uploadSessionId: input.uploadSessionId } : {}),

@@ -35,9 +35,11 @@ export const Confirmed = () => {
       })
     : 'a date we will confirm soon';
 
-  // Reshape DB lines into CartLine-shape for OrderSummaryPane reuse.
-  const fakeLines: CartLine[] = data.lines.map((l) => ({
-    key: l.product_id,
+  // Reshape DB lines into CartLine-shape for OrderSummaryPane reuse. Multiple
+  // order_items can share a product_id (e.g. 3 sofas of the same model), so we
+  // suffix the array index to keep React keys unique.
+  const fakeLines: CartLine[] = data.lines.map((l, idx) => ({
+    key: `${l.product_id}-${idx}`,
     qty: l.qty,
     config: {
       kind: 'flat' as const,

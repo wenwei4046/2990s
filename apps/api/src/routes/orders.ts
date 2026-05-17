@@ -238,7 +238,10 @@ orders.post('/', async (c) => {
     subtotal: totals.subtotal,
     addonTotal: totals.addonTotal,
     total: totals.total,
-    paid: 0,
+    // Amount actually collected at handover. Threaded from the POS via the
+    // optional `paid` field in orderV1PostSchema; the SQL function uses
+    // COALESCE((p->>'paid')::int, 0) so legacy clients still produce 0.
+    paid: dto.paid ?? 0,
     lines: totals.lines.map((l) => ({
       productId: l.productId,
       qty: l.qty,

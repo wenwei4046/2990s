@@ -103,6 +103,9 @@ export const orderV1PostSchema = z.object({
   // Handover-time logistics addons (dispose, lift, assemble). Server recomputes
   // total against the current `addons` table — drifted prices reject with 409.
   addons:              z.array(handoverAddonSchema).optional(),
+  // Amount collected at handover (whole MYR). Flows into `orders.paid` via the
+  // RPC's `paid` key; defaults to 0 server-side when omitted (legacy clients).
+  paid:                z.number().int().nonnegative().optional(),
 
   // Client-submitted total — server recomputes and rejects with 409 if drift
   // exceeds 0.5%. Never trusted as the actual saved amount.

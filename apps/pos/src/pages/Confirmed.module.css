@@ -7,14 +7,14 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  /* Hero stretches to fill; actions sit below in flow so they never
+     overlap the title/body copy (Bug 3 from Task 19 e2e verification). */
 }
 .actions {
-  position: absolute;
-  bottom: var(--space-7);
-  left: var(--space-7);
   display: flex;
   gap: var(--space-3);
-  z-index: 2;
+  padding: var(--space-4) var(--space-7);
+  background: var(--c-cream);
 }
 .right {
   background: var(--bg-alt);
@@ -27,5 +27,5 @@
 }
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 1fr; }
-  .actions { position: static; padding: var(--space-3); }
+  .actions { padding: var(--space-3); }
 }
