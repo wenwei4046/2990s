@@ -6,6 +6,7 @@ import {
   OrderPricingError,
   type ServerProductInfo,
   type OrderLineInput,
+  type AddonStaticInfo,
 } from '@2990s/shared/pricing';
 import { supabaseAuth } from '../middleware/auth';
 import { presign, type SlipMime } from '../lib/r2';
@@ -83,15 +84,17 @@ orders.post('/', async (c) => {
   // Addon prices are loaded once and passed to computeOrderTotal so paid
   // pillow extras on size lines are recomputed against current addons table.
   const productIds = Array.from(new Set(dto.lines.map((l) => l.config.productId)));
-  const addonIds = Array.from(
-    new Set(
-      dto.lines.flatMap((l) =>
-        l.config.kind === 'size' && l.config.addonExtras
-          ? l.config.addonExtras.map((e) => e.addonId)
-          : [],
-      ),
-    ),
+  // Two distinct addon-id sources flow through the same `addons` select:
+  // 1) per-size-line addonExtras (e.g. paid extra pillows)
+  // 2) handover-time logistics addons from `dto.addons` (dispose, lift, assemble)
+  // Union them so we make a single DB round-trip.
+  const sizeLineAddonIds = dto.lines.flatMap((l) =>
+    l.config.kind === 'size' && l.config.addonExtras
+      ? l.config.addonExtras.map((e) => e.addonId)
+      : [],
   );
+  const handoverAddonIds = (dto.addons ?? []).map((a) => a.addonId);
+  const addonIds = Array.from(new Set([...sizeLineAddonIds, ...handoverAddonIds]));
 
   const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes] = await Promise.all([
     supabase
@@ -111,8 +114,20 @@ orders.post('/', async (c) => {
       .select('product_id, size_id, active, price')
       .in('product_id', productIds),
     addonIds.length > 0
-      ? supabase.from('addons').select('id, price').in('id', addonIds)
-      : Promise.resolve({ data: [] as { id: string; price: number }[], error: null }),
+      ? supabase
+          .from('addons')
+          .select('id, kind, price, per_floor_item, enabled')
+          .in('id', addonIds)
+      : Promise.resolve({
+          data: [] as {
+            id: string;
+            kind: 'qty' | 'floors_items' | 'flat';
+            price: number;
+            per_floor_item: number | null;
+            enabled: boolean;
+          }[],
+          error: null,
+        }),
   ]);
 
   for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes]) {
@@ -124,7 +139,23 @@ orders.post('/', async (c) => {
   const bundles = bundlesRes.data ?? [];
   const sizes = sizesRes.data ?? [];
   const addonPricesById = new Map<string, number>();
-  for (const a of addonsRes.data ?? []) addonPricesById.set(a.id, a.price);
+  // Static catalog info for handover-time addons (logistics: dispose, lift,
+  // assemble) — fed into computeOrderTotal so addonPrice() canonical formula
+  // runs against current row state. Disabled addons are filtered out: a
+  // tampered POS submitting a retired addon id silently drops out of the
+  // total (mirrors migration 0023's INNER JOIN ... WHERE enabled = TRUE on
+  // the persist side).
+  const handoverAddonInfosById = new Map<string, AddonStaticInfo>();
+  for (const a of addonsRes.data ?? []) {
+    addonPricesById.set(a.id, a.price);
+    if (a.enabled) {
+      handoverAddonInfosById.set(a.id, {
+        kind: a.kind,
+        basePrice: a.price,
+        perFloorItem: a.per_floor_item,
+      });
+    }
+  }
 
   // Build per-product ServerProductInfo for the shared recompute.
   const infoById = new Map<string, ServerProductInfo>();
@@ -154,7 +185,13 @@ orders.post('/', async (c) => {
   const lineInputs: OrderLineInput[] = dto.lines.map((l) => ({ qty: l.qty, config: l.config }));
   let totals;
   try {
-    totals = computeOrderTotal(lineInputs, infoById, addonPricesById);
+    totals = computeOrderTotal(
+      lineInputs,
+      infoById,
+      addonPricesById,
+      dto.addons,
+      handoverAddonInfosById,
+    );
   } catch (err) {
     if (err instanceof OrderPricingError) {
       return c.json({ error: 'pricing_invalid', detail: err.detail }, 422);
@@ -182,6 +219,8 @@ orders.post('/', async (c) => {
   }
 
   // Hand the authoritative numbers to the RPC for atomic insert.
+  // Handover-redesign (Phase 4.5) fields are conditionally included so older
+  // POS clients that don't send them still produce a clean payload.
   const rpcPayload = {
     customerName: dto.customer.name,
     customerPhone: dto.customer.phone ?? '',
@@ -209,6 +248,18 @@ orders.post('/', async (c) => {
     })),
     // Slip MVP — null when not transfer or no session
     uploadSessionId: dto.uploadSessionId ?? null,
+
+    // ─── Handover-redesign (Phase 4.5) ─────────────────────────────────
+    // Migration 0023 maps these onto the `orders` row + addon order_items.
+    // Server forwards addons verbatim — the SQL function INNER JOINs against
+    // `addons WHERE enabled = TRUE` so unknown / disabled ids drop out.
+    ...(dto.customerType        ? { customerType:        dto.customerType        } : {}),
+    ...(dto.buildingType        ? { buildingType:        dto.buildingType        } : {}),
+    ...(dto.billingSame  !== undefined ? { billingSame:  dto.billingSame  } : {}),
+    ...(dto.salespersonId       ? { salespersonId:       dto.salespersonId       } : {}),
+    ...(dto.specialInstructions ? { specialInstructions: dto.specialInstructions } : {}),
+    ...(dto.addressLater !== undefined ? { addressLater: dto.addressLater } : {}),
+    ...(dto.addons && dto.addons.length > 0 ? { addons: dto.addons } : {}),
   };
 
   const { data, error } = await supabase.rpc('create_order_with_items', { p: rpcPayload });
@@ -234,6 +285,7 @@ orders.post('/', async (c) => {
   return c.json({
     id: data as string,
     subtotal: totals.subtotal,
+    addonTotal: totals.addonTotal,
     total: totals.total,
     lines: totals.lines.map((l, i) => ({
       productId: l.productId,
