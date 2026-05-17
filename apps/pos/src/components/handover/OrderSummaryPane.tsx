@@ -115,9 +115,47 @@ const FormPane = ({ lines, form, subtotal, addonTotal, total }: FormPaneProps) =
   );
 };
 
-const ReceiptPane = (_p: ReceiptPaneProps) => {
-  // Implemented in Task 16. Placeholder for now.
-  return <aside className={styles.pane}><h2>Receipt — pending Task 16</h2></aside>;
+const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, paid }: ReceiptPaneProps) => {
+  const dateStr = new Date(placedAt).toLocaleDateString('en-GB');
+  return (
+    <aside className={`${styles.pane} receipt`}>
+      <header className={styles.head}>
+        <code className={styles.orderId}>{orderId} · {dateStr}</code>
+        <h2 className={styles.title}>Receipt</h2>
+      </header>
+      <Section heading="Items">
+        {lines.map((l) => (
+          <article key={l.key} className={styles.itemCard}>
+            <div className={styles.itemPhoto} />
+            <div className={styles.itemBody}>
+              <div className={styles.itemName}>{l.config.productName}</div>
+              <div className={styles.itemDetail}>qty {l.qty}</div>
+            </div>
+            <div className={styles.itemPrice}>
+              <span className={styles.itemPriceUnit}>RM</span>
+              {fmtRM(l.qty * l.config.total).replace('RM ', '')}
+            </div>
+          </article>
+        ))}
+      </Section>
+      <Section heading="Delivery">
+        {customer.address && <Row label="Address" value={customer.address} />}
+        <Row label="Date" value={delivery.date ?? ''} placeholder="—" />
+      </Section>
+      <Section heading="Payment">
+        <Row label="Method" value={payment.method} />
+        <div className={styles.row}>
+          <span className={styles.rowLabel}>Status</span>
+          <span className={`${styles.rowValue} ${styles.statusRecorded}`}>Recorded</span>
+        </div>
+      </Section>
+      <footer className={styles.totalBar}>
+        <span className="t-eyebrow">Paid</span>
+        <PriceTag amount={paid} size="lg" />
+        <p className={styles.totalCaption}>Same price. Every piece. Always.</p>
+      </footer>
+    </aside>
+  );
 };
 
 const Section = ({ heading, children }: { heading: string; children: React.ReactNode }) => (

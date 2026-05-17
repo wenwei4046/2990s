@@ -1,0 +1,31 @@
+.layout {
+  display: grid;
+  grid-template-columns: 60% 40%;
+  min-height: 100vh;
+}
+.left {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.actions {
+  position: absolute;
+  bottom: var(--space-7);
+  left: var(--space-7);
+  display: flex;
+  gap: var(--space-3);
+  z-index: 2;
+}
+.right {
+  background: var(--bg-alt);
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+.shell {
+  padding: var(--space-7);
+  text-align: center;
+}
+@media (max-width: 1024px) {
+  .layout { grid-template-columns: 1fr; }
+  .actions { position: static; padding: var(--space-3); }
+}

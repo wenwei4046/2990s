@@ -81,3 +81,9 @@
   color: var(--fg-soft);
   margin: 0;
 }
+
+.statusRecorded {
+  color: var(--c-success);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+}
