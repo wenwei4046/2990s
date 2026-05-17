@@ -18,6 +18,13 @@ export interface Env {
 
   // R2 binding (Phase 4 slip workflow)
   SLIPS: R2Bucket;
+
+  // R2 binding for public assets (Task 18 — category hero photos).
+  // TODO(Task 18): the 2990s-public bucket must be provisioned in the
+  // Cloudflare dashboard with public access enabled, then bound in
+  // wrangler.toml. Until then this is typed for compile-time but the
+  // endpoint will error at runtime with "env.PUBLIC_ASSETS is undefined".
+  PUBLIC_ASSETS: R2Bucket;
 }
 
 // Hono context augmentation — middleware sets these.

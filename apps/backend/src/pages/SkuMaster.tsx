@@ -20,6 +20,7 @@ import { useAuth } from '../lib/auth';
 import { useCategories, useProducts, useSeries, type ProductRow } from '../lib/queries';
 import { useUpdateProduct, useBulkSetProductVisibility } from '../lib/admin-queries';
 import { SkuDrawer } from '../components/SkuDrawer';
+import { CategoryHeroSection } from '../components/CategoryHeroSection';
 import styles from './SkuMaster.module.css';
 
 type DrawerState =
@@ -520,6 +521,9 @@ export const SkuMaster = () => {
           Showing <strong>{filtered.length}</strong> of {list.length} SKUs
         </div>
       )}
+
+      {/* Task 18 — admin/coordinator can upload one hero image per category. */}
+      <CategoryHeroSection />
 
       {drawer.open && (
         <SkuDrawer

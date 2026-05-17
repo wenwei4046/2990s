@@ -24,6 +24,21 @@ R2_ENDPOINT = "https://e2494242a0fd563cacee5a301cf95dd3.r2.cloudflarestorage.com
 binding = "SLIPS"
 bucket_name = "2990s-slips"
 
+# R2 binding for public assets (Task 18 — category hero photos).
+# TODO(Task 18): create the 2990s-public bucket in the Cloudflare dashboard,
+# enable public access (.r2.dev or custom domain), then set VITE_R2_PUBLIC_URL
+# in apps/backend/.env and apps/pos/.env to the public URL. Until provisioned,
+# `wrangler deploy` will fail because the bucket doesn't exist — so this
+# binding is intentionally COMMENTED OUT. The env.ts type is declared
+# regardless so the TS compiler is happy; the runtime check on env.PUBLIC_ASSETS
+# in routes/categories.ts will simply throw when the binding is missing, which
+# matches the "endpoint errors until R2 is provisioned" plan. Uncomment the
+# four lines below once the bucket exists.
+# [[r2_buckets]]
+# binding = "PUBLIC_ASSETS"
+# bucket_name = "2990s-public"
+# preview_bucket_name = "2990s-public"
+
 # Cron triggers for the slip-orphan reaper (every 10 min).
 [triggers]
 crons = ["*/10 * * * *"]

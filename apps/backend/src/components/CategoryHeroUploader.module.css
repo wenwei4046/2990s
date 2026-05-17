@@ -1,0 +1,55 @@
+.uploader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 180px;
+}
+.preview {
+  width: 180px;
+  height: 100px;
+  background-color: var(--bg-alt);
+  background-size: cover;
+  background-position: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+.previewEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 0 8px;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+}
+.actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+}
+.actions button:hover:not(:disabled) {
+  border-color: var(--c-burnt);
+}
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.removeBtn {
+  color: var(--c-error);
+}
+.err {
+  font-size: var(--fs-12);
+  color: var(--c-error);
+}
