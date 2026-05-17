@@ -124,3 +124,34 @@
   margin: 0 0 var(--space-3);
   color: var(--fg-muted);
 }
+
+:global(.highlightCard) {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  margin-bottom: var(--space-3);
+}
+:global(.highlightCardActive) {
+  background: var(--lane-received-bg);
+  border-color: var(--c-orange);
+}
+:global(.highlightCard) input[type="checkbox"] {
+  width: 22px; height: 22px;
+  accent-color: var(--c-orange);
+  margin-top: 2px;
+}
+:global(.highlightCard) strong { display: block; font-size: var(--fs-15); }
+:global(.highlightCard) p { margin: 4px 0 0; font-size: var(--fs-12); color: var(--fg-muted); }
+
+:global(.subTitle) {
+  font-family: var(--font-title);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-18);
+  margin: var(--space-3) 0;
+}
