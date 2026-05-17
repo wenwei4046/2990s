@@ -11,7 +11,7 @@ import {
   ShoppingBag,
   Check,
 } from 'lucide-react';
-import { useCart, cartItemCount, cartSubtotal, type CartLine } from '../state/cart';
+import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useCatalog, type CatalogProduct } from '../lib/queries';
 import { useSaveQuote } from '../lib/quotes';
 import styles from './CustomerOrderSheet.module.css';
@@ -212,9 +212,6 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
 
         {lines.length > 0 && (
           <div className={styles.foot}>
-            <div className={styles.samePriceNote}>
-              Same price · Every piece · RM2,990
-            </div>
             <div className={styles.line}>
               <span>Subtotal</span>
               <span>RM{fmtMYR(subtotal)}.00</span>
@@ -284,7 +281,7 @@ const CartItem = ({ line, product, onRemove, onDec, onInc }: CartItemProps) => {
         <div className={styles.itemNameRow}>
           <span className={styles.itemName}>{line.config.productName}</span>
         </div>
-        <div className={styles.itemDetail}>{line.config.summary}</div>
+        <div className={styles.itemDetail}>{cartSummary(line.config)}</div>
         <div className={styles.itemQty}>
           <button type="button" onClick={onDec} aria-label="Decrease">
             <Minus size={12} strokeWidth={2} />

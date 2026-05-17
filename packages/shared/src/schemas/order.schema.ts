@@ -59,6 +59,7 @@ export const customerDtoSchema = z.object({
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
   address: z.string().optional(),
+  addressLine2: z.string().optional(),
   postcode: z.string().optional(),
   city: z.string().optional(),
   state: z.string().optional(),

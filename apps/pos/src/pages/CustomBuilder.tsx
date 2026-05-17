@@ -13,6 +13,7 @@ import {
   findSnap,
   hasArmConflict,
   reclinerEligible,
+  summarizeSofaCells,
   type Cell,
   type Depth,
   type Rot,
@@ -188,8 +189,17 @@ interface CustomBuilderProps {
   onAdded: () => void;
 }
 
-let __cellSeq = 0;
-const nextCellId = () => `c${++__cellSeq}`;
+// Cell ids must survive HMR (which resets module locals) and a future cells-
+// persistence layer (where cells may be hydrated with ids generated in an
+// earlier session). A monotonic module-level counter fails both — after HMR
+// the counter resets to 0 but the in-memory `cells` keeps its old ids, and
+// freshly minted ids collide with the existing ones, breaking any code that
+// looks cells up by id (notably the composite overlay's group-cell filter).
+// crypto.randomUUID is supported on every tablet+browser we target.
+const nextCellId = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   '1-seater',
@@ -652,16 +662,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     for (const c of cells) { if (c.id) cellById.set(c.id, c); }
     for (let i = 0; i < priceResult.groups.length; i++) {
       const g = priceResult.groups[i]!;
-      const a = analyses[i];
       const groupCells = g.cellIds
         .map((id) => cellById.get(id))
         .filter((c): c is Cell => c != null)
         .map((c) => ({ ...c }));
       if (groupCells.length === 0) continue;
-      const sig = g.signature;
-      const summary = a?.closed && g.bundle
-        ? `${g.bundle.label} (${sig})`
-        : `Custom (${sig})`;
+      // Single source of truth for sofa-line labels — see summarizeSofaCells.
+      // Note this is also re-derived at cart-render time, so updating the
+      // rule here propagates to existing cart items too.
+      const summary = summarizeSofaCells(groupCells, depth);
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
@@ -1130,6 +1139,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             if (!g.bundle) return null;
             const groupCells = analyses[i]?.group;
             if (!groupCells || groupCells.length === 0) return null;
+            // Skip when the modular shape isn't actually closed. groupPrice
+            // intentionally treats a lone handed module (1A-RHF, 2B-RHF, …)
+            // as a 1S/2S bundle for PO + pricing (factory ships a complete
+            // sofa for those SKUs), but on-canvas the composite PNG depicts
+            // both arms — overlaying it on a one-armed module makes the
+            // silhouette sprout a second arm the moment the cell deselects.
+            // Multi-module groups already need analyzeSofa.closed for bundle
+            // matching in groupPrice, so this gate is a no-op for them.
+            if (!analyses[i]?.closed) return null;
             const ids = new Set(
               groupCells.map((c) => c.id).filter((x): x is string => x != null),
             );

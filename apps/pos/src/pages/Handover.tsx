@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
-import { useCart, cartSubtotal } from '../state/cart';
+import { useCart, cartSubtotal, cartSummary } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
 import { useLocalities } from '../lib/queries';
 import { PricingDriftModal } from '../components/PricingDriftModal';
@@ -36,13 +36,6 @@ const STEP_LIST: ReadonlyArray<{ id: Step; label: string; Icon: typeof User }> =
   { id: 'signature', label: 'Sign-off',  Icon: PenLine },
 ];
 
-const DELIVERY_SLOTS = [
-  '09:00 – 12:00',
-  '12:00 – 15:00',
-  '15:00 – 18:00',
-  '18:00 – 21:00',
-] as const;
-
 interface FormValues {
   // Step 1: Customer
   name: string;
@@ -53,11 +46,11 @@ interface FormValues {
   emergencyRelation: string;
   // Step 2: Delivery
   address: string;
+  addressLine2: string;
   postcode: string;
   state: string;
   city: string;
   deliveryDate: string;
-  deliverySlot: string;
   deliveryTbd: boolean;
   // Step 3: Payment
   paymentMethod: PaymentMethod;
@@ -70,8 +63,8 @@ interface FormValues {
 const empty: FormValues = {
   name: '', phone: '', email: '',
   emergencyName: '', emergencyPhone: '', emergencyRelation: '',
-  address: '', postcode: '', state: '', city: '',
-  deliveryDate: '', deliverySlot: '', deliveryTbd: false,
+  address: '', addressLine2: '', postcode: '', state: '', city: '',
+  deliveryDate: '', deliveryTbd: false,
   paymentMethod: 'transfer',
   paymentPreset: 'half',
   customAmount: '',
@@ -187,9 +180,9 @@ export const Handover = () => {
   const buildNotesFromForm = (): string => {
     const parts: string[] = [];
     if (form.notes.trim()) parts.push(form.notes.trim());
-    // Delivery date / slot are written to orders.delivery_date + .delivery_slot
-    // columns directly (Bug #7 fix). Only the "TBD" fallback stays in notes
-    // since there is no schema column for that signal.
+    // Delivery date is written to orders.delivery_date directly (Bug #7 fix).
+    // Only the "TBD" fallback stays in notes since there is no schema column
+    // for that signal.
     if (form.deliveryTbd) parts.push('Delivery date: TBD (further notice)');
     if (form.emergencyName.trim()) {
       const phone = form.emergencyPhone.trim() ? ` — ${form.emergencyPhone.trim()}` : '';
@@ -212,6 +205,7 @@ export const Handover = () => {
           name: form.name.trim(),
           phone: form.phone.trim() || undefined,
           address: form.address.trim() || undefined,
+          addressLine2: form.addressLine2.trim() || undefined,
           postcode: form.postcode.trim() || undefined,
           city: form.city.trim() || undefined,
           state: form.state.trim() || undefined,
@@ -220,9 +214,6 @@ export const Handover = () => {
         approvalCode: form.approvalCode.trim() || undefined,
         notes: buildNotesFromForm() || undefined,
         deliveryDate: !form.deliveryTbd && form.deliveryDate ? form.deliveryDate : undefined,
-        deliverySlot: !form.deliveryTbd && form.deliveryDate && form.deliverySlot
-          ? form.deliverySlot
-          : undefined,
         lines,
         acceptedServerTotal,
         uploadSessionId: uploadSessionId ?? undefined,
@@ -318,12 +309,24 @@ export const Handover = () => {
                   />
                 </Field>
                 <Field label="Relation">
-                  <input
-                    type="text"
+                  <select
                     value={form.emergencyRelation}
                     onChange={(e) => update('emergencyRelation', e.target.value)}
-                    placeholder="e.g. spouse"
-                  />
+                  >
+                    <option value="">Select…</option>
+                    <option value="Husband">Husband</option>
+                    <option value="Wife">Wife</option>
+                    <option value="Father">Father</option>
+                    <option value="Mother">Mother</option>
+                    <option value="Son">Son</option>
+                    <option value="Daughter">Daughter</option>
+                    <option value="Brother">Brother</option>
+                    <option value="Sister">Sister</option>
+                    <option value="Friend">Friend</option>
+                    <option value="Colleague">Colleague</option>
+                    <option value="Relative">Relative</option>
+                    <option value="Other">Other</option>
+                  </select>
                 </Field>
               </div>
             </section>
@@ -332,12 +335,22 @@ export const Handover = () => {
           {step === 'delivery' && (
             <section className={styles.section}>
               <h2 className={styles.sectionTitle}>Delivery</h2>
-              <Field label="Address">
-                <textarea
-                  rows={2}
+              <Field label="Address line 1">
+                <input
+                  type="text"
                   value={form.address}
                   onChange={(e) => update('address', e.target.value)}
-                  autoComplete="street-address"
+                  autoComplete="address-line1"
+                  placeholder="Lot / street / road"
+                />
+              </Field>
+              <Field label="Address line 2">
+                <input
+                  type="text"
+                  value={form.addressLine2}
+                  onChange={(e) => update('addressLine2', e.target.value)}
+                  autoComplete="address-line2"
+                  placeholder="Building / unit / floor (optional)"
                 />
               </Field>
               <div className={styles.fieldRow3}>
@@ -372,20 +385,23 @@ export const Handover = () => {
                   </select>
                 </Field>
                 <Field label="Postcode">
-                  <input
-                    type="text"
-                    list="postcode-suggestions"
+                  <select
                     value={form.postcode}
                     onChange={(e) => update('postcode', e.target.value)}
-                    inputMode="numeric"
+                    disabled={!form.state || !form.city}
                     autoComplete="postal-code"
-                    maxLength={5}
-                  />
-                  {postcodeSuggestions.length > 0 && (
-                    <datalist id="postcode-suggestions">
-                      {postcodeSuggestions.map((p) => <option key={p} value={p} />)}
-                    </datalist>
-                  )}
+                  >
+                    <option value="">
+                      {!form.state
+                        ? 'Pick state first'
+                        : !form.city
+                          ? 'Pick city first'
+                          : 'Select postcode…'}
+                    </option>
+                    {postcodeSuggestions.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
                 </Field>
               </div>
 
@@ -401,33 +417,19 @@ export const Handover = () => {
                     update('deliveryTbd', e.target.checked);
                     if (e.target.checked) {
                       update('deliveryDate', '');
-                      update('deliverySlot', '');
                     }
                   }}
                 />
                 <span>Delivery date to be confirmed (further notice)</span>
               </label>
               {!form.deliveryTbd && (
-                <div className={styles.fieldRow}>
-                  <Field label="Delivery date">
-                    <input
-                      type="date"
-                      value={form.deliveryDate}
-                      onChange={(e) => update('deliveryDate', e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Time slot">
-                    <select
-                      value={form.deliverySlot}
-                      onChange={(e) => update('deliverySlot', e.target.value)}
-                    >
-                      <option value="">Any time</option>
-                      {DELIVERY_SLOTS.map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
+                <Field label="Delivery date">
+                  <input
+                    type="date"
+                    value={form.deliveryDate}
+                    onChange={(e) => update('deliveryDate', e.target.value)}
+                  />
+                </Field>
               )}
             </section>
           )}
@@ -501,15 +503,20 @@ export const Handover = () => {
                 />
               </div>
 
-              {form.paymentMethod !== 'transfer' && (
-                <Field label="Approval code">
-                  <input
-                    type="text"
-                    value={form.approvalCode}
-                    onChange={(e) => update('approvalCode', e.target.value)}
-                  />
-                </Field>
-              )}
+              <Field label="Reference number">
+                <input
+                  type="text"
+                  value={form.approvalCode}
+                  onChange={(e) => update('approvalCode', e.target.value)}
+                  placeholder={
+                    form.paymentMethod === 'transfer'
+                      ? 'DuitNow / bank reference'
+                      : form.paymentMethod === 'installment'
+                        ? 'Agreement / contract no.'
+                        : 'Approval code from POS terminal'
+                  }
+                />
+              </Field>
               {form.paymentMethod === 'transfer' && (
                 <SlipUploadStep
                   onConfirmed={setUploadSessionId}
@@ -586,7 +593,7 @@ export const Handover = () => {
               <li key={l.key} className={styles.line}>
                 <div>
                   <div className={styles.lineName}>{l.config.productName}</div>
-                  <div className={styles.lineSummary}>{l.config.summary}</div>
+                  <div className={styles.lineSummary}>{cartSummary(l.config)}</div>
                 </div>
                 <div className={styles.lineTotal}>
                   <span className={styles.lineQty}>× {l.qty}</span>

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { Cell, Depth } from '@2990s/shared';
+import { summarizeSofaCells, type Cell, type Depth } from '@2990s/shared';
 
 /**
  * Cart line snapshot. The `total` field is what we display in the cart and
@@ -107,3 +107,23 @@ export const cartSubtotal = (lines: CartLine[]): number =>
 
 export const cartItemCount = (lines: CartLine[]): number =>
   lines.reduce((sum, l) => sum + l.qty, 0);
+
+/**
+ * Display summary for a cart line. For Custom Build sofas (cells present) we
+ * re-derive the label at render time so naming changes — e.g., dropping the
+ * "(1A+1A)" composition jargon from bundle-matched lines — apply to items
+ * already in the cart, not just newly added ones. Quick-Pick sofas, size-
+ * configured items, and flat items keep their stored summary (it carries
+ * extra context like L-facing direction or chosen size).
+ */
+export const cartSummary = (config: CartConfig): string => {
+  if (
+    config.kind === 'sofa' &&
+    config.cells &&
+    config.cells.length > 0 &&
+    config.depth
+  ) {
+    return summarizeSofaCells(config.cells, config.depth);
+  }
+  return config.summary;
+};

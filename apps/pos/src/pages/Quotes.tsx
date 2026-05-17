@@ -10,7 +10,7 @@ import {
 import { Button, IconButton } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useQuotes, useDeleteQuote, type QuoteRow } from '../lib/quotes';
-import { useCart } from '../state/cart';
+import { useCart, cartSummary } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import styles from './Quotes.module.css';
 
@@ -88,7 +88,7 @@ export const Quotes = () => {
                 {q.cart.slice(0, 3).map((l, i) => (
                   <li key={`${q.id}-${i}`}>
                     <span className={styles.lineName}>{l.config.productName}</span>
-                    <span className={styles.lineSummary}>{l.config.summary}</span>
+                    <span className={styles.lineSummary}>{cartSummary(l.config)}</span>
                     <span className={styles.lineQty}>× {l.qty}</span>
                   </li>
                 ))}

@@ -468,6 +468,7 @@ export interface OrderDetail {
   customerPhone: string | null;
   customerEmail: string | null;
   customerAddress: string | null;
+  customerAddressLine2: string | null;
   customerPostcode: string | null;
   customerCity: string | null;
   customerState: string | null;
@@ -507,7 +508,7 @@ export const useOrderDetail = (orderId: string | null) =>
         .select(
           'id, placed_at, staff_id, showroom_id, lane, ' +
           'customer_name, customer_phone, customer_email, ' +
-          'customer_address, customer_postcode, customer_city, customer_state, ' +
+          'customer_address, customer_address_line2, customer_postcode, customer_city, customer_state, ' +
           'subtotal, addon_total, total, paid, ' +
           'payment_method, approval_code, notes, ' +
           'slip_key, slip_state, slip_verified_by, slip_verified_at, slip_flag_reason, ' +
@@ -529,6 +530,7 @@ export const useOrderDetail = (orderId: string | null) =>
         customerPhone: r.customer_phone,
         customerEmail: r.customer_email,
         customerAddress: r.customer_address,
+        customerAddressLine2: r.customer_address_line2 ?? null,
         customerPostcode: r.customer_postcode,
         customerCity: r.customer_city,
         customerState: r.customer_state,

@@ -65,6 +65,7 @@ export const orderV1PostSchema = z.object({
     phone: z.string().optional(),
     email: z.string().optional(),
     address: z.string().optional(),
+    addressLine2: z.string().optional(),
     postcode: z.string().optional(),
     city: z.string().optional(),
     state: z.string().optional(),

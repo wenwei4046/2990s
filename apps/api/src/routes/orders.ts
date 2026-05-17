@@ -187,6 +187,7 @@ orders.post('/', async (c) => {
     customerPhone: dto.customer.phone ?? '',
     customerEmail: dto.customer.email ?? '',
     customerAddress: dto.customer.address ?? '',
+    customerAddressLine2: dto.customer.addressLine2 ?? '',
     customerPostcode: dto.customer.postcode ?? '',
     customerCity: dto.customer.city ?? '',
     customerState: dto.customer.state ?? '',

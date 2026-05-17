@@ -198,6 +198,27 @@ const BUNDLE_BY_SIG = new Map<string, BundleDef>([
 export const detectBundle = (modIds: string[]): BundleDef | null =>
   BUNDLE_BY_SIG.get(bundleSignature(modIds)) ?? null;
 
+/**
+ * Human-readable cart/quote label for a sofa group. Mirrors the bundle-vs-
+ * à-la-carte decision in `groupPrice` (single-module short-circuit included),
+ * but skipped the pricing-row.active check because callers may not have
+ * pricing in hand (e.g., re-rendering a stored cart line).
+ *
+ * Bundle-matched closed group → commercial bundle label ("2-Seater", "3 + L").
+ * Anything else → `Custom (<family-signature>)` so distinct custom builds in
+ * the same cart stay distinguishable.
+ */
+export const summarizeSofaCells = (cells: Cell[], depth: Depth): string => {
+  if (cells.length === 0) return 'Custom (empty)';
+  const modIds = cells.map((c) => c.moduleId);
+  const candidate = detectBundle(modIds);
+  if (candidate) {
+    const closed = cells.length === 1 || analyzeSofa(cells, depth).closed;
+    if (closed) return candidate.label;
+  }
+  return `Custom (${familySignature(modIds)})`;
+};
+
 /* ─── Edge typing & rotation ───────────────────────────────────────── */
 
 export type EdgeType = 'arm' | 'open' | 'back' | 'front';

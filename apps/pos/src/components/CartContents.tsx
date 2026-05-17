@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { Trash2, BookmarkPlus, Check } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
-import { useCart, cartSubtotal, type CartLine } from '../state/cart';
+import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useSaveQuote } from '../lib/quotes';
 import styles from './CartContents.module.css';
 
@@ -168,7 +168,7 @@ const Line = ({ line, variant, onRemove, onSetQty }: {
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
     <div className={styles.lineMain}>
       <div className={styles.lineName}>{line.config.productName}</div>
-      <div className={styles.lineSummary}>{line.config.summary}</div>
+      <div className={styles.lineSummary}>{cartSummary(line.config)}</div>
     </div>
     <div className={styles.qtyBox}>
       <button

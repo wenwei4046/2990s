@@ -78,7 +78,7 @@ export function OrderDrawer({ orderId, onClose }: Props) {
       minute: '2-digit',
     });
     const addressBits = [
-      order.customerAddress,
+      [order.customerAddress, order.customerAddressLine2].filter(Boolean).join(', '),
       [order.customerPostcode, order.customerCity, order.customerState].filter(Boolean).join(' '),
     ].filter(Boolean).join(' · ');
     const html = `<!DOCTYPE html>
@@ -179,11 +179,11 @@ export function OrderDrawer({ orderId, onClose }: Props) {
                 <div><b>Paid</b><span>{fmtRM(order.paid)}</span></div>
                 <div><b>Payment</b><span>{order.paymentMethod}</span></div>
                 <div><b>Placed</b><span>{fmtTime(order.placedAt)}</span></div>
-                {order.customerAddress && (
+                {(order.customerAddress || order.customerAddressLine2) && (
                   <div className={styles.addressRow}>
                     <b>Address</b>
                     <span>
-                      {order.customerAddress}
+                      {[order.customerAddress, order.customerAddressLine2].filter(Boolean).join(', ')}
                       {order.customerPostcode || order.customerCity || order.customerState
                         ? ` · ${[order.customerPostcode, order.customerCity, order.customerState].filter(Boolean).join(' ')}`
                         : ''}

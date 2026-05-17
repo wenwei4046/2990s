@@ -292,6 +292,7 @@ export const customers = pgTable('customers', {
   phone:        text('phone'),                    // normalized intl format
   email:        text('email'),
   address:      text('address'),
+  addressLine2: text('address_line2'),
   postcode:     text('postcode'),
   city:         text('city'),
   state:        text('state'),
@@ -338,6 +339,7 @@ export const orders = pgTable('orders', {
   customerPhone:    text('customer_phone'),
   customerEmail:    text('customer_email'),
   customerAddress:  text('customer_address'),
+  customerAddressLine2: text('customer_address_line2'),
   customerPostcode: text('customer_postcode'),
   customerCity:     text('customer_city'),
   customerState:    text('customer_state'),
