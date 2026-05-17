@@ -1,8 +1,133 @@
+import { Check } from 'lucide-react';
+import { fmtRM } from '@2990s/shared';
+import { Field } from './Field';
+import { SlipUploadStep } from '../SlipUploadStep';
 import type { HandoverForm } from '../../lib/handover-helpers';
+import styles from '../../pages/Handover.module.css';
 
-export const ConfirmPaymentStep = (_p: {
+const METHOD_LABEL: Record<string, string> = {
+  credit: 'Credit Card',
+  debit: 'Debit Card',
+  transfer: 'Bank transfer / DuitNow',
+  installment: 'Installment',
+};
+
+export const ConfirmPaymentStep = ({
+  form, update, subtotal, addonTotal,
+}: {
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
   subtotal: number;
   addonTotal: number;
-}) => <div>Confirm payment step — TODO (Task 14)</div>;
+}) => {
+  const total = subtotal + addonTotal;
+  const halfTotal = Math.round(total / 2);
+  const seventyTotal = Math.round(total * 0.7);
+
+  const setPreset = (preset: HandoverForm['paymentPreset'], amount: number) => {
+    update('paymentPreset', preset);
+    update('amountPaid', amount);
+  };
+
+  const inferPreset = (amount: number): HandoverForm['paymentPreset'] => {
+    if (amount === halfTotal) return 'half';
+    if (amount === total) return 'full';
+    if (amount === seventyTotal) return 'seventy';
+    return 'custom';
+  };
+
+  const methodLabel = METHOD_LABEL[form.paymentMethod] ?? '—';
+
+  return (
+    <section className={styles.stepBody}>
+      <h2 className={styles.stepTitle}>Confirm payment</h2>
+      <p className={styles.stepLead}>
+        Record the payment received via <strong>{methodLabel}</strong>. Customer can pay any amount between{' '}
+        <strong>50% deposit</strong> ({fmtRM(halfTotal)}) and the full total ({fmtRM(total)}).
+      </p>
+
+      <Field label="Amount paid">
+        <input
+          type="number"
+          min={halfTotal}
+          max={total}
+          value={form.amountPaid || ''}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            update('amountPaid', v);
+            update('paymentPreset', inferPreset(v));
+          }}
+          placeholder={String(total)}
+        />
+      </Field>
+
+      <div className={styles.presetRow}>
+        <PresetPill
+          active={form.paymentPreset === 'half'}
+          onClick={() => setPreset('half', halfTotal)}
+        >
+          50% deposit · {fmtRM(halfTotal)}
+        </PresetPill>
+        <PresetPill
+          active={form.paymentPreset === 'full'}
+          onClick={() => setPreset('full', total)}
+        >
+          Full payment · {fmtRM(total)}
+        </PresetPill>
+        <PresetPill
+          active={form.paymentPreset === 'seventy'}
+          onClick={() => setPreset('seventy', seventyTotal)}
+        >
+          70% · {fmtRM(seventyTotal)}
+        </PresetPill>
+      </div>
+
+      <Field label="Approval code *">
+        <input
+          type="text"
+          value={form.approvalCode}
+          onChange={(e) => update('approvalCode', e.target.value)}
+          placeholder={
+            form.paymentMethod === 'transfer'
+              ? 'DuitNow / bank reference'
+              : form.paymentMethod === 'installment'
+                ? 'Agreement / contract no.'
+                : 'Approval code from POS terminal'
+          }
+        />
+      </Field>
+
+      <h3 className="subTitle">
+        Payment slip / proof {form.paymentMethod === 'transfer' && <span className={styles.required}>*</span>}
+      </h3>
+      <SlipUploadStep
+        onConfirmed={(id) => update('slipUploadSessionId', id)}
+        onCleared={() => update('slipUploadSessionId', null)}
+      />
+
+      {form.paymentRecorded && (
+        <p className={styles.recordedNote}>
+          <Check size={14} strokeWidth={2} />
+          Payment recorded · {fmtRM(form.amountPaid)}
+        </p>
+      )}
+    </section>
+  );
+};
+
+const PresetPill = ({
+  active, onClick, children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`${styles.presetPill} ${active ? styles.presetPillActive : ''}`}
+    aria-pressed={active}
+  >
+    {children}
+  </button>
+);

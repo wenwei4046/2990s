@@ -209,3 +209,44 @@
   color: var(--fg-muted);
   margin-top: 2px;
 }
+
+.presetRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.presetPill {
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font: inherit;
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+  color: var(--fg);
+}
+.presetPill:hover { background: var(--bg-alt); }
+.presetPillActive {
+  background: var(--c-orange) !important;
+  border-color: var(--c-orange);
+  color: var(--c-cream);
+}
+
+.required {
+  color: var(--c-error);
+  margin-left: 4px;
+}
+
+.recordedNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--c-success);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-13);
+  margin-top: var(--space-3);
+}
