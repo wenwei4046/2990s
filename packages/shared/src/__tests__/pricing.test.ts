@@ -5,6 +5,7 @@ import {
   OrderPricingError,
   type ServerProductInfo,
   type OrderLineInput,
+  type AddonStaticInfo,
 } from '../pricing';
 
 const sofaInfo = (productId = 'sofa-1'): ServerProductInfo => ({
@@ -185,6 +186,123 @@ describe('computeOrderTotal', () => {
         map,
       ),
     ).toThrow(OrderPricingError);
+  });
+});
+
+describe('computeOrderTotal — handover addons', () => {
+  // Flat-priced product, RM 2,990 — keeps line-side math out of the way so
+  // the assertions are purely about addonTotal / total composition.
+  const flatProductId = '11111111-1111-1111-1111-111111111111';
+  const productInfo = new Map<string, ServerProductInfo>([
+    [flatProductId, {
+      productId: flatProductId,
+      pricingKind: 'flat',
+      flatPrice: 2990,
+    }],
+  ]);
+
+  const baseLine: OrderLineInput = {
+    qty: 1,
+    config: { kind: 'flat', productId: flatProductId },
+  };
+
+  it('returns addonTotal=0 when no handover addons provided (backward-compat 3-arg form)', () => {
+    const result = computeOrderTotal([baseLine], productInfo);
+    expect(result.addonTotal).toBe(0);
+    expect(result.total).toBe(2990);
+  });
+
+  it('returns addonTotal=0 when handoverAddons param is an empty array', () => {
+    const result = computeOrderTotal([baseLine], productInfo, undefined, [], new Map());
+    expect(result.addonTotal).toBe(0);
+    expect(result.total).toBe(2990);
+  });
+
+  it('sums qty-kind handover addon (dispose-mattress × 2 @ RM 120)', () => {
+    const result = computeOrderTotal(
+      [baseLine],
+      productInfo,
+      undefined,
+      [{ addonId: 'dispose-mattress', qty: 2 }],
+      new Map<string, AddonStaticInfo>([
+        ['dispose-mattress', { kind: 'qty', basePrice: 120, perFloorItem: null }],
+      ]),
+    );
+    expect(result.addonTotal).toBe(240);
+    expect(result.total).toBe(2990 + 240);
+  });
+
+  it('uses canonical lift formula: max(0, floors - 2) × items × perFloorItem', () => {
+    const result = computeOrderTotal(
+      [baseLine],
+      productInfo,
+      undefined,
+      [{ addonId: 'lift', floorsCount: 5, itemsCount: 2 }],
+      new Map<string, AddonStaticInfo>([
+        ['lift', { kind: 'floors_items', basePrice: 0, perFloorItem: 50 }],
+      ]),
+    );
+    // max(0, 5-2) × 2 × 50 = 300
+    expect(result.addonTotal).toBe(300);
+  });
+
+  it('floors_items returns 0 when floors ≤ 2 (within free range)', () => {
+    const result = computeOrderTotal(
+      [baseLine],
+      productInfo,
+      undefined,
+      [{ addonId: 'lift', floorsCount: 2, itemsCount: 5 }],
+      new Map<string, AddonStaticInfo>([
+        ['lift', { kind: 'floors_items', basePrice: 0, perFloorItem: 50 }],
+      ]),
+    );
+    expect(result.addonTotal).toBe(0);
+  });
+
+  it('ignores unknown addonId silently (filtered, no throw)', () => {
+    const result = computeOrderTotal(
+      [baseLine],
+      productInfo,
+      undefined,
+      [{ addonId: 'definitely-not-a-real-addon', qty: 1 }],
+      new Map(),
+    );
+    expect(result.addonTotal).toBe(0);
+    expect(result.total).toBe(2990);
+  });
+
+  it('defaults missing qty to 1 for qty-kind addons', () => {
+    const result = computeOrderTotal(
+      [baseLine],
+      productInfo,
+      undefined,
+      [{ addonId: 'dispose-mattress' }],
+      new Map<string, AddonStaticInfo>([
+        ['dispose-mattress', { kind: 'qty', basePrice: 120, perFloorItem: null }],
+      ]),
+    );
+    expect(result.addonTotal).toBe(120);
+  });
+
+  it('sums multiple mixed-kind addons in one cart', () => {
+    const result = computeOrderTotal(
+      [baseLine],
+      productInfo,
+      undefined,
+      [
+        { addonId: 'dispose-mattress', qty: 1 },
+        { addonId: 'lift', floorsCount: 4, itemsCount: 3 },
+        { addonId: 'assemble', qty: 1 },
+      ],
+      new Map<string, AddonStaticInfo>([
+        ['dispose-mattress', { kind: 'qty', basePrice: 120, perFloorItem: null }],
+        ['lift',             { kind: 'floors_items', basePrice: 0, perFloorItem: 50 }],
+        ['assemble',         { kind: 'flat', basePrice: 200, perFloorItem: null }],
+      ]),
+    );
+    // 120 + (max(0,4-2)×3×50=300) + 200 = 620
+    expect(result.addonTotal).toBe(620);
+    expect(result.total).toBe(2990 + 620);
   });
 });
 

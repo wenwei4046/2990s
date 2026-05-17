@@ -59,6 +59,17 @@ export const orderLineSchema = z.object({
   config: orderLineConfigSchema,
 });
 
+// Handover-redesign (Phase 4.5) optional addon entry. Server reloads addon
+// rows from the `addons` table at recompute time, so the client only needs to
+// identify each addon by id and supply the variable arguments. Empty/missing
+// optional numeric args default to 1 (qty) / 0 (floors, items) on the server.
+export const handoverAddonSchema = z.object({
+  addonId: z.string(),
+  qty: z.number().int().positive().optional(),
+  floorsCount: z.number().int().nonnegative().optional(),
+  itemsCount: z.number().int().nonnegative().optional(),
+});
+
 export const orderV1PostSchema = z.object({
   customer: z.object({
     name: z.string().min(1),
@@ -79,6 +90,20 @@ export const orderV1PostSchema = z.object({
   deliverySlot: z.string().max(64).optional(),
   lines: z.array(orderLineSchema).min(1),
 
+  // ─── Handover-redesign (Phase 4.5) ───────────────────────────────────
+  // All optional → backward-compatible with pre-redesign POS clients.
+  // Mapped to `orders` columns by migration 0023.
+  customerType:        z.enum(['new', 'existing']).optional(),
+  buildingType:        z.enum(['condo', 'landed', 'apartment', 'office', 'shop', 'other']).optional(),
+  billingSame:         z.boolean().optional(),
+  salespersonId:       z.string().uuid().optional(),
+  specialInstructions: z.string().max(1000).optional(),
+  // When true, customer chose delivery TBD — address fields may be blank.
+  addressLater:        z.boolean().optional(),
+  // Handover-time logistics addons (dispose, lift, assemble). Server recomputes
+  // total against the current `addons` table — drifted prices reject with 409.
+  addons:              z.array(handoverAddonSchema).optional(),
+
   // Client-submitted total — server recomputes and rejects with 409 if drift
   // exceeds 0.5%. Never trusted as the actual saved amount.
   clientTotal: z.number().int().nonnegative(),
@@ -90,3 +115,4 @@ export const orderV1PostSchema = z.object({
 
 export type OrderV1PostBody = z.infer<typeof orderV1PostSchema>;
 export type OrderLineDto = z.infer<typeof orderLineSchema>;
+export type HandoverAddonDto = z.infer<typeof handoverAddonSchema>;

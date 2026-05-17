@@ -155,6 +155,28 @@ export interface OrderTotals {
   total: number;
 }
 
+/* ─── Handover-time addons (logistics: dispose, lift, assemble) ────── */
+
+/** Variable per-cart inputs the POS submits for each addon line. */
+export interface HandoverAddonInput {
+  addonId: string;
+  /** Used for kind='qty'. Defaults to 1 when omitted. */
+  qty?: number;
+  /** Used for kind='floors_items'. Defaults to 0 when omitted. */
+  floorsCount?: number;
+  /** Used for kind='floors_items'. Defaults to 0 when omitted. */
+  itemsCount?: number;
+}
+
+/** Static catalog info loaded once from the `addons` table on the API side
+ *  and threaded into computeOrderTotal so the math stays purely functional
+ *  (no I/O, no Drizzle imports in @2990s/shared). */
+export interface AddonStaticInfo {
+  kind: 'qty' | 'floors_items' | 'flat';
+  basePrice: number;
+  perFloorItem: number | null;
+}
+
 export type OrderTotalError =
   | { code: 'unknown_product'; productId: string }
   | { code: 'wrong_pricing_kind'; productId: string; expected: string; got: string }
@@ -184,6 +206,16 @@ export const computeOrderTotal = (
    *  one size line submits addonExtras — the API loads addons table once and
    *  passes the price map here so the math stays purely functional. */
   addonPricesById?: Map<string, number>,
+  /** Handover-time logistics addons (dispose, lift, assemble). Distinct from
+   *  per-size `addonExtras` above: those attach to a configured product line
+   *  (e.g. extra pillows on a mattress size); these stand alone in the cart's
+   *  addon shelf and roll up into a separate `addonTotal` slot on OrderTotals. */
+  handoverAddons?: HandoverAddonInput[],
+  /** Static catalog info for each handover addon id referenced above. The API
+   *  loads the `addons` table once and threads it through; unknown ids are
+   *  silently ignored (server-side authoritative — old POS clients that send
+   *  retired addons just see them drop out of the total). */
+  handoverAddonInfosById?: Map<string, AddonStaticInfo>,
 ): OrderTotals => {
   const out: OrderLineResult[] = [];
   for (const line of lines) {
@@ -281,7 +313,26 @@ export const computeOrderTotal = (
   }
 
   const subtotal = out.reduce((s, l) => s + l.lineTotal, 0);
-  return { lines: out, subtotal, addonTotal: 0, total: subtotal };
+
+  // Handover-time logistics addons. Reuse the canonical addonPrice() helper
+  // — lift formula (`max(0, floors - 2) × items × perFloorItem`) lives there
+  // (Codex P2.7 audit). Unknown addonIds drop out silently so a stale POS
+  // client never blocks a sale on a retired addon row.
+  let addonTotal = 0;
+  for (const a of handoverAddons ?? []) {
+    const info = handoverAddonInfosById?.get(a.addonId);
+    if (!info) continue;
+    addonTotal += addonPrice(
+      info.kind,
+      info.basePrice,
+      info.perFloorItem,
+      a.qty ?? 1,
+      a.floorsCount ?? 0,
+      a.itemsCount ?? 0,
+    );
+  }
+
+  return { lines: out, subtotal, addonTotal, total: subtotal + addonTotal };
 };
 
 /** True when the client-submitted total drifts more than 0.5% from server. */
