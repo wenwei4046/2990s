@@ -286,7 +286,7 @@ When `configurable` is clicked, the card expands in place:
 └──────────────────────────────────────────────────────────┘
 ```
 
-For `lift` (kind=`floors_items`), the expanded form shows two inputs (`Floors` and `Items`) and computes `floors × items × perFloorItem`. Other `qty`-kind addons show one `QTY` input.
+For `lift` (kind=`floors_items`), the expanded form shows two inputs (`Floors` and `Items`) and computes `max(0, floors - 2) × items × perFloorItem` — the first two floors are free since lift access only applies on the 3rd floor and above. Other `qty`-kind addons show one `QTY` input. Canonical formula source: `packages/shared/src/pricing.ts:23` (per Codex P2.7 audit, POS prototype is the canonical visible-to-customer price; the backend drawer's earlier `floors × items × 50` was a bug).
 
 The `[○]` / `[●]` is the select-checkbox in the top-right corner; clicking it toggles `selected`. Selecting auto-expands. Deselecting collapses.
 

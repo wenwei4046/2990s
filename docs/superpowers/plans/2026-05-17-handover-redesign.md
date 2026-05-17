@@ -257,9 +257,10 @@ BEGIN
     a.price,                                                            -- server-side price
     CASE
       WHEN a.kind = 'floors_items' THEN
-        a.price
-        + a.per_floor_item
-          * COALESCE((ad->>'floorsCount')::int, 0)
+        -- Canonical lift formula (packages/shared/src/pricing.ts:23):
+        -- first 2 floors free; charge per_floor_item only for floors 3 and above
+        COALESCE(a.per_floor_item, 0)
+          * GREATEST(0, COALESCE((ad->>'floorsCount')::int, 0) - 2)
           * COALESCE((ad->>'itemsCount')::int, 0)
       ELSE a.price * COALESCE((ad->>'qty')::int, 1)
     END,
@@ -394,15 +395,27 @@ describe('computeOrderTotal addons', () => {
     expect(result.total).toBe(2990 + 240);
   });
 
-  it('adds floors_items addon (lift)', () => {
+  it('adds floors_items addon (lift) — first 2 floors free', () => {
     const result = computeOrderTotal({
       lines: [/* ... */],
-      addons: [{ addonId: 'lift', floorsCount: 3, itemsCount: 2 }],
+      addons: [{ addonId: 'lift', floorsCount: 5, itemsCount: 2 }],
       addonInfos: {
         lift: { kind: 'floors_items', price: 0, perFloorItem: 50 },
       },
     });
-    expect(result.addonTotal).toBe(300); // 50 × 3 × 2
+    // max(0, 5-2) × 2 × 50 = 300
+    expect(result.addonTotal).toBe(300);
+  });
+
+  it('floors_items 0 when floors ≤ 2 (within free floors)', () => {
+    const result = computeOrderTotal({
+      lines: [/* ... */],
+      addons: [{ addonId: 'lift', floorsCount: 2, itemsCount: 5 }],
+      addonInfos: {
+        lift: { kind: 'floors_items', price: 0, perFloorItem: 50 },
+      },
+    });
+    expect(result.addonTotal).toBe(0);
   });
 });
 ```
@@ -453,10 +466,12 @@ export const computeOrderTotal = (input: {
     const info = input.addonInfos?.[a.addonId];
     if (!info) continue;  // ignore unknown
     if (info.kind === 'floors_items') {
+      // Canonical lift math (see packages/shared/src/pricing.ts:23):
+      // first 2 floors free; perFloorItem applies only from floor 3 up.
       addonTotal +=
-        info.price + (info.perFloorItem ?? 0)
-        * (a.floorsCount ?? 0)
-        * (a.itemsCount ?? 0);
+        Math.max(0, (a.floorsCount ?? 0) - 2)
+        * (a.itemsCount ?? 0)
+        * (info.perFloorItem ?? 0);
     } else {
       addonTotal += info.price * (a.qty ?? 1);
     }
@@ -752,8 +767,12 @@ describe('computeAddonTotal', () => {
   it('sums qty addons', () => {
     expect(computeAddonTotal({ 'dispose-mattress': { selected: true, expanded: true, qty: 2 } }, infos)).toBe(240);
   });
-  it('sums floors_items addons', () => {
-    expect(computeAddonTotal({ lift: { selected: true, expanded: true, floorsCount: 3, itemsCount: 2 } }, infos)).toBe(300);
+  it('sums floors_items addons (first 2 floors free)', () => {
+    // max(0, 5-2) × 2 × 50 = 300
+    expect(computeAddonTotal({ lift: { selected: true, expanded: true, floorsCount: 5, itemsCount: 2 } }, infos)).toBe(300);
+  });
+  it('floors_items returns 0 when floors ≤ 2', () => {
+    expect(computeAddonTotal({ lift: { selected: true, expanded: true, floorsCount: 2, itemsCount: 5 } }, infos)).toBe(0);
   });
   it('ignores unselected addons', () => {
     expect(computeAddonTotal({ 'dispose-mattress': { selected: false, expanded: false, qty: 1 } }, infos)).toBe(0);
@@ -884,7 +903,8 @@ export const computeAddonTotal = (
     const info = infos[id];
     if (!info) continue;
     if (info.kind === 'floors_items') {
-      total += info.price + info.perFloorItem * (sel.floorsCount ?? 0) * (sel.itemsCount ?? 0);
+      // Canonical lift math: first 2 floors free (see packages/shared/src/pricing.ts:23)
+      total += Math.max(0, (sel.floorsCount ?? 0) - 2) * (sel.itemsCount ?? 0) * info.perFloorItem;
     } else {
       total += info.price * (sel.qty ?? 1);
     }
@@ -2526,7 +2546,8 @@ export const AddonCard = ({
   const expanded = selection.expanded;
 
   const lineTotal = addon.kind === 'floors_items'
-    ? addon.price + (addon.perFloorItem ?? 0) * (selection.floorsCount ?? 0) * (selection.itemsCount ?? 0)
+    // Canonical lift math (packages/shared/src/pricing.ts:23): first 2 floors free.
+    ? Math.max(0, (selection.floorsCount ?? 0) - 2) * (selection.itemsCount ?? 0) * (addon.perFloorItem ?? 0)
     : addon.price * (selection.qty ?? 1);
 
   return (
