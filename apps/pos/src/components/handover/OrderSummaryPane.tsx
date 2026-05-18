@@ -24,6 +24,12 @@ export interface FormPaneProps {
   form: HandoverForm;
   subtotal: number;
   addonTotal: number;
+  deliveryFee: {
+    base:          number;
+    crossCategory: number;
+    additional:    number;
+    total:         number;
+  };
   total: number;
 }
 
@@ -43,7 +49,7 @@ export const OrderSummaryPane = (props: FormPaneProps | ReceiptPaneProps) => {
   return <FormPane {...props} />;
 };
 
-const FormPane = ({ lines, form, subtotal, addonTotal, total }: FormPaneProps) => {
+const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: FormPaneProps) => {
   const placeholderId = 'SO-XXXX';
   const today = new Date().toLocaleDateString('en-GB');
 
@@ -116,13 +122,25 @@ const FormPane = ({ lines, form, subtotal, addonTotal, total }: FormPaneProps) =
       <Section heading="Totals">
         <Row label="Items subtotal" value={fmtRM(subtotal)} />
         {addonTotal > 0 && <Row label="Add-ons" value={fmtRM(addonTotal)} />}
+        {deliveryFee.base > 0 && (
+          <Row label="Delivery fee" value={fmtRM(deliveryFee.base)} />
+        )}
+        {deliveryFee.crossCategory > 0 && (
+          <Row label="Cross-category surcharge" value={fmtRM(deliveryFee.crossCategory)} />
+        )}
+        {deliveryFee.additional > 0 && (
+          <Row label="Additional delivery fee" value={fmtRM(deliveryFee.additional)} />
+        )}
       </Section>
 
       <footer className={styles.totalBar}>
         <span className={styles.totalLabel}>Total</span>
         <div className={styles.totalRight}>
           <PriceTag amount={total} size="lg" />
-          <p className={styles.totalCaption}>Inclusive of delivery within Klang Valley</p>
+          <p className={styles.totalCaption}>
+            Delivery within Klang Valley
+            {deliveryFee.total > 0 ? ` · RM ${fmtRM(deliveryFee.total).replace('RM ', '')} included` : ''}
+          </p>
         </div>
       </footer>
     </aside>
