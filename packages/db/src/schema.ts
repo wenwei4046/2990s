@@ -98,6 +98,19 @@ export const appConfig = pgTable('app_config', {
   updatedBy:   uuid('updated_by'),          // references staff.id once staff exists
 });
 
+/* ─────────────────────────── Delivery fee config ───────────────────── */
+// Singleton (id = 1) holding the two delivery-fee defaults. UPDATEs bump
+// app_config.pricing_version via trigger so saved quotes surface drift.
+// RLS: read for any authenticated staff; UPDATE for admin/coordinator only.
+
+export const deliveryFeeConfig = pgTable('delivery_fee_config', {
+  id:               integer('id').primaryKey().default(1),     // CHECK (id = 1) at DB
+  baseFee:          integer('base_fee').notNull().default(250),
+  crossCategoryFee: integer('cross_category_fee').notNull().default(175),
+  updatedAt:        timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:        uuid('updated_by'),                        // references staff(id)
+});
+
 /* ─────────────────────────── Showrooms ──────────────────────────────── */
 // Every order is placed AT a specific showroom. Staff have a primary
 // affiliation. Coordinators with showroom_id = NULL oversee all showrooms.
@@ -362,6 +375,13 @@ export const orders = pgTable('orders', {
   total:      integer('total').notNull(),
   paid:       integer('paid').notNull().default(0),
 
+  // Delivery fee snapshot (migration 0029). All three columns are NOT NULL
+  // DEFAULT 0 so legacy rows backfill cleanly. Reconstructed from
+  // delivery_fee_config + cart at order time; never mutated by config edits.
+  deliveryFeeBase:           integer('delivery_fee_base').notNull().default(0),
+  deliveryFeeCrossCategory:  integer('delivery_fee_cross_category').notNull().default(0),
+  deliveryFeeAdditional:     integer('delivery_fee_additional').notNull().default(0),
+
   // Pricing version snapshot at order placement (Codex P2.5).
   // Server stamps from `app_config.pricing_version` (bumped by trigger on any
   // products/pricing UPDATE). Lets us reconstruct WHY a posted order's total
@@ -472,6 +492,9 @@ export const quotes = pgTable('quotes', {
   subtotal:    integer('subtotal').notNull(),
   addonTotal:  integer('addon_total').notNull().default(0),
   total:       integer('total').notNull(),
+  deliveryFeeBase:           integer('delivery_fee_base').notNull().default(0),
+  deliveryFeeCrossCategory:  integer('delivery_fee_cross_category').notNull().default(0),
+  deliveryFeeAdditional:     integer('delivery_fee_additional').notNull().default(0),
   // Pricing version snapshot when the quote was saved — when the quote is later
   // promoted to an order, server compares this against current pricing_version
   // and surfaces a PricingDriftModal if drift detected (see §5.2.1).
