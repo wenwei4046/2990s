@@ -341,3 +341,53 @@ export const pricingDriftExceeds = (clientTotal: number, serverTotal: number): b
   const drift = Math.abs(clientTotal - serverTotal) / serverTotal;
   return drift > 0.005;
 };
+
+/* ─── Delivery fee (migration 0029) ────────────────────────────────── */
+
+export interface DeliveryFeeConfig {
+  baseFee:          number;
+  crossCategoryFee: number;
+}
+
+export interface DeliveryFeeResult {
+  /** Flat per-order base fee (default RM 250). */
+  base:          number;
+  /** One-time surcharge when the cart spans ≥2 distinct category ids
+   *  (default RM 175). Charged flat, not per extra category. */
+  crossCategory: number;
+  /** Free-form fee keyed in by POS sales at handover. */
+  additional:    number;
+  /** base + crossCategory + additional. */
+  total:         number;
+}
+
+/**
+ * Server-side recompute of the delivery fee. Pure — no DB I/O.
+ *
+ * `categoryIds` is the list of `products.category_id` values for every line
+ * in the cart, duplicates allowed. Empty / falsy ids are ignored so an
+ * untyped flat product doesn't accidentally trip cross-category billing.
+ *
+ * Negative `additionalFee` is clamped to 0 defensively; the POS UI should
+ * never submit negative values, but the server is authoritative.
+ */
+export const computeDeliveryFee = (
+  categoryIds:   string[],
+  config:        DeliveryFeeConfig,
+  additionalFee: number,
+): DeliveryFeeResult => {
+  const cleaned = categoryIds.filter((id): id is string => Boolean(id));
+  if (cleaned.length === 0) {
+    return { base: 0, crossCategory: 0, additional: 0, total: 0 };
+  }
+  const distinct      = new Set(cleaned);
+  const crossCategory = distinct.size >= 2 ? config.crossCategoryFee : 0;
+  const additional    = Math.max(0, additionalFee);
+  const base          = config.baseFee;
+  return {
+    base,
+    crossCategory,
+    additional,
+    total: base + crossCategory + additional,
+  };
+};

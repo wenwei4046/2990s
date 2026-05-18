@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeOrderTotal,
+  computeDeliveryFee,
   pricingDriftExceeds,
   OrderPricingError,
   type ServerProductInfo,
@@ -322,5 +323,64 @@ describe('pricingDriftExceeds', () => {
   it('handles zero-total edge case', () => {
     expect(pricingDriftExceeds(0, 0)).toBe(false);
     expect(pricingDriftExceeds(1, 0)).toBe(true);
+  });
+});
+
+describe('computeDeliveryFee', () => {
+  const cfg = { baseFee: 250, crossCategoryFee: 175 };
+
+  it('returns all zeros when no categories', () => {
+    expect(computeDeliveryFee([], cfg, 0)).toEqual({
+      base: 0, crossCategory: 0, additional: 0, total: 0,
+    });
+  });
+
+  it('charges only base fee for a single-category cart', () => {
+    expect(computeDeliveryFee(['sofa'], cfg, 0)).toEqual({
+      base: 250, crossCategory: 0, additional: 0, total: 250,
+    });
+  });
+
+  it('charges base + cross-category for two distinct categories', () => {
+    expect(computeDeliveryFee(['sofa', 'mattress'], cfg, 0)).toEqual({
+      base: 250, crossCategory: 175, additional: 0, total: 425,
+    });
+  });
+
+  it('charges cross-category once even with three distinct categories', () => {
+    expect(computeDeliveryFee(['sofa', 'mattress', 'bedframe'], cfg, 0)).toEqual({
+      base: 250, crossCategory: 175, additional: 0, total: 425,
+    });
+  });
+
+  it('treats duplicate category ids as one (Sofa Custom + Sofa Bundle)', () => {
+    expect(computeDeliveryFee(['sofa', 'sofa', 'sofa'], cfg, 0)).toEqual({
+      base: 250, crossCategory: 0, additional: 0, total: 250,
+    });
+  });
+
+  it('adds the additional fee on top', () => {
+    expect(computeDeliveryFee(['sofa', 'mattress'], cfg, 80)).toEqual({
+      base: 250, crossCategory: 175, additional: 80, total: 505,
+    });
+  });
+
+  it('clamps negative additional fee to 0 (defensive — POS UI should never submit negative)', () => {
+    expect(computeDeliveryFee(['sofa'], cfg, -50)).toEqual({
+      base: 250, crossCategory: 0, additional: 0, total: 250,
+    });
+  });
+
+  it('ignores falsy / empty category ids', () => {
+    expect(computeDeliveryFee(['sofa', '', '', 'mattress'], cfg, 0)).toEqual({
+      base: 250, crossCategory: 175, additional: 0, total: 425,
+    });
+  });
+
+  it('honours zero rates from the config (admin sets free delivery)', () => {
+    const free = { baseFee: 0, crossCategoryFee: 0 };
+    expect(computeDeliveryFee(['sofa', 'mattress'], free, 0)).toEqual({
+      base: 0, crossCategory: 0, additional: 0, total: 0,
+    });
   });
 });
