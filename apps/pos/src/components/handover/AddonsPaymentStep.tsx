@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
 import { AddonCard } from './AddonCard';
+import { Field } from './Field';
 import styles from '../../pages/Handover.module.css';
 
 const HANDOVER_ADDON_IDS = ['dispose-mattress', 'dispose-bedframe', 'lift', 'assemble'];
@@ -51,6 +52,33 @@ export const AddonsPaymentStep = ({
           );
         })}
       </div>
+
+      <h3 className="subTitle">Additional delivery fee (optional)</h3>
+      <p className={styles.stepLead}>
+        Use this for non-standard delivery situations (outstation, urgent slot,
+        oversized item). Leave blank for none.
+      </p>
+
+      <Field label="Amount (RM)">
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={form.additionalDeliveryFee || ''}
+          onChange={(e) => {
+            const v = e.target.value;
+            update(
+              'additionalDeliveryFee',
+              v === '' ? 0 : Math.max(0, Math.floor(Number(v))),
+            );
+          }}
+          placeholder="0"
+        />
+      </Field>
+      <p className={styles.signCaption}>
+        Adds on top of the base fee and any cross-category surcharge.
+        Whole RM, no sen.
+      </p>
 
       <h3 className="subTitle">Payment method</h3>
       <div className="fieldRow">
