@@ -64,6 +64,14 @@ export interface OrderSubmitInput {
   /** Amount actually collected at handover (MYR integer). Threaded to the
    *  RPC's `paid` field; the Confirmed page surfaces this as "PAID RM X". */
   paid?: number;
+  /** Additional delivery fee keyed in by POS sales at handover (MYR integer).
+   *  Forwarded to POST /orders; server adds it to baseFee + crossCategoryFee
+   *  to compute the canonical delivery total. (Migration 0029) */
+  additionalDeliveryFee?: number;
+  /** Full client-computed delivery fee total (base + cross-category + additional).
+   *  Summed into clientTotal so the 0.5% drift check matches the server's
+   *  recompute. Without this an order with a RM 250 base fee fires a 409. */
+  deliveryFeeTotal?: number;
 }
 
 const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
@@ -105,11 +113,14 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     };
   });
 
-  // clientTotal must include handover addons so the server's drift check
-  // (subtotal + addonTotal) matches what we sent. acceptedServerTotal short-
-  // circuits this on the retry path after the user accepts a 409 drift.
+  // clientTotal must include handover addons + delivery fee so the server's
+  // drift check (subtotal + addonTotal + deliveryFee) matches what we sent.
+  // acceptedServerTotal short-circuits this on the retry path after the user
+  // accepts a 409 drift.
   const clientTotal = input.acceptedServerTotal
-    ?? (input.lines.reduce((s, l) => s + l.qty * l.config.total, 0) + (input.addonTotal ?? 0));
+    ?? (input.lines.reduce((s, l) => s + l.qty * l.config.total, 0)
+        + (input.addonTotal ?? 0)
+        + (input.deliveryFeeTotal ?? 0));
 
   return {
     customer: input.customer,
@@ -125,6 +136,9 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     ...(input.addressLater !== undefined ? { addressLater: input.addressLater } : {}),
     ...(input.addons && input.addons.length > 0 ? { addons: input.addons } : {}),
     ...(input.paid !== undefined ? { paid: input.paid } : {}),
+    ...(input.additionalDeliveryFee !== undefined
+      ? { additionalDeliveryFee: input.additionalDeliveryFee }
+      : {}),
     lines,
     clientTotal,
     ...(input.uploadSessionId ? { uploadSessionId: input.uploadSessionId } : {}),

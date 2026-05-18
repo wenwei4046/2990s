@@ -198,6 +198,8 @@ export const Handover = () => {
           })),
         addonTotal,
         paid: form.amountPaid,
+        additionalDeliveryFee: form.additionalDeliveryFee,
+        deliveryFeeTotal: deliveryFee.total,
         lines,
         acceptedServerTotal,
         uploadSessionId: form.slipUploadSessionId ?? undefined,
