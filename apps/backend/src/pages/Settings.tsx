@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Pencil, X, Save, MessageCircle, Mail, CheckCircle2, Circle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -13,20 +13,23 @@ import {
   useCreateDriver,
   useUpdateStaffActive,
   useCreateStaff,
+  useDeliveryFeeConfig,
+  useUpdateDeliveryFeeConfig,
   type StaffRow,
   type StaffRoleValue,
   type ShowroomRow,
 } from '../lib/admin-queries';
 import styles from './Settings.module.css';
 
-type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'app';
+type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'app';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'suppliers', label: 'Suppliers' },
-  { id: 'drivers', label: 'Drivers' },
+  { id: 'drivers',   label: 'Drivers' },
   { id: 'showrooms', label: 'Showrooms' },
-  { id: 'staff', label: 'Staff' },
-  { id: 'app', label: 'App config' },
+  { id: 'staff',     label: 'Staff' },
+  { id: 'delivery',  label: 'Delivery fees' },
+  { id: 'app',       label: 'App config' },
 ];
 
 export const Settings = () => {
@@ -74,6 +77,7 @@ export const Settings = () => {
       {tab === 'drivers' && <DriversTab canEdit={isCoordOrAdmin} />}
       {tab === 'showrooms' && <ShowroomsTab />}
       {tab === 'staff' && <StaffTab canEdit={isAdmin} />}
+      {tab === 'delivery' && <DeliveryFeesTab canEdit={isCoordOrAdmin} />}
       {tab === 'app' && <AppConfigTab />}
     </div>
   );
@@ -916,6 +920,121 @@ const AppConfigTab = () => {
           ))}
         </div>
       )}
+    </>
+  );
+};
+
+/* ─── Delivery fees (admin/coordinator) ─── */
+
+const DeliveryFeesTab = ({ canEdit }: { canEdit: boolean }) => {
+  const cfg = useDeliveryFeeConfig();
+  const update = useUpdateDeliveryFeeConfig();
+
+  const [baseFee, setBaseFee]                 = useState<number | ''>('');
+  const [crossCategoryFee, setCrossCategoryFee] = useState<number | ''>('');
+  const [error, setError]   = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  // Hydrate inputs once the GET resolves.
+  useEffect(() => {
+    if (cfg.data) {
+      setBaseFee(cfg.data.baseFee);
+      setCrossCategoryFee(cfg.data.crossCategoryFee);
+    }
+  }, [cfg.data]);
+
+  const onSave = async () => {
+    setError(null);
+    setSuccess(false);
+    if (typeof baseFee !== 'number' || typeof crossCategoryFee !== 'number') {
+      setError('Both fields must be a whole-RM integer.');
+      return;
+    }
+    if (baseFee < 0 || crossCategoryFee < 0) {
+      setError('Fees cannot be negative.');
+      return;
+    }
+    try {
+      await update.mutateAsync({ baseFee, crossCategoryFee });
+      setSuccess(true);
+    } catch (err) {
+      setError(String((err as Error).message ?? err));
+    }
+  };
+
+  if (cfg.isLoading) return <div className={styles.appConfigCard}>Loading delivery fees…</div>;
+  if (cfg.error)     return <div className={styles.appConfigCard}>Failed to load: {String(cfg.error)}</div>;
+
+  return (
+    <>
+      <div className={styles.readOnlyBanner}>
+        <strong>Delivery fee rules.</strong> Every order is charged the base fee.
+        Orders with products from ≥2 categories (e.g. sofa + mattress) also pay
+        the cross-category surcharge — flat, once. Changes apply to NEW orders
+        only — existing orders keep the fees they were placed with.
+      </div>
+
+      <div className={styles.appConfigCard}>
+        <div className={styles.field}>
+          <label className={styles.fieldLabel} htmlFor="base-fee">Base fee (RM)</label>
+          <input
+            id="base-fee"
+            type="number"
+            min={0}
+            step={1}
+            className={styles.input}
+            value={baseFee}
+            disabled={!canEdit}
+            onChange={(e) => setBaseFee(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+          />
+          <span className={styles.fieldHint}>Charged on every order. Whole RM (no sen).</span>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.fieldLabel} htmlFor="cross-cat-fee">Cross-category surcharge (RM)</label>
+          <input
+            id="cross-cat-fee"
+            type="number"
+            min={0}
+            step={1}
+            className={styles.input}
+            value={crossCategoryFee}
+            disabled={!canEdit}
+            onChange={(e) => setCrossCategoryFee(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+          />
+          <span className={styles.fieldHint}>
+            Added once, flat, when the order contains ≥2 distinct product categories.
+            Sofa Custom + Sofa Bundle count as one category.
+          </span>
+        </div>
+
+        {error && <div className={styles.errorBanner} role="alert">{error}</div>}
+        {success && <div className={styles.banner}>Saved.</div>}
+
+        {canEdit && (
+          <div className={styles.actionsRow}>
+            <Button
+              variant="primary"
+              onClick={() => void onSave()}
+              disabled={update.isPending}
+            >
+              <Save size={16} strokeWidth={1.75} />
+              {update.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        )}
+
+        <div className={styles.appConfigRow} style={{ marginTop: 'var(--space-3)' }}>
+          <div>
+            <div className={styles.appConfigKey}>Last updated</div>
+          </div>
+          <div className={styles.appConfigValue}>
+            {cfg.data?.updatedAt
+              ? new Date(cfg.data.updatedAt).toLocaleString('en-MY')
+              : '—'}
+          </div>
+        </div>
+      </div>
     </>
   );
 };
