@@ -335,3 +335,56 @@ export const useBulkSetProductVisibility = () => {
     },
   });
 };
+
+/* ─── Delivery fee config ─── */
+
+export interface DeliveryFeeConfigRow {
+  baseFee:          number;
+  crossCategoryFee: number;
+  updatedAt:        string;
+  updatedBy:        string | null;
+}
+
+export const useDeliveryFeeConfig = () =>
+  useQuery({
+    queryKey: ['delivery-fee-config'],
+    queryFn: async (): Promise<DeliveryFeeConfigRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /delivery-fees failed (${res.status})`);
+      return (await res.json()) as DeliveryFeeConfigRow;
+    },
+    staleTime: 30_000,
+  });
+
+export const useUpdateDeliveryFeeConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: { baseFee: number; crossCategoryFee: number }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees`, {
+        method: 'PATCH',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /delivery-fees failed (${res.status})`);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery-fee-config'] });
+    },
+  });
+};
