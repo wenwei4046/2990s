@@ -325,3 +325,28 @@ export const useProductPricingRealtime = (productId: string | undefined) => {
     };
   }, [qc, productId]);
 };
+
+/* ─── Delivery fee config ─── */
+
+export interface DeliveryFeeConfigRow {
+  baseFee:          number;
+  crossCategoryFee: number;
+}
+
+export const useDeliveryFeeConfig = () =>
+  useQuery({
+    queryKey: ['delivery-fee-config'],
+    queryFn: async (): Promise<DeliveryFeeConfigRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /delivery-fees failed (${res.status})`);
+      const body = (await res.json()) as { baseFee: number; crossCategoryFee: number };
+      return { baseFee: body.baseFee, crossCategoryFee: body.crossCategoryFee };
+    },
+    staleTime: 60_000,
+  });

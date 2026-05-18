@@ -40,6 +40,8 @@ export interface HandoverForm {
   paymentMethod: PaymentMethod;
 
   amountPaid: number;
+  /** Additional delivery fee keyed in by sales at handover. Whole RM, 0 if none. */
+  additionalDeliveryFee: number;
   paymentPreset: PaymentPreset;
   approvalCode: string;
   slipUploadSessionId: string | null;

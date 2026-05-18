@@ -16,12 +16,17 @@ import {
 
 const baseForm: HandoverForm = {
   name: '', phone: '', email: '', salespersonId: '', customerType: 'new',
-  addressLater: false, fullAddress: '', postcode: '', city: '', state: '',
+  addressLater: false, fullAddress: '', addressLine2: '',
+  postcode: '', city: '', state: '',
   buildingType: '', billingSame: true,
+  billingAddress: '', billingAddressLine2: '',
+  billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
-  deliveryDate: '', specialInstructions: '',
+  deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  specialInstructions: '',
   addons: {}, paymentMethod: '',
-  amountPaid: 0, paymentPreset: 'full', approvalCode: '',
+  amountPaid: 0, additionalDeliveryFee: 0,
+  paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
 };

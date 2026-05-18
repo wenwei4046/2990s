@@ -52,7 +52,9 @@ const empty: HandoverForm = {
   deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
   specialInstructions: '',
   addons: {}, paymentMethod: '',
-  amountPaid: 0, paymentPreset: 'full', approvalCode: '',
+  amountPaid: 0,
+  additionalDeliveryFee: 0,
+  paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
 };
