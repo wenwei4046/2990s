@@ -3,8 +3,9 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
-import { useAddons, useLocalities } from '../lib/queries';
+import { useAddons, useLocalities, useDeliveryFeeConfig, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
+import { computeDeliveryFee } from '@2990s/shared/pricing';
 import {
   validateCustomer, validateAddress, validateEmergency, validateTargetDate,
   validateAddonsPayment, validateConfirmPayment, validateSign,
@@ -80,6 +81,8 @@ export const Handover = () => {
   const createOrder = useCreateOrder();
   const addons = useAddons();
   const localities = useLocalities();
+  const catalog = useCatalog();
+  const deliveryCfgQuery = useDeliveryFeeConfig();
 
   const update = <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -107,7 +110,23 @@ export const Handover = () => {
     }]),
   );
   const addonTotal = computeAddonTotal(form.addons, addonInfos);
-  const total = subtotal + addonTotal;
+
+  // Delivery fee (migration 0029) — Backend Settings → Delivery sets the base
+  // + cross-category rates; POS adds an optional additional fee at handover.
+  const categoryIdByProductId = new Map<string, string>();
+  for (const p of catalog.data ?? []) {
+    if (p.category?.id) categoryIdByProductId.set(p.id, p.category.id);
+  }
+  const cartCategoryIds = lines
+    .map((l) => categoryIdByProductId.get(l.config.productId) ?? '')
+    .filter(Boolean);
+  const deliveryCfg = deliveryCfgQuery.data ?? { baseFee: 0, crossCategoryFee: 0 };
+  const deliveryFee = computeDeliveryFee(
+    cartCategoryIds,
+    { baseFee: deliveryCfg.baseFee, crossCategoryFee: deliveryCfg.crossCategoryFee },
+    form.additionalDeliveryFee,
+  );
+  const total = subtotal + addonTotal + deliveryFee.total;
 
   const validity: Record<StepKey, boolean> = {
     customer:  validateCustomer(form),
@@ -251,6 +270,7 @@ export const Handover = () => {
             form={form}
             subtotal={subtotal}
             addonTotal={addonTotal}
+            deliveryFee={deliveryFee}
             total={total}
           />
         </form>
