@@ -1,15 +1,31 @@
 .card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  transition: background-color 150ms, border-color 150ms;
+}
+.cardOn {
+  background: var(--lane-received-bg);
+  border-color: var(--c-orange);
+}
+
+.summary {
   display: grid;
   grid-template-columns: 48px 1fr auto auto;
   align-items: center;
   gap: 12px;
-  padding: var(--space-3) var(--space-4);
-  background: var(--bg-alt);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  transition: border-color 150ms;
 }
-.cardOn { border-color: var(--c-orange); }
+
+.badge {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-15);
+  color: var(--c-burnt);
+}
 
 .icon {
   display: inline-flex;
@@ -37,7 +53,8 @@
   grid-template-columns: auto auto 1fr;
   gap: 12px;
   align-items: center;
-  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
 }
 .expandField {
   display: flex;
@@ -58,27 +75,9 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   font: inherit;
-  background: var(--bg);
+  background: #fff;
 }
 .expandField input:focus { outline: none; border-color: var(--c-burnt); }
-.lineTotal {
-  font-family: var(--font-title);
-  font-weight: var(--w-semibold);
-  margin-left: auto;
-  color: var(--c-burnt);
-}
-
-.configLink {
-  background: transparent;
-  border: none;
-  color: var(--c-orange);
-  cursor: pointer;
-  font-family: var(--font-button);
-  font-size: var(--fs-13);
-  font-weight: var(--w-semibold);
-}
-.configLink:hover { text-decoration: underline; }
-
 .check {
   width: 28px;
   height: 28px;

@@ -96,6 +96,13 @@ export const orderV1PostSchema = z.object({
   customerType:        z.enum(['new', 'existing']).optional(),
   buildingType:        z.enum(['condo', 'landed', 'apartment', 'office', 'shop', 'other']).optional(),
   billingSame:         z.boolean().optional(),
+  // Billing address — only present when billingSame === false.
+  // Persisted to orders.customer_billing_* (migration 0028).
+  billingAddress:        z.string().optional(),
+  billingAddressLine2:   z.string().optional(),
+  billingPostcode:       z.string().optional(),
+  billingCity:           z.string().optional(),
+  billingState:          z.string().optional(),
   salespersonId:       z.string().uuid().optional(),
   specialInstructions: z.string().max(1000).optional(),
   // When true, customer chose delivery TBD — address fields may be blank.

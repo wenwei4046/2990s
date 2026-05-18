@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { Bookmark, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, Bookmark, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/staff';
@@ -30,9 +30,13 @@ interface TopbarProps {
    * is mid-build of a single SKU.
    */
   centerSlot?: ReactNode;
+  /** When set, render a chevron-left "Back" pill in the left section linking here. */
+  backTo?: string;
+  /** Label for the back pill; defaults to "Back". */
+  backLabel?: string;
 }
 
-export function Topbar({ step, rightSlot, centerSlot }: TopbarProps) {
+export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: TopbarProps) {
   const { user, signOut } = useAuth();
   const { data: staff } = useStaff();
   const lines = useCart((s) => s.lines);
@@ -48,6 +52,11 @@ export function Topbar({ step, rightSlot, centerSlot }: TopbarProps) {
   return (
     <header className={styles.topbar}>
       <div className={styles.left}>
+        {backTo && (
+          <Link to={backTo} className={styles.iconBtn} aria-label={backLabel ?? 'Back'}>
+            <ArrowLeft size={20} strokeWidth={1.75} />
+          </Link>
+        )}
         <Link to="/catalog" className={styles.wordmark} aria-label="2990's POS home">
           2990
           <span className={styles.wordmarkRing}>S</span>

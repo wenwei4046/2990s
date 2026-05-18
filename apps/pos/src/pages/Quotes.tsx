@@ -105,7 +105,7 @@ export const Quotes = () => {
                   {q.cart.length} {q.cart.length === 1 ? 'piece' : 'pieces'}
                 </span>
                 <span className={styles.total}>
-                  <sup>RM</sup>{q.total.toLocaleString('en-MY')}
+                  <span className={styles.totalUnit}>RM</span>{q.total.toLocaleString('en-MY')}
                 </span>
               </div>
 

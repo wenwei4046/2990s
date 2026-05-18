@@ -9,12 +9,20 @@ import {
   MapPin,
   Calendar,
   Clock,
+  X,
+  Package,
+  Save,
+  ArrowRight,
+  Circle,
+  Check,
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocalities } from '../lib/queries';
+import { SlipUploadStep } from '../components/SlipUploadStep';
 import styles from './OrderStatus.module.css';
 
 // Demo PIN for pilot (per CLAUDE.md prototype reference). Production wires
@@ -25,15 +33,39 @@ const SESSION_KEY = 'pos-orders-unlocked-v1';
 
 type Lane = 'received' | 'proceed' | 'logistics' | 'ready' | 'dispatched' | 'delivered' | 'cancelled';
 
+interface OrderItem {
+  qty: number;
+  lineTotal: number;
+  productName: string | null;
+  productImage: string | null;
+}
+
 interface MyOrderRow {
   id: string;
   placedAt: string;
   customerName: string;
+  customerPhone: string | null;
+  customerEmail: string | null;
   customerCity: string | null;
+  customerAddress: string | null;
+  customerAddressLine2: string | null;
+  customerPostcode: string | null;
+  customerState: string | null;
   total: number;
+  subtotal: number;
+  addonTotal: number;
   paid: number;
   lane: Lane;
   deliveryDate: string | null;
+  deliverySlot: string | null;
+  paymentMethod: string | null;
+  approvalCode: string | null;
+  notes: string | null;
+  staffName: string | null;
+  staffInitials: string | null;
+  pieces: number;
+  firstImage: string | null;
+  items: OrderItem[];
 }
 
 const useMyOrders = () =>
@@ -41,22 +73,65 @@ const useMyOrders = () =>
     queryKey: ['my-orders'],
     queryFn: async (): Promise<MyOrderRow[]> => {
       // RLS scopes sales to own orders automatically. No explicit filter needed.
+      // Embed staff (placing salesperson) + order_items (qty, line_total, product
+      // for photo). Disambiguate staff embed via the explicit FK name because
+      // orders has 4 FKs to staff (staff_id, salesperson_id, po_issued_by,
+      // slip_verified_by).
       const { data, error } = await supabase
         .from('orders')
-        .select('id, placed_at, customer_name, customer_city, total, paid, lane, delivery_date')
+        .select(`
+          id, placed_at,
+          customer_name, customer_phone, customer_email,
+          customer_address, customer_address_line2,
+          customer_postcode, customer_city, customer_state,
+          subtotal, addon_total, total, paid, lane,
+          delivery_date, delivery_slot,
+          payment_method, approval_code, notes,
+          staff:orders_staff_id_staff_id_fk (name, initials),
+          order_items (qty, kind, line_total, products:product_id (name, img_key, thumb_key))
+        `)
         .order('placed_at', { ascending: false })
         .limit(50);
       if (error) throw error;
-      return (data ?? []).map((r: any) => ({
-        id: r.id,
-        placedAt: r.placed_at,
-        customerName: r.customer_name,
-        customerCity: r.customer_city ?? null,
-        total: r.total,
-        paid: r.paid ?? 0,
-        lane: r.lane as Lane,
-        deliveryDate: r.delivery_date ?? null,
-      }));
+      return (data ?? []).map((r: any) => {
+        const items: OrderItem[] = (r.order_items ?? [])
+          .filter((it: any) => it.kind === 'product')
+          .map((it: any) => ({
+            qty: it.qty ?? 0,
+            lineTotal: it.line_total ?? 0,
+            productName: it.products?.name ?? null,
+            productImage: it.products?.thumb_key ?? it.products?.img_key ?? null,
+          }));
+        const pieces = items.reduce((s, it) => s + it.qty, 0);
+        const firstImage = items.find((it) => it.productImage)?.productImage ?? null;
+        return {
+          id: r.id,
+          placedAt: r.placed_at,
+          customerName: r.customer_name,
+          customerPhone: r.customer_phone ?? null,
+          customerEmail: r.customer_email ?? null,
+          customerCity: r.customer_city ?? null,
+          customerAddress: r.customer_address ?? null,
+          customerAddressLine2: r.customer_address_line2 ?? null,
+          customerPostcode: r.customer_postcode ?? null,
+          customerState: r.customer_state ?? null,
+          subtotal: r.subtotal ?? 0,
+          addonTotal: r.addon_total ?? 0,
+          total: r.total,
+          paid: r.paid ?? 0,
+          lane: r.lane as Lane,
+          deliveryDate: r.delivery_date ?? null,
+          deliverySlot: r.delivery_slot ?? null,
+          paymentMethod: r.payment_method ?? null,
+          approvalCode: r.approval_code ?? null,
+          notes: r.notes ?? null,
+          staffName: r.staff?.name ?? null,
+          staffInitials: r.staff?.initials ?? null,
+          pieces,
+          firstImage,
+          items,
+        };
+      });
     },
     staleTime: 10_000,
   });
@@ -232,6 +307,14 @@ const LANES: ReadonlyArray<LaneDef> = [
 const OrderBoard = ({ staffName }: { staffName: string }) => {
   const orders = useMyOrders();
   const list = orders.data ?? [];
+  const [active, setActive] = useState<MyOrderRow | null>(null);
+
+  // Keep the active drawer order in sync with refetches.
+  useEffect(() => {
+    if (!active) return;
+    const fresh = list.find((o) => o.id === active.id);
+    if (fresh && fresh !== active) setActive(fresh);
+  }, [list, active]);
 
   const grouped = useMemo(() => {
     const map: Record<LaneDef['id'], MyOrderRow[]> = {
@@ -312,7 +395,9 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
                       Nothing here yet
                     </div>
                   ) : (
-                    items.map((o) => <OrderTile key={o.id} order={o} />)
+                    items.map((o) => (
+                      <OrderTile key={o.id} order={o} onOpen={setActive} />
+                    ))
                   )}
                 </div>
               </section>
@@ -320,35 +405,44 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
           })}
         </div>
       )}
+      {active && (
+        <OrderDetail order={active} onClose={() => setActive(null)} />
+      )}
     </main>
     </>
   );
 };
 
-const OrderTile = ({ order }: { order: MyOrderRow }) => {
+const OrderTile = ({ order, onOpen }: {
+  order: MyOrderRow;
+  onOpen: (o: MyOrderRow) => void;
+}) => {
   const paidPct = order.total > 0 ? Math.min(100, Math.round((order.paid / order.total) * 100)) : 0;
+  const dateLabel = order.deliveryDate
+    ? new Date(order.deliveryDate).toLocaleDateString('en-MY', { day: 'numeric', month: 'short' })
+    : 'Date TBD';
+  const addressLabel = order.customerCity ?? order.customerAddress?.slice(0, 28) ?? 'Address pending';
+
   return (
-    <article className={styles.tile}>
-      <div className={styles.tileHead}>
-        <span className={styles.tileId}>{order.id}</span>
-        <span className={styles.tileWhen}>{fmtTimeAgo(order.placedAt)}</span>
-      </div>
-      <div className={styles.tileName}>{order.customerName}</div>
-      <div className={styles.tileMeta}>
-        <span className={styles.tileMetaItem}>
-          <MapPin size={11} strokeWidth={1.75} />
-          {order.customerCity ?? 'Address pending'}
-        </span>
-        <span className={styles.tileMetaItem}>
-          <Calendar size={11} strokeWidth={1.75} />
-          {order.deliveryDate
-            ? new Date(order.deliveryDate).toLocaleDateString('en-MY', { day: 'numeric', month: 'short' })
-            : 'Date TBD'}
-        </span>
+    <button type="button" className={styles.tile} onClick={() => onOpen(order)}>
+      <div className={styles.tileTopRow}>
+        <div className={styles.tileTopInfo}>
+          <span className={styles.tileId}>{order.id}</span>
+          <span className={styles.tileName}>{order.customerName}</span>
+        </div>
+        <div
+          className={styles.tilePhoto}
+          style={order.firstImage ? { backgroundImage: `url(${order.firstImage})` } : undefined}
+        >
+          {!order.firstImage && <Package size={18} strokeWidth={1.5} />}
+          {order.pieces > 1 && (
+            <span className={styles.tilePieces}>×{order.pieces}</span>
+          )}
+        </div>
       </div>
       <div className={styles.tileTotalRow}>
         <span className={styles.tileTotal}>
-          <sup>RM</sup>{fmtMoney(order.total)}
+          <span className={styles.tileTotalUnit}>RM</span>{fmtMoney(order.total)}
         </span>
         <span className={styles.tilePaid}>
           <Clock size={10} strokeWidth={1.75} />
@@ -356,8 +450,521 @@ const OrderTile = ({ order }: { order: MyOrderRow }) => {
         </span>
       </div>
       <div className={styles.tilePaidBar}>
-        <div className={styles.tilePaidBarFill} style={{ width: `${paidPct}%` }} />
+        <div
+          className={`${styles.tilePaidBarFill} ${paidPct < 50 ? styles.tilePaidBarFillLow : ''}`}
+          style={{ width: `${paidPct}%` }}
+        />
       </div>
-    </article>
+      <div className={styles.tileMeta}>
+        <span className={styles.tileMetaItem}>
+          <Calendar size={11} strokeWidth={1.75} />
+          {dateLabel}
+        </span>
+        <span className={styles.tileMetaItem}>
+          <MapPin size={11} strokeWidth={1.75} />
+          {addressLabel}
+        </span>
+      </div>
+      <div className={styles.tileFoot}>
+        <span>{order.staffName ?? '—'}</span>
+        <span>{fmtTimeAgo(order.placedAt)}</span>
+      </div>
+    </button>
   );
 };
+
+/* ─── Order Detail Drawer ─── */
+
+const LANE_LABEL: Record<Lane, string> = {
+  received: 'Place',
+  proceed: 'Proceed',
+  logistics: 'Logistics',
+  ready: 'Ready',
+  dispatched: 'Dispatched',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+};
+
+const fmtAbsDate = (iso: string | null): string => {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-MY', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
+const OrderDetail = ({ order, onClose }: {
+  order: MyOrderRow;
+  onClose: () => void;
+}) => {
+  const queryClient = useQueryClient();
+  const editable = order.lane === 'received';
+
+  // Local edit state. Resync ONLY when switching orders, not on background
+  // refetches of the same order — otherwise typing would get blown away.
+  const [edited, setEdited] = useState<MyOrderRow>(order);
+  useEffect(() => { setEdited(order); }, [order.id]);
+
+  // Payment recorded this session (added on top of order.paid).
+  const [paymentAdd, setPaymentAdd] = useState<string>('');
+  const [slipSessionId, setSlipSessionId] = useState<string | null>(null);
+
+  // Earliest delivery date = order placed_at + 30 days (production + logistics
+  // window). Sales can't quote a date earlier than that — matches the
+  // "As fast as possible" default in the Handover Target Date step.
+  const minDeliveryDate = useMemo(() => {
+    const placedAt = new Date(order.placedAt);
+    placedAt.setDate(placedAt.getDate() + 30);
+    placedAt.setHours(0, 0, 0, 0);
+    const y = placedAt.getFullYear();
+    const m = String(placedAt.getMonth() + 1).padStart(2, '0');
+    const d = String(placedAt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }, [order.placedAt]);
+
+  // Cascading dropdowns (state → city → postcode) sourced from my_localities.
+  const localities = useLocalities();
+  const states = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of localities.data ?? []) set.add(l.state);
+    return Array.from(set).sort();
+  }, [localities.data]);
+  const cities = useMemo(() => {
+    if (!edited.customerState) return [] as string[];
+    const set = new Set<string>();
+    for (const l of localities.data ?? []) {
+      if (l.state === edited.customerState) set.add(l.city);
+    }
+    return Array.from(set).sort();
+  }, [localities.data, edited.customerState]);
+  const postcodes = useMemo(() => {
+    if (!edited.customerState || !edited.customerCity) return [] as string[];
+    const set = new Set<string>();
+    for (const l of localities.data ?? []) {
+      if (l.state === edited.customerState && l.city === edited.customerCity) set.add(l.postcode);
+    }
+    return Array.from(set).sort();
+  }, [localities.data, edited.customerState, edited.customerCity]);
+
+  const set = <K extends keyof MyOrderRow>(k: K, v: MyOrderRow[K]) =>
+    setEdited((prev) => ({ ...prev, [k]: v }));
+
+  const additionalPaid = Math.max(0, Number(paymentAdd) || 0);
+  const effectivePaid = Math.min(order.total, edited.paid + additionalPaid);
+  const paidPct = order.total > 0 ? Math.min(100, Math.round((effectivePaid / order.total) * 100)) : 0;
+
+  const customerInfoOk = !!(edited.customerName.trim() && edited.customerEmail?.trim());
+  const addressOk = !!(edited.customerAddress?.trim() && edited.customerPostcode?.trim());
+  const dateOk = !!edited.deliveryDate;
+  const paidOk = order.total > 0 && effectivePaid / order.total >= 0.5;
+  // When recording additional payment, slip upload is required as proof.
+  const slipOk = additionalPaid === 0 || slipSessionId !== null;
+  const allOk = customerInfoOk && addressOk && paidOk && slipOk;
+
+  // Dirty check: any of the editable string fields changed, or payment recorded
+  const dirty =
+    edited.customerName !== order.customerName ||
+    edited.customerPhone !== order.customerPhone ||
+    edited.customerEmail !== order.customerEmail ||
+    edited.customerAddress !== order.customerAddress ||
+    edited.customerAddressLine2 !== order.customerAddressLine2 ||
+    edited.customerPostcode !== order.customerPostcode ||
+    edited.customerCity !== order.customerCity ||
+    edited.customerState !== order.customerState ||
+    edited.deliveryDate !== order.deliveryDate ||
+    edited.approvalCode !== order.approvalCode ||
+    additionalPaid > 0 ||
+    slipSessionId !== null;
+
+  const buildPatch = (extra: Record<string, unknown> = {}) => {
+    const patch: Record<string, unknown> = {
+      customer_name: edited.customerName.trim() || null,
+      customer_phone: edited.customerPhone?.trim() || null,
+      customer_email: edited.customerEmail?.trim() || null,
+      customer_address: edited.customerAddress?.trim() || null,
+      customer_address_line2: edited.customerAddressLine2?.trim() || null,
+      customer_postcode: edited.customerPostcode?.trim() || null,
+      customer_city: edited.customerCity?.trim() || null,
+      customer_state: edited.customerState?.trim() || null,
+      delivery_date: edited.deliveryDate || null,
+      approval_code: edited.approvalCode?.trim() || null,
+      paid: effectivePaid,
+      ...extra,
+    };
+    return patch;
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: async (extra: Record<string, unknown>) => {
+      const patch = buildPatch(extra);
+      // If user uploaded a slip with the top-up, store its r2_key on the order
+      // and promote the pending row (mirrors create_order_with_items pattern).
+      if (slipSessionId) {
+        const { data: session } = await supabase
+          .from('pending_slip_uploads')
+          .select('r2_key')
+          .eq('id', slipSessionId)
+          .maybeSingle();
+        if (session?.r2_key) {
+          patch.slip_key = session.r2_key;
+          patch.slip_state = 'pending';
+        }
+        await supabase
+          .from('pending_slip_uploads')
+          .update({ status: 'promoted', promoted_at: new Date().toISOString(), promoted_to_order_id: order.id })
+          .eq('id', slipSessionId);
+      }
+      const { error } = await supabase.from('orders').update(patch).eq('id', order.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      setPaymentAdd('');
+      setSlipSessionId(null);
+      queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+    },
+  });
+
+  const onSave = () => saveMutation.mutate({});
+  const onProceed = () => {
+    if (!allOk) return;
+    saveMutation.mutate({ lane: 'proceed' }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+        onClose();
+      },
+    });
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [onClose]);
+
+  return (
+    <div className={styles.detailOverlay} onClick={onClose}>
+      <aside className={styles.detail} onClick={(e) => e.stopPropagation()}>
+        <header className={styles.detailHead}>
+          <div>
+            <div className={styles.detailEyebrow}>Order · {LANE_LABEL[order.lane]}</div>
+            <h2 className={styles.detailTitle}>{order.id}</h2>
+            <div className={styles.detailSub}>
+              {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}
+            </div>
+          </div>
+          <IconButton
+            icon={<X size={18} strokeWidth={1.75} />}
+            aria-label="Close"
+            onClick={onClose}
+          />
+        </header>
+
+        <div className={styles.detailBody}>
+          <section className={styles.detailSection}>
+            <h4 className={styles.detailSectionTitle}>
+              Items <span className={styles.detailSectionMeta}>{order.pieces} {order.pieces === 1 ? 'piece' : 'pieces'}</span>
+            </h4>
+            <div className={styles.detailItems}>
+              {order.items.map((it, i) => (
+                <div key={i} className={styles.detailItem}>
+                  <div
+                    className={styles.detailItemPhoto}
+                    style={it.productImage ? { backgroundImage: `url(${it.productImage})` } : undefined}
+                  >
+                    {!it.productImage && <Package size={16} strokeWidth={1.5} />}
+                  </div>
+                  <div className={styles.detailItemBody}>
+                    <div className={styles.detailItemName}>{it.productName ?? 'Product'}</div>
+                  </div>
+                  <div className={styles.detailItemQty}>×{it.qty}</div>
+                  <div className={styles.detailItemPrice}>
+                    <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(it.lineTotal)}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className={styles.detailTotalsRow}>
+              <span>Subtotal</span>
+              <span><span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(order.subtotal)}</span>
+            </div>
+            {order.addonTotal > 0 && (
+              <div className={styles.detailTotalsRow}>
+                <span>Add-ons</span>
+                <span><span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(order.addonTotal)}</span>
+              </div>
+            )}
+            <div className={`${styles.detailTotalsRow} ${styles.detailTotalsRowGrand}`}>
+              <span>Total</span>
+              <span><span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(order.total)}</span>
+            </div>
+          </section>
+
+          <section className={styles.detailSection}>
+            <h4 className={styles.detailSectionTitle}>
+              Customer
+              <span className={`${styles.detailTick} ${customerInfoOk ? styles.detailTickOk : ''}`}>
+                {customerInfoOk ? 'Complete' : 'Incomplete'}
+              </span>
+            </h4>
+            <div className={styles.detailFieldGrid}>
+              <DetailField label="Full name *" disabled={!editable}>
+                <input
+                  type="text"
+                  value={edited.customerName}
+                  onChange={(e) => set('customerName', e.target.value)}
+                  disabled={!editable}
+                  placeholder="Customer's full name"
+                />
+              </DetailField>
+              <DetailField label="Phone" disabled={!editable}>
+                <input
+                  type="tel"
+                  value={edited.customerPhone ?? ''}
+                  onChange={(e) => set('customerPhone', e.target.value)}
+                  disabled={!editable}
+                  placeholder="+60 12 345 6789"
+                />
+              </DetailField>
+              <DetailField label="Email *" span={2} disabled={!editable}>
+                <input
+                  type="email"
+                  value={edited.customerEmail ?? ''}
+                  onChange={(e) => set('customerEmail', e.target.value)}
+                  disabled={!editable}
+                  placeholder="customer@example.com"
+                />
+              </DetailField>
+            </div>
+          </section>
+
+          <section className={styles.detailSection}>
+            <h4 className={styles.detailSectionTitle}>
+              Delivery
+              <span className={`${styles.detailTick} ${addressOk ? styles.detailTickOk : ''}`}>
+                {addressOk ? 'Set' : 'Missing'}
+              </span>
+            </h4>
+            <div className={styles.detailFieldGrid}>
+              <DetailField label="Address line 1 *" span={2} disabled={!editable}>
+                <input
+                  type="text"
+                  value={edited.customerAddress ?? ''}
+                  onChange={(e) => set('customerAddress', e.target.value)}
+                  disabled={!editable}
+                  placeholder="Unit, street, area"
+                />
+              </DetailField>
+              <DetailField label="Address line 2" span={2} disabled={!editable}>
+                <input
+                  type="text"
+                  value={edited.customerAddressLine2 ?? ''}
+                  onChange={(e) => set('customerAddressLine2', e.target.value)}
+                  disabled={!editable}
+                  placeholder="Apt, floor, building (optional)"
+                />
+              </DetailField>
+              <DetailField label="State *" disabled={!editable}>
+                <select
+                  value={edited.customerState ?? ''}
+                  onChange={(e) => {
+                    setEdited((p) => ({
+                      ...p,
+                      customerState: e.target.value || null,
+                      customerCity: null,
+                      customerPostcode: null,
+                    }));
+                  }}
+                  disabled={!editable}
+                >
+                  <option value="">Select state…</option>
+                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </DetailField>
+              <DetailField label="City *" disabled={!editable || !edited.customerState}>
+                <select
+                  value={edited.customerCity ?? ''}
+                  onChange={(e) => {
+                    setEdited((p) => ({
+                      ...p,
+                      customerCity: e.target.value || null,
+                      customerPostcode: null,
+                    }));
+                  }}
+                  disabled={!editable || !edited.customerState}
+                >
+                  <option value="">{edited.customerState ? 'Select city…' : 'Pick state first'}</option>
+                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </DetailField>
+              <DetailField label="Postcode *" disabled={!editable || !edited.customerCity}>
+                <select
+                  value={edited.customerPostcode ?? ''}
+                  onChange={(e) => set('customerPostcode', e.target.value || null)}
+                  disabled={!editable || !edited.customerCity}
+                >
+                  <option value="">
+                    {!edited.customerState ? 'Pick state first'
+                      : !edited.customerCity ? 'Pick city first'
+                      : 'Select postcode…'}
+                  </option>
+                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </DetailField>
+              <DetailField label="Delivery date" disabled={!editable}>
+                <input
+                  type="date"
+                  value={edited.deliveryDate ?? ''}
+                  onChange={(e) => set('deliveryDate', e.target.value || null)}
+                  disabled={!editable}
+                  min={minDeliveryDate}
+                />
+              </DetailField>
+            </div>
+          </section>
+
+          <section className={styles.detailSection}>
+            <h4 className={styles.detailSectionTitle}>
+              Payment
+              <span className={`${styles.detailTick} ${paidOk ? styles.detailTickOk : ''}`}>
+                {paidOk ? '≥ 50% paid' : 'Below 50%'}
+              </span>
+            </h4>
+            <div className={styles.detailKV}><span>Method</span><span>{order.paymentMethod ?? 'Pending'}</span></div>
+            <div className={styles.detailKV}>
+              <span>Paid so far</span>
+              <span>
+                <span className={styles.detailItemPriceUnit}>RM</span>{fmtMoney(effectivePaid)}
+                {' '}<em>/ {fmtMoney(order.total)}</em>
+              </span>
+            </div>
+            <div className={styles.detailPayBar}>
+              <div
+                className={`${styles.detailPayBarFill} ${paidPct < 50 ? styles.tilePaidBarFillLow : ''}`}
+                style={{ width: `${paidPct}%` }}
+              />
+            </div>
+            <div className={styles.detailPayLegend}>
+              <span>{paidPct}% collected</span>
+              <span>Threshold · 50%</span>
+            </div>
+            {editable && (
+              <>
+                <div className={styles.detailFieldGrid} style={{ marginTop: 12 }}>
+                  <DetailField label="Record additional payment (RM)" disabled={false}>
+                    <input
+                      type="number"
+                      min={0}
+                      max={order.total - order.paid}
+                      value={paymentAdd}
+                      onChange={(e) => setPaymentAdd(e.target.value)}
+                      placeholder="0"
+                    />
+                  </DetailField>
+                  <DetailField label="Approval code" disabled={false}>
+                    <input
+                      type="text"
+                      value={edited.approvalCode ?? ''}
+                      onChange={(e) => set('approvalCode', e.target.value)}
+                      placeholder="POS terminal ref"
+                    />
+                  </DetailField>
+                </div>
+
+                {additionalPaid > 0 && (
+                  <div className={styles.detailSlipWrap}>
+                    <div className={styles.detailFieldLabel}>
+                      Payment slip <span className={styles.detailRequired}>*</span>
+                    </div>
+                    <SlipUploadStep
+                      onConfirmed={(id) => setSlipSessionId(id)}
+                      onCleared={() => setSlipSessionId(null)}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+
+          {order.notes && (
+            <section className={styles.detailSection}>
+              <h4 className={styles.detailSectionTitle}>Notes</h4>
+              <p className={styles.detailNotes}>{order.notes}</p>
+            </section>
+          )}
+        </div>
+
+        <footer className={styles.detailFoot}>
+          {editable && (
+            <>
+              <div className={styles.detailChecklist}>
+                <ChecklistItem ok={customerInfoOk} label="Customer info" />
+                <ChecklistItem ok={addressOk} label="Delivery address" />
+                <ChecklistItem ok={dateOk} label="Delivery date" />
+                <ChecklistItem ok={paidOk} label="≥ 50% paid" />
+              </div>
+              {saveMutation.error && (
+                <p className={styles.detailFootError}>
+                  Save failed: {String((saveMutation.error as Error).message)}
+                </p>
+              )}
+              <div className={styles.detailCta}>
+                <button
+                  type="button"
+                  className={styles.detailSaveBtn}
+                  onClick={onSave}
+                  disabled={!dirty || saveMutation.isPending}
+                >
+                  <Save size={14} strokeWidth={1.75} />
+                  {saveMutation.isPending ? 'Saving…' : 'Save changes'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.detailProceedBtn}
+                  onClick={onProceed}
+                  disabled={!allOk || saveMutation.isPending}
+                >
+                  Move to Proceed
+                  <ArrowRight size={14} strokeWidth={1.75} />
+                </button>
+              </div>
+            </>
+          )}
+          {!editable && (
+            <span className={styles.detailFootInfo}>
+              {order.lane === 'delivered' ? 'Delivered · managed in backend' : 'Locked · coordinator handling'}
+            </span>
+          )}
+        </footer>
+      </aside>
+    </div>
+  );
+};
+
+/* ─── Footer checklist item ─── */
+
+const ChecklistItem = ({ ok, label }: { ok: boolean; label: string }) => (
+  <span className={`${styles.detailCheck} ${ok ? styles.detailCheckOk : ''}`}>
+    {ok
+      ? <Check size={14} strokeWidth={2.25} />
+      : <Circle size={14} strokeWidth={1.75} />}
+    {label}
+  </span>
+);
+
+/* ─── Editable field primitive ─── */
+
+const DetailField = ({ label, span, disabled, children }: {
+  label: string;
+  span?: number;
+  disabled: boolean;
+  children: React.ReactNode;
+}) => (
+  <label
+    className={`${styles.detailField} ${disabled ? styles.detailFieldDisabled : ''}`}
+    style={span === 2 ? { gridColumn: 'span 2' } : undefined}
+  >
+    <span className={styles.detailFieldLabel}>{label}</span>
+    {children}
+  </label>
+);

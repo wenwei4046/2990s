@@ -28,7 +28,7 @@ export interface PresignArgs {
   secretAccessKey: string;
   endpoint: string;
   key: string;
-  method: 'GET' | 'PUT';
+  method: 'GET' | 'PUT' | 'HEAD';
   expiresInSeconds: number;
   contentType?: string;
 }
@@ -115,4 +115,36 @@ export async function r2Head(bucket: R2Bucket, key: string): Promise<{ size: num
 
 export async function r2Delete(bucket: R2Bucket, key: string): Promise<void> {
   await bucket.delete(key);
+}
+
+// S3-API HEAD via presigned URL. Used in routes that need to verify a file
+// uploaded by the browser via presigned PUT — because in `wrangler dev`
+// (without --remote) the R2 binding is a local Miniflare simulation while
+// the browser PUT lands in the real R2 bucket. Going through S3 in both
+// init/PUT and confirm/HEAD guarantees they hit the same backend in dev
+// and prod alike.
+export async function r2HeadViaS3(args: {
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  endpoint: string;
+  key: string;
+}): Promise<{ size: number; etag: string } | null> {
+  const url = await presign({
+    bucket: args.bucket,
+    region: 'auto',
+    accessKeyId: args.accessKeyId,
+    secretAccessKey: args.secretAccessKey,
+    endpoint: args.endpoint,
+    key: args.key,
+    method: 'HEAD',
+    expiresInSeconds: 60,
+  });
+  const res = await fetch(url, { method: 'HEAD' });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`r2 head failed: ${res.status}`);
+  return {
+    size: Number(res.headers.get('content-length') ?? '0'),
+    etag: (res.headers.get('etag') ?? '').replace(/"/g, ''),
+  };
 }

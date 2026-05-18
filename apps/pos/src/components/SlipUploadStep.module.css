@@ -1,62 +1,92 @@
 .root {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 16px;
-  border: 1px solid var(--c-line);
-  border-radius: 8px;
-  background: var(--c-cream);
+  padding: 14px 20px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  transition: 120ms ease;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--fg);
 }
-
-.label {
-  font-weight: 600;
-  color: var(--c-ink);
+.actionBtn:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
 }
-
-.required {
-  font-weight: 400;
-  font-size: 12px;
-  color: var(--fg-muted);
-  margin-left: 8px;
+.actionBtnPrimary {
+  background: var(--c-ink);
+  color: var(--fg-on-ink);
+  border-color: var(--c-ink);
 }
-
-.input {
-  padding: 8px;
+.actionBtnPrimary:hover {
+  background: var(--c-burnt);
+  border-color: var(--c-burnt);
+  color: var(--fg-on-ink);
 }
 
 .preview {
   max-width: 240px;
   max-height: 320px;
-  border-radius: 4px;
-  border: 1px solid var(--c-line);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
 }
 
 .status {
   color: var(--fg-muted);
-  font-size: 14px;
+  font-size: var(--fs-13);
 }
 
 .statusDone {
-  color: var(--c-success);
   display: flex;
   align-items: center;
   gap: 8px;
+  color: var(--c-success);
+  font-family: var(--font-button);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-13);
 }
 
 .statusError {
-  color: var(--c-error);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  color: var(--c-error);
 }
 
 .replace {
   margin-left: auto;
-  background: none;
-  border: 1px solid var(--c-line);
-  padding: 4px 8px;
-  border-radius: 4px;
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
   font: inherit;
-  color: var(--c-ink);
+  font-size: var(--fs-12);
+  color: var(--fg);
+}
+.replace:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
 }

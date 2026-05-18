@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
+import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
 import { useAddons, useLocalities } from '../lib/queries';
@@ -7,6 +8,7 @@ import { useAuth } from '../lib/auth';
 import {
   validateCustomer, validateAddress, validateEmergency, validateTargetDate,
   validateAddonsPayment, validateConfirmPayment, validateSign,
+  getStepBlockers,
   computeAddonTotal,
   type HandoverForm, type AddonInfo,
 } from '../lib/handover-helpers';
@@ -41,10 +43,14 @@ const empty: HandoverForm = {
   salespersonId: '',
   customerType: 'new',
   addressLater: false,
-  fullAddress: '', postcode: '', city: '', state: '', buildingType: '',
+  fullAddress: '', addressLine2: '',
+  postcode: '', city: '', state: '', buildingType: '',
   billingSame: true,
+  billingAddress: '', billingAddressLine2: '',
+  billingPostcode: '', billingCity: '', billingState: '',
   emergencyName: '', emergencyRelation: '', emergencyPhone: '',
-  deliveryDate: '', specialInstructions: '',
+  deliveryDate: '', deliveryDateLater: false, deliveryAsap: false,
+  specialInstructions: '',
   addons: {}, paymentMethod: '',
   amountPaid: 0, paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
@@ -59,6 +65,9 @@ export const Handover = () => {
   const subtotal = cartSubtotal(lines);
 
   const [idx, setIdx] = useState(0);
+  // Only show blockers banner AFTER user clicks Continue and validation fails.
+  // Resets on step change so the new step starts clean.
+  const [attempted, setAttempted] = useState(false);
   const [form, setForm] = useState<HandoverForm>(() => ({
     ...empty,
     salespersonId: auth.user?.id ?? '',
@@ -76,11 +85,8 @@ export const Handover = () => {
   if (lines.length === 0) {
     return (
       <>
-        <Topbar step="customer" />
+        <Topbar step="customer" backTo="/catalog" backLabel="Back to catalog" />
         <main className={styles.shell}>
-          <header className={styles.header}>
-            <h1 className={styles.heading}>Handover</h1>
-          </header>
           <p className={styles.empty}>
             Cart is empty. <Link to="/catalog">Back to catalog</Link>
           </p>
@@ -112,17 +118,22 @@ export const Handover = () => {
   };
 
   const goPrev = () => {
+    setAttempted(false);
     if (idx > 0) setIdx(idx - 1);
     else navigate('/cart');
   };
 
   const goNext = async () => {
     const stepKey = current.key;
-    if (!validity[stepKey]) return;
+    if (!validity[stepKey]) {
+      setAttempted(true);
+      return;
+    }
     if (isLast) {
       await submitOrder();
       return;
     }
+    setAttempted(false);
     setIdx(idx + 1);
   };
 
@@ -135,16 +146,24 @@ export const Handover = () => {
           phone: form.phone.trim() || undefined,
           email: form.email.trim() || undefined,
           address: form.fullAddress.trim() || undefined,
+          addressLine2: form.addressLine2.trim() || undefined,
           postcode: form.postcode.trim() || undefined,
           city: form.city.trim() || undefined,
           state: form.state.trim() || undefined,
         },
         paymentMethod: form.paymentMethod as Exclude<typeof form.paymentMethod, ''>,
         approvalCode: form.approvalCode.trim() || undefined,
-        deliveryDate: !form.addressLater && form.deliveryDate ? form.deliveryDate : undefined,
+        deliveryDate: !form.deliveryDateLater && form.deliveryDate ? form.deliveryDate : undefined,
         customerType: form.customerType,
         buildingType: form.buildingType || undefined,
         billingSame: form.billingSame,
+        ...(form.billingSame ? {} : {
+          billingAddress: form.billingAddress.trim() || undefined,
+          billingAddressLine2: form.billingAddressLine2.trim() || undefined,
+          billingPostcode: form.billingPostcode.trim() || undefined,
+          billingCity: form.billingCity.trim() || undefined,
+          billingState: form.billingState.trim() || undefined,
+        }),
         salespersonId: form.salespersonId || undefined,
         specialInstructions: form.specialInstructions.trim() || undefined,
         addressLater: form.addressLater,
@@ -180,24 +199,26 @@ export const Handover = () => {
 
   return (
     <>
-      <Topbar step="customer" />
+      <Topbar step="customer" backTo="/cart" backLabel="Back to cart" />
       <main className={styles.shell}>
-        <header className={styles.header}>
-          <h1 className={styles.heading}>Handover</h1>
-        </header>
-
-        <PhaseNav
-          phase={phase}
-          steps={STEPS}
-          currentIdx={idx}
-          onJump={(targetIdx) => { if (targetIdx <= idx) setIdx(targetIdx); }}
-        />
-
         <form className={styles.layout} onSubmit={onSubmit}>
           <div className={styles.main}>
-            <div className={styles.phaseEyebrow}>
-              PHASE {phase} OF 2 · {phase === 1 ? 'ADDITIONAL INFO' : 'CONFIRM & PAY'}
+            <div className={styles.eyebrowRow}>
+              <div className={styles.phaseEyebrow}>
+                PHASE {phase} OF 2 · {phase === 1 ? 'ADDITIONAL INFO' : 'CONFIRM & PAY'}
+              </div>
+              <Link to="/cart" className={styles.backPill} aria-label="Back to cart">
+                <ArrowLeft size={14} strokeWidth={1.75} />
+                <span>Back to cart</span>
+              </Link>
             </div>
+
+            <PhaseNav
+              phase={phase}
+              steps={STEPS}
+              currentIdx={idx}
+              onJump={(targetIdx) => { if (targetIdx <= idx) setIdx(targetIdx); }}
+            />
             {current.key === 'customer'  && <CustomerStep  form={form} update={update} />}
             {current.key === 'address'   && <AddressStep   form={form} update={update} localities={localities.data ?? []} />}
             {current.key === 'emergency' && <EmergencyStep form={form} update={update} />}
@@ -214,6 +235,8 @@ export const Handover = () => {
               valid={validity[current.key]}
               submitting={createOrder.isPending}
               paymentRecorded={form.paymentRecorded}
+              blockers={getStepBlockers(current.key, form, subtotal, addonTotal)}
+              attempted={attempted}
               onPrev={goPrev}
               onNext={goNext}
               onRecordPayment={() => update('paymentRecorded', true)}

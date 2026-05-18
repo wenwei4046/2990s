@@ -139,10 +139,10 @@ export const CartContents = ({ variant, onContinue }: Props) => {
           <PriceTag amount={subtotal} size={variant === 'rail' ? 'md' : 'lg'} />
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" onClick={clear}>Clear</Button>
+          <Button variant="secondary" onClick={clear}>Clear</Button>
           {!savingQuote && variant === 'page' && (
             <Button
-              variant="ghost"
+              variant="secondary"
               onClick={() => setSavingQuote(true)}
               disabled={lines.length === 0}
             >

@@ -4,7 +4,7 @@ import {
   type SlipInitResponse,
   type SlipConfirmResponse,
 } from '@2990s/shared';
-import { buildSlipKey, presign, r2Head } from '../lib/r2';
+import { buildSlipKey, presign, r2HeadViaS3 } from '../lib/r2';
 import { slipBindings, expiresInOneHour } from '../lib/slip';
 import type { Env, Variables } from '../env';
 
@@ -26,14 +26,37 @@ slipRoutes.post('/init', async (c) => {
   const bindings = slipBindings(c.env);
 
   // Look up staff's showroom to stamp the row (RLS scope).
+  //
+  // Sales / showroom_lead carry their own showroom_id. Admin / coordinator /
+  // finance have NULL showroom_id by design ("oversee all showrooms" per
+  // CLAUDE.md) but pending_slip_uploads.showroom_id is NOT NULL — same shape
+  // as the POST /quotes fix in commit e67dbd3. Fall back to first active
+  // showroom by sort_order for elevated roles. RLS already permits
+  // is_coordinator_or_above() to insert with any showroom_id.
   const { data: staffRow, error: staffErr } = await supabase
     .from('staff')
-    .select('showroom_id, active')
+    .select('showroom_id, active, role')
     .eq('id', staffId)
     .maybeSingle();
   if (staffErr) return c.json({ error: 'staff_lookup_failed', detail: staffErr.message }, 500);
   if (!staffRow || !staffRow.active) {
     return c.json({ error: 'forbidden', reason: 'no_active_staff' }, 403);
+  }
+
+  let showroomId: string | null = staffRow.showroom_id ?? null;
+  const elevatedRoles = new Set(['admin', 'coordinator', 'finance']);
+  if (!showroomId && staffRow.role && elevatedRoles.has(staffRow.role)) {
+    const { data: defaultRoom } = await supabase
+      .from('showrooms')
+      .select('id')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    showroomId = defaultRoom?.id ?? null;
+  }
+  if (!showroomId) {
+    return c.json({ error: 'staff_showroom_missing' }, 400);
   }
 
   const sessionId = crypto.randomUUID();
@@ -46,7 +69,7 @@ slipRoutes.post('/init', async (c) => {
       id: sessionId,
       upload_session_id: sessionId,
       staff_id: staffId,
-      showroom_id: staffRow.showroom_id,
+      showroom_id: showroomId,
       r2_key: r2Key,
       content_type: parsed.data.contentType,
       content_hash: parsed.data.contentHash,
@@ -99,7 +122,13 @@ slipRoutes.post('/:session/confirm', async (c) => {
     return c.json({ error: 'invalid_state', currentStatus: row.status }, 409);
   }
 
-  const head = await r2Head(bindings.bucket, row.r2_key);
+  const head = await r2HeadViaS3({
+    bucket: bindings.bucketName,
+    accessKeyId: bindings.accessKeyId,
+    secretAccessKey: bindings.secretAccessKey,
+    endpoint: bindings.endpoint,
+    key: row.r2_key,
+  });
   if (!head) {
     return c.json({ error: 'file_not_in_r2' }, 404);
   }

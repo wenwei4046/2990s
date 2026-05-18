@@ -117,13 +117,13 @@ describe('validateSign', () => {
 });
 
 describe('computeMinCalendarDate', () => {
-  it('returns tomorrow in YYYY-MM-DD', () => {
+  it('returns order date + 30 days in YYYY-MM-DD', () => {
     const today = new Date('2026-05-17T00:00:00');
-    expect(computeMinCalendarDate(today)).toBe('2026-05-18');
+    expect(computeMinCalendarDate(today)).toBe('2026-06-16');
   });
   it('wraps month boundary', () => {
     const lastDay = new Date('2026-05-31T00:00:00');
-    expect(computeMinCalendarDate(lastDay)).toBe('2026-06-01');
+    expect(computeMinCalendarDate(lastDay)).toBe('2026-06-30');
   });
 });
 

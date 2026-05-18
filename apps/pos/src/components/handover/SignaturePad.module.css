@@ -1,13 +1,15 @@
 .sign {
-  border: 1px dashed var(--line);
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-3);
-  background: var(--bg-alt);
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(34, 31, 32, 0.04);
 }
 .canvas {
   width: 100%;
   aspect-ratio: 4 / 1;
-  background: var(--bg);
+  background: #fff;
+  border: 1px dashed var(--line);
   border-radius: var(--radius-sm);
   cursor: crosshair;
   touch-action: none;
@@ -33,11 +35,11 @@
   gap: 4px;
   padding: 4px 10px;
   border: 1px solid var(--line);
-  background: var(--bg);
+  background: #fff;
   border-radius: var(--radius-pill);
   cursor: pointer;
   font: inherit;
   font-size: var(--fs-12);
 }
-.clearBtn:hover:not(:disabled) { background: var(--bg-alt); }
+.clearBtn:hover:not(:disabled) { border-color: var(--c-burnt); color: var(--c-burnt); }
 .clearBtn:disabled { opacity: 0.4; cursor: not-allowed; }

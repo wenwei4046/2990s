@@ -259,6 +259,14 @@ orders.post('/', async (c) => {
     ...(dto.customerType        ? { customerType:        dto.customerType        } : {}),
     ...(dto.buildingType        ? { buildingType:        dto.buildingType        } : {}),
     ...(dto.billingSame  !== undefined ? { billingSame:  dto.billingSame  } : {}),
+    // Billing address fields — only forwarded when present (i.e. billingSame=false).
+    // SQL function 0028 ignores them when billingSame=true; this just keeps the
+    // payload tidy.
+    ...(dto.billingAddress      ? { billingAddress:      dto.billingAddress      } : {}),
+    ...(dto.billingAddressLine2 ? { billingAddressLine2: dto.billingAddressLine2 } : {}),
+    ...(dto.billingPostcode     ? { billingPostcode:     dto.billingPostcode     } : {}),
+    ...(dto.billingCity         ? { billingCity:         dto.billingCity         } : {}),
+    ...(dto.billingState        ? { billingState:        dto.billingState        } : {}),
     ...(dto.salespersonId       ? { salespersonId:       dto.salespersonId       } : {}),
     ...(dto.specialInstructions ? { specialInstructions: dto.specialInstructions } : {}),
     ...(dto.addressLater !== undefined ? { addressLater: dto.addressLater } : {}),

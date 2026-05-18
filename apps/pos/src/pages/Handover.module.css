@@ -1,7 +1,6 @@
 .shell {
   min-height: 100vh;
   background: var(--bg);
-  padding: var(--space-5) var(--space-6);
   margin: 0 auto;
   width: 100%;
 }
@@ -22,9 +21,9 @@
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: var(--space-6);
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) 480px;
+  align-items: stretch;
+  min-height: 100vh;
 }
 
 .main {
@@ -32,6 +31,14 @@
   flex-direction: column;
   gap: var(--space-5);
   min-width: 0;
+  padding: var(--space-5) var(--space-6);
+}
+
+.eyebrowRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
 .phaseEyebrow {
@@ -49,6 +56,28 @@
   width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--c-orange);
+}
+
+.backPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  color: var(--fg);
+  cursor: pointer;
+  text-decoration: none;
+  transition: 120ms ease;
+  white-space: nowrap;
+}
+.backPill:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
 }
 
 .error {
@@ -91,7 +120,7 @@
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: #fff;
 }
 :global(.field) input:focus,
 :global(.field) select:focus,
@@ -168,7 +197,7 @@
   gap: 12px;
   align-items: center;
   padding: 12px 16px;
-  background: var(--bg-alt);
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -176,7 +205,7 @@
   font: inherit;
 }
 .methodBtnActive {
-  background: var(--bg);
+  background: #fff;
   border-color: var(--c-orange);
   box-shadow: 0 0 0 1px var(--c-orange) inset;
 }
@@ -208,6 +237,56 @@
   font-size: var(--fs-12);
   color: var(--fg-muted);
   margin-top: 2px;
+}
+
+.amountCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-alt);
+  border-radius: var(--radius-md);
+}
+.amountLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-soft);
+}
+.amountInputWrap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.amountPrefix {
+  font-family: var(--font-mark);
+  font-weight: var(--w-semibold);
+  font-size: var(--fs-18);
+  color: var(--fg-muted);
+}
+.amountInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-mark);
+  font-weight: var(--w-black);
+  font-size: var(--fs-32);
+  letter-spacing: var(--tk-tight);
+  line-height: 1;
+  color: var(--fg);
+}
+.amountInput::-webkit-outer-spin-button,
+.amountInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .presetRow {

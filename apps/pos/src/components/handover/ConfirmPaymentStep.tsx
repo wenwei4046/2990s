@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Check } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { Field } from './Field';
@@ -24,6 +25,19 @@ export const ConfirmPaymentStep = ({
   const halfTotal = Math.round(total / 2);
   const seventyTotal = Math.round(total * 0.7);
 
+  // Sync the initial preset='full' default with the actual cart total on
+  // first mount. The form is initialized in Handover.tsx with amountPaid=0
+  // because total isn't known yet, but presetPill renders 'full' as active
+  // — visually misleading. Hydrate the amount once on entry.
+  useEffect(() => {
+    if (form.amountPaid === 0 && form.paymentPreset === 'full' && total > 0) {
+      update('amountPaid', total);
+    }
+    // Intentional: run once on mount to seed the default; subsequent edits
+    // are user-driven via input/presets.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setPreset = (preset: HandoverForm['paymentPreset'], amount: number) => {
     update('paymentPreset', preset);
     update('amountPaid', amount);
@@ -46,20 +60,25 @@ export const ConfirmPaymentStep = ({
         <strong>50% deposit</strong> ({fmtRM(halfTotal)}) and the full total ({fmtRM(total)}).
       </p>
 
-      <Field label="Amount paid">
-        <input
-          type="number"
-          min={halfTotal}
-          max={total}
-          value={form.amountPaid || ''}
-          onChange={(e) => {
-            const v = Number(e.target.value);
-            update('amountPaid', v);
-            update('paymentPreset', inferPreset(v));
-          }}
-          placeholder={String(total)}
-        />
-      </Field>
+      <div className={styles.amountCard}>
+        <span className={styles.amountLabel}>Amount paid</span>
+        <div className={styles.amountInputWrap}>
+          <span className={styles.amountPrefix}>RM</span>
+          <input
+            type="number"
+            min={halfTotal}
+            max={total}
+            value={form.amountPaid || ''}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              update('amountPaid', v);
+              update('paymentPreset', inferPreset(v));
+            }}
+            placeholder={String(total)}
+            className={styles.amountInput}
+          />
+        </div>
+      </div>
 
       <div className={styles.presetRow}>
         <PresetPill

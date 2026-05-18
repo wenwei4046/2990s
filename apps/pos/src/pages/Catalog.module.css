@@ -73,10 +73,11 @@
   gap: 4px;
   position: sticky;
   top: var(--space-3);
-  /* Cooler-than-page paper tone — matches prototype's --pos-rail (=--c-paper)
-     so the sidebar reads as a recessed panel instead of blending into the
-     cream page bg. */
-  background: var(--c-paper);
+  /* White panel + subtle shadow lifts the rail off the cream page so categories
+     read as a distinct card instead of blending in (matches Order summary +
+     Quotes card treatment). */
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(34, 31, 32, 0.04);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-4) var(--space-3);
@@ -202,14 +203,14 @@
   gap: 6px;
   padding: 8px 14px;
   border-radius: var(--radius-pill);
-  border: 1px solid transparent;
-  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  background: #fff;
   flex: 1;
   transition: 120ms;
 }
 .search:focus-within {
   border-color: var(--c-orange);
-  background: var(--c-cream);
+  background: #fff;
 }
 .search input {
   flex: 1;
@@ -227,7 +228,7 @@
   padding: 8px 14px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--line);
-  background: var(--bg);
+  background: #fff;
   font-family: var(--font-button);
   font-size: var(--fs-13);
   font-weight: var(--w-medium);
@@ -368,32 +369,6 @@
 
 /* Orange round configure button — bottom-right corner of the photo area.
    Visual handle the staff can tap to skip into the configurator quickly. */
-.cardConfigBtn {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  background: var(--c-burnt);
-  color: var(--c-cream);
-  border: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(34, 31, 32, 0.18);
-  transition: transform 120ms ease, background 120ms ease;
-}
-.cardConfigBtn:hover {
-  background: var(--c-orange);
-  transform: scale(1.05);
-}
-.cardConfigBtn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .body {
   padding: var(--space-3) var(--space-4) var(--space-4);
   display: flex;

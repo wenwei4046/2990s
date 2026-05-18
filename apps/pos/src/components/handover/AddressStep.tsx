@@ -60,26 +60,36 @@ export const AddressStep = ({
         <>
           <h3 className="subTitle">Delivery address</h3>
 
-          <Field label="Full address">
-            <textarea
-              rows={3}
+          <Field label="Address line 1">
+            <input
+              type="text"
               value={form.fullAddress}
               onChange={(e) => update('fullAddress', e.target.value)}
               placeholder="Unit, street, area"
             />
           </Field>
 
+          <Field label="Address line 2">
+            <input
+              type="text"
+              value={form.addressLine2}
+              onChange={(e) => update('addressLine2', e.target.value)}
+              placeholder="Apt, floor, building (optional)"
+            />
+          </Field>
+
           <div className="fieldRow">
-            <Field label="Postcode">
+            <Field label="State">
               <select
-                value={form.postcode}
-                onChange={(e) => update('postcode', e.target.value)}
-                disabled={!form.state || !form.city}
+                value={form.state}
+                onChange={(e) => {
+                  update('state', e.target.value);
+                  update('city', '');
+                  update('postcode', '');
+                }}
               >
-                <option value="">
-                  {!form.state ? 'Pick state first' : !form.city ? 'Pick city first' : 'Select postcode…'}
-                </option>
-                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                <option value="">Select state…</option>
+                {states.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
             <Field label="City">
@@ -98,17 +108,16 @@ export const AddressStep = ({
           </div>
 
           <div className="fieldRow">
-            <Field label="State">
+            <Field label="Postcode">
               <select
-                value={form.state}
-                onChange={(e) => {
-                  update('state', e.target.value);
-                  update('city', '');
-                  update('postcode', '');
-                }}
+                value={form.postcode}
+                onChange={(e) => update('postcode', e.target.value)}
+                disabled={!form.state || !form.city}
               >
-                <option value="">Select state…</option>
-                {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                <option value="">
+                  {!form.state ? 'Pick state first' : !form.city ? 'Pick city first' : 'Select postcode…'}
+                </option>
+                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </Field>
             <Field label="Building type">
@@ -133,6 +142,86 @@ export const AddressStep = ({
               <p>Uncheck if the invoice should be issued to a different address.</p>
             </div>
           </label>
+
+          {!form.billingSame && (
+            <>
+              <h3 className="subTitle">Billing address</h3>
+
+              <Field label="Billing address line 1">
+                <input
+                  type="text"
+                  value={form.billingAddress}
+                  onChange={(e) => update('billingAddress', e.target.value)}
+                  placeholder="Unit, street, area"
+                />
+              </Field>
+
+              <Field label="Billing address line 2">
+                <input
+                  type="text"
+                  value={form.billingAddressLine2}
+                  onChange={(e) => update('billingAddressLine2', e.target.value)}
+                  placeholder="Apt, floor, building (optional)"
+                />
+              </Field>
+
+              <div className="fieldRow">
+                <Field label="State">
+                  <select
+                    value={form.billingState}
+                    onChange={(e) => {
+                      update('billingState', e.target.value);
+                      update('billingCity', '');
+                      update('billingPostcode', '');
+                    }}
+                  >
+                    <option value="">Select state…</option>
+                    {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </Field>
+                <Field label="City">
+                  <select
+                    value={form.billingCity}
+                    onChange={(e) => {
+                      update('billingCity', e.target.value);
+                      update('billingPostcode', '');
+                    }}
+                    disabled={!form.billingState}
+                  >
+                    <option value="">{form.billingState ? 'Select city…' : 'Pick state first'}</option>
+                    {(() => {
+                      if (!form.billingState) return [];
+                      const set = new Set<string>();
+                      for (const l of localities) if (l.state === form.billingState) set.add(l.city);
+                      return Array.from(set).sort();
+                    })().map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+              </div>
+
+              <div className="fieldRow">
+                <Field label="Postcode">
+                  <select
+                    value={form.billingPostcode}
+                    onChange={(e) => update('billingPostcode', e.target.value)}
+                    disabled={!form.billingState || !form.billingCity}
+                  >
+                    <option value="">
+                      {!form.billingState ? 'Pick state first' : !form.billingCity ? 'Pick city first' : 'Select postcode…'}
+                    </option>
+                    {(() => {
+                      if (!form.billingState || !form.billingCity) return [];
+                      const set = new Set<string>();
+                      for (const l of localities) {
+                        if (l.state === form.billingState && l.city === form.billingCity) set.add(l.postcode);
+                      }
+                      return Array.from(set).sort();
+                    })().map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </Field>
+              </div>
+            </>
+          )}
         </>
       )}
     </section>

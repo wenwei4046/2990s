@@ -86,7 +86,6 @@ INSERT INTO addons (id, label, description, icon, kind, price, per_floor_item, u
   ('dispose-mattress', 'Dispose old mattress', 'We collect & dispose responsibly',     'recycle',           'qty',          120, NULL, 'piece',      1, NULL, TRUE,  1),
   ('dispose-bedframe', 'Dispose old bedframe', 'We collect & dispose responsibly',     'recycle',           'qty',          120, NULL, 'piece',      1, NULL, TRUE,  2),
   ('lift',             'Lift access — 3rd floor & above', 'For buildings without service lift', 'arrow-up-from-line', 'floors_items',  0,  50, 'floor·item', 1, NULL, TRUE,  3),
-  ('assemble',         'Bed frame assembly',  'On-site assembly by delivery team',     'wrench',            'qty',           80, NULL, 'piece',      1, NULL, TRUE,  4),
   ('wrap',             'Mattress protector wrap', 'Vacuum-sealed protective wrap',     'package',           'qty',           35, NULL, 'piece',      1, 240,  TRUE,  5),
   ('pillow-set',       'Linen pillow pair',   'Set of 2 linen pillows',                'sparkles',          'qty',          180, NULL, 'set',        1, 18,   FALSE, 6)
 ON CONFLICT (id) DO UPDATE SET

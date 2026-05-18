@@ -148,13 +148,18 @@ const submitOrder = async (input: OrderSubmitInput): Promise<OrderCreatedRespons
   });
 
   if (res.status === 409) {
-    let payload: PricingDriftPayload;
+    let payload: { error?: string } & Partial<PricingDriftPayload>;
     try {
-      payload = (await res.json()) as PricingDriftPayload;
+      payload = await res.json() as typeof payload;
     } catch {
       throw new Error('POST /orders returned 409 with malformed body');
     }
-    throw new PricingDriftError(payload);
+    // 409 is shared between pricing_drift and slip state conflicts
+    // (slip_not_ready). Only pricing_drift carries the totals payload.
+    if (payload.error === 'pricing_drift' && payload.clientTotal !== undefined) {
+      throw new PricingDriftError(payload as PricingDriftPayload);
+    }
+    throw new Error(`POST /orders failed (409): ${JSON.stringify(payload)}`);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '<no body>');

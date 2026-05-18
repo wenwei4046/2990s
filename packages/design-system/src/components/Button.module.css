@@ -37,12 +37,13 @@
 }
 
 .variant-secondary {
-  background: var(--c-cream);
+  background: #fff;
   color: var(--c-ink);
-  border-color: var(--line-strong);
+  border-color: var(--line);
 }
 .variant-secondary:hover:not(:disabled) {
-  background: var(--c-beige);
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
 }
 
 .variant-ghost {

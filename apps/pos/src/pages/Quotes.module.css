@@ -39,16 +39,20 @@
 }
 
 .card {
-  background: var(--c-cream);
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  transition: border-color 120ms;
+  box-shadow: 0 1px 2px rgba(34, 31, 32, 0.04);
+  transition: border-color 120ms, box-shadow 120ms;
 }
-.card:hover { border-color: var(--c-orange); }
+.card:hover {
+  border-color: var(--c-orange);
+  box-shadow: 0 2px 6px rgba(34, 31, 32, 0.08);
+}
 
 .cardHead {
   display: flex;
@@ -144,11 +148,14 @@
   letter-spacing: var(--tk-tight);
   color: var(--c-burnt);
   line-height: 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
 }
-.total sup {
-  font-size: var(--fs-11);
-  color: var(--fg-muted);
-  margin-right: 2px;
+.totalUnit {
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  opacity: 0.78;
 }
 
 .actions {

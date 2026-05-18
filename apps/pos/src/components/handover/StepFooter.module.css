@@ -1,7 +1,57 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
 .bar {
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--line);
+}
+
+.blockers {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--c-warn-bg, #FFF1E0);
+  border: 1px solid var(--c-warn, #E86B3A);
+  border-radius: var(--radius-md);
+  color: var(--c-burnt);
+}
+.blockers > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.blockerList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.blockerHead {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+}
+.blockerList ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--fs-13);
+  color: var(--fg);
+}
+.blockerList li {
+  line-height: 1.4;
+}
+
+/* Visually-muted Continue button — still clickable so we can show the
+   blocker banner on click. Mimics the disabled look. */
+.muted {
+  opacity: 0.45;
+}
+.muted:hover {
+  opacity: 0.45;
 }

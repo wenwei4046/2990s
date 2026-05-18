@@ -12,10 +12,6 @@ import {
   Search,
   RotateCcw,
   Sparkles,
-  AlertTriangle,
-  Check,
-  SlidersHorizontal,
-  Plus,
   type LucideIcon,
 } from 'lucide-react';
 import { Button, PriceTag } from '@2990s/design-system';
@@ -261,8 +257,6 @@ export const Catalog = () => {
 const ProductCard = ({ p }: { p: CatalogProduct }) => {
   const headlinePrice =
     p.pricing_kind === 'flat' && p.flat_price != null ? p.flat_price : null;
-  const lowStock = p.stock <= p.low_at && p.stock > 0;
-  const out = p.stock === 0;
   const tbc = p.pricing_kind === 'tbc';
 
   return (
@@ -280,26 +274,6 @@ const ProductCard = ({ p }: { p: CatalogProduct }) => {
         )}
         {p.series && (
           <span className={styles.photoBadge}>{p.series.label}</span>
-        )}
-        {!out && (
-          <span className={`${styles.photoStock} ${lowStock ? styles.photoStockLow : ''}`}>
-            {lowStock
-              ? <AlertTriangle size={11} strokeWidth={2} />
-              : <Check size={11} strokeWidth={2} />}
-            {p.stock} in stock
-          </span>
-        )}
-        {out && (
-          <span className={`${styles.photoStock} ${styles.photoStockOut}`}>
-            <AlertTriangle size={11} strokeWidth={2} /> Out of stock
-          </span>
-        )}
-        {!tbc && (
-          <span className={styles.cardConfigBtn} aria-hidden="true">
-            {p.pricing_kind === 'flat'
-              ? <Plus size={16} strokeWidth={2} />
-              : <SlidersHorizontal size={16} strokeWidth={2} />}
-          </span>
         )}
       </div>
       <div className={styles.body}>

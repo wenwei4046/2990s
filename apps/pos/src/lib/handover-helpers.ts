@@ -22,13 +22,19 @@ export interface HandoverForm {
   salespersonId: string; customerType: CustomerType;
 
   addressLater: boolean;
-  fullAddress: string; postcode: string; city: string; state: string;
+  fullAddress: string; addressLine2: string;
+  postcode: string; city: string; state: string;
   buildingType: BuildingType;
   billingSame: boolean;
+  // Billing address — only used when !billingSame. Persisted to
+  // orders.customer_billing_* columns (migration 0028).
+  billingAddress: string; billingAddressLine2: string;
+  billingPostcode: string; billingCity: string; billingState: string;
 
   emergencyName: string; emergencyRelation: string; emergencyPhone: string;
 
-  deliveryDate: string; specialInstructions: string;
+  deliveryDate: string; deliveryDateLater: boolean; deliveryAsap: boolean;
+  specialInstructions: string;
 
   addons: Record<string, AddonSelection>;
   paymentMethod: PaymentMethod;
@@ -45,17 +51,29 @@ export interface HandoverForm {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const validateCustomer = (f: HandoverForm): boolean =>
-  f.name.trim().length > 0 && EMAIL_RE.test(f.email.trim());
+  f.name.trim().length > 0
+  && f.phone.trim().length > 0
+  && EMAIL_RE.test(f.email.trim());
 
-export const validateAddress = (f: HandoverForm): boolean =>
-  f.addressLater ||
-  (
+export const validateAddress = (f: HandoverForm): boolean => {
+  if (f.addressLater) return true;
+  const deliveryOk =
     f.fullAddress.trim().length > 0 &&
     f.postcode.trim().length > 0 &&
     f.city.trim().length > 0 &&
     f.state.trim().length > 0 &&
-    f.buildingType !== ''
-  );
+    f.buildingType !== '';
+  if (!deliveryOk) return false;
+  // When billing differs from delivery, the billing block must also be
+  // complete (address line 1 + state + city + postcode).
+  if (!f.billingSame) {
+    return f.billingAddress.trim().length > 0
+      && f.billingPostcode.trim().length > 0
+      && f.billingCity.trim().length > 0
+      && f.billingState.trim().length > 0;
+  }
+  return true;
+};
 
 export const validateEmergency = (f: HandoverForm): boolean => {
   const filledCount = [f.emergencyName, f.emergencyRelation, f.emergencyPhone].filter((v) => v.trim()).length;
@@ -63,7 +81,7 @@ export const validateEmergency = (f: HandoverForm): boolean => {
 };
 
 export const validateTargetDate = (f: HandoverForm): boolean =>
-  f.addressLater || f.deliveryDate.length > 0;
+  f.deliveryDateLater || f.deliveryAsap || f.deliveryDate.length > 0;
 
 export const validateAddonsPayment = (f: HandoverForm): boolean =>
   f.paymentMethod !== '';
@@ -81,12 +99,101 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
 
 export const validateSign = (f: HandoverForm): boolean => f.signed;
 
-export const computeMinCalendarDate = (today: Date): string => {
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  const y = tomorrow.getFullYear();
-  const m = String(tomorrow.getMonth() + 1).padStart(2, '0');
-  const d = String(tomorrow.getDate()).padStart(2, '0');
+// ─── Step blockers — human-friendly "why is Continue disabled" reasons ──────
+// Each function returns a list of short sentences (≤ 60 chars). UI renders
+// these above the StepFooter when the user attempts to advance an invalid
+// step OR when the disabled Continue button is hovered/focused.
+
+export type HandoverStepKey = 'customer'|'address'|'emergency'|'target'|'addons'|'confirm'|'sign';
+
+const customerBlockers = (f: HandoverForm): string[] => {
+  const b: string[] = [];
+  if (!f.name.trim()) b.push('Full name required');
+  if (!f.phone.trim()) b.push('Phone required');
+  if (!f.email.trim()) b.push('Email required');
+  else if (!EMAIL_RE.test(f.email.trim())) b.push('Email format invalid (e.g. name@example.com)');
+  return b;
+};
+
+const addressBlockers = (f: HandoverForm): string[] => {
+  if (f.addressLater) return [];
+  const b: string[] = [];
+  if (!f.fullAddress.trim()) b.push('Address line 1 required');
+  if (!f.state.trim()) b.push('State required');
+  if (!f.city.trim()) b.push('City required');
+  if (!f.postcode.trim()) b.push('Postcode required');
+  if (!f.buildingType) b.push('Building type required');
+  if (!f.billingSame) {
+    if (!f.billingAddress.trim()) b.push('Billing address line 1 required');
+    if (!f.billingState.trim()) b.push('Billing state required');
+    if (!f.billingCity.trim()) b.push('Billing city required');
+    if (!f.billingPostcode.trim()) b.push('Billing postcode required');
+  }
+  return b;
+};
+
+const emergencyBlockers = (f: HandoverForm): string[] => {
+  const filled = [f.emergencyName, f.emergencyRelation, f.emergencyPhone].filter((v) => v.trim()).length;
+  if (filled === 0 || filled === 3) return [];
+  return ['Emergency contact needs all 3 fields filled — or leave all blank'];
+};
+
+const targetDateBlockers = (f: HandoverForm): string[] => {
+  if (f.deliveryDateLater || f.deliveryAsap) return [];
+  if (!f.deliveryDate) return ['Pick a delivery date, or check "As fast as possible" / "For further notice"'];
+  return [];
+};
+
+const addonsPaymentBlockers = (f: HandoverForm): string[] => {
+  if (f.paymentMethod) return [];
+  return ['Pick a payment method'];
+};
+
+const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number): string[] => {
+  const b: string[] = [];
+  if (!f.paymentMethod) b.push('Payment method missing');
+  const total = subtotal + addonTotal;
+  const halfTotal = Math.round(total / 2);
+  if (f.amountPaid < halfTotal) b.push(`Amount paid must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
+  else if (f.amountPaid > total) b.push('Amount paid exceeds total');
+  if (!f.approvalCode.trim()) b.push('Approval code required');
+  if (f.paymentMethod === 'transfer' && f.slipUploadSessionId === null) b.push('Payment slip required for bank transfer');
+  if (!f.paymentRecorded) b.push('Click "Confirm payment received" first to record');
+  return b;
+};
+
+const signBlockers = (f: HandoverForm): string[] => {
+  if (f.signed) return [];
+  return ['Customer must sign on the pad below to confirm'];
+};
+
+export const getStepBlockers = (
+  key: HandoverStepKey,
+  f: HandoverForm,
+  subtotal: number,
+  addonTotal: number,
+): string[] => {
+  switch (key) {
+    case 'customer': return customerBlockers(f);
+    case 'address':  return addressBlockers(f);
+    case 'emergency': return emergencyBlockers(f);
+    case 'target':   return targetDateBlockers(f);
+    case 'addons':   return addonsPaymentBlockers(f);
+    case 'confirm':  return confirmPaymentBlockers(f, subtotal, addonTotal);
+    case 'sign':     return signBlockers(f);
+  }
+};
+
+// Min delivery date = order_date + 30 days (production + logistics window).
+// Used both at order placement (today as baseline) and in OrderStatus drawer
+// edits (placedAt as baseline). Matches the "As fast as possible" target in
+// TargetDateStep. Returns ISO YYYY-MM-DD.
+export const computeMinCalendarDate = (orderDate: Date): string => {
+  const earliest = new Date(orderDate);
+  earliest.setDate(orderDate.getDate() + 30);
+  const y = earliest.getFullYear();
+  const m = String(earliest.getMonth() + 1).padStart(2, '0');
+  const d = String(earliest.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 };
 

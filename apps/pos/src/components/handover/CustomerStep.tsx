@@ -29,9 +29,10 @@ export const CustomerStep = ({
             autoFocus
           />
         </Field>
-        <Field label="Phone">
+        <Field label="Phone *">
           <input
             type="tel"
+            required
             value={form.phone}
             onChange={(e) => update('phone', e.target.value)}
             autoComplete="tel"

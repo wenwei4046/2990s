@@ -81,8 +81,14 @@ const FormPane = ({ lines, form, subtotal, addonTotal, total }: FormPaneProps) =
         )}
         {form.phone.trim()   && <Row label="Phone"   value={form.phone} />}
         {form.email.trim()   && <Row label="Email"   value={form.email} />}
-        {form.addressLater   ? <Row label="Address" value="To be filled later" italic />
-                              : form.fullAddress.trim() && <Row label="Address" value={form.fullAddress} />}
+        {form.addressLater ? (
+          <Row label="Address" value="To be filled later" italic />
+        ) : (
+          <>
+            {form.fullAddress.trim() && <Row label="Address" value={form.fullAddress} />}
+            {form.addressLine2.trim() && <Row label="" value={form.addressLine2} />}
+          </>
+        )}
       </Section>
 
       {emergencyHasAny && (
@@ -94,11 +100,17 @@ const FormPane = ({ lines, form, subtotal, addonTotal, total }: FormPaneProps) =
       )}
 
       <Section heading="Delivery">
-        <Row label="Date" value={form.deliveryDate ? formatDate(form.deliveryDate) : ''} placeholder="Pending" />
+        {form.deliveryDateLater
+          ? <p className={styles.placeholder}>For further notice</p>
+          : form.deliveryDate
+            ? <p className={styles.rowValue}>{formatDate(form.deliveryDate)}</p>
+            : <p className={styles.placeholder}>Pending</p>}
       </Section>
 
       <Section heading="Payment">
-        <Row label="Method" value={PAYMENT_LABEL[form.paymentMethod] ?? ''} placeholder="Pending" />
+        {form.paymentMethod
+          ? <p className={styles.rowValue}>{PAYMENT_LABEL[form.paymentMethod]}</p>
+          : <p className={styles.placeholder}>Pending</p>}
       </Section>
 
       <Section heading="Totals">
@@ -107,9 +119,11 @@ const FormPane = ({ lines, form, subtotal, addonTotal, total }: FormPaneProps) =
       </Section>
 
       <footer className={styles.totalBar}>
-        <span className="t-eyebrow">Total</span>
-        <PriceTag amount={total} size="lg" />
-        <p className={styles.totalCaption}>Inclusive of delivery within Klang Valley</p>
+        <span className={styles.totalLabel}>Total</span>
+        <div className={styles.totalRight}>
+          <PriceTag amount={total} size="lg" />
+          <p className={styles.totalCaption}>Inclusive of delivery within Klang Valley</p>
+        </div>
       </footer>
     </aside>
   );
@@ -150,9 +164,11 @@ const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, pa
         </div>
       </Section>
       <footer className={styles.totalBar}>
-        <span className="t-eyebrow">Paid</span>
-        <PriceTag amount={paid} size="lg" />
-        <p className={styles.totalCaption}>Same price. Every piece. Always.</p>
+        <span className={styles.totalLabel}>Paid</span>
+        <div className={styles.totalRight}>
+          <PriceTag amount={paid} size="lg" />
+          <p className={styles.totalCaption}>Same price. Every piece. Always.</p>
+        </div>
       </footer>
     </aside>
   );
@@ -169,7 +185,7 @@ const Row = ({ label, value, placeholder, italic }: {
   label: string; value: string; placeholder?: string; italic?: boolean;
 }) => (
   <div className={styles.row}>
-    {label && <span className={styles.rowLabel}>{label}</span>}
+    <span className={styles.rowLabel}>{label}</span>
     <span className={`${styles.rowValue} ${italic ? styles.rowItalic : ''}`}>
       {value || <em>{placeholder}</em>}
     </span>

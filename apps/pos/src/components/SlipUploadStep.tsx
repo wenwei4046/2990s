@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Camera, Upload } from 'lucide-react';
 import { uploadSlipFull, type SlipUploadPhase } from '../lib/slip';
 import { ALLOWED_SLIP_MIMES, MAX_SLIP_SIZE_BYTES } from '@2990s/shared/schemas';
 import styles from './SlipUploadStep.module.css';
@@ -16,7 +17,9 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Revoke object URL on unmount or when previewUrl changes.
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
     if (!previewUrl) return;
     return () => URL.revokeObjectURL(previewUrl);
@@ -71,17 +74,41 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
 
   return (
     <div className={styles.root}>
-      <label className={styles.label}>
-        Payment slip <span className={styles.required}>required for transfer</span>
-      </label>
+      <input
+        ref={fileInputRef}
+        type="file"
+        className={styles.hiddenInput}
+        accept={ALLOWED_SLIP_MIMES.join(',')}
+        onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+      />
+      <input
+        ref={cameraInputRef}
+        type="file"
+        className={styles.hiddenInput}
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+      />
 
       {phase === 'idle' && !file && (
-        <input
-          type="file"
-          className={styles.input}
-          accept={ALLOWED_SLIP_MIMES.join(',')}
-          onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-        />
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={styles.actionBtn}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload size={16} strokeWidth={1.75} />
+            Attach file
+          </button>
+          <button
+            type="button"
+            className={`${styles.actionBtn} ${styles.actionBtnPrimary}`}
+            onClick={() => cameraInputRef.current?.click()}
+          >
+            <Camera size={16} strokeWidth={1.75} />
+            Open camera
+          </button>
+        </div>
       )}
 
       {previewUrl && (
