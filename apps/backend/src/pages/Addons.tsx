@@ -15,6 +15,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../lib/auth';
 import { useAddons, type AddonRow } from '../lib/queries';
 import { supabase } from '../lib/supabase';
+import { NewAddonModal } from '../components/NewAddonModal';
 import styles from './Addons.module.css';
 
 interface AddonPatch {
@@ -40,6 +41,9 @@ export const Addons = () => {
   const { staff } = useAuth();
   const addons = useAddons();
   const isAdmin = staff?.role === 'admin';
+
+  const [newOpen, setNewOpen] = useState(false);
+  const openNew = () => { if (isAdmin) setNewOpen(true); };
 
   const qc = useQueryClient();
   const mutation = useMutation({
@@ -90,7 +94,7 @@ export const Addons = () => {
             lift access, assembly, accessories.
           </div>
         </div>
-        <button type="button" className={styles.btnPrimary} disabled={!isAdmin} title={isAdmin ? 'Add a new add-on' : 'Admin only'}>
+        <button type="button" className={styles.btnPrimary} disabled={!isAdmin} onClick={openNew} title={isAdmin ? 'Add a new add-on' : 'Admin only'}>
           <Plus size={14} strokeWidth={2} />
           New add-on
         </button>
@@ -120,7 +124,7 @@ export const Addons = () => {
             />
           ))}
 
-          <button type="button" className={styles.cardPlaceholder} disabled={!isAdmin} title={isAdmin ? 'Add a new add-on' : 'Admin only'}>
+          <button type="button" className={styles.cardPlaceholder} disabled={!isAdmin} onClick={openNew} title={isAdmin ? 'Add a new add-on' : 'Admin only'}>
             <span className={styles.placeholderIcon}>
               <Plus size={18} strokeWidth={1.75} />
             </span>
@@ -130,6 +134,13 @@ export const Addons = () => {
             </span>
           </button>
         </div>
+      )}
+
+      {newOpen && (
+        <NewAddonModal
+          existing={addons.data ?? []}
+          onClose={() => setNewOpen(false)}
+        />
       )}
     </div>
   );
