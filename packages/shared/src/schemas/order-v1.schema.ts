@@ -113,6 +113,10 @@ export const orderV1PostSchema = z.object({
   // Amount collected at handover (whole MYR). Flows into `orders.paid` via the
   // RPC's `paid` key; defaults to 0 server-side when omitted (legacy clients).
   paid:                z.number().int().nonnegative().optional(),
+  // Additional delivery fee keyed in by POS sales at handover. No cap; server
+  // clamps negatives to 0. Server-recomputed delivery fee = config.baseFee
+  // + (crossCategoryFee if ≥2 product categories) + this. (Migration 0029)
+  additionalDeliveryFee: z.number().int().nonnegative().optional(),
 
   // Client-submitted total — server recomputes and rejects with 409 if drift
   // exceeds 0.5%. Never trusted as the actual saved amount.
