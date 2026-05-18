@@ -3,6 +3,7 @@ import { orderV1PostSchema, SlipVerifyRequestSchema } from '@2990s/shared/schema
 import {
   computeOrderTotal,
   pricingDriftExceeds,
+  computeDeliveryFee,
   OrderPricingError,
   type ServerProductInfo,
   type OrderLineInput,
@@ -96,10 +97,10 @@ orders.post('/', async (c) => {
   const handoverAddonIds = (dto.addons ?? []).map((a) => a.addonId);
   const addonIds = Array.from(new Set([...sizeLineAddonIds, ...handoverAddonIds]));
 
-  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes] = await Promise.all([
+  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes] = await Promise.all([
     supabase
       .from('products')
-      .select('id, pricing_kind, flat_price, recliner_upgrade_price')
+      .select('id, category_id, pricing_kind, flat_price, recliner_upgrade_price')
       .in('id', productIds),
     supabase
       .from('product_compartments')
@@ -128,13 +129,22 @@ orders.post('/', async (c) => {
           }[],
           error: null,
         }),
+    supabase
+      .from('delivery_fee_config')
+      .select('base_fee, cross_category_fee')
+      .eq('id', 1)
+      .single(),
   ]);
 
-  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes]) {
+  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes]) {
     if (r.error) return c.json({ error: 'pricing_fetch_failed', reason: r.error.message }, 500);
   }
 
   const products = productsRes.data ?? [];
+  const categoryIdByProductId = new Map<string, string>();
+  for (const p of products) {
+    if (p.category_id) categoryIdByProductId.set(p.id, p.category_id);
+  }
   const compartments = compartmentsRes.data ?? [];
   const bundles = bundlesRes.data ?? [];
   const sizes = sizesRes.data ?? [];
@@ -199,12 +209,29 @@ orders.post('/', async (c) => {
     throw err;
   }
 
+  // ─── Delivery fee (migration 0029) ────────────────────────────────
+  // Reads the singleton delivery_fee_config row; recomputes from the cart's
+  // distinct category ids; folds in the POS-supplied additional fee.
+  const cartCategoryIds = dto.lines
+    .map((l) => categoryIdByProductId.get(l.config.productId) ?? '')
+    .filter(Boolean);
+  const deliveryCfg = deliveryCfgRes.data ?? { base_fee: 0, cross_category_fee: 0 };
+  const deliveryFee = computeDeliveryFee(
+    cartCategoryIds,
+    { baseFee: deliveryCfg.base_fee, crossCategoryFee: deliveryCfg.cross_category_fee },
+    dto.additionalDeliveryFee ?? 0,
+  );
+  const finalTotal = totals.total + deliveryFee.total;
+
   // Drift check (>0.5%) — the contract that protects "honest pricing".
-  if (pricingDriftExceeds(dto.clientTotal, totals.total)) {
+  // finalTotal now includes the recomputed delivery fee so any tampered
+  // POS that submits a lower delivery_fee_additional gets caught.
+  if (pricingDriftExceeds(dto.clientTotal, finalTotal)) {
     return c.json({
       error: 'pricing_drift',
       clientTotal: dto.clientTotal,
-      serverTotal: totals.total,
+      serverTotal: finalTotal,
+      deliveryFee,
       lines: totals.lines.map((l, i) => ({
         qty: l.qty,
         productId: l.productId,
@@ -237,7 +264,10 @@ orders.post('/', async (c) => {
     deliverySlot: dto.deliverySlot ?? '',
     subtotal: totals.subtotal,
     addonTotal: totals.addonTotal,
-    total: totals.total,
+    deliveryFeeBase:           deliveryFee.base,
+    deliveryFeeCrossCategory:  deliveryFee.crossCategory,
+    deliveryFeeAdditional:     deliveryFee.additional,
+    total: finalTotal,
     // Amount actually collected at handover. Threaded from the POS via the
     // optional `paid` field in orderV1PostSchema; the SQL function uses
     // COALESCE((p->>'paid')::int, 0) so legacy clients still produce 0.
@@ -297,7 +327,8 @@ orders.post('/', async (c) => {
     id: data as string,
     subtotal: totals.subtotal,
     addonTotal: totals.addonTotal,
-    total: totals.total,
+    deliveryFee,
+    total: finalTotal,
     lines: totals.lines.map((l, i) => ({
       productId: l.productId,
       qty: l.qty,
