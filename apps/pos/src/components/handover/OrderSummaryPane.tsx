@@ -138,7 +138,7 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
         <div className={styles.totalRight}>
           <PriceTag amount={total} size="lg" />
           <p className={styles.totalCaption}>
-            Delivery within Klang Valley
+            {form.state ? `Delivery within ${form.state}` : 'Delivery'}
             {deliveryFee.total > 0 ? ` · RM ${fmtRM(deliveryFee.total).replace('RM ', '')} included` : ''}
           </p>
         </div>
