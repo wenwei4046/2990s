@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
 import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
+import { hashPin } from '../lib/bcrypt';
 
 export const admin = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -14,12 +15,16 @@ const CreateStaffBodySchema = z.object({
   staffCode:  z.string().trim().min(1).max(8),
   name:       z.string().trim().min(1).max(80),
   role:       z.enum(STAFF_ROLES),
-  email:      z.string().trim().toLowerCase().email(),
+  email:      z.string().trim().toLowerCase().email().optional(),
   initials:   z.string().trim().min(1).max(4),
   color:      z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be 6-digit hex like #FF7733'),
   showroomId: z.string().uuid().nullable().optional(),
   phone:      z.string().trim().min(1).nullable().optional(),
-});
+  pin:        z.string().regex(/^\d{6}$/, 'pin must be 6 digits').optional(),
+}).refine(
+  (v) => v.role !== 'sales' || v.pin !== undefined,
+  { message: 'pin_required_for_sales', path: ['pin'] },
+);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadStaffRole(c: any): Promise<string | null> {
@@ -34,9 +39,6 @@ async function loadStaffRole(c: any): Promise<string | null> {
   return data.role;
 }
 
-// POST /admin/staff — admin-only. Invites a new user via email magic link
-// AND creates the matching staff row atomically. On row-insert failure we
-// roll back by deleting the just-created auth user.
 admin.post('/staff', async (c) => {
   const callerRole = await loadStaffRole(c);
   if (callerRole !== 'admin') {
@@ -52,8 +54,8 @@ admin.post('/staff', async (c) => {
   }
   const input = parsed.data;
 
-  // staff_code uniqueness pre-flight (cheap, friendlier error than the
-  // unique-constraint violation that would surface at INSERT time).
+  // staff_code uniqueness pre-flight (cheap, friendlier than the unique-constraint
+  // violation that would surface at INSERT time).
   const userScoped = c.get('supabase');
   const { data: codeClash } = await userScoped
     .from('staff')
@@ -64,31 +66,40 @@ admin.post('/staff', async (c) => {
     return c.json({ error: 'staff_code_taken', staffCode: input.staffCode }, 409);
   }
 
-  // Service-role admin client. Only ever used inside this handler.
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Step 1: invite the user. Supabase creates auth.users row + emails magic link.
-  const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
-    input.email,
-    {
-      data: {
-        staff_code: input.staffCode,
-        name:       input.name,
-        role:       input.role,
-      },
-    },
-  );
-  if (inviteErr || !invited?.user) {
-    return c.json(
-      { error: 'invite_failed', detail: inviteErr?.message ?? 'no user returned' },
-      422,
-    );
-  }
-  const userId = invited.user.id;
+  // Sales path: createUser (no magic link) + bcrypt(pin) → pin_hash.
+  // Non-sales path: inviteUserByEmail (magic link to backend portal).
+  const isSales = input.role === 'sales';
+  const email = input.email ?? `${input.staffCode.toLowerCase()}+pos@2990s.local`;
 
-  // Step 2: insert staff row using the same UUID.
+  let userId: string;
+  if (isSales) {
+    const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
+      email,
+      password: crypto.randomUUID(),
+      email_confirm: true,
+      user_metadata: { staff_code: input.staffCode, name: input.name, role: input.role },
+    });
+    if (createErr || !created?.user) {
+      return c.json({ error: 'auth_user_create_failed', detail: createErr?.message }, 422);
+    }
+    userId = created.user.id;
+  } else {
+    const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
+      email,
+      { data: { staff_code: input.staffCode, name: input.name, role: input.role } },
+    );
+    if (inviteErr || !invited?.user) {
+      return c.json({ error: 'invite_failed', detail: inviteErr?.message ?? 'no user returned' }, 422);
+    }
+    userId = invited.user.id;
+  }
+
+  const pinHash = isSales && input.pin ? await hashPin(input.pin) : null;
+
   const { data: newStaff, error: insertErr } = await adminClient
     .from('staff')
     .insert({
@@ -97,17 +108,17 @@ admin.post('/staff', async (c) => {
       name:         input.name,
       role:         input.role,
       showroom_id:  input.showroomId ?? null,
-      email:        input.email,
+      email,
       phone:        input.phone ?? null,
       initials:     input.initials,
       color:        input.color,
       active:       true,
+      pin_hash:     pinHash,
     })
     .select('id, staff_code, name, role, showroom_id, email, phone, initials, color, active')
     .maybeSingle();
 
   if (insertErr || !newStaff) {
-    // Roll back the auth.users row so we don't leave an orphaned account.
     const { error: delErr } = await adminClient.auth.admin.deleteUser(userId);
     if (delErr) {
       console.error('[admin/staff] rollback failed', { userId, delErr });
