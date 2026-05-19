@@ -19,6 +19,7 @@ import {
   type StaffRoleValue,
   type ShowroomRow,
 } from '../lib/admin-queries';
+import { PinDrawer } from '../components/PinDrawer';
 import styles from './Settings.module.css';
 
 type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'app';
@@ -627,11 +628,14 @@ const STAFF_ROLE_OPTIONS: { value: StaffRoleValue; label: string }[] = [
   { value: 'admin',         label: 'Admin' },
 ];
 
+type PinDrawerState = { open: false } | { open: true; staff: StaffRow };
+
 const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
   const staffList = useStaff();
   const showrooms = useShowrooms();
   const updateActive = useUpdateStaffActive();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [pinDrawer, setPinDrawer] = useState<PinDrawerState>({ open: false });
 
   const showroomName = (id: string | null) =>
     id ? showrooms.data?.find((s) => s.id === id)?.name ?? '—' : 'All showrooms';
@@ -639,7 +643,7 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
   return (
     <>
       <div className={styles.readOnlyBanner}>
-        <strong>Heads up.</strong> New staff get a magic-link invite at the email you enter — they set their own password and can sign in to the backend portal. PIN reset for POS sales still requires Supabase Studio.
+        <strong>Heads up.</strong> Sales people sign in to POS with their 6-digit PIN — use the Set / Reset PIN button on each row. Other roles get a magic-link invite emailed when you create them.
       </div>
 
       <div className={styles.actionsRow} style={{ marginBottom: 'var(--space-3)' }}>
@@ -685,7 +689,17 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
                     )}
                   </td>
                   {canEdit && (
-                    <td>
+                    <td style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      {s.role === 'sales' && (
+                        <button
+                          type="button"
+                          className={styles.editBtn}
+                          onClick={() => setPinDrawer({ open: true, staff: s })}
+                          aria-label={`Set or reset PIN for ${s.staffCode}`}
+                        >
+                          Set / Reset PIN
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={styles.editBtn}
@@ -710,6 +724,13 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
         <StaffDrawer
           showrooms={showrooms.data ?? []}
           onClose={() => setDrawerOpen(false)}
+        />
+      )}
+
+      {pinDrawer.open && (
+        <PinDrawer
+          staff={pinDrawer.staff}
+          onClose={() => setPinDrawer({ open: false })}
         />
       )}
     </>
