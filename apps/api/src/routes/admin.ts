@@ -147,3 +147,53 @@ admin.post('/staff', async (c) => {
 
   return c.json({ staff: newStaff }, 201);
 });
+
+const PatchPinBodySchema = z.object({
+  pin: z.union([z.string().regex(/^\d{6}$/), z.null()]),
+});
+
+admin.patch('/staff/:id/pin', async (c) => {
+  const callerRole = await loadStaffRole(c);
+  if (callerRole !== 'admin') {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const id = c.req.param('id');
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    return c.json({ error: 'invalid_request' }, 400);
+  }
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = PatchPinBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
+  }
+
+  const userScoped = c.get('supabase');
+  const { data: target } = await userScoped
+    .from('staff')
+    .select('role')
+    .eq('id', id)
+    .maybeSingle();
+  if (!target) return c.json({ error: 'staff_not_found' }, 404);
+  if (target.role !== 'sales') return c.json({ error: 'not_a_sales_staff' }, 422);
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const pinHash = parsed.data.pin === null ? null : await hashPin(parsed.data.pin);
+
+  const { data: updated, error: updateErr } = await adminClient
+    .from('staff')
+    .update({ pin_hash: pinHash })
+    .eq('id', id)
+    .select('id, staff_code, name, role, showroom_id, email, phone, initials, color, active')
+    .maybeSingle();
+
+  if (updateErr || !updated) {
+    return c.json({ error: 'staff_update_failed', detail: updateErr?.message }, 500);
+  }
+  return c.json({ staff: updated }, 200);
+});

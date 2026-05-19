@@ -208,3 +208,117 @@ describe('POST /admin/staff — sales role with PIN', () => {
     expect(deleteUserMock).toHaveBeenCalledWith('u-throw');
   });
 });
+
+describe('PATCH /admin/staff/:id/pin', () => {
+  const TARGET_ID = '22222222-2222-2222-2222-222222222222';
+
+  function buildAppForPin(callerRole: string | null, targetStaff: { role: string } | null) {
+    const userScopedFrom = (table: string) => ({
+      select: () => ({
+        eq: (col: string, val: string) => ({
+          maybeSingle: async () => {
+            if (table === 'staff' && col === 'id' && val === ADMIN_USER_ID) {
+              return { data: callerRole ? { role: callerRole, active: true } : null, error: null };
+            }
+            if (table === 'staff' && col === 'id' && val === TARGET_ID) {
+              return { data: targetStaff, error: null };
+            }
+            return { data: null, error: null };
+          },
+        }),
+      }),
+    });
+    const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+    app.use('*', async (c, next) => {
+      c.set('user', { id: ADMIN_USER_ID } as any);
+      c.set('supabase', { from: userScopedFrom } as any);
+      await next();
+    });
+    app.route('/admin', admin);
+    return app;
+  }
+
+  it('non-admin caller → 403', async () => {
+    const app = buildAppForPin('coordinator', { role: 'sales' });
+    const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: '123456' }),
+    }, baseEnv);
+    expect(res.status).toBe(403);
+  });
+
+  it('non-sales target → 422 not_a_sales_staff', async () => {
+    const app = buildAppForPin('admin', { role: 'coordinator' });
+    const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: '123456' }),
+    }, baseEnv);
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe('not_a_sales_staff');
+  });
+
+  it('target not found → 404', async () => {
+    const app = buildAppForPin('admin', null);
+    const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: '123456' }),
+    }, baseEnv);
+    expect(res.status).toBe(404);
+  });
+
+  it('valid 6-digit PIN → 200, sets bcrypt hash via admin client', async () => {
+    let updatedPatch: any = null;
+    adminFromMock.mockImplementation((table: string) => ({
+      update: (patch: any) => {
+        if (table === 'staff') updatedPatch = patch;
+        return {
+          eq: () => ({
+            select: () => ({
+              maybeSingle: async () => ({ data: { id: TARGET_ID, role: 'sales' }, error: null }),
+            }),
+          }),
+        };
+      },
+    }));
+    const app = buildAppForPin('admin', { role: 'sales' });
+    const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: '482917' }),
+    }, baseEnv);
+    expect(res.status).toBe(200);
+    expect(typeof updatedPatch.pin_hash).toBe('string');
+    expect(updatedPatch.pin_hash.length).toBeGreaterThan(20);
+  });
+
+  it('pin=null → 200, clears pin_hash', async () => {
+    let updatedPatch: any = null;
+    adminFromMock.mockImplementation((table: string) => ({
+      update: (patch: any) => {
+        if (table === 'staff') updatedPatch = patch;
+        return {
+          eq: () => ({
+            select: () => ({
+              maybeSingle: async () => ({ data: { id: TARGET_ID, role: 'sales' }, error: null }),
+            }),
+          }),
+        };
+      },
+    }));
+    const app = buildAppForPin('admin', { role: 'sales' });
+    const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: null }),
+    }, baseEnv);
+    expect(res.status).toBe(200);
+    expect(updatedPatch.pin_hash).toBeNull();
+  });
+
+  it('malformed PIN → 400', async () => {
+    const app = buildAppForPin('admin', { role: 'sales' });
+    const res = await app.request(`/admin/staff/${TARGET_ID}/pin`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: 'abc' }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+  });
+});
