@@ -92,7 +92,7 @@ describe('POST /admin/staff — sales role with PIN', () => {
     expect(res.status).toBe(201);
     expect(createUserMock).toHaveBeenCalledTimes(1);
     expect(inviteByEmailMock).not.toHaveBeenCalled();
-    const createUserArg = createUserMock.mock.calls[0][0];
+    const createUserArg = createUserMock.mock.calls[0]![0];
     expect(createUserArg.email).toBe('aw+pos@2990s.local');
     expect(createUserArg.email_confirm).toBe(true);
     expect(typeof createUserArg.password).toBe('string');
@@ -115,7 +115,7 @@ describe('POST /admin/staff — sales role with PIN', () => {
       }),
     }, baseEnv);
     expect(res.status).toBe(201);
-    expect(createUserMock.mock.calls[0][0].email).toBe('aisha@2990s.my');
+    expect(createUserMock.mock.calls[0]![0].email).toBe('aisha@2990s.my');
   });
 
   it('rejects sales role without PIN (422 pin_required_for_sales)', async () => {
@@ -254,7 +254,7 @@ describe('PATCH /admin/staff/:id/pin', () => {
       body: JSON.stringify({ pin: '123456' }),
     }, baseEnv);
     expect(res.status).toBe(422);
-    expect((await res.json()).error).toBe('not_a_sales_staff');
+    expect(((await res.json()) as { error?: string }).error).toBe('not_a_sales_staff');
   });
 
   it('target not found → 404', async () => {

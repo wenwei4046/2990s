@@ -25,6 +25,7 @@ describe('createPinRateLimiter', () => {
     for (let i = 0; i < 5; i++) rl.recordFailure(STAFF_A);
     const result = rl.check(STAFF_A);
     expect(result.allowed).toBe(false);
+    if (result.allowed) throw new Error('expected blocked');
     expect(result.retryAfter).toBeGreaterThan(0);
     expect(result.retryAfter).toBeLessThanOrEqual(60);
   });
