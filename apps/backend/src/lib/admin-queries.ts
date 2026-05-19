@@ -114,11 +114,12 @@ export interface StaffUpsert {
   staffCode:  string;
   name:       string;
   role:       StaffRoleValue;
-  email:      string;
+  email:      string | null;
   initials:   string;
   color:      string;
   showroomId: string | null;
   phone:      string | null;
+  pin?:       string;   // required at API level when role==='sales'
 }
 
 // Goes through the API Worker because creating an auth.users row needs the
@@ -137,7 +138,10 @@ export const useCreateStaff = () => {
           authorization: `Bearer ${token}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          ...input,
+          email: input.email ?? undefined,  // omit so server can synthesize
+        }),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
