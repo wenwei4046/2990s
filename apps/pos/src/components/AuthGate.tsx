@@ -1,14 +1,13 @@
-import { Navigate, useLocation } from 'react-router';
 import type { ReactNode } from 'react';
 import { useAuth } from '../lib/auth';
+import { LockScreen } from '../pages/LockScreen';
 
-// Redirects to /login if not signed in. Phase 2 will replace this with a
-// PIN switcher that overlays the catalog without dropping the staff session.
+// LockScreen handles the common path (PIN). The /login route stays available
+// as an emergency email/password gate for admin access.
 export const AuthGate = ({ children }: { children: ReactNode }) => {
   const { user, loading } = useAuth();
-  const location = useLocation();
 
   if (loading) return <div style={{ padding: 32 }}>Loading…</div>;
-  if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  if (!user) return <LockScreen />;
   return <>{children}</>;
 };
