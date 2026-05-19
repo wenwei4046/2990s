@@ -321,4 +321,13 @@ describe('PATCH /admin/staff/:id/pin', () => {
     }, baseEnv);
     expect(res.status).toBe(400);
   });
+
+  it('malformed UUID in path → 400', async () => {
+    const app = buildAppForPin('admin', { role: 'sales' });
+    const res = await app.request('/admin/staff/not-a-uuid/pin', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pin: '123456' }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+  });
 });

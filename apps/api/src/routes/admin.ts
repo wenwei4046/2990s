@@ -158,10 +158,11 @@ admin.patch('/staff/:id/pin', async (c) => {
     return c.json({ error: 'not_authorized_role' }, 403);
   }
 
-  const id = c.req.param('id');
-  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+  const idParse = z.string().uuid().safeParse(c.req.param('id'));
+  if (!idParse.success) {
     return c.json({ error: 'invalid_request' }, 400);
   }
+  const id = idParse.data;
 
   let body: unknown;
   try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -193,7 +194,7 @@ admin.patch('/staff/:id/pin', async (c) => {
     .maybeSingle();
 
   if (updateErr || !updated) {
-    return c.json({ error: 'staff_update_failed', detail: updateErr?.message }, 500);
+    return c.json({ error: 'staff_update_failed', detail: updateErr?.message }, 422);
   }
   return c.json({ staff: updated }, 200);
 });
