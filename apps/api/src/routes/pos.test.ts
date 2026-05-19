@@ -40,25 +40,23 @@ beforeEach(() => {
   __resetRateLimiter();
 });
 
+// Chainable mock — each builder method returns the same object so the route's
+// conditional `.eq('showroom_id')` works whether or not it's called.
+function chainable(rows: any[], error: any = null) {
+  const obj: any = {};
+  obj.select = () => obj;
+  obj.eq = () => obj;
+  obj.not = () => obj;
+  obj.order = async () => ({ data: rows, error });
+  return obj;
+}
+
 describe('GET /pos/sales-staff', () => {
   it('returns active sales staff, no PII fields', async () => {
-    adminFromMock.mockImplementation(() => ({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            not: () => ({
-              order: async () => ({
-                data: [
-                  { id: 'u1', staff_code: 'AW', name: 'Aisha', initials: 'AW', color: '#E86B3A', email: 'aw+pos@2990s.local', pin_hash: 'hash', role: 'sales', active: true, showroom_id: 'kl' },
-                  { id: 'u2', staff_code: 'JM', name: 'Jaime',  initials: 'JM', color: '#A6471E', email: 'jm+pos@2990s.local', pin_hash: 'hash', role: 'sales', active: true, showroom_id: 'kl' },
-                ],
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      }),
-    }));
+    adminFromMock.mockImplementation(() => chainable([
+      { id: 'u1', staff_code: 'AW', name: 'Aisha', initials: 'AW', color: '#E86B3A' },
+      { id: 'u2', staff_code: 'JM', name: 'Jaime',  initials: 'JM', color: '#A6471E' },
+    ]));
     const app = buildApp();
     const res = await app.request('/pos/sales-staff?showroomId=kl', {}, baseEnv);
     expect(res.status).toBe(200);
@@ -71,15 +69,7 @@ describe('GET /pos/sales-staff', () => {
   });
 
   it('returns 200 [] when no staff', async () => {
-    adminFromMock.mockImplementation(() => ({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            not: () => ({ order: async () => ({ data: [], error: null }) }),
-          }),
-        }),
-      }),
-    }));
+    adminFromMock.mockImplementation(() => chainable([]));
     const app = buildApp();
     const res = await app.request('/pos/sales-staff', {}, baseEnv);
     expect(res.status).toBe(200);

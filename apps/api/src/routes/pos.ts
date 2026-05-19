@@ -19,26 +19,28 @@ pos.get('/sales-staff', async (c) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Service-role select bypasses RLS — safe because we hand-pick the columns.
-  // Server-side: role='sales' AND active=true AND pin_hash IS NOT NULL.
-  // Showroom narrowing applied post-fetch (the staff list is small enough at
-  // MVP that pulling all active sales then filtering in JS is fine).
-  const { data, error } = await adminClient
+  // Service-role select bypasses RLS — narrow columns to exactly what we return
+  // so no PII leaks even if a future contributor forgets the JS whitelist.
+  // Server-side: role='sales' AND active=true AND pin_hash IS NOT NULL,
+  // optionally narrowed to a single showroom.
+  let builder = adminClient
     .from('staff')
-    .select('id, staff_code, name, initials, color, role, active, showroom_id, pin_hash')
+    .select('id, staff_code, name, initials, color')
     .eq('role', 'sales')
-    .eq('active', true)
+    .eq('active', true);
+  if (showroomId) {
+    builder = builder.eq('showroom_id', showroomId);
+  }
+  const { data, error } = await builder
     .not('pin_hash', 'is', null)
     .order('staff_code');
+
   if (error) {
     return c.json({ error: 'fetch_failed', detail: error.message }, 500);
   }
 
-  const rows = (data ?? []).filter((r: any) => !showroomId || r.showroom_id === showroomId);
-
-  // Whitelist outgoing fields.
   return c.json(
-    rows.map((r: any) => ({
+    (data ?? []).map((r: any) => ({
       id: r.id,
       staffCode: r.staff_code,
       name: r.name,
