@@ -13,6 +13,7 @@ import { quotes } from './routes/quotes';
 import { admin } from './routes/admin';
 import { categoriesApi } from './routes/categories';
 import { deliveryFees } from './routes/delivery-fees';
+import { pos } from './routes/pos';
 import { supabaseAuth } from './middleware/auth';
 import { reapOnce } from './lib/reaper';
 
@@ -40,6 +41,7 @@ app.route('/quotes', quotes);
 app.route('/admin', admin);
 app.route('/admin/categories', categoriesApi);
 app.route('/delivery-fees', deliveryFees);
+app.route('/pos', pos);
 
 // Slip routes need auth; applied at mount because slipRoutes itself has no
 // middleware (so it stays unit-testable with mocked context).
