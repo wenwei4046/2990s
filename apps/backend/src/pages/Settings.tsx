@@ -731,26 +731,45 @@ const StaffDrawer = ({
   const [initials, setInitials] = useState('');
   const [color, setColor] = useState<string>(STAFF_AVATAR_COLORS[0] ?? '#E86B3A');
   const [showroomId, setShowroomId] = useState<string>('');
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
   const [error, setError] = useState<string | null>(null);
   const createStaff = useCreateStaff();
   const saving = createStaff.isPending;
 
+  const isSales = role === 'sales';
+
   const onSave = async () => {
     setError(null);
-    if (!staffCode.trim() || !name.trim() || !email.trim() || !initials.trim()) {
-      setError('Code, name, email and initials are required.');
+    if (!staffCode.trim() || !name.trim() || !initials.trim()) {
+      setError('Code, name and initials are required.');
       return;
+    }
+    if (!isSales && !email.trim()) {
+      setError('Email is required for non-sales roles.');
+      return;
+    }
+    if (isSales) {
+      if (!/^\d{6}$/.test(pin)) {
+        setError('PIN must be 6 digits.');
+        return;
+      }
+      if (pin !== confirmPin) {
+        setError("PINs don't match.");
+        return;
+      }
     }
     try {
       await createStaff.mutateAsync({
         staffCode:  staffCode.trim().toUpperCase(),
         name:       name.trim(),
         role,
-        email:      email.trim().toLowerCase(),
+        email:      email.trim().toLowerCase() || null,
         initials:   initials.trim().toUpperCase(),
         color,
         showroomId: showroomId || null,
         phone:      phone.trim() || null,
+        pin:        isSales ? pin : undefined,
       });
       onClose();
     } catch (err) {
@@ -766,7 +785,9 @@ const StaffDrawer = ({
             <div className="t-eyebrow">New staff</div>
             <h3 className={styles.drawerTitle}>Add a staff member</h3>
             <div className={styles.drawerSub}>
-              They'll get a magic-link invite at the email you enter, set their own password, and can sign in once active.
+              {isSales
+                ? 'Sales people sign in to POS with a 6-digit PIN. Email is optional — leave blank to auto-generate one.'
+                : "They'll get a magic-link invite at the email you enter, set their own password, and can sign in once active."}
             </div>
           </div>
           <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
@@ -800,18 +821,6 @@ const StaffDrawer = ({
           </label>
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Email</span>
-            <input
-              className={styles.input}
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="aisha@example.com"
-            />
-            <span className={styles.fieldHint}>Magic-link invite is sent here. Required even for sales (PIN reset uses email).</span>
-          </label>
-
-          <label className={styles.field}>
             <span className={styles.fieldLabel}>Role</span>
             <select
               className={styles.input}
@@ -824,6 +833,58 @@ const StaffDrawer = ({
             </select>
             <span className={styles.fieldHint}>Sales sign in to POS via PIN; everyone else uses the backend portal.</span>
           </label>
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>
+              Email{isSales ? <span className={styles.muted}> (optional)</span> : null}
+            </span>
+            <input
+              className={styles.input}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder={isSales ? 'leave blank to auto-generate' : 'name@2990s.my'}
+            />
+            <span className={styles.fieldHint}>
+              {isSales
+                ? "Sales users don't receive email. Leave blank and we'll synthesize one."
+                : 'Magic-link invite is sent here.'}
+            </span>
+          </label>
+
+          {isSales && (
+            <>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>PIN (6 digits)</span>
+                <input
+                  className={styles.input}
+                  type="password"
+                  inputMode="numeric"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                  placeholder="••••••"
+                  autoComplete="new-password"
+                />
+                <span className={styles.fieldHint}>You can change this later. Sales staff can't change their own PIN.</span>
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Confirm PIN</span>
+                <input
+                  className={styles.input}
+                  type="password"
+                  inputMode="numeric"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  value={confirmPin}
+                  onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
+                  placeholder="••••••"
+                  autoComplete="new-password"
+                />
+              </label>
+            </>
+          )}
 
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Showroom</span>
@@ -884,7 +945,7 @@ const StaffDrawer = ({
           <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button variant="primary" onClick={() => void onSave()} disabled={saving}>
             <Save size={16} strokeWidth={1.75} />
-            {saving ? 'Inviting…' : 'Send invite'}
+            {saving ? (isSales ? 'Creating…' : 'Inviting…') : (isSales ? 'Create POS user' : 'Send invite')}
           </Button>
         </footer>
       </div>
