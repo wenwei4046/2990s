@@ -180,6 +180,31 @@ export const useCreateStaff = () => {
   });
 };
 
+export const useSetStaffPin = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, pin }: { id: string; pin: string | null }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/admin/staff/${id}/pin`, {
+        method: 'PATCH',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ pin }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '<no body>');
+        throw new Error(`setStaffPin failed (${res.status}): ${text}`);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['staff'] });
+    },
+  });
+};
+
 /* ─── App config ─── */
 
 export interface AppConfigRow {
