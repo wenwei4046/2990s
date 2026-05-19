@@ -110,7 +110,8 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
           type="button"
           className={styles.iconBtn}
           onClick={() => void signOut()}
-          aria-label="Sign out"
+          aria-label="Switch user"
+          title="Switch user"
         >
           <LogOut size={18} strokeWidth={1.75} />
         </button>
