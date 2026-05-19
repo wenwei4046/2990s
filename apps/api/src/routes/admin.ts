@@ -24,6 +24,9 @@ const CreateStaffBodySchema = z.object({
 }).refine(
   (v) => v.role !== 'sales' || v.pin !== undefined,
   { message: 'pin_required_for_sales', path: ['pin'] },
+).refine(
+  (v) => v.role === 'sales' || v.pin === undefined,
+  { message: 'pin_forbidden_for_non_sales', path: ['pin'] },
 );
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,23 +103,33 @@ admin.post('/staff', async (c) => {
 
   const pinHash = isSales && input.pin ? await hashPin(input.pin) : null;
 
-  const { data: newStaff, error: insertErr } = await adminClient
-    .from('staff')
-    .insert({
-      id:           userId,
-      staff_code:   input.staffCode,
-      name:         input.name,
-      role:         input.role,
-      showroom_id:  input.showroomId ?? null,
-      email,
-      phone:        input.phone ?? null,
-      initials:     input.initials,
-      color:        input.color,
-      active:       true,
-      pin_hash:     pinHash,
-    })
-    .select('id, staff_code, name, role, showroom_id, email, phone, initials, color, active')
-    .maybeSingle();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let newStaff: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let insertErr: any = null;
+  try {
+    const result = await adminClient
+      .from('staff')
+      .insert({
+        id:           userId,
+        staff_code:   input.staffCode,
+        name:         input.name,
+        role:         input.role,
+        showroom_id:  input.showroomId ?? null,
+        email,
+        phone:        input.phone ?? null,
+        initials:     input.initials,
+        color:        input.color,
+        active:       true,
+        pin_hash:     pinHash,
+      })
+      .select('id, staff_code, name, role, showroom_id, email, phone, initials, color, active')
+      .maybeSingle();
+    newStaff = result.data;
+    insertErr = result.error;
+  } catch (thrown) {
+    insertErr = { message: String((thrown as Error).message ?? thrown) };
+  }
 
   if (insertErr || !newStaff) {
     const { error: delErr } = await adminClient.auth.admin.deleteUser(userId);

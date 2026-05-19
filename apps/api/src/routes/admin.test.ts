@@ -170,4 +170,41 @@ describe('POST /admin/staff — sales role with PIN', () => {
     expect(res.status).toBe(422);
     expect(deleteUserMock).toHaveBeenCalledWith('u-rb');
   });
+
+  it('rejects non-sales role WITH pin (400 pin_forbidden_for_non_sales)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'ML', name: 'Mei Lin', role: 'coordinator',
+        email: 'ml@2990s.my', initials: 'ML', color: '#2F5D4F', pin: '111111',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('pin_forbidden_for_non_sales');
+  });
+
+  it('rolls back auth user when staff insert throws an exception (not just error)', async () => {
+    createUserMock.mockResolvedValue({ data: { user: { id: 'u-throw' } }, error: null });
+    deleteUserMock.mockResolvedValue({ error: null });
+    adminFromMock.mockImplementation(() => ({
+      insert: () => ({
+        select: () => ({
+          maybeSingle: async () => { throw new Error('network reset'); },
+        }),
+      }),
+    }));
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'AW', name: 'A', role: 'sales',
+        initials: 'AW', color: '#E86B3A', pin: '111111',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(422);
+    expect(deleteUserMock).toHaveBeenCalledWith('u-throw');
+  });
 });
