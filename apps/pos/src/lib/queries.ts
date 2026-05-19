@@ -350,3 +350,47 @@ export const useDeliveryFeeConfig = () =>
     },
     staleTime: 60_000,
   });
+
+/* ─── Sales staff (LockScreen pre-session list) ───────────────────────
+ *
+ * This query is unique: it MUST work BEFORE Supabase auth, because the
+ * LockScreen shows the staff picker before anyone has logged in. So we
+ * hit the unauthenticated Worker route directly (no bearer token), and
+ * cache the last response in localStorage so cold-boot offline still
+ * shows the picker. The route is authenticated by network position
+ * (CF Worker behind the same domain) + showroomId filtering, not JWT.
+ */
+
+const SHOWROOM_ID = import.meta.env.VITE_POS_SHOWROOM_ID as string | undefined;
+
+export interface SalesStaffRow {
+  id: string;
+  staffCode: string;
+  name: string;
+  initials: string;
+  color: string;
+}
+
+const SALES_STAFF_CACHE_KEY = 'pos:sales-staff-cache';
+
+export const useShowroomSalesStaff = () =>
+  useQuery({
+    queryKey: ['pos', 'sales-staff', SHOWROOM_ID ?? 'all'],
+    queryFn: async (): Promise<SalesStaffRow[]> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const qs = SHOWROOM_ID ? `?showroomId=${encodeURIComponent(SHOWROOM_ID)}` : '';
+      const res = await fetch(`${API_URL}/pos/sales-staff${qs}`);
+      if (!res.ok) throw new Error(`GET /pos/sales-staff failed (${res.status})`);
+      const rows = (await res.json()) as SalesStaffRow[];
+      try { localStorage.setItem(SALES_STAFF_CACHE_KEY, JSON.stringify(rows)); } catch { /* quota */ }
+      return rows;
+    },
+    staleTime: 5 * 60_000,
+    placeholderData: () => {
+      try {
+        const cached = localStorage.getItem(SALES_STAFF_CACHE_KEY);
+        if (cached) return JSON.parse(cached) as SalesStaffRow[];
+      } catch { /* parse */ }
+      return undefined;
+    },
+  });
