@@ -3,6 +3,7 @@ import { PriceTag } from '@2990s/design-system';
 import type { CartLine } from '../../state/cart';
 import { cartSummary } from '../../state/cart';
 import type { HandoverForm } from '../../lib/handover-helpers';
+import { COMPANY_LEGAL, RECEIPT_TERMS } from '../../lib/legal';
 import styles from './OrderSummaryPane.module.css';
 
 const PAYMENT_LABEL: Record<string, string> = {
@@ -188,6 +189,34 @@ const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, pa
           <p className={styles.totalCaption}>Same price. Every piece. Always.</p>
         </div>
       </footer>
+
+      <section className={styles.legal}>
+        <div className={styles.legalCompany}>
+          <div className={styles.legalCompanyName}>
+            {COMPANY_LEGAL.name}{' '}
+            <span className={styles.legalSsm}>(SSM {COMPANY_LEGAL.ssm})</span>
+          </div>
+          <div className={styles.legalAddrBlock}>
+            <div className={styles.legalAddrTag}>HQ</div>
+            <div>
+              {COMPANY_LEGAL.hqLines.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </div>
+          </div>
+          <div className={styles.legalAddrBlock}>
+            <div className={styles.legalAddrTag}>Showroom</div>
+            <div>{COMPANY_LEGAL.showroomLine}</div>
+          </div>
+        </div>
+
+        <div className={styles.legalTermsHead}>Terms &amp; Conditions</div>
+        <ol className={styles.legalTerms}>
+          {RECEIPT_TERMS.map((t, i) => (
+            <li key={i}>{t}</li>
+          ))}
+        </ol>
+      </section>
     </aside>
   );
 };

@@ -72,6 +72,10 @@ export interface OrderSubmitInput {
    *  Summed into clientTotal so the 0.5% drift check matches the server's
    *  recompute. Without this an order with a RM 250 base fee fires a 409. */
   deliveryFeeTotal?: number;
+  /** Customer e-signature captured by Handover SignaturePad — base64 PNG data
+   *  URL. Persisted to orders.signature_data; re-rendered 1:1 on the printed
+   *  Sales Order. Optional so older POS clients still parse. */
+  signatureData?: string;
 }
 
 const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
@@ -142,6 +146,7 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     lines,
     clientTotal,
     ...(input.uploadSessionId ? { uploadSessionId: input.uploadSessionId } : {}),
+    ...(input.signatureData ? { signatureData: input.signatureData } : {}),
   };
 };
 

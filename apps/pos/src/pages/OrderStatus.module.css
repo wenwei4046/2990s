@@ -881,6 +881,31 @@
   border-top: 1px solid var(--line);
   background: #fff;
 }
+.detailFootActions {
+  display: flex;
+  justify-content: flex-end;
+}
+.detailPrintBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: var(--c-ink);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.detailPrintBtn:hover {
+  background: var(--bg-alt);
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
+}
 .detailChecklist {
   display: grid;
   grid-template-columns: 1fr 1fr;

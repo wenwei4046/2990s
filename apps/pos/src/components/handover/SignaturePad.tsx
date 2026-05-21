@@ -1,11 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Eraser } from 'lucide-react';
 import styles from './SignaturePad.module.css';
 
 const SIGN_W = 800;
 const SIGN_H = 200;
 
-export const SignaturePad = ({ onChange }: { onChange: (signed: boolean) => void }) => {
+export interface SignaturePadHandle {
+  // Returns the canvas as a base64 PNG data URL, or null if nothing was drawn.
+  // Used by Handover submit to persist the signature alongside the order.
+  getDataUrl: () => string | null;
+}
+
+export const SignaturePad = forwardRef<
+  SignaturePadHandle,
+  { onChange: (signed: boolean) => void }
+>(({ onChange }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hasInk, setHasInk] = useState(false);
   const drawing = useRef(false);
@@ -63,6 +72,13 @@ export const SignaturePad = ({ onChange }: { onChange: (signed: boolean) => void
     if (ctx) ctx.clearRect(0, 0, SIGN_W, SIGN_H);
   }, []);
 
+  useImperativeHandle(ref, () => ({
+    getDataUrl: () => {
+      if (!hasInk || !canvasRef.current) return null;
+      return canvasRef.current.toDataURL('image/png');
+    },
+  }), [hasInk]);
+
   return (
     <div className={styles.sign}>
       <canvas
@@ -89,4 +105,6 @@ export const SignaturePad = ({ onChange }: { onChange: (signed: boolean) => void
       </div>
     </div>
   );
-};
+});
+
+SignaturePad.displayName = 'SignaturePad';

@@ -7,6 +7,7 @@ import { Handover } from './pages/Handover';
 import { Confirmed } from './pages/Confirmed';
 import { OrderStatus } from './pages/OrderStatus';
 import { Quotes } from './pages/Quotes';
+import { SalesOrderPrint } from './pages/SalesOrderPrint';
 import { AuthGate } from './components/AuthGate';
 
 export const router = createBrowserRouter([
@@ -18,6 +19,7 @@ export const router = createBrowserRouter([
   { path: '/confirmed/:orderId', element: <AuthGate><Confirmed /></AuthGate> },
   { path: '/my-orders', element: <AuthGate><OrderStatus /></AuthGate> },
   { path: '/quotes', element: <AuthGate><Quotes /></AuthGate> },
+  { path: '/print/sales-order/:orderId', element: <AuthGate><SalesOrderPrint /></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
 ]);

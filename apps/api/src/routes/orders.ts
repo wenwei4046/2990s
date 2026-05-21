@@ -320,6 +320,9 @@ orders.post('/', async (c) => {
     // Slip MVP — null when not transfer or no session
     uploadSessionId: dto.uploadSessionId ?? null,
 
+    // Customer e-signature data URL — RPC writes to orders.signature_data
+    signatureData: dto.signatureData ?? null,
+
     // ─── Handover-redesign (Phase 4.5) ─────────────────────────────────
     // Migration 0023 maps these onto the `orders` row + addon order_items.
     // Server forwards addons verbatim — the SQL function INNER JOINs against

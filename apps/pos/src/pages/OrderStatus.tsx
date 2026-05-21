@@ -19,6 +19,7 @@ import {
   Receipt,
   Store,
   Loader2,
+  Printer,
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -1053,6 +1054,19 @@ const OrderDetail = ({ order, onClose }: {
         </div>
 
         <footer className={styles.detailFoot}>
+          {order.lane !== 'delivered' && order.lane !== 'cancelled' && (
+            <div className={styles.detailFootActions}>
+              <a
+                href={`/print/sales-order/${order.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.detailPrintBtn}
+              >
+                <Printer size={14} strokeWidth={1.75} />
+                Generate Sales Order
+              </a>
+            </div>
+          )}
           {editable && (
             <>
               <div className={styles.detailChecklist}>

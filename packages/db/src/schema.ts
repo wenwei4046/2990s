@@ -416,6 +416,7 @@ export const orders = pgTable('orders', {
   deliveredAt:   timestamp('delivered_at', { withTimezone: true }),
   doSigned:      boolean('do_signed').notNull().default(false),
   doKey:         text('do_key'),                       // Supabase Storage path (bucket 'dos')
+  signatureData: text('signature_data'),               // base64 PNG of customer e-sign captured at handover
 
   notes:     text('notes'),
   stockNote: text('stock_note'),

@@ -105,3 +105,104 @@
   font-family: var(--font-button);
   font-weight: var(--w-semibold);
 }
+
+/* ─── Legal footer (Receipt only — company info + T&C) ─────────────── */
+.legal {
+  margin-top: var(--space-5);
+  padding: var(--space-4) 0 var(--space-5);
+  border-top: 1px solid var(--line);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+
+.legalCompany {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.legalCompanyName {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-ink);
+}
+
+.legalSsm {
+  font-family: var(--font-sans);
+  font-weight: var(--w-regular);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg-muted);
+  font-size: var(--fs-11);
+}
+
+.legalAddrBlock {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: var(--space-2);
+}
+
+.legalAddrTag {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+
+.legalTermsHead {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-ink);
+  margin: var(--space-4) 0 var(--space-2);
+}
+
+.legalTerms {
+  list-style: decimal;
+  padding-left: 1.4em;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.legalTerms li {
+  font-size: var(--fs-11);
+  line-height: 1.45;
+  color: var(--fg-muted);
+  text-wrap: pretty;
+}
+
+/* Print-only refinements — smaller margins, denser text, force visible. */
+@media print {
+  .legal {
+    page-break-inside: avoid;
+    color: #000;
+    margin-top: 24px;
+    padding-top: 12px;
+    border-top: 1px solid #999;
+  }
+  .legalCompanyName,
+  .legalTermsHead,
+  .legalAddrTag {
+    color: #000;
+  }
+  .legalTerms li {
+    color: #000;
+    font-size: 9.5pt;
+  }
+  .legal,
+  .legalSsm {
+    color: #444;
+  }
+}

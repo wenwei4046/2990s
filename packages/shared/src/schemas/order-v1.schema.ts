@@ -125,6 +125,13 @@ export const orderV1PostSchema = z.object({
   // Slip MVP (Phase 4): present iff paymentMethod=transfer. Server-side RPC
   // validates session ownership + status='uploaded' and promotes atomically.
   uploadSessionId: z.string().uuid().optional(),
+
+  // Customer e-signature captured by the Handover SignaturePad — a base64
+  // PNG data URL. Persisted as-is on orders.signature_data so the printed
+  // Sales Order can re-render it 1:1. Sales-flow path is optional (so older
+  // POS clients still parse), but Handover gates submit on form.signed, so
+  // in practice every new order arrives with one.
+  signatureData: z.string().optional(),
 });
 
 export type OrderV1PostBody = z.infer<typeof orderV1PostSchema>;

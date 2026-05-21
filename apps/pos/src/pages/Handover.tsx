@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
@@ -24,6 +24,7 @@ import { TargetDateStep } from '../components/handover/TargetDateStep';
 import { AddonsPaymentStep } from '../components/handover/AddonsPaymentStep';
 import { ConfirmPaymentStep } from '../components/handover/ConfirmPaymentStep';
 import { SignConfirmStep } from '../components/handover/SignConfirmStep';
+import type { SignaturePadHandle } from '../components/handover/SignaturePad';
 import { PricingDriftModal } from '../components/PricingDriftModal';
 import styles from './Handover.module.css';
 
@@ -66,6 +67,10 @@ export const Handover = () => {
   const lines = useCart((s) => s.lines);
   const clear = useCart((s) => s.clear);
   const subtotal = cartSubtotal(lines);
+
+  // Captures the canvas signature at submit time so we persist the exact ink
+  // the customer drew — the Sales Order PDF re-embeds it 1:1.
+  const signatureRef = useRef<SignaturePadHandle>(null);
 
   const [idx, setIdx] = useState(0);
   // Only show blockers banner AFTER user clicks Continue and validation fails.
@@ -203,6 +208,7 @@ export const Handover = () => {
         lines,
         acceptedServerTotal,
         uploadSessionId: form.slipUploadSessionId ?? undefined,
+        signatureData: signatureRef.current?.getDataUrl() ?? undefined,
       });
       clear();
       navigate(`/confirmed/${encodeURIComponent(result.id)}`, { replace: true });
@@ -248,7 +254,7 @@ export const Handover = () => {
             {current.key === 'target'    && <TargetDateStep form={form} update={update} />}
             {current.key === 'addons'    && <AddonsPaymentStep form={form} update={update} addons={addons.data ?? []} />}
             {current.key === 'confirm'   && <ConfirmPaymentStep form={form} update={update} subtotal={subtotal} addonTotal={addonTotal} />}
-            {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} />}
+            {current.key === 'sign'      && <SignConfirmStep   form={form} update={update} signatureRef={signatureRef} />}
 
             {serverError && <p className={styles.error}>{serverError}</p>}
 

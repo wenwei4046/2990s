@@ -1,0 +1,364 @@
+/* A4 sales order printable. Layout mirrors the reference template Loo
+   shared 2026-05-22: company info top-left, big SALES ORDER right, two
+   info boxes, two parties boxes, items table, totals card, signature,
+   T&C, footer. Print uses A4 size + 15mm margin via @page. Screen
+   preview centers the page on a soft background. */
+
+@page {
+  size: A4;
+  margin: 15mm;
+}
+
+.shell {
+  min-height: 100vh;
+  background: var(--bg-alt);
+  padding: var(--space-6) var(--space-5);
+  display: flex;
+  justify-content: center;
+}
+
+.page {
+  background: #fff;
+  color: #221F20;
+  width: 100%;
+  max-width: 794px;          /* A4 width at 96 dpi: 8.27in * 96 ≈ 794px */
+  min-height: 1123px;        /* A4 height: 11.69in * 96 ≈ 1123px */
+  padding: 30px 36px 24px;
+  box-shadow: 0 8px 24px rgba(34, 31, 32, 0.08);
+  font-family: var(--font-sans);
+  font-size: 11pt;
+  line-height: 1.45;
+}
+
+/* ───── Header ───── */
+.header {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.companyName {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: 14pt;
+  letter-spacing: 0.02em;
+  color: #221F20;
+}
+
+.companySsm {
+  font-size: 9pt;
+  color: #6b6260;
+}
+
+.companyAddress {
+  margin-top: 8px;
+  font-size: 9.5pt;
+  color: #404040;
+  line-height: 1.5;
+}
+
+.headerRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.docTitle {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: 20pt;
+  letter-spacing: 0.06em;
+  color: #221F20;
+}
+
+.docId {
+  font-family: var(--font-button);
+  font-weight: 600;
+  font-size: 11pt;
+  color: var(--c-burnt);
+  margin-top: 4px;
+}
+
+.docMeta {
+  font-size: 9.5pt;
+  color: #555;
+}
+
+/* ───── Meta row (Order Reference + Delivery) ───── */
+.metaRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.metaBox {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.metaLabel {
+  font-family: var(--font-button);
+  font-size: 9pt;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  margin-bottom: 4px;
+}
+
+.metaValue {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: 11pt;
+  color: #221F20;
+}
+
+.metaSub {
+  font-size: 9pt;
+  color: #6b6260;
+  margin-top: 2px;
+}
+
+/* ───── Parties row (Bill to + Sold by) ───── */
+.partiesRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.partyBox {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.partyLabel {
+  font-family: var(--font-button);
+  font-size: 9pt;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  margin-bottom: 4px;
+}
+
+.partyName {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: 11pt;
+  color: #221F20;
+  margin-bottom: 4px;
+}
+
+.partyLine {
+  font-size: 9.5pt;
+  color: #404040;
+  line-height: 1.45;
+}
+
+/* ───── Items table ───── */
+.items {
+  width: 100%;
+  margin-top: 18px;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.items thead th {
+  background: #F4ECDD;        /* soft peach matches template */
+  font-family: var(--font-button);
+  font-weight: 600;
+  font-size: 10pt;
+  color: #221F20;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.items tbody td {
+  padding: 10px 12px;
+  font-size: 10pt;
+  color: #221F20;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(34, 31, 32, 0.06);
+}
+
+.items tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.colSku   { width: 16%; font-family: var(--font-mono); font-size: 9pt; word-break: break-all; }
+.colDesc  { width: 40%; }
+.colQty   { width: 8%;  text-align: center; }
+.colMoney { width: 18%; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ───── After-items row: customer signature (LEFT) + totals (RIGHT) ───── */
+.afterItems {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 24px;
+  align-items: end;       /* signature line aligns to totals bottom */
+  margin-top: 18px;
+}
+
+.totalsWrap {
+  /* legacy wrapper — kept so the totals card stays its 280px size */
+}
+
+.totals {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.totalRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 8px 14px;
+  font-size: 10pt;
+  border-bottom: 1px solid var(--line);
+}
+
+.totalRow:last-child {
+  border-bottom: none;
+}
+
+.totalLabel {
+  font-family: var(--font-button);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 9pt;
+  color: #221F20;
+}
+
+.totalValue {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: 10pt;
+  color: #221F20;
+  font-variant-numeric: tabular-nums;
+}
+
+.balanceRow {
+  background: rgba(232, 107, 58, 0.12);
+}
+
+.balanceRow .totalLabel,
+.balanceRow .totalValue {
+  color: var(--c-burnt);
+  font-weight: 800;
+  font-size: 11pt;
+}
+
+/* ───── Customer signature (LEFT column of .afterItems) ───── */
+.signatureBox {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.signatureCanvas {
+  height: 80px;
+  position: relative;
+}
+
+.signatureImg {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: left bottom;
+  filter: contrast(1.15);
+  mix-blend-mode: multiply;   /* hides any anti-aliased white halo on print */
+}
+
+.signatureLine {
+  border-top: 1px solid #221F20;
+  height: 0;
+}
+
+.signatureLabel {
+  font-family: var(--font-button);
+  font-size: 9pt;
+  font-weight: 600;
+  color: var(--c-burnt);
+  margin-top: 6px;
+}
+
+.signatureSub {
+  font-size: 9pt;
+  color: #404040;
+  margin-top: 2px;
+}
+
+/* ───── T&C ───── */
+.terms {
+  margin-top: 26px;
+  padding-left: 20px;
+  color: var(--c-burnt);
+  font-size: 8.5pt;
+  line-height: 1.5;
+  page-break-inside: avoid;
+}
+
+.terms li {
+  margin-bottom: 4px;
+}
+
+/* ───── Footer ───── */
+.docFooter {
+  margin-top: 22px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5pt;
+  color: #6b6260;
+}
+
+/* ───── Print overrides ───── */
+@media print {
+  .shell {
+    background: #fff;
+    padding: 0;
+    min-height: auto;
+  }
+  .page {
+    max-width: none;
+    min-height: auto;
+    box-shadow: none;
+    padding: 0;
+  }
+  /* Hide everything outside the sales order page so other content
+     (topbar, auth gate spinners) doesn't end up on the printed page. */
+  body * {
+    visibility: hidden;
+  }
+  .sales-order-page,
+  .sales-order-page * {
+    visibility: visible;
+  }
+  .sales-order-page {
+    position: absolute;
+    inset: 0;
+  }
+}
