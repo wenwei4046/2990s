@@ -70,9 +70,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (!body.tokenHash || !body.email) {
       return { error: 'session_issue_failed' };
     }
+    // Use token_hash flow — body.tokenHash is the hashed_token from
+    // admin.generateLink. The plain `token` field expects a 6-digit OTP code,
+    // not the hash, which is why the previous version returned
+    // "Token has expired or is invalid".
     const { error: otpErr } = await supabase.auth.verifyOtp({
-      email: body.email,
-      token: body.tokenHash,
+      token_hash: body.tokenHash,
       type: 'magiclink',
     });
     return { error: otpErr?.message ?? null };
