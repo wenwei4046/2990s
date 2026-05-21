@@ -766,7 +766,9 @@ const StaffDrawer = ({
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [color, setColor] = useState<string>(STAFF_AVATAR_COLORS[0] ?? '#E86B3A');
-  const [showroomId, setShowroomId] = useState<string>('');
+  // Default role is 'sales', which requires a showroom — pre-select the first
+  // one so the create button works out of the box on a single-showroom MVP.
+  const [showroomId, setShowroomId] = useState<string>(showrooms[0]?.id ?? '');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -780,6 +782,15 @@ const StaffDrawer = ({
   const staffCode = useMemo(() => nextStaffCode(existingCodes), [existingCodes]);
   const initials = staffCode.replace(STAFF_CODE_PREFIX, '');
 
+  // Flipping the role to sales while the showroom dropdown is on "All showrooms"
+  // would otherwise leave showroomId as "" with no visible option — restore
+  // the first real showroom so the select stays in sync with state.
+  useEffect(() => {
+    if (isSales && !showroomId && showrooms[0]?.id) {
+      setShowroomId(showrooms[0].id);
+    }
+  }, [isSales, showroomId, showrooms]);
+
   const onSave = async () => {
     setError(null);
     if (!name.trim()) {
@@ -791,6 +802,10 @@ const StaffDrawer = ({
       return;
     }
     if (isSales) {
+      if (!showroomId) {
+        setError('Sales staff must be assigned to a showroom.');
+        return;
+      }
       if (!/^\d{6}$/.test(pin)) {
         setError('PIN must be 6 digits.');
         return;
@@ -922,17 +937,28 @@ const StaffDrawer = ({
           )}
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Showroom</span>
+            <span className={styles.fieldLabel}>
+              Showroom{isSales ? ' *' : null}
+            </span>
             <select
               className={styles.input}
               value={showroomId}
               onChange={(e) => setShowroomId(e.target.value)}
+              required={isSales}
             >
-              <option value="">All showrooms (oversees every location)</option>
+              {!isSales && (
+                <option value="">All showrooms (oversees every location)</option>
+              )}
               {showrooms.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+            {isSales && (
+              <span className={styles.fieldHint}>
+                Sales staff must be assigned to a single showroom — orders they
+                place are scoped to it.
+              </span>
+            )}
           </label>
 
           <div className={styles.field}>
@@ -1014,8 +1040,10 @@ const DeliveryFeesTab = ({ canEdit }: { canEdit: boolean }) => {
   const cfg = useDeliveryFeeConfig();
   const update = useUpdateDeliveryFeeConfig();
 
-  const [baseFee, setBaseFee]                 = useState<number | ''>('');
-  const [crossCategoryFee, setCrossCategoryFee] = useState<number | ''>('');
+  const [baseFee, setBaseFee]                       = useState<number | ''>('');
+  const [crossCategoryFee, setCrossCategoryFee]     = useState<number | ''>('');
+  const [mattressDays, setMattressDays]             = useState<number | ''>('');
+  const [sofaDays, setSofaDays]                     = useState<number | ''>('');
   const [error, setError]   = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
@@ -1024,22 +1052,32 @@ const DeliveryFeesTab = ({ canEdit }: { canEdit: boolean }) => {
     if (cfg.data) {
       setBaseFee(cfg.data.baseFee);
       setCrossCategoryFee(cfg.data.crossCategoryFee);
+      setMattressDays(cfg.data.mattressBedframeLeadDays);
+      setSofaDays(cfg.data.sofaLeadDays);
     }
   }, [cfg.data]);
 
   const onSave = async () => {
     setError(null);
     setSuccess(false);
-    if (typeof baseFee !== 'number' || typeof crossCategoryFee !== 'number') {
-      setError('Both fields must be a whole-RM integer.');
+    if (
+      typeof baseFee !== 'number' || typeof crossCategoryFee !== 'number' ||
+      typeof mattressDays !== 'number' || typeof sofaDays !== 'number'
+    ) {
+      setError('All four fields must be whole-number integers.');
       return;
     }
-    if (baseFee < 0 || crossCategoryFee < 0) {
-      setError('Fees cannot be negative.');
+    if (baseFee < 0 || crossCategoryFee < 0 || mattressDays < 0 || sofaDays < 0) {
+      setError('Values cannot be negative.');
       return;
     }
     try {
-      await update.mutateAsync({ baseFee, crossCategoryFee });
+      await update.mutateAsync({
+        baseFee,
+        crossCategoryFee,
+        mattressBedframeLeadDays: mattressDays,
+        sofaLeadDays: sofaDays,
+      });
       setSuccess(true);
     } catch (err) {
       setError(String((err as Error).message ?? err));
@@ -1089,6 +1127,44 @@ const DeliveryFeesTab = ({ canEdit }: { canEdit: boolean }) => {
           <span className={styles.fieldHint}>
             Added once, flat, when the order contains ≥2 distinct product categories.
             Sofa Custom + Sofa Bundle count as one category.
+          </span>
+        </div>
+
+        <div className={styles.fieldGroupHead}>Delivery lead times</div>
+
+        <div className={styles.field}>
+          <label className={styles.fieldLabel} htmlFor="mattress-days">Mattress + bed frame (days)</label>
+          <input
+            id="mattress-days"
+            type="number"
+            min={0}
+            step={1}
+            className={styles.input}
+            value={mattressDays}
+            disabled={!canEdit}
+            onChange={(e) => setMattressDays(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+          />
+          <span className={styles.fieldHint}>
+            Minimum days from order date before a delivery date can be picked
+            when the cart contains a mattress or bed frame.
+          </span>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.fieldLabel} htmlFor="sofa-days">Sofa (days)</label>
+          <input
+            id="sofa-days"
+            type="number"
+            min={0}
+            step={1}
+            className={styles.input}
+            value={sofaDays}
+            disabled={!canEdit}
+            onChange={(e) => setSofaDays(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+          />
+          <span className={styles.fieldHint}>
+            Minimum days from order date when the cart contains a sofa. Mixed
+            carts use the larger of the two lead times.
           </span>
         </div>
 

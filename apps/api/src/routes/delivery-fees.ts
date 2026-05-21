@@ -9,9 +9,13 @@ deliveryFees.use('*', supabaseAuth);
 
 const WRITE_ROLES = new Set(['admin', 'coordinator']);
 
+// Same form holds fees + lead days. Each field is independent so the PATCH
+// can partial-update either group without nuking the other.
 const patchSchema = z.object({
-  baseFee:          z.number().int().nonnegative(),
-  crossCategoryFee: z.number().int().nonnegative(),
+  baseFee:                  z.number().int().nonnegative().optional(),
+  crossCategoryFee:         z.number().int().nonnegative().optional(),
+  mattressBedframeLeadDays: z.number().int().nonnegative().optional(),
+  sofaLeadDays:             z.number().int().nonnegative().optional(),
 });
 
 // GET — every authenticated staff role can read.
@@ -19,15 +23,17 @@ deliveryFees.get('/', async (c) => {
   const supabase = c.get('supabase');
   const { data, error } = await supabase
     .from('delivery_fee_config')
-    .select('base_fee, cross_category_fee, updated_at, updated_by')
+    .select('base_fee, cross_category_fee, mattress_bedframe_lead_days, sofa_lead_days, updated_at, updated_by')
     .eq('id', 1)
     .single();
   if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
   return c.json({
-    baseFee:          data.base_fee,
-    crossCategoryFee: data.cross_category_fee,
-    updatedAt:        data.updated_at,
-    updatedBy:        data.updated_by,
+    baseFee:                  data.base_fee,
+    crossCategoryFee:         data.cross_category_fee,
+    mattressBedframeLeadDays: data.mattress_bedframe_lead_days,
+    sofaLeadDays:             data.sofa_lead_days,
+    updatedAt:                data.updated_at,
+    updatedBy:                data.updated_by,
   });
 });
 
@@ -58,14 +64,18 @@ deliveryFees.patch('/', async (c) => {
     }, 400);
   }
 
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    updated_by: userId,
+  };
+  if (parsed.data.baseFee                  !== undefined) patch.base_fee                    = parsed.data.baseFee;
+  if (parsed.data.crossCategoryFee         !== undefined) patch.cross_category_fee          = parsed.data.crossCategoryFee;
+  if (parsed.data.mattressBedframeLeadDays !== undefined) patch.mattress_bedframe_lead_days = parsed.data.mattressBedframeLeadDays;
+  if (parsed.data.sofaLeadDays             !== undefined) patch.sofa_lead_days              = parsed.data.sofaLeadDays;
+
   const { error } = await supabase
     .from('delivery_fee_config')
-    .update({
-      base_fee:           parsed.data.baseFee,
-      cross_category_fee: parsed.data.crossCategoryFee,
-      updated_at:         new Date().toISOString(),
-      updated_by:         userId,
-    })
+    .update(patch)
     .eq('id', 1);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   return c.json({ ok: true });

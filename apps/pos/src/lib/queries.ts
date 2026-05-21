@@ -329,8 +329,10 @@ export const useProductPricingRealtime = (productId: string | undefined) => {
 /* ─── Delivery fee config ─── */
 
 export interface DeliveryFeeConfigRow {
-  baseFee:          number;
-  crossCategoryFee: number;
+  baseFee:                  number;
+  crossCategoryFee:         number;
+  mattressBedframeLeadDays: number;
+  sofaLeadDays:             number;
 }
 
 export const useDeliveryFeeConfig = () =>
@@ -345,8 +347,18 @@ export const useDeliveryFeeConfig = () =>
         headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(`GET /delivery-fees failed (${res.status})`);
-      const body = (await res.json()) as { baseFee: number; crossCategoryFee: number };
-      return { baseFee: body.baseFee, crossCategoryFee: body.crossCategoryFee };
+      const body = (await res.json()) as {
+        baseFee:                  number;
+        crossCategoryFee:         number;
+        mattressBedframeLeadDays: number;
+        sofaLeadDays:             number;
+      };
+      return {
+        baseFee:                  body.baseFee,
+        crossCategoryFee:         body.crossCategoryFee,
+        mattressBedframeLeadDays: body.mattressBedframeLeadDays,
+        sofaLeadDays:             body.sofaLeadDays,
+      };
     },
     staleTime: 60_000,
   });
@@ -372,6 +384,43 @@ export interface SalesStaffRow {
 }
 
 const SALES_STAFF_CACHE_KEY = 'pos:sales-staff-cache';
+
+/* ─── Sales stats (My Orders KPI cards) ────────────────────────────────
+ *
+ * Calendar-month totals + counts for the current sales user, scoped to
+ * the user's home showroom. RLS would clamp this to "own orders only"
+ * if hit via the JS client — the server endpoint uses service-role to
+ * compute showroom-wide aggregates and then returns both numbers.
+ */
+
+export interface SalesStatsRow {
+  monthLabel:     string;
+  monthStart:     string;
+  monthEnd:       string;
+  staffName:      string;
+  showroomTotal:  number;
+  showroomCount:  number;
+  personalTotal:  number;
+  personalCount:  number;
+}
+
+export const useSalesStats = (enabled = true) =>
+  useQuery({
+    enabled,
+    queryKey: ['pos', 'sales-stats'],
+    staleTime: 60_000,
+    queryFn: async (): Promise<SalesStatsRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/pos/sales-stats`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /pos/sales-stats failed (${res.status})`);
+      return await res.json() as SalesStatsRow;
+    },
+  });
 
 export const useShowroomSalesStaff = () =>
   useQuery({

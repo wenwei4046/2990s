@@ -131,7 +131,7 @@ orders.post('/', async (c) => {
         }),
     supabase
       .from('delivery_fee_config')
-      .select('base_fee, cross_category_fee')
+      .select('base_fee, cross_category_fee, mattress_bedframe_lead_days, sofa_lead_days')
       .eq('id', 1)
       .single(),
   ]);
@@ -144,6 +144,44 @@ orders.post('/', async (c) => {
   const categoryIdByProductId = new Map<string, string>();
   for (const p of products) {
     if (p.category_id) categoryIdByProductId.set(p.id, p.category_id);
+  }
+
+  // Per-category delivery lead-time floor. Locked 2026-05-22 with Loo:
+  // mattress + bed frame share one minimum, sofa has its own, mixed carts
+  // take the larger of the two. Defence-in-depth — POS enforces this client-
+  // side, but the server is authoritative so a tampered tablet can't sneak in
+  // a delivery date inside the lead window.
+  if (dto.deliveryDate) {
+    const cartCategoryIds = new Set<string>();
+    for (const line of dto.lines) {
+      const catId = categoryIdByProductId.get(line.config.productId);
+      if (catId) cartCategoryIds.add(catId);
+    }
+    const sofaLead  = deliveryCfgRes.data?.sofa_lead_days ?? 30;
+    const matBfLead = deliveryCfgRes.data?.mattress_bedframe_lead_days ?? 20;
+    const sofaContrib  = cartCategoryIds.has('sofa')                                                           ? sofaLead  : 0;
+    const matBfContrib = (cartCategoryIds.has('mattress') || cartCategoryIds.has('bedframe'))                  ? matBfLead : 0;
+    const requiredDays = Math.max(sofaContrib, matBfContrib, 0);
+
+    if (requiredDays > 0) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const minDate = new Date(today);
+      minDate.setDate(minDate.getDate() + requiredDays);
+      const requested = new Date(`${dto.deliveryDate}T00:00:00`);
+
+      if (requested.getTime() < minDate.getTime()) {
+        const minIso = `${minDate.getFullYear()}-${String(minDate.getMonth() + 1).padStart(2, '0')}-${String(minDate.getDate()).padStart(2, '0')}`;
+        return c.json({
+          error: 'delivery_date_too_early',
+          requiredDays,
+          earliestAllowed: minIso,
+          reason: cartCategoryIds.has('sofa') && (cartCategoryIds.has('mattress') || cartCategoryIds.has('bedframe'))
+            ? (requiredDays === sofaLead ? 'sofa' : 'mattress_or_bedframe')
+            : cartCategoryIds.has('sofa') ? 'sofa' : 'mattress_or_bedframe',
+        }, 400);
+      }
+    }
   }
   const compartments = compartmentsRes.data ?? [];
   const bundles = bundlesRes.data ?? [];

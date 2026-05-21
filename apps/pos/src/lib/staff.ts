@@ -9,6 +9,7 @@ export interface StaffRecord {
   role: string;
   initials: string;
   color: string;
+  showroomId: string | null;
 }
 
 export function useStaff() {
@@ -20,7 +21,7 @@ export function useStaff() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('staff')
-        .select('id, staff_code, name, role, initials, color')
+        .select('id, staff_code, name, role, initials, color, showroom_id')
         .eq('id', user!.id)
         .maybeSingle();
       if (error) throw error;
@@ -32,6 +33,7 @@ export function useStaff() {
         role: data.role,
         initials: data.initials,
         color: data.color,
+        showroomId: data.showroom_id ?? null,
       };
     },
   });

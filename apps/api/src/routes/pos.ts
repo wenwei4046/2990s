@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import type { Env, Variables } from '../env';
+import { supabaseAuth } from '../middleware/auth';
 import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
 import { verifyPin } from '../lib/bcrypt';
 
@@ -113,4 +114,129 @@ pos.post('/pin-login', async (c) => {
     return c.json({ error: 'session_issue_failed', detail: linkErr?.message }, 500);
   }
   return c.json({ tokenHash: link.properties.hashed_token, email: staff.email }, 200);
+});
+
+// POST /pos/verify-pin — post-session PIN re-check used by the My Orders gate.
+// No new session is issued; we only return { valid: true|false }. Reuses the
+// same rate limiter (keyed by user.id so a brute-forcer can't spam this and
+// the LockScreen endpoint with the same id-key independently).
+const VerifyPinBodySchema = z.object({
+  pin: z.string().regex(/^\d{6}$/),
+});
+pos.post('/verify-pin', supabaseAuth, async (c) => {
+  const user = c.get('user');
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = VerifyPinBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
+  }
+
+  const limit = activeLimiter.check(user.id);
+  if (!limit.allowed) {
+    return c.json({ error: 'too_many_attempts', retryAfter: limit.retryAfter }, 429);
+  }
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: staff, error } = await adminClient
+    .from('staff')
+    .select('pin_hash, role, active')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (error) {
+    return c.json({ error: 'fetch_failed', detail: error.message }, 500);
+  }
+  const verifiable = staff && staff.active && staff.role === 'sales' && staff.pin_hash;
+  if (!verifiable) {
+    return c.json({ error: 'staff_not_verifiable' }, 401);
+  }
+
+  const ok = await verifyPin(parsed.data.pin, staff.pin_hash as string);
+  if (!ok) {
+    activeLimiter.recordFailure(user.id);
+    const after = activeLimiter.check(user.id);
+    return c.json({
+      valid: false,
+      remainingAttempts: after.allowed ? after.remainingAttempts : 0,
+    }, 401);
+  }
+
+  activeLimiter.reset(user.id);
+  return c.json({ valid: true }, 200);
+});
+
+// GET /pos/sales-stats — current-calendar-month aggregates for the logged-in
+// sales user. Counts every order placed at the user's showroom + their own
+// orders, excluding cancellations. Service-role bypass needed because RLS
+// scopes sales to own orders only — showroom-wide totals would be 0 otherwise.
+pos.get('/sales-stats', supabaseAuth, async (c) => {
+  const user = c.get('user');
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const { data: staff, error: staffErr } = await adminClient
+    .from('staff')
+    .select('name, showroom_id')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (staffErr || !staff) {
+    return c.json({ error: 'staff_not_found' }, 404);
+  }
+
+  // Month bounds in Asia/Kuala_Lumpur (UTC+8, no DST). Workers run in UTC, so
+  // shift +8h to find "now" in MY, take the 1st of that month at MY midnight,
+  // then shift back -8h for the UTC instant. Same for the upper bound.
+  const nowUtc = new Date();
+  const nowMy  = new Date(nowUtc.getTime() + 8 * 60 * 60 * 1000);
+  const y = nowMy.getUTCFullYear();
+  const m = nowMy.getUTCMonth();
+  const monthStartUtc = new Date(Date.UTC(y, m, 1, 0, 0, 0) - 8 * 60 * 60 * 1000).toISOString();
+  const monthEndUtc   = new Date(Date.UTC(y, m + 1, 1, 0, 0, 0) - 8 * 60 * 60 * 1000).toISOString();
+
+  let showroomTotal = 0;
+  let showroomCount = 0;
+  if (staff.showroom_id) {
+    const { data, error } = await adminClient
+      .from('orders')
+      .select('total')
+      .eq('showroom_id', staff.showroom_id)
+      .neq('lane', 'cancelled')
+      .gte('placed_at', monthStartUtc)
+      .lt('placed_at', monthEndUtc);
+    if (error) return c.json({ error: 'fetch_failed', detail: error.message }, 500);
+    showroomCount = data?.length ?? 0;
+    showroomTotal = (data ?? []).reduce((s, r) => s + (r.total ?? 0), 0);
+  }
+
+  const { data: personalRows, error: personalErr } = await adminClient
+    .from('orders')
+    .select('total')
+    .eq('staff_id', user.id)
+    .neq('lane', 'cancelled')
+    .gte('placed_at', monthStartUtc)
+    .lt('placed_at', monthEndUtc);
+  if (personalErr) return c.json({ error: 'fetch_failed', detail: personalErr.message }, 500);
+  const personalCount = personalRows?.length ?? 0;
+  const personalTotal = (personalRows ?? []).reduce((s, r) => s + (r.total ?? 0), 0);
+
+  const monthLabel = new Intl.DateTimeFormat('en-MY', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Asia/Kuala_Lumpur',
+  }).format(nowUtc);
+
+  return c.json({
+    monthLabel,
+    monthStart: monthStartUtc,
+    monthEnd:   monthEndUtc,
+    staffName:  staff.name,
+    showroomTotal,
+    showroomCount,
+    personalTotal,
+    personalCount,
+  }, 200);
 });

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { MonthCalendar } from './MonthCalendar';
 import { Field } from './Field';
 import type { HandoverForm } from '../../lib/handover-helpers';
+import { useCartLeadDays } from '../../lib/lead-times';
 import styles from '../../pages/Handover.module.css';
 
 export const TargetDateStep = ({
@@ -10,24 +11,26 @@ export const TargetDateStep = ({
   form: HandoverForm;
   update: <K extends keyof HandoverForm>(k: K, v: HandoverForm[K]) => void;
 }) => {
-  // T+30 minimum — sales can't quote delivery earlier than 30 days from
-  // the order date (per Loo: standard production + logistics window).
-  // Matches the "As fast as possible" default below.
+  const { days: leadDays, reasonLabel } = useCartLeadDays();
+
+  // Cart-aware minimum delivery date. Sofa carts get the longer lead time;
+  // mattress/bed-frame-only carts use the shorter one; mixed carts use the
+  // larger of the two. Both numbers are admin-configurable (Backend Settings
+  // → Delivery). Matches the "As fast as possible" default below.
   const earliestDate = useMemo(() => {
     const t = new Date();
-    t.setDate(t.getDate() + 30);
+    t.setDate(t.getDate() + leadDays);
     t.setHours(0, 0, 0, 0);
     return t;
-  }, []);
-  // ASAP target = order date + 30 days (per Loo: standard "as fast as possible").
+  }, [leadDays]);
   const asapIso = useMemo(() => {
     const t = new Date();
-    t.setDate(t.getDate() + 30);
+    t.setDate(t.getDate() + leadDays);
     const y = t.getFullYear();
     const m = String(t.getMonth() + 1).padStart(2, '0');
     const d = String(t.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
-  }, []);
+  }, [leadDays]);
   const fmtAsap = useMemo(() =>
     new Date(asapIso + 'T00:00:00').toLocaleDateString('en-MY', {
       day: 'numeric', month: 'short', year: 'numeric',
@@ -70,7 +73,12 @@ export const TargetDateStep = ({
           />
           <div>
             <strong>As fast as possible</strong>
-            <p>Earliest standard slot — 30 days from order date ({fmtAsap}).</p>
+            <p>
+              Earliest standard slot — {leadDays} days from order date ({fmtAsap}).
+              {reasonLabel !== 'standard' && (
+                <> Driven by <strong>{reasonLabel}</strong>.</>
+              )}
+            </p>
           </div>
         </label>
 

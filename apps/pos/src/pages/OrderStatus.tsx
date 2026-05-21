@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
   ArrowLeft,
@@ -15,21 +15,26 @@ import {
   ArrowRight,
   Circle,
   Check,
+  Delete,
+  Receipt,
+  Store,
+  Loader2,
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { supabase } from '../lib/supabase';
 import { Topbar } from '../components/Topbar';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLocalities } from '../lib/queries';
+import { useLocalities, useSalesStats } from '../lib/queries';
+import { useStaff } from '../lib/staff';
 import { SlipUploadStep } from '../components/SlipUploadStep';
 import styles from './OrderStatus.module.css';
 
-// Demo PIN for pilot (per CLAUDE.md prototype reference). Production wires
-// through to staff.pin_hash via /api/auth/pin endpoint.
-const DEMO_PIN = '299000';
 const PIN_LEN = 6;
-const SESSION_KEY = 'pos-orders-unlocked-v1';
+// Scoped by user.id so a fresh login on the same tablet re-prompts for PIN
+// instead of inheriting the previous user's unlocked state.
+const SESSION_KEY_PREFIX = 'pos-orders-unlocked-v2:';
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
 type Lane = 'received' | 'proceed' | 'logistics' | 'ready' | 'dispatched' | 'delivered' | 'cancelled';
 
@@ -148,121 +153,199 @@ const fmtTimeAgo = (iso: string): string => {
 
 export const OrderStatus = () => {
   const { user } = useAuth();
+  const sessionKey = user ? `${SESSION_KEY_PREFIX}${user.id}` : null;
   const [unlocked, setUnlocked] = useState<boolean>(() => {
-    if (typeof sessionStorage === 'undefined') return false;
-    return sessionStorage.getItem(SESSION_KEY) === '1';
+    if (!user || typeof sessionStorage === 'undefined') return false;
+    return sessionStorage.getItem(`${SESSION_KEY_PREFIX}${user.id}`) === '1';
   });
+
+  if (!user) return null; // AuthGate blocks unauthenticated access upstream.
 
   if (!unlocked) {
     return (
       <PinGate
         onUnlock={() => {
-          sessionStorage.setItem(SESSION_KEY, '1');
+          if (sessionKey) sessionStorage.setItem(sessionKey, '1');
           setUnlocked(true);
         }}
       />
     );
   }
 
-  // POS auth currently exposes user.email; staff name lookup lands when the
-  // staff table read is wired through (per-staff PIN comes with that).
-  const fallbackName = user?.email?.split('@')[0] ?? 'Sales';
-  return <OrderBoard staffName={fallbackName} />;
+  return <OrderBoard sessionKey={sessionKey} />;
 };
 
 /* ─── PIN Gate ─── */
 
 const PinGate = ({ onUnlock }: { onUnlock: () => void }) => {
-  const [digits, setDigits] = useState<string[]>(Array(PIN_LEN).fill(''));
-  const [error, setError] = useState<string | null>(null);
-  const refs = useRef<(HTMLInputElement | null)[]>([]);
+  const [pin, setPin] = useState('');
+  const [showErr, setShowErr] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [retryAfter, setRetryAfter] = useState<number | null>(null);
 
-  const setDigit = (i: number, v: string) => {
-    const cleaned = v.replace(/\D/g, '').slice(0, 1);
-    setDigits((cur) => {
-      const next = [...cur];
-      next[i] = cleaned;
-      return next;
-    });
-    setError(null);
-    if (cleaned && i < PIN_LEN - 1) refs.current[i + 1]?.focus();
-  };
+  // onUnlock is recreated on every parent render. Stashing it in a ref keeps
+  // the submit effect's dep array stable — otherwise the effect re-runs every
+  // render, its cleanup fires, and any in-flight fetch gets wrongly cancelled.
+  const onUnlockRef = useRef(onUnlock);
+  onUnlockRef.current = onUnlock;
 
-  const tryUnlock = () => {
-    const pin = digits.join('');
-    if (pin.length < PIN_LEN) {
-      setError('Enter the 6-digit PIN');
+  // Countdown for rate-limit lockout.
+  useEffect(() => {
+    if (retryAfter === null) return;
+    if (retryAfter <= 0) {
+      setRetryAfter(null);
+      setErrorMsg(null);
       return;
     }
-    if (pin === DEMO_PIN) {
-      onUnlock();
-    } else {
-      setError('PIN incorrect — try again');
-      setDigits(Array(PIN_LEN).fill(''));
-      refs.current[0]?.focus();
-    }
-  };
+    const t = window.setTimeout(
+      () => setRetryAfter((s) => (s == null ? null : s - 1)),
+      1000,
+    );
+    return () => window.clearTimeout(t);
+  }, [retryAfter]);
 
+  // Submit when PIN reaches 6 digits.
   useEffect(() => {
-    refs.current[0]?.focus();
-  }, []);
+    if (pin.length !== PIN_LEN || busy) return;
+    const submit = async () => {
+      setBusy(true);
+      try {
+        const session = await supabase.auth.getSession();
+        const token = session.data.session?.access_token;
+        if (!token || !API_URL) {
+          setPin('');
+          setShowErr(true);
+          setErrorMsg('Session lost — sign in again');
+          window.setTimeout(() => setShowErr(false), 700);
+          return;
+        }
+        const res = await fetch(`${API_URL}/pos/verify-pin`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ pin }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          valid?: boolean;
+          remainingAttempts?: number;
+          retryAfter?: number;
+          error?: string;
+        };
+        if (res.ok && body.valid) {
+          window.setTimeout(() => onUnlockRef.current(), 180);
+          return;
+        }
+        setPin('');
+        setShowErr(true);
+        if (res.status === 429 && typeof body.retryAfter === 'number') {
+          setRetryAfter(body.retryAfter);
+          setErrorMsg(`Too many attempts — try again in ${body.retryAfter}s`);
+        } else if (body.valid === false) {
+          const remaining = body.remainingAttempts ?? 0;
+          setErrorMsg(remaining > 0 ? `Wrong PIN — ${remaining} left` : 'Wrong PIN');
+        } else {
+          setErrorMsg(body.error ?? 'Verification failed');
+        }
+        window.setTimeout(() => setShowErr(false), 700);
+      } finally {
+        setBusy(false);
+      }
+    };
+    void submit();
+  }, [pin, busy]);
+
+  const locked = retryAfter !== null && retryAfter > 0;
+  const padDisabled = busy || locked;
+
+  const press = useCallback(
+    (k: string | 'del' | 'clr') => {
+      if (padDisabled) return;
+      if (k === 'del') { setPin((p) => p.slice(0, -1)); return; }
+      if (k === 'clr') { setPin(''); return; }
+      if (errorMsg && !locked) setErrorMsg(null);
+      setShowErr(false);
+      setPin((p) => (p.length >= PIN_LEN ? p : p + k));
+    },
+    [padDisabled, errorMsg, locked],
+  );
 
   return (
-    <main className={styles.gate}>
-      <div className={styles.gateCard}>
-        <div className={styles.gateIcon}>
-          <ShieldCheck size={32} strokeWidth={1.75} />
+    <>
+      <Topbar />
+      <main className={styles.gate}>
+        <div className={styles.gateCard}>
+          <div className={styles.gateIcon}>
+            <ShieldCheck size={26} strokeWidth={1.75} />
+          </div>
+          <div className={styles.gateEyebrow}>Your orders</div>
+          <h2 className={styles.gateTitle}>Enter your PIN</h2>
+          <p className={styles.gateSub}>
+            Same PIN you signed in with. Keeps customer details safe when the
+            tablet is shared.
+          </p>
+
+          <div
+            className={`${styles.gateDots} ${showErr ? styles.gateDotsErr : ''}`}
+            aria-live="polite"
+          >
+            {Array.from({ length: PIN_LEN }).map((_, i) => (
+              <span
+                key={i}
+                className={`${styles.gateDot} ${
+                  showErr ? styles.gateDotErr : pin.length > i ? styles.gateDotOn : ''
+                }`}
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+
+          {errorMsg && <div className={styles.gateError} role="alert">{errorMsg}</div>}
+
+          <div className={styles.gatePad}>
+            {['1','2','3','4','5','6','7','8','9'].map((k) => (
+              <button
+                key={k}
+                type="button"
+                className={styles.gateKey}
+                onClick={() => press(k)}
+                disabled={padDisabled}
+              >
+                {k}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`${styles.gateKey} ${styles.gateKeyUtil}`}
+              onClick={() => press('clr')}
+              disabled={padDisabled}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className={styles.gateKey}
+              onClick={() => press('0')}
+              disabled={padDisabled}
+            >
+              0
+            </button>
+            <button
+              type="button"
+              className={`${styles.gateKey} ${styles.gateKeyUtil}`}
+              onClick={() => press('del')}
+              disabled={padDisabled}
+              aria-label="Delete last digit"
+            >
+              <Delete size={18} strokeWidth={1.75} />
+            </button>
+          </div>
+
+          <Link to="/catalog" className={styles.gateBack}>
+            <ArrowLeft size={14} strokeWidth={1.75} /> Back to catalog
+          </Link>
         </div>
-        <h1 className={styles.gateTitle}>Order status</h1>
-        <p className={styles.gateBody}>
-          Enter your 6-digit staff PIN to view your orders. PIN switching keeps
-          this tablet shareable across sales staff.
-        </p>
-        <div
-          className={styles.pinRow}
-          onPaste={(e) => {
-            const txt = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, PIN_LEN);
-            if (!txt) return;
-            e.preventDefault();
-            const next = Array(PIN_LEN).fill('');
-            for (let i = 0; i < txt.length; i++) next[i] = txt[i];
-            setDigits(next);
-            refs.current[Math.min(txt.length, PIN_LEN - 1)]?.focus();
-          }}
-        >
-          {digits.map((d, i) => (
-            <input
-              key={i}
-              ref={(el) => { refs.current[i] = el; }}
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={1}
-              value={d}
-              onChange={(e) => setDigit(i, e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Backspace' && !d && i > 0) {
-                  refs.current[i - 1]?.focus();
-                }
-                if (e.key === 'Enter') tryUnlock();
-              }}
-              className={styles.pinInput}
-              aria-label={`PIN digit ${i + 1}`}
-            />
-          ))}
-        </div>
-        {error && <p className={styles.gateError}>{error}</p>}
-        <Button variant="primary" onClick={tryUnlock} fullWidth>
-          Unlock
-        </Button>
-        <Link to="/catalog" className={styles.gateBack}>
-          <ArrowLeft size={14} strokeWidth={1.75} /> Back to catalog
-        </Link>
-        <p className={styles.gateHint}>
-          Pilot PIN: <code>299000</code>. Production will switch to per-staff hashed PINs.
-        </p>
-      </div>
-    </main>
+      </main>
+    </>
   );
 };
 
@@ -304,10 +387,14 @@ const LANES: ReadonlyArray<LaneDef> = [
   },
 ];
 
-const OrderBoard = ({ staffName }: { staffName: string }) => {
+const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   const orders = useMyOrders();
+  const stats = useSalesStats();
+  const staff = useStaff();
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
+
+  const staffName = staff.data?.name ?? stats.data?.staffName ?? 'Sales';
 
   // Keep the active drawer order in sync with refetches.
   useEffect(() => {
@@ -353,7 +440,7 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
             type="button"
             className={styles.lockBtn}
             onClick={() => {
-              sessionStorage.removeItem(SESSION_KEY);
+              if (sessionKey) sessionStorage.removeItem(sessionKey);
               window.location.reload();
             }}
           >
@@ -361,6 +448,8 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
           </button>
         </div>
       </header>
+
+      <SalesKpis stats={stats} staffName={staffName} />
 
       {orders.isLoading ? (
         <p className={styles.empty}>Loading…</p>
@@ -412,6 +501,75 @@ const OrderBoard = ({ staffName }: { staffName: string }) => {
     </>
   );
 };
+
+/* ─── Sales KPIs (2 cards above the board) ─── */
+
+const SalesKpis = ({
+  stats,
+  staffName,
+}: {
+  stats: ReturnType<typeof useSalesStats>;
+  staffName: string;
+}) => {
+  const monthLabel = stats.data?.monthLabel ?? '';
+  return (
+    <section className={styles.kpis} aria-label={`Sales · ${monthLabel}`}>
+      <div className={styles.kpiCard}>
+        <div className={styles.kpiHead}>
+          <Store size={13} strokeWidth={1.75} />
+          Showroom · {monthLabel || '—'}
+        </div>
+        {stats.isLoading && !stats.data ? (
+          <KpiPlaceholder />
+        ) : stats.error ? (
+          <div className={styles.kpiError}>Couldn’t load</div>
+        ) : (
+          <>
+            <div className={styles.kpiNum}>
+              <span className={styles.kpiUnit}>RM</span>
+              {fmtMoney(stats.data?.showroomTotal ?? 0)}
+            </div>
+            <div className={styles.kpiDelta}>
+              <Receipt size={12} strokeWidth={1.75} />
+              {stats.data?.showroomCount ?? 0}{' '}
+              {(stats.data?.showroomCount ?? 0) === 1 ? 'order' : 'orders'}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className={styles.kpiCard}>
+        <div className={styles.kpiHead}>
+          <ShieldCheck size={13} strokeWidth={1.75} />
+          {staffName} · {monthLabel || '—'}
+        </div>
+        {stats.isLoading && !stats.data ? (
+          <KpiPlaceholder />
+        ) : stats.error ? (
+          <div className={styles.kpiError}>Couldn’t load</div>
+        ) : (
+          <>
+            <div className={styles.kpiNum}>
+              <span className={styles.kpiUnit}>RM</span>
+              {fmtMoney(stats.data?.personalTotal ?? 0)}
+            </div>
+            <div className={styles.kpiDelta}>
+              <Receipt size={12} strokeWidth={1.75} />
+              {stats.data?.personalCount ?? 0}{' '}
+              {(stats.data?.personalCount ?? 0) === 1 ? 'order' : 'orders'}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+};
+
+const KpiPlaceholder = () => (
+  <div className={styles.kpiLoading}>
+    <Loader2 size={16} strokeWidth={1.75} className={styles.kpiSpin} />
+  </div>
+);
 
 const OrderTile = ({ order, onOpen }: {
   order: MyOrderRow;

@@ -287,6 +287,17 @@
   flex-direction: column;
   gap: 6px;
 }
+.fieldGroupHead {
+  font-family: var(--font-button);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-11);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
 .fieldLabel {
   font-family: var(--font-button);
   font-weight: var(--w-semibold);

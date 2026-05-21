@@ -368,10 +368,12 @@ export const useBulkSetProductVisibility = () => {
 /* ─── Delivery fee config ─── */
 
 export interface DeliveryFeeConfigRow {
-  baseFee:          number;
-  crossCategoryFee: number;
-  updatedAt:        string;
-  updatedBy:        string | null;
+  baseFee:                  number;
+  crossCategoryFee:         number;
+  mattressBedframeLeadDays: number;
+  sofaLeadDays:             number;
+  updatedAt:                string;
+  updatedBy:                string | null;
 }
 
 export const useDeliveryFeeConfig = () =>
@@ -394,7 +396,12 @@ export const useDeliveryFeeConfig = () =>
 export const useUpdateDeliveryFeeConfig = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (patch: { baseFee: number; crossCategoryFee: number }) => {
+    mutationFn: async (patch: {
+      baseFee?:                  number;
+      crossCategoryFee?:         number;
+      mattressBedframeLeadDays?: number;
+      sofaLeadDays?:             number;
+    }) => {
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const session = await supabase.auth.getSession();
       const token   = session.data.session?.access_token;

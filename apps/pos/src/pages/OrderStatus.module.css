@@ -1,6 +1,6 @@
-/* ─── PIN Gate ─── */
+/* ─── PIN Gate — keypad style, ported from prototype/pos-styles.css .pin-gate ─── */
 .gate {
-  min-height: 100vh;
+  min-height: calc(100vh - 64px);
   background: var(--bg);
   display: grid;
   place-items: center;
@@ -9,73 +9,151 @@
 
 .gateCard {
   width: 100%;
-  max-width: 480px;
-  background: var(--c-cream);
+  max-width: 420px;
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: var(--space-7);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  align-items: center;
+  padding: 36px 36px 28px;
   text-align: center;
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--shadow-3);
 }
 
 .gateIcon {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: var(--c-burnt);
-  color: var(--c-cream);
-  display: grid;
-  place-items: center;
-  margin-bottom: var(--space-2);
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--c-orange) 14%, transparent);
+  color: var(--c-burnt);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+}
+
+.gateEyebrow {
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+  margin-bottom: 6px;
 }
 
 .gateTitle {
   font-family: var(--font-title);
-  font-weight: var(--w-bold);
-  font-size: var(--fs-32);
-  margin: 0;
+  font-weight: 900;
+  font-size: 28px;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+  color: var(--c-ink);
 }
 
-.gateBody {
-  font-size: var(--fs-13);
+.gateSub {
+  font-size: 13px;
   color: var(--fg-muted);
   line-height: 1.5;
-  margin: 0;
+  max-width: 36ch;
+  margin: 0 auto 22px;
 }
 
-.pinRow {
+.gateDots {
   display: flex;
-  gap: 8px;
-  margin: var(--space-3) 0;
+  gap: 12px;
+  justify-content: center;
+  margin-bottom: 20px;
 }
 
-.pinInput {
-  width: 48px;
-  height: 60px;
-  text-align: center;
-  font-family: var(--font-mono);
-  font-size: var(--fs-24);
-  font-weight: var(--w-bold);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  outline: none;
-  transition: border-color 120ms;
+.gateDot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line-strong);
+  transition: 120ms ease;
 }
-.pinInput:focus {
-  border-color: var(--c-burnt);
+
+.gateDotOn {
+  background: var(--c-orange);
+  border-color: var(--c-orange);
+}
+
+.gateDotErr {
+  background: #b8331f;
+  border-color: #b8331f;
+}
+
+.gateDotsErr {
+  animation: gateShake 380ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+@keyframes gateShake {
+  10%, 90%  { transform: translateX(-1px); }
+  20%, 80%  { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60%  { transform: translateX(3px); }
 }
 
 .gateError {
-  margin: 0;
-  font-size: var(--fs-13);
-  color: var(--c-error);
+  font-size: 12px;
   font-family: var(--font-button);
-  font-weight: var(--w-semibold);
+  font-weight: 600;
+  color: #b8331f;
+  margin-bottom: 12px;
+}
+
+.gatePad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.gateKey {
+  height: 52px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-button);
+  font-weight: 600;
+  font-size: 20px;
+  color: var(--c-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-1);
+  transition: 100ms ease;
+}
+.gateKey:hover:not(:disabled) {
+  box-shadow: var(--shadow-2);
+  transform: translateY(-1px);
+}
+.gateKey:active:not(:disabled) {
+  transform: scale(0.97);
+  box-shadow: var(--shadow-press);
+}
+.gateKey:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.gateKeyUtil {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--fg-muted);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+.gateKeyUtil:hover:not(:disabled) {
+  background: rgba(34, 31, 32, 0.04);
+  box-shadow: none;
+  transform: none;
+}
+.gateKeyUtil:active:not(:disabled) {
+  background: rgba(34, 31, 32, 0.08);
+  box-shadow: none;
 }
 
 .gateBack {
@@ -83,25 +161,95 @@
   align-items: center;
   gap: 4px;
   font-family: var(--font-button);
-  font-size: var(--fs-12);
-  font-weight: var(--w-medium);
+  font-size: 12px;
+  font-weight: 500;
   color: var(--fg-muted);
   text-decoration: none;
-  margin-top: var(--space-2);
 }
-.gateBack:hover { color: var(--fg); }
+.gateBack:hover { color: var(--c-burnt); }
 
-.gateHint {
-  margin: var(--space-3) 0 0;
-  font-size: var(--fs-11);
-  color: var(--fg-soft);
+/* ─── Sales KPIs (above the lanes) — ported from prototype be-kpi ─── */
+.kpis {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
 }
-.gateHint code {
-  font-family: var(--font-mono);
-  background: var(--bg-alt);
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
+
+.kpiCard {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 22px 22px 18px;
+  box-shadow: var(--shadow-1);
+}
+
+.kpiHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--fg-muted);
+}
+
+.kpiNum {
+  font-family: var(--font-title);
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 8px;
+  color: var(--c-ink);
+  line-height: 1;
+}
+
+.kpiUnit {
+  font-size: 16px;
+  font-weight: 700;
+  vertical-align: 14px;
+  padding-right: 6px;
+  color: var(--fg-muted);
+}
+
+.kpiDelta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+}
+
+.kpiError {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #b8331f;
+  font-family: var(--font-button);
+  font-weight: 600;
+}
+
+.kpiLoading {
+  margin-top: 12px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  color: var(--fg-muted);
+}
+
+.kpiSpin {
+  animation: kpiSpin 900ms linear infinite;
+}
+
+@keyframes kpiSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .kpis { grid-template-columns: 1fr; }
 }
 
 /* ─── Shell ─── */

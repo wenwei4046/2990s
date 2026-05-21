@@ -104,11 +104,13 @@ export const appConfig = pgTable('app_config', {
 // RLS: read for any authenticated staff; UPDATE for admin/coordinator only.
 
 export const deliveryFeeConfig = pgTable('delivery_fee_config', {
-  id:               integer('id').primaryKey().default(1),     // CHECK (id = 1) at DB
-  baseFee:          integer('base_fee').notNull().default(250),
-  crossCategoryFee: integer('cross_category_fee').notNull().default(175),
-  updatedAt:        timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedBy:        uuid('updated_by'),                        // references staff(id)
+  id:                       integer('id').primaryKey().default(1),     // CHECK (id = 1) at DB
+  baseFee:                  integer('base_fee').notNull().default(250),
+  crossCategoryFee:         integer('cross_category_fee').notNull().default(175),
+  mattressBedframeLeadDays: integer('mattress_bedframe_lead_days').notNull().default(20),
+  sofaLeadDays:             integer('sofa_lead_days').notNull().default(30),
+  updatedAt:                timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:                uuid('updated_by'),                        // references staff(id)
 });
 
 /* ─────────────────────────── Showrooms ──────────────────────────────── */
