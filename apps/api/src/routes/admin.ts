@@ -12,7 +12,7 @@ admin.use('*', supabaseAuth);
 const STAFF_ROLES = ['sales', 'showroom_lead', 'coordinator', 'finance', 'admin'] as const;
 
 const CreateStaffBodySchema = z.object({
-  staffCode:  z.string().trim().min(1).max(8),
+  staffCode:  z.string().trim().min(1).max(16),
   name:       z.string().trim().min(1).max(80),
   role:       z.enum(STAFF_ROLES),
   email:      z.string().trim().toLowerCase().email().optional(),

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, X, Save, MessageCircle, Mail, CheckCircle2, Circle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -620,6 +620,20 @@ const ShowroomsTab = () => {
 
 const STAFF_AVATAR_COLORS = ['#E86B3A', '#A6471E', '#2F5D4F', '#1F3A8A', '#221F20'];
 
+// Auto-generate the next 2990S-XXX code by scanning existing staff codes.
+// Ignores codes that don't match the pattern (e.g. legacy 'OWNER', 'AW').
+const STAFF_CODE_PREFIX = '2990S-';
+const STAFF_CODE_RE = /^2990S-(\d+)$/;
+function nextStaffCode(existing: readonly string[]): string {
+  const maxN = existing.reduce((acc, code) => {
+    const m = code.match(STAFF_CODE_RE);
+    if (!m) return acc;
+    const n = parseInt(m[1] ?? '0', 10);
+    return Number.isFinite(n) && n > acc ? n : acc;
+  }, 0);
+  return `${STAFF_CODE_PREFIX}${String(maxN + 1).padStart(3, '0')}`;
+}
+
 const STAFF_ROLE_OPTIONS: { value: StaffRoleValue; label: string }[] = [
   { value: 'sales',         label: 'Sales' },
   { value: 'showroom_lead', label: 'Showroom lead' },
@@ -723,6 +737,7 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
       {drawerOpen && (
         <StaffDrawer
           showrooms={showrooms.data ?? []}
+          existingCodes={(staffList.data ?? []).map((s) => s.staffCode)}
           onClose={() => setDrawerOpen(false)}
         />
       )}
@@ -739,17 +754,17 @@ const StaffTab = ({ canEdit }: { canEdit: boolean }) => {
 
 const StaffDrawer = ({
   showrooms,
+  existingCodes,
   onClose,
 }: {
   showrooms: ShowroomRow[];
+  existingCodes: readonly string[];
   onClose: () => void;
 }) => {
-  const [staffCode, setStaffCode] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState<StaffRoleValue>('sales');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [initials, setInitials] = useState('');
   const [color, setColor] = useState<string>(STAFF_AVATAR_COLORS[0] ?? '#E86B3A');
   const [showroomId, setShowroomId] = useState<string>('');
   const [pin, setPin] = useState('');
@@ -760,10 +775,15 @@ const StaffDrawer = ({
 
   const isSales = role === 'sales';
 
+  // staffCode + initials are auto-derived from the existing roster — kept in
+  // sync as the staff list refetches behind the scenes.
+  const staffCode = useMemo(() => nextStaffCode(existingCodes), [existingCodes]);
+  const initials = staffCode.replace(STAFF_CODE_PREFIX, '');
+
   const onSave = async () => {
     setError(null);
-    if (!staffCode.trim() || !name.trim() || !initials.trim()) {
-      setError('Code, name and initials are required.');
+    if (!name.trim()) {
+      setError('Name is required.');
       return;
     }
     if (!isSales && !email.trim()) {
@@ -782,11 +802,11 @@ const StaffDrawer = ({
     }
     try {
       await createStaff.mutateAsync({
-        staffCode:  staffCode.trim().toUpperCase(),
+        staffCode,
         name:       name.trim(),
         role,
         email:      email.trim().toLowerCase() || null,
-        initials:   initials.trim().toUpperCase(),
+        initials,
         color,
         showroomId: showroomId || null,
         phone:      phone.trim() || null,
@@ -819,17 +839,11 @@ const StaffDrawer = ({
         <div className={styles.drawerBody}>
           {error && <div className={styles.errorBanner}>{error}</div>}
 
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Staff code</span>
-            <input
-              className={styles.input}
-              value={staffCode}
-              onChange={(e) => setStaffCode(e.target.value)}
-              placeholder="e.g. AW"
-              maxLength={8}
-            />
-            <span className={styles.fieldHint}>Short uppercase identifier shown in topbar avatars and history.</span>
-          </label>
+          <div className={styles.banner}>
+            Will be created as <code className={styles.code}>{staffCode}</code> ·
+            avatar shows <strong>{initials}</strong>. Auto-generated from the
+            roster — next free slot in the 2990S series.
+          </div>
 
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Full name</span>
@@ -919,18 +933,6 @@ const StaffDrawer = ({
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Initials</span>
-            <input
-              className={styles.input}
-              value={initials}
-              onChange={(e) => setInitials(e.target.value)}
-              placeholder="e.g. AW"
-              maxLength={4}
-            />
-            <span className={styles.fieldHint}>Shown in topbar avatar circle. 1–4 characters.</span>
           </label>
 
           <div className={styles.field}>
