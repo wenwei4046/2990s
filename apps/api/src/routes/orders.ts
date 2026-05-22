@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { orderV1PostSchema, SlipVerifyRequestSchema } from '@2990s/shared/schemas';
+import { orderV1PostSchema } from '@2990s/shared/schemas';
 import {
   computeOrderTotal,
   pricingDriftExceeds,
@@ -533,62 +533,6 @@ orders.patch('/:id/lane', async (c) => {
     ...(dispatchedAt ? { dispatchedAt } : {}),
     ...(deliveredAt ? { deliveredAt } : {}),
     ...(doSignedSet !== undefined ? { doSigned: doSignedSet } : {}),
-  });
-});
-
-orders.patch('/:id/slip', async (c) => {
-  const role = await loadStaffRole(c);
-  if (!role || !COORDINATOR_ROLES.has(role)) {
-    return c.json({ error: 'not_authorized_role' }, 403);
-  }
-
-  const orderId = c.req.param('id');
-  const staffId = c.get('user').id;
-  const supabase = c.get('supabase');
-
-  let body: unknown;
-  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
-
-  const parsed = SlipVerifyRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'reason_required', issues: parsed.error.issues }, 400);
-  }
-
-  const { data: row, error: fetchErr } = await supabase
-    .from('orders')
-    .select('id, slip_state')
-    .eq('id', orderId)
-    .maybeSingle();
-
-  if (fetchErr) return c.json({ error: 'db_fetch_failed', detail: fetchErr.message }, 500);
-  if (!row) return c.json({ error: 'order_not_found' }, 404);
-  if (row.slip_state !== 'pending') {
-    return c.json({ error: 'invalid_state', currentSlipState: row.slip_state }, 400);
-  }
-
-  const now = new Date().toISOString();
-  const updateFields = parsed.data.state === 'verified'
-    ? { slip_state: 'verified', slip_verified_by: staffId, slip_verified_at: now, slip_flag_reason: null }
-    : { slip_state: 'flagged',  slip_verified_by: staffId, slip_verified_at: now, slip_flag_reason: parsed.data.reason };
-
-  const { error: updateErr } = await supabase
-    .from('orders')
-    .update(updateFields)
-    .eq('id', orderId);
-  if (updateErr) return c.json({ error: 'db_update_failed', detail: updateErr.message }, 500);
-
-  await supabase.from('order_slip_events').insert({
-    order_id: orderId,
-    event: parsed.data.state,
-    actor_id: staffId,
-    meta: parsed.data.state === 'flagged' ? { reason: parsed.data.reason } : {},
-  });
-
-  return c.json({
-    orderId,
-    slipState: parsed.data.state,
-    slipVerifiedBy: staffId,
-    slipVerifiedAt: now,
   });
 });
 
