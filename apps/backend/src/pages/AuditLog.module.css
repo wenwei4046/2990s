@@ -56,3 +56,62 @@
   color: var(--fg-muted);
   font-size: var(--fs-14);
 }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table thead th {
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+  color: var(--c-ink);
+  white-space: nowrap;
+}
+
+.table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--c-ink);
+}
+
+.table tbody tr:hover { background: var(--bg-alt); }
+
+.monoCell { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+.numCell  { text-align: right; font-variant-numeric: tabular-nums; }
+
+.exportBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--c-ink);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+}
+
+.exportBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.exportBtn:not(:disabled):hover { opacity: 0.9; }
+
+.slipBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--c-ink);
+}
+
+.slipBtn:hover { background: var(--bg-alt); }
