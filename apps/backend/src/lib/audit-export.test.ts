@@ -62,10 +62,11 @@ describe('exportXlsx', () => {
     const wb = XLSX.read(bytes, { type: 'array' });
     expect(wb.SheetNames).toContain('Payments');
     const sheet = wb.Sheets['Payments'];
-    expect(sheet['A1'].v).toBe('SO#');
-    expect(sheet['E1'].v).toBe('Amount (RM)');
-    expect(sheet['A2'].v).toBe('SO-2990');
-    expect(typeof sheet['E2'].v).toBe('number');
-    expect(sheet['E2'].v).toBe(5980);
+    expect(sheet).toBeDefined();
+    expect(sheet!['A1'].v).toBe('SO#');
+    expect(sheet!['E1'].v).toBe('Amount (RM)');
+    expect(sheet!['A2'].v).toBe('SO-2990');
+    expect(typeof sheet!['E2'].v).toBe('number');
+    expect(sheet!['E2'].v).toBe(5980);
   });
 });

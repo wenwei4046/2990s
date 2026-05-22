@@ -98,7 +98,7 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
 export function downloadBlob(bytes: Uint8Array | string, filename: string, mime: string): void {
   const blob = typeof bytes === 'string'
     ? new Blob([bytes], { type: mime })
-    : new Blob([bytes], { type: mime });
+    : new Blob([new Uint8Array(bytes)], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
