@@ -94,15 +94,15 @@ Same conversation also confirmed: **bump `order_seq` from 2050 → 2990** so pro
     {
       "id": "SO-2990",
       "placedAt": "2026-05-22T10:14:00Z",
-      "showroom": { "id": "...", "name": "Showroom KL" },
       "customerName": "Tan Wei Ming",
       "total": 5980,
       "paymentMethod": "transfer",
       "approvalCode": "BNK-784512",
-      "salesperson": { "id": "...", "name": "Aw Wei Lin" },
-      "keyedBy":     { "id": "...", "name": "Aw Wei Lin" },
-      "slipKey":     "slips/SO-2990/abc.jpg",
-      "slipUploaded": true
+      "slipKey":      "slips/SO-2990/abc.jpg",
+      "slipUploaded": true,
+      "showroomId":     "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "salespersonId":  "...",
+      "staffId":        "..."
     }
   ],
   "count": 1
@@ -110,6 +110,8 @@ Same conversation also confirmed: **bump `order_seq` from 2050 → 2990** so pro
 ```
 
 `slipKey` is the R2 key. Frontend calls existing `fetchSlipUrl` helper to get a presigned URL when the user clicks the thumbnail.
+
+**Why IDs not names**: the endpoint returns FK IDs (`showroomId` / `salespersonId` / `staffId`) rather than nested `{id, name}` objects. The Backend already caches the full staff and showroom lists via TanStack Query (`useStaffList`, `useShowrooms`), so resolving ID → name on the client costs nothing and keeps the API flat. Avoids server-side joins on every audit-log request.
 
 **Sort**: `placedAt DESC` always. Pagination not in scope — 2990's volume is modest and the default 30-day window will rarely exceed a few hundred rows. If it ever does we add `?limit=&offset=`.
 
