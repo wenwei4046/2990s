@@ -3,7 +3,7 @@ import { NavLink } from 'react-router';
 import {
   LayoutDashboard,
   Inbox,
-  ShieldCheck,
+  FileSpreadsheet,
   Package,
   PlusCircle,
   UsersRound,
@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useNotificationStore } from '../lib/notifications';
-import { useOrders, useSlipQueue } from '../lib/queries';
+import { useOrders } from '../lib/queries';
 import styles from './Sidebar.module.css';
 
 type NavRow =
@@ -43,7 +43,6 @@ const formatRole = (role?: string | null): string => {
 export const Sidebar = () => {
   const { staff, signOut } = useAuth();
   const { data: orders } = useOrders();
-  const { data: slipQueue } = useSlipQueue();
   const ordersReadAt = useNotificationStore((s) => s.ordersReadAt);
 
   const ordersBadge =
@@ -52,8 +51,6 @@ export const Sidebar = () => {
       if (ordersReadAt && o.placedAt <= ordersReadAt) return false;
       return true;
     }).length ?? 0;
-  const slipsBadge = slipQueue?.length ?? 0;
-
   const items: NavRow[] = [
     { kind: 'group', label: 'Workspace' },
     { kind: 'link', to: '/dashboard', icon: <LayoutDashboard {...ICON_PROPS} />, label: 'Dashboard' },
@@ -64,14 +61,14 @@ export const Sidebar = () => {
       label: 'Orders',
       badge: ordersBadge,
     },
-    {
-      kind: 'link',
-      to: '/verify-slips',
-      icon: <ShieldCheck {...ICON_PROPS} />,
-      label: 'Verify slips',
-      badge: slipsBadge,
-      badgeMuted: slipsBadge === 0,
-    },
+    ...(staff && ['finance', 'coordinator', 'admin'].includes(staff.role)
+      ? [{
+          kind: 'link' as const,
+          to: '/audit-log',
+          icon: <FileSpreadsheet {...ICON_PROPS} />,
+          label: 'Payment audit log',
+        }]
+      : []),
     { kind: 'group', label: 'Catalog' },
     { kind: 'link', to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
     { kind: 'link', to: '/addons', icon: <PlusCircle {...ICON_PROPS} />, label: 'Add-on products' },
