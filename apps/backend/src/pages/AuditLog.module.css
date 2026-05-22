@@ -1,0 +1,58 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: var(--space-5) var(--space-6);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.headerText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-32);
+  margin: 4px 0 6px;
+  color: var(--c-ink);
+}
+
+.lede {
+  margin: 0;
+  max-width: 540px;
+}
+
+.exportButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.tableWrap {
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.empty {
+  padding: var(--space-7) var(--space-5);
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.placeholder {
+  padding: var(--space-4) var(--space-5);
+  color: var(--fg-muted);
+  font-size: var(--fs-14);
+}
