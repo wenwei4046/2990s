@@ -22,7 +22,7 @@ const ROUTE_META: Record<string, RouteMeta> = {
     sub: '01 received → 06 delivered',
     searchPlaceholder: 'Order ID, customer, phone…',
   },
-  '/verify-slips': { title: 'Verify slips', sub: 'Awaiting payment slip check' },
+  '/audit-log': { title: 'Payment audit log', sub: 'Finance reports' },
   '/sku-master': {
     title: 'SKU master',
     sub: 'Catalog & per-Model pricing',

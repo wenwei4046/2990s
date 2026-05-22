@@ -26,11 +26,6 @@ export const SlipConfirmResponseSchema = z.object({
   r2Key: z.string(),
 });
 
-export const SlipVerifyRequestSchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('verified'), reason: z.string().max(500).optional() }),
-  z.object({ state: z.literal('flagged'),  reason: z.string().min(1).max(500) }),
-]);
-
 export const SlipUrlResponseSchema = z.object({
   url: z.string().url(),
   contentType: z.string(),
@@ -40,5 +35,4 @@ export const SlipUrlResponseSchema = z.object({
 export type SlipInitRequest = z.infer<typeof SlipInitRequestSchema>;
 export type SlipInitResponse = z.infer<typeof SlipInitResponseSchema>;
 export type SlipConfirmResponse = z.infer<typeof SlipConfirmResponseSchema>;
-export type SlipVerifyRequest = z.infer<typeof SlipVerifyRequestSchema>;
 export type SlipUrlResponse = z.infer<typeof SlipUrlResponseSchema>;

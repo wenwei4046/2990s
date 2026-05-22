@@ -4,7 +4,7 @@ import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { SkuMaster } from './pages/SkuMaster';
 import { Orders } from './pages/Orders';
-import { VerifySlips } from './pages/VerifySlips';
+import { AuditLog } from './pages/AuditLog';
 import { Addons } from './pages/Addons';
 import { Settings } from './pages/Settings';
 import { Customers } from './pages/Customers';
@@ -20,7 +20,7 @@ export const router = createBrowserRouter([
       { path: 'dashboard', element: <Dashboard /> },
       { path: 'orders', element: <Orders /> },
       { path: 'sku-master', element: <SkuMaster /> },
-      { path: 'verify-slips', element: <VerifySlips /> },
+      { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
       { path: 'settings', element: <Settings /> },

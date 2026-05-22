@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   SlipInitRequestSchema,
   SlipConfirmRequestSchema,
-  SlipVerifyRequestSchema,
   ALLOWED_SLIP_MIMES,
   MAX_SLIP_SIZE_BYTES,
 } from './slip.schema';
@@ -48,28 +47,5 @@ describe('SlipInitRequestSchema', () => {
 describe('SlipConfirmRequestSchema', () => {
   it('accepts empty body', () => {
     expect(SlipConfirmRequestSchema.parse({})).toEqual({});
-  });
-});
-
-describe('SlipVerifyRequestSchema', () => {
-  it('accepts state=verified without reason', () => {
-    expect(SlipVerifyRequestSchema.parse({ state: 'verified' })).toMatchObject({ state: 'verified' });
-  });
-
-  it('accepts state=flagged with reason', () => {
-    expect(SlipVerifyRequestSchema.parse({ state: 'flagged', reason: 'Amount mismatch' }))
-      .toMatchObject({ state: 'flagged', reason: 'Amount mismatch' });
-  });
-
-  it('rejects state=flagged without reason', () => {
-    expect(() => SlipVerifyRequestSchema.parse({ state: 'flagged' })).toThrow();
-  });
-
-  it('rejects reason > 500 chars', () => {
-    expect(() => SlipVerifyRequestSchema.parse({ state: 'flagged', reason: 'a'.repeat(501) })).toThrow();
-  });
-
-  it('rejects unknown state', () => {
-    expect(() => SlipVerifyRequestSchema.parse({ state: 'whatever' })).toThrow();
   });
 });

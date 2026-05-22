@@ -3,25 +3,17 @@ import { useNavigate } from 'react-router';
 import {
   Sparkles,
   Truck,
-  ShieldCheck,
   Banknote,
   TrendingUp,
   MapPin,
-  AlertCircle,
   CircleDot,
   ArrowRight,
   Inbox,
   ArrowRightCircle,
   PackageSearch,
-  CheckCircle2,
-  Clock,
-  ChevronRight,
-  CreditCard,
-  type LucideIcon,
 } from 'lucide-react';
-import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
-import { useOrders, useOrdersRealtime, useSlipQueue, type OrderListRow } from '../lib/queries';
+import { useOrders, useOrdersRealtime, type OrderListRow } from '../lib/queries';
 import { LANES, type LaneId } from '../lib/lanes';
 import styles from './Dashboard.module.css';
 
@@ -44,25 +36,10 @@ const isToday = (iso: string): boolean => {
   );
 };
 
-const PAYMENT_ICON: Record<string, LucideIcon> = {
-  transfer: Banknote,
-  credit: CreditCard,
-  debit: CreditCard,
-  installment: CreditCard,
-};
-
-const PAYMENT_LABEL: Record<string, string> = {
-  transfer: 'Bank transfer / DuitNow',
-  credit: 'Credit card',
-  debit: 'Debit card',
-  installment: 'Installment',
-};
-
 export const Dashboard = () => {
   const { staff } = useAuth();
   const navigate = useNavigate();
   const orders = useOrders();
-  const slipQueue = useSlipQueue();
   useOrdersRealtime();
 
   const list: ReadonlyArray<OrderListRow> = orders.data ?? [];
@@ -81,14 +58,10 @@ export const Dashboard = () => {
     (o) => o.lane === 'dispatched' && o.deliveryDate && isToday(o.deliveryDate),
   ).length;
   const collectedToday = todayOrders.reduce((s, o) => s + (o.paid ?? 0), 0);
-  const toVerify = slipQueue.data?.length ?? 0;
-  const needsAttention = counts.received + counts.proceed + toVerify;
-  const pendingSlips = (slipQueue.data ?? []).slice(0, 4);
+  const needsAttention = counts.received + counts.proceed;
 
   const goToLane = (id: LaneId) => navigate(`/orders?lane=${id}`);
   const goToBoard = () => navigate('/orders');
-  const goToVerify = () => navigate('/verify-slips');
-  const openOrder = (id: string) => navigate(`/orders?orderId=${encodeURIComponent(id)}`);
 
   return (
     <div className={styles.page}>
@@ -125,13 +98,6 @@ export const Dashboard = () => {
             <div className={styles.kpiNum}>{dispatchToday}</div>
             <div className={styles.kpiDelta}>
               <MapPin size={12} strokeWidth={1.75} />By driver schedule
-            </div>
-          </div>
-          <div className={styles.kpi}>
-            <div className={styles.kpiHead}><ShieldCheck size={16} strokeWidth={1.75} />Slips to verify</div>
-            <div className={styles.kpiNum}>{toVerify}</div>
-            <div className={`${styles.kpiDelta} ${styles.kpiFlag}`}>
-              <AlertCircle size={12} strokeWidth={1.75} />Verify only · Finance approves
             </div>
           </div>
           <div className={styles.kpi}>
@@ -179,58 +145,6 @@ export const Dashboard = () => {
         })}
       </div>
 
-      <div className={styles.sectionTitle}>
-        <div>
-          <h2 className={styles.sectionH2}>Awaiting payment slip check</h2>
-          <span className={styles.sectionSub}>You verify the slip matches — Finance approves</span>
-        </div>
-        <button type="button" className={styles.ghostBtn} onClick={goToVerify}>
-          All slips <ArrowRight size={14} strokeWidth={1.75} />
-        </button>
-      </div>
-
-      <div className={styles.verifyCard}>
-        {pendingSlips.length === 0 ? (
-          <div className={styles.verifyEmpty}>
-            <CheckCircle2 size={22} strokeWidth={1.75} />
-            <span>All slips checked. Nicely done.</span>
-          </div>
-        ) : (
-          pendingSlips.map((o) => {
-            const PayIcon = PAYMENT_ICON[o.paymentMethod] ?? CreditCard;
-            const initial = o.customerName?.charAt(0).toUpperCase() ?? '?';
-            return (
-              <button
-                key={o.id}
-                type="button"
-                className={styles.verifyRow}
-                onClick={() => openOrder(o.id)}
-              >
-                <span className={styles.verifyAvatar}>{initial}</span>
-                <div className={styles.verifyMain}>
-                  <div className={styles.verifyName}>
-                    {o.customerName} <span className={styles.verifyId}>· {o.id}</span>
-                  </div>
-                  <div className={styles.verifySub}>
-                    Placed {new Date(o.placedAt).toLocaleString('en-MY', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}
-                  </div>
-                </div>
-                <div className={styles.verifyAmount}>
-                  <sup>RM</sup>{fmtRM(o.total).replace('RM', '').trim()}
-                </div>
-                <div className={styles.verifyMethod}>
-                  <PayIcon size={14} strokeWidth={1.75} />
-                  {PAYMENT_LABEL[o.paymentMethod] ?? o.paymentMethod}
-                </div>
-                <span className={`${styles.verifyPill} ${styles.verifyPillWarn}`}>
-                  <Clock size={12} strokeWidth={1.75} />Awaiting check
-                </span>
-                <ChevronRight size={16} strokeWidth={1.75} className={styles.verifyChev} />
-              </button>
-            );
-          })
-        )}
-      </div>
     </div>
   );
 };
