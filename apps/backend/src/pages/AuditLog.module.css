@@ -1,54 +1,116 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: var(--space-5) var(--space-6);
+  gap: var(--space-5);
   max-width: 1400px;
   margin: 0 auto;
 }
 
+/* ─── Header (eyebrow + title + export buttons) ─── */
 .header {
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
-  gap: var(--space-4);
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
 }
 
 .headerText {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
+  max-width: 560px;
 }
 
 .title {
   font-family: var(--font-title);
   font-weight: var(--w-bold);
   font-size: var(--fs-32);
-  margin: 4px 0 6px;
-  color: var(--c-ink);
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--fg);
+  text-wrap: balance;
 }
 
 .lede {
   margin: 0;
-  max-width: 540px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  line-height: 1.55;
+  color: var(--fg-muted);
+  text-wrap: pretty;
 }
 
 .exportButtons {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
+  flex-shrink: 0;
 }
 
+.exportBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  background: var(--c-orange);
+  color: var(--c-cream);
+  border: 1.5px solid var(--c-orange);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: var(--shadow-2);
+  transition: background var(--duration-fast),
+              border-color var(--duration-fast),
+              transform var(--duration-fast),
+              box-shadow var(--duration-fast);
+}
+.exportBtn:not(:disabled):hover {
+  background: var(--c-burnt);
+  border-color: var(--c-burnt);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-3);
+}
+.exportBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.exportBtnGhost {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--line-strong);
+  box-shadow: none;
+}
+.exportBtnGhost:not(:disabled):hover {
+  background: transparent;
+  color: var(--c-burnt);
+  border-color: var(--c-burnt);
+  box-shadow: none;
+  transform: translateY(-1px);
+}
+
+/* ─── Table card ─── */
 .tableWrap {
-  border: 1px solid var(--c-line);
-  border-radius: var(--radius-md);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   overflow: hidden;
-  background: var(--bg);
+  box-shadow: var(--shadow-1);
 }
 
 .empty {
   padding: var(--space-7) var(--space-5);
   text-align: center;
   color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  line-height: 1.55;
 }
 
 .placeholder {
@@ -57,61 +119,89 @@
   font-size: var(--fs-14);
 }
 
+/* ─── Table ─── */
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--fs-14);
 }
 
 .table thead th {
   text-align: left;
-  padding: 12px 14px;
+  padding: 14px 16px;
   background: var(--bg-alt);
   border-bottom: 1px solid var(--line);
-  font-weight: 600;
-  color: var(--c-ink);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
   white-space: nowrap;
 }
 
 .table tbody td {
-  padding: 10px 14px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--line);
-  color: var(--c-ink);
+  color: var(--fg);
+  vertical-align: middle;
 }
 
-.table tbody tr:hover { background: var(--bg-alt); }
+.table tbody tr:last-child td { border-bottom: none; }
 
-.monoCell { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
-.numCell  { text-align: right; font-variant-numeric: tabular-nums; }
-
-.exportBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background: var(--c-ink);
-  color: var(--bg);
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font: inherit;
+.table tbody tr {
+  transition: background var(--duration-fast);
+}
+.table tbody tr:hover {
+  background: var(--bg-alt);
 }
 
-.exportBtn:disabled { opacity: 0.4; cursor: not-allowed; }
-.exportBtn:not(:disabled):hover { opacity: 0.9; }
+/* SO# + approval code — Raleway semibold tracked, burnt accent */
+.monoCell {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.06em;
+  color: var(--c-burnt);
+  white-space: nowrap;
+}
+
+/* Amount — Merriweather bold, tabular nums, right-aligned */
+.numCell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-15);
+  white-space: nowrap;
+}
 
 .slipBtn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: 6px;
+  padding: 6px 12px;
   background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  color: var(--c-ink);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  transition: border-color var(--duration-fast),
+              color var(--duration-fast),
+              background var(--duration-fast);
+}
+.slipBtn:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
+  background: var(--bg-alt);
 }
 
-.slipBtn:hover { background: var(--bg-alt); }
+@media (max-width: 900px) {
+  .header { flex-direction: column; align-items: stretch; }
+  .exportButtons { width: 100%; }
+  .exportBtn { flex: 1; justify-content: center; }
+}

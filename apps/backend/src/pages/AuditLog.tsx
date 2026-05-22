@@ -109,7 +109,7 @@ export const AuditLog = () => {
           </button>
           <button
             type="button"
-            className={styles.exportBtn}
+            className={`${styles.exportBtn} ${styles.exportBtnGhost}`}
             disabled={rows.length === 0}
             onClick={onExportCsv}
           >
