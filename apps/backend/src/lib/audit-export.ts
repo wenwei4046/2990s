@@ -1,0 +1,110 @@
+export interface AuditExportRow {
+  id: string;
+  placedAt: string;
+  showroomName: string;
+  customerName: string;
+  total: number;
+  paymentMethod: string;
+  approvalCode: string | null;
+  salespersonName: string;
+  keyedByName: string;
+  slipUploaded: boolean;
+}
+
+const HEADERS = [
+  'SO#',
+  'Date',
+  'Showroom',
+  'Customer',
+  'Amount (RM)',
+  'Method',
+  'Approval code',
+  'Salesperson',
+  'Keyed by',
+  'Slip uploaded',
+] as const;
+
+const fmtDate = (iso: string): string => {
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mm = months[d.getMonth()];
+  const yyyy = d.getFullYear();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${dd} ${mm} ${yyyy} ${hh}:${min}`;
+};
+
+const csvEscape = (cell: string | number | null | undefined): string => {
+  if (cell === null || cell === undefined) return '';
+  const s = String(cell);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+};
+
+export function exportCsv(rows: AuditExportRow[]): string {
+  const lines: string[] = [HEADERS.join(',')];
+  for (const r of rows) {
+    lines.push([
+      csvEscape(r.id),
+      csvEscape(fmtDate(r.placedAt)),
+      csvEscape(r.showroomName),
+      csvEscape(r.customerName),
+      csvEscape(r.total),
+      csvEscape(r.paymentMethod),
+      csvEscape(r.approvalCode),
+      csvEscape(r.salespersonName),
+      csvEscape(r.keyedByName),
+      csvEscape(r.slipUploaded ? 'Yes' : 'No'),
+    ].join(','));
+  }
+  return '﻿' + lines.join('\n');
+}
+
+export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
+  const XLSX = await import('xlsx');
+
+  const data: (string | number)[][] = [HEADERS.slice()];
+  for (const r of rows) {
+    data.push([
+      r.id,
+      fmtDate(r.placedAt),
+      r.showroomName,
+      r.customerName,
+      r.total,
+      r.paymentMethod,
+      r.approvalCode ?? '',
+      r.salespersonName,
+      r.keyedByName,
+      r.slipUploaded ? 'Yes' : 'No',
+    ]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  (ws as any)['!cols'] = [
+    { wch: 10 }, { wch: 18 }, { wch: 14 }, { wch: 22 },
+    { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 18 },
+    { wch: 18 }, { wch: 14 },
+  ];
+  (ws as any)['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Payments');
+
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  return new Uint8Array(buf as ArrayBuffer);
+}
+
+export function downloadBlob(bytes: Uint8Array | string, filename: string, mime: string): void {
+  const blob = typeof bytes === 'string'
+    ? new Blob([bytes], { type: mime })
+    : new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
