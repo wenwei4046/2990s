@@ -69,6 +69,9 @@ export interface ProductRow {
   visible: boolean;
   flatPrice: number | null;
   reclinerUpgradePrice: number | null;
+  seatUpgradeLabel: string | null;
+  seatUpgradeFootrest: boolean;
+  depthOptions: string | null;
   includedAddons: { addonId: string; qty: number }[];
   updatedAt: string;
 }
@@ -189,7 +192,7 @@ export const useProducts = () =>
       const { data, error } = await supabase
         .from('products')
         .select(
-          'id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, stock, low_at, visible, flat_price, recliner_upgrade_price, included_addons, updated_at',
+          'id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, stock, low_at, visible, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, included_addons, updated_at',
         )
         .order('updated_at', { ascending: false });
       if (error) throw error;
@@ -209,6 +212,9 @@ export const useProducts = () =>
         visible: r.visible,
         flatPrice: r.flat_price,
         reclinerUpgradePrice: r.recliner_upgrade_price,
+        seatUpgradeLabel: (r as { seat_upgrade_label: string | null }).seat_upgrade_label ?? null,
+        seatUpgradeFootrest: (r as { seat_upgrade_footrest: boolean | null }).seat_upgrade_footrest ?? true,
+        depthOptions: (r as { depth_options: string | null }).depth_options ?? null,
         includedAddons: (r.included_addons ?? []) as { addonId: string; qty: number }[],
         updatedAt: r.updated_at,
       }));

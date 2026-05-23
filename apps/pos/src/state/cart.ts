@@ -14,6 +14,12 @@ export interface SofaConfigSnapshot {
   bundleId?: string;     // set when Quick-Pick
   cells?: Cell[];        // set when Custom-build
   depth?: Depth;
+  /** Per-Model upgrade label, stored so cartSummary can re-derive the
+   *  "+ N <label>" suffix for Custom-build lines already in the cart. F3. */
+  seatUpgradeLabel?: string | null;
+  /** Upgrade footrest flag. false = auto-included headrest → invoice shows
+   *  "+ N <label>" on a quick-pick line (F3). */
+  seatUpgradeFootrest?: boolean;
   total: number;
   summary: string;       // e.g. "3+L · Bundle"
 }
@@ -123,7 +129,7 @@ export const cartSummary = (config: CartConfig): string => {
     config.cells.length > 0 &&
     config.depth
   ) {
-    return summarizeSofaCells(config.cells, config.depth);
+    return summarizeSofaCells(config.cells, config.depth, config.seatUpgradeLabel);
   }
   return config.summary;
 };

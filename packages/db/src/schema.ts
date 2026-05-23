@@ -227,6 +227,12 @@ export const products = pgTable('products', {
 
   // pricing_kind = 'sofa_build'
   reclinerUpgradePrice: integer('recliner_upgrade_price'),  // 0 = disabled
+  // F3 (migration 0039): one named per-seat upgrade per Model. NULL = none.
+  seatUpgradeLabel:    text('seat_upgrade_label'),
+  seatUpgradeFootrest: boolean('seat_upgrade_footrest').notNull().default(true),
+  // F5 (migration 0040): per-Model seat depths — CSV of inches, e.g. '24,30'.
+  // NULL = no depth choice. Display + plan-view only, never a pricing dimension.
+  depthOptions:        text('depth_options'),
 
   createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -151,7 +151,10 @@ const ItemsTable = ({ order }: { order: OrderDetail }) => (
       {order.lines.map((l, i) => (
         <tr key={i}>
           <td className={styles.colSku}>{l.product_sku ?? '—'}</td>
-          <td className={styles.colDesc}>{l.product_name}</td>
+          <td className={styles.colDesc}>
+            {l.product_name}
+            {l.description && <span className={styles.lineDesc}>{l.description}</span>}
+          </td>
           <td className={styles.colQty}>{l.qty}</td>
           <td className={styles.colMoney}>{fmtMoney(l.unit_price)}</td>
           <td className={styles.colMoney}>{fmtMoney(l.line_total)}</td>

@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { describeSofaLine } from '@2990s/shared';
 import { supabase } from './supabase';
 
 export interface OrderDetail {
@@ -31,6 +32,9 @@ export interface OrderDetail {
     qty:          number;
     unit_price:   number;
     line_total:   number;
+    /** Config-derived line description (e.g. "2-Seater + 2 Power slide",
+     *  "1A-LHF + 2A-RHF"). null when the product has no describable config. */
+    description:  string | null;
   }[];
 }
 
@@ -63,21 +67,30 @@ export const useOrderById = (orderId: string | undefined) =>
       const { data: items, error: itemErr } = await supabase
         .from('order_items')
         .select(`
-          product_id, qty, unit_price, line_total,
+          product_id, qty, unit_price, line_total, config,
           products ( name, sku, category_id )
         `)
         .eq('order_id', orderId)
         .eq('kind', 'product');
       if (itemErr) throw itemErr;
 
-      const lines = (items ?? []).map((i: any) => ({
-        product_id:   i.product_id,
-        product_name: i.products?.name ?? '',
-        product_sku:  i.products?.sku ?? null,
-        qty:          i.qty,
-        unit_price:   i.unit_price ?? 0,
-        line_total:   i.line_total,
-      }));
+      const lines = (items ?? []).map((i: any) => {
+        const config = i.config;
+        let description: string | null = null;
+        if (config && config.kind === 'sofa') {
+          description = describeSofaLine(config);
+          if (config.depth) description += ` · ${config.depth}"`;  // F5: show depth
+        }
+        return {
+          product_id:   i.product_id,
+          product_name: i.products?.name ?? '',
+          product_sku:  i.products?.sku ?? null,
+          qty:          i.qty,
+          unit_price:   i.unit_price ?? 0,
+          line_total:   i.line_total,
+          description,
+        };
+      });
 
       let showroom: OrderDetail['showroom'] = null;
       if (row.showroom_id) {

@@ -15,7 +15,7 @@ const cellSchema = z.object({
 });
 
 const sofaConfigSchema = z.object({
-  depth: z.enum(['24', '28']),
+  depth: z.string().regex(/^\d{2,3}$/),  // inches; F5 widened from '24'|'28'
   mode: z.enum(['preset', 'custom']),
   presetId: z.string().optional(),
   quickFlip: z.enum(['L', 'R']).optional(),

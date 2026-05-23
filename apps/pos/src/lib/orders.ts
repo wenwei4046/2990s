@@ -95,6 +95,8 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
           ...(l.config.bundleId ? { bundleId: l.config.bundleId } : {}),
           ...(l.config.cells ? { cells: l.config.cells } : {}),
           ...(l.config.depth ? { depth: l.config.depth } : {}),
+          ...(l.config.seatUpgradeLabel ? { seatUpgradeLabel: l.config.seatUpgradeLabel } : {}),
+          ...(l.config.seatUpgradeFootrest !== undefined ? { seatUpgradeFootrest: l.config.seatUpgradeFootrest } : {}),
         },
       };
     }

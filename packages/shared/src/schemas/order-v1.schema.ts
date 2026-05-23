@@ -25,7 +25,16 @@ const sofaLineConfigSchema = z.object({
   productId: z.string().uuid(),
   bundleId: z.string().optional(),
   cells: z.array(cellSchema).optional(),
-  depth: z.enum(['24', '28']).optional(),
+  // Seat depth in inches (F5: per-Model options, e.g. '24'/'30'/'32'). Widened
+  // from the old '24'|'28' enum. Non-pricing — the server recompute ignores it.
+  depth: z.string().regex(/^\d{2,3}$/).optional(),
+  // Snapshot of the Model's per-seat upgrade name at order time (F3) so the
+  // saved order / invoice / Backend drawer can render "+ N <label>" without a
+  // products join. Display only — never affects the server recompute.
+  seatUpgradeLabel: z.string().max(40).nullable().optional(),
+  // Footrest flag snapshot (F3) so the invoice can show auto-included headrests
+  // ("+ N Headrest") on a quick-pick. Display only — recompute ignores it.
+  seatUpgradeFootrest: z.boolean().optional(),
 });
 
 const sizeLineConfigSchema = z.object({

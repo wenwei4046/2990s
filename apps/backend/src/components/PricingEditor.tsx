@@ -11,6 +11,9 @@ interface SkuFormData {
   pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
   categoryId: string;
   reclinerUpgradePrice?: number;
+  seatUpgradeLabel?: string | null;
+  seatUpgradeFootrest?: boolean;
+  depthOptions?: string | null;
   compartments?: { compartmentId: string; active: boolean; price: number }[];
   bundles?: { bundleId: string; active: boolean; price: number }[];
   sizes?: { sizeId: string; active: boolean; price: number }[];
@@ -84,6 +87,10 @@ const COMP_GROUPS: CompartmentLibrary['compGroup'][] = [
   'L-Shape',
   'Accessory',
 ];
+
+// F5: depths a sofa Model can offer (inches). The editor stores the chosen
+// subset as a CSV in products.depth_options; the POS depth toggle reads it.
+const DEPTH_CHOICES = [24, 26, 28, 30, 32] as const;
 
 const SofaEditor = () => {
   const { control, setValue, formState: { errors } } = useFormContext<SkuFormData>();
@@ -214,16 +221,40 @@ const SofaEditor = () => {
         </div>
       </div>
 
-      {/* Recliner */}
+      {/* Per-seat upgrade (F3) — one named upgrade per Model */}
       <div className={styles.block}>
         <div className={styles.blockHead}>
           <div>
-            <div className={styles.blockTitle}>Power-recliner upgrade</div>
-            <div className={styles.blockSub}>Per-seat add-on for 1A/2A/1NA/2NA modules. RM 0 disables it for this Model.</div>
+            <div className={styles.blockTitle}>Per-seat upgrade</div>
+            <div className={styles.blockSub}>
+              One named upgrade staff can add per seat in Custom Build (1A/2A/1NA/2NA modules).
+              Leave the name blank to offer none. Order lines read &ldquo;+ N {'{name}'}&rdquo;.
+            </div>
           </div>
         </div>
         <div className={styles.reclinerRow}>
-          <span className={styles.rowLabel}>Add a power recliner to a single seat</span>
+          <span className={styles.rowLabel}>Upgrade name</span>
+          <Controller
+            control={control}
+            name="seatUpgradeLabel"
+            render={({ field }) => (
+              <input
+                type="text"
+                maxLength={40}
+                placeholder="e.g. Power slide — blank = none"
+                value={field.value ?? ''}
+                onChange={(e) => field.onChange(e.target.value)}
+                style={{
+                  flex: 1, minWidth: 0, padding: '8px 10px',
+                  border: '1px solid rgba(34,31,32,0.15)', borderRadius: 8,
+                  font: 'inherit', color: 'var(--c-ink)', background: '#fff',
+                }}
+              />
+            )}
+          />
+        </div>
+        <div className={styles.reclinerRow}>
+          <span className={styles.rowLabel}>Price per seat</span>
           <Controller
             control={control}
             name="reclinerUpgradePrice"
@@ -231,8 +262,70 @@ const SofaEditor = () => {
               <PriceInput value={field.value ?? 0} onChange={field.onChange} />
             )}
           />
-          <span className={styles.rowSub}>per seat</span>
+          <span className={styles.rowSub}>RM 0 = free (e.g. headrest)</span>
         </div>
+        <div className={styles.reclinerRow}>
+          <span className={styles.rowLabel}>Opens a footrest</span>
+          <Controller
+            control={control}
+            name="seatUpgradeFootrest"
+            render={({ field }) => (
+              <ActiveToggle value={field.value ?? true} onChange={field.onChange} />
+            )}
+          />
+          <span className={styles.rowSub}>power = yes · headrest = no</span>
+        </div>
+      </div>
+
+      {/* Seat depths (F5) — per-Model selectable depths */}
+      <div className={styles.block}>
+        <div className={styles.blockHead}>
+          <div>
+            <div className={styles.blockTitle}>Seat depths</div>
+            <div className={styles.blockSub}>
+              Which depths this Model offers (inches). Staff pick one in the configurator;
+              it&rsquo;s recorded on the order + invoice. Same price across depths.
+            </div>
+          </div>
+        </div>
+        <Controller
+          control={control}
+          name="depthOptions"
+          render={({ field }) => {
+            const selected = (field.value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+            const toggle = (d: string) => {
+              const set = new Set(selected);
+              if (set.has(d)) set.delete(d); else set.add(d);
+              // Keep canonical ascending order; empty → null (no depth choice).
+              const next = DEPTH_CHOICES.filter((c) => set.has(String(c))).join(',');
+              field.onChange(next || null);
+            };
+            return (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '4px 0' }}>
+                {DEPTH_CHOICES.map((d) => {
+                  const on = selected.includes(String(d));
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggle(String(d))}
+                      style={{
+                        padding: '8px 14px', borderRadius: 8, font: 'inherit',
+                        fontWeight: on ? 600 : 400, cursor: 'pointer',
+                        border: on ? '1.5px solid var(--c-burnt)' : '1px solid rgba(34,31,32,0.15)',
+                        background: on ? 'var(--c-burnt)' : '#fff',
+                        color: on ? '#fff' : 'var(--c-ink)',
+                      }}
+                    >
+                      {d}&Prime;
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          }}
+        />
       </div>
     </section>
   );

@@ -51,6 +51,7 @@ interface SkuFormData {
   name: string;
   detail: string | null;
   sizeDisplay: string | null;
+  depthOptions: string | null;
   imgKey: string | null;
   thumbKey: string | null;
   stock: number;
@@ -59,6 +60,8 @@ interface SkuFormData {
   /** Per-Model free add-ons (e.g. mattress includes 2 free Memory foam pillows). */
   includedAddons: { addonId: string; qty: number }[];
   reclinerUpgradePrice?: number;
+  seatUpgradeLabel?: string | null;
+  seatUpgradeFootrest?: boolean;
   compartments?: { compartmentId: string; active: boolean; price: number }[];
   bundles?: { bundleId: string; active: boolean; price: number }[];
   sizes?: { sizeId: string; active: boolean; price: number }[];
@@ -149,6 +152,7 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
       name: product?.name ?? '',
       detail: product?.detail ?? '',
       sizeDisplay: product?.sizeDisplay ?? '',
+      depthOptions: product?.depthOptions ?? null,
       imgKey: product?.imgKey ?? null,
       thumbKey: product?.thumbKey ?? null,
       stock: product?.stock ?? 0,
@@ -156,6 +160,8 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
       visible: product?.visible ?? true,
       includedAddons: product?.includedAddons ?? [],
       reclinerUpgradePrice: product?.reclinerUpgradePrice ?? 0,
+      seatUpgradeLabel: product?.seatUpgradeLabel ?? null,
+      seatUpgradeFootrest: product?.seatUpgradeFootrest ?? true,
       compartments: editComps,
       bundles: editBundles,
       sizes: editSizes,
@@ -232,6 +238,7 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
       name: raw.name,
       detail: raw.detail || null,
       sizeDisplay: raw.sizeDisplay || null,
+      depthOptions: raw.depthOptions || null,
       imgKey: raw.imgKey,
       thumbKey: raw.thumbKey,
       stock: raw.stock,
@@ -241,6 +248,8 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
     };
     if (raw.pricingKind === 'sofa_build') {
       cleaned.reclinerUpgradePrice = raw.reclinerUpgradePrice ?? 0;
+      cleaned.seatUpgradeLabel = raw.seatUpgradeLabel?.trim() ? raw.seatUpgradeLabel.trim() : null;
+      cleaned.seatUpgradeFootrest = raw.seatUpgradeFootrest ?? true;
       cleaned.compartments = raw.compartments;
       cleaned.bundles = raw.bundles;
     } else if (raw.pricingKind === 'size_variants') {
@@ -284,6 +293,7 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
         name: valid.name,
         detail: valid.detail,
         size_display: valid.sizeDisplay,
+        depth_options: valid.depthOptions,
         img_key: valid.imgKey,
         thumb_key: valid.thumbKey,
         stock: valid.stock,
@@ -292,6 +302,8 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
         included_addons: valid.includedAddons,
         flat_price: valid.pricingKind === 'flat' ? valid.flatPrice : null,
         recliner_upgrade_price: valid.pricingKind === 'sofa_build' ? valid.reclinerUpgradePrice : null,
+        seat_upgrade_label: valid.pricingKind === 'sofa_build' ? (valid.seatUpgradeLabel ?? null) : null,
+        seat_upgrade_footrest: valid.pricingKind === 'sofa_build' ? (valid.seatUpgradeFootrest ?? true) : true,
       };
       const { error } = await supabase.from('products').update(productRow).eq('id', product.id);
       if (error) throw new Error(error.message);

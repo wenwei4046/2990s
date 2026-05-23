@@ -20,6 +20,7 @@ import {
   type FlatConfigSnapshot,
 } from '../state/cart';
 import { CustomBuilder } from './CustomBuilder';
+import { SofaCellsPreview } from '../components/SofaCellsPreview';
 import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
 
@@ -39,15 +40,41 @@ interface SizeRow {
 const QUICK_PRESET_META: Record<string, { sub: string; cushions: number; baseW: number; baseD: number }> = {
   '1S':  { sub: 'Single seat',           cushions: 2, baseW: 190, baseD: 95 },
   '2S':  { sub: 'Two seats',             cushions: 3, baseW: 265, baseD: 95 },
+  // 2.5-Seater reuses 2S.png (see bundleArtSrc) rendered ~25cm wider.
+  '2.5S':{ sub: 'Two-and-a-half seats',  cushions: 3, baseW: 290, baseD: 95 },
   '3S':  { sub: 'Three seats',           cushions: 4, baseW: 316, baseD: 95 },
   '2+L': { sub: '2-seater with chaise',  cushions: 3, baseW: 253, baseD: 165 },
   '3+L': { sub: '3-seater with chaise',  cushions: 4, baseW: 360, baseD: 165 },
+  // F6: 2-seater + wood console = 1A(95) + WC-45(45) + 1A(95) = 235cm.
+  '2WC': { sub: '2-seater with wood console', cushions: 2, baseW: 235, baseD: 95 },
+  // F7: power-slide combo — a 2-seater, same footprint as 2S.
+  '2PS': { sub: '2-seater · 2 power slide',   cushions: 3, baseW: 265, baseD: 95 },
+  // F4: corner package (composed preview, no single PNG).
+  CORNER: { sub: '1B + corner + 2A',          cushions: 3, baseW: 200, baseD: 253 },
+};
+
+// Composed-preview cell templates for presets that have NO single composite PNG
+// (F6 console, F4 corner) — rendered via <SofaCellsPreview> from the module art.
+// cm coords. CORNER's L-layout is a sensible default; positions/rotations are
+// easily tweaked (it's just the preview + the canonical PO module list).
+const PRESET_CELLS: Record<string, Cell[]> = {
+  '2WC': [
+    { id: 'wc-l', moduleId: '1A-LHF', x: 0,   y: 0,  rot: 0 },
+    { id: 'wc-c', moduleId: 'WC-45',  x: 95,  y: 0,  rot: 0 },
+    { id: 'wc-r', moduleId: '1A-RHF', x: 140, y: 0,  rot: 0 },
+  ],
+  CORNER: [
+    { id: 'cn-1b',  moduleId: '1B-LHF', x: 0,   y: 0,  rot: 0 },
+    { id: 'cn-cnr', moduleId: 'CNR',    x: 105, y: 0,  rot: 0 },
+    { id: 'cn-2a',  moduleId: '2A-RHF', x: 105, y: 95, rot: 90 },
+  ],
 };
 
 const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number } => {
   const m = QUICK_PRESET_META[bundleId];
   if (!m) return { w: 0, d: 0 };
-  const offsetPerCushion = depth === '28' ? 10 : 0;
+  // Mirror the engine (sofa-build widthOffsetPerCushion): 2.5cm/inch/cushion.
+  const offsetPerCushion = Math.max(0, (parseInt(depth, 10) - 24) * 2.5);
   return { w: m.baseW + offsetPerCushion * m.cushions, d: m.baseD };
 };
 
@@ -87,7 +114,27 @@ export const Configurator = () => {
     compartments: compartments.data ?? [],
     bundles: bundles.data ?? [],
     reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
-  }), [compartments.data, bundles.data, product.data?.recliner_upgrade_price]);
+    seatUpgradeLabel: product.data?.seat_upgrade_label ?? null,
+    seatUpgradeFootrest: product.data?.seat_upgrade_footrest ?? true,
+  }), [
+    compartments.data, bundles.data,
+    product.data?.recliner_upgrade_price,
+    product.data?.seat_upgrade_label,
+    product.data?.seat_upgrade_footrest,
+  ]);
+
+  // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
+  // toggle always has a value (only rendered for sofas, which always seed it).
+  const depthOptions = useMemo<Depth[]>(() => {
+    const raw: string = product.data?.depth_options ?? '';
+    const parsed = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    return parsed.length > 0 ? parsed : ['24'];
+  }, [product.data?.depth_options]);
+
+  // Keep activeDepth within the Model's offered depths (default to the first).
+  useEffect(() => {
+    if (!depthOptions.includes(activeDepth)) setActiveDepth(depthOptions[0] ?? '24');
+  }, [depthOptions, activeDepth]);
 
   // Build size rows once per data refresh (used by isSize render + topbar
   // action slot). Rows are derived from the size library so staff see a
@@ -224,6 +271,10 @@ export const Configurator = () => {
       productName: p.name,
       bundleId: pickedSofaRow.bundle.id,
       depth: activeDepth,
+      // Snapshot the Model's upgrade so the invoice can show an auto-included
+      // headrest ("+ N Headrest") on this quick-pick line (F3).
+      seatUpgradeLabel: p.seat_upgrade_label ?? null,
+      seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
       total: pickedSofaRow.price,
       summary: lShape
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"`
@@ -340,7 +391,7 @@ export const Configurator = () => {
         <ArrowLeft size={20} strokeWidth={1.75} />
       </button>
       <span className={styles.depthTabs} role="tablist" aria-label="Seat depth">
-        {(['24', '28'] as const).map((d) => (
+        {depthOptions.map((d) => (
           <button
             key={d}
             type="button"
@@ -845,6 +896,13 @@ const bundleArtSrc = (bundleId: string, flip: 'L' | 'R'): string => {
   if (bundleId === '2+L' || bundleId === '3+L') {
     return `/sofa-modules/${bundleId}-${flip}.png`;
   }
+  // 2.5-Seater has no dedicated plan-view art — reuse the 2-Seater PNG,
+  // rendered wider via QUICK_PRESET_META.baseW (Loo 2026-05-23).
+  if (bundleId === '2.5S') return '/sofa-modules/2S.png';
+  // 2PS (power-slide combo, F7) is visually a 2-seater → reuse 2S.png.
+  if (bundleId === '2PS') return '/sofa-modules/2S.png';
+  // 2WC (console, F6) uses /sofa-modules/2WC.png once Loo provides it; until then
+  // the <img onError> below falls back to 2S.png so the hero never breaks.
   return `/sofa-modules/${bundleId}.png`;
 };
 
@@ -979,6 +1037,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
   // same width ratio so the visual matches the cm label.
   const baseW = QUICK_PRESET_META[pickedRow.bundle.id]?.baseW ?? dims.w;
   const depthScale = baseW > 0 ? dims.w / baseW : 1;
+  const heroCells = PRESET_CELLS[pickedRow.bundle.id];
 
   return (
     <>
@@ -992,6 +1051,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             const isPicked = bundle.id === pickedRow.bundle.id;
             const lShape = isLShapeBundle(bundle.id);
             const meta = QUICK_PRESET_META[bundle.id];
+            const presetCells = PRESET_CELLS[bundle.id];
             return (
               <button
                 key={bundle.id}
@@ -1000,12 +1060,17 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                 onClick={() => onPick(bundle.id)}
               >
                 <div className={styles.qpCardArt}>
-                  <img
-                    src={bundleArtSrc(bundle.id, quickFlip)}
-                    alt={`${bundle.label} plan view`}
-                    draggable={false}
-                    loading="lazy"
-                  />
+                  {presetCells ? (
+                    <SofaCellsPreview cells={presetCells} depth={depth} />
+                  ) : (
+                    <img
+                      src={bundleArtSrc(bundle.id, quickFlip)}
+                      alt={`${bundle.label} plan view`}
+                      draggable={false}
+                      loading="lazy"
+                      onError={(e) => { const t = e.currentTarget; if (!t.src.endsWith('/2S.png')) t.src = '/sofa-modules/2S.png'; }}
+                    />
+                  )}
                 </div>
                 <div className={styles.qpCardBody}>
                   <span className={styles.qpCardLabel}>{bundle.label}</span>
@@ -1040,12 +1105,16 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
 
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
+          {heroCells ? (
+            <SofaCellsPreview cells={heroCells} depth={depth} />
+          ) : (
           <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
             <img
               src={heroSrc}
               alt={`${pickedRow.bundle.label} plan view`}
               draggable={false}
               style={{ transform: `scaleX(${depthScale})` }}
+              onError={(e) => { const t = e.currentTarget; if (!t.src.endsWith('/2S.png')) t.src = '/sofa-modules/2S.png'; }}
             />
             {/* Top width dim — vertical pins at the ends of a horizontal line,
                 with the cm label absolute-positioned over the middle. */}
@@ -1068,6 +1137,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
               </span>
             </div>
           </div>
+          )}
         </div>
         <footer className={styles.qpHeroFoot}>
           <span className={styles.qpHeroFootEyebrow}>Plan view</span>

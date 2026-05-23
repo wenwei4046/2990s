@@ -650,6 +650,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   const allClosed = analyses.every((a) => a.closed);
   const canAdd = cells.length > 0 && allClosed;
 
+  // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
+  // offersUpgrade gates the per-seat add button; footrest distinguishes
+  // power (opens a footrest) from headrest (no footrest). Price stays
+  // pricing.reclinerUpgradePrice.
+  const upgradeLabel = pricing.seatUpgradeLabel ?? null;
+  const upgradeHasFootrest = pricing.seatUpgradeFootrest ?? true;
+  const upgradePrice = pricing.reclinerUpgradePrice;
+  const offersUpgrade = !!upgradeLabel;
+
   const handleAdd = () => {
     if (!canAdd) return;
     // Split per sofa group → one cart line per physical sofa (Loo, 2026-05-16).
@@ -670,13 +679,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // Single source of truth for sofa-line labels — see summarizeSofaCells.
       // Note this is also re-derived at cart-render time, so updating the
       // rule here propagates to existing cart items too.
-      const summary = summarizeSofaCells(groupCells, depth);
+      const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel);
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
         productName,
         cells: groupCells,
         depth,
+        seatUpgradeLabel: pricing.seatUpgradeLabel ?? null,
         total: g.finalPrice,
         summary,
       };
@@ -995,10 +1005,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     return <img src={artSrc} style={imgStyle} alt={m.label} draggable={false} />;
                   })()}
 
-                  {/* Per-seat recliner overlays — render inside the rotated
+                  {/* Per-seat upgrade overlays — render inside the rotated
                       cellArt so wash + badge + footrest auto-orient with the
-                      module. Positioned in NATIVE module cm coords. */}
-                  {(() => {
+                      module. Positioned in NATIVE module cm coords. Only shown
+                      when this Model offers an upgrade (F3). */}
+                  {offersUpgrade && (() => {
                     const rects = seatRectsCm(m, depth);
                     const recs = c.recliners ?? [];
                     return rects.map((rect, i) => {
@@ -1022,9 +1033,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                             aria-hidden
                             style={{ left: sx + sw / 2, top: sy + sh / 2 }}
                           >
-                            {recState.open ? 'RECLINED' : 'RECLINER'}
+                            {upgradeLabel}
                           </div>
-                          {recState.open && (
+                          {upgradeHasFootrest && recState.open && (
                             <div
                               className={styles.reclineFootrestWrap}
                               aria-hidden
@@ -1049,10 +1060,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     });
                   })()}
 
-                  {/* Per-seat controls — only on the selected cell. Each
-                      eligible seat gets a +R upgrade button OR a R / R.O
-                      footrest toggle plus a ✕ to drop the upgrade. */}
-                  {isSelected && c.id != null && (() => {
+                  {/* Per-seat controls — only on the selected cell, and only
+                      when this Model offers an upgrade (F3). Each eligible seat
+                      gets an add (+) button; once added, a footrest open/close
+                      toggle (power upgrades only — not headrest) plus a ✕ to
+                      drop it. Label + price come from the Model's pricing. */}
+                  {isSelected && c.id != null && offersUpgrade && (() => {
                     const rects = seatRectsCm(m, depth);
                     const recs = c.recliners ?? [];
                     const cid = c.id;
@@ -1076,26 +1089,28 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                               type="button"
                               className={`${styles.seatBtn} ${styles.seatBtnAdd}`}
                               onClick={() => toggleSeatRecliner(cid, i)}
-                              title="Upgrade this seat to a power recliner (+RM 990)"
+                              title={`Add ${upgradeLabel}${upgradePrice > 0 ? ` (+RM ${upgradePrice.toLocaleString('en-MY')})` : ''}`}
                             >
-                              + R
+                              +
                             </button>
                           )}
                           {isRec && (
                             <div className={styles.seatCtlStack}>
-                              <button
-                                type="button"
-                                className={`${styles.seatBtn} ${isOpenSeat ? styles.seatBtnOn : ''}`}
-                                onClick={() => toggleSeatReclinerOpen(cid, i)}
-                                title={isOpenSeat ? 'Close footrest' : 'Open footrest'}
-                              >
-                                {isOpenSeat ? 'R.O' : 'R'}
-                              </button>
+                              {upgradeHasFootrest && (
+                                <button
+                                  type="button"
+                                  className={`${styles.seatBtn} ${isOpenSeat ? styles.seatBtnOn : ''}`}
+                                  onClick={() => toggleSeatReclinerOpen(cid, i)}
+                                  title={isOpenSeat ? 'Close footrest' : 'Open footrest'}
+                                >
+                                  {isOpenSeat ? 'R.O' : 'R'}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className={`${styles.seatBtn} ${styles.seatBtnRemove}`}
                                 onClick={() => toggleSeatRecliner(cid, i)}
-                                title="Remove recliner upgrade"
+                                title={`Remove ${upgradeLabel}`}
                               >
                                 ✕
                               </button>

@@ -111,6 +111,12 @@ export type SofaLineConfig = {
   bundleId?: string;
   cells?: Cell[];
   depth?: Depth;
+  /** Snapshot of the Model's per-seat upgrade label at order time (F3).
+   *  Display only — computeOrderTotal ignores it (price = reclinerUpgradePrice). */
+  seatUpgradeLabel?: string | null;
+  /** Footrest flag snapshot (F3). false = auto-included headrest → invoice shows
+   *  "+ N <label>" on a quick-pick line. Display only. */
+  seatUpgradeFootrest?: boolean;
 };
 export type SizeLineConfig = {
   kind: 'size';

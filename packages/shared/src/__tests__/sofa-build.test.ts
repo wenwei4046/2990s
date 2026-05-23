@@ -1,15 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import {
+  BUNDLES,
   detectBundle,
   familySignature,
   groupSofas,
   cellEffectiveBbox,
   cellBbox,
+  moduleFootprint,
+  findModule,
   computeSofaPrice,
   analyzeSofa,
   hasArmConflict,
   findSnap,
   cellsToPoSkus,
+  summarizeSofaCells,
+  describeSofaLine,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -58,9 +63,131 @@ describe('detectBundle', () => {
   it('returns null when no signature matches', () => {
     expect(detectBundle(['1NA', '1NA'])).toBeNull();
   });
+  // 2.5-Seater is a Quick-Pick-only widened 2-seater (Loo 2026-05-23). It must
+  // exist in BUNDLES (so the POS quick-pick list renders it) but must NEVER be
+  // auto-detected from a custom build — there is no 2.5A module to compose, so
+  // its signature '2.5A' is unreachable. These guard that contract.
+  it('exposes a 2.5S bundle labelled 2.5-Seater', () => {
+    const b = BUNDLES.find((x) => x.id === '2.5S');
+    expect(b?.label).toBe('2.5-Seater');
+  });
+  it('never auto-detects 2.5S from real modules', () => {
+    expect(detectBundle(['2A-LHF'])?.id).toBe('2S');           // wider-looking 2-seater still maps to 2S
+    expect(detectBundle(['2A-LHF', '2A-RHF'])?.id).not.toBe('2.5S');
+    expect(detectBundle(['1A-LHF', '1NA', '2A-RHF'])?.id).not.toBe('2.5S');
+  });
+});
+
+/* F3 — per-seat upgrade label suffix on the cart/order summary. */
+describe('summarizeSofaCells upgrade suffix', () => {
+  const cell = (moduleId: string, recliners: { seatIdx: number; open: boolean }[]): Cell =>
+    ({ id: 'c1', moduleId, x: 0, y: 0, rot: 0, recliners });
+
+  it('appends "+ N <label>" when seats are upgraded and a label is given', () => {
+    const cells = [cell('2A-LHF', [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
+    expect(summarizeSofaCells(cells, '24', 'Power slide')).toBe('2-Seater + 2 Power slide');
+  });
+  it('omits the suffix when no label is passed (back-compat)', () => {
+    const cells = [cell('1A-LHF', [{ seatIdx: 0, open: false }])];
+    expect(summarizeSofaCells(cells, '24')).toBe('1-Seater');
+  });
+  it('omits the suffix when no seat is upgraded', () => {
+    const cells = [cell('1A-LHF', [])];
+    expect(summarizeSofaCells(cells, '24', 'Headrest')).toBe('1-Seater');
+  });
   it('drops accessories before signing', () => {
     expect(familySignature(['1A-LHF', 'WC-45', '2A-RHF'])).toBe('1A+2A');
     expect(detectBundle(['1A-LHF', 'WC-45', '2A-RHF'])?.id).toBe('3S');
+  });
+});
+
+/* Invoice/order line description (Track 2 §8.1 decomposition rule). Single-piece
+ * bundles show the name; multi-piece decompose to oriented module ids. Reads the
+ * stored order_items.config (bundleId for Quick-Pick, cells for Custom Build). */
+describe('describeSofaLine', () => {
+  const cell = (
+    moduleId: string,
+    x: number,
+    recliners: { seatIdx: number; open: boolean }[] = [],
+  ): Cell => ({ id: `${moduleId}@${x}`, moduleId, x, y: 0, rot: 0, recliners });
+
+  it('quick-pick single-piece bundles show the bundle name', () => {
+    expect(describeSofaLine({ bundleId: '1S' })).toBe('1-Seater');
+    expect(describeSofaLine({ bundleId: '2S' })).toBe('2-Seater');
+    expect(describeSofaLine({ bundleId: '2.5S' })).toBe('2.5-Seater');
+  });
+
+  it('quick-pick multi-piece bundles decompose to oriented module ids', () => {
+    expect(describeSofaLine({ bundleId: '3S' })).toBe('1A-LHF + 2A-RHF');
+    expect(describeSofaLine({ bundleId: '2+L' })).toBe('2A-LHF + L-RHF');
+  });
+
+  it('quick-pick console bundle (2WC) shows 1A-LHF + WC-45 + 1A-RHF (F6)', () => {
+    expect(describeSofaLine({ bundleId: '2WC' })).toBe('1A-LHF + WC-45 + 1A-RHF');
+  });
+
+  it('quick-pick power-slide combo (2PS) shows its bundle name (F7)', () => {
+    expect(describeSofaLine({ bundleId: '2PS' })).toBe('2-Seater + 2 Power slide');
+  });
+
+  it('quick-pick corner bundle (CORNER) shows 1B-LHF + CNR + 2A-RHF (F4)', () => {
+    expect(describeSofaLine({ bundleId: 'CORNER' })).toBe('1B-LHF + CNR + 2A-RHF');
+  });
+
+  it('custom single-piece keeps the name and appends "+ N <upgrade>"', () => {
+    const cells = [cell('2A-LHF', 0, [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
+    expect(describeSofaLine({ cells, depth: '24', seatUpgradeLabel: 'Power slide' }))
+      .toBe('2-Seater + 2 Power slide');
+  });
+
+  it('custom multi-piece lists its oriented cell ids left-to-right', () => {
+    const cells = [cell('2A-RHF', 95), cell('1A-LHF', 0)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + 2A-RHF');
+  });
+
+  it('custom with a console lists the accessory inline (not collapsed to a bundle)', () => {
+    const cells = [cell('1A-LHF', 0), cell('WC-45', 95), cell('1A-RHF', 140)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + WC-45 + 1A-RHF');
+  });
+
+  it('falls back gracefully when neither bundleId nor cells are present', () => {
+    expect(describeSofaLine({})).toBe('Sofa');
+  });
+
+  // F3: an auto-included headrest (non-footrest upgrade) shows "+ N Headrest" on a
+  // quick-pick line, N = the bundle's seat count. Opt-in power upgrades (footrest)
+  // are NOT auto-appended on quick-pick (they're added per seat in Custom Build).
+  it('appends "+ N Headrest" for a non-footrest upgrade (N = bundle seat count)', () => {
+    const hr = { seatUpgradeLabel: 'Headrest', seatUpgradeFootrest: false };
+    expect(describeSofaLine({ bundleId: '1S', ...hr })).toBe('1-Seater + 1 Headrest');
+    expect(describeSofaLine({ bundleId: '2S', ...hr })).toBe('2-Seater + 2 Headrest');
+    expect(describeSofaLine({ bundleId: '2.5S', ...hr })).toBe('2.5-Seater + 2 Headrest');
+  });
+  it('does NOT auto-append a footrest (opt-in power) upgrade on quick-pick', () => {
+    expect(describeSofaLine({ bundleId: '2S', seatUpgradeLabel: 'Power slide', seatUpgradeFootrest: true }))
+      .toBe('2-Seater');
+  });
+});
+
+// F1: STOOL is a placeable accessory module in Custom Build (was in the DB
+// compartment_library but absent from SOFA_MODULES → previously dead).
+describe('STOOL accessory module', () => {
+  it('is a placeable accessory module (group Accessory, accessory=true)', () => {
+    const m = findModule('STOOL');
+    expect(m?.accessory).toBe(true);
+    expect(m?.group).toBe('Accessory');
+  });
+});
+
+/* F5: depth widened beyond 24/28. Plan-view width grows 2.5cm per inch per
+ * cushion, anchored on the existing 24″=base / 28″=+10cm/cushion behaviour. */
+describe('moduleFootprint depth scaling', () => {
+  it('widens 2.5cm per inch per cushion (24 base, 28 +10, 30 +15, 32 +20)', () => {
+    const m = findModule('2A-LHF')!; // w 158cm, 2 cushions
+    expect(moduleFootprint(m, 0, '24').w).toBe(158);
+    expect(moduleFootprint(m, 0, '28').w).toBe(178);
+    expect(moduleFootprint(m, 0, '30').w).toBe(188);
+    expect(moduleFootprint(m, 0, '32').w).toBe(198);
   });
 });
 

@@ -32,6 +32,8 @@ const productBase = z.object({
   name:            z.string().min(1).max(120),
   detail:          z.string().max(280).nullable(),
   sizeDisplay:     z.string().max(80).nullable(),
+  // F5: per-Model seat depths — CSV of inches, e.g. '24,30'. null = no choice.
+  depthOptions:    z.string().max(40).nullable(),
   imgKey:          z.string().max(200).nullable(),
   thumbKey:        z.string().max(200).nullable(),
   stock:           z.number().int().min(0),
@@ -57,6 +59,11 @@ const sofaBundleRow = z.object({
 export const sofaProductSchema = productBase.extend({
   pricingKind:          z.literal('sofa_build'),
   reclinerUpgradePrice: money,
+  // F3 (2026-05-23): per-Model name for the single per-seat upgrade. null =
+  // this Model offers no upgrade (POS hides the add button). footrest=false
+  // for headrest (no footrest), true for power recliner/incliner/slide/leg.
+  seatUpgradeLabel:     z.string().max(40).nullable().optional(),
+  seatUpgradeFootrest:  z.boolean().optional(),
   compartments:         z.array(sofaPricingRow).min(1),
   bundles:              z.array(sofaBundleRow).min(1),
 });

@@ -63,11 +63,19 @@ ON CONFLICT (id) DO UPDATE SET
 
 -- ─── Bundle library (5 quick-pick presets) ──────────────────────────────────
 INSERT INTO bundle_library (id, label, sub, signature, base_width_cm, base_depth_cm, cushions, default_price, art_left, art_right, art_base, sort_order) VALUES
-  ('1S',  '1-Seater', 'Single seat',           '1A',         190,  95, 2, 1490, NULL, NULL, '1S.png', 1),
-  ('2S',  '2-Seater', 'Two seats',             '2A',         316,  95, 4, 1990, NULL, NULL, '2S.png', 2),
-  ('3S',  '3-Seater', 'Three seats',           '1A+2A',      265,  95, 3, 2490, NULL, NULL, '3S.png', 3),
-  ('2+L', '2 + L',    '2-seater with chaise',  '2A+L',       253, 165, 3, 2990, '2+L-L.png', '2+L-R.png', NULL, 4),
-  ('3+L', '3 + L',    '3-seater with chaise',  '1A+2NA+L',   360, 165, 4, 3990, '3+L-L.png', '3+L-R.png', NULL, 5)
+  ('1S',   '1-Seater',   'Single seat',           '1A',         190,  95, 2, 1490, NULL, NULL, '1S.png', 1),
+  ('2S',   '2-Seater',   'Two seats',             '2A',         316,  95, 4, 1990, NULL, NULL, '2S.png', 2),
+  -- 2.5-Seater: widened 2-seater, Quick-Pick only. No dedicated art — POS
+  -- reuses 2S.png rendered wider (Loo 2026-05-23). signature '2.5A' is
+  -- non-matchable (no 2.5A module) so it never auto-detects in Custom Build.
+  ('2.5S', '2.5-Seater', 'Two-and-a-half seats',  '2.5A',       290,  95, 3, 2990, NULL, NULL, '2S.png', 3),
+  ('3S',   '3-Seater',   'Three seats',           '1A+2A',      265,  95, 3, 2490, NULL, NULL, '3S.png', 4),
+  ('2+L',  '2 + L',      '2-seater with chaise',  '2A+L',       253, 165, 3, 2990, '2+L-L.png', '2+L-R.png', NULL, 5),
+  ('3+L',  '3 + L',      '3-seater with chaise',  '1A+2NA+L',   360, 165, 4, 3990, '3+L-L.png', '3+L-R.png', NULL, 6),
+  -- F6/F7 preset bundles (2026-05-24). 2WC art_base 2WC.png pending Loo; 2PS reuses 2S.png.
+  ('2WC',  '2-Seater + Console',       '2-seater with wood console', '2WC-PRESET', 235, 95, 2, 2990, NULL, NULL, '2WC.png', 7),
+  ('2PS',  '2-Seater + 2 Power slide', '2-seater · 2 power slide',   '2PS-PRESET', 265, 95, 3, 2990, NULL, NULL, '2S.png',  8),
+  ('CORNER','Corner',                  '1B + corner + 2A',           'CORNER-PRESET', 200, 253, 3, 2990, NULL, NULL, NULL, 9)
 ON CONFLICT (id) DO UPDATE SET
   label = EXCLUDED.label, sub = EXCLUDED.sub, signature = EXCLUDED.signature,
   default_price = EXCLUDED.default_price, sort_order = EXCLUDED.sort_order;

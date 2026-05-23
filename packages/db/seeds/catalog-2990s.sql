@@ -21,8 +21,11 @@
 --   • all 15 library compartments  → seeded active at library default price so
 --                                     Custom Build prices à-la-carte correctly
 --
--- TRACK 2 (needs sofa-build.ts change — NOT done here, flagged inline):
---   • 2.5-SEATER bundle            → AM 9070, AM 9071, SF 5080
+-- 2.5-SEATER (DONE 2026-05-23): added as a Quick-Pick-only bundle `2.5S`
+--   (widened 2-seater, reuses 2S.png) — see sofa-build.ts BUNDLES + seed-
+--   libraries.sql bundle_library. Seeded for AM 9070 / AM 9071 / SF 5080 below.
+--
+-- TRACK 2 (still needs sofa-build.ts change — NOT done here, flagged inline):
 --   • POWER-LEG/SLIDE/INCLINER as distinct order-line items ("2S + 2 power
 --     slide"), HEADREST descriptor ("2S + 2 headrest")
 --   • STOOL as a placeable module  → SF 5080  (in library, absent from
@@ -89,25 +92,28 @@ BEGIN
     ('cccccccc-cccc-cccc-cccc-cccccccc0002','2S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0002','3S', true,2490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0002','2+L',true,2990),
-    -- SF 9050 — only "2-seater + wood console" 2990 (console included in price)
-    ('cccccccc-cccc-cccc-cccc-cccccccc0003','2S', true,2990),
+    -- SF 9050 — only "2-seater + wood console" 2990 (2WC preset = 1A-LHF+WC-45+1A-RHF)
+    ('cccccccc-cccc-cccc-cccc-cccccccc0003','2WC', true,2990),
     -- AM 9053 — standard + power incliner (recliner_upgrade_price)
     ('cccccccc-cccc-cccc-cccc-cccccccc0004','1S', true,1490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0004','2S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0004','3S', true,2490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0004','2+L',true,2990),
-    -- AM 9070 — headrest included in price; 2.5-seater → Track 2
-    ('cccccccc-cccc-cccc-cccc-cccccccc0005','1S', true,1990),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0005','2S', true,2490),
-    -- AM 9071 — 3S=2990; 2.5-seater 2990 → Track 2
-    ('cccccccc-cccc-cccc-cccc-cccccccc0006','1S', true,1490),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0006','2S', true,1990),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0006','3S', true,2990),
-    -- SF 5119 — 1S/2S higher; power leg (recliner_upgrade_price)
+    -- AM 9070 — headrest included in price (headrest descriptor → Track 2)
+    ('cccccccc-cccc-cccc-cccc-cccccccc0005','1S',  true,1990),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0005','2S',  true,2490),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0005','2.5S',true,2990),
+    -- AM 9071 — 3S=2990; 2.5-seater 2990
+    ('cccccccc-cccc-cccc-cccc-cccccccc0006','1S',  true,1490),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0006','2S',  true,1990),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0006','3S',  true,2990),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0006','2.5S',true,2990),
+    -- SF 5119 — 1S/2S higher; +console preset (2WC); power leg (recliner_upgrade_price)
     ('cccccccc-cccc-cccc-cccc-cccccccc0007','1S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0007','2S', true,2490),
-    -- SF 5080 — only 2.5-seater + stool → Track 2 (no expressible bundle)
-    -- 5080 intentionally has NO product_bundles row.
+    ('cccccccc-cccc-cccc-cccc-cccccccc0007','2WC',true,2990),
+    -- SF 5080 — 2.5-seater 2990 (stool placeable module → Track 2)
+    ('cccccccc-cccc-cccc-cccc-cccccccc0008','2.5S',true,2990),
     -- SF 5130 — only 2+L
     ('cccccccc-cccc-cccc-cccc-cccccccc0009','2+L',true,2990),
     -- DSL 8019 — 3S=2990; power incliner
@@ -116,10 +122,11 @@ BEGIN
     ('cccccccc-cccc-cccc-cccc-cccccccc0010','3S', true,2990),
     -- DSL 8020 — only 2+L
     ('cccccccc-cccc-cccc-cccc-cccccccc0011','2+L',true,2990),
-    -- DSL 8027 — standard; power slide; "2S+2 power slide" combo → Track 2
+    -- DSL 8027 — standard; +2S+2-power-slide combo preset (2PS); per-seat slide too
     ('cccccccc-cccc-cccc-cccc-cccccccc0012','1S', true,1490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0012','2S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0012','3S', true,2490),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0012','2PS',true,2990),
     -- 5531 — standard
     ('cccccccc-cccc-cccc-cccc-cccccccc0013','1S', true,1490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0013','2S', true,1990),
@@ -129,8 +136,28 @@ BEGIN
     ('cccccccc-cccc-cccc-cccc-cccccccc0014','1S', true,1490),
     ('cccccccc-cccc-cccc-cccc-cccccccc0014','2S', true,1990),
     ('cccccccc-cccc-cccc-cccc-cccccccc0014','3S', true,2490),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0014','2+L',true,2990)
-    -- 5539 — corner package 1B+CORNER+2A @2990 → Track 2 (no quick-pick bundle)
+    ('cccccccc-cccc-cccc-cccc-cccccccc0014','2+L',true,2990),
+    -- 5539 — corner package preset (CORNER = 1B-LHF + CNR + 2A-RHF) @2990
+    ('cccccccc-cccc-cccc-cccc-cccccccc0015','CORNER',true,2990)
   ON CONFLICT (product_id, bundle_id) DO UPDATE SET
     active = EXCLUDED.active, price = EXCLUDED.price;
+
+  -- ── 4) Per-Model seat upgrade label + footrest (F3, 2026-05-23, migration
+  --        0039). Only the Models the PDF lists with a power/headrest option;
+  --        price stays recliner_upgrade_price. Others keep seat_upgrade_label
+  --        NULL → POS hides the per-seat add button. ─────────────────────────
+  UPDATE products SET seat_upgrade_label='Power incliner', seat_upgrade_footrest=true  WHERE sku IN ('SOF-AM9053','SOF-DSL8019');
+  UPDATE products SET seat_upgrade_label='Power slide',    seat_upgrade_footrest=true  WHERE sku='SOF-DSL8027';
+  UPDATE products SET seat_upgrade_label='Power leg',      seat_upgrade_footrest=true  WHERE sku='SOF-SF5119';
+  UPDATE products SET seat_upgrade_label='Headrest',       seat_upgrade_footrest=false WHERE sku='SOF-AM9070';
+
+  -- ── 5) Per-Model seat depths (F5, 2026-05-24, migration 0040). CSV of inches;
+  --        the POS depth toggle reads this. Non-pricing (same price all depths). ─
+  UPDATE products SET depth_options='24,30'       WHERE sku IN ('SOF-AM9036','SOF-AM9038','SOF-AM9053','SOF-DSL8020');
+  UPDATE products SET depth_options='24,26,28,30' WHERE sku='SOF-SF9050';
+  UPDATE products SET depth_options='28'          WHERE sku IN ('SOF-AM9070','SOF-AM9071','SOF-SF5080','SOF-SF5130','SOF-5539');
+  UPDATE products SET depth_options='30'          WHERE sku IN ('SOF-SF5119','SOF-DSL8019');
+  UPDATE products SET depth_options='32'          WHERE sku='SOF-DSL8027';
+  UPDATE products SET depth_options='24,28'       WHERE sku='SOF-5531';
+  UPDATE products SET depth_options='24,28,30'    WHERE sku='SOF-5535';
 END $$;

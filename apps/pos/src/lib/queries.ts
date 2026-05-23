@@ -81,13 +81,18 @@ export const useProduct = (productId: string | undefined) =>
       const { data, error } = await supabase
         .from('products')
         .select(
-          'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
+          'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
         )
         .eq('id', productId)
         .maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('not_found');
-      return data as typeof data & { included_addons: { addonId: string; qty: number }[] };
+      return data as typeof data & {
+        included_addons: { addonId: string; qty: number }[];
+        seat_upgrade_label: string | null;
+        seat_upgrade_footrest: boolean;
+        depth_options: string | null;
+      };
     },
   });
 

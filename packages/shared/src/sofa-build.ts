@@ -9,7 +9,11 @@
 /* ─── Public types ─────────────────────────────────────────────────── */
 
 export type Rot = 0 | 90 | 180 | 270;
-export type Depth = '24' | '28';
+// Seat depth in inches, as a string (e.g. '24', '28', '30', '32'). Was a
+// '24'|'28' union; widened (F5) so the configurator can offer each Model's real
+// depths from products.depth_options. Display + plan-view width only — never a
+// pricing dimension.
+export type Depth = string;
 
 export interface Cell {
   /** Optional client-side cell id for grouping by reference. */
@@ -48,6 +52,14 @@ export interface SofaProductPricing {
   compartments: SofaProductPricingRow[];
   bundles: SofaProductPricingBundle[];
   reclinerUpgradePrice: number;
+  /** Per-Model name for the per-seat upgrade ('Power slide','Headrest', …).
+   *  null/undefined → this Model offers no per-seat upgrade (POS hides the add
+   *  button). Display only — the upgrade price is `reclinerUpgradePrice`.
+   *  F3, 2026-05-23 (migration 0039). */
+  seatUpgradeLabel?: string | null;
+  /** true → upgraded seat opens a footrest (power recliner/incliner/slide/leg);
+   *  false → no footrest (headrest). Defaults to true when omitted. */
+  seatUpgradeFootrest?: boolean;
 }
 
 export interface BundleDef {
@@ -109,6 +121,9 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   // Accessory — 45cm wood console. Slots between sofa pieces; doesn't count
   // toward bundles or closure.
   { id: 'WC-45',  group: 'Accessory', label: 'Wood console · 45cm',    w: 45,  d: 95,  cushions: 0, accessory: true },
+  // Ottoman / stool — 75×75 free-standing accessory (F1). Doesn't count toward
+  // bundles or closure. Art: STOOL.png (Loo provides).
+  { id: 'STOOL',  group: 'Accessory', label: 'Ottoman / stool',        w: 75,  d: 75,  cushions: 0, accessory: true },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -169,9 +184,26 @@ const bundleSignature = (modIds: string[]): string =>
 export const BUNDLES: readonly BundleDef[] = [
   { id: '1S',  label: '1-Seater', signature: '1A',       canonicalModules: ['1A'] },
   { id: '2S',  label: '2-Seater', signature: '2A',       canonicalModules: ['2A'] },
+  // 2.5-Seater — a widened 2-seater sold via Quick Pick only (Loo 2026-05-23).
+  // No distinct module/art: the POS reuses 2S.png rendered wider (see
+  // Configurator QUICK_PRESET_META + bundleArtSrc). The signature is an
+  // intentionally non-matchable family ('2.5A') so detectBundle never
+  // auto-selects it from a custom build — there is no 2.5A module to compose.
+  { id: '2.5S',label: '2.5-Seater',signature: '2.5A',    canonicalModules: ['2A'] },
   { id: '3S',  label: '3-Seater', signature: '1A+2A',    canonicalModules: ['1A', '2A'] },
   { id: '2+L', label: '2 + L',    signature: '2A+L',     canonicalModules: ['2A', 'L'] },
   { id: '3+L', label: '3 + L',    signature: '1NA+2A+L', canonicalModules: ['2A', '1NA', 'L'] },
+  // 2-Seater + Console (F6) — two single-arm 1-seaters flanking a wood console,
+  // Quick-Pick only. Non-matchable signature so a custom 1A+WC+1A never
+  // auto-detects as this priced preset.
+  { id: '2WC', label: '2-Seater + Console', signature: '2WC-PRESET', canonicalModules: ['1A', 'WC-45', '1A'] },
+  // 2-Seater + 2 Power slide combo (F7, DSL 8027) — a 2-seater sold as a fixed
+  // Quick-Pick at the combo price; per-seat power slide stays available in Custom
+  // Build too. Label IS the invoice text. Non-matchable signature.
+  { id: '2PS', label: '2-Seater + 2 Power slide', signature: '2PS-PRESET', canonicalModules: ['2A'] },
+  // Corner package (F4, 5539) — 1B + corner + 2A, Quick-Pick only, composed
+  // preview (no composite PNG). Non-matchable signature.
+  { id: 'CORNER', label: 'Corner', signature: 'CORNER-PRESET', canonicalModules: ['1B', 'CNR', '2A'] },
 ];
 
 // Each entry is a signature → bundle. Multiple signatures map to the same
@@ -208,15 +240,129 @@ export const detectBundle = (modIds: string[]): BundleDef | null =>
  * Anything else → `Custom (<family-signature>)` so distinct custom builds in
  * the same cart stay distinguishable.
  */
-export const summarizeSofaCells = (cells: Cell[], depth: Depth): string => {
+export const summarizeSofaCells = (
+  cells: Cell[],
+  depth: Depth,
+  /** Per-Model upgrade label — when set AND any seat is upgraded, the summary
+   *  gets a "+ N <label>" suffix (e.g. "2-Seater + 2 Power slide"). Omitted by
+   *  callers that lack pricing in hand; then no suffix is added. F3 2026-05-23. */
+  seatUpgradeLabel?: string | null,
+): string => {
   if (cells.length === 0) return 'Custom (empty)';
   const modIds = cells.map((c) => c.moduleId);
   const candidate = detectBundle(modIds);
-  if (candidate) {
-    const closed = cells.length === 1 || analyzeSofa(cells, depth).closed;
-    if (closed) return candidate.label;
+  let base: string;
+  if (candidate && (cells.length === 1 || analyzeSofa(cells, depth).closed)) {
+    base = candidate.label;
+  } else {
+    base = `Custom (${familySignature(modIds)})`;
   }
-  return `Custom (${familySignature(modIds)})`;
+  const upgradeCount = cells.reduce((n, c) => n + (c.recliners?.length ?? 0), 0);
+  if (seatUpgradeLabel && upgradeCount > 0) {
+    base += ` + ${upgradeCount} ${seatUpgradeLabel}`;
+  }
+  return base;
+};
+
+/* ─── Invoice / order line description (Track 2 §8.1) ──────────────── */
+// Single-piece bundles (1S/2S/2.5S) show the bundle name; multi-piece bundles
+// (3S/2+L/3+L/corner/console) decompose to oriented module ids. Reads the
+// persisted order_items.config (bundleId = Quick-Pick, cells = Custom Build).
+// Display only — never used for pricing.
+
+const SINGLE_PIECE_BUNDLES = new Set(['1S', '2S', '2.5S']);
+
+// Canonical oriented decomposition for a Quick-Pick bundle (no cells to read).
+// Outer arms face out (leftmost LHF, rightmost RHF); mirror is equally valid
+// (Loo 2026-05-24). Keyed by bundle id; single-piece bundles aren't listed here
+// (they render as their name).
+const BUNDLE_INVOICE_DECOMP: Record<string, string> = {
+  '3S':  '1A-LHF + 2A-RHF',
+  '2+L': '2A-LHF + L-RHF',
+  '3+L': '2A-LHF + 1NA + L-RHF',
+  // Console (F6): two single-arm 1-seaters flanking a wood console.
+  '2WC': '1A-LHF + WC-45 + 1A-RHF',
+  // Corner package (F4, 5539): 1B + corner + 2A.
+  'CORNER': '1B-LHF + CNR + 2A-RHF',
+};
+
+const bundleLabelById = (bundleId: string): string =>
+  BUNDLES.find((b) => b.id === bundleId)?.label ?? bundleId;
+
+// Seats in a bundle, from its canonical module families (1x → 1, 2x → 2, L/CNR → 0).
+// Counts auto-included headrests on a quick-pick (F3).
+const bundleSeatCount = (bundleId: string): number => {
+  const b = BUNDLES.find((x) => x.id === bundleId);
+  if (!b) return 0;
+  return b.canonicalModules.reduce(
+    (n, fam) => n + (fam.startsWith('2') ? 2 : fam.startsWith('1') ? 1 : 0),
+    0,
+  );
+};
+
+export interface SofaLineDescriptor {
+  /** Quick-Pick: the chosen bundle id. */
+  bundleId?: string;
+  /** Custom Build: the laid-out cells (module ids already carry orientation). */
+  cells?: Cell[];
+  depth?: Depth;
+  /** Per-Model upgrade label snapshot; suffixes "+ N <label>" when seats upgraded. */
+  seatUpgradeLabel?: string | null;
+  /** Upgrade footrest flag. false = auto-included (headrest) → shown on a quick-pick
+   *  as "+ N <label>" (N = seat count). true/undefined = opt-in power upgrade added
+   *  per seat in Custom Build, NOT auto-appended on quick-pick. F3. */
+  seatUpgradeFootrest?: boolean;
+}
+
+/**
+ * Human-readable description for a sofa order/invoice line (Track 2 §8.1):
+ *   - single-piece bundle (1S/2S/2.5S) → bundle name ("2-Seater")
+ *   - multi-piece bundle (3S/2+L/…)    → decomposed module ids ("1A-LHF + 2A-RHF")
+ *   - Custom Build cells               → the cells' own oriented ids, left-to-right
+ *     (a console / any accessory in the cells forces decomposition so it stays visible)
+ *   - any seat upgrades                → "+ N <seatUpgradeLabel>" appended
+ */
+export const describeSofaLine = (cfg: SofaLineDescriptor): string => {
+  const depth: Depth = cfg.depth ?? '24';
+
+  if (cfg.cells && cfg.cells.length > 0) {
+    const cells = cfg.cells;
+    const modIds = cells.map((c) => c.moduleId);
+    const hasAccessory = modIds.some(isAccessoryModule);
+    const candidate = detectBundle(modIds);
+    const closed = cells.length === 1 || analyzeSofa(cells, depth).closed;
+
+    let base: string;
+    if (candidate && closed && !hasAccessory && SINGLE_PIECE_BUNDLES.has(candidate.id)) {
+      base = candidate.label;
+    } else {
+      base = [...cells]
+        .sort((a, b) => a.x - b.x || a.y - b.y)
+        .map((c) => c.moduleId)
+        .join(' + ');
+    }
+
+    const upgradeCount = cells.reduce((n, c) => n + (c.recliners?.length ?? 0), 0);
+    if (cfg.seatUpgradeLabel && upgradeCount > 0) {
+      base += ` + ${upgradeCount} ${cfg.seatUpgradeLabel}`;
+    }
+    return base;
+  }
+
+  if (cfg.bundleId) {
+    const base = SINGLE_PIECE_BUNDLES.has(cfg.bundleId)
+      ? bundleLabelById(cfg.bundleId)
+      : (BUNDLE_INVOICE_DECOMP[cfg.bundleId] ?? bundleLabelById(cfg.bundleId));
+    // Auto-included non-footrest upgrade (headrest) → "+ N <label>" (N = seat count).
+    // Opt-in footrest upgrades (power) are added per seat in Custom Build, not here.
+    if (cfg.seatUpgradeLabel && cfg.seatUpgradeFootrest === false) {
+      const n = bundleSeatCount(cfg.bundleId);
+      if (n > 0) return `${base} + ${n} ${cfg.seatUpgradeLabel}`;
+    }
+    return base;
+  }
+
+  return 'Sofa';
 };
 
 /* ─── Edge typing & rotation ───────────────────────────────────────── */
@@ -244,6 +390,7 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   'L-LHF':  ['open', 'back', 'open', 'front'],
   'L-RHF':  ['open', 'back', 'open', 'front'],
   'WC-45':  ['open', 'open', 'open', 'open'],
+  'STOOL':  ['open', 'open', 'open', 'open'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -263,7 +410,12 @@ export const cellEdges = (cell: Cell): EdgeType[] => {
 
 /* ─── Footprint + bbox ─────────────────────────────────────────────── */
 
-const widthOffsetPerCushion = (depth: Depth): number => (depth === '28' ? 10 : 0);
+// Plan-view length grows with seat depth: 2.5cm per inch per cushion, anchored
+// on the 24″ baseline (24→0, 28→+10, 30→+15, 32→+20). Non-numeric/below-baseline → 0.
+const widthOffsetPerCushion = (depth: Depth): number => {
+  const inch = parseInt(depth, 10);
+  return Number.isFinite(inch) ? Math.max(0, (inch - 24) * 2.5) : 0;
+};
 
 export const moduleFootprint = (m: SofaModuleSpec, rot: Rot, depth: Depth): { w: number; h: number } => {
   const w = m.w + widthOffsetPerCushion(depth) * m.cushions;

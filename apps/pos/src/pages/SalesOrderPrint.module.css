@@ -206,6 +206,15 @@
 .colQty   { width: 8%;  text-align: center; }
 .colMoney { width: 18%; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* Config-derived sub-line under the product name (sofa bundle / decomposition). */
+.lineDesc {
+  display: block;
+  margin-top: 2pt;
+  font-size: 8.5pt;
+  color: #555;
+  line-height: 1.35;
+}
+
 /* ───── After-items row: customer signature (LEFT) + totals (RIGHT) ───── */
 .afterItems {
   display: grid;

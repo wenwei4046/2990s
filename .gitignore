@@ -52,3 +52,4 @@ supabase/
 
 # Local mockup HTML for visual companion / screenshot-only exploration
 verify-*.html
+.gstack/
