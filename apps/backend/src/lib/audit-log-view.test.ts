@@ -11,7 +11,7 @@ const row = (over: Partial<AuditLogRow> = {}): AuditLogRow => ({
   id: 'SO-2057', placedAt: '2026-05-21T15:01:00Z',
   customerName: 'Hafiz Rahman', customerPhone: '+60 11 998 7766',
   total: 6819, paid: 4466, paymentMethod: 'installment', installmentMonths: 12,
-  approvalCode: 'CONTRACT-1', slipKey: null, slipUploaded: false,
+  approvalCode: 'CONTRACT-1', merchantProvider: null, slipKey: null, slipUploaded: false,
   showroomId: 'sh', salespersonId: 'sp', staffId: 'st', ...over,
 });
 
@@ -70,11 +70,14 @@ describe('methodLabel + methodDetail', () => {
     expect(methodLabel('debit')).toBe('Debit card');
     expect(methodLabel('installment')).toBe('Installment');
     expect(methodLabel('transfer')).toBe('Bank transfer');
+    expect(methodLabel('merchant')).toBe('Merchant');
   });
-  it('shows the term only for installment', () => {
+  it('shows the term for installment and provider for merchant', () => {
     expect(methodDetail(row({ paymentMethod: 'installment', installmentMonths: 12 }))).toBe('12 months');
     expect(methodDetail(row({ paymentMethod: 'installment', installmentMonths: null }))).toBe('—');
-    expect(methodDetail(row({ paymentMethod: 'credit', installmentMonths: null }))).toBeNull();
+    expect(methodDetail(row({ paymentMethod: 'merchant', merchantProvider: 'GHL' }))).toBe('GHL');
+    expect(methodDetail(row({ paymentMethod: 'merchant', merchantProvider: null }))).toBe('—');
+    expect(methodDetail(row({ paymentMethod: 'transfer' }))).toBeNull();
   });
 });
 

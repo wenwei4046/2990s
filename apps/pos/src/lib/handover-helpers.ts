@@ -1,6 +1,7 @@
 export type CustomerType = 'new' | 'existing';
 export type BuildingType = '' | 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
-export type PaymentMethod = '' | 'credit' | 'debit' | 'transfer' | 'installment';
+export type PaymentMethod = '' | 'merchant' | 'transfer' | 'installment';
+export type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
 export type PaymentPreset = 'half' | 'full' | 'seventy' | 'custom';
 
 export interface AddonSelection {
@@ -40,6 +41,8 @@ export interface HandoverForm {
   paymentMethod: PaymentMethod;
   /** Installment term in months. Required when paymentMethod === 'installment'. */
   installmentMonths: 6 | 12 | null;
+  /** Merchant acquirer / terminal. Required when paymentMethod === 'merchant'. */
+  merchantProvider: MerchantProvider | null;
 
   amountPaid: number;
   /** Additional delivery fee keyed in by sales at handover. Whole RM, 0 if none. */
@@ -90,6 +93,7 @@ export const validateTargetDate = (f: HandoverForm): boolean =>
 export const validateAddonsPayment = (f: HandoverForm): boolean => {
   if (f.paymentMethod === '') return false;
   if (f.paymentMethod === 'installment' && f.installmentMonths == null) return false;
+  if (f.paymentMethod === 'merchant' && f.merchantProvider == null) return false;
   return true;
 };
 
@@ -155,6 +159,9 @@ const addonsPaymentBlockers = (f: HandoverForm): string[] => {
   if (!f.paymentMethod) return ['Pick a payment method'];
   if (f.paymentMethod === 'installment' && f.installmentMonths == null) {
     return ['Pick the installment term (6 or 12 months)'];
+  }
+  if (f.paymentMethod === 'merchant' && f.merchantProvider == null) {
+    return ['Pick the merchant (GHL / HLB / MBB / PBB)'];
   }
   return [];
 };

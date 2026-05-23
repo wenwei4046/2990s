@@ -81,11 +81,14 @@ export const orderV1PostSchema = z.object({
     city: z.string().optional(),
     state: z.string().optional(),
   }),
-  paymentMethod: z.enum(['credit', 'debit', 'installment', 'transfer']),
+  // credit/debit folded into 'merchant' (2026-05-23). POS only sends these three.
+  paymentMethod: z.enum(['merchant', 'installment', 'transfer']),
   approvalCode: z.string().optional(),
   // Installment term — 6 or 12 months. Required iff paymentMethod = 'installment'
   // (enforced by the .superRefine below). 0% installment — never affects pricing.
   installmentMonths: z.union([z.literal(6), z.literal(12)]).nullable().optional(),
+  // Merchant acquirer / terminal. Required iff paymentMethod = 'merchant'.
+  merchantProvider: z.enum(['GHL', 'HLB', 'MBB', 'PBB']).nullable().optional(),
   notes: z.string().optional(),
   // ISO YYYY-MM-DD; omit when customer wants delivery TBD.
   deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invalid_date_format').optional(),
@@ -144,6 +147,16 @@ export const orderV1PostSchema = z.object({
   } else if (v.installmentMonths !== undefined && v.installmentMonths !== null) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installmentMonths'],
       message: 'installment_term_only_for_installment' });
+  }
+
+  if (v.paymentMethod === 'merchant') {
+    if (!v.merchantProvider) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['merchantProvider'],
+        message: 'merchant_provider_required' });
+    }
+  } else if (v.merchantProvider !== undefined && v.merchantProvider !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['merchantProvider'],
+      message: 'merchant_provider_only_for_merchant' });
   }
 });
 

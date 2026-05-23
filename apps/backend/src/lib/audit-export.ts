@@ -6,6 +6,7 @@ export interface AuditExportRow {
   total: number;
   paid: number;
   paymentMethod: string;
+  merchantProvider: string | null;
   installmentMonths: number | null;
   approvalCode: string | null;
   salespersonName: string;
@@ -15,7 +16,7 @@ export interface AuditExportRow {
 
 const HEADERS = [
   'SO#', 'Date', 'Showroom', 'Customer',
-  'Amount (RM)', 'Paid (RM)', 'Method', 'Installment (months)',
+  'Amount (RM)', 'Paid (RM)', 'Method', 'Merchant', 'Installment (months)',
   'Approval code', 'Salesperson', 'Keyed by', 'Slip uploaded',
 ] as const;
 
@@ -48,6 +49,7 @@ export function exportCsv(rows: AuditExportRow[]): string {
       csvEscape(r.total),
       csvEscape(r.paid),
       csvEscape(r.paymentMethod),
+      csvEscape(r.merchantProvider ?? ''),
       csvEscape(r.installmentMonths ?? ''),
       csvEscape(r.approvalCode),
       csvEscape(r.salespersonName),
@@ -65,7 +67,7 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
   for (const r of rows) {
     data.push([
       r.id, fmtDate(r.placedAt), r.showroomName, r.customerName,
-      r.total, r.paid, r.paymentMethod, r.installmentMonths ?? '',
+      r.total, r.paid, r.paymentMethod, r.merchantProvider ?? '', r.installmentMonths ?? '',
       r.approvalCode ?? '', r.salespersonName, r.keyedByName,
       r.slipUploaded ? 'Yes' : 'No',
     ]);
@@ -74,7 +76,7 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
   const ws = XLSX.utils.aoa_to_sheet(data);
   (ws as any)['!cols'] = [
     { wch: 10 }, { wch: 18 }, { wch: 14 }, { wch: 22 },
-    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 18 },
     { wch: 16 }, { wch: 18 }, { wch: 18 }, { wch: 14 },
   ];
   (ws as any)['!freeze'] = { xSplit: 0, ySplit: 1 };

@@ -56,7 +56,9 @@ export const slipState = pgEnum('slip_state', [
 ]);
 
 export const paymentMethod = pgEnum('payment_method', [
-  'credit', 'debit', 'installment', 'transfer',
+  // credit/debit retained for legacy rows only (migrated to 'merchant' by 0037);
+  // POS no longer offers them. 'merchant' = card via GHL/HLB/MBB/PBB terminal.
+  'credit', 'debit', 'installment', 'transfer', 'merchant',
 ]);
 
 export const addonKind = pgEnum('addon_kind', [
@@ -396,6 +398,9 @@ export const orders = pgTable('orders', {
   // Installment term in months (6 or 12). NULL unless paymentMethod = 'installment'.
   // 0% installment — metadata only, never affects pricing. (Migration 0034)
   installmentMonths: integer('installment_months'),
+  // Merchant acquirer / terminal (GHL/HLB/MBB/PBB). NULL unless paymentMethod =
+  // 'merchant'. Replaces the old credit/debit split. (Migration 0037)
+  merchantProvider: text('merchant_provider'),
 
   // Slip
   slipState:        slipState('slip_state').notNull().default('none'),

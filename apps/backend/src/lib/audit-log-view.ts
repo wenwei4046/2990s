@@ -49,15 +49,20 @@ export function matchesSearch(row: AuditLogRow, q: string): boolean {
 
 const METHOD_LABELS: Record<string, string> = {
   credit: 'Credit card', debit: 'Debit card',
-  installment: 'Installment', transfer: 'Bank transfer',
+  installment: 'Installment', transfer: 'Bank transfer', merchant: 'Merchant',
 };
 export function methodLabel(method: string): string {
   return METHOD_LABELS[method] ?? method;
 }
 
 export function methodDetail(row: AuditLogRow): string | null {
-  if (row.paymentMethod !== 'installment') return null;
-  return row.installmentMonths ? `${row.installmentMonths} months` : '—';
+  if (row.paymentMethod === 'installment') {
+    return row.installmentMonths ? `${row.installmentMonths} months` : '—';
+  }
+  if (row.paymentMethod === 'merchant') {
+    return row.merchantProvider ?? '—';
+  }
+  return null;
 }
 
 export function initials(name: string): string {

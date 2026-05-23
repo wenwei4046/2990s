@@ -100,8 +100,10 @@
 .tileDebit { background: var(--c-secondary-a); }
 .tileInstallment { background: var(--c-secondary-b); }
 .tileTransfer { background: var(--c-burnt); }
+.tileMerchant { background: var(--c-orange); }
 .methodName { display: block; }
 .methodDetail { display: block; color: var(--fg-soft); font-size: var(--fs-13); }
+.methodApproval { display: block; color: var(--fg-soft); font-size: var(--fs-12); font-family: var(--font-mono); }
 .sp { display: inline-flex; align-items: center; gap: var(--space-2); }
 .avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-pill); background: var(--bg-warm); color: var(--c-burnt); font-size: var(--fs-12); font-weight: var(--w-bold); flex: none; }
 .openBtn { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-pill); border: 1px solid var(--c-line); background: var(--bg); color: var(--c-ink); cursor: pointer; }

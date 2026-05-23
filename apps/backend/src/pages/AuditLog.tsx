@@ -47,10 +47,12 @@ const fmtClock = (iso: string) => {
 
 const METHOD_ICON: Record<string, typeof CreditCard> = {
   credit: CreditCard, debit: CreditCard, installment: CalendarClock, transfer: QrCode,
+  merchant: CreditCard,
 };
 const METHOD_TILE: Record<string, string | undefined> = {
   credit: styles.tileCredit, debit: styles.tileDebit,
   installment: styles.tileInstallment, transfer: styles.tileTransfer,
+  merchant: styles.tileMerchant,
 };
 
 export const AuditLog = () => {
@@ -103,7 +105,7 @@ export const AuditLog = () => {
     input.map((r) => ({
       id: r.id, placedAt: r.placedAt, showroomName: showroomName(r.showroomId),
       customerName: r.customerName, total: r.total, paid: r.paid,
-      paymentMethod: r.paymentMethod, installmentMonths: r.installmentMonths,
+      paymentMethod: r.paymentMethod, merchantProvider: r.merchantProvider, installmentMonths: r.installmentMonths,
       approvalCode: r.approvalCode, salespersonName: staffName(r.salespersonId),
       keyedByName: staffName(r.staffId), slipUploaded: r.slipUploaded,
     }));
@@ -256,6 +258,7 @@ export const AuditLog = () => {
                         <span>
                           <strong className={styles.methodName}>{methodLabel(r.paymentMethod)}</strong>
                           {detail && <span className={styles.methodDetail}>{detail}</span>}
+                          {r.approvalCode && <span className={styles.methodApproval}>{r.approvalCode}</span>}
                         </span>
                       </div>
                     </td>

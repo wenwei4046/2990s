@@ -24,12 +24,31 @@ describe('orderV1PostSchema installmentMonths', () => {
   });
 
   it('rejects a term on a non-installment order', () => {
-    const r = orderV1PostSchema.safeParse({ ...base, paymentMethod: 'credit', installmentMonths: 6 });
+    const r = orderV1PostSchema.safeParse({ ...base, paymentMethod: 'transfer', installmentMonths: 6 });
     expect(r.success).toBe(false);
   });
 
-  it('accepts a credit order with no term (null/omitted)', () => {
-    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'credit' }).success).toBe(true);
-    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'credit', installmentMonths: null }).success).toBe(true);
+  it('accepts a transfer order with no term (null/omitted)', () => {
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'transfer' }).success).toBe(true);
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'transfer', installmentMonths: null }).success).toBe(true);
+  });
+});
+
+describe('orderV1PostSchema merchantProvider', () => {
+  it('accepts a merchant order with a provider', () => {
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'merchant', merchantProvider: 'GHL' }).success).toBe(true);
+  });
+  it('rejects a merchant order with no provider', () => {
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'merchant' }).success).toBe(false);
+  });
+  it('rejects an unknown provider', () => {
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'merchant', merchantProvider: 'XYZ' }).success).toBe(false);
+  });
+  it('rejects a provider on a non-merchant order', () => {
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'transfer', merchantProvider: 'GHL' }).success).toBe(false);
+  });
+  it('rejects credit/debit (folded into merchant)', () => {
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'credit' }).success).toBe(false);
+    expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'debit' }).success).toBe(false);
   });
 });

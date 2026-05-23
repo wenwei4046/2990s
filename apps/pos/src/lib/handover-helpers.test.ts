@@ -29,6 +29,7 @@ const baseForm: HandoverForm = {
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   installmentMonths: null,
+  merchantProvider: null,
   signed: false,
 };
 
@@ -85,13 +86,13 @@ describe('validateTargetDate', () => {
 describe('validateAddonsPayment', () => {
   it('requires paymentMethod', () => {
     expect(validateAddonsPayment(baseForm)).toBe(false);
-    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'debit' })).toBe(true);
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'transfer' })).toBe(true);
   });
 });
 
 describe('validateAddonsPayment + installment term', () => {
   it('non-installment methods need no term', () => {
-    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'credit' })).toBe(true);
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'transfer' })).toBe(true);
   });
   it('installment requires a 6/12 term', () => {
     expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'installment', installmentMonths: null })).toBe(false);
@@ -99,17 +100,24 @@ describe('validateAddonsPayment + installment term', () => {
   });
 });
 
+describe('validateAddonsPayment + merchant provider', () => {
+  it('merchant requires a GHL/HLB/MBB/PBB provider', () => {
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'merchant', merchantProvider: null })).toBe(false);
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'merchant', merchantProvider: 'GHL' })).toBe(true);
+  });
+});
+
 describe('validateConfirmPayment', () => {
   const subtotal = 2990;
   it('requires recorded, code, amount in range', () => {
-    const f = { ...baseForm, paymentMethod: 'debit' as const, amountPaid: 2990, approvalCode: '123', paymentRecorded: true, slipUploadSessionId: 'sess' };
+    const f = { ...baseForm, paymentMethod: 'transfer' as const, amountPaid: 2990, approvalCode: '123', paymentRecorded: true, slipUploadSessionId: 'sess' };
     expect(validateConfirmPayment(f, subtotal, 0)).toBe(true);
     expect(validateConfirmPayment({ ...f, approvalCode: '' }, subtotal, 0)).toBe(false);
     expect(validateConfirmPayment({ ...f, amountPaid: 100 }, subtotal, 0)).toBe(false);
     expect(validateConfirmPayment({ ...f, paymentRecorded: false }, subtotal, 0)).toBe(false);
   });
   it('requires a slip session for every payment method', () => {
-    for (const m of ['credit', 'debit', 'installment', 'transfer'] as const) {
+    for (const m of ['merchant', 'installment', 'transfer'] as const) {
       const f = { ...baseForm, paymentMethod: m, amountPaid: 2990, approvalCode: '123', paymentRecorded: true };
       expect(validateConfirmPayment(f, subtotal, 0)).toBe(false);
       expect(validateConfirmPayment({ ...f, slipUploadSessionId: 'sess' }, subtotal, 0)).toBe(true);

@@ -5,8 +5,7 @@ import { useStaff } from '../lib/admin-queries';
 import styles from './AuditLogFilterBar.module.css';
 
 const METHODS = [
-  { value: 'credit',      label: 'Credit card',   Icon: CreditCard },
-  { value: 'debit',       label: 'Debit card',    Icon: CreditCard },
+  { value: 'merchant',    label: 'Merchant',      Icon: CreditCard },
   { value: 'installment', label: 'Installment',   Icon: CalendarClock },
   { value: 'transfer',    label: 'Bank transfer', Icon: QrCode },
 ] as const;

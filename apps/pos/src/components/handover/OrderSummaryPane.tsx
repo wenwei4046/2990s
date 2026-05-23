@@ -7,8 +7,7 @@ import { COMPANY_LEGAL, RECEIPT_TERMS } from '../../lib/legal';
 import styles from './OrderSummaryPane.module.css';
 
 const PAYMENT_LABEL: Record<string, string> = {
-  credit: 'Credit Card',
-  debit: 'Debit Card',
+  merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
 };

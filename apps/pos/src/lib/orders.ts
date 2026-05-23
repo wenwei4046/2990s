@@ -66,6 +66,8 @@ export interface OrderSubmitInput {
   paid?: number;
   /** Installment term (6 or 12 months); only set when paymentMethod==='installment'. */
   installmentMonths?: 6 | 12 | null;
+  /** Merchant acquirer / terminal; only set when paymentMethod==='merchant'. */
+  merchantProvider?: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
   /** Additional delivery fee keyed in by POS sales at handover (MYR integer).
    *  Forwarded to POST /orders; server adds it to baseFee + crossCategoryFee
    *  to compute the canonical delivery total. (Migration 0029) */
@@ -143,6 +145,7 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     ...(input.addons && input.addons.length > 0 ? { addons: input.addons } : {}),
     ...(input.paid !== undefined ? { paid: input.paid } : {}),
     ...(input.installmentMonths != null ? { installmentMonths: input.installmentMonths } : {}),
+    ...(input.merchantProvider != null ? { merchantProvider: input.merchantProvider } : {}),
     ...(input.additionalDeliveryFee !== undefined
       ? { additionalDeliveryFee: input.additionalDeliveryFee }
       : {}),

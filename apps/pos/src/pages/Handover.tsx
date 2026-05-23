@@ -60,6 +60,7 @@ const empty: HandoverForm = {
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
   installmentMonths: null,
+  merchantProvider: null,
 };
 
 export const Handover = () => {
@@ -205,6 +206,7 @@ export const Handover = () => {
         addonTotal,
         paid: form.amountPaid,
         installmentMonths: form.installmentMonths,
+        merchantProvider: form.merchantProvider,
         additionalDeliveryFee: form.additionalDeliveryFee,
         deliveryFeeTotal: deliveryFee.total,
         lines,

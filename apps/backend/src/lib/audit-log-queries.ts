@@ -22,6 +22,7 @@ export interface AuditLogRow {
   paid: number;
   paymentMethod: string;
   installmentMonths: number | null;
+  merchantProvider: string | null;
   approvalCode: string | null;
   slipKey: string | null;
   slipUploaded: boolean;

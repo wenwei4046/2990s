@@ -7,8 +7,7 @@ import type { HandoverForm } from '../../lib/handover-helpers';
 import styles from '../../pages/Handover.module.css';
 
 const METHOD_LABEL: Record<string, string> = {
-  credit: 'Credit Card',
-  debit: 'Debit Card',
+  merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
 };

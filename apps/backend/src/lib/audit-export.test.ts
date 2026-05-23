@@ -10,6 +10,7 @@ const sampleRows: AuditExportRow[] = [
     total: 5980,
     paid: 5980,
     paymentMethod: 'transfer',
+    merchantProvider: null,
     installmentMonths: null,
     approvalCode: 'BNK-784512',
     salespersonName: 'Aw Wei Lin',
@@ -23,7 +24,8 @@ const sampleRows: AuditExportRow[] = [
     customerName: 'Lim Mei Ling, "VIP"',
     total: 12500,
     paid: 3000,
-    paymentMethod: 'credit',
+    paymentMethod: 'merchant',
+    merchantProvider: 'GHL',
     installmentMonths: null,
     approvalCode: null,
     salespersonName: 'Jeff Mok',
@@ -35,7 +37,7 @@ const sampleRows: AuditExportRow[] = [
 const row: AuditExportRow = {
   id: 'SO-2057', placedAt: '2026-05-21T15:01:00Z', showroomName: 'Showroom KL',
   customerName: 'Hafiz Rahman', total: 6819, paid: 4466,
-  paymentMethod: 'installment', installmentMonths: 12, approvalCode: 'CONTRACT-1',
+  paymentMethod: 'installment', merchantProvider: null, installmentMonths: 12, approvalCode: 'CONTRACT-1',
   salespersonName: 'Rafiq Lim', keyedByName: 'Mei Lin Chua', slipUploaded: false,
 };
 
@@ -56,7 +58,7 @@ describe('exportCsv', () => {
   it('produces a UTF-8 BOM + header row + escaped data rows', () => {
     const csv = exportCsv(sampleRows);
     expect(csv.charCodeAt(0)).toBe(0xFEFF);
-    expect(csv).toMatch(/SO#,Date,Showroom,Customer,Amount \(RM\),Paid \(RM\),Method,Installment \(months\),Approval code,Salesperson,Keyed by,Slip uploaded/);
+    expect(csv).toMatch(/SO#,Date,Showroom,Customer,Amount \(RM\),Paid \(RM\),Method,Merchant,Installment \(months\),Approval code,Salesperson,Keyed by,Slip uploaded/);
     expect(csv).toContain('"Lim Mei Ling, ""VIP"""');
     expect(csv).not.toMatch(/null/i);
     expect(csv).toMatch(/Yes/);

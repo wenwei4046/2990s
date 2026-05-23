@@ -8,7 +8,7 @@ export const auditLog = new Hono<{ Bindings: Env; Variables: Variables }>();
 auditLog.use('*', supabaseAuth);
 
 const ALLOWED_ROLES = new Set(['coordinator', 'finance', 'admin']);
-const PAYMENT_METHODS = ['credit', 'debit', 'installment', 'transfer'] as const;
+const PAYMENT_METHODS = ['credit', 'debit', 'installment', 'transfer', 'merchant'] as const;
 
 const QuerySchema = z.object({
   from:           z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -74,7 +74,7 @@ auditLog.get('/', async (c) => {
   let qb = supabase
     .from('orders')
     .select(
-      'id, placed_at, customer_name, customer_phone, total, paid, payment_method, installment_months, approval_code, slip_key, showroom_id, salesperson_id, staff_id',
+      'id, placed_at, customer_name, customer_phone, total, paid, payment_method, installment_months, merchant_provider, approval_code, slip_key, showroom_id, salesperson_id, staff_id',
     )
     .gte('placed_at', fromIso);
 
@@ -110,6 +110,7 @@ auditLog.get('/', async (c) => {
     paid: r.paid,
     paymentMethod: r.payment_method,
     installmentMonths: r.installment_months,
+    merchantProvider: r.merchant_provider,
     approvalCode: r.approval_code,
     slipKey: r.slip_key,
     slipUploaded: r.slip_key !== null,
