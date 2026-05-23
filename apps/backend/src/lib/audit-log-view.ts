@@ -16,8 +16,8 @@ export function rangeForPreset(preset: QuickRange, now: Date = new Date()): { fr
     case 'today':     return { from: today, to: today };
     case 'yesterday': { const y = ymd(addDays(now, -1)); return { from: y, to: y }; }
     case 'last7':     return { from: ymd(addDays(now, -6)),  to: today };
-    case 'last30':    return { from: ymd(addDays(now, -30)), to: today };
-    case 'last90':    return { from: ymd(addDays(now, -90)), to: today };
+    case 'last30':    return { from: ymd(addDays(now, -29)), to: today };
+    case 'last90':    return { from: ymd(addDays(now, -89)), to: today };
   }
 }
 
@@ -56,10 +56,8 @@ export function methodLabel(method: string): string {
 }
 
 export function methodDetail(row: AuditLogRow): string | null {
-  if (row.paymentMethod === 'installment' && row.installmentMonths) {
-    return `${row.installmentMonths} months`;
-  }
-  return null;
+  if (row.paymentMethod !== 'installment') return null;
+  return row.installmentMonths ? `${row.installmentMonths} months` : '—';
 }
 
 export function initials(name: string): string {

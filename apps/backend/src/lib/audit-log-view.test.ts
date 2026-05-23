@@ -24,8 +24,8 @@ describe('rangeForPreset', () => {
   });
   it('last7 / last30 / last90 span back from today', () => {
     expect(rangeForPreset('last7', FIXED)).toEqual({ from: '2026-05-17', to: '2026-05-23' });
-    expect(rangeForPreset('last30', FIXED)).toEqual({ from: '2026-04-23', to: '2026-05-23' });
-    expect(rangeForPreset('last90', FIXED)).toEqual({ from: '2026-02-22', to: '2026-05-23' });
+    expect(rangeForPreset('last30', FIXED)).toEqual({ from: '2026-04-24', to: '2026-05-23' });
+    expect(rangeForPreset('last90', FIXED)).toEqual({ from: '2026-02-23', to: '2026-05-23' });
   });
 });
 
@@ -73,7 +73,7 @@ describe('methodLabel + methodDetail', () => {
   });
   it('shows the term only for installment', () => {
     expect(methodDetail(row({ paymentMethod: 'installment', installmentMonths: 12 }))).toBe('12 months');
-    expect(methodDetail(row({ paymentMethod: 'installment', installmentMonths: null }))).toBeNull();
+    expect(methodDetail(row({ paymentMethod: 'installment', installmentMonths: null }))).toBe('—');
     expect(methodDetail(row({ paymentMethod: 'credit', installmentMonths: null }))).toBeNull();
   });
 });
