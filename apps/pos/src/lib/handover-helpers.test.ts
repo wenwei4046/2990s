@@ -102,16 +102,18 @@ describe('validateAddonsPayment + installment term', () => {
 describe('validateConfirmPayment', () => {
   const subtotal = 2990;
   it('requires recorded, code, amount in range', () => {
-    const f = { ...baseForm, paymentMethod: 'debit' as const, amountPaid: 2990, approvalCode: '123', paymentRecorded: true };
+    const f = { ...baseForm, paymentMethod: 'debit' as const, amountPaid: 2990, approvalCode: '123', paymentRecorded: true, slipUploadSessionId: 'sess' };
     expect(validateConfirmPayment(f, subtotal, 0)).toBe(true);
     expect(validateConfirmPayment({ ...f, approvalCode: '' }, subtotal, 0)).toBe(false);
     expect(validateConfirmPayment({ ...f, amountPaid: 100 }, subtotal, 0)).toBe(false);
     expect(validateConfirmPayment({ ...f, paymentRecorded: false }, subtotal, 0)).toBe(false);
   });
-  it('requires slip session when paymentMethod=transfer', () => {
-    const f = { ...baseForm, paymentMethod: 'transfer' as const, amountPaid: 2990, approvalCode: '123', paymentRecorded: true };
-    expect(validateConfirmPayment(f, subtotal, 0)).toBe(false);
-    expect(validateConfirmPayment({ ...f, slipUploadSessionId: 'sess' }, subtotal, 0)).toBe(true);
+  it('requires a slip session for every payment method', () => {
+    for (const m of ['credit', 'debit', 'installment', 'transfer'] as const) {
+      const f = { ...baseForm, paymentMethod: m, amountPaid: 2990, approvalCode: '123', paymentRecorded: true };
+      expect(validateConfirmPayment(f, subtotal, 0)).toBe(false);
+      expect(validateConfirmPayment({ ...f, slipUploadSessionId: 'sess' }, subtotal, 0)).toBe(true);
+    }
   });
   it('rejects when paymentMethod is empty (defense-in-depth)', () => {
     const f: HandoverForm = {

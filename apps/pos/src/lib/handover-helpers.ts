@@ -100,7 +100,7 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   if (f.amountPaid < halfTotal || f.amountPaid > total) return false;
   if (f.approvalCode.trim().length === 0) return false;
   if (!f.paymentRecorded) return false;
-  if (f.paymentMethod === 'transfer' && f.slipUploadSessionId === null) return false;
+  if (f.slipUploadSessionId === null) return false;  // slip / proof compulsory for ALL payment methods
   return true;
 };
 
@@ -167,7 +167,7 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   if (f.amountPaid < halfTotal) b.push(`Amount paid must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
   else if (f.amountPaid > total) b.push('Amount paid exceeds total');
   if (!f.approvalCode.trim()) b.push('Approval code required');
-  if (f.paymentMethod === 'transfer' && f.slipUploadSessionId === null) b.push('Payment slip required for bank transfer');
+  if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');
   if (!f.paymentRecorded) b.push('Click "Confirm payment received" first to record');
   return b;
 };

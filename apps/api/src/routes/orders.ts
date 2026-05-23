@@ -348,8 +348,9 @@ orders.post('/', async (c) => {
   const { data, error } = await supabase.rpc('create_order_with_items', { p: rpcPayload });
   if (error) {
     const msg = error.message ?? '';
-    // Slip-specific RAISE EXCEPTION codes from migration 0010
-    if (msg.includes('slip_required_for_transfer'))    return c.json({ error: 'slip_required_for_transfer' }, 400);
+    // Slip-specific RAISE EXCEPTION codes (slip_required: 0035 — slip now
+    // compulsory for ALL payment methods, not just transfer).
+    if (msg.includes('slip_required'))                 return c.json({ error: 'slip_required' }, 400);
     if (msg.includes('slip_not_ready'))                return c.json({ error: 'slip_not_ready' }, 409);
     if (msg.includes('slip_session_not_found'))        return c.json({ error: 'slip_session_not_found' }, 404);
     if (msg.includes('not_session_owner'))             return c.json({ error: 'not_session_owner' }, 403);

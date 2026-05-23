@@ -117,7 +117,7 @@ export const ConfirmPaymentStep = ({
       </Field>
 
       <h3 className="subTitle">
-        Payment slip / proof {form.paymentMethod === 'transfer' && <span className={styles.required}>*</span>}
+        Payment slip / proof <span className={styles.required}>*</span>
       </h3>
       <SlipUploadStep
         onConfirmed={(id) => update('slipUploadSessionId', id)}
