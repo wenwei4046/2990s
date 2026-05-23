@@ -4,7 +4,9 @@ export interface AuditExportRow {
   showroomName: string;
   customerName: string;
   total: number;
+  paid: number;
   paymentMethod: string;
+  installmentMonths: number | null;
   approvalCode: string | null;
   salespersonName: string;
   keyedByName: string;
@@ -12,16 +14,9 @@ export interface AuditExportRow {
 }
 
 const HEADERS = [
-  'SO#',
-  'Date',
-  'Showroom',
-  'Customer',
-  'Amount (RM)',
-  'Method',
-  'Approval code',
-  'Salesperson',
-  'Keyed by',
-  'Slip uploaded',
+  'SO#', 'Date', 'Showroom', 'Customer',
+  'Amount (RM)', 'Paid (RM)', 'Method', 'Installment (months)',
+  'Approval code', 'Salesperson', 'Keyed by', 'Slip uploaded',
 ] as const;
 
 const fmtDate = (iso: string): string => {
@@ -51,7 +46,9 @@ export function exportCsv(rows: AuditExportRow[]): string {
       csvEscape(r.showroomName),
       csvEscape(r.customerName),
       csvEscape(r.total),
+      csvEscape(r.paid),
       csvEscape(r.paymentMethod),
+      csvEscape(r.installmentMonths ?? ''),
       csvEscape(r.approvalCode),
       csvEscape(r.salespersonName),
       csvEscape(r.keyedByName),
@@ -67,15 +64,9 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
   const data: (string | number)[][] = [HEADERS.slice()];
   for (const r of rows) {
     data.push([
-      r.id,
-      fmtDate(r.placedAt),
-      r.showroomName,
-      r.customerName,
-      r.total,
-      r.paymentMethod,
-      r.approvalCode ?? '',
-      r.salespersonName,
-      r.keyedByName,
+      r.id, fmtDate(r.placedAt), r.showroomName, r.customerName,
+      r.total, r.paid, r.paymentMethod, r.installmentMonths ?? '',
+      r.approvalCode ?? '', r.salespersonName, r.keyedByName,
       r.slipUploaded ? 'Yes' : 'No',
     ]);
   }
@@ -83,8 +74,8 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
   const ws = XLSX.utils.aoa_to_sheet(data);
   (ws as any)['!cols'] = [
     { wch: 10 }, { wch: 18 }, { wch: 14 }, { wch: 22 },
-    { wch: 12 }, { wch: 12 }, { wch: 16 }, { wch: 18 },
-    { wch: 18 }, { wch: 14 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 },
+    { wch: 16 }, { wch: 18 }, { wch: 18 }, { wch: 14 },
   ];
   (ws as any)['!freeze'] = { xSplit: 0, ySplit: 1 };
 
