@@ -171,9 +171,16 @@ const SkuMasterTab = () => {
           : `${rows.length} products · Production configs from SKU sheet`}
       </p>
 
-      {error && (
+      {/* Error banner — surface API failures (e.g. table not migrated yet) so
+          the page doesn't look like an infinite spinner. */}
+      {error && !isLoading && (
         <div className={styles.bannerWarn}>
-          Failed to load products: {error instanceof Error ? error.message : String(error)}
+          <strong>Failed to load products.</strong>{' '}
+          {error instanceof Error ? error.message : String(error)}
+          <div style={{ marginTop: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            If this is a fresh deploy: run <code>pnpm db:push</code> + import
+            <code> seeds/hookka-products-import.sql</code> against Supabase.
+          </div>
         </div>
       )}
 
@@ -194,25 +201,37 @@ const SkuMasterTab = () => {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {isLoading && (
+              <tr>
+                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                  Loading products…
+                </td>
+              </tr>
+            )}
+            {!isLoading && rows.map((row) => (
               <ProductRow key={row.id} row={row} editMode={editMode} />
             ))}
-            {!isLoading && rows.length === 0 && (
+            {!isLoading && !error && rows.length === 0 && (
               <tr>
                 <td colSpan={10} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
                   <Package size={32} strokeWidth={1.5} />
                   <div style={{ marginTop: 8 }}>No products yet.</div>
+                  <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+                    Run the seed import if you just migrated the schema.
+                  </div>
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-        <div className={styles.tableFoot}>
-          <span className={styles.eyebrow}>
-            Showing {rows.length} of {rows.length}
-          </span>
-          <span className={styles.eyebrow}>{rows.length} total products</span>
-        </div>
+        {!isLoading && !error && (
+          <div className={styles.tableFoot}>
+            <span className={styles.eyebrow}>
+              Showing {rows.length} of {rows.length}
+            </span>
+            <span className={styles.eyebrow}>{rows.length} total products</span>
+          </div>
+        )}
       </div>
     </>
   );
@@ -357,11 +376,25 @@ const MaintenanceTab = () => {
     return <p className={styles.eyebrow}>Loading maintenance config…</p>;
   }
 
+  if (resolved.isError) {
+    return (
+      <div className={styles.bannerWarn}>
+        <strong>Failed to load maintenance config.</strong>{' '}
+        {resolved.error instanceof Error ? resolved.error.message : String(resolved.error)}
+        <div style={{ marginTop: 6, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          The <code>maintenance_config_history</code> table likely doesn't exist
+          yet. Run migration <code>0039_hookka_products_port.sql</code> against
+          Supabase, then refresh.
+        </div>
+      </div>
+    );
+  }
+
   if (!config) {
     return (
       <div className={styles.bannerWarn}>
-        No maintenance config baseline found. Run the 0039 migration to seed
-        the master baseline.
+        No maintenance config baseline found. The migration ran but the master
+        baseline row is missing — re-apply migration 0039 to seed it.
       </div>
     );
   }
