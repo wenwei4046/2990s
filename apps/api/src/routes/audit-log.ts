@@ -74,7 +74,7 @@ auditLog.get('/', async (c) => {
   let qb = supabase
     .from('orders')
     .select(
-      'id, placed_at, customer_name, total, payment_method, approval_code, slip_key, showroom_id, salesperson_id, staff_id',
+      'id, placed_at, customer_name, customer_phone, total, paid, payment_method, installment_months, approval_code, slip_key, showroom_id, salesperson_id, staff_id',
     )
     .gte('placed_at', fromIso);
 
@@ -105,8 +105,11 @@ auditLog.get('/', async (c) => {
     id: r.id,
     placedAt: r.placed_at,
     customerName: r.customer_name,
+    customerPhone: r.customer_phone,
     total: r.total,
+    paid: r.paid,
     paymentMethod: r.payment_method,
+    installmentMonths: r.installment_months,
     approvalCode: r.approval_code,
     slipKey: r.slip_key,
     slipUploaded: r.slip_key !== null,
