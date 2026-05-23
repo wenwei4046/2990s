@@ -15,6 +15,7 @@ const PAYMENT_LABEL: Record<string, string> = {
   merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
+  cash: 'Cash',
 };
 
 export const Confirmed = () => {

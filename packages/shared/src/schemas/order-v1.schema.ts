@@ -81,8 +81,8 @@ export const orderV1PostSchema = z.object({
     city: z.string().optional(),
     state: z.string().optional(),
   }),
-  // credit/debit folded into 'merchant' (2026-05-23). POS only sends these three.
-  paymentMethod: z.enum(['merchant', 'installment', 'transfer']),
+  // credit/debit folded into 'merchant' (2026-05-23). POS sends merchant/installment/transfer/cash.
+  paymentMethod: z.enum(['merchant', 'installment', 'transfer', 'cash']),
   approvalCode: z.string().optional(),
   // Installment term — 6 or 12 months. Required iff paymentMethod = 'installment'
   // (enforced by the .superRefine below). 0% installment — never affects pricing.

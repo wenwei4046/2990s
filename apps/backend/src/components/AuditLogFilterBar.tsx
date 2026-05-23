@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { CreditCard, CalendarClock, QrCode, Search } from 'lucide-react';
+import { CreditCard, CalendarClock, QrCode, Banknote, Search } from 'lucide-react';
 import type { AuditLogFilters } from '../lib/audit-log-queries';
 import { useStaff } from '../lib/admin-queries';
 import styles from './AuditLogFilterBar.module.css';
@@ -8,6 +8,7 @@ const METHODS = [
   { value: 'merchant',    label: 'Merchant',      Icon: CreditCard },
   { value: 'installment', label: 'Installment',   Icon: CalendarClock },
   { value: 'transfer',    label: 'Bank transfer', Icon: QrCode },
+  { value: 'cash',        label: 'Cash',          Icon: Banknote },
 ] as const;
 
 interface Props {

@@ -10,6 +10,7 @@ const METHOD_LABEL: Record<string, string> = {
   merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
+  cash: 'Cash',
 };
 
 export const ConfirmPaymentStep = ({
@@ -110,7 +111,9 @@ export const ConfirmPaymentStep = ({
               ? 'DuitNow / bank reference'
               : form.paymentMethod === 'installment'
                 ? 'Agreement / contract no.'
-                : 'Approval code from POS terminal'
+                : form.paymentMethod === 'cash'
+                  ? 'Cash receipt / reference no.'
+                  : 'Approval code from POS terminal'
           }
         />
       </Field>

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Receipt, Download, FileSpreadsheet, ChevronsDown, ChevronsUp,
-  ChevronRight, CreditCard, CalendarClock, QrCode,
+  ChevronRight, CreditCard, CalendarClock, QrCode, Banknote,
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import {
@@ -47,12 +47,12 @@ const fmtClock = (iso: string) => {
 
 const METHOD_ICON: Record<string, typeof CreditCard> = {
   credit: CreditCard, debit: CreditCard, installment: CalendarClock, transfer: QrCode,
-  merchant: CreditCard,
+  merchant: CreditCard, cash: Banknote,
 };
 const METHOD_TILE: Record<string, string | undefined> = {
   credit: styles.tileCredit, debit: styles.tileDebit,
   installment: styles.tileInstallment, transfer: styles.tileTransfer,
-  merchant: styles.tileMerchant,
+  merchant: styles.tileMerchant, cash: styles.tileCash,
 };
 
 export const AuditLog = () => {
@@ -222,6 +222,7 @@ export const AuditLog = () => {
                 <th>Customer</th>
                 <th className={styles.numCol}>Amount</th>
                 <th>Method · details</th>
+                <th>Approval code</th>
                 <th>Salesperson</th>
                 <th aria-label="Open" />
               </tr>
@@ -258,10 +259,10 @@ export const AuditLog = () => {
                         <span>
                           <strong className={styles.methodName}>{methodLabel(r.paymentMethod)}</strong>
                           {detail && <span className={styles.methodDetail}>{detail}</span>}
-                          {r.approvalCode && <span className={styles.methodApproval}>{r.approvalCode}</span>}
                         </span>
                       </div>
                     </td>
+                    <td className={styles.approvalCell}>{r.approvalCode ?? '—'}</td>
                     <td>
                       <span className={styles.sp}>
                         <span className={styles.avatar}>{initials(staffName(r.salespersonId))}</span>

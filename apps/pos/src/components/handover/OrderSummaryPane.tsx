@@ -10,6 +10,7 @@ const PAYMENT_LABEL: Record<string, string> = {
   merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
+  cash: 'Cash',
 };
 
 const formatDate = (iso: string): string => {

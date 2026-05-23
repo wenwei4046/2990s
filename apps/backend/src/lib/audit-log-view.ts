@@ -49,7 +49,7 @@ export function matchesSearch(row: AuditLogRow, q: string): boolean {
 
 const METHOD_LABELS: Record<string, string> = {
   credit: 'Credit card', debit: 'Debit card',
-  installment: 'Installment', transfer: 'Bank transfer', merchant: 'Merchant',
+  installment: 'Installment', transfer: 'Bank transfer', merchant: 'Merchant', cash: 'Cash',
 };
 export function methodLabel(method: string): string {
   return METHOD_LABELS[method] ?? method;

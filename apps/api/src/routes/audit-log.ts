@@ -8,7 +8,7 @@ export const auditLog = new Hono<{ Bindings: Env; Variables: Variables }>();
 auditLog.use('*', supabaseAuth);
 
 const ALLOWED_ROLES = new Set(['coordinator', 'finance', 'admin']);
-const PAYMENT_METHODS = ['credit', 'debit', 'installment', 'transfer', 'merchant'] as const;
+const PAYMENT_METHODS = ['credit', 'debit', 'installment', 'transfer', 'merchant', 'cash'] as const;
 
 const QuerySchema = z.object({
   from:           z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

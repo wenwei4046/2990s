@@ -80,6 +80,8 @@
 .rowSelected { background: rgba(166,71,30,0.05); }
 .checkCol { width: 44px; text-align: center; }
 .numCol { text-align: right; }
+.table thead th.numCol { text-align: right; }
+.approvalCell { font-family: var(--font-mono); font-size: var(--fs-13); color: var(--fg-muted); }
 .day { font-weight: var(--w-semibold); }
 .clock { color: var(--fg-soft); font-size: var(--fs-13); }
 .soPill {
@@ -101,6 +103,7 @@
 .tileInstallment { background: var(--c-secondary-b); }
 .tileTransfer { background: var(--c-burnt); }
 .tileMerchant { background: var(--c-orange); }
+.tileCash { background: var(--c-secondary-a); }
 .methodName { display: block; }
 .methodDetail { display: block; color: var(--fg-soft); font-size: var(--fs-13); }
 .methodApproval { display: block; color: var(--fg-soft); font-size: var(--fs-12); font-family: var(--font-mono); }

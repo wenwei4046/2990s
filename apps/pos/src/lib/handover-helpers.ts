@@ -1,6 +1,6 @@
 export type CustomerType = 'new' | 'existing';
 export type BuildingType = '' | 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
-export type PaymentMethod = '' | 'merchant' | 'transfer' | 'installment';
+export type PaymentMethod = '' | 'merchant' | 'transfer' | 'installment' | 'cash';
 export type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
 export type PaymentPreset = 'half' | 'full' | 'seventy' | 'custom';
 

@@ -58,7 +58,7 @@ export const slipState = pgEnum('slip_state', [
 export const paymentMethod = pgEnum('payment_method', [
   // credit/debit retained for legacy rows only (migrated to 'merchant' by 0037);
   // POS no longer offers them. 'merchant' = card via GHL/HLB/MBB/PBB terminal.
-  'credit', 'debit', 'installment', 'transfer', 'merchant',
+  'credit', 'debit', 'installment', 'transfer', 'merchant', 'cash',
 ]);
 
 export const addonKind = pgEnum('addon_kind', [

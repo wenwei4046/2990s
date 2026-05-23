@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, Clock } from 'lucide-react';
+import { Banknote, CreditCard, Clock, Wallet } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
@@ -104,6 +104,13 @@ export const AddonsPaymentStep = ({
           label="Installment"
           hint="Agreement / contract no."
           onClick={() => { update('paymentMethod', 'installment'); update('merchantProvider', null); }}
+        />
+        <MethodButton
+          active={form.paymentMethod === 'cash'}
+          icon={Wallet}
+          label="Cash"
+          hint="Cash received at counter"
+          onClick={() => { update('paymentMethod', 'cash'); update('installmentMonths', null); update('merchantProvider', null); }}
         />
       </div>
       {form.paymentMethod === 'merchant' && (
