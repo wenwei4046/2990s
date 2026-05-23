@@ -59,6 +59,7 @@ const empty: HandoverForm = {
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
   signed: false,
+  installmentMonths: null,
 };
 
 export const Handover = () => {
@@ -203,6 +204,7 @@ export const Handover = () => {
           })),
         addonTotal,
         paid: form.amountPaid,
+        installmentMonths: form.installmentMonths,
         additionalDeliveryFee: form.additionalDeliveryFee,
         deliveryFeeTotal: deliveryFee.total,
         lines,

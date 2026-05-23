@@ -87,14 +87,14 @@ export const AddonsPaymentStep = ({
           icon={CreditCard}
           label="Credit Card"
           hint="Approval code from terminal"
-          onClick={() => update('paymentMethod', 'credit')}
+          onClick={() => { update('paymentMethod', 'credit'); update('installmentMonths', null); }}
         />
         <MethodButton
           active={form.paymentMethod === 'debit'}
           icon={CreditCard}
           label="Debit Card"
           hint="Approval code from terminal"
-          onClick={() => update('paymentMethod', 'debit')}
+          onClick={() => { update('paymentMethod', 'debit'); update('installmentMonths', null); }}
         />
       </div>
       <div className="fieldRow">
@@ -103,7 +103,7 @@ export const AddonsPaymentStep = ({
           icon={Banknote}
           label="Bank transfer / DuitNow"
           hint="Slip required"
-          onClick={() => update('paymentMethod', 'transfer')}
+          onClick={() => { update('paymentMethod', 'transfer'); update('installmentMonths', null); }}
         />
         <MethodButton
           active={form.paymentMethod === 'installment'}
@@ -113,6 +113,22 @@ export const AddonsPaymentStep = ({
           onClick={() => update('paymentMethod', 'installment')}
         />
       </div>
+      {form.paymentMethod === 'installment' && (
+        <div className={styles.installmentTerm} role="group" aria-label="Installment term">
+          <span className={styles.installmentTermLabel}>Term</span>
+          {([6, 12] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`${styles.termChip} ${form.installmentMonths === m ? styles.termChipActive : ''}`}
+              aria-pressed={form.installmentMonths === m}
+              onClick={() => update('installmentMonths', m)}
+            >
+              {m} months
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 };
