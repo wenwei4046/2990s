@@ -28,6 +28,7 @@ const baseForm: HandoverForm = {
   amountPaid: 0, additionalDeliveryFee: 0,
   paymentPreset: 'full', approvalCode: '',
   slipUploadSessionId: null, paymentRecorded: false,
+  installmentMonths: null,
   signed: false,
 };
 
@@ -85,6 +86,16 @@ describe('validateAddonsPayment', () => {
   it('requires paymentMethod', () => {
     expect(validateAddonsPayment(baseForm)).toBe(false);
     expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'debit' })).toBe(true);
+  });
+});
+
+describe('validateAddonsPayment + installment term', () => {
+  it('non-installment methods need no term', () => {
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'credit' })).toBe(true);
+  });
+  it('installment requires a 6/12 term', () => {
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'installment', installmentMonths: null })).toBe(false);
+    expect(validateAddonsPayment({ ...baseForm, paymentMethod: 'installment', installmentMonths: 12 })).toBe(true);
   });
 });
 

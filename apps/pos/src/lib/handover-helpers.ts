@@ -38,6 +38,8 @@ export interface HandoverForm {
 
   addons: Record<string, AddonSelection>;
   paymentMethod: PaymentMethod;
+  /** Installment term in months. Required when paymentMethod === 'installment'. */
+  installmentMonths: 6 | 12 | null;
 
   amountPaid: number;
   /** Additional delivery fee keyed in by sales at handover. Whole RM, 0 if none. */
@@ -85,8 +87,11 @@ export const validateEmergency = (f: HandoverForm): boolean => {
 export const validateTargetDate = (f: HandoverForm): boolean =>
   f.deliveryDateLater || f.deliveryAsap || f.deliveryDate.length > 0;
 
-export const validateAddonsPayment = (f: HandoverForm): boolean =>
-  f.paymentMethod !== '';
+export const validateAddonsPayment = (f: HandoverForm): boolean => {
+  if (f.paymentMethod === '') return false;
+  if (f.paymentMethod === 'installment' && f.installmentMonths == null) return false;
+  return true;
+};
 
 export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number): boolean => {
   if (f.paymentMethod === '') return false;  // method must be chosen (defense-in-depth — orchestrator step 5 already gates this)
@@ -147,8 +152,11 @@ const targetDateBlockers = (f: HandoverForm): string[] => {
 };
 
 const addonsPaymentBlockers = (f: HandoverForm): string[] => {
-  if (f.paymentMethod) return [];
-  return ['Pick a payment method'];
+  if (!f.paymentMethod) return ['Pick a payment method'];
+  if (f.paymentMethod === 'installment' && f.installmentMonths == null) {
+    return ['Pick the installment term (6 or 12 months)'];
+  }
+  return [];
 };
 
 const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number): string[] => {
