@@ -83,6 +83,9 @@ export const orderV1PostSchema = z.object({
   }),
   paymentMethod: z.enum(['credit', 'debit', 'installment', 'transfer']),
   approvalCode: z.string().optional(),
+  // Installment term — 6 or 12 months. Required iff paymentMethod = 'installment'
+  // (enforced by the .superRefine below). 0% installment — never affects pricing.
+  installmentMonths: z.union([z.literal(6), z.literal(12)]).nullable().optional(),
   notes: z.string().optional(),
   // ISO YYYY-MM-DD; omit when customer wants delivery TBD.
   deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invalid_date_format').optional(),
@@ -132,6 +135,16 @@ export const orderV1PostSchema = z.object({
   // POS clients still parse), but Handover gates submit on form.signed, so
   // in practice every new order arrives with one.
   signatureData: z.string().optional(),
+}).superRefine((v, ctx) => {
+  if (v.paymentMethod === 'installment') {
+    if (v.installmentMonths !== 6 && v.installmentMonths !== 12) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installmentMonths'],
+        message: 'installment_term_required' });
+    }
+  } else if (v.installmentMonths !== undefined && v.installmentMonths !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installmentMonths'],
+      message: 'installment_term_only_for_installment' });
+  }
 });
 
 export type OrderV1PostBody = z.infer<typeof orderV1PostSchema>;
