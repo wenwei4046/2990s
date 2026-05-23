@@ -482,3 +482,35 @@ describe('POST /orders — handover redesign fields', () => {
     expect(rpcCapture.last).toBeUndefined();
   });
 });
+
+describe('POST /orders installmentMonths', () => {
+  it('forwards installmentMonths to the RPC payload for installment orders', async () => {
+    const rpcCapture: { last?: { name: string; args: any } } = {};
+    const supabase = createMockSupabase({
+      staff: () => ({ data: { role: 'sales', active: true }, error: null }),
+      products: () => ({ data: [{ id: PRODUCT_ID, category_id: 'sofa', pricing_kind: 'flat', flat_price: 5980, recliner_upgrade_price: 0 }], error: null }),
+      product_compartments: () => ({ data: [], error: null }),
+      product_bundles: () => ({ data: [], error: null }),
+      product_size_variants: () => ({ data: [], error: null }),
+      addons: () => ({ data: [], error: null }),
+      delivery_fee_config: defaultDeliveryFeeCfg,
+    }, rpcCapture, { data: 'SO-2991', error: null });
+    const app = buildApp(supabase);
+
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        customer: { name: 'Hafiz Rahman' },
+        paymentMethod: 'installment',
+        installmentMonths: 12,
+        approvalCode: 'CONTRACT-1',
+        lines: [{ qty: 1, config: { kind: 'flat', productId: PRODUCT_ID } }],
+        clientTotal: 5980 + 250,
+      }),
+    }, baseEnv);
+
+    expect(res.status).toBe(201);
+    expect(rpcCapture.last?.args?.p?.installmentMonths).toBe(12);
+  });
+});

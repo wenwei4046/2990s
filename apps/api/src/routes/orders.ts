@@ -342,6 +342,7 @@ orders.post('/', async (c) => {
     ...(dto.specialInstructions ? { specialInstructions: dto.specialInstructions } : {}),
     ...(dto.addressLater !== undefined ? { addressLater: dto.addressLater } : {}),
     ...(dto.addons && dto.addons.length > 0 ? { addons: dto.addons } : {}),
+    ...(dto.installmentMonths != null ? { installmentMonths: dto.installmentMonths } : {}),
   };
 
   const { data, error } = await supabase.rpc('create_order_with_items', { p: rpcPayload });
