@@ -393,6 +393,9 @@ export const orders = pgTable('orders', {
   // Payment
   paymentMethod: paymentMethod('payment_method').notNull(),
   approvalCode:  text('approval_code'),
+  // Installment term in months (6 or 12). NULL unless paymentMethod = 'installment'.
+  // 0% installment — metadata only, never affects pricing. (Migration 0034)
+  installmentMonths: integer('installment_months'),
 
   // Slip
   slipState:        slipState('slip_state').notNull().default('none'),
