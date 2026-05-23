@@ -647,6 +647,185 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ════════════════════════════════════════════════════════════════════════
+   Manufacturing modules — ported from HOOKKA ERP (2026-05-24)
+   ────────────────────────────────────────────────────────────────────────
+   Coexists with retail `products` table:
+   - `products`     — retail catalogue (sofa per-Model pricing, size variants)
+   - `mfg_products` — manufacturer SKUs (BOM hierarchy, dept working times)
+   Bridge: `mfg_products.retail_product_id` (nullable) links a mfg SKU to
+   the retail listing when both exist.
+   Money in this section uses INTEGER `_sen` (1 sen = RM 0.01) to match
+   HOOKKA conventions and preserve precision on multi-component pricing.
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const mfgProductCategory = pgEnum('mfg_product_category', [
+  'SOFA', 'BEDFRAME', 'ACCESSORY',
+]);
+
+export const mfgProductStatus = pgEnum('mfg_product_status', [
+  'ACTIVE', 'INACTIVE',
+]);
+
+export const fabricCategory = pgEnum('fabric_category', [
+  'B.M-FABR', 'S-FABR', 'S.M-FABR', 'LINING', 'WEBBING',
+]);
+
+export const fabricPriceTier = pgEnum('fabric_price_tier', [
+  'PRICE_1', 'PRICE_2',
+]);
+
+export const maintenanceConfigScope = pgEnum('maintenance_config_scope', [
+  'master',     // company-wide baseline
+  'customer',   // per-customer override (key is 'customer:<uuid>' in code)
+]);
+
+/* ─────────────────────────── mfg_products ──────────────────────────────
+   Manufacturer SKU master. One row per (model × size) variant — e.g.
+   HILTON bedframe has 5 size rows (K/Q/S/SS/SK) and HILTON(A) is another
+   model with its own 5 size rows. `base_model = '1003'` groups them.
+
+   Pricing scheme: two-tier price1/price2 driven by fabric.priceTier.
+   Surcharges from Maintenance config (divan/leg/gap/specials) stack on top.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const mfgProducts = pgTable('mfg_products', {
+  id:                     text('id').primaryKey(),
+  code:                   text('code').notNull(),                 // '1003-(K)', '1003(A)-(Q)'
+  name:                   text('name').notNull(),                 // 'HILTON BEDFRAME (6FT)'
+  category:               mfgProductCategory('category').notNull(),
+  description:            text('description'),
+  baseModel:              text('base_model'),                     // '1003' — groups size variants
+  sizeCode:               text('size_code'),                      // 'K','Q','S','SS','SK','SP'
+  sizeLabel:              text('size_label'),                     // '6FT','5FT','200CMX200CM'
+  fabricUsage:            integer('fabric_usage_centi').notNull().default(0), // meters × 100 (e.g. 4.5m = 450)
+  unitM3:                 integer('unit_m3_milli').notNull().default(0),      // m³ × 1000 (e.g. 0.953 = 953)
+  status:                 mfgProductStatus('status').notNull().default('ACTIVE'),
+  costPriceSen:           integer('cost_price_sen').notNull().default(0),
+  basePriceSen:           integer('base_price_sen'),              // PRICE 2 (default)
+  price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier)
+  productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
+  subAssemblies:          jsonb('sub_assemblies'),                // string[] e.g. ['Divan','Headboard']
+  skuCode:                text('sku_code'),
+  fabricColor:            text('fabric_color'),
+  pieces:                 jsonb('pieces'),                        // { count, names: string[] }
+  seatHeightPrices:       jsonb('seat_height_prices'),            // [{height,priceSen}]
+  defaultVariants:        jsonb('default_variants'),              // {fabricCode,divanHeight,legHeight,gap,specials}
+  retailProductId:        uuid('retail_product_id').references(() => products.id, { onDelete: 'set null' }),
+  createdAt:              timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:              timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxCode:     index('idx_mfg_products_code').on(t.code),
+  idxCategory: index('idx_mfg_products_category').on(t.category),
+  idxBase:     index('idx_mfg_products_base_model').on(t.baseModel),
+}));
+
+/* ─────────────────────────── product_dept_configs ──────────────────────
+   Per-product working time defaults across the 8-department production
+   flow. Sourced from HOOKKA's Production Sheet; one row per SKU code.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const productDeptConfigs = pgTable('product_dept_configs', {
+  productCode:           text('product_code').primaryKey(),
+  unitM3Milli:           integer('unit_m3_milli').notNull().default(0),
+  fabricUsageCenti:      integer('fabric_usage_centi').notNull().default(0),
+  price2Sen:             integer('price2_sen').notNull().default(0),
+  fabCutCategory:        text('fab_cut_category'),
+  fabCutMinutes:         integer('fab_cut_minutes'),
+  fabSewCategory:        text('fab_sew_category'),
+  fabSewMinutes:         integer('fab_sew_minutes'),
+  woodCutCategory:       text('wood_cut_category'),
+  woodCutMinutes:        integer('wood_cut_minutes'),
+  foamCategory:          text('foam_category'),
+  foamMinutes:           integer('foam_minutes'),
+  framingCategory:       text('framing_category'),
+  framingMinutes:        integer('framing_minutes'),
+  upholsteryCategory:    text('upholstery_category'),
+  upholsteryMinutes:     integer('upholstery_minutes'),
+  packingCategory:       text('packing_category'),
+  packingMinutes:        integer('packing_minutes'),
+  subAssemblies:         jsonb('sub_assemblies'),
+  heightsSubAssemblies:  jsonb('heights_sub_assemblies'),
+});
+
+/* ─────────────────────────── fabrics ───────────────────────────────────
+   Simple fabric master. fabric_trackings is the richer analytics layer
+   with price tier + stock metrics.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const fabrics = pgTable('fabrics', {
+  id:            text('id').primaryKey(),
+  code:          text('code').notNull().unique(),
+  name:          text('name').notNull(),
+  category:      text('category'),
+  priceSen:      integer('price_sen').notNull().default(0),
+  sohMeters:     integer('soh_meters_centi').notNull().default(0),    // meters × 100
+  reorderLevel:  integer('reorder_level_centi').notNull().default(0), // meters × 100
+});
+
+export const fabricTrackings = pgTable('fabric_trackings', {
+  id:                   text('id').primaryKey(),
+  fabricCode:           text('fabric_code').notNull(),
+  fabricDescription:    text('fabric_description'),
+  fabricCategory:       fabricCategory('fabric_category'),
+  priceTier:            fabricPriceTier('price_tier'),
+  priceCenti:           integer('price_centi').notNull().default(0),       // RM × 100
+  sohCenti:             integer('soh_centi').notNull().default(0),
+  poOutstandingCenti:   integer('po_outstanding_centi').notNull().default(0),
+  lastMonthUsageCenti:  integer('last_month_usage_centi').notNull().default(0),
+  oneWeekUsageCenti:    integer('one_week_usage_centi').notNull().default(0),
+  twoWeeksUsageCenti:   integer('two_weeks_usage_centi').notNull().default(0),
+  oneMonthUsageCenti:   integer('one_month_usage_centi').notNull().default(0),
+  shortageCenti:        integer('shortage_centi').notNull().default(0),
+  reorderPointCenti:    integer('reorder_point_centi').notNull().default(0),
+  supplier:             text('supplier'),
+  leadTimeDays:         integer('lead_time_days').notNull().default(0),
+}, (t) => ({
+  idxCode: index('idx_fabric_trackings_code').on(t.fabricCode),
+  idxTier: index('idx_fabric_trackings_tier').on(t.priceTier),
+}));
+
+/* ─────────────────────────── maintenance_config_history ────────────────
+   Variant config (Divan/Total/Gap/Leg/Specials for Bedframe; Sizes/Leg/
+   Specials for Sofa; Fabrics for Common) stored as JSONB with
+   effective-date versioning. Append-only — edits are new rows.
+
+   scope encoding:
+     'master'           — company-wide baseline
+     'customer:<uuid>'  — per-customer override (encoded as TEXT for
+                          flexibility; resolver uses LIKE 'customer:%')
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const maintenanceConfigHistory = pgTable('maintenance_config_history', {
+  id:             text('id').primaryKey(),                       // 'mch-<12hex>'
+  scope:          text('scope').notNull(),                       // 'master' | 'customer:<uuid>'
+  config:         jsonb('config').notNull(),                     // MaintenanceConfig shape
+  effectiveFrom:  date('effective_from').notNull(),
+  notes:          text('notes'),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:      uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxScopeEff: index('idx_mch_scope_eff').on(t.scope, t.effectiveFrom),
+}));
+
+/* ─────────────────────────── master_price_history ──────────────────────
+   Per-SKU price change audit (base/price1/cost). Driven by the History
+   icon in the SKU Master table.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const masterPriceHistory = pgTable('master_price_history', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  productCode:  text('product_code').notNull(),
+  field:        text('field').notNull(),         // 'base_price_sen' | 'price1_sen' | 'cost_price_sen'
+  oldValueSen:  integer('old_value_sen'),
+  newValueSen:  integer('new_value_sen'),
+  reason:       text('reason'),
+  changedAt:    timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
+  changedBy:    uuid('changed_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxCode: index('idx_mph_code').on(t.productCode),
+}));
+
 /* ─────────────────────────── Type helpers ───────────────────────────── */
 
 export type Staff             = typeof staff.$inferSelect;
@@ -673,3 +852,30 @@ export type SlipUploadStatus  = (typeof slipUploadStatus.enumValues)[number];
 export type PaymentKind       = (typeof paymentKind.enumValues)[number];
 export type PricingKind       = (typeof pricingKind.enumValues)[number];
 export type StaffRole         = (typeof staffRole.enumValues)[number];
+
+/* Manufacturing module types (HOOKKA port) */
+export type MfgProduct               = typeof mfgProducts.$inferSelect;
+export type NewMfgProduct            = typeof mfgProducts.$inferInsert;
+export type ProductDeptConfig        = typeof productDeptConfigs.$inferSelect;
+export type NewProductDeptConfig     = typeof productDeptConfigs.$inferInsert;
+export type Fabric                   = typeof fabrics.$inferSelect;
+export type NewFabric                = typeof fabrics.$inferInsert;
+export type FabricTracking           = typeof fabricTrackings.$inferSelect;
+export type NewFabricTracking        = typeof fabricTrackings.$inferInsert;
+export type MaintenanceConfigRow     = typeof maintenanceConfigHistory.$inferSelect;
+export type NewMaintenanceConfigRow  = typeof maintenanceConfigHistory.$inferInsert;
+export type MasterPriceHistoryRow    = typeof masterPriceHistory.$inferSelect;
+export type NewMasterPriceHistoryRow = typeof masterPriceHistory.$inferInsert;
+
+/* MaintenanceConfig — the JSON blob shape stored in maintenanceConfigHistory.config */
+export type PricedOption = { value: string; priceSen: number };
+export type MaintenanceConfig = {
+  divanHeights:   PricedOption[];   // Bedframe
+  legHeights:     PricedOption[];   // Bedframe
+  totalHeights:   PricedOption[];   // Bedframe (Divan + Gap + Leg)
+  gaps:           string[];         // Bedframe — no surcharge
+  specials:       PricedOption[];   // Bedframe
+  sofaLegHeights: PricedOption[];   // Sofa
+  sofaSpecials:   PricedOption[];   // Sofa
+  sofaSizes:      string[];         // Sofa — no surcharge
+};

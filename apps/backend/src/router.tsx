@@ -8,6 +8,7 @@ import { AuditLog } from './pages/AuditLog';
 import { Addons } from './pages/Addons';
 import { Settings } from './pages/Settings';
 import { Customers } from './pages/Customers';
+import { Products } from './pages/Products';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: 'dashboard', element: <Dashboard /> },
       { path: 'orders', element: <Orders /> },
       { path: 'sku-master', element: <SkuMaster /> },
+      { path: 'products', element: <Products /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
