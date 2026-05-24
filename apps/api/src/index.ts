@@ -20,6 +20,13 @@ import { maintenanceConfig } from './routes/maintenance-config';
 import { fabricTracking } from './routes/fabric-tracking';
 import { suppliers } from './routes/suppliers';
 import { mfgPurchaseOrders } from './routes/mfg-purchase-orders';
+import { grns } from './routes/grns';
+import { purchaseInvoices } from './routes/purchase-invoices';
+import { mfgSalesOrders } from './routes/mfg-sales-orders';
+import { deliveryOrdersMfg } from './routes/delivery-orders-mfg';
+import { salesInvoices } from './routes/sales-invoices';
+import { consignment } from './routes/consignment';
+import { deliveryReturns } from './routes/delivery-returns';
 import { supabaseAuth } from './middleware/auth';
 import { reapOnce } from './lib/reaper';
 
@@ -54,6 +61,13 @@ app.route('/maintenance-config', maintenanceConfig);
 app.route('/fabric-tracking', fabricTracking);
 app.route('/suppliers', suppliers);
 app.route('/mfg-purchase-orders', mfgPurchaseOrders);
+app.route('/grns', grns);
+app.route('/purchase-invoices', purchaseInvoices);
+app.route('/mfg-sales-orders', mfgSalesOrders);
+app.route('/delivery-orders-mfg', deliveryOrdersMfg);
+app.route('/sales-invoices', salesInvoices);
+app.route('/consignment', consignment);
+app.route('/delivery-returns', deliveryReturns);
 
 // Slip routes need auth; applied at mount because slipRoutes itself has no
 // middleware (so it stays unit-testable with mocked context).
