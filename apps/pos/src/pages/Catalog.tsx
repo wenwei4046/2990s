@@ -273,7 +273,7 @@ const ProductCard = ({ p }: { p: CatalogProduct }) => {
           <span className={styles.photoFallback}>{productInitial(p.name)}</span>
         )}
         {p.series && (
-          <span className={styles.photoBadge}>{p.series.label}</span>
+          <span className={styles.photoBadge} data-brand={p.series.id}>{p.series.label}</span>
         )}
       </div>
       <div className={styles.body}>

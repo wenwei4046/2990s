@@ -345,6 +345,24 @@
   box-shadow: 0 1px 3px rgba(34, 31, 32, 0.1);
 }
 
+/* Per-brand badge tints (mattress sub-brands). Loo-approved deviation from the
+   uniform burnt badge, 2026-05-24, using each brand's own identity colour:
+   - 2990's    → house orange (--c-orange) on cream
+   - Carres    → Carres red-orange #D44210 on cream (sampled from brand wordmark)
+   - HappiSleep → inverted: purple #6259B2 fill + yellow #FCE84D text (sampled
+                  from brand artwork). See UI_REFERENCE.md "Approved deviations". */
+.photoBadge[data-brand='brand-2990s'] {
+  color: var(--c-orange);
+}
+.photoBadge[data-brand='brand-carres'] {
+  color: #d44210;
+}
+.photoBadge[data-brand='brand-happisleep'] {
+  background: #6259b2;
+  color: #fce84d;
+  box-shadow: 0 1px 3px rgba(34, 31, 32, 0.18);
+}
+
 /* Stock badge — top-right per prototype. Ample stock = dark pill with cream
    checkmark (reads "all good"). Low/out = burnt-orange pill with alert icon. */
 .photoStock {
