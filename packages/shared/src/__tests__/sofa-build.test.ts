@@ -132,8 +132,8 @@ describe('describeSofaLine', () => {
     expect(describeSofaLine({ bundleId: '2PS' })).toBe('2-Seater + 2 Power slide');
   });
 
-  it('quick-pick corner bundle (CORNER) shows 1B-LHF + CNR + 2A-RHF (F4)', () => {
-    expect(describeSofaLine({ bundleId: 'CORNER' })).toBe('1B-LHF + CNR + 2A-RHF');
+  it('quick-pick corner bundle (CORNER) shows 1A-LHF + CNR + 2A-RHF (F4)', () => {
+    expect(describeSofaLine({ bundleId: 'CORNER' })).toBe('1A-LHF + CNR + 2A-RHF');
   });
 
   it('custom single-piece keeps the name and appends "+ N <upgrade>"', () => {

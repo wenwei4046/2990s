@@ -214,9 +214,9 @@ export const BUNDLES: readonly BundleDef[] = [
   // Quick-Pick at the combo price; per-seat power slide stays available in Custom
   // Build too. Label IS the invoice text. Non-matchable signature.
   { id: '2PS', label: '2-Seater + 2 Power slide', signature: '2PS-PRESET', canonicalModules: ['2A'] },
-  // Corner package (F4, 5539) — 1B + corner + 2A, Quick-Pick only, composed
+  // Corner package (F4, 5539) — 1A + corner + 2A, Quick-Pick only, composed
   // preview (no composite PNG). Non-matchable signature.
-  { id: 'CORNER', label: 'Corner', signature: 'CORNER-PRESET', canonicalModules: ['1B', 'CNR', '2A'] },
+  { id: 'CORNER', label: 'Corner', signature: 'CORNER-PRESET', canonicalModules: ['1A', 'CNR', '2A'] },
 ];
 
 // Each entry is a signature → bundle. Multiple signatures map to the same
@@ -295,8 +295,8 @@ const BUNDLE_INVOICE_DECOMP: Record<string, string> = {
   '3+L': '2A-LHF + 1NA + L-RHF',
   // Console (F6): two single-arm 1-seaters flanking a wood console.
   '2WC': '1A-LHF + WC-45 + 1A-RHF',
-  // Corner package (F4, 5539): 1B + corner + 2A.
-  'CORNER': '1B-LHF + CNR + 2A-RHF',
+  // Corner package (F4, 5539): 1A + corner + 2A (1A is the chaise leg).
+  'CORNER': '1A-LHF + CNR + 2A-RHF',
 };
 
 const bundleLabelById = (bundleId: string): string =>
