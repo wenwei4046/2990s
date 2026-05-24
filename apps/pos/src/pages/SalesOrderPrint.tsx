@@ -33,10 +33,30 @@ export const SalesOrderPrint = () => {
 
   useEffect(() => {
     if (isLoading || !data) return;
-    // One paint cycle before snapshotting — gives the signature <img> time
-    // to load so it's included in the print output.
-    const t = window.setTimeout(() => window.print(), 350);
-    return () => window.clearTimeout(t);
+    // Don't print until the customer signature image has decoded — otherwise
+    // window.print() can snapshot the page before the <img> paints and the
+    // e-signature is missing from the PDF. We preload the same data URL the
+    // SignatureBlock <img> uses; once it loads (cached, so the DOM img is
+    // painted too) we print. Fallback timer covers no-signature orders and
+    // any decode failure so the print never hangs.
+    let printed = false;
+    const doPrint = () => {
+      if (printed) return;
+      printed = true;
+      // Two rAFs guarantee the frame holding the signature <img> has painted
+      // before the (blocking) print snapshot.
+      requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+    };
+    if (data.signature_data) {
+      const img = new Image();
+      img.onload = doPrint;
+      img.onerror = doPrint;
+      img.src = data.signature_data;
+      const fallback = window.setTimeout(doPrint, 1500);
+      return () => { printed = true; window.clearTimeout(fallback); };
+    }
+    const t = window.setTimeout(doPrint, 250);
+    return () => { printed = true; window.clearTimeout(t); };
   }, [isLoading, data]);
 
   if (isLoading) return <main className={styles.shell}>Loading…</main>;
@@ -201,7 +221,6 @@ const SignatureBlock = ({ order }: { order: OrderDetail }) => (
         />
       )}
     </div>
-    <div className={styles.signatureLine} />
     <div className={styles.signatureLabel}>Customer signature</div>
     <div className={styles.signatureSub}>
       {order.customer_name}

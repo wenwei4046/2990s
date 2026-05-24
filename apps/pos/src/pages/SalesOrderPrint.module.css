@@ -283,26 +283,24 @@
   justify-content: flex-end;
 }
 
+/* Dashed signature box — mirrors the reference template. The synced
+   e-signature PNG (orders.signature_data) sits inside it, padded. */
 .signatureCanvas {
-  height: 80px;
+  height: 90px;
   position: relative;
+  border: 1px dashed rgba(34, 31, 32, 0.45);
+  border-radius: 4px;
 }
 
 .signatureImg {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  max-width: 100%;
-  max-height: 100%;
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
   object-fit: contain;
-  object-position: left bottom;
+  object-position: left center;
   filter: contrast(1.15);
   mix-blend-mode: multiply;   /* hides any anti-aliased white halo on print */
-}
-
-.signatureLine {
-  border-top: 1px solid #221F20;
-  height: 0;
 }
 
 .signatureLabel {
