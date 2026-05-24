@@ -10,6 +10,8 @@ import { Settings } from './pages/Settings';
 import { Customers } from './pages/Customers';
 import { Products } from './pages/Products';
 import { FabricTracking } from './pages/FabricTracking';
+import { Suppliers } from './pages/Suppliers';
+import { PurchaseOrders } from './pages/PurchaseOrders';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -24,6 +26,8 @@ export const router = createBrowserRouter([
       { path: 'sku-master', element: <SkuMaster /> },
       { path: 'products', element: <Products /> },
       { path: 'fabric-tracking', element: <FabricTracking /> },
+      { path: 'suppliers', element: <Suppliers /> },
+      { path: 'purchase-orders', element: <PurchaseOrders /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
