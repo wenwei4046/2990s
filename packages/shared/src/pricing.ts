@@ -150,6 +150,13 @@ export type BedframeLineConfig = {
   divanHeightId?: string;
   totalHeightId?: string;
   specialIds?: string[];
+  // Display-only label snapshots (mirrors the Zod schema). The recompute
+  // ignores these; they ride along in configJson for the printed SO / Backend.
+  gapLabel?: string | null;
+  legHeightLabel?: string | null;
+  divanHeightLabel?: string | null;
+  totalHeightLabel?: string | null;
+  specialLabels?: string[];
 };
 export type OrderLineConfig = SofaLineConfig | SizeLineConfig | FlatLineConfig | BedframeLineConfig;
 

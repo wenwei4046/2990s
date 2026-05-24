@@ -577,3 +577,128 @@ describe('POST /orders — sofa fabric surcharge (spec 2026-05-24)', () => {
     expect(res.status).toBe(422);
   });
 });
+
+describe('POST /orders — bedframe configurator (spec 2026-05-25)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const BED_ID = PRODUCT_ID;
+  const bedframeRow = {
+    id: BED_ID, category_id: 'bedframe', pricing_kind: 'bedframe_build',
+    flat_price: null, recliner_upgrade_price: null,
+  };
+
+  // Full bedframe config (non-DIVAN): size + colour + gap/leg/divan/total.
+  function fullBedframeConfig(colourId: string) {
+    return {
+      kind: 'bedframe' as const,
+      productId: BED_ID,
+      sizeId: 'queen',
+      colourId,
+      gapId: 'gap-6',
+      legHeightId: 'leg-4',
+      divanHeightId: 'divan-8',
+      totalHeightId: 'total-14',
+    };
+  }
+  function bedframeBody(config: any, clientTotal: number) {
+    return {
+      customer: { name: 'Test Customer', phone: '0123456789', address: '123 Test Lane' },
+      paymentMethod: 'merchant' as const,
+      merchantProvider: 'GHL' as const,
+      approvalCode: 'TEST123',
+      lines: [{ qty: 1, config }],
+      clientTotal,
+    };
+  }
+
+  // Tables specific to bedframe recompute. colourSurcharge / gapSurcharge let a
+  // test prove the surcharge path isn't dead (0 for pilot, but the math runs).
+  function bedframeHandlers(opts: { colourSurcharge?: number; gapSurcharge?: number } = {}) {
+    return {
+      staff: () => ({ data: salesStaffRow, error: null }),
+      products: () => ({ data: [bedframeRow], error: null }),
+      product_compartments: () => ({ data: [], error: null }),
+      product_bundles: () => ({ data: [], error: null }),
+      product_size_variants: () => ({ data: [{ product_id: BED_ID, size_id: 'queen', active: true, price: 2990 }], error: null }),
+      bedframe_colours: () => ({ data: [{ id: 'sand', surcharge: opts.colourSurcharge ?? 0, active: true }], error: null }),
+      product_bedframe_colours: () => ({ data: [{ product_id: BED_ID, colour_id: 'sand', active: true }], error: null }),
+      bedframe_options: () => ({ data: [
+        { id: 'gap-6', surcharge: opts.gapSurcharge ?? 0, active: true },
+        { id: 'leg-4', surcharge: 0, active: true },
+        { id: 'divan-8', surcharge: 0, active: true },
+        { id: 'total-14', surcharge: 0, active: true },
+      ], error: null }),
+      addons: () => ({ data: [], error: null }),
+      delivery_fee_config: defaultDeliveryFeeCfg,
+    };
+  }
+
+  it('prices a full bedframe at size base + delivery (all surcharges 0)', async () => {
+    const rpcCapture: { last?: { name: string; args: any } } = {};
+    const supabase = createMockSupabase(bedframeHandlers(), rpcCapture, { data: 'SO-2060', error: null });
+    const app = buildApp(supabase);
+    // 2990 size + 0 surcharges + 250 delivery base = 3240.
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(bedframeBody(fullBedframeConfig('sand'), 3240)),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(rpcCapture.last?.args?.p?.total).toBe(3240);
+  });
+
+  it('folds colour + option surcharges into the recomputed total', async () => {
+    const rpcCapture: { last?: { name: string; args: any } } = {};
+    const supabase = createMockSupabase(bedframeHandlers({ colourSurcharge: 150, gapSurcharge: 50 }), rpcCapture, { data: 'SO-2061', error: null });
+    const app = buildApp(supabase);
+    // 2990 size + 150 colour + 50 gap + 250 delivery = 3440.
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(bedframeBody(fullBedframeConfig('sand'), 3440)),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(rpcCapture.last?.args?.p?.total).toBe(3440);
+  });
+
+  it('accepts a DIVAN minimal config (size + colour + leg only)', async () => {
+    const rpcCapture: { last?: { name: string; args: any } } = {};
+    const supabase = createMockSupabase(bedframeHandlers(), rpcCapture, { data: 'SO-2062', error: null });
+    const app = buildApp(supabase);
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(bedframeBody(
+        { kind: 'bedframe', productId: BED_ID, sizeId: 'queen', colourId: 'sand', legHeightId: 'leg-4' },
+        3240,
+      )),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(rpcCapture.last?.args?.p?.total).toBe(3240);
+  });
+
+  it('returns 409 pricing_drift when the client total is tampered low', async () => {
+    const supabase = createMockSupabase(bedframeHandlers(), {}, { data: 'SO-2063', error: null });
+    const app = buildApp(supabase);
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(bedframeBody(fullBedframeConfig('sand'), 1)),
+    }, baseEnv);
+    expect(res.status).toBe(409);
+    const body = await res.json() as any;
+    expect(body.error).toBe('pricing_drift');
+    expect(body.serverTotal).toBe(3240);
+  });
+
+  it('rejects a colour not ticked / unknown on this Model (422)', async () => {
+    const supabase = createMockSupabase(bedframeHandlers(), {}, { data: 'SO-2064', error: null });
+    const app = buildApp(supabase);
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(bedframeBody(fullBedframeConfig('charcoal'), 3240)),
+    }, baseEnv);
+    expect(res.status).toBe(422);
+  });
+});
