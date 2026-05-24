@@ -1133,7 +1133,9 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
           {heroCells ? (
-            <SofaCellsPreview cells={heroCells} depth={depth} />
+            <div className={styles.qpHeroCells}>
+              <SofaCellsPreview cells={heroCells} depth={depth} />
+            </div>
           ) : (
           <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
             <img

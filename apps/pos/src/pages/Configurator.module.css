@@ -700,6 +700,10 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 8px;
+  /* Query container so a composed <SofaCellsPreview> thumbnail (console/corner
+     presets) sizes to this 76px box, not the viewport. PNG-preset <img> below
+     is unaffected (max-width/height already cap it). */
+  container-type: size;
 }
 .qpCardArt img {
   max-width: 100%;
@@ -808,6 +812,24 @@
   display: block;
   transition: transform 220ms ease-out;
 }
+
+/* Composed-preview hero (2WC console, CORNER) — no single PNG, so it renders
+   via <SofaCellsPreview>. Same vertical envelope as the 2:1 PNG box (≤55% frame
+   height, ≤80% frame width); the preview contains itself to this box at its real
+   cm aspect ratio. Establishes a query container so the preview sizes here
+   instead of filling the whole canvas. */
+.qpHeroCells {
+  width: 80cqw;
+  height: 55cqh;
+  margin: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  filter: drop-shadow(0 16px 24px rgba(60, 40, 20, 0.12));
+}
+
 @property --sil-left {
   syntax: '<percentage>';
   inherits: true;
