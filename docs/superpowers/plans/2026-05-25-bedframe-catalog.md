@@ -1,146 +1,159 @@
-# Bedframe Catalog (Phase 1) Implementation Plan
+# Bedframe Configurator Implementation Plan (full)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Get the 18 base bedframe models into the POS catalog as size-variant products at placeholder pricing, sellable by size immediately.
+**Goal:** Add the 18 base bedframe models to the POS catalog with a full configurator (size + special-size text · colour · mattress gap · leg height · divan height · total height · specials), priced + recomputed server-side.
 
-**Architecture:** Pure-data seed, identical pattern to `mattress-catalog.sql` — 18 `products` (`category_id='bedframe'`, `pricing_kind='size_variants'`) + `product_size_variants` (standard 4 @ RM2990 placeholder). No migration, no new tables. The richer configurator (colour/gap/leg/divan/total/specials) is Plan 2 (`docs/superpowers/specs/2026-05-25-bedframe-configurator-design.md` §3.3–3.7).
+**Architecture:** Bedframes are `pricing_kind='bedframe_build'`. Colour = new global `bedframe_colours` library + per-Model tick `product_bedframe_colours` (mirrors sofa `fabric_colours`/`product_fabrics`). Option choice-lists = POS-owned `bedframe_options` (Decision B — one-time snapshot of `maintenance_config`, then decoupled). All POS pricing owned by SKU Master; every option free for pilot (surcharge columns reserved). Price recompute lives in shared `pricing.ts`, enforced on `POST /orders`.
 
-**Tech Stack:** Supabase Postgres, idempotent SQL seed applied via Supabase MCP, POS static-asset hero image, CF Pages deploy.
+**Tech Stack:** Drizzle/Postgres + Supabase MCP, Hono Worker, React/Vite POS, Zod, Vitest.
 
-**Source:** model names from `mfg_products` WHERE category='BEDFRAME' (18 base models, variant suffixes collapsed). Decisions: spec §2.
+**Spec:** `docs/superpowers/specs/2026-05-25-bedframe-configurator-design.md`
+**Closest analog (follow it):** the sofa fabric/colour feature — migration `0044_sofa_fabric_colour.sql`, `fabric_library`/`fabric_colours`/`product_fabrics`, `FabricColourPicker.tsx`, `fabricSurchargeFor` + the sofa branch of `computeOrderTotal` in `packages/shared/src/pricing.ts`, the fabric integration in `order-v1.schema.ts`/`cart.ts`/`orders.ts`/`POST /orders`. Bedframe mirrors this shape.
 
 ---
 
 ## File structure
-- Create: `packages/db/seeds/bedframe-catalog.sql` — the seed (only new file).
-- Reuse: `apps/pos/public/catalog/mattress-bed.png` as the shared hero (it is a bed-frame line-art; Loo swaps real photos later per the mattress pattern). No new asset.
-- No schema.ts / migration changes (size_variants already exists).
+- Migration: `packages/db/migrations/00NN_bedframe_configurator.sql` (next free number).
+- Schema: `packages/db/src/schema.ts` — add 3 tables + `bedframe_build` enum value.
+- Seeds: `packages/db/seeds/bedframe-catalog.sql`, `bedframe-colours.sql`, `bedframe-options.sql`.
+- Shared: `packages/shared/src/schemas/order-v1.schema.ts` (+ `order.schema.ts`), `packages/shared/src/pricing.ts` (+ tests).
+- POS: `apps/pos/src/pages/Configurator.tsx` (bedframe branch), `apps/pos/src/components/BedframeOptions.tsx` (new), `apps/pos/src/lib/queries.ts` (hooks), `apps/pos/src/state/cart.ts`, `apps/pos/src/lib/orders.ts`.
+- API: `apps/api/src/routes/orders.ts` (recompute branch) + test.
+- Backend: `apps/backend/src/lib/queries.ts` (bedframe colour/options load) — SKU-Master size pricing already works.
 
-## The 18 models (UUID `ffffffff-…-00NN`, SKU, name ← mfg base)
-0001 BED-HILTON·Hilton(1003) · 0002 BED-FENRIR·Fenrir(1005) · 0003 BED-CODY·Cody(1007) ·
-0004 BED-RICARDO·Ricardo(1008) · 0005 BED-VALKRIE·Valkrie(1009) · 0006 BED-JAGER·Jager(1013) ·
-0007 BED-ARIZONA·Arizona(1019) · 0008 BED-COTY·Coty(1023) · 0009 BED-TIFANNY·Tifanny(1030) ·
-0010 BED-VICTORIA·Victoria(1041) · 0011 BED-ELEPHANE·Elephane(2003) · 0012 BED-REGAL·Regal(2006) ·
-0013 BED-TRION·Trion(2009) · 0014 BED-NINA·Nina(2027) · 0015 BED-JACOB·Jacob(2033) ·
-0016 BED-CELENE·Celene(2038) · 0017 BED-ELEGANT·Elegant(2041) · 0018 BED-DIVAN·Divan(DIVAN)
-
-All: `visible=true`, `stock=99`, all 4 sizes active @ 2990 placeholder (Loo deactivates/prices unavailable sizes in Backend SKU Master). `detail` NULL, `size_display` NULL, no series.
+## The 18 models (UUID `ffffffff-…-00NN`)
+0001 Hilton(1003) 0002 Fenrir(1005) 0003 Cody(1007) 0004 Ricardo(1008) 0005 Valkrie(1009)
+0006 Jager(1013) 0007 Arizona(1019) 0008 Coty(1023) 0009 Tifanny(1030) 0010 Victoria(1041)
+0011 Elephane(2003) 0012 Regal(2006) 0013 Trion(2009) 0014 Nina(2027) 0015 Jacob(2033)
+0016 Celene(2038) 0017 Elegant(2041) 0018 Divan(DIVAN). SKU `BED-<NAME>`, all `visible`, `stock=99`.
 
 ---
 
-### Task 1: Write the bedframe catalog seed
+### Task 1: Migration — enum + 3 tables
 
-**Files:**
-- Create: `packages/db/seeds/bedframe-catalog.sql`
+**Files:** Create `packages/db/migrations/00NN_bedframe_configurator.sql`; modify `packages/db/src/schema.ts`.
 
-- [ ] **Step 1: Write the seed file**
-
-```sql
--- packages/db/seeds/bedframe-catalog.sql
--- ============================================================================
--- Bedframe catalogue · Phase 1 (pure-data seed, placeholder pricing)
--- 18 base models from mfg_products (BEDFRAME), variant suffixes collapsed.
--- pricing_kind='size_variants' (like mattresses) — standard 4 sizes @ RM2990
--- placeholder. Loo edits real per-size prices + deactivates unavailable sizes
--- in Backend SKU Master. The richer configurator (colour/gap/leg/divan/total/
--- specials) is Plan 2. Hero reuses the shared bed line-art.
--- Idempotent: stable UUIDs ffffffff-…-00NN + ON CONFLICT. Does NOT touch
--- mock (eeee…), sofa (cccc…), or mattress (dddd…) rows.
--- ============================================================================
-DO $$
-DECLARE
-  v_img text := 'https://2990s-pos.pages.dev/catalog/mattress-bed.png';
-BEGIN
-  INSERT INTO products
-    (id, sku, category_id, pricing_kind, name, img_key, thumb_key, visible, stock)
-  VALUES
-    ('ffffffff-ffff-ffff-ffff-ffffffff0001','BED-HILTON','bedframe','size_variants','Hilton',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0002','BED-FENRIR','bedframe','size_variants','Fenrir',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0003','BED-CODY','bedframe','size_variants','Cody',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0004','BED-RICARDO','bedframe','size_variants','Ricardo',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0005','BED-VALKRIE','bedframe','size_variants','Valkrie',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0006','BED-JAGER','bedframe','size_variants','Jager',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0007','BED-ARIZONA','bedframe','size_variants','Arizona',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0008','BED-COTY','bedframe','size_variants','Coty',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0009','BED-TIFANNY','bedframe','size_variants','Tifanny',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0010','BED-VICTORIA','bedframe','size_variants','Victoria',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0011','BED-ELEPHANE','bedframe','size_variants','Elephane',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0012','BED-REGAL','bedframe','size_variants','Regal',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0013','BED-TRION','bedframe','size_variants','Trion',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0014','BED-NINA','bedframe','size_variants','Nina',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0015','BED-JACOB','bedframe','size_variants','Jacob',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0016','BED-CELENE','bedframe','size_variants','Celene',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0017','BED-ELEGANT','bedframe','size_variants','Elegant',v_img,v_img,true,99),
-    ('ffffffff-ffff-ffff-ffff-ffffffff0018','BED-DIVAN','bedframe','size_variants','Divan',v_img,v_img,true,99)
-  ON CONFLICT (id) DO UPDATE SET
-    sku=EXCLUDED.sku, category_id=EXCLUDED.category_id, pricing_kind=EXCLUDED.pricing_kind,
-    name=EXCLUDED.name, img_key=EXCLUDED.img_key, thumb_key=EXCLUDED.thumb_key,
-    visible=EXCLUDED.visible, stock=EXCLUDED.stock, updated_at=now();
-
-  INSERT INTO product_size_variants (product_id, size_id, active, price)
-  SELECT p.id, s.size_id, true, 2990
-  FROM products p
-  CROSS JOIN (VALUES ('single'),('super-single'),('queen'),('king')) AS s(size_id)
-  WHERE p.id BETWEEN 'ffffffff-ffff-ffff-ffff-ffffffff0001'
-                 AND 'ffffffff-ffff-ffff-ffff-ffffffff0018'
-  ON CONFLICT (product_id, size_id) DO UPDATE SET active=EXCLUDED.active, price=EXCLUDED.price;
-END $$;
-```
-
-- [ ] **Step 2: Commit the seed file**
-
-```bash
-git add packages/db/seeds/bedframe-catalog.sql
-git commit -m "feat(catalog): seed 18 bedframe models (size_variants, placeholder)"
-```
-
-### Task 2: Apply to live Supabase + verify
-
-- [ ] **Step 1: Pre-check preconditions** (Supabase MCP `execute_sql`)
+- [ ] **Step 1: Write the migration** (mirror `0044_sofa_fabric_colour.sql` for RLS + realtime boilerplate)
 
 ```sql
-SELECT (SELECT count(*) FROM categories WHERE id='bedframe') AS has_cat,
-       (SELECT count(*) FROM size_library WHERE id IN ('single','super-single','queen','king')) AS sizes,
-       (SELECT count(*) FROM products WHERE id BETWEEN 'ffffffff-ffff-ffff-ffff-ffffffff0001' AND 'ffffffff-ffff-ffff-ffff-ffffffff9999') AS already;
-```
-Expected: `has_cat=1, sizes=4, already=0`.
+-- 00NN_bedframe_configurator.sql
+ALTER TYPE pricing_kind ADD VALUE IF NOT EXISTS 'bedframe_build';
 
-- [ ] **Step 2: Apply the seed** — paste the full `DO $$…$$` block from Task 1 Step 1 into Supabase MCP `execute_sql`. Expected: `[]` (no error).
-
-- [ ] **Step 3: Verify** (`execute_sql`)
-
-```sql
-SELECT (SELECT count(*) FROM products WHERE category_id='bedframe' AND id BETWEEN 'ffffffff-ffff-ffff-ffff-ffffffff0001' AND 'ffffffff-ffff-ffff-ffff-ffffffff9999') AS frames,
-       (SELECT count(*) FROM product_size_variants v JOIN products p ON p.id=v.product_id WHERE p.category_id='bedframe' AND v.price=2990) AS variants,
-       (SELECT count(*) FROM products WHERE category_id='bedframe' AND img_key IS NULL) AS missing_img;
-```
-Expected: `frames=18, variants=72, missing_img=0`.
-
-### Task 3: Ship + deploy + verify live
-
-- [ ] **Step 1: Branch is `feat/bedframe-configurator`** (spec already committed there). Push + PR.
-
-```bash
-git push -u origin feat/bedframe-configurator
-gh pr create --title "feat(catalog): bedframe catalog (Phase 1) — 18 models as size variants" --base main --body "Seeds 18 bedframe models as size_variants @ placeholder RM2990 (Loo prices in Backend). Spec: docs/superpowers/specs/2026-05-25-bedframe-configurator-design.md. Configurator = Plan 2."
-```
-
-- [ ] **Step 2: Merge + watch deploy** (no new asset needed — hero already live from the mattress ship).
-
-```bash
-gh pr merge --squash --delete-branch
-gh run watch <deploy-run-id> --exit-status
+CREATE TABLE IF NOT EXISTS bedframe_colours (
+  id text PRIMARY KEY, label text NOT NULL, swatch_hex text,
+  surcharge integer NOT NULL DEFAULT 0, active boolean NOT NULL DEFAULT true,
+  sort_order integer NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS product_bedframe_colours (
+  product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  colour_id text NOT NULL REFERENCES bedframe_colours(id),
+  active boolean NOT NULL DEFAULT true,
+  PRIMARY KEY (product_id, colour_id)
+);
+CREATE TABLE IF NOT EXISTS bedframe_options (
+  id text PRIMARY KEY,
+  kind text NOT NULL,            -- 'gap'|'leg_height'|'divan_height'|'total_height'|'special'
+  value text NOT NULL,
+  surcharge integer NOT NULL DEFAULT 0,
+  active boolean NOT NULL DEFAULT true,
+  sort_order integer NOT NULL DEFAULT 0
+);
+-- RLS: read for any authenticated staff; write admin/coordinator. Copy the exact
+-- policy + realtime publication lines from 0044 for the 3 tables.
+ALTER TABLE bedframe_colours ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_bedframe_colours ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bedframe_options ENABLE ROW LEVEL SECURITY;
+-- (policies + ALTER PUBLICATION supabase_realtime ADD TABLE … — mirror 0044)
 ```
 
-- [ ] **Step 3: Verify on live POS** — Loo eyeballs the Bed frames category (18 frames, hero image, "By size", pick size → cart at RM2990). PWA hard-refresh.
+- [ ] **Step 2:** Add the 3 tables + `'bedframe_build'` to the `pricingKind` enum array in `packages/db/src/schema.ts` (Drizzle), matching the `fabricColours`/`productFabrics` table definitions' style.
+- [ ] **Step 3:** `pnpm --filter @2990s/db typecheck` (or build) — expect clean.
+- [ ] **Step 4: Commit** `feat(db): bedframe configurator schema (colours, options, enum)`.
+
+### Task 2: Seeds
+
+**Files:** Create the 3 seed files.
+
+- [ ] **Step 1: `bedframe-catalog.sql`** — 18 products (`pricing_kind='bedframe_build'`, `category_id='bedframe'`, `mfg_model_code` set, `img_key`=`https://2990s-pos.pages.dev/catalog/mattress-bed.png`), standard-4 `product_size_variants` @ 2990, and a cross-join of all `bedframe_colours` into `product_bedframe_colours` (active). Stable UUIDs `ffffffff-…-0001..0018`, idempotent ON CONFLICT. (Pattern: `mattress-catalog.sql`.)
+- [ ] **Step 2: `bedframe-colours.sql`** — starter palette, all surcharge 0:
+  `('sand','Sand','#D8C7A8'), ('stone','Stone','#B8B0A4'), ('charcoal','Charcoal','#3A3A3A'), ('forest','Forest','#3B5141'), ('rust','Rust','#A6471E')` (sort 1–5, active). Idempotent.
+- [ ] **Step 3: `bedframe-options.sql`** — snapshot the CURRENT maintenance values (from the spec / a fresh `SELECT config FROM maintenance_config_history ORDER BY effective_from DESC LIMIT 1`): gaps 4″–10″ (kind `gap`); legHeights No Leg/1″/2″/4″/6″/7″ (kind `leg_height`); divanHeights 4″–16″ (kind `divan_height`); totalHeights 10″–28″ (kind `total_height`); specials (kind `special`). **ALL `surcharge=0`** (POS-owned; ignore the maintenance sen values). Deterministic `id` per row e.g. `gap-6`, `leg-7`, `special-left-drawer`. Idempotent.
+- [ ] **Step 4: Commit** `feat(db): bedframe seeds (catalog, colours, options snapshot)`.
+
+### Task 3: Shared — BedframeConfig Zod
+
+**Files:** `packages/shared/src/schemas/order-v1.schema.ts`, `order.schema.ts`; tests `order-v1.schema.test.ts`.
+
+- [ ] **Step 1: Write failing test** — a valid bedframe line `{ kind:'product', productId, qty:1, config:{ sizeId:'queen', colourId:'sand', gapId:'gap-6', legHeightId:'leg-4', divanHeightId:'divan-8', totalHeightId:'total-14', specialIds:[] } }` passes; a DIVAN line with only `{ sizeId, colourId, legHeightId }` passes; missing `colourId` fails.
+- [ ] **Step 2: Run — fails.**
+- [ ] **Step 3: Add `BedframeLineConfig`** to the config union: `{ sizeId: string; sizeOther?: string; colourId: string; gapId?: string; legHeightId: string; divanHeightId?: string; totalHeightId?: string; specialIds?: string[] }`. Required-ness: `sizeId,colourId,legHeightId` always; `gapId,divanHeightId,totalHeightId,specialIds` required for non-DIVAN (superRefine keyed off the product, OR keep optional in shape + enforce in UI — match how sofa fabric required-ness is done). Mirror in `order.schema.ts`.
+- [ ] **Step 4: Run — passes.** **Step 5: Commit.**
+
+### Task 4: Shared — computeBedframePrice + recompute wiring
+
+**Files:** `packages/shared/src/pricing.ts`; `packages/shared/src/__tests__/pricing.test.ts`.
+
+- [ ] **Step 1: Write failing tests** — base size price only (all options 0) → equals size variant price; with a (hypothetical) priced colour/option → adds surcharge; unknown colourId → throws `unknown_bedframe_colour`.
+- [ ] **Step 2: Run — fails.**
+- [ ] **Step 3: Implement**
+```ts
+// total = sizeVariant.price + colour.surcharge + Σ option.surcharge (by id)
+export function computeBedframePrice(args: {
+  sizeVariantPrice: number;
+  config: BedframeLineConfig;
+  colours: { id: string; surcharge: number }[];
+  options: { id: string; surcharge: number }[];
+}): number { /* lookup + sum; throw on unknown ids (mirror fabricSurchargeFor errors) */ }
+```
+Wire a `bedframe_build` branch into `computeOrderTotal` (next to the sofa branch), looking up the product's active size-variant price + the colours/options arrays passed in.
+- [ ] **Step 4: Run — passes.** **Step 5: Commit.**
+
+### Task 5: POS queries — colours + options hooks
+
+**Files:** `apps/pos/src/lib/queries.ts`.
+
+- [ ] Add `useBedframeColours()` + `useBedframeOptions()` (read `bedframe_colours` active, `product_bedframe_colours` for the product, `bedframe_options` grouped by `kind`) + realtime, mirroring `useProductFabrics`. Commit.
+
+### Task 6: POS configurator — bedframe branch
+
+**Files:** `apps/pos/src/pages/Configurator.tsx`; new `apps/pos/src/components/BedframeOptions.tsx` (+ `.module.css`).
+
+- [ ] Render a `bedframe_build` branch: size chips (reuse size-variant picker) + a "Special size (optional)" text input → `sizeOther`; colour swatch picker (only ticked colours, reuse FabricColourPicker styling); gap / leg / divan / total as labelled select rows from `bedframe_options` by kind; specials multi-select chips. **DIVAN ONLY** (`sku='BED-DIVAN'` / `mfg_model_code='DIVAN'`): render only size + colour + leg. Live total in the topbar slot (= base size price for pilot). Gate Add-to-Cart on required selections. Commit.
+
+### Task 7: POS cart + order body
+
+**Files:** `apps/pos/src/state/cart.ts`, `apps/pos/src/lib/orders.ts`.
+
+- [ ] Snapshot the bedframe `config` (+ resolved labels for display) into the cart line; `buildPostBody` carries the `BedframeLineConfig`. Mirror the sofa fabric snapshot. Commit.
+
+### Task 8: API server recompute
+
+**Files:** `apps/api/src/routes/orders.ts`; `apps/api/src/routes/orders.test.ts`.
+
+- [ ] **Step 1: Failing test** — POST a bedframe order; server recomputes via `computeBedframePrice`; tampered total (>0.5%) → 400. **Step 2: fails. Step 3:** add the `bedframe_build` branch to the recompute (load size-variant price + bedframe_colours + bedframe_options, call `computeBedframePrice`). **Step 4: passes. Step 5: commit.**
+
+### Task 9: Backend load (display) + typecheck gate
+
+**Files:** `apps/backend/src/lib/queries.ts`.
+
+- [ ] Ensure bedframe order lines render their config (size/colour/options) in order detail (mirror how sofa fabric suffix is shown). SKU-Master size pricing already works for `size_variants`-shaped variants; confirm `bedframe_build` products show in the Bedframe category + size-variant pricing editor. Commit.
+- [ ] **Full gate:** `pnpm typecheck` + `pnpm test` (shared/api/backend) green. Fix any drift.
+
+### Task 10: Ship + apply + verify
+
+- [ ] Push `feat/bedframe-configurator`, open PR → main.
+- [ ] Apply migration (Supabase MCP `apply_migration`) + the 3 seeds (`execute_sql`) to prod `dolvxrchzbnqvahocwsu`. Verify: 18 bedframe products, 72 size variants, 5 colours, options rows by kind, all `img_key` set.
+- [ ] Merge → watch deploy green → Loo eyeballs live (Bed frames category → configure → size/colour/gap/leg/divan/total/specials; DIVAN ONLY shows only size+colour+leg). PWA hard-refresh.
 
 ---
 
 ## Self-review
-- **Spec coverage:** Plan 1 covers spec §2 (18 models), §3.1 (catalog products), §3.2 (standard-4 sizes @ placeholder), §3.8 (pricing in SKU Master — placeholder set here, edited there). Deferred to Plan 2 (explicitly): §3.3 colour, §3.4 options, §3.5 config, §3.6 recompute, §3.7 configurator UI, §4 migrations. No gaps for Phase 1.
-- **Placeholders:** none — full SQL + exact verification counts (18/72/0).
-- **Consistency:** UUID range `…0001–0018`, `pricing_kind='size_variants'`, all `img_key` set; matches the verified mattress seed pattern.
+- **Spec coverage:** §2 decisions (T1–T2 data, T3 required-ness, T6 DIVAN special-case, pricing-in-SKU-Master via placeholder seed); §3.1 catalog (T2); §3.2 sizes + sizeOther (T2,T3,T6); §3.3 colours (T1,T2,T5,T6); §3.4 bedframe_options snapshot/Decision B (T1,T2,T5,T6); §3.5 config (T3); §3.6 recompute (T4,T8); §3.7 UI (T6); §3.8 backend (T9); §4 migrations (T1); §5 seeds (T2). No gaps.
+- **Placeholders:** load-bearing logic (Zod shape, computeBedframePrice signature, migration DDL, seed contents) is concrete; UI/queries/cart/recompute steps point to the exact sofa-fabric analog to follow (subagents read it).
+- **Consistency:** `BedframeLineConfig` field names identical across T3/T4/T6/T7/T8; `bedframe_options.kind` values fixed; UUID range 0001–0018.
 
-## Notes for Plan 2 (next)
-Switch bedframes `size_variants → bedframe_build`, add `bedframe_colours`/`product_bedframe_colours`/`bedframe_options` (+ migrations), snapshot maintenance values into `bedframe_options` (Decision B), `BedframeConfig` Zod (`order-v1` + `order.schema`), `computeBedframePrice` (shared/pricing) + server recompute in `POST /orders`, the 7-dimension configurator branch in `Configurator.tsx` (DIVAN ONLY = size+colour+leg), cart snapshot + `buildPostBody`. **Blocked on Loo's colour list.**
+## Dependencies / deferred
+- Real colour list + any surcharges — Loo later (1-line seed update; starter palette ships now).
+- Per-Model colour tick UI in Backend — default all-on; tick UI optional follow-up.
+- Bedframe hero photos — shared bed line-art for now.
