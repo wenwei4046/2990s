@@ -4,7 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-import { BUNDLES, cellsToPoSkus, type Cell, type Depth } from '@2990s/shared';
+import { BUNDLES, cellsToPoSkus, describeBedframeLine, type Cell, type Depth } from '@2990s/shared';
 
 export interface Category {
   id: string;
@@ -67,7 +67,7 @@ export interface ProductRow {
   sku: string;
   categoryId: string;
   seriesId: string | null;
-  pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricingKind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   name: string;
   detail: string | null;
   sizeDisplay: string | null;
@@ -272,7 +272,7 @@ export interface ProductSizeRow {
 
 export const useProductPricing = (productId: string | null, pricingKind: ProductRow['pricingKind'] | null) =>
   useQuery({
-    enabled: !!productId && (pricingKind === 'sofa_build' || pricingKind === 'size_variants'),
+    enabled: !!productId && (pricingKind === 'sofa_build' || pricingKind === 'size_variants' || pricingKind === 'bedframe_build'),
     queryKey: ['product', productId, 'pricing', pricingKind],
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
@@ -491,7 +491,22 @@ export const useOrders = () =>
                 purchased: purchased.has(`${r.id}|${line.sku}`),
               }));
             }
-            // Non-sofa products (mattress / bedframe / flat): unchanged.
+            // Bedframe configurator (spec 2026-05-25): full spec from the
+            // persisted config label snapshots, appended to the product name
+            // so the factory PO sheet reads size/colour/gap/leg/divan/total/
+            // specials — mirrors how sofa folds its build into productName.
+            if (p.pricing_kind === 'bedframe_build') {
+              const spec = describeBedframeLine(it.config ?? {});
+              return [{
+                ...base,
+                sku: p.sku,
+                size: null,
+                colour: null,
+                productName: spec ? `${p.name} · ${spec}` : p.name,
+                purchased: purchased.has(`${r.id}|${p.sku}`),
+              }];
+            }
+            // Other non-sofa products (mattress / flat): unchanged.
             return [{
               ...base,
               sku: p.sku,

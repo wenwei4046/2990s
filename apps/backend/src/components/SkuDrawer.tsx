@@ -266,7 +266,7 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
       cleaned.compartments = raw.compartments;
       cleaned.bundles = raw.bundles;
       cleaned.fabrics = raw.fabrics;
-    } else if (raw.pricingKind === 'size_variants') {
+    } else if (raw.pricingKind === 'size_variants' || raw.pricingKind === 'bedframe_build') {
       cleaned.sizes = raw.sizes;
     } else if (raw.pricingKind === 'flat') {
       cleaned.flatPrice = raw.flatPrice ?? 0;
@@ -340,7 +340,10 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
         if (r1.error) throw new Error(r1.error.message);
         if (r2.error) throw new Error(r2.error.message);
         if (r3.error) throw new Error(r3.error.message);
-      } else if (valid.pricingKind === 'size_variants') {
+      } else if (valid.pricingKind === 'size_variants' || valid.pricingKind === 'bedframe_build') {
+        // Bedframes price by size exactly like mattresses (placeholder retail
+        // per size). Colour + dimension options live in their own tables and
+        // carry 0 surcharge for pilot — no SKU-Master edit surface yet.
         const sizes = valid.sizes.map((s) => ({
           product_id: product.id, size_id: s.sizeId, active: s.active, price: s.price,
         }));

@@ -3,6 +3,7 @@ import {
   computeOrderTotal,
   computeDeliveryFee,
   pricingDriftExceeds,
+  describeBedframeLine,
   OrderPricingError,
   type ServerProductInfo,
   type OrderLineInput,
@@ -117,6 +118,30 @@ describe('computeOrderTotal — bedframe', () => {
     expect(() => computeOrderTotal(
       [bedLine({ sizeId: 'queen', colourId: 'sand', legHeightId: 'leg-999' })] as never, map,
     )).toThrow(/unknown_bedframe_option/);
+  });
+});
+
+describe('describeBedframeLine', () => {
+  it('builds a full spec line from the label snapshots', () => {
+    expect(describeBedframeLine({
+      kind: 'bedframe', productId: 'p', sizeId: 'queen', colourId: 'sand',
+      colourLabel: 'Sand', gapLabel: '6"', legHeightId: 'leg-4', legHeightLabel: '4"',
+      divanHeightLabel: '8"', totalHeightLabel: '14"',
+    })).toBe('Queen · Sand · Gap 6" · Leg 4" · Divan 8" · Total 14"');
+  });
+  it('maps the four standard size ids to labels', () => {
+    expect(describeBedframeLine({ kind: 'bedframe', productId: 'p', sizeId: 'super-single', colourId: 'c', legHeightId: 'l' }))
+      .toBe('Super Single');
+  });
+  it('appends a free-text special size in parentheses', () => {
+    expect(describeBedframeLine({ kind: 'bedframe', productId: 'p', sizeId: 'king', sizeOther: '200 x 200', colourId: 'c', legHeightId: 'l' }))
+      .toBe('King (200 x 200)');
+  });
+  it('joins specials and renders a DIVAN minimal line (size + colour + leg)', () => {
+    expect(describeBedframeLine({
+      kind: 'bedframe', productId: 'p', sizeId: 'queen', colourId: 'c', colourLabel: 'Stone',
+      legHeightId: 'l', legHeightLabel: '2"', specialLabels: ['Left Drawer', 'HB Straight'],
+    })).toBe('Queen · Stone · Leg 2" · Left Drawer + HB Straight');
   });
 });
 

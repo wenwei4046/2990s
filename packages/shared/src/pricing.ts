@@ -160,6 +160,33 @@ export type BedframeLineConfig = {
 };
 export type OrderLineConfig = SofaLineConfig | SizeLineConfig | FlatLineConfig | BedframeLineConfig;
 
+// The four standard bed sizes → display labels (sizeId is persisted, not the
+// label). Falls back to a Title-cased id for any non-standard size.
+const BEDFRAME_SIZE_LABELS: Record<string, string> = {
+  single: 'Single', 'super-single': 'Super Single', queen: 'Queen', king: 'King',
+};
+
+/** Display-only spec line for a persisted bedframe order line, built from the
+ *  label snapshots in configJson (no DB join). e.g.
+ *  "Queen · Sand · Gap 6\" · Leg 4\" · Divan 8\" · Total 14\"". Used by the
+ *  printed Sales Order + Backend PO sheet, mirroring describeSofaLine. */
+export const describeBedframeLine = (cfg: Partial<BedframeLineConfig>): string => {
+  const parts: string[] = [];
+  if (cfg.sizeId) {
+    const lbl = BEDFRAME_SIZE_LABELS[cfg.sizeId] ?? (cfg.sizeId.charAt(0).toUpperCase() + cfg.sizeId.slice(1));
+    parts.push(cfg.sizeOther ? `${lbl} (${cfg.sizeOther})` : lbl);
+  } else if (cfg.sizeOther) {
+    parts.push(cfg.sizeOther);
+  }
+  if (cfg.colourLabel) parts.push(cfg.colourLabel);
+  if (cfg.gapLabel) parts.push(`Gap ${cfg.gapLabel}`);
+  if (cfg.legHeightLabel) parts.push(`Leg ${cfg.legHeightLabel}`);
+  if (cfg.divanHeightLabel) parts.push(`Divan ${cfg.divanHeightLabel}`);
+  if (cfg.totalHeightLabel) parts.push(`Total ${cfg.totalHeightLabel}`);
+  if (cfg.specialLabels && cfg.specialLabels.length > 0) parts.push(cfg.specialLabels.join(' + '));
+  return parts.join(' · ');
+};
+
 export interface OrderLineInput {
   qty: number;
   config: OrderLineConfig;

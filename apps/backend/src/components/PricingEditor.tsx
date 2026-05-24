@@ -9,7 +9,7 @@ import {
 import styles from './PricingEditor.module.css';
 
 interface SkuFormData {
-  pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricingKind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   categoryId: string;
   reclinerUpgradePrice?: number;
   seatUpgradeLabel?: string | null;
@@ -28,7 +28,9 @@ export const PricingEditor = () => {
   const categoryId = useWatch({ control, name: 'categoryId' });
 
   if (pricingKind === 'sofa_build') return <SofaEditor />;
-  if (pricingKind === 'size_variants') return <SizeEditor catLabel={categoryId === 'mattress' ? 'Mattress' : 'Bedframe'} />;
+  // Bedframes price by size like mattresses — same editor, "Bedframe" label.
+  if (pricingKind === 'size_variants' || pricingKind === 'bedframe_build')
+    return <SizeEditor catLabel={categoryId === 'mattress' ? 'Mattress' : 'Bedframe'} />;
   if (pricingKind === 'flat') return <FlatEditor />;
   return <TbcPlaceholder categoryId={categoryId} />;
 };
