@@ -48,6 +48,7 @@ export type MfgProductRow = {
   name: string;
   category: MfgCategory;
   description: string | null;
+  base_model: string | null;
   size_label: string | null;
   base_price_sen: number | null;
   price1_sen: number | null;
@@ -59,6 +60,8 @@ export type MfgProductRow = {
   fabric_color: string | null;
   sub_assemblies: unknown;
   pieces: unknown;
+  /** Sofa-only: array of { height: "24", priceSen: 50000 } from seat_height_prices JSONB. */
+  seat_height_prices: Array<{ height: string; priceSen: number }> | null;
   default_variants: unknown;
   updated_at: string;
 };
