@@ -384,3 +384,38 @@ describe('computeDeliveryFee', () => {
     });
   });
 });
+
+describe('computeOrderTotal — sofa fabric surcharge', () => {
+  const info = (): Map<string, ServerProductInfo> => new Map([['P1', {
+    productId: 'P1', pricingKind: 'sofa_build', flatPrice: null,
+    sofa: {
+      reclinerUpgradePrice: 0, compartments: [],
+      bundles: [{ bundleId: '2S', active: true, price: 1990 }],
+      fabrics: [
+        { fabricId: 'linen',   active: true,  surcharge: 0,   colourIds: ['sand', 'stone'] },
+        { fabricId: 'velvet',  active: true,  surcharge: 300, colourIds: ['sand'] },
+        { fabricId: 'retired', active: false, surcharge: 999, colourIds: ['sand'] },
+      ],
+    },
+  }]]);
+  const line = (fabricId?: string, colourId?: string): OrderLineInput[] => ([{
+    qty: 1, config: { kind: 'sofa', productId: 'P1', bundleId: '2S', depth: '24', fabricId, colourId },
+  }]);
+
+  it('adds the active fabric surcharge to the sofa line', () => {
+    expect(computeOrderTotal(line('velvet', 'sand'), info()).subtotal).toBe(2290); // 1990 + 300
+  });
+  it('adds 0 for a standard fabric', () => {
+    expect(computeOrderTotal(line('linen', 'stone'), info()).subtotal).toBe(1990);
+  });
+  it('rejects a sofa with no fabric when the Model offers fabrics', () => {
+    expect(() => computeOrderTotal(line(undefined, undefined), info())).toThrow(OrderPricingError);
+  });
+  it('rejects an inactive or unknown fabric', () => {
+    expect(() => computeOrderTotal(line('retired', 'sand'), info())).toThrow(OrderPricingError);
+    expect(() => computeOrderTotal(line('nope', 'sand'), info())).toThrow(OrderPricingError);
+  });
+  it('rejects a colour that does not belong to the fabric', () => {
+    expect(() => computeOrderTotal(line('velvet', 'charcoal'), info())).toThrow(OrderPricingError);
+  });
+});
