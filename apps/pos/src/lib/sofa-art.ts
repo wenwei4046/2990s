@@ -8,9 +8,27 @@
 /** Silhouette bbox within a PNG, as fractions (0..1) of the PNG's width/height. */
 export interface ArtBbox { l: number; t: number; r: number; b: number }
 
-const ART_BBOX_FALLBACK: ArtBbox = { l: 0.1, t: 0.2, r: 0.9, b: 0.8 };
+export const ART_BBOX_FALLBACK: ArtBbox = { l: 0.1, t: 0.2, r: 0.9, b: 0.8 };
 const bboxCache = new Map<string, ArtBbox>();
 const bboxPending = new Map<string, Promise<ArtBbox>>();
+
+// Pre-measured silhouette bboxes for the FIXED Quick-Pick preset modules
+// (2WC console + CORNER). These render via <SofaCellsPreview>, whose first paint
+// happens on catalog load — before the async canvas scan can resolve. Without a
+// cached bbox the modules fell back to objectFit:contain and showed as tiny,
+// gap-separated silhouettes (the 2WC card bug, 2026-05-24). Seeding the cache
+// makes the composed preview pixel-correct on the very first frame; the async
+// measureArtBbox still runs and confirms these same values. Fractions are the
+// alpha bbox of each 1024² PNG, measured 2026-05-24.
+const SEED_BBOX: Record<string, ArtBbox> = {
+  '/sofa-modules/1A-LHF.png': { l: 0.2207, t: 0.1758, r: 0.7773, b: 0.8242 },
+  '/sofa-modules/1A-RHF.png': { l: 0.2207, t: 0.1758, r: 0.7773, b: 0.8242 },
+  '/sofa-modules/WC-45.png':  { l: 0.3027, t: 0.1973, r: 0.6953, b: 0.8008 },
+  '/sofa-modules/1B-LHF.png': { l: 0.2207, t: 0.1758, r: 0.7773, b: 0.8242 },
+  '/sofa-modules/CNR.png':    { l: 0.1758, t: 0.1758, r: 0.8242, b: 0.8242 },
+  '/sofa-modules/2A-RHF.png': { l: 0.1211, t: 0.2773, r: 0.8789, b: 0.7227 },
+};
+for (const [src, bbox] of Object.entries(SEED_BBOX)) bboxCache.set(src, bbox);
 
 /** Synchronous cache read — undefined until measureArtBbox(src) has resolved. */
 export const getCachedArtBbox = (src: string): ArtBbox | undefined => bboxCache.get(src);
