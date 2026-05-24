@@ -97,7 +97,7 @@ orders.post('/', async (c) => {
   const handoverAddonIds = (dto.addons ?? []).map((a) => a.addonId);
   const addonIds = Array.from(new Set([...sizeLineAddonIds, ...handoverAddonIds]));
 
-  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes] = await Promise.all([
+  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes] = await Promise.all([
     supabase
       .from('products')
       .select('id, category_id, pricing_kind, flat_price, recliner_upgrade_price')
@@ -134,9 +134,19 @@ orders.post('/', async (c) => {
       .select('base_fee, cross_category_fee, mattress_bedframe_lead_days, sofa_lead_days')
       .eq('id', 1)
       .single(),
+    // Sofa fabric availability + per-Model surcharge (spec 2026-05-24).
+    supabase
+      .from('product_fabrics')
+      .select('product_id, fabric_id, active, surcharge')
+      .in('product_id', productIds),
+    // Active fabric colours (global, small table) — used to validate the chosen
+    // colour belongs to the chosen fabric in the recompute.
+    supabase
+      .from('fabric_colours')
+      .select('fabric_id, colour_id, active'),
   ]);
 
-  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes]) {
+  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes]) {
     if (r.error) return c.json({ error: 'pricing_fetch_failed', reason: r.error.message }, 500);
   }
 
@@ -185,6 +195,15 @@ orders.post('/', async (c) => {
   }
   const compartments = compartmentsRes.data ?? [];
   const bundles = bundlesRes.data ?? [];
+  // Per-Model fabric rows + a fabric→active-colour-ids map for the recompute.
+  const productFabrics = fabricsRes.data ?? [];
+  const activeColourIdsByFabric = new Map<string, string[]>();
+  for (const col of fabricColoursRes.data ?? []) {
+    if (!col.active) continue;
+    const arr = activeColourIdsByFabric.get(col.fabric_id) ?? [];
+    arr.push(col.colour_id);
+    activeColourIdsByFabric.set(col.fabric_id, arr);
+  }
   const sizes = sizesRes.data ?? [];
   const addonPricesById = new Map<string, number>();
   // Static catalog info for handover-time addons (logistics: dispose, lift,
@@ -220,6 +239,14 @@ orders.post('/', async (c) => {
         bundles: bundles
           .filter((r) => r.product_id === p.id)
           .map((r) => ({ bundleId: r.bundle_id, active: r.active, price: r.price })),
+        fabrics: productFabrics
+          .filter((r) => r.product_id === p.id)
+          .map((r) => ({
+            fabricId: r.fabric_id,
+            active: r.active,
+            surcharge: r.surcharge,
+            colourIds: activeColourIdsByFabric.get(r.fabric_id) ?? [],
+          })),
       } : undefined,
       sizes: p.pricing_kind === 'size_variants'
         ? sizes
