@@ -45,6 +45,15 @@ export interface BundleLibrary {
   sortOrder: number;
 }
 
+export interface FabricLibrary {
+  id: string;
+  label: string;
+  tier: string;
+  defaultSurcharge: number;
+  active: boolean;
+  sortOrder: number;
+}
+
 export interface SizeLibrary {
   id: string;
   label: string;
@@ -165,6 +174,28 @@ export const useBundleLibrary = () =>
     ...LIBRARY_OPTS,
   });
 
+// All fabrics (incl. inactive) so admin can re-enable; SofaEditor filters/labels.
+export const useFabricLibrary = () =>
+  useQuery({
+    queryKey: ['library', 'fabrics'],
+    queryFn: async (): Promise<FabricLibrary[]> => {
+      const { data, error } = await supabase
+        .from('fabric_library')
+        .select('id, label, tier, default_surcharge, active, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        label: r.label,
+        tier: r.tier,
+        defaultSurcharge: r.default_surcharge,
+        active: r.active,
+        sortOrder: r.sort_order,
+      }));
+    },
+    ...LIBRARY_OPTS,
+  });
+
 export const useSizeLibrary = () =>
   useQuery({
     queryKey: ['library', 'sizes'],
@@ -247,7 +278,7 @@ export const useProductPricing = (productId: string | null, pricingKind: Product
       if (!productId) throw new Error('no productId');
 
       if (pricingKind === 'sofa_build') {
-        const [comps, bundles] = await Promise.all([
+        const [comps, bundles, fabrics] = await Promise.all([
           supabase
             .from('product_compartments')
             .select('compartment_id, active, price')
@@ -256,9 +287,14 @@ export const useProductPricing = (productId: string | null, pricingKind: Product
             .from('product_bundles')
             .select('bundle_id, active, price')
             .eq('product_id', productId),
+          supabase
+            .from('product_fabrics')
+            .select('fabric_id, active, surcharge')
+            .eq('product_id', productId),
         ]);
         if (comps.error) throw comps.error;
         if (bundles.error) throw bundles.error;
+        if (fabrics.error) throw fabrics.error;
         return {
           kind: 'sofa_build' as const,
           compartments: (comps.data ?? []).map((r) => ({
@@ -270,6 +306,11 @@ export const useProductPricing = (productId: string | null, pricingKind: Product
             bundleId: r.bundle_id,
             active: r.active,
             price: r.price,
+          })),
+          fabrics: (fabrics.data ?? []).map((r) => ({
+            fabricId: r.fabric_id,
+            active: r.active,
+            surcharge: r.surcharge,
           })),
         };
       }

@@ -33,6 +33,7 @@ import {
   useBundleLibrary,
   useCategories,
   useCompartmentLibrary,
+  useFabricLibrary,
   useProductPricing,
   useSeries,
   useSizeLibrary,
@@ -64,6 +65,7 @@ interface SkuFormData {
   seatUpgradeFootrest?: boolean;
   compartments?: { compartmentId: string; active: boolean; price: number }[];
   bundles?: { bundleId: string; active: boolean; price: number }[];
+  fabrics?: { fabricId: string; active: boolean; surcharge: number }[];
   sizes?: { sizeId: string; active: boolean; price: number }[];
   flatPrice?: number;
 }
@@ -96,6 +98,7 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
   const seriesQ = useSeries();
   const compLib = useCompartmentLibrary();
   const bundleLib = useBundleLibrary();
+  const fabricLib = useFabricLibrary();
   const sizeLib = useSizeLibrary();
   const existingPricing = useProductPricing(
     product?.id ?? null,
@@ -104,7 +107,7 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
 
   // Default form values vary by mode + category. Computed once libraries are ready.
   const defaults = useMemo<SkuFormData | null>(() => {
-    if (!compLib.data || !bundleLib.data || !sizeLib.data || !categories.data) return null;
+    if (!compLib.data || !bundleLib.data || !fabricLib.data || !sizeLib.data || !categories.data) return null;
     if (mode === 'edit' && !product) return null;
     if (mode === 'edit' && existingPricing.isLoading) return null;
 
@@ -119,6 +122,10 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
       .slice()
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((l) => ({ bundleId: l.id, active: true, price: l.defaultPrice }));
+    const seedFabrics = fabricLib.data
+      .slice()
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((l) => ({ fabricId: l.id, active: true, surcharge: l.defaultSurcharge }));
     const seedSizes = sizeLib.data
       .slice()
       .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -138,6 +145,11 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
           sofa.bundles.find((r) => r.bundleId === seed.bundleId) ?? seed,
         )
       : seedBundles;
+    const editFabrics = sofa
+      ? seedFabrics.map((seed) =>
+          (sofa.fabrics ?? []).find((r) => r.fabricId === seed.fabricId) ?? seed,
+        )
+      : seedFabrics;
     const editSizes = sized
       ? seedSizes.map((seed) =>
           sized.sizes.find((r) => r.sizeId === seed.sizeId) ?? seed,
@@ -164,12 +176,13 @@ export const SkuDrawer = ({ mode, product, onClose }: SkuDrawerProps) => {
       seatUpgradeFootrest: product?.seatUpgradeFootrest ?? true,
       compartments: editComps,
       bundles: editBundles,
+      fabrics: editFabrics,
       sizes: editSizes,
       flatPrice: product?.flatPrice ?? 0,
     };
   }, [
     mode, product, existingPricing.data, existingPricing.isLoading,
-    compLib.data, bundleLib.data, sizeLib.data, categories.data,
+    compLib.data, bundleLib.data, fabricLib.data, sizeLib.data, categories.data,
   ]);
 
   if (!defaults) {
@@ -252,6 +265,7 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
       cleaned.seatUpgradeFootrest = raw.seatUpgradeFootrest ?? true;
       cleaned.compartments = raw.compartments;
       cleaned.bundles = raw.bundles;
+      cleaned.fabrics = raw.fabrics;
     } else if (raw.pricingKind === 'size_variants') {
       cleaned.sizes = raw.sizes;
     } else if (raw.pricingKind === 'flat') {
@@ -315,12 +329,17 @@ const SkuDrawerForm = ({ defaults, mode, product, onClose, qc, categories, serie
         const bundles = valid.bundles.map((b) => ({
           product_id: product.id, bundle_id: b.bundleId, active: b.active, price: b.price,
         }));
-        const [r1, r2] = await Promise.all([
+        const fabrics = valid.fabrics.map((f) => ({
+          product_id: product.id, fabric_id: f.fabricId, active: f.active, surcharge: f.surcharge,
+        }));
+        const [r1, r2, r3] = await Promise.all([
           supabase.from('product_compartments').upsert(comps, { onConflict: 'product_id,compartment_id' }),
           supabase.from('product_bundles').upsert(bundles, { onConflict: 'product_id,bundle_id' }),
+          supabase.from('product_fabrics').upsert(fabrics, { onConflict: 'product_id,fabric_id' }),
         ]);
         if (r1.error) throw new Error(r1.error.message);
         if (r2.error) throw new Error(r2.error.message);
+        if (r3.error) throw new Error(r3.error.message);
       } else if (valid.pricingKind === 'size_variants') {
         const sizes = valid.sizes.map((s) => ({
           product_id: product.id, size_id: s.sizeId, active: s.active, price: s.price,
