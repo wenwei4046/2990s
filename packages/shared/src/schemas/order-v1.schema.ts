@@ -83,6 +83,16 @@ const bedframeLineConfigSchema = z.object({
   divanHeightId: z.string().optional(),
   totalHeightId: z.string().optional(),
   specialIds: z.array(z.string()).optional(),
+  // Display-only label snapshots (like sofa fabricLabel/seatUpgradeLabel) so the
+  // printed Sales Order + Backend detail render the full spec without a join to
+  // bedframe_options. The server recompute ignores these — it reprices off the
+  // *Ids above. Captured at order time, so a later Backend label edit doesn't
+  // rewrite what the customer signed.
+  gapLabel: z.string().max(40).nullable().optional(),
+  legHeightLabel: z.string().max(40).nullable().optional(),
+  divanHeightLabel: z.string().max(40).nullable().optional(),
+  totalHeightLabel: z.string().max(40).nullable().optional(),
+  specialLabels: z.array(z.string().max(60)).optional(),
 });
 
 export const orderLineConfigSchema = z.discriminatedUnion('kind', [

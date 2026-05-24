@@ -290,7 +290,7 @@ const ProductCard = ({ p }: { p: CatalogProduct }) => {
             <PriceTag amount={headlinePrice} size="sm" />
           ) : (
             <span className={styles.fromLabel}>
-              {p.pricing_kind === 'sofa_build' ? 'Configure' : 'By size'}
+              {p.pricing_kind === 'sofa_build' || p.pricing_kind === 'bedframe_build' ? 'Configure' : 'By size'}
             </span>
           )}
         </div>

@@ -12,7 +12,7 @@ export interface CatalogProduct {
   size_display: string | null;
   img_key: string | null;
   thumb_key: string | null;
-  pricing_kind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricing_kind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   flat_price: number | null;
   recliner_upgrade_price: number | null;
   stock: number;
