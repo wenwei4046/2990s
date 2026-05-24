@@ -19,11 +19,15 @@
 --   series in seed-libraries.sql are untouched (and stay hidden — the dropdown
 --   only lists series that have ≥1 product).
 --
--- PHOTO: all 18 share one cropped line-art bed hero (the PDFs carry no per-model
---   photography — only the same illustration). Hosted as a POS static asset:
---   apps/pos/public/catalog/mattress-bed.png → absolute pages.dev URL so both
---   POS and Backend resolve it (img_key is used directly as an <img>/CSS url).
---   Swap per-model photos in Backend SKU Master once real photography exists.
+-- PHOTO: hosted as POS static assets → absolute pages.dev URLs so both POS and
+--   Backend resolve them (img_key is used directly as an <img>/CSS url):
+--     • mattress-bed.png        — shared line-art hero (the 15 models with no
+--                                 real photography; PDFs carry only the same
+--                                 illustration). Variable v_img.
+--     • mattress-2990s-soft.jpg — real room photo for the 2990's Soft trio
+--                                 (Ketta/Akka/Arrus Soft → 0001/0003/0005).
+--                                 Variable v_soft.
+--   Swap remaining per-model photos in Backend SKU Master as real shots arrive.
 --
 -- Idempotent: stable UUIDs dddddddd-…-00NN + ON CONFLICT. Safe to re-run; a
 -- re-run RESETS prices/visibility to these seed values (overwrites Backend edits).
@@ -40,18 +44,19 @@ ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label, active = EXCLUDED.active;
 
 DO $$
 DECLARE
-  v_img text := 'https://2990s-pos.pages.dev/catalog/mattress-bed.png';
+  v_img  text := 'https://2990s-pos.pages.dev/catalog/mattress-bed.png';
+  v_soft text := 'https://2990s-pos.pages.dev/catalog/mattress-2990s-soft.jpg';  -- 2990's Soft real photo
 BEGIN
   -- ── 2) Products (18 size_variants mattresses) ────────────────────────────
   INSERT INTO products
     (id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, visible, stock)
   VALUES
     -- 2990s — Ketta (8"), Akka (12"), Arrus (12"); Soft + Firm each
-    ('dddddddd-dddd-dddd-dddd-dddddddd0001','MAT-2990-KETTA-S','mattress','brand-2990s','size_variants','Ketta Soft','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.','8" Soft',v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0001','MAT-2990-KETTA-S','mattress','brand-2990s','size_variants','Ketta Soft','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.','8" Soft',v_soft,v_soft,true,99),
     ('dddddddd-dddd-dddd-dddd-dddddddd0002','MAT-2990-KETTA-F','mattress','brand-2990s','size_variants','Ketta Firm','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.','8" Firm',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0003','MAT-2990-AKKA-S','mattress','brand-2990s','size_variants','Akka Soft','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.','12" Soft',v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0003','MAT-2990-AKKA-S','mattress','brand-2990s','size_variants','Akka Soft','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.','12" Soft',v_soft,v_soft,true,99),
     ('dddddddd-dddd-dddd-dddd-dddddddd0004','MAT-2990-AKKA-F','mattress','brand-2990s','size_variants','Akka Firm','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.','12" Firm',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0005','MAT-2990-ARRUS-S','mattress','brand-2990s','size_variants','Arrus Soft','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.','12" Soft',v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0005','MAT-2990-ARRUS-S','mattress','brand-2990s','size_variants','Arrus Soft','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.','12" Soft',v_soft,v_soft,true,99),
     ('dddddddd-dddd-dddd-dddd-dddddddd0006','MAT-2990-ARRUS-F','mattress','brand-2990s','size_variants','Arrus Firm','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.','12" Firm',v_img,v_img,true,99),
 
     -- Carres — Balance (12"), Whisper (12" S/F), Embrace (14" S/F), Cloudrest (14" tbc)
