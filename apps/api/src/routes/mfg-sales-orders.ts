@@ -145,3 +145,170 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   return c.json({ salesOrder: data });
 });
+
+// ── PATCH header — edit debtor info, addresses, note, etc. ───────────
+mfgSalesOrders.patch('/:docNo', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const map: Array<[string, string]> = [
+    ['debtorCode', 'debtor_code'], ['debtorName', 'debtor_name'], ['agent', 'agent'],
+    ['salesLocation', 'sales_location'], ['ref', 'ref'], ['poDocNo', 'po_doc_no'],
+    ['venue', 'venue'], ['branding', 'branding'], ['transferTo', 'transfer_to'],
+    ['address1', 'address1'], ['address2', 'address2'], ['address3', 'address3'],
+    ['address4', 'address4'], ['phone', 'phone'], ['note', 'note'],
+    ['remark2', 'remark2'], ['remark3', 'remark3'], ['remark4', 'remark4'],
+    ['soDate', 'so_date'], ['currency', 'currency'],
+  ];
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of map) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
+
+  const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  return c.json({ ok: true, docNo });
+});
+
+// ── Item CRUD ─────────────────────────────────────────────────────────
+//
+// Each mutation recomputes the header totals + category breakdown so the
+// list view stays accurate without a separate refresh step.
+async function recomputeTotals(sb: any, docNo: string) {
+  const { data: items } = await sb.from('mfg_sales_order_items').select('item_group, total_centi, line_cost_centi').eq('doc_no', docNo).eq('cancelled', false);
+  let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
+  for (const it of (items ?? []) as Array<{ item_group: string; total_centi: number; line_cost_centi: number }>) {
+    total += it.total_centi || 0;
+    totalCost += it.line_cost_centi || 0;
+    const g = (it.item_group ?? '').toLowerCase();
+    if (g.includes('mattress') || g.includes('sofa')) mattressSofa += it.total_centi;
+    else if (g.includes('bedframe')) bedframe += it.total_centi;
+    else if (g.includes('accessor')) accessories += it.total_centi;
+    else others += it.total_centi;
+  }
+  const margin = total - totalCost;
+  await sb.from('mfg_sales_orders').update({
+    mattress_sofa_centi: mattressSofa,
+    bedframe_centi: bedframe,
+    accessories_centi: accessories,
+    others_centi: others,
+    local_total_centi: total,
+    balance_centi: total,
+    total_cost_centi: totalCost,
+    total_revenue_centi: total,
+    total_margin_centi: margin,
+    margin_pct_basis: total > 0 ? Math.round((margin / total) * 10000) : 0,
+    line_count: (items ?? []).length,
+    updated_at: new Date().toISOString(),
+  }).eq('doc_no', docNo);
+}
+
+mfgSalesOrders.post('/:docNo/items', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
+
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue').eq('doc_no', docNo).maybeSingle();
+  if (!header) return c.json({ error: 'not_found' }, 404);
+
+  const qty = Number(it.qty ?? 1);
+  const unit = Number(it.unitPriceCenti ?? 0);
+  const discount = Number(it.discountCenti ?? 0);
+  const lineTotal = (qty * unit) - discount;
+  const lineCost = Number(it.unitCostCenti ?? 0) * qty;
+  const row = {
+    doc_no: docNo,
+    line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
+    debtor_code: header.debtor_code,
+    debtor_name: header.debtor_name,
+    agent: header.agent,
+    item_group: it.itemGroup ?? 'others',
+    item_code: it.itemCode,
+    description: (it.description as string) ?? null,
+    description2: (it.description2 as string) ?? null,
+    uom: (it.uom as string) ?? 'UNIT',
+    qty,
+    unit_price_centi: unit,
+    discount_centi: discount,
+    total_centi: lineTotal,
+    total_inc_centi: lineTotal,
+    balance_centi: lineTotal,
+    venue: header.venue,
+    branding: header.branding,
+    variants: (it.variants as unknown) ?? null,
+    unit_cost_centi: Number(it.unitCostCenti ?? 0),
+    line_cost_centi: lineCost,
+    line_margin_centi: lineTotal - lineCost,
+  };
+  const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  await recomputeTotals(sb, docNo);
+  return c.json({ item: data }, 201);
+});
+
+mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  // Re-derive totals if qty/price/discount changed
+  const { data: prev } = await sb.from('mfg_sales_order_items').select('qty, unit_price_centi, discount_centi, unit_cost_centi').eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+  const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
+  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
+  const unitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : prev.unit_cost_centi;
+  const lineTotal = (qty * unit) - discount;
+  const lineCost = unitCost * qty;
+
+  const updates: Record<string, unknown> = {
+    qty, unit_price_centi: unit, discount_centi: discount, unit_cost_centi: unitCost,
+    total_centi: lineTotal, total_inc_centi: lineTotal, balance_centi: lineTotal,
+    line_cost_centi: lineCost, line_margin_centi: lineTotal - lineCost,
+  };
+  for (const [from, to] of [
+    ['itemCode', 'item_code'], ['itemGroup', 'item_group'], ['description', 'description'],
+    ['description2', 'description2'], ['uom', 'uom'], ['variants', 'variants'],
+    ['remark', 'remark'], ['cancelled', 'cancelled'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+
+  const { error } = await sb.from('mfg_sales_order_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  await recomputeTotals(sb, docNo);
+  return c.json({ ok: true });
+});
+
+mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  await recomputeTotals(sb, docNo);
+  return c.body(null, 204);
+});
+
+// ── Debtor lookup — autocomplete from prior SOs ───────────────────────
+mfgSalesOrders.get('/debtors/search', async (c) => {
+  const sb = c.get('supabase'); const q = c.req.query('q') ?? '';
+  let query = sb.from('mfg_sales_orders').select('debtor_code, debtor_name, phone, address1, address2, address3, address4').order('updated_at', { ascending: false }).limit(200);
+  if (q.trim()) query = query.or(`debtor_name.ilike.%${q}%,debtor_code.ilike.%${q}%`);
+  const { data, error } = await query;
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  // Dedupe by (debtor_code || debtor_name) — keep most recent only.
+  const seen = new Set<string>();
+  const out = [];
+  for (const r of (data ?? []) as Array<Record<string, string | null>>) {
+    const key = (r.debtor_code || r.debtor_name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+    if (out.length >= 25) break;
+  }
+  return c.json({ debtors: out });
+});

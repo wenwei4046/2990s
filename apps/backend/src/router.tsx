@@ -17,6 +17,7 @@ import {
   Grns, PurchaseInvoicesPage, MfgSalesOrdersPage, MfgDeliveryOrdersPage,
   SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage,
 } from './pages/FlowPages';
+import { SalesOrderDetail } from './pages/SalesOrderDetail';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
       { path: 'grns', element: <Grns /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
+      { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
       { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
       { path: 'sales-invoices', element: <SalesInvoicesPage /> },
       { path: 'consignment', element: <ConsignmentPage /> },

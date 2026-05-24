@@ -6,6 +6,7 @@
 // create drawers come in follow-up). 2990s tokens, no Tailwind.
 
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -183,6 +184,7 @@ const MSO_CHIPS: Chip[] = [
 ];
 
 export const MfgSalesOrdersPage = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgSalesOrders(status === 'all' ? undefined : status);
@@ -208,7 +210,11 @@ export const MfgSalesOrdersPage = () => {
           <tbody>
             {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.doc_no}>
+              <tr
+                key={r.doc_no}
+                onClick={() => navigate(`/mfg-sales-orders/${r.doc_no}`)}
+                style={{ cursor: 'pointer' }}
+              >
                 <td><span className={styles.codeChip}>{r.doc_no}</span></td>
                 <td>{r.so_date}</td>
                 <td>{r.debtor_name}</td>

@@ -86,6 +86,7 @@ mfgProducts.patch('/:id', async (c) => {
     costPriceSen?: number | null;
     notes?: string;
     defaultVariants?: unknown;
+    seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }>;
   };
   try {
     body = (await c.req.json()) as typeof body;
@@ -98,7 +99,7 @@ mfgProducts.patch('/:id', async (c) => {
 
   const { data: current, error: loadErr } = await supabase
     .from('mfg_products')
-    .select('code, base_price_sen, price1_sen, cost_price_sen, default_variants')
+    .select('code, base_price_sen, price1_sen, cost_price_sen, default_variants, seat_height_prices')
     .eq('id', id)
     .maybeSingle();
   if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
@@ -121,6 +122,28 @@ mfgProducts.patch('/:id', async (c) => {
   }
   if (body.defaultVariants !== undefined) {
     updates.default_variants = body.defaultVariants;
+  }
+  // Sofa tier matrix — diff per (height × tier) slot so the audit trail
+  // captures each change instead of a single opaque blob write.
+  if (Array.isArray(body.seatHeightPrices)) {
+    updates.seat_height_prices = body.seatHeightPrices;
+
+    type Slot = { height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' };
+    const oldArr = (Array.isArray(current.seat_height_prices)
+      ? (current.seat_height_prices as Slot[])
+      : []);
+    const newArr = body.seatHeightPrices;
+    const keyOf = (s: Slot) => `${s.height}|${s.tier ?? 'PRICE_2'}`;
+    const oldMap = new Map(oldArr.map((s) => [keyOf(s), s.priceSen] as const));
+    const newMap = new Map(newArr.map((s) => [keyOf(s), s.priceSen] as const));
+    const keys = new Set([...oldMap.keys(), ...newMap.keys()]);
+    for (const k of keys) {
+      const oldVal = oldMap.get(k) ?? null;
+      const newVal = newMap.get(k) ?? null;
+      if (oldVal !== newVal) {
+        priceChanges.push({ field: `seat_height:${k}`, oldValueSen: oldVal, newValueSen: newVal });
+      }
+    }
   }
 
   if (Object.keys(updates).length === 1) {

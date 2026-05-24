@@ -34,6 +34,7 @@ import {
 import { Button } from '@2990s/design-system';
 import {
   useMfgProducts,
+  useUpdateMfgProductPrices,
   useMaintenanceConfig,
   useMaintenanceConfigHistory,
   useSaveMaintenanceConfig,
@@ -41,6 +42,8 @@ import {
   type MfgProductRow,
   type MaintenanceConfig,
   type PricedOption,
+  type SeatHeightPrice,
+  type SofaPriceTier,
 } from '../lib/mfg-products-queries';
 import styles from './Products.module.css';
 
@@ -107,13 +110,46 @@ const fmtRm = (sen: number | null): string => {
 const fmtUnit = (milli: number): string =>
   (milli / 1000).toFixed(3);
 
-type Tier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
+type Tier = SofaPriceTier;
 
 const TIER_CHIPS: { value: Tier; label: string }[] = [
   { value: 'PRICE_1', label: 'P1' },
   { value: 'PRICE_2', label: 'P2' },
   { value: 'PRICE_3', label: 'P3' },
 ];
+
+// Look up the priceSen for a given (height, tier) pair. Legacy rows with no
+// `tier` field count as PRICE_2 (HOOKKA's historic default).
+const priceForHeightTier = (
+  arr: SeatHeightPrice[] | null | undefined,
+  height: string,
+  tier: Tier,
+): number | null => {
+  if (!Array.isArray(arr)) return null;
+  const hit = arr.find((p) => p.height === height && (p.tier ?? 'PRICE_2') === tier);
+  return hit ? hit.priceSen : null;
+};
+
+// Replace (or insert) the priceSen for one (height × tier) slot in the array.
+const upsertHeightTier = (
+  arr: SeatHeightPrice[] | null | undefined,
+  height: string,
+  tier: Tier,
+  priceSen: number | null,
+): SeatHeightPrice[] => {
+  const next = Array.isArray(arr) ? [...arr] : [];
+  const idx = next.findIndex(
+    (p) => p.height === height && (p.tier ?? 'PRICE_2') === tier,
+  );
+  if (priceSen == null || priceSen === 0) {
+    if (idx >= 0) next.splice(idx, 1);
+    return next;
+  }
+  const entry: SeatHeightPrice = { height, priceSen, tier };
+  if (idx >= 0) next[idx] = entry;
+  else next.push(entry);
+  return next;
+};
 
 const SkuMasterTab = () => {
   const [category, setCategory] = useState<MfgCategory | 'all'>('all');
@@ -292,16 +328,24 @@ const ProductRow = ({
   sofaSizes: string[];
   tier: Tier;
 }) => {
-  // seat_height_prices is per-size; tier currently affects display only (no
-  // multi-tier data ported yet — we still show the same prices for now).
-  // When tier-specific data lands, switch this lookup to read seat_height_prices
-  // by tier key (e.g. `${tier}_priceSen`).
-  void tier;
-  const priceForSize = (size: string): number | null => {
-    const arr = row.seat_height_prices;
-    if (!Array.isArray(arr)) return null;
-    const hit = arr.find((p) => p.height === size);
-    return hit ? hit.priceSen : null;
+  // Local draft of the seat_height_prices array — buffers user edits before
+  // committing on blur. Reset whenever the row's data changes upstream.
+  const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
+  const [draftBase, setDraftBase] = useState<number | null>(null);
+  const [draftP1, setDraftP1] = useState<number | null>(null);
+  const update = useUpdateMfgProductPrices();
+
+  // The effective array we read from — draft if mid-edit, else the server row.
+  const seatArr = draftSeat ?? row.seat_height_prices ?? [];
+
+  const updateSofaCell = (size: string, newPriceSen: number | null) => {
+    const next = upsertHeightTier(seatArr, size, tier, newPriceSen);
+    setDraftSeat(next);
+    update.mutate({ id: row.id, seatHeightPrices: next });
+  };
+
+  const flushBedframePrice = (field: 'basePriceSen' | 'price1Sen', val: number | null) => {
+    update.mutate({ id: row.id, [field]: val });
   };
 
   return (
@@ -317,10 +361,17 @@ const ProductRow = ({
             {row.base_model ?? '—'}
           </td>
           {sofaSizes.map((s) => {
-            const sen = priceForSize(s);
+            const sen = priceForHeightTier(seatArr, s, tier);
             return (
               <td key={s} className={sen ? styles.price : styles.priceEmpty}>
-                {fmtRm(sen)}
+                {editMode ? (
+                  <PriceInput
+                    valueSen={sen}
+                    onCommit={(v) => updateSofaCell(s, v)}
+                  />
+                ) : (
+                  fmtRm(sen)
+                )}
               </td>
             );
           })}
@@ -329,11 +380,31 @@ const ProductRow = ({
         <>
           <td><span className={styles.catPill}>{row.category}</span></td>
           <td>{row.size_label ?? '—'}</td>
-          <td className={row.base_price_sen ? styles.price : styles.priceEmpty}>
-            {fmtRm(row.base_price_sen)}
+          <td className={(draftBase ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftBase ?? row.base_price_sen}
+                onCommit={(v) => {
+                  setDraftBase(v);
+                  flushBedframePrice('basePriceSen', v);
+                }}
+              />
+            ) : (
+              fmtRm(row.base_price_sen)
+            )}
           </td>
-          <td className={row.price1_sen ? styles.price : styles.priceEmpty}>
-            {fmtRm(row.price1_sen)}
+          <td className={(draftP1 ?? row.price1_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftP1 ?? row.price1_sen}
+                onCommit={(v) => {
+                  setDraftP1(v);
+                  flushBedframePrice('price1Sen', v);
+                }}
+              />
+            ) : (
+              fmtRm(row.price1_sen)
+            )}
           </td>
         </>
       )}
@@ -345,6 +416,52 @@ const ProductRow = ({
         </Button>
       </td>
     </tr>
+  );
+};
+
+/* Compact RM input — accepts blank (= clear). Commits on blur or Enter. */
+const PriceInput = ({
+  valueSen,
+  onCommit,
+}: {
+  valueSen: number | null;
+  onCommit: (v: number | null) => void;
+}) => {
+  const [local, setLocal] = useState<string>(
+    valueSen == null ? '' : (valueSen / 100).toFixed(2),
+  );
+
+  const commit = () => {
+    const trimmed = local.trim();
+    if (trimmed === '') {
+      onCommit(null);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return;
+    onCommit(Math.round(parsed * 100));
+  };
+
+  return (
+    <input
+      type="number"
+      step="0.01"
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      style={{
+        width: 84,
+        textAlign: 'right',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 'var(--fs-13)',
+        background: 'var(--c-cream)',
+        border: '1px solid var(--c-orange)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '3px 6px',
+        outline: 'none',
+      }}
+    />
   );
 };
 

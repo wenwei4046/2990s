@@ -91,6 +91,92 @@ export const useCreateMfgSalesOrder = () => {
   });
 };
 
+export const useUpdateMfgSalesOrderHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, ...body }: { docNo: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/mfg-sales-orders/${docNo}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+    },
+  });
+};
+
+export const useUpdateMfgSalesOrderStatus = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, status }: { docNo: string; status: string }) =>
+      authedFetch<{ salesOrder: unknown }>(`/mfg-sales-orders/${docNo}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+    },
+  });
+};
+
+export const useAddMfgSalesOrderItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, ...item }: { docNo: string } & Record<string, unknown>) =>
+      authedFetch<{ item: unknown }>(`/mfg-sales-orders/${docNo}/items`, {
+        method: 'POST', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+    },
+  });
+};
+
+export const useUpdateMfgSalesOrderItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, itemId, ...item }: { docNo: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/mfg-sales-orders/${docNo}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+    },
+  });
+};
+
+export const useDeleteMfgSalesOrderItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, itemId }: { docNo: string; itemId: string }) =>
+      authedFetch<void>(`/mfg-sales-orders/${docNo}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+    },
+  });
+};
+
+export type DebtorSuggestion = {
+  debtor_code: string | null;
+  debtor_name: string | null;
+  phone: string | null;
+  address1: string | null;
+  address2: string | null;
+  address3: string | null;
+  address4: string | null;
+};
+export const useDebtorSearch = (q: string) => useQuery({
+  queryKey: ['mfg-sales-orders', 'debtors', q],
+  queryFn: () => authedFetch<{ debtors: DebtorSuggestion[] }>(
+    `/mfg-sales-orders/debtors/search${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+  ),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* ── DO (mfg) ─────────────────────────────────────────────────────────── */
 export const useMfgDeliveryOrders = (status?: string) => baseQuery<{ deliveryOrders: any[] }>(['mfg-delivery-orders', status ?? 'all'], `/delivery-orders-mfg${status ? `?status=${status}` : ''}`);
 export const useMfgDeliveryOrderDetail = (id: string | null) => useQuery({
