@@ -21,6 +21,8 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
+import { useProductFabrics } from '../lib/queries';
+import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import styles from './CustomBuilder.module.css';
 
 const ROOM_W_CM = 600;   // 6 m wide
@@ -648,7 +650,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [analyses]);
 
   const allClosed = analyses.every((a) => a.closed);
-  const canAdd = cells.length > 0 && allClosed;
+  // Fabric + colour (spec 2026-05-24) — required before Add-to-Cart, surcharge
+  // folds onto each sofa line.
+  const productFabrics = useProductFabrics(productId);
+  const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
+  const fabricSurcharge = fabricSel?.surcharge ?? 0;
+  const canAdd = cells.length > 0 && allClosed && fabricSel != null;
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
   // offersUpgrade gates the per-seat add button; footrest distinguishes
@@ -679,7 +686,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // Single source of truth for sofa-line labels — see summarizeSofaCells.
       // Note this is also re-derived at cart-render time, so updating the
       // rule here propagates to existing cart items too.
-      const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel);
+      const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
+      const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel) + fabricSuffix;
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
@@ -687,7 +695,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         cells: groupCells,
         depth,
         seatUpgradeLabel: pricing.seatUpgradeLabel ?? null,
-        total: g.finalPrice,
+        // Fabric + colour applies to each sofa line in the build (server
+        // recompute adds the surcharge per line).
+        fabricId: fabricSel?.fabricId,
+        colourId: fabricSel?.colourId,
+        fabricLabel: fabricSel?.fabricLabel,
+        colourLabel: fabricSel?.colourLabel,
+        colourHex: fabricSel?.colourHex ?? undefined,
+        total: g.finalPrice + fabricSurcharge,
         summary,
       };
       addConfigured(snapshot);
@@ -738,6 +753,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             );
           })}
         </div>
+        <FabricColourPicker
+          productFabrics={productFabrics.data ?? []}
+          fabricId={fabricSel?.fabricId ?? null}
+          colourId={fabricSel?.colourId ?? null}
+          onChange={setFabricSel}
+        />
       </aside>
 
       <section className={styles.canvasCol}>
@@ -1257,14 +1278,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
-            <PriceTag amount={priceResult.total} size="lg" />
+            <PriceTag amount={priceResult.total + fabricSurcharge * priceResult.groups.length} size="lg" />
           </div>
           <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
             {!cells.length
               ? 'Add modules to start'
               : !allClosed
                 ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                : 'Add to cart'}
+                : !fabricSel
+                  ? 'Choose a fabric'
+                  : 'Add to cart'}
           </Button>
         </footer>
       </section>
