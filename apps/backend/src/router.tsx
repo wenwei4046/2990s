@@ -12,6 +12,10 @@ import { Products } from './pages/Products';
 import { FabricTracking } from './pages/FabricTracking';
 import { Suppliers } from './pages/Suppliers';
 import { PurchaseOrders } from './pages/PurchaseOrders';
+import {
+  Grns, PurchaseInvoicesPage, MfgSalesOrdersPage, MfgDeliveryOrdersPage,
+  SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage,
+} from './pages/FlowPages';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -28,6 +32,13 @@ export const router = createBrowserRouter([
       { path: 'fabric-tracking', element: <FabricTracking /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'purchase-orders', element: <PurchaseOrders /> },
+      { path: 'grns', element: <Grns /> },
+      { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
+      { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
+      { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
+      { path: 'sales-invoices', element: <SalesInvoicesPage /> },
+      { path: 'consignment', element: <ConsignmentPage /> },
+      { path: 'delivery-returns', element: <DeliveryReturnsPage /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },

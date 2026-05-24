@@ -790,6 +790,442 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
 });
 
 /* ════════════════════════════════════════════════════════════════════════
+   GRN + Purchase Invoice — complete the procurement pipeline (PO → GRN → PI)
+   Migration 0042.
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const grnStatus = pgEnum('grn_status', ['DRAFT', 'POSTED', 'CLOSED']);
+
+export const purchaseInvoiceStatus = pgEnum('purchase_invoice_status', [
+  'DRAFT', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
+]);
+
+export const grns = pgTable('grns', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  grnNumber:         text('grn_number').notNull().unique(),         // 'GRN-2605-001'
+  purchaseOrderId:   uuid('purchase_order_id').notNull().references(() => purchaseOrders.id, { onDelete: 'restrict' }),
+  supplierId:        uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  receivedAt:        date('received_at').notNull().defaultNow(),
+  deliveryNoteRef:   text('delivery_note_ref'),                     // supplier's DO number
+  status:            grnStatus('status').notNull().default('DRAFT'),
+  notes:             text('notes'),
+  postedAt:          timestamp('posted_at', { withTimezone: true }),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPo:       index('idx_grn_po').on(t.purchaseOrderId),
+  idxSupplier: index('idx_grn_supplier').on(t.supplierId),
+  idxStatus:   index('idx_grn_status').on(t.status),
+}));
+
+export const grnItems = pgTable('grn_items', {
+  id:                    uuid('id').primaryKey().defaultRandom(),
+  grnId:                 uuid('grn_id').notNull().references(() => grns.id, { onDelete: 'cascade' }),
+  purchaseOrderItemId:   uuid('purchase_order_item_id').references(() => purchaseOrderItems.id, { onDelete: 'set null' }),
+  materialKind:          materialKind('material_kind').notNull(),
+  materialCode:          text('material_code').notNull(),
+  materialName:          text('material_name').notNull(),
+  qtyReceived:           integer('qty_received').notNull(),
+  qtyAccepted:           integer('qty_accepted').notNull(),
+  qtyRejected:           integer('qty_rejected').notNull().default(0),
+  rejectionReason:       text('rejection_reason'),
+  unitPriceCenti:        integer('unit_price_centi').notNull(),     // snapshot from PO line
+  notes:                 text('notes'),
+  createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxGrn: index('idx_grn_items_grn').on(t.grnId),
+}));
+
+export const purchaseInvoices = pgTable('purchase_invoices', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  invoiceNumber:     text('invoice_number').notNull().unique(),     // 'PI-2605-001' (ours)
+  supplierInvoiceRef: text('supplier_invoice_ref'),                 // supplier's invoice number
+  supplierId:        uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  purchaseOrderId:   uuid('purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  grnId:             uuid('grn_id').references(() => grns.id, { onDelete: 'set null' }),
+  invoiceDate:       date('invoice_date').notNull().defaultNow(),
+  dueDate:           date('due_date'),
+  currency:          currencyCode('currency').notNull().default('MYR'),
+  subtotalCenti:     integer('subtotal_centi').notNull().default(0),
+  taxCenti:          integer('tax_centi').notNull().default(0),
+  totalCenti:        integer('total_centi').notNull().default(0),
+  paidCenti:         integer('paid_centi').notNull().default(0),
+  status:            purchaseInvoiceStatus('status').notNull().default('DRAFT'),
+  notes:             text('notes'),
+  postedAt:          timestamp('posted_at', { withTimezone: true }),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSupplier: index('idx_pi_supplier').on(t.supplierId),
+  idxPo:       index('idx_pi_po').on(t.purchaseOrderId),
+  idxStatus:   index('idx_pi_status').on(t.status),
+}));
+
+export const purchaseInvoiceItems = pgTable('purchase_invoice_items', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  purchaseInvoiceId:   uuid('purchase_invoice_id').notNull().references(() => purchaseInvoices.id, { onDelete: 'cascade' }),
+  grnItemId:           uuid('grn_item_id').references(() => grnItems.id, { onDelete: 'set null' }),
+  materialKind:        materialKind('material_kind').notNull(),
+  materialCode:        text('material_code').notNull(),
+  materialName:        text('material_name').notNull(),
+  qty:                 integer('qty').notNull(),
+  unitPriceCenti:      integer('unit_price_centi').notNull(),
+  lineTotalCenti:      integer('line_total_centi').notNull(),
+  notes:               text('notes'),
+  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPi: index('idx_pi_items_pi').on(t.purchaseInvoiceId),
+}));
+
+/* ════════════════════════════════════════════════════════════════════════
+   B2B Sales: SO → DO → Sales Invoice
+   HOUZS ERP风格 — separate from retail `orders` (which is POS-style).
+   `mfg_sales_orders` because we have two coexisting "sales order" concepts:
+   - retail `orders.id` = 'SO-2045' (POS, 6-lane flow)
+   - mfg `mfg_sales_orders.doc_no` = 'SO-009559' (B2B contract, HOUZS pattern)
+   Migration 0042 (same migration as GRN+PI for atomic deploy).
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const mfgSoStatus = pgEnum('mfg_so_status', [
+  'DRAFT', 'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
+  'DELIVERED', 'INVOICED', 'CLOSED', 'ON_HOLD', 'CANCELLED',
+]);
+
+export const doStatus = pgEnum('do_status', [
+  'DRAFT', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
+  'DELIVERED', 'INVOICED', 'CANCELLED',
+]);
+
+export const salesInvoiceStatus = pgEnum('sales_invoice_status', [
+  'DRAFT', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
+]);
+
+export const mfgSalesOrders = pgTable('mfg_sales_orders', {
+  // Mirrors HOUZS so_headers (doc_no PK as TEXT — human-readable like 'SO-009559')
+  docNo:             text('doc_no').primaryKey(),
+  transferTo:        text('transfer_to'),
+  soDate:            date('so_date').notNull().defaultNow(),
+  branding:          text('branding'),
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name').notNull(),
+  agent:             text('agent'),
+  salesLocation:     text('sales_location'),
+  ref:               text('ref'),
+  poDocNo:           text('po_doc_no'),                            // customer's PO
+  venue:             text('venue'),
+
+  // Address fields (HOUZS pattern — 4 address lines + phone)
+  address1:          text('address1'),
+  address2:          text('address2'),
+  address3:          text('address3'),
+  address4:          text('address4'),
+  phone:             text('phone'),
+
+  // Money breakdown by category (HOUZS pattern, denormalized for fast filter)
+  mattressSofaCenti: integer('mattress_sofa_centi').notNull().default(0),
+  bedframeCenti:     integer('bedframe_centi').notNull().default(0),
+  accessoriesCenti:  integer('accessories_centi').notNull().default(0),
+  othersCenti:       integer('others_centi').notNull().default(0),
+  localTotalCenti:   integer('local_total_centi').notNull().default(0),
+  balanceCenti:      integer('balance_centi').notNull().default(0),
+
+  totalCostCenti:    integer('total_cost_centi').notNull().default(0),
+  totalRevenueCenti: integer('total_revenue_centi').notNull().default(0),
+  totalMarginCenti:  integer('total_margin_centi').notNull().default(0),
+  marginPctBasis:    integer('margin_pct_basis').notNull().default(0), // × 100 (e.g. 23.50% = 2350)
+  lineCount:         integer('line_count').notNull().default(0),
+
+  currency:          currencyCode('currency').notNull().default('MYR'),
+  status:            mfgSoStatus('status').notNull().default('DRAFT'),
+  remark2:           text('remark2'),
+  remark3:           text('remark3'),
+  remark4:           text('remark4'),
+  note:              text('note'),
+  processingDate:    date('processing_date'),
+  salesExemptionExpiry: date('sales_exemption_expiry'),
+
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDate:     index('idx_mso_date').on(t.soDate),
+  idxDebtor:   index('idx_mso_debtor').on(t.debtorCode),
+  idxStatus:   index('idx_mso_status').on(t.status),
+  idxBranding: index('idx_mso_branding').on(t.branding),
+}));
+
+export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
+  // Mirrors HOUZS so_lines
+  id:                uuid('id').primaryKey().defaultRandom(),
+  docNo:             text('doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  lineDate:          date('line_date').notNull().defaultNow(),
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name'),
+  agent:             text('agent'),
+  itemGroup:         text('item_group').notNull(),                 // bedframe/sofa/mattress/accessory/others
+  itemCode:          text('item_code').notNull(),
+  description:       text('description'),
+  description2:      text('description2'),
+  uom:               text('uom').notNull().default('UNIT'),
+  location:          text('location'),
+  qty:               integer('qty').notNull().default(1),
+  unitPriceCenti:    integer('unit_price_centi').notNull().default(0),
+  discountCenti:     integer('discount_centi').notNull().default(0),
+  totalCenti:        integer('total_centi').notNull().default(0),
+  taxCenti:          integer('tax_centi').notNull().default(0),
+  totalIncCenti:     integer('total_inc_centi').notNull().default(0),
+  balanceCenti:      integer('balance_centi').notNull().default(0),
+  paymentStatus:     text('payment_status').notNull().default('Unchecked'),
+  venue:             text('venue'),
+  branding:          text('branding'),
+  remark:            text('remark'),
+  cancelled:         boolean('cancelled').notNull().default(false),
+  variants:          jsonb('variants'),                             // {fabric, gap, divanHeight, legHeight, ...}
+  unitCostCenti:     integer('unit_cost_centi').notNull().default(0),
+  lineCostCenti:     integer('line_cost_centi').notNull().default(0),
+  lineMarginCenti:   integer('line_margin_centi').notNull().default(0),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDoc:       index('idx_mso_items_doc').on(t.docNo),
+  idxItemCode:  index('idx_mso_items_item').on(t.itemCode),
+  idxItemGroup: index('idx_mso_items_group').on(t.itemGroup),
+}));
+
+/* DO — delivery orders (we → customer) */
+export const deliveryOrders = pgTable('delivery_orders', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  doNumber:          text('do_number').notNull().unique(),         // 'DO-2605-001'
+  soDocNo:           text('so_doc_no').references(() => mfgSalesOrders.docNo, { onDelete: 'set null' }),
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name').notNull(),
+  doDate:            date('do_date').notNull().defaultNow(),
+  expectedDeliveryAt: date('expected_delivery_at'),
+  signedAt:          timestamp('signed_at', { withTimezone: true }),
+  deliveredAt:       timestamp('delivered_at', { withTimezone: true }),
+  dispatchedAt:      timestamp('dispatched_at', { withTimezone: true }),
+
+  driverId:          uuid('driver_id').references(() => drivers.id, { onDelete: 'set null' }),
+  driverName:        text('driver_name'),                          // snapshot
+  vehicle:           text('vehicle'),
+  m3Total:           integer('m3_total_milli').notNull().default(0),  // × 1000
+
+  // Address snapshot
+  address1:          text('address1'),
+  address2:          text('address2'),
+  city:              text('city'),
+  state:             text('state'),
+  postcode:          text('postcode'),
+  phone:             text('phone'),
+
+  podR2Key:          text('pod_r2_key'),                           // proof of delivery photo
+  signatureData:     text('signature_data'),                       // base64 png
+  status:            doStatus('status').notNull().default('DRAFT'),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSo:     index('idx_do_so').on(t.soDocNo),
+  idxStatus: index('idx_do_status').on(t.status),
+  idxDate:   index('idx_do_date').on(t.doDate),
+}));
+
+export const deliveryOrderItems = pgTable('delivery_order_items', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  deliveryOrderId:   uuid('delivery_order_id').notNull().references(() => deliveryOrders.id, { onDelete: 'cascade' }),
+  soItemId:          uuid('so_item_id').references(() => mfgSalesOrderItems.id, { onDelete: 'set null' }),
+  itemCode:          text('item_code').notNull(),
+  description:       text('description'),
+  qty:               integer('qty').notNull(),
+  m3Milli:           integer('m3_milli').notNull().default(0),
+  unitPriceCenti:    integer('unit_price_centi').notNull().default(0),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDo: index('idx_do_items_do').on(t.deliveryOrderId),
+}));
+
+/* Sales Invoice — we billing the customer */
+export const salesInvoices = pgTable('sales_invoices', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  invoiceNumber:     text('invoice_number').notNull().unique(),    // 'SI-2605-001'
+  soDocNo:           text('so_doc_no').references(() => mfgSalesOrders.docNo, { onDelete: 'set null' }),
+  deliveryOrderId:   uuid('delivery_order_id').references(() => deliveryOrders.id, { onDelete: 'set null' }),
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name').notNull(),
+  invoiceDate:       date('invoice_date').notNull().defaultNow(),
+  dueDate:           date('due_date'),
+  currency:          currencyCode('currency').notNull().default('MYR'),
+  subtotalCenti:     integer('subtotal_centi').notNull().default(0),
+  discountCenti:     integer('discount_centi').notNull().default(0),
+  taxCenti:          integer('tax_centi').notNull().default(0),
+  totalCenti:        integer('total_centi').notNull().default(0),
+  paidCenti:         integer('paid_centi').notNull().default(0),
+  status:            salesInvoiceStatus('status').notNull().default('DRAFT'),
+  notes:             text('notes'),
+  sentAt:            timestamp('sent_at', { withTimezone: true }),
+  paidAt:            timestamp('paid_at', { withTimezone: true }),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSo:      index('idx_si_so').on(t.soDocNo),
+  idxDebtor:  index('idx_si_debtor').on(t.debtorCode),
+  idxStatus:  index('idx_si_status').on(t.status),
+  idxDueDate: index('idx_si_due_date').on(t.dueDate),
+}));
+
+export const salesInvoiceItems = pgTable('sales_invoice_items', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  salesInvoiceId:    uuid('sales_invoice_id').notNull().references(() => salesInvoices.id, { onDelete: 'cascade' }),
+  soItemId:          uuid('so_item_id').references(() => mfgSalesOrderItems.id, { onDelete: 'set null' }),
+  itemCode:          text('item_code').notNull(),
+  description:       text('description'),
+  qty:               integer('qty').notNull(),
+  unitPriceCenti:    integer('unit_price_centi').notNull().default(0),
+  discountCenti:     integer('discount_centi').notNull().default(0),
+  taxCenti:          integer('tax_centi').notNull().default(0),
+  lineTotalCenti:    integer('line_total_centi').notNull().default(0),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSi: index('idx_si_items_si').on(t.salesInvoiceId),
+}));
+
+/* ════════════════════════════════════════════════════════════════════════
+   Consignment (stock at customer branch) + Delivery Return
+   Migration 0042 (same).
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const consignmentStatus = pgEnum('consignment_status', [
+  'AT_BRANCH',  // stock physically at customer's place, ours
+  'SOLD',       // customer reports sold, we invoice
+  'RETURNED',   // pulled back, restocked
+  'DAMAGED',    // written off
+]);
+
+export const consignmentNoteType = pgEnum('consignment_note_type', ['OUT', 'RETURN']);
+
+export const deliveryReturnStatus = pgEnum('delivery_return_status', [
+  'PENDING',      // customer flagged, not yet picked up
+  'RECEIVED',     // back in warehouse
+  'INSPECTED',    // QC done
+  'REFUNDED',     // money back
+  'CREDIT_NOTED', // credit note issued instead of cash refund
+  'REJECTED',     // return denied
+]);
+
+/* Consignment orders — stock placed at a customer branch */
+export const consignmentOrders = pgTable('consignment_orders', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  consignmentNumber: text('consignment_number').notNull().unique(),  // 'CO-2605-001'
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name').notNull(),
+  branchLocation:    text('branch_location'),                        // physical site
+  placedAt:          date('placed_at').notNull().defaultNow(),
+  notes:             text('notes'),
+  status:            consignmentStatus('status').notNull().default('AT_BRANCH'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDebtor: index('idx_co_debtor').on(t.debtorCode),
+  idxStatus: index('idx_co_status').on(t.status),
+}));
+
+export const consignmentOrderItems = pgTable('consignment_order_items', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  consignmentOrderId:  uuid('consignment_order_id').notNull().references(() => consignmentOrders.id, { onDelete: 'cascade' }),
+  itemCode:            text('item_code').notNull(),
+  description:         text('description'),
+  qtyPlaced:           integer('qty_placed').notNull(),
+  qtySold:             integer('qty_sold').notNull().default(0),
+  qtyReturned:         integer('qty_returned').notNull().default(0),
+  qtyDamaged:          integer('qty_damaged').notNull().default(0),
+  unitPriceCenti:      integer('unit_price_centi').notNull().default(0),
+  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxCo: index('idx_co_items_co').on(t.consignmentOrderId),
+}));
+
+/* Consignment notes — movement receipts (OUT when placed, RETURN when pulled) */
+export const consignmentNotes = pgTable('consignment_notes', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  noteNumber:          text('note_number').notNull().unique(),       // 'CN-2605-001'
+  consignmentOrderId:  uuid('consignment_order_id').notNull().references(() => consignmentOrders.id, { onDelete: 'restrict' }),
+  noteType:            consignmentNoteType('note_type').notNull(),
+  noteDate:            date('note_date').notNull().defaultNow(),
+  driverId:            uuid('driver_id').references(() => drivers.id, { onDelete: 'set null' }),
+  driverName:          text('driver_name'),
+  vehicle:             text('vehicle'),
+  signedAt:            timestamp('signed_at', { withTimezone: true }),
+  signatureData:       text('signature_data'),
+  notes:               text('notes'),
+  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:           uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+}, (t) => ({
+  idxCo:   index('idx_cn_co').on(t.consignmentOrderId),
+  idxType: index('idx_cn_type').on(t.noteType),
+}));
+
+export const consignmentNoteItems = pgTable('consignment_note_items', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  consignmentNoteId:   uuid('consignment_note_id').notNull().references(() => consignmentNotes.id, { onDelete: 'cascade' }),
+  consignmentItemId:   uuid('consignment_item_id').references(() => consignmentOrderItems.id, { onDelete: 'set null' }),
+  itemCode:            text('item_code').notNull(),
+  description:         text('description'),
+  qty:                 integer('qty').notNull(),
+  notes:               text('notes'),
+  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxCn: index('idx_cn_items_cn').on(t.consignmentNoteId),
+}));
+
+/* Delivery Return — customer returning previously-delivered goods */
+export const deliveryReturns = pgTable('delivery_returns', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  returnNumber:      text('return_number').notNull().unique(),       // 'DR-2605-001'
+  deliveryOrderId:   uuid('delivery_order_id').references(() => deliveryOrders.id, { onDelete: 'set null' }),
+  salesInvoiceId:    uuid('sales_invoice_id').references(() => salesInvoices.id, { onDelete: 'set null' }),
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name').notNull(),
+  returnDate:        date('return_date').notNull().defaultNow(),
+  reason:            text('reason'),
+  status:            deliveryReturnStatus('status').notNull().default('PENDING'),
+  receivedAt:        timestamp('received_at', { withTimezone: true }),
+  inspectedAt:       timestamp('inspected_at', { withTimezone: true }),
+  refundedAt:        timestamp('refunded_at', { withTimezone: true }),
+  refundCenti:       integer('refund_centi').notNull().default(0),
+  inspectionNotes:   text('inspection_notes'),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDo:     index('idx_dr_do').on(t.deliveryOrderId),
+  idxStatus: index('idx_dr_status').on(t.status),
+  idxDebtor: index('idx_dr_debtor').on(t.debtorCode),
+}));
+
+export const deliveryReturnItems = pgTable('delivery_return_items', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  deliveryReturnId:    uuid('delivery_return_id').notNull().references(() => deliveryReturns.id, { onDelete: 'cascade' }),
+  doItemId:            uuid('do_item_id').references(() => deliveryOrderItems.id, { onDelete: 'set null' }),
+  itemCode:            text('item_code').notNull(),
+  description:         text('description'),
+  qtyReturned:         integer('qty_returned').notNull(),
+  condition:           text('condition'),                            // 'NEW', 'DAMAGED', 'DEFECT'
+  unitPriceCenti:      integer('unit_price_centi').notNull().default(0),
+  refundCenti:         integer('refund_centi').notNull().default(0),
+  notes:               text('notes'),
+  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDr: index('idx_dr_items_dr').on(t.deliveryReturnId),
+}));
+
+/* ════════════════════════════════════════════════════════════════════════
    Manufacturing modules — ported from HOOKKA ERP (2026-05-24)
    ────────────────────────────────────────────────────────────────────────
    Coexists with retail `products` table:
