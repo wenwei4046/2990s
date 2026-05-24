@@ -16,6 +16,7 @@ import {
   summarizeSofaCells,
   describeSofaLine,
   fabricSurchargeFor,
+  fabricColourSuffix,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -678,5 +679,16 @@ describe('fabricSurchargeFor', () => {
 
   it('handles a Model with no fabrics array', () => {
     expect(fabricSurchargeFor(pricing(), 'velvet')).toBe(0);
+  });
+});
+
+describe('fabricColourSuffix', () => {
+  it('formats fabric + colour', () => {
+    expect(fabricColourSuffix('Velvet', 'Sand')).toBe(' · Velvet / Sand');
+  });
+  it('returns empty when either is missing', () => {
+    expect(fabricColourSuffix(null, null)).toBe('');
+    expect(fabricColourSuffix('Velvet', null)).toBe('');
+    expect(fabricColourSuffix(undefined, 'Sand')).toBe('');
   });
 });

@@ -563,6 +563,13 @@ export const fabricSurchargeFor = (
   return f?.surcharge ?? 0;
 };
 
+/** Display-only " · <fabric> / <colour>" suffix for an invoice / cart sofa line.
+ *  Empty string when either label is missing. */
+export const fabricColourSuffix = (
+  fabricLabel?: string | null,
+  colourLabel?: string | null,
+): string => (fabricLabel && colourLabel ? ` · ${fabricLabel} / ${colourLabel}` : '');
+
 const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): SofaGroupPrice => {
   const cellIds = group.map((c, i) => c.id ?? `__cell_${i}`);
   const modIds = group.map((c) => c.moduleId);
