@@ -245,7 +245,7 @@ export const products = pgTable('products', {
   pricingConsistency: check('pricing_consistency', sql`
     (${t.pricingKind} = 'flat'         AND ${t.flatPrice} IS NOT NULL) OR
     (${t.pricingKind} = 'sofa_build'   AND ${t.reclinerUpgradePrice} IS NOT NULL) OR
-    (${t.pricingKind} IN ('size_variants','tbc'))
+    (${t.pricingKind} IN ('size_variants','bedframe_build','tbc'))
   `),
 }));
 
