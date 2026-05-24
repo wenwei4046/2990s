@@ -12,6 +12,11 @@ import {
   useGrns, usePurchaseInvoices, useMfgSalesOrders, useMfgDeliveryOrders,
   useSalesInvoices, useConsignments, useDeliveryReturns,
 } from '../lib/flow-queries';
+import {
+  CreateGrnDrawer, CreatePurchaseInvoiceDrawer, CreateSalesOrderDrawer,
+  CreateDeliveryOrderDrawer, CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
+  CreateDeliveryReturnDrawer,
+} from './FlowDrawers';
 import styles from './FlowPages.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -84,7 +89,7 @@ export const Grns = () => {
         title="Goods Receipt Notes"
         subtitle="GRN — receive stock against PO"
         newLabel="New GRN"
-        onNew={() => alert('New GRN — pick a PO + qty per item. (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} GRN`}</p>
@@ -109,6 +114,7 @@ export const Grns = () => {
             )}
           </tbody>
         </table>
+      {open && <CreateGrnDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
@@ -133,7 +139,7 @@ export const PurchaseInvoicesPage = () => {
         title="Purchase Invoices"
         subtitle="Supplier invoices to us"
         newLabel="New Invoice"
-        onNew={() => alert('New Purchase Invoice — pick supplier + GRN + items. (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={PI_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} invoices`}</p>
@@ -158,6 +164,7 @@ export const PurchaseInvoicesPage = () => {
             )}
           </tbody>
         </table>
+      {open && <CreatePurchaseInvoiceDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
@@ -184,7 +191,7 @@ export const MfgSalesOrdersPage = () => {
         title="Sales Orders (B2B)"
         subtitle="Manufacturer sales orders — HOUZS pattern, separate from retail POS orders"
         newLabel="New SO"
-        onNew={() => alert('New Sales Order — full HOUZS-style modal (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={MSO_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} sales orders`}</p>
@@ -214,6 +221,7 @@ export const MfgSalesOrdersPage = () => {
             )}
           </tbody>
         </table>
+      {open && <CreateSalesOrderDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
@@ -240,7 +248,7 @@ export const MfgDeliveryOrdersPage = () => {
         title="Delivery Orders"
         subtitle="DO — deliveries to customer"
         newLabel="New DO"
-        onNew={() => alert('New DO — pick SO + items + driver (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={DO_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} delivery orders`}</p>
@@ -268,6 +276,7 @@ export const MfgDeliveryOrdersPage = () => {
             )}
           </tbody>
         </table>
+      {open && <CreateDeliveryOrderDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
@@ -293,7 +302,7 @@ export const SalesInvoicesPage = () => {
         title="Sales Invoices"
         subtitle="Customer invoices from us"
         newLabel="New Invoice"
-        onNew={() => alert('New Sales Invoice — pick SO/DO + items (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={SI_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} invoices`}</p>
@@ -323,6 +332,7 @@ export const SalesInvoicesPage = () => {
             )}
           </tbody>
         </table>
+      {open && <CreateSalesInvoiceDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
@@ -347,7 +357,7 @@ export const ConsignmentPage = () => {
         title="Consignment"
         subtitle="Stock placed at customer branches — sells through / returns / damaged"
         newLabel="New Consignment"
-        onNew={() => alert('New Consignment — pick customer + branch + items (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={CO_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} consignments`}</p>
@@ -371,6 +381,7 @@ export const ConsignmentPage = () => {
             )}
           </tbody>
         </table>
+      {open && <CreateConsignmentDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
@@ -397,7 +408,7 @@ export const DeliveryReturnsPage = () => {
         title="Delivery Returns"
         subtitle="Customer returning previously-delivered goods"
         newLabel="New Return"
-        onNew={() => alert('New Delivery Return — pick DO + items + reason (drawer wiring to come)')}
+        onNew={() => setOpen(true)}
       />
       <StatusChips chips={DR_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} returns`}</p>
@@ -426,6 +437,7 @@ export const DeliveryReturnsPage = () => {
             )}
           </tbody>
         </table>
+      {open && <CreateDeliveryReturnDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );
