@@ -162,6 +162,92 @@
   background: var(--c-cream);
 }
 
+/* Compact variant — tightens rows so a sofa Model fits across one line
+   instead of the wrap-heavy 80px tall default. Used when colsCount > 8. */
+.tableCompact tbody td {
+  padding: var(--space-3) var(--space-3);   /* 12px vs default 16px */
+  font-size: var(--fs-13);                    /* 13px vs 14 */
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.tableCompact thead th {
+  padding: var(--space-2) var(--space-3);
+}
+
+.rowCompact td {
+  vertical-align: middle;
+}
+
+.nameCompact {
+  font-weight: 600;
+  color: var(--c-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+.nameSubCompact {
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+/* TIER P1 / P2 / P3 toggle (sofa view only). Matches the SkuMaster header
+   "control segment" pill cluster — neutral surface + active ink. */
+.tierGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-3);
+}
+
+.tierLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.tierChips {
+  display: inline-flex;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  gap: 2px;
+}
+
+.tierChip {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  min-width: 36px;
+}
+
+.tierChip:hover {
+  color: var(--c-ink);
+}
+
+.tierChip[data-active='true'] {
+  background: var(--c-ink);
+  color: var(--c-cream);
+}
+
 .codeChip {
   display: inline-block;
   font-family: var(--font-mono);

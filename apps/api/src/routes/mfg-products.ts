@@ -35,9 +35,9 @@ mfgProducts.get('/', async (c) => {
   let q = supabase
     .from('mfg_products')
     .select(
-      'id, code, name, category, description, size_label, base_price_sen, price1_sen, ' +
+      'id, code, name, category, description, base_model, size_label, base_price_sen, price1_sen, ' +
         'unit_m3_milli, fabric_usage_centi, production_time_minutes, status, sku_code, ' +
-        'fabric_color, sub_assemblies, pieces, default_variants, updated_at',
+        'fabric_color, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
     )
     .eq('status', 'ACTIVE')
     .order('code', { ascending: true });

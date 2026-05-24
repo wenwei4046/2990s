@@ -105,20 +105,32 @@ const fmtRm = (sen: number | null): string => {
 const fmtUnit = (milli: number): string =>
   (milli / 1000).toFixed(3);
 
-const fmtFabric = (centi: number): string =>
-  centi === 0 ? '—' : `${(centi / 100).toFixed(0)} m`;
+type Tier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
+
+const TIER_CHIPS: { value: Tier; label: string }[] = [
+  { value: 'PRICE_1', label: 'P1' },
+  { value: 'PRICE_2', label: 'P2' },
+  { value: 'PRICE_3', label: 'P3' },
+];
 
 const SkuMasterTab = () => {
   const [category, setCategory] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [editMode, setEditMode] = useState(false);
+  const [tier, setTier] = useState<Tier>('PRICE_2');
 
   const { data: products, isLoading, error } = useMfgProducts({
     category: category === 'all' ? undefined : category,
     search: search.trim() || undefined,
   });
+  const config = useMaintenanceConfig('master');
 
   const rows = useMemo(() => products ?? [], [products]);
+  const isSofaView = category === 'SOFA';
+  const sofaSizes = config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
+
+  // Total column count (header colspan for loading/empty states)
+  const colCount = 3 + (isSofaView ? 1 + sofaSizes.length : 2 + 2) + 1 + 1; // code + desc + (model+sizes OR cat+size+P2+P1) + unit + variants
 
   return (
     <>
@@ -162,6 +174,24 @@ const SkuMasterTab = () => {
             <Edit3 {...ICON_PROPS} />
             <span>{editMode ? 'Cancel' : 'Edit Prices'}</span>
           </Button>
+          {isSofaView && (
+            <div className={styles.tierGroup}>
+              <span className={styles.tierLabel}>TIER</span>
+              <div className={styles.tierChips}>
+                {TIER_CHIPS.map((t) => (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => setTier(t.value)}
+                    data-active={tier === t.value}
+                    className={styles.tierChip}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -171,8 +201,6 @@ const SkuMasterTab = () => {
           : `${rows.length} products · Production configs from SKU sheet`}
       </p>
 
-      {/* Error banner — surface API failures (e.g. table not migrated yet) so
-          the page doesn't look like an infinite spinner. */}
       {error && !isLoading && (
         <div className={styles.bannerWarn}>
           <strong>Failed to load products.</strong>{' '}
@@ -185,35 +213,51 @@ const SkuMasterTab = () => {
       )}
 
       <div className={styles.tableCard}>
-        <table className={styles.table}>
+        <table className={`${styles.table} ${styles.tableCompact}`}>
           <thead>
             <tr>
               <th>Product Code</th>
               <th>Description</th>
-              <th>Category</th>
-              <th>Size</th>
-              <th style={{ textAlign: 'right' }}>Price 2</th>
-              <th style={{ textAlign: 'right' }}>Price 1</th>
+              {isSofaView ? (
+                <>
+                  <th>Model</th>
+                  {sofaSizes.map((s) => (
+                    <th key={s} style={{ textAlign: 'right' }}>{s}</th>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <th>Category</th>
+                  <th>Size</th>
+                  <th style={{ textAlign: 'right' }}>Price 2</th>
+                  <th style={{ textAlign: 'right' }}>Price 1</th>
+                </>
+              )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
-              <th style={{ textAlign: 'right' }}>Fabric</th>
-              <th style={{ textAlign: 'right' }}>Total Min</th>
               <th>Variants</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
                   Loading products…
                 </td>
               </tr>
             )}
             {!isLoading && rows.map((row) => (
-              <ProductRow key={row.id} row={row} editMode={editMode} />
+              <ProductRow
+                key={row.id}
+                row={row}
+                editMode={editMode}
+                isSofaView={isSofaView}
+                sofaSizes={sofaSizes}
+                tier={tier}
+              />
             ))}
             {!isLoading && !error && rows.length === 0 && (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
+                <td colSpan={colCount} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-7)' }}>
                   <Package size={32} strokeWidth={1.5} />
                   <div style={{ marginTop: 8 }}>No products yet.</div>
                   <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
@@ -227,7 +271,7 @@ const SkuMasterTab = () => {
         {!isLoading && !error && (
           <div className={styles.tableFoot}>
             <span className={styles.eyebrow}>
-              Showing {rows.length} of {rows.length}
+              Record 1 of {rows.length}
             </span>
             <span className={styles.eyebrow}>{rows.length} total products</span>
           </div>
@@ -237,28 +281,61 @@ const SkuMasterTab = () => {
   );
 };
 
-const ProductRow = ({ row, editMode }: { row: MfgProductRow; editMode: boolean }) => {
+const ProductRow = ({
+  row, editMode, isSofaView, sofaSizes, tier,
+}: {
+  row: MfgProductRow;
+  editMode: boolean;
+  isSofaView: boolean;
+  sofaSizes: string[];
+  tier: Tier;
+}) => {
+  // seat_height_prices is per-size; tier currently affects display only (no
+  // multi-tier data ported yet — we still show the same prices for now).
+  // When tier-specific data lands, switch this lookup to read seat_height_prices
+  // by tier key (e.g. `${tier}_priceSen`).
+  void tier;
+  const priceForSize = (size: string): number | null => {
+    const arr = row.seat_height_prices;
+    if (!Array.isArray(arr)) return null;
+    const hit = arr.find((p) => p.height === size);
+    return hit ? hit.priceSen : null;
+  };
+
   return (
-    <tr>
+    <tr className={styles.rowCompact}>
       <td><span className={styles.codeChip}>{row.code}</span></td>
       <td>
-        <div className={styles.nameMain}>{row.name}</div>
-        {row.description && <div className={styles.nameSub}>{row.description}</div>}
+        <div className={styles.nameCompact}>{row.name}</div>
+        {row.description && <div className={styles.nameSubCompact}>{row.description}</div>}
       </td>
-      <td><span className={styles.catPill}>{row.category}</span></td>
-      <td>{row.size_label ?? '—'}</td>
-      <td className={row.base_price_sen ? styles.price : styles.priceEmpty}>
-        {fmtRm(row.base_price_sen)}
-      </td>
-      <td className={row.price1_sen ? styles.price : styles.priceEmpty}>
-        {fmtRm(row.price1_sen)}
-      </td>
+      {isSofaView ? (
+        <>
+          <td className={styles.numCellMuted} style={{ textAlign: 'left' }}>
+            {row.base_model ?? '—'}
+          </td>
+          {sofaSizes.map((s) => {
+            const sen = priceForSize(s);
+            return (
+              <td key={s} className={sen ? styles.price : styles.priceEmpty}>
+                {fmtRm(sen)}
+              </td>
+            );
+          })}
+        </>
+      ) : (
+        <>
+          <td><span className={styles.catPill}>{row.category}</span></td>
+          <td>{row.size_label ?? '—'}</td>
+          <td className={row.base_price_sen ? styles.price : styles.priceEmpty}>
+            {fmtRm(row.base_price_sen)}
+          </td>
+          <td className={row.price1_sen ? styles.price : styles.priceEmpty}>
+            {fmtRm(row.price1_sen)}
+          </td>
+        </>
+      )}
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
-      <td className={styles.numCell}>{fmtFabric(row.fabric_usage_centi)}</td>
-      <td className={styles.numCellMuted}>
-        {row.production_time_minutes}
-        <span className={styles.minSuffix}>min</span>
-      </td>
       <td>
         <Button variant="ghost" size="sm" disabled={editMode}>
           <Settings2 {...ICON_PROPS} />
