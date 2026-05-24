@@ -175,6 +175,84 @@ export const useProductCompartments = (productId: string | undefined) =>
     },
   });
 
+/* ─── Sofa fabric & colour (spec 2026-05-24) ─── */
+
+export interface FabricLibraryRow {
+  id: string;
+  label: string;
+  tier: string;
+  defaultSurcharge: number;
+  active: boolean;
+  sortOrder: number;
+}
+export interface FabricColourRow {
+  fabricId: string;
+  colourId: string;
+  label: string;
+  swatchHex: string | null;
+  active: boolean;
+  sortOrder: number;
+}
+export interface ProductFabricRow {
+  fabricId: string;
+  active: boolean;
+  surcharge: number;
+}
+
+// Global fabric collection (active only) — drives the POS swatch palette.
+export const useFabricLibrary = () =>
+  useQuery({
+    queryKey: ['fabric-library'],
+    queryFn: async (): Promise<FabricLibraryRow[]> => {
+      const { data, error } = await supabase
+        .from('fabric_library')
+        .select('id, label, tier, default_surcharge, active, sort_order')
+        .eq('active', true)
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id, label: r.label, tier: r.tier, defaultSurcharge: r.default_surcharge,
+        active: r.active, sortOrder: r.sort_order,
+      }));
+    },
+  });
+
+// All active colours (global, small) — filtered per fabric in the picker.
+export const useFabricColours = () =>
+  useQuery({
+    queryKey: ['fabric-colours'],
+    queryFn: async (): Promise<FabricColourRow[]> => {
+      const { data, error } = await supabase
+        .from('fabric_colours')
+        .select('fabric_id, colour_id, label, swatch_hex, active, sort_order')
+        .eq('active', true)
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        fabricId: r.fabric_id, colourId: r.colour_id, label: r.label,
+        swatchHex: r.swatch_hex, active: r.active, sortOrder: r.sort_order,
+      }));
+    },
+  });
+
+// Per-Model fabric availability + surcharge.
+export const useProductFabrics = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['product', productId, 'fabrics'],
+    queryFn: async (): Promise<ProductFabricRow[]> => {
+      if (!productId) throw new Error('no productId');
+      const { data, error } = await supabase
+        .from('product_fabrics')
+        .select('fabric_id, active, surcharge')
+        .eq('product_id', productId);
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        fabricId: r.fabric_id, active: r.active, surcharge: r.surcharge,
+      }));
+    },
+  });
+
 export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
@@ -313,6 +391,11 @@ export const useProductPricingRealtime = (productId: string | undefined) => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'product_compartments', filter: `product_id=eq.${productId}` },
         () => void qc.invalidateQueries({ queryKey: ['product', productId, 'compartments'] }),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_fabrics', filter: `product_id=eq.${productId}` },
+        () => void qc.invalidateQueries({ queryKey: ['product', productId, 'fabrics'] }),
       )
       .on(
         'postgres_changes',

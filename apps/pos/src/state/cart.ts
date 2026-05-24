@@ -20,8 +20,16 @@ export interface SofaConfigSnapshot {
   /** Upgrade footrest flag. false = auto-included headrest → invoice shows
    *  "+ N <label>" on a quick-pick line (F3). */
   seatUpgradeFootrest?: boolean;
+  /** Chosen upholstery fabric + colour (spec 2026-05-24). fabricId/colourId
+   *  feed the order POST (server validates + prices); the labels + hex are
+   *  display snapshots so the cart/invoice render without a DB join. */
+  fabricId?: string;
+  colourId?: string;
+  fabricLabel?: string;
+  colourLabel?: string;
+  colourHex?: string;
   total: number;
-  summary: string;       // e.g. "3+L · Bundle"
+  summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
 
 export interface SizeConfigSnapshot {
