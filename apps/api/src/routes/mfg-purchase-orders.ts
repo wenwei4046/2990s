@@ -139,7 +139,7 @@ mfgPurchaseOrders.post('/', async (c) => {
     };
   });
 
-  const { data: header, error: hErr } = await supabase
+  const { data: headerData, error: hErr } = await supabase
     .from('purchase_orders')
     .insert({
       po_number: poNumber,
@@ -160,6 +160,11 @@ mfgPurchaseOrders.post('/', async (c) => {
     if (hErr.code === '42501') return c.json({ error: 'forbidden', reason: hErr.message }, 403);
     return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   }
+
+  // Cast through `unknown` — Supabase JS without generated types returns
+  // `GenericStringError` from `.select(string).single()` even when data is
+  // populated. Project-wide pattern; see apps/api/src/routes/admin.ts L97.
+  const header = headerData as unknown as { id: string; po_number: string };
 
   const itemsToInsert = itemRows.map((r) => ({ ...r, purchase_order_id: header.id }));
   const { error: iErr } = await supabase.from('purchase_order_items').insert(itemsToInsert);
