@@ -234,7 +234,7 @@ const SupplierDrawer = ({
 
 const CreateForm = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateSupplier();
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<Record<string, string | number>>({
     code: '',
     name: '',
     contactPerson: '',
@@ -247,17 +247,19 @@ const CreateForm = ({ onClose }: { onClose: () => void }) => {
     rating: 0,
     notes: '',
   });
-  const onChange = (k: keyof typeof form, v: string | number) => setForm((s) => ({ ...s, [k]: v }));
+  const onChange = (k: string, v: string | number) => setForm((s) => ({ ...s, [k]: v }));
 
   const submit = () => {
-    if (!form.code.trim() || !form.name.trim()) {
+    const code = String(form.code ?? '').trim();
+    const name = String(form.name ?? '').trim();
+    if (!code || !name) {
       alert('Code and Name are required.');
       return;
     }
     create.mutate({
       ...form,
       rating: Number(form.rating) || 0,
-    } as Partial<SupplierRow>, { onSuccess: onClose });
+    } as unknown as Partial<SupplierRow>, { onSuccess: onClose });
   };
 
   return (
@@ -325,7 +327,7 @@ const EditForm = ({
   return (
     <>
       <div className={styles.drawerBody}>
-        <SupplierFields form={value as never} onChange={onChange as never} />
+        <SupplierFields form={value} onChange={onChange} />
         <BindingsSection supplierId={supplierId} bindings={bindings} />
       </div>
       <footer className={styles.drawerFooter}>
