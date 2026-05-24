@@ -516,3 +516,64 @@ describe('POST /orders installmentMonths', () => {
     expect(rpcCapture.last?.args?.p?.installmentMonths).toBe(12);
   });
 });
+
+describe('POST /orders — sofa fabric surcharge (spec 2026-05-24)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const SOFA_ID = PRODUCT_ID;
+  const sofaRow = {
+    id: SOFA_ID, category_id: 'sofa', pricing_kind: 'sofa_build',
+    flat_price: null, recliner_upgrade_price: 0,
+  };
+
+  function sofaFabricBody(fabricId: string, colourId: string, clientTotal: number) {
+    return {
+      customer: { name: 'Test Customer', phone: '0123456789', address: '123 Test Lane' },
+      paymentMethod: 'merchant' as const,
+      merchantProvider: 'GHL' as const,
+      approvalCode: 'TEST123',
+      lines: [{
+        qty: 1,
+        config: { kind: 'sofa' as const, productId: SOFA_ID, bundleId: '2S', depth: '24', fabricId, colourId },
+      }],
+      clientTotal,
+    };
+  }
+
+  const fabricHandlers = {
+    staff: () => ({ data: salesStaffRow, error: null }),
+    products: () => ({ data: [sofaRow], error: null }),
+    product_compartments: () => ({ data: [], error: null }),
+    product_bundles: () => ({ data: [{ product_id: SOFA_ID, bundle_id: '2S', active: true, price: 1990 }], error: null }),
+    product_size_variants: () => ({ data: [], error: null }),
+    product_fabrics: () => ({ data: [{ product_id: SOFA_ID, fabric_id: 'velvet', active: true, surcharge: 300 }], error: null }),
+    fabric_colours: () => ({ data: [{ fabric_id: 'velvet', colour_id: 'sand', active: true }], error: null }),
+    addons: () => ({ data: [], error: null }),
+    delivery_fee_config: defaultDeliveryFeeCfg,
+  };
+
+  it('folds the active fabric surcharge into the recomputed total', async () => {
+    const rpcCapture: { last?: { name: string; args: any } } = {};
+    const supabase = createMockSupabase(fabricHandlers, rpcCapture, { data: 'SO-2052', error: null });
+    const app = buildApp(supabase);
+    // 1990 bundle + 300 velvet surcharge + 250 delivery base = 2540.
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(sofaFabricBody('velvet', 'sand', 2540)),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(rpcCapture.last?.args?.p?.total).toBe(2540);
+  });
+
+  it('rejects a colour that does not belong to the chosen fabric (422)', async () => {
+    const supabase = createMockSupabase(fabricHandlers, {}, { data: 'SO-2053', error: null });
+    const app = buildApp(supabase);
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify(sofaFabricBody('velvet', 'charcoal', 2540)),
+    }, baseEnv);
+    expect(res.status).toBe(422);
+  });
+});

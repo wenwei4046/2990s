@@ -2,6 +2,7 @@ import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import {
   useBundleLibrary,
   useCompartmentLibrary,
+  useFabricLibrary,
   useSizeLibrary,
   type CompartmentLibrary,
 } from '../lib/queries';
@@ -16,6 +17,7 @@ interface SkuFormData {
   depthOptions?: string | null;
   compartments?: { compartmentId: string; active: boolean; price: number }[];
   bundles?: { bundleId: string; active: boolean; price: number }[];
+  fabrics?: { fabricId: string; active: boolean; surcharge: number }[];
   sizes?: { sizeId: string; active: boolean; price: number }[];
   flatPrice?: number;
 }
@@ -96,25 +98,30 @@ const SofaEditor = () => {
   const { control, setValue, formState: { errors } } = useFormContext<SkuFormData>();
   const compartments = useWatch({ control, name: 'compartments' }) ?? [];
   const bundles = useWatch({ control, name: 'bundles' }) ?? [];
-  // Surfaces the superRefine() error from productSchema when admin tries to
-  // save with 0 active+priced bundles. Cleared automatically on next submit.
+  const fabrics = useWatch({ control, name: 'fabrics' }) ?? [];
+  // Surfaces the superRefine() errors from productSchema when admin tries to
+  // save with 0 active bundles / fabrics. Cleared automatically on next submit.
   const bundlesErr = (errors as { bundles?: { message?: string } }).bundles?.message;
+  const fabricsErr = (errors as { fabrics?: { message?: string } }).fabrics?.message;
 
   const compLib = useCompartmentLibrary();
   const bundleLib = useBundleLibrary();
+  const fabricLib = useFabricLibrary();
 
-  if (compLib.isLoading || bundleLib.isLoading) {
+  if (compLib.isLoading || bundleLib.isLoading || fabricLib.isLoading) {
     return <section className={styles.section}><p className="t-body fg-muted">Loading library…</p></section>;
   }
-  if (compLib.error || bundleLib.error) {
-    return <section className={styles.section}><p className={styles.error}>Failed to load compartment / bundle library.</p></section>;
+  if (compLib.error || bundleLib.error || fabricLib.error) {
+    return <section className={styles.section}><p className={styles.error}>Failed to load compartment / bundle / fabric library.</p></section>;
   }
 
   const lib = compLib.data ?? [];
   const blib = bundleLib.data ?? [];
+  const flib = fabricLib.data ?? [];
 
   const activeC = compartments.filter((c) => c.active).length;
   const activeB = bundles.filter((b) => b.active).length;
+  const activeF = fabrics.filter((f) => f.active).length;
 
   const setCompField = (i: number, patch: Partial<{ active: boolean; price: number }>) => {
     const next = compartments.map((c, idx) => (idx === i ? { ...c, ...patch } : c));
@@ -138,13 +145,20 @@ const SofaEditor = () => {
       { shouldDirty: true },
     );
   };
+  const setFabricField = (i: number, patch: Partial<{ active: boolean; surcharge: number }>) => {
+    const next = fabrics.map((f, idx) => (idx === i ? { ...f, ...patch } : f));
+    setValue('fabrics', next, { shouldDirty: true });
+  };
+  const bulkFabric = (active: boolean) => {
+    setValue('fabrics', fabrics.map((f) => ({ ...f, active })), { shouldDirty: true });
+  };
 
   return (
     <section className={styles.section}>
       <header className={styles.sectionHead}>
         <h3 className={styles.sectionTitle}>Sofa pricing</h3>
         <span className={styles.stat}>
-          {activeC}/{compartments.length} compartments · {activeB}/{bundles.length} bundles
+          {activeC}/{compartments.length} compartments · {activeB}/{bundles.length} bundles · {activeF}/{fabrics.length} fabrics
         </span>
       </header>
 
@@ -215,6 +229,40 @@ const SofaEditor = () => {
                   {def?.sub && <span className={styles.rowSub}> · {def.sub}</span>}
                 </span>
                 <PriceInput value={b.price} onChange={(v) => setBundleField(i, { price: v })} disabled={!b.active} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Fabrics — per-Model availability + surcharge (spec 2026-05-24) */}
+      <div className={styles.block}>
+        <div className={styles.blockHead}>
+          <div>
+            <div className={styles.blockTitle}>Fabrics</div>
+            <div className={styles.blockSub}>
+              Which fabrics this Model offers + the surcharge for each (RM 0 = included).
+              Colour is free and comes with each fabric. At least one must be active.
+            </div>
+            {fabricsErr && <div className={styles.error} style={{ marginTop: 6 }}>{fabricsErr}</div>}
+          </div>
+          <div className={styles.blockActions}>
+            <button type="button" className={styles.miniBtn} onClick={() => bulkFabric(true)}>All on</button>
+            <button type="button" className={styles.miniBtn} onClick={() => bulkFabric(false)}>All off</button>
+          </div>
+        </div>
+        <div className={styles.rows}>
+          {fabrics.map((f, i) => {
+            const def = flib.find((l) => l.id === f.fabricId);
+            return (
+              <div key={f.fabricId} className={`${styles.row} ${f.active ? '' : styles.rowOff}`}>
+                <ActiveToggle value={f.active} onChange={(v) => setFabricField(i, { active: v })} />
+                <code className={styles.rowId}>{f.fabricId}</code>
+                <span className={styles.rowLabel}>
+                  {def?.label ?? f.fabricId}
+                  {def?.tier && <span className={styles.rowSub}> · {def.tier}</span>}
+                </span>
+                <PriceInput value={f.surcharge} onChange={(v) => setFabricField(i, { surcharge: v })} disabled={!f.active} />
               </div>
             );
           })}

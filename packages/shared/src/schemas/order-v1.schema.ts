@@ -35,6 +35,14 @@ const sofaLineConfigSchema = z.object({
   // Footrest flag snapshot (F3) so the invoice can show auto-included headrests
   // ("+ N Headrest") on a quick-pick. Display only — recompute ignores it.
   seatUpgradeFootrest: z.boolean().optional(),
+  // Upholstery fabric + colour (spec 2026-05-24). Optional in shape; the server
+  // recompute REQUIRES them when the Model offers active fabrics, validates them,
+  // and adds the fabric surcharge. Labels are display-only snapshots for the
+  // invoice / Backend drawer (no products join needed).
+  fabricId: z.string().optional(),
+  colourId: z.string().optional(),
+  fabricLabel: z.string().max(60).nullable().optional(),
+  colourLabel: z.string().max(60).nullable().optional(),
 });
 
 const sizeLineConfigSchema = z.object({

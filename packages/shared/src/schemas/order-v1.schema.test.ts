@@ -52,3 +52,30 @@ describe('orderV1PostSchema merchantProvider', () => {
     expect(orderV1PostSchema.safeParse({ ...base, paymentMethod: 'debit' }).success).toBe(false);
   });
 });
+
+describe('orderV1PostSchema sofa fabric/colour', () => {
+  const sofaOrder = (extra: Record<string, unknown>) => ({
+    ...base,
+    paymentMethod: 'cash' as const,
+    lines: [{ qty: 1, config: {
+      kind: 'sofa' as const, productId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      bundleId: '2S', depth: '24', ...extra,
+    } }],
+  });
+
+  it('preserves fabricId + colourId (+ labels) on a sofa line', () => {
+    const r = orderV1PostSchema.safeParse(sofaOrder({
+      fabricId: 'velvet', colourId: 'sand', fabricLabel: 'Velvet', colourLabel: 'Sand',
+    }));
+    expect(r.success).toBe(true);
+    if (r.success) {
+      const cfg = r.data.lines[0]!.config as { fabricId?: string; colourId?: string };
+      expect(cfg.fabricId).toBe('velvet');
+      expect(cfg.colourId).toBe('sand');
+    }
+  });
+
+  it('still accepts a sofa line without fabric (shape-optional; recompute enforces)', () => {
+    expect(orderV1PostSchema.safeParse(sofaOrder({})).success).toBe(true);
+  });
+});
