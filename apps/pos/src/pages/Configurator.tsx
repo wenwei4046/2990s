@@ -19,9 +19,16 @@ import {
   type SofaConfigSnapshot,
   type SizeConfigSnapshot,
   type FlatConfigSnapshot,
+  type BedframeConfigSnapshot,
 } from '../state/cart';
 import { CustomBuilder } from './CustomBuilder';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
+import {
+  BedframeOptions,
+  emptyBedframeSelection,
+  bedframeSurcharge,
+  type BedframeSelection,
+} from '../components/BedframeOptions';
 import { SofaCellsPreview } from '../components/SofaCellsPreview';
 import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
@@ -134,6 +141,12 @@ export const Configurator = () => {
   // sofas; the picker resolves labels/hex/surcharge so the snapshot + LIVE
   // TOTAL render without another lookup.
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
+  // Bedframe configurator selection (spec 2026-05-25) — colour + dimension
+  // options. Size reuses pickedSizeId; sizeOther is the optional special-size
+  // free text. The picker resolves labels/hex/surcharge so the snapshot + LIVE
+  // TOTAL render without another lookup.
+  const [bfSel, setBfSel] = useState<BedframeSelection>(emptyBedframeSelection);
+  const [bfSizeOther, setBfSizeOther] = useState('');
 
   const sizes = useProductSizes(productId);
   const sizeLib = useSizeLibrary();
@@ -250,6 +263,54 @@ export const Configurator = () => {
   const p = product.data;
   const isSofa = p.pricing_kind === 'sofa_build';
   const isSize = p.pricing_kind === 'size_variants';
+  const isBedframe = p.pricing_kind === 'bedframe_build';
+  // DIVAN ONLY base — collapses the configurator to size + colour + leg (no
+  // mattress gap / divan height / total height / specials). Keyed off the SKU.
+  const isDivan = p.sku === 'BED-DIVAN';
+
+  // Bedframe line total = picked size base + every selected surcharge (all 0
+  // for pilot, but threaded so a future Backend price edit flows through).
+  const bedframeTotal = sizeBase + bedframeSurcharge(bfSel);
+  // Required: size (active+priced) + colour + leg always; gap/divan/total also
+  // for non-DIVAN. Specials are optional. Mirrors the server recompute's
+  // required-ness so a gated Add-to-Cart never produces a 400.
+  const canAddBedframe =
+    isBedframe && pickedSize != null && pickedSize.active && pickedSize.price != null &&
+    bfSel.colourId != null && bfSel.legId != null &&
+    (isDivan || (bfSel.gapId != null && bfSel.divanId != null && bfSel.totalId != null));
+
+  const handleAddBedframe = () => {
+    if (!canAddBedframe || pickedSize == null || pickedSize.price == null || bfSel.colourId == null || bfSel.legId == null) return;
+    const parts = [pickedSize.label + (bfSizeOther.trim() ? ` (${bfSizeOther.trim()})` : '')];
+    if (bfSel.colourLabel) parts.push(bfSel.colourLabel);
+    if (bfSel.gapLabel) parts.push(`Gap ${bfSel.gapLabel}`);
+    if (bfSel.legLabel) parts.push(`Leg ${bfSel.legLabel}`);
+    if (bfSel.divanLabel) parts.push(`Divan ${bfSel.divanLabel}`);
+    if (bfSel.totalLabel) parts.push(`Total ${bfSel.totalLabel}`);
+    if (bfSel.specials.length > 0) parts.push(bfSel.specials.map((s) => s.label).join(' + '));
+    const snapshot: BedframeConfigSnapshot = {
+      kind: 'bedframe',
+      productId: p.id,
+      productName: p.name,
+      sizeId: pickedSize.id,
+      ...(bfSizeOther.trim() ? { sizeOther: bfSizeOther.trim() } : {}),
+      colourId: bfSel.colourId,
+      colourLabel: bfSel.colourLabel,
+      ...(bfSel.colourHex ? { colourHex: bfSel.colourHex } : {}),
+      ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
+      legHeightId: bfSel.legId,
+      legHeightLabel: bfSel.legLabel,
+      ...(bfSel.divanId ? { divanHeightId: bfSel.divanId, divanHeightLabel: bfSel.divanLabel } : {}),
+      ...(bfSel.totalId ? { totalHeightId: bfSel.totalId, totalHeightLabel: bfSel.totalLabel } : {}),
+      ...(bfSel.specials.length > 0
+        ? { specialIds: bfSel.specials.map((s) => s.id), specialLabels: bfSel.specials.map((s) => s.label) }
+        : {}),
+      total: bedframeTotal,
+      summary: parts.join(' · '),
+    };
+    addConfigured(snapshot);
+    navigate('/catalog');
+  };
 
   const handleAddSize = () => {
     if (!canAddSize || pickedSize == null || pickedSize.price == null) return;
@@ -371,6 +432,53 @@ export const Configurator = () => {
     </span>
   ) : undefined;
 
+  // Bedframe right slot — chip + LIVE TOTAL + Cancel + Add to Cart. Same shape
+  // as the size slot; the rail below carries the colour + dimension options.
+  const bedframeTopbarSlot = isBedframe ? (
+    <span className={styles.topbarActions}>
+      <span className={styles.topbarChip}>
+        <span className={styles.topbarChipEyebrow}>
+          {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
+        </span>
+        <span className={styles.topbarChipName}>
+          {p.name}
+          {pickedSize ? ` · ${pickedSize.label}` : ''}
+          {isDivan ? ' · Divan' : ''}
+        </span>
+        {bfSel.colourLabel && (
+          <span className={styles.topbarChipSub}>
+            {bfSel.colourLabel}
+            {bfSel.legLabel ? ` · Leg ${bfSel.legLabel}` : ''}
+          </span>
+        )}
+      </span>
+      <span className={styles.topbarTotal}>
+        <span className={styles.topbarTotalLbl}>LIVE TOTAL</span>
+        <span className={styles.topbarTotalAmt}>
+          <sup>RM</sup>
+          {bedframeTotal > 0 ? bedframeTotal.toLocaleString('en-MY') : '—'}
+        </span>
+        <span className={styles.topbarTotalNote}>Delivery &amp; assembly included</span>
+      </span>
+      <button
+        type="button"
+        className={styles.topbarBtnGhost}
+        onClick={() => navigate('/catalog')}
+      >
+        <X size={14} strokeWidth={1.75} />
+        Cancel
+      </button>
+      <button
+        type="button"
+        className={styles.topbarBtnPrimary}
+        disabled={!canAddBedframe}
+        onClick={handleAddBedframe}
+      >
+        + Add to Cart
+      </button>
+    </span>
+  ) : undefined;
+
   // Sofa right slot — chip + LIVE TOTAL + Cancel + Add to Cart. Depth toggle
   // and mode tabs moved to centerSlot per prototype topbar layout.
   const sofaTopbarSlot = isSofa && mode === 'quick' ? (
@@ -472,10 +580,10 @@ export const Configurator = () => {
     <Topbar
       step={isSofa ? undefined : 'cart'}
       centerSlot={sofaCenterSlot}
-      rightSlot={sofaTopbarSlot ?? sizeTopbarSlot}
+      rightSlot={sofaTopbarSlot ?? sizeTopbarSlot ?? bedframeTopbarSlot}
     />
     <main
-      className={isSofa && mode === 'quick' ? styles.sofaShell : isSize ? styles.shellWide : styles.shell}
+      className={isSofa && mode === 'quick' ? styles.sofaShell : (isSize || isBedframe) ? styles.shellWide : styles.shell}
       // Custom-build mode runs on a slightly warmer cream (#FAF6EC vs the app
       // default #FFF9EB) so the "build space" feels distinct from Quick Pick's
       // catalogue browse. The palette sits on top as an elevated white panel
@@ -484,7 +592,7 @@ export const Configurator = () => {
       // left-half color split.
       style={isSofa && mode === 'custom' ? { background: '#FAF6EC' } : undefined}
     >
-      {!isSize && !isSofa && (
+      {!isSize && !isSofa && !isBedframe && (
         <header className={styles.header}>
           <IconButton
             icon={<ArrowLeft size={20} strokeWidth={1.75} />}
@@ -500,13 +608,14 @@ export const Configurator = () => {
         </header>
       )}
 
-      {isSize && (
+      {(isSize || isBedframe) && (
         <header className={styles.headerWide}>
           <div>
             <span className="t-eyebrow">{p.category_id}</span>
             <h1 className={styles.heading}>
               {p.name}
               {pickedSize ? ` · ${pickedSize.label}` : ''}
+              {isDivan ? ' · Divan' : ''}
             </h1>
           </div>
           <span className={styles.footprintLbl}>
@@ -566,29 +675,7 @@ export const Configurator = () => {
           </div>
           <aside className={styles.rail}>
             <RailSection title="Size" sub={pickedSize ? `${pickedSize.label} · ${pickedSize.widthCm}×${pickedSize.lengthCm} cm` : undefined}>
-              <div className={styles.sizeGrid}>
-                {sizeRows.map((r) => {
-                  const isPicked = pickedSizeId === r.id;
-                  const inactive = !r.active || r.price == null;
-                  return (
-                    <button
-                      key={r.id}
-                      type="button"
-                      className={`${styles.sizeCard} ${isPicked ? styles.sizeCardPicked : ''} ${inactive ? styles.sizeCardInactive : ''}`}
-                      disabled={inactive}
-                      onClick={() => setPickedSizeId(r.id)}
-                    >
-                      <span className={styles.sizeCardName}>{r.label}</span>
-                      <span className={styles.sizeCardDim}>
-                        {r.widthCm}×{r.lengthCm} cm
-                      </span>
-                      <span className={styles.sizeCardPrice}>
-                        {inactive ? 'Not on this Model' : fmtRM(r.price ?? 0)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <SizeGrid rows={sizeRows} pickedId={pickedSizeId} onPick={setPickedSizeId} />
             </RailSection>
 
             <RailSection title={`About this ${p.category_id}`}>
@@ -669,6 +756,49 @@ export const Configurator = () => {
                 })}
               </RailSection>
             )}
+          </aside>
+        </div>
+      )}
+
+      {isBedframe && (
+        <div className={styles.twoCol}>
+          <div className={styles.previewArea}>
+            {pickedSize ? (
+              <FootprintPreview
+                widthCm={pickedSize.widthCm}
+                lengthCm={pickedSize.lengthCm}
+                label={pickedSize.label}
+              />
+            ) : (
+              <div className={styles.previewEmpty}>
+                <span>Pick a size on the right to preview the footprint.</span>
+              </div>
+            )}
+          </div>
+          <aside className={styles.rail}>
+            <RailSection title="Size" sub={pickedSize ? `${pickedSize.label} · ${pickedSize.widthCm}×${pickedSize.lengthCm} cm` : undefined}>
+              <SizeGrid rows={sizeRows} pickedId={pickedSizeId} onPick={setPickedSizeId} />
+              <label className={styles.sizeOtherField}>
+                <span className={styles.sizeOtherLabel}>Special size (optional)</span>
+                <input
+                  type="text"
+                  className={styles.sizeOtherInput}
+                  placeholder='e.g. 200 x 200'
+                  value={bfSizeOther}
+                  maxLength={60}
+                  onChange={(e) => setBfSizeOther(e.target.value)}
+                />
+              </label>
+            </RailSection>
+
+            <RailSection title="Build">
+              <BedframeOptions
+                productId={p.id}
+                isDivan={isDivan}
+                value={bfSel}
+                onChange={setBfSel}
+              />
+            </RailSection>
           </aside>
         </div>
       )}
@@ -896,6 +1026,40 @@ const RailSection = ({ title, sub, children }: RailSectionProps) => (
     </header>
     {children}
   </section>
+);
+
+interface SizeGridProps {
+  rows: SizeRow[];
+  pickedId: string | null;
+  onPick: (id: string) => void;
+}
+// Standard-size picker grid shared by the mattress (size_variants) and bedframe
+// (bedframe_build) rails. Inactive sizes (no variant on this Model) render
+// dimmed + disabled, same as SofaQuickPick.
+const SizeGrid = ({ rows, pickedId, onPick }: SizeGridProps) => (
+  <div className={styles.sizeGrid}>
+    {rows.map((r) => {
+      const isPicked = pickedId === r.id;
+      const inactive = !r.active || r.price == null;
+      return (
+        <button
+          key={r.id}
+          type="button"
+          className={`${styles.sizeCard} ${isPicked ? styles.sizeCardPicked : ''} ${inactive ? styles.sizeCardInactive : ''}`}
+          disabled={inactive}
+          onClick={() => onPick(r.id)}
+        >
+          <span className={styles.sizeCardName}>{r.label}</span>
+          <span className={styles.sizeCardDim}>
+            {r.widthCm}×{r.lengthCm} cm
+          </span>
+          <span className={styles.sizeCardPrice}>
+            {inactive ? 'Not on this Model' : fmtRM(r.price ?? 0)}
+          </span>
+        </button>
+      );
+    })}
+  </div>
 );
 
 interface FlatAddToCartProps {

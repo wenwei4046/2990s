@@ -117,6 +117,29 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
         },
       };
     }
+    if (l.config.kind === 'bedframe') {
+      return {
+        qty: l.qty,
+        config: {
+          kind: 'bedframe' as const,
+          productId: l.config.productId,
+          sizeId: l.config.sizeId,
+          ...(l.config.sizeOther ? { sizeOther: l.config.sizeOther } : {}),
+          colourId: l.config.colourId,
+          ...(l.config.colourLabel ? { colourLabel: l.config.colourLabel } : {}),
+          ...(l.config.gapId ? { gapId: l.config.gapId } : {}),
+          ...(l.config.gapLabel ? { gapLabel: l.config.gapLabel } : {}),
+          legHeightId: l.config.legHeightId,
+          ...(l.config.legHeightLabel ? { legHeightLabel: l.config.legHeightLabel } : {}),
+          ...(l.config.divanHeightId ? { divanHeightId: l.config.divanHeightId } : {}),
+          ...(l.config.divanHeightLabel ? { divanHeightLabel: l.config.divanHeightLabel } : {}),
+          ...(l.config.totalHeightId ? { totalHeightId: l.config.totalHeightId } : {}),
+          ...(l.config.totalHeightLabel ? { totalHeightLabel: l.config.totalHeightLabel } : {}),
+          ...(l.config.specialIds && l.config.specialIds.length > 0 ? { specialIds: l.config.specialIds } : {}),
+          ...(l.config.specialLabels && l.config.specialLabels.length > 0 ? { specialLabels: l.config.specialLabels } : {}),
+        },
+      };
+    }
     // flat
     return {
       qty: l.qty,

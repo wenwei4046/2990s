@@ -1,0 +1,101 @@
+/* Bedframe colour + dimension options — sits in the Configurator rail for
+   bedframe_build Models, styled to match FabricColourPicker / qpCard. */
+
+.block {
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+}
+.block:first-of-type {
+  border-top: none;
+  margin-top: 8px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.eyebrow {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+.req {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-orange);
+}
+
+.muted {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 12px 0;
+}
+
+/* Colour swatches — same language as the sofa fabric colour row. */
+.colourRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.swatch {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(34, 31, 32, 0.2);
+  cursor: pointer;
+}
+.swatchOn {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c-orange);
+}
+
+/* Single-select option chips (gap / leg / divan / total) + multi-select
+   specials. min-height keeps a 40px+ touch target on tablet. */
+.chipRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chip {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  text-align: left;
+  min-width: 56px;
+  min-height: 40px;
+  justify-content: center;
+  padding: 8px 12px;
+  background: var(--c-paper);
+  border: 1.5px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--line-strong); }
+.chipOn {
+  background: #fff;
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.14);
+}
+.chipVal {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.chipMeta {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--fg-muted);
+}

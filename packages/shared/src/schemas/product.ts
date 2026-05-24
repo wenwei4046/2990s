@@ -88,6 +88,15 @@ export const sizeProductSchema = productBase.extend({
   sizes:       z.array(sizeRow).min(1),
 });
 
+// Bedframe configurator (spec 2026-05-25). Prices by size exactly like
+// size_variants (placeholder retail per size, owned by SKU Master); the
+// colour + dimension options carry 0 surcharge for pilot and live in their
+// own tables, so the SKU-Master form is identical to the mattress size grid.
+export const bedframeProductSchema = productBase.extend({
+  pricingKind: z.literal('bedframe_build'),
+  sizes:       z.array(sizeRow).min(1),
+});
+
 // Flat: single fixed price.
 export const flatProductSchema = productBase.extend({
   pricingKind: z.literal('flat'),
@@ -108,10 +117,11 @@ export const tbcProductSchema = productBase.extend({
 export const productSchema = z.discriminatedUnion('pricingKind', [
   sofaProductSchema,
   sizeProductSchema,
+  bedframeProductSchema,
   flatProductSchema,
   tbcProductSchema,
 ]).superRefine((val, ctx) => {
-  if (val.pricingKind === 'size_variants') {
+  if (val.pricingKind === 'size_variants' || val.pricingKind === 'bedframe_build') {
     const ok = val.sizes.some((s) => s.active && s.price > 0);
     if (!ok) {
       ctx.addIssue({
@@ -141,8 +151,9 @@ export const productSchema = z.discriminatedUnion('pricingKind', [
   }
 });
 
-export type ProductInput      = z.infer<typeof productSchema>;
-export type SofaProductInput  = z.infer<typeof sofaProductSchema>;
-export type SizeProductInput  = z.infer<typeof sizeProductSchema>;
-export type FlatProductInput  = z.infer<typeof flatProductSchema>;
-export type TbcProductInput   = z.infer<typeof tbcProductSchema>;
+export type ProductInput        = z.infer<typeof productSchema>;
+export type SofaProductInput    = z.infer<typeof sofaProductSchema>;
+export type SizeProductInput    = z.infer<typeof sizeProductSchema>;
+export type BedframeProductInput = z.infer<typeof bedframeProductSchema>;
+export type FlatProductInput    = z.infer<typeof flatProductSchema>;
+export type TbcProductInput     = z.infer<typeof tbcProductSchema>;

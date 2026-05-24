@@ -97,7 +97,7 @@ orders.post('/', async (c) => {
   const handoverAddonIds = (dto.addons ?? []).map((a) => a.addonId);
   const addonIds = Array.from(new Set([...sizeLineAddonIds, ...handoverAddonIds]));
 
-  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes] = await Promise.all([
+  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes] = await Promise.all([
     supabase
       .from('products')
       .select('id, category_id, pricing_kind, flat_price, recliner_upgrade_price')
@@ -144,9 +144,24 @@ orders.post('/', async (c) => {
     supabase
       .from('fabric_colours')
       .select('fabric_id, colour_id, active'),
+    // Bedframe colour library (global) + per-Model ticks + option lists
+    // (spec 2026-05-25). The recompute validates the chosen colour is ticked
+    // active on the Model and each dimension option id is active, then sums
+    // surcharges (all 0 for pilot). Tiny tables — fetched unconditionally,
+    // same as the fabric tables above.
+    supabase
+      .from('bedframe_colours')
+      .select('id, surcharge, active'),
+    supabase
+      .from('product_bedframe_colours')
+      .select('product_id, colour_id, active')
+      .in('product_id', productIds),
+    supabase
+      .from('bedframe_options')
+      .select('id, surcharge, active'),
   ]);
 
-  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes]) {
+  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes]) {
     if (r.error) return c.json({ error: 'pricing_fetch_failed', reason: r.error.message }, 500);
   }
 
@@ -205,6 +220,27 @@ orders.post('/', async (c) => {
     activeColourIdsByFabric.set(col.fabric_id, arr);
   }
   const sizes = sizesRes.data ?? [];
+
+  // Bedframe (spec 2026-05-25): global colour surcharge/active + per-Model
+  // ticks + the global option list. Per-Model bedframeColours = colours TICKED
+  // active on the Model, carrying the global surcharge + active flag — so the
+  // recompute rejects an un-ticked colour (unknown) AND a globally-retired one
+  // (inactive). Options are global, identical for every bedframe Model.
+  const bedframeColourGlobalById = new Map<string, { surcharge: number; active: boolean }>();
+  for (const col of bedframeColoursRes.data ?? []) {
+    bedframeColourGlobalById.set(col.id, { surcharge: col.surcharge, active: col.active });
+  }
+  const tickedColourIdsByProduct = new Map<string, string[]>();
+  for (const t of productBedframeColoursRes.data ?? []) {
+    if (!t.active) continue;
+    const arr = tickedColourIdsByProduct.get(t.product_id) ?? [];
+    arr.push(t.colour_id);
+    tickedColourIdsByProduct.set(t.product_id, arr);
+  }
+  const bedframeOptionsList = (bedframeOptionsRes.data ?? []).map((o) => ({
+    id: o.id, surcharge: o.surcharge, active: o.active,
+  }));
+
   const addonPricesById = new Map<string, number>();
   // Static catalog info for handover-time addons (logistics: dispose, lift,
   // assemble) — fed into computeOrderTotal so addonPrice() canonical formula
@@ -248,11 +284,21 @@ orders.post('/', async (c) => {
             colourIds: activeColourIdsByFabric.get(r.fabric_id) ?? [],
           })),
       } : undefined,
-      sizes: p.pricing_kind === 'size_variants'
+      // Bedframes price off product_size_variants too — load sizes for both.
+      sizes: (p.pricing_kind === 'size_variants' || p.pricing_kind === 'bedframe_build')
         ? sizes
             .filter((r) => r.product_id === p.id)
             .map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price }))
         : undefined,
+      bedframeColours: p.pricing_kind === 'bedframe_build'
+        ? (tickedColourIdsByProduct.get(p.id) ?? [])
+            .map((cid) => {
+              const g = bedframeColourGlobalById.get(cid);
+              return g ? { id: cid, surcharge: g.surcharge, active: g.active } : null;
+            })
+            .filter((x): x is { id: string; surcharge: number; active: boolean } => x != null)
+        : undefined,
+      bedframeOptions: p.pricing_kind === 'bedframe_build' ? bedframeOptionsList : undefined,
     });
   }
 

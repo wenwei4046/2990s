@@ -12,7 +12,7 @@ export interface CatalogProduct {
   size_display: string | null;
   img_key: string | null;
   thumb_key: string | null;
-  pricing_kind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricing_kind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   flat_price: number | null;
   recliner_upgrade_price: number | null;
   stock: number;
@@ -253,6 +253,80 @@ export const useProductFabrics = (productId: string | undefined) =>
     },
   });
 
+/* ─── Bedframe configurator (spec 2026-05-25) ─────────────────────────
+ * Mirrors the sofa fabric/colour hooks. Colour = global `bedframe_colours`
+ * library ∩ the Model's `product_bedframe_colours` ticks (surcharge lives on
+ * the global colour, no per-Model override). Options = global `bedframe_options`
+ * (gap / leg_height / divan_height / total_height / special), grouped by `kind`
+ * in the configurator. All surcharges 0 for pilot. */
+
+export interface BedframeColourRow {
+  id: string;
+  label: string;
+  swatchHex: string | null;
+  surcharge: number;
+  sortOrder: number;
+}
+export interface BedframeOptionRow {
+  id: string;
+  kind: string; // 'gap'|'leg_height'|'divan_height'|'total_height'|'special'
+  value: string;
+  surcharge: number;
+  sortOrder: number;
+}
+
+// Colours offered for a given bedframe Model = global active bedframe_colours
+// intersected with the Model's active product_bedframe_colours ticks.
+export const useBedframeColours = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['bedframe-colours', productId],
+    queryFn: async (): Promise<BedframeColourRow[]> => {
+      if (!productId) throw new Error('no productId');
+      const [globalRes, tickRes] = await Promise.all([
+        supabase
+          .from('bedframe_colours')
+          .select('id, label, swatch_hex, surcharge, active, sort_order')
+          .eq('active', true)
+          .order('sort_order'),
+        supabase
+          .from('product_bedframe_colours')
+          .select('colour_id, active')
+          .eq('product_id', productId)
+          .eq('active', true),
+      ]);
+      if (globalRes.error) throw globalRes.error;
+      if (tickRes.error) throw tickRes.error;
+      const ticked = new Set((tickRes.data ?? []).map((r) => r.colour_id));
+      return (globalRes.data ?? [])
+        .filter((r) => ticked.has(r.id))
+        .map((r) => ({
+          id: r.id, label: r.label, swatchHex: r.swatch_hex,
+          surcharge: r.surcharge, sortOrder: r.sort_order,
+        }));
+    },
+  });
+
+// Global bedframe option choice-lists (active only). Small + changes rarely
+// (Backend admin), so cache aggressively like size_library — no realtime.
+export const useBedframeOptions = () =>
+  useQuery({
+    queryKey: ['bedframe-options'],
+    staleTime: 5 * 60_000,
+    queryFn: async (): Promise<BedframeOptionRow[]> => {
+      const { data, error } = await supabase
+        .from('bedframe_options')
+        .select('id, kind, value, surcharge, active, sort_order')
+        .eq('active', true)
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id, kind: r.kind, value: r.value,
+        surcharge: r.surcharge, sortOrder: r.sort_order,
+      }));
+    },
+  });
+
 export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
@@ -396,6 +470,11 @@ export const useProductPricingRealtime = (productId: string | undefined) => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'product_fabrics', filter: `product_id=eq.${productId}` },
         () => void qc.invalidateQueries({ queryKey: ['product', productId, 'fabrics'] }),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_bedframe_colours', filter: `product_id=eq.${productId}` },
+        () => void qc.invalidateQueries({ queryKey: ['bedframe-colours', productId] }),
       )
       .on(
         'postgres_changes',

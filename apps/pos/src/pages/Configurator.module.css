@@ -318,6 +318,38 @@
 }
 .sizeCardPicked .sizeCardPrice { color: var(--c-cream); }
 
+/* Special-size free-text (bedframe configurator) — sits under the size grid. */
+.sizeOtherField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.sizeOtherLabel {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.sizeOtherInput {
+  appearance: none;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--c-paper);
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.sizeOtherInput:focus {
+  outline: none;
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.14);
+}
+
 /* About */
 .aboutText {
   font-size: var(--fs-14);

@@ -65,10 +65,41 @@ const flatLineConfigSchema = z.object({
   productId: z.string().uuid(),
 });
 
+// Bedframe configurator (spec 2026-05-25). size + colour + leg are always
+// present; gap/divan/total/specials are present for full bedframes but ABSENT
+// for DIVAN ONLY (hence optional in shape — the UI enforces required-ness per
+// Model, the server recompute validates ids + sums surcharges). sizeOther is a
+// free-text special size (e.g. "200 x 200"), display-only, no structured price.
+// colourLabel is a display-only snapshot for the invoice (no products join).
+const bedframeLineConfigSchema = z.object({
+  kind: z.literal('bedframe'),
+  productId: z.string().uuid(),
+  sizeId: z.string(),
+  sizeOther: z.string().max(60).optional(),
+  colourId: z.string(),
+  colourLabel: z.string().max(60).nullable().optional(),
+  gapId: z.string().optional(),
+  legHeightId: z.string(),
+  divanHeightId: z.string().optional(),
+  totalHeightId: z.string().optional(),
+  specialIds: z.array(z.string()).optional(),
+  // Display-only label snapshots (like sofa fabricLabel/seatUpgradeLabel) so the
+  // printed Sales Order + Backend detail render the full spec without a join to
+  // bedframe_options. The server recompute ignores these — it reprices off the
+  // *Ids above. Captured at order time, so a later Backend label edit doesn't
+  // rewrite what the customer signed.
+  gapLabel: z.string().max(40).nullable().optional(),
+  legHeightLabel: z.string().max(40).nullable().optional(),
+  divanHeightLabel: z.string().max(40).nullable().optional(),
+  totalHeightLabel: z.string().max(40).nullable().optional(),
+  specialLabels: z.array(z.string().max(60)).optional(),
+});
+
 export const orderLineConfigSchema = z.discriminatedUnion('kind', [
   sofaLineConfigSchema,
   sizeLineConfigSchema,
   flatLineConfigSchema,
+  bedframeLineConfigSchema,
 ]);
 
 export const orderLineSchema = z.object({

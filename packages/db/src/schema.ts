@@ -33,10 +33,11 @@ export const compGroup = pgEnum('comp_group', [
 ]);
 
 export const pricingKind = pgEnum('pricing_kind', [
-  'size_variants',  // mattress, bedframe — priced by size
-  'sofa_build',     // sofa — priced by compartments + bundles + recliner
-  'flat',           // single fixed price
-  'tbc',            // not yet priced (TBC categories)
+  'size_variants',   // mattress — priced by size
+  'sofa_build',      // sofa — priced by compartments + bundles + recliner
+  'bedframe_build',  // bedframe — size variant + colour + options (gap/leg/divan/total/specials)
+  'flat',            // single fixed price
+  'tbc',             // not yet priced (TBC categories)
 ]);
 
 export const orderLane = pgEnum('order_lane', [
@@ -313,6 +314,40 @@ export const productFabrics = pgTable('product_fabrics', {
   surcharge: integer('surcharge').notNull().default(0),          // seeded from default_surcharge
 }, (t) => ({
   pk: primaryKey({ columns: [t.productId, t.fabricId] }),
+}));
+
+/* ─────────────────────────── Bedframe configurator ──────────────────── */
+// Bedframe (pricing_kind='bedframe_build'): size variant (reuse product_size_
+// variants) + a global colour library + POS-owned option choice-lists snapshot
+// (gap/leg/divan/total/specials, Decision B — decoupled from maintenance_config).
+// All POS pricing SKU-Master-owned; surcharges start 0. (Spec 2026-05-25.)
+
+export const bedframeColours = pgTable('bedframe_colours', {
+  id:        text('id').primaryKey(),                 // 'sand','charcoal'
+  label:     text('label').notNull(),
+  swatchHex: text('swatch_hex'),
+  surcharge: integer('surcharge').notNull().default(0),
+  active:    boolean('active').notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+});
+
+export const productBedframeColours = pgTable('product_bedframe_colours', {
+  productId: uuid('product_id').notNull().references(() => products.id, { onDelete: 'cascade' }),
+  colourId:  text('colour_id').notNull().references(() => bedframeColours.id),
+  active:    boolean('active').notNull().default(true),   // the per-Model "勾选"
+}, (t) => ({
+  pk: primaryKey({ columns: [t.productId, t.colourId] }),
+}));
+
+export const bedframeOptions = pgTable('bedframe_options', {
+  id:        text('id').primaryKey(),                 // 'gap-6','leg-7','special-left-drawer'
+  kind:      text('kind').notNull(),                  // 'gap'|'leg_height'|'divan_height'|'total_height'|'special'
+  value:     text('value').notNull(),                 // '6"','7"','Left Drawer'
+  surcharge: integer('surcharge').notNull().default(0),
+  active:    boolean('active').notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+}, (t) => ({
+  kindIdx: index('idx_bedframe_options_kind').on(t.kind),
 }));
 
 /* ─────────────────────────── Add-ons ────────────────────────────────── */

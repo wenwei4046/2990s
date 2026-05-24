@@ -56,7 +56,40 @@ export interface FlatConfigSnapshot {
   summary: string;       // e.g. "Flat price"
 }
 
-export type CartConfig = SofaConfigSnapshot | SizeConfigSnapshot | FlatConfigSnapshot;
+// Bedframe configurator (spec 2026-05-25). Field names mirror the Zod
+// BedframeLineConfig so buildPostBody maps 1:1. Labels + hex are display
+// snapshots for the cart/invoice; the server revalidates ids + reprices.
+// sizeOther is a free-text special size (e.g. "200 x 200"), display-only.
+export interface BedframeConfigSnapshot {
+  kind: 'bedframe';
+  productId: string;
+  productName: string;
+  sizeId: string;
+  sizeOther?: string;
+  colourId: string;
+  colourLabel: string | null;
+  colourHex?: string;
+  gapId?: string;
+  legHeightId: string;
+  divanHeightId?: string;
+  totalHeightId?: string;
+  specialIds?: string[];
+  // Display-label snapshots (parallel to the *Id fields) so the cart, printed
+  // Sales Order, and Backend detail render the spec without a join.
+  gapLabel?: string | null;
+  legHeightLabel?: string | null;
+  divanHeightLabel?: string | null;
+  totalHeightLabel?: string | null;
+  specialLabels?: string[];
+  total: number;
+  summary: string;       // e.g. "Queen · Sand · Gap 6\" · Leg 4\""
+}
+
+export type CartConfig =
+  | SofaConfigSnapshot
+  | SizeConfigSnapshot
+  | FlatConfigSnapshot
+  | BedframeConfigSnapshot;
 
 export interface CartLine {
   key: string;
