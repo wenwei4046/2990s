@@ -1238,7 +1238,7 @@ export const deliveryReturnItems = pgTable('delivery_return_items', {
    ════════════════════════════════════════════════════════════════════════ */
 
 export const mfgProductCategory = pgEnum('mfg_product_category', [
-  'SOFA', 'BEDFRAME', 'ACCESSORY',
+  'SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS',
 ]);
 
 export const mfgProductStatus = pgEnum('mfg_product_status', [

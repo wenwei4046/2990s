@@ -28,6 +28,8 @@ import {
   Settings2,
   History,
   Package,
+  Trash2,
+  Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -43,7 +45,6 @@ import {
 import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
-const LG_ICON = { size: 18, strokeWidth: 1.75 } as const;
 
 type TopTab = 'sku' | 'maintenance';
 
@@ -92,6 +93,7 @@ const CATEGORIES: { value: MfgCategory | 'all'; label: string }[] = [
   { value: 'ACCESSORY', label: 'Accessory' },
   { value: 'BEDFRAME', label: 'Bedframe' },
   { value: 'SOFA', label: 'Sofa' },
+  { value: 'MATTRESS', label: 'Mattress' },
 ];
 
 const fmtRm = (sen: number | null): string => {
@@ -571,6 +573,11 @@ const MaintenanceList = ({
   onChange: (next: MaintenanceConfig) => void;
   priced: boolean;
 }) => {
+  // Empty draft state for the "add new" row at the bottom of the list when
+  // edit mode is on. Kept local so toggling tabs cancels in-flight adds.
+  const [draftValue, setDraftValue] = useState('');
+  const [draftPrice, setDraftPrice] = useState('0.00');
+
   if (listKey === 'fabrics') {
     return (
       <div className={styles.bannerWarn}>
@@ -580,9 +587,25 @@ const MaintenanceList = ({
     );
   }
 
-  // String[] tabs (gaps, sofaSizes)
+  // ── String[] tabs (gaps, sofaSizes) ───────────────────────────────────
   if (listKey === 'gaps' || listKey === 'sofaSizes') {
     const items = config[listKey] as string[];
+
+    const removeAt = (idx: number) => {
+      const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+      (next[listKey] as string[]).splice(idx, 1);
+      onChange(next);
+    };
+
+    const addItem = () => {
+      const v = draftValue.trim();
+      if (!v) return;
+      const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+      (next[listKey] as string[]).push(v);
+      onChange(next);
+      setDraftValue('');
+    };
+
     return (
       <div className={styles.maintList}>
         {items.map((v, i) => (
@@ -592,15 +615,78 @@ const MaintenanceList = ({
             </button>
             <span className={styles.maintRowIdx}>{i + 1}</span>
             <span className={styles.maintRowValue}>{v}</span>
-            <span />
+            {editMode ? (
+              <button
+                type="button"
+                className={styles.maintRowIcon}
+                title="Remove"
+                onClick={() => removeAt(i)}
+                style={{ color: 'var(--c-festive-b, #B8331F)' }}
+              >
+                <Trash2 {...ICON_PROPS} />
+              </button>
+            ) : (
+              <span />
+            )}
           </div>
         ))}
+
+        {editMode && (
+          <div
+            className={styles.maintRow}
+            style={{
+              background: 'var(--c-paper)',
+              borderColor: 'var(--c-orange)',
+              gridTemplateColumns: '32px 32px 1fr auto',
+            }}
+          >
+            <span className={styles.maintRowIcon}><Plus {...ICON_PROPS} /></span>
+            <span className={styles.maintRowIdx}>+</span>
+            <input
+              type="text"
+              placeholder="New value (e.g. 28)"
+              value={draftValue}
+              onChange={(e) => setDraftValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+              style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-14)',
+                background: 'var(--c-cream)',
+                border: '1px solid var(--line)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '6px 10px',
+                outline: 'none',
+              }}
+            />
+            <Button variant="primary" size="sm" onClick={addItem}>
+              <Plus {...ICON_PROPS} />
+              <span>Add</span>
+            </Button>
+          </div>
+        )}
       </div>
     );
   }
 
-  // PricedOption[] tabs (the rest)
+  // ── PricedOption[] tabs (the rest) ────────────────────────────────────
   const items = config[listKey] as PricedOption[];
+
+  const removeAt = (idx: number) => {
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    (next[listKey] as PricedOption[]).splice(idx, 1);
+    onChange(next);
+  };
+
+  const addItem = () => {
+    const v = draftValue.trim();
+    if (!v) return;
+    const priceSen = Math.round((Number(draftPrice) || 0) * 100);
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    (next[listKey] as PricedOption[]).push({ value: v, priceSen });
+    onChange(next);
+    setDraftValue('');
+    setDraftPrice('0.00');
+  };
 
   return (
     <div className={styles.maintList}>
@@ -610,41 +696,136 @@ const MaintenanceList = ({
             <History {...ICON_PROPS} />
           </button>
           <span className={styles.maintRowIdx}>{i + 1}</span>
-          <span className={styles.maintRowValue}>{opt.value}</span>
-          <span className={styles.maintRowPrice}>
-            <span className={styles.maintRowRmPrefix}>RM</span>
+          <span className={styles.maintRowValue}>
             {editMode ? (
               <input
-                type="number"
-                step="0.01"
-                value={(opt.priceSen / 100).toFixed(2)}
+                type="text"
+                value={opt.value}
                 onChange={(e) => {
                   const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-                  const list = next[listKey] as PricedOption[];
-                  list[i]!.priceSen = Math.round(Number(e.target.value) * 100);
+                  (next[listKey] as PricedOption[])[i]!.value = e.target.value;
                   onChange(next);
                 }}
                 style={{
-                  width: 90,
-                  textAlign: 'right',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 'var(--fs-14)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-16)',
+                  fontWeight: 600,
                   background: 'var(--c-cream)',
                   border: '1px solid var(--c-orange)',
                   borderRadius: 'var(--radius-sm)',
                   padding: '4px 8px',
                   outline: 'none',
+                  width: '100%',
+                  maxWidth: 280,
                 }}
               />
             ) : (
-              <span className={opt.priceSen === 0 ? styles.maintRowPriceMuted : undefined}>
-                {(opt.priceSen / 100).toFixed(2)}
-              </span>
+              opt.value
+            )}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-3)', alignItems: 'center', justifyContent: 'flex-end' }}>
+            <span className={styles.maintRowPrice}>
+              <span className={styles.maintRowRmPrefix}>RM</span>
+              {editMode ? (
+                <input
+                  type="number"
+                  step="0.01"
+                  value={(opt.priceSen / 100).toFixed(2)}
+                  onChange={(e) => {
+                    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+                    const list = next[listKey] as PricedOption[];
+                    list[i]!.priceSen = Math.round(Number(e.target.value) * 100);
+                    onChange(next);
+                  }}
+                  style={{
+                    width: 90,
+                    textAlign: 'right',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--fs-14)',
+                    background: 'var(--c-cream)',
+                    border: '1px solid var(--c-orange)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '4px 8px',
+                    outline: 'none',
+                  }}
+                />
+              ) : (
+                <span className={opt.priceSen === 0 ? styles.maintRowPriceMuted : undefined}>
+                  {(opt.priceSen / 100).toFixed(2)}
+                </span>
+              )}
+            </span>
+            {editMode && (
+              <button
+                type="button"
+                className={styles.maintRowIcon}
+                title="Remove"
+                onClick={() => removeAt(i)}
+                style={{ color: 'var(--c-festive-b, #B8331F)' }}
+              >
+                <Trash2 {...ICON_PROPS} />
+              </button>
             )}
           </span>
         </div>
       ))}
-      {!priced && <p className={styles.eyebrow}>No surcharge pricing for this list.</p>}
+
+      {editMode && (
+        <div
+          className={styles.maintRow}
+          style={{
+            background: 'var(--c-paper)',
+            borderColor: 'var(--c-orange)',
+            gridTemplateColumns: '32px 32px 1fr auto',
+          }}
+        >
+          <span className={styles.maintRowIcon}><Plus {...ICON_PROPS} /></span>
+          <span className={styles.maintRowIdx}>+</span>
+          <input
+            type="text"
+            placeholder="New value"
+            value={draftValue}
+            onChange={(e) => setDraftValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+            style={{
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-14)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '6px 10px',
+              outline: 'none',
+            }}
+          />
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+            <span className={styles.maintRowRmPrefix}>RM</span>
+            <input
+              type="number"
+              step="0.01"
+              value={draftPrice}
+              onChange={(e) => setDraftPrice(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+              style={{
+                width: 90,
+                textAlign: 'right',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-14)',
+                background: 'var(--c-cream)',
+                border: '1px solid var(--line)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '6px 8px',
+                outline: 'none',
+              }}
+            />
+            <Button variant="primary" size="sm" onClick={addItem}>
+              <Plus {...ICON_PROPS} />
+              <span>Add</span>
+            </Button>
+          </span>
+        </div>
+      )}
+
+      {!priced && !editMode && <p className={styles.eyebrow}>No surcharge pricing for this list.</p>}
     </div>
   );
 };
