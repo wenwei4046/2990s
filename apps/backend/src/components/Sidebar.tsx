@@ -9,6 +9,8 @@ import {
   Layers,
   PlusCircle,
   UsersRound,
+  Truck,
+  ScrollText,
   Settings,
   LogOut,
 } from 'lucide-react';
@@ -76,6 +78,9 @@ export const Sidebar = () => {
     { kind: 'link', to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
     { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Tracking' },
     { kind: 'link', to: '/addons', icon: <PlusCircle {...ICON_PROPS} />, label: 'Add-on products' },
+    { kind: 'group', label: 'Procurement' },
+    { kind: 'link', to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
+    { kind: 'link', to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
     { kind: 'group', label: 'Reference' },
     { kind: 'link', to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
     { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },

@@ -659,23 +659,123 @@ export const pendingSlipUploads = pgTable('pending_slip_uploads', {
 // Phase 4-D · Suppliers + Purchase Orders (migrations 0014, 0015)
 // ────────────────────────────────────────────────────────────────────
 
+export const supplierStatus = pgEnum('supplier_status', ['ACTIVE', 'INACTIVE', 'BLOCKED']);
+
+export const currencyCode = pgEnum('currency_code', ['MYR', 'RMB', 'USD', 'SGD']);
+
+export const poStatus = pgEnum('po_status', [
+  'DRAFT',                // editable, not sent
+  'SUBMITTED',            // sent to supplier, awaiting acknowledgement
+  'PARTIALLY_RECEIVED',   // some GRN posted
+  'RECEIVED',             // all items GRN'd
+  'CANCELLED',
+]);
+
 export const suppliers = pgTable('suppliers', {
   id:             uuid('id').primaryKey().defaultRandom(),
   code:           text('code').notNull().unique(),
   name:           text('name').notNull(),
   whatsappNumber: text('whatsapp_number'),
   email:          text('email'),
+  // HOOKKA-port fields (migration 0041): full master record for purchasing.
+  contactPerson:  text('contact_person'),
+  phone:          text('phone'),
+  address:        text('address'),
+  state:          text('state'),
+  paymentTerms:   text('payment_terms'),                  // free-form 'NET 30', 'COD'
+  status:         supplierStatus('status').notNull().default('ACTIVE'),
+  rating:         integer('rating').notNull().default(0), // 0-5 scale
+  notes:          text('notes'),
   createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ───── supplier_material_bindings — the "two-code mapping" table ─────
+   The crux of the HOOKKA port: maps our internal `material_code`
+   (e.g. mfg_products.code '1003-(K)' or fabrics.code 'AVANI 01')
+   to the supplier's own SKU + price + lead time + currency.
+   One material can have N suppliers; exactly one per material is
+   `is_main_supplier=true` (enforced at app layer, not DB constraint).
+
+   `material_kind` lets one binding row reference either a finished
+   SKU (mfg_product) or a fabric — extend with more values when raw
+   materials get ported.
+   ─────────────────────────────────────────────────────────────────── */
+
+export const materialKind = pgEnum('material_kind', ['mfg_product', 'fabric', 'raw']);
+
+export const supplierMaterialBindings = pgTable('supplier_material_bindings', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  supplierId:        uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'cascade' }),
+  materialKind:      materialKind('material_kind').notNull(),
+  materialCode:      text('material_code').notNull(),    // OUR internal code ('1003-(K)','AVANI 01')
+  materialName:      text('material_name').notNull(),    // snapshot for the binding row
+  supplierSku:       text('supplier_sku').notNull(),     // SUPPLIER's own SKU
+  unitPriceCenti:    integer('unit_price_centi').notNull().default(0),  // × 100; works for both MYR + RMB
+  currency:          currencyCode('currency').notNull().default('MYR'),
+  leadTimeDays:      integer('lead_time_days').notNull().default(0),
+  paymentTermsOverride: text('payment_terms_override'),  // overrides supplier.payment_terms if set
+  moq:               integer('moq').notNull().default(0),                // min order quantity
+  priceValidFrom:    date('price_valid_from'),
+  priceValidTo:      date('price_valid_to'),
+  isMainSupplier:    boolean('is_main_supplier').notNull().default(false),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSupplier:        index('idx_smb_supplier').on(t.supplierId),
+  idxMaterial:        index('idx_smb_material').on(t.materialKind, t.materialCode),
+  idxMain:            index('idx_smb_main_per_material')
+                        .on(t.materialKind, t.materialCode)
+                        .where(sql`${t.isMainSupplier} = true`),
+}));
+
 export const purchaseOrders = pgTable('purchase_orders', {
-  id:         uuid('id').primaryKey().defaultRandom(),
-  poNumber:   text('po_number').notNull().unique(),
-  supplierId: uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
-  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  createdBy:  uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
-});
+  id:          uuid('id').primaryKey().defaultRandom(),
+  poNumber:    text('po_number').notNull().unique(),       // 'PO-2026-001'
+  supplierId:  uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  // Extended fields (migration 0041)
+  status:      poStatus('status').notNull().default('DRAFT'),
+  poDate:      date('po_date').notNull().defaultNow(),
+  expectedAt:  date('expected_at'),                        // delivery ETA
+  currency:    currencyCode('currency').notNull().default('MYR'),
+  subtotalCenti: integer('subtotal_centi').notNull().default(0),
+  taxCenti:    integer('tax_centi').notNull().default(0),
+  totalCenti:  integer('total_centi').notNull().default(0),
+  notes:       text('notes'),
+  submittedAt: timestamp('submitted_at', { withTimezone: true }),
+  receivedAt:  timestamp('received_at', { withTimezone: true }),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:   uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSupplier: index('idx_po_supplier').on(t.supplierId),
+  idxStatus:   index('idx_po_status').on(t.status),
+}));
+
+/* PO items — what we're ordering FROM a supplier (vs purchase_order_lines
+   which links a retail-order SKU to a supplier-PO for the existing retail
+   /purchase-orders skeleton). */
+export const purchaseOrderItems = pgTable('purchase_order_items', {
+  id:               uuid('id').primaryKey().defaultRandom(),
+  purchaseOrderId:  uuid('purchase_order_id').notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
+  // Optional FK to the binding row that priced this line — gives us
+  // traceability when supplier prices change later.
+  bindingId:        uuid('binding_id').references(() => supplierMaterialBindings.id, { onDelete: 'set null' }),
+  materialKind:     materialKind('material_kind').notNull(),
+  materialCode:     text('material_code').notNull(),
+  materialName:     text('material_name').notNull(),
+  supplierSku:      text('supplier_sku'),                  // snapshot at PO time
+  qty:              integer('qty').notNull(),
+  unitPriceCenti:   integer('unit_price_centi').notNull(),
+  lineTotalCenti:   integer('line_total_centi').notNull(),
+  receivedQty:      integer('received_qty').notNull().default(0), // updated by GRN (when ported)
+  notes:            text('notes'),
+  createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPo: index('idx_po_items_po').on(t.purchaseOrderId),
+}));
 
 export const purchaseOrderLines = pgTable('purchase_order_lines', {
   id:               uuid('id').primaryKey().defaultRandom(),
