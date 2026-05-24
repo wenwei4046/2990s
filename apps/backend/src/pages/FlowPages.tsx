@@ -80,6 +80,7 @@ const GRN_CHIPS: Chip[] = [
 
 export const Grns = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useGrns(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.grns ?? [], [data]);
 
@@ -130,6 +131,7 @@ const PI_CHIPS: Chip[] = [
 
 export const PurchaseInvoicesPage = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = usePurchaseInvoices(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.purchaseInvoices ?? [], [data]);
 
@@ -182,6 +184,7 @@ const MSO_CHIPS: Chip[] = [
 
 export const MfgSalesOrdersPage = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgSalesOrders(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.salesOrders ?? [], [data]);
 
@@ -239,6 +242,7 @@ const DO_CHIPS: Chip[] = [
 
 export const MfgDeliveryOrdersPage = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgDeliveryOrders(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.deliveryOrders ?? [], [data]);
 
@@ -293,6 +297,7 @@ const SI_CHIPS: Chip[] = [
 
 export const SalesInvoicesPage = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useSalesInvoices(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.salesInvoices ?? [], [data]);
 
@@ -348,6 +353,7 @@ const CO_CHIPS: Chip[] = [
 
 export const ConsignmentPage = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useConsignments(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.consignments ?? [], [data]);
 
@@ -399,6 +405,7 @@ const DR_CHIPS: Chip[] = [
 
 export const DeliveryReturnsPage = () => {
   const [status, setStatus] = useState('all');
+  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useDeliveryReturns(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.deliveryReturns ?? [], [data]);
 
