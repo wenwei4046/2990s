@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -51,25 +51,49 @@ const QUICK_PRESET_META: Record<string, { sub: string; cushions: number; baseW: 
   '2WC': { sub: '2-seater with wood console', cushions: 2, baseW: 235, baseD: 95 },
   // F7: power-slide combo — a 2-seater, same footprint as 2S.
   '2PS': { sub: '2-seater · 2 power slide',   cushions: 3, baseW: 265, baseD: 95 },
-  // F4: corner package (composed preview, no single PNG).
-  CORNER: { sub: '1B + corner + 2A',          cushions: 3, baseW: 200, baseD: 253 },
+  // F4: corner package (composed preview, no single PNG). L-shape: corner + 2A
+  // across the top, 1A chaise dropping down the left (253×190 @24", 283×200 @28").
+  CORNER: { sub: '1A + corner + 2A',          cushions: 3, baseW: 253, baseD: 190 },
 };
 
-// Composed-preview cell templates for presets that have NO single composite PNG
-// (F6 console, F4 corner) — rendered via <SofaCellsPreview> from the module art.
-// cm coords. CORNER's L-layout is a sensible default; positions/rotations are
-// easily tweaked (it's just the preview + the canonical PO module list).
-const PRESET_CELLS: Record<string, Cell[]> = {
-  '2WC': [
-    { id: 'wc-l', moduleId: '1A-LHF', x: 0,   y: 0,  rot: 0 },
-    { id: 'wc-c', moduleId: 'WC-45',  x: 95,  y: 0,  rot: 0 },
-    { id: 'wc-r', moduleId: '1A-RHF', x: 140, y: 0,  rot: 0 },
-  ],
-  CORNER: [
-    { id: 'cn-1b',  moduleId: '1B-LHF', x: 0,   y: 0,  rot: 0 },
-    { id: 'cn-cnr', moduleId: 'CNR',    x: 105, y: 0,  rot: 0 },
-    { id: 'cn-2a',  moduleId: '2A-RHF', x: 105, y: 95, rot: 90 },
-  ],
+// Composed-preview cells for presets that have NO single composite PNG (F6
+// console, F4 corner) — rendered via <SofaCellsPreview> from module art. Cell
+// x/y are computed from each module's ACTUAL width at the chosen seat depth
+// (modules grow ~10cm/cushion at 28") so neighbours always abut — no gap at
+// 24" AND no overlap at 28". Memoised per (bundle, depth) so the returned array
+// keeps a stable reference (SofaCellsPreview's effect deps on `cells`).
+const presetCellsCache = new Map<string, Cell[]>();
+const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined => {
+  const key = `${bundleId}-${depth}`;
+  const hit = presetCellsCache.get(key);
+  if (hit) return hit;
+  const wOf = (id: string): number => {
+    const m = findModule(id);
+    return m ? moduleFootprint(m, 0, depth).w : 0;
+  };
+  let cells: Cell[] | undefined;
+  if (bundleId === '2WC') {
+    // 1A + wood console + 1A, left to right.
+    const a = wOf('1A-LHF');
+    const c = wOf('WC-45');
+    cells = [
+      { id: 'wc-l', moduleId: '1A-LHF', x: 0,     y: 0, rot: 0 },
+      { id: 'wc-c', moduleId: 'WC-45',  x: a,     y: 0, rot: 0 },
+      { id: 'wc-r', moduleId: '1A-RHF', x: a + c, y: 0, rot: 0 },
+    ];
+  } else if (bundleId === 'CORNER') {
+    // L-shape: corner + 2-seater across the top; 1A chaise drops down the left
+    // (rot 270 → backrest on the outer-left edge, seat opening into the room).
+    // CNR depth (m.d) is constant with seat depth, so the chaise sits at y = 95.
+    const cnrW = wOf('CNR');
+    cells = [
+      { id: 'cn-cnr', moduleId: 'CNR',    x: 0,    y: 0,  rot: 0 },
+      { id: 'cn-2a',  moduleId: '2A-RHF', x: cnrW, y: 0,  rot: 0 },
+      { id: 'cn-1a',  moduleId: '1A-LHF', x: 0,    y: 95, rot: 270 },
+    ];
+  }
+  if (cells) presetCellsCache.set(key, cells);
+  return cells;
 };
 
 const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number } => {
@@ -1063,7 +1087,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
   // same width ratio so the visual matches the cm label.
   const baseW = QUICK_PRESET_META[pickedRow.bundle.id]?.baseW ?? dims.w;
   const depthScale = baseW > 0 ? dims.w / baseW : 1;
-  const heroCells = PRESET_CELLS[pickedRow.bundle.id];
+  const heroCells = buildPresetCells(pickedRow.bundle.id, depth);
 
   return (
     <>
@@ -1077,7 +1101,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             const isPicked = bundle.id === pickedRow.bundle.id;
             const lShape = isLShapeBundle(bundle.id);
             const meta = QUICK_PRESET_META[bundle.id];
-            const presetCells = PRESET_CELLS[bundle.id];
+            const presetCells = buildPresetCells(bundle.id, depth);
             return (
               <button
                 key={bundle.id}
