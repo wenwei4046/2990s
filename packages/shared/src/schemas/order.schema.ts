@@ -20,6 +20,12 @@ const sofaConfigSchema = z.object({
   presetId: z.string().optional(),
   quickFlip: z.enum(['L', 'R']).optional(),
   customCells: z.array(cellSchema),
+  // Upholstery fabric + colour (spec 2026-05-24). Optional in shape; server
+  // recompute enforces presence + validity for sofas. Labels are display-only.
+  fabricId: z.string().optional(),
+  colourId: z.string().optional(),
+  fabricLabel: z.string().optional(),
+  colourLabel: z.string().optional(),
 });
 
 const mattressConfigSchema = z.object({
