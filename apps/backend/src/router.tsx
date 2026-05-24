@@ -9,6 +9,7 @@ import { Addons } from './pages/Addons';
 import { Settings } from './pages/Settings';
 import { Customers } from './pages/Customers';
 import { Products } from './pages/Products';
+import { FabricTracking } from './pages/FabricTracking';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: 'orders', element: <Orders /> },
       { path: 'sku-master', element: <SkuMaster /> },
       { path: 'products', element: <Products /> },
+      { path: 'fabric-tracking', element: <FabricTracking /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },

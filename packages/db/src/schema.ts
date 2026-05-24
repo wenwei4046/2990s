@@ -678,7 +678,7 @@ export const fabricCategory = pgEnum('fabric_category', [
 ]);
 
 export const fabricPriceTier = pgEnum('fabric_price_tier', [
-  'PRICE_1', 'PRICE_2',
+  'PRICE_1', 'PRICE_2', 'PRICE_3',
 ]);
 
 export const maintenanceConfigScope = pgEnum('maintenance_config_scope', [
@@ -774,7 +774,13 @@ export const fabricTrackings = pgTable('fabric_trackings', {
   fabricCode:           text('fabric_code').notNull(),
   fabricDescription:    text('fabric_description'),
   fabricCategory:       fabricCategory('fabric_category'),
+  // Legacy single tier — kept for back-compat. New code reads the split
+  // columns below and falls back to this when both are NULL.
   priceTier:            fabricPriceTier('price_tier'),
+  // Per-context tiers (migration 0040). sofa_price_tier covers SOFA AND
+  // ACCESSORY contexts; bedframe_price_tier covers BEDFRAME only.
+  sofaPriceTier:        fabricPriceTier('sofa_price_tier'),
+  bedframePriceTier:    fabricPriceTier('bedframe_price_tier'),
   priceCenti:           integer('price_centi').notNull().default(0),       // RM × 100
   sohCenti:             integer('soh_centi').notNull().default(0),
   poOutstandingCenti:   integer('po_outstanding_centi').notNull().default(0),
