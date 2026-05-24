@@ -42,11 +42,14 @@ const tierShort = (t: FabricTier | null): string =>
   t ? `Price ${t.replace('PRICE_', '')}` : '—';
 
 const catClass = (c: FabricCategoryValue | null): string => {
-  if (c === 'B.M-FABR') return styles.catBM;
-  if (c === 'S-FABR') return styles.catS;
-  if (c === 'S.M-FABR') return styles.catSM;
-  if (c === 'LINING') return styles.catLN;
-  if (c === 'WEBBING') return styles.catWB;
+  // Cast each lookup to string — CSS Modules typings declare each export
+  // as `string | undefined`, which trips strict mode even though these
+  // classes always resolve at build time.
+  if (c === 'B.M-FABR') return styles.catBM as string;
+  if (c === 'S-FABR') return styles.catS as string;
+  if (c === 'S.M-FABR') return styles.catSM as string;
+  if (c === 'LINING') return styles.catLN as string;
+  if (c === 'WEBBING') return styles.catWB as string;
   return '';
 };
 
