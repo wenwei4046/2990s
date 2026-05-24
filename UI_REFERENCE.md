@@ -214,6 +214,20 @@ These are intentional changes from the prototype's current state. Anything not o
 
 **Not changed:** `prototype/` files (tablet-canonical and not desktop-aware), PWA manifest (`orientation: 'landscape'` is a no-op in desktop browsers), design tokens, routes, schema, API contracts.
 
+### §4 · Per-brand catalog badge colours (mattress sub-brands)
+
+**Approved on:** 2026-05-24 (Loo, with brand reference artwork for each).
+**Status:** Implemented in `apps/pos/src/pages/Catalog.tsx` + `Catalog.module.css`.
+
+**Why:** the mattress catalogue carries three real sub-brands (2990's / Carres / HappiSleep), seeded as `series` rows. The POS catalog card badge (`.photoBadge`, which renders `series.label`) was a single burnt-orange treatment for all. Loo wants each badge in its own brand identity so staff/customers read the brand at a glance.
+
+**What changed:** the badge is keyed by `data-brand={series.id}`:
+- `brand-2990s` → house orange (`--c-orange` #E86B3A) text on cream — the 2990's brand orange.
+- `brand-carres` → Carres red-orange **#D44210** text on cream (sampled from the Carres wordmark).
+- `brand-happisleep` → **inverted**: purple **#6259B2** fill + yellow **#FCE84D** text (sampled from HappiSleep brand artwork).
+
+**Note on brand colours:** #D44210 / #6259B2 / #FCE84D are **sub-brand** identity colours, intentionally outside the 2990's house palette (cream/orange/burnt/ink). This is the one sanctioned place they appear — scoped to the brand badge only. The "Don't change the brand colours" rule still holds everywhere else.
+
 ---
 
 ## What NOT to do
