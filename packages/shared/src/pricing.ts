@@ -117,6 +117,13 @@ export type SofaLineConfig = {
   /** Footrest flag snapshot (F3). false = auto-included headrest → invoice shows
    *  "+ N <label>" on a quick-pick line. Display only. */
   seatUpgradeFootrest?: boolean;
+  /** Chosen upholstery fabric + colour (spec 2026-05-24). The sofa branch
+   *  REQUIRES fabricId/colourId when the Model offers active fabrics, validates
+   *  them, and adds the fabric surcharge. Labels are display-only snapshots. */
+  fabricId?: string;
+  colourId?: string;
+  fabricLabel?: string | null;
+  colourLabel?: string | null;
 };
 export type SizeLineConfig = {
   kind: 'size';
@@ -188,6 +195,9 @@ export type OrderTotalError =
   | { code: 'wrong_pricing_kind'; productId: string; expected: string; got: string }
   | { code: 'no_geometry_or_bundle'; productId: string }
   | { code: 'inactive_bundle'; productId: string; bundleId: string }
+  | { code: 'unknown_fabric'; productId: string; fabricId?: string }
+  | { code: 'inactive_fabric'; productId: string; fabricId: string }
+  | { code: 'invalid_colour'; productId: string; fabricId: string; colourId?: string }
   | { code: 'inactive_size'; productId: string; sizeId: string }
   | { code: 'unknown_size'; productId: string; sizeId: string }
   | { code: 'unknown_addon'; productId: string; addonId: string }
@@ -253,6 +263,30 @@ export const computeOrderTotal = (
         breakdown.push(`Bundle ${bundle.bundleId}: RM ${bundle.price.toLocaleString('en-MY')}`);
       } else {
         throw new OrderPricingError({ code: 'no_geometry_or_bundle', productId: info.productId });
+      }
+
+      // Fabric surcharge + colour validation (spec 2026-05-24, G1/G6). Honest
+      // pricing: a tampered POS can't fake or skip the surcharge. Required only
+      // when this Model actually offers active fabrics — every real sofa does
+      // (product schema enforces >=1 active + the 0044 cross-join), so this is
+      // "always required" in practice while staying backward-compatible with
+      // fixtures that carry no fabric rows.
+      const activeFabrics = info.sofa.fabrics?.filter((f) => f.active) ?? [];
+      if (cfg.fabricId) {
+        const fabric = info.sofa.fabrics?.find((f) => f.fabricId === cfg.fabricId);
+        if (!fabric) {
+          throw new OrderPricingError({ code: 'unknown_fabric', productId: info.productId, fabricId: cfg.fabricId });
+        }
+        if (!fabric.active) {
+          throw new OrderPricingError({ code: 'inactive_fabric', productId: info.productId, fabricId: cfg.fabricId });
+        }
+        if (!cfg.colourId || !fabric.colourIds.includes(cfg.colourId)) {
+          throw new OrderPricingError({ code: 'invalid_colour', productId: info.productId, fabricId: cfg.fabricId, colourId: cfg.colourId });
+        }
+        unitPrice += fabric.surcharge;
+        breakdown.push(`Fabric ${fabric.fabricId} (+RM ${fabric.surcharge.toLocaleString('en-MY')})`);
+      } else if (activeFabrics.length > 0) {
+        throw new OrderPricingError({ code: 'unknown_fabric', productId: info.productId });
       }
 
       out.push({

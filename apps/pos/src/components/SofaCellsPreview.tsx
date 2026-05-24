@@ -37,12 +37,15 @@ export const SofaCellsPreview = ({ cells, depth, className }: Props) => {
       style={{
         position: 'relative',
         aspectRatio: `${bb.w} / ${bb.h}`,
-        // Fit within a height- OR width-constrained parent, preserving the cm
-        // aspect (cards are 76px-tall; the hero frame is flex-centred).
-        height: '100%',
-        width: 'auto',
-        maxWidth: '100%',
-        margin: '0 auto',
+        // Contain within a `container-type: size` parent (qpHeroCells in the
+        // hero, qpCardArt in the rail card), preserving the layout's cm aspect
+        // ratio, centred, never overflowing either axis. Width is the binding
+        // dimension; height follows from the aspect ratio. Both call sites
+        // establish a query container, so 100cqw/100cqh resolve to the parent's
+        // box — NOT the viewport (which previously rendered presets full-bleed).
+        width: `min(100cqw, calc(100cqh * ${bb.w} / ${bb.h}))`,
+        height: 'auto',
+        margin: 'auto',
       }}
     >
       {cells.map((c, i) => {

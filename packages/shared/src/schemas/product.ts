@@ -55,6 +55,13 @@ const sofaBundleRow = z.object({
   active:   z.boolean(),
   price:    money,
 });
+// Per-Model fabric availability + surcharge (spec 2026-05-24). fabricId is
+// checked against fabric_library server-side; schema only validates shape.
+const sofaFabricRow = z.object({
+  fabricId:  z.string().min(1),
+  active:    z.boolean(),
+  surcharge: money,
+});
 
 export const sofaProductSchema = productBase.extend({
   pricingKind:          z.literal('sofa_build'),
@@ -66,6 +73,7 @@ export const sofaProductSchema = productBase.extend({
   seatUpgradeFootrest:  z.boolean().optional(),
   compartments:         z.array(sofaPricingRow).min(1),
   bundles:              z.array(sofaBundleRow).min(1),
+  fabrics:              z.array(sofaFabricRow).min(1),
 });
 
 // Mattress / bedframe: 4 sizes (Single, Super Single, Queen, King).
@@ -119,6 +127,15 @@ export const productSchema = z.discriminatedUnion('pricingKind', [
         code: z.ZodIssueCode.custom,
         path: ['bundles'],
         message: 'Activate at least one Quick-Pick bundle and fill in its price.',
+      });
+    }
+    // Sofas require a fabric choice (spec 2026-05-24, G6) — at least one active.
+    const fabricOk = val.fabrics.some((f) => f.active);
+    if (!fabricOk) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fabrics'],
+        message: 'Activate at least one fabric — sofas require a fabric choice.',
       });
     }
   }

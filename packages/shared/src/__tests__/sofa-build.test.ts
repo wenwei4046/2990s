@@ -15,6 +15,8 @@ import {
   cellsToPoSkus,
   summarizeSofaCells,
   describeSofaLine,
+  fabricSurchargeFor,
+  fabricColourSuffix,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -652,5 +654,41 @@ describe('cellsToPoSkus', () => {
     const cells: Cell[] = [{ id: 'w', moduleId: 'WC-45', x: 0, y: 0, rot: 0 }];
     const skus = cellsToPoSkus(cells, '24');
     expect(skus).toEqual([{ sku: 'WC-45', label: 'Wood console · 45cm', qty: 1 }]);
+  });
+});
+
+describe('fabricSurchargeFor', () => {
+  const withFabrics = pricing({
+    fabrics: [
+      { fabricId: 'linen',   active: true,  surcharge: 0,   colourIds: ['sand', 'stone'] },
+      { fabricId: 'velvet',  active: true,  surcharge: 300, colourIds: ['sand'] },
+      { fabricId: 'retired', active: false, surcharge: 999, colourIds: [] },
+    ],
+  });
+
+  it('returns the surcharge of an active fabric', () => {
+    expect(fabricSurchargeFor(withFabrics, 'velvet')).toBe(300);
+    expect(fabricSurchargeFor(withFabrics, 'linen')).toBe(0);
+  });
+
+  it('returns 0 for missing, unknown, or inactive fabric', () => {
+    expect(fabricSurchargeFor(withFabrics, undefined)).toBe(0);
+    expect(fabricSurchargeFor(withFabrics, 'nope')).toBe(0);
+    expect(fabricSurchargeFor(withFabrics, 'retired')).toBe(0);
+  });
+
+  it('handles a Model with no fabrics array', () => {
+    expect(fabricSurchargeFor(pricing(), 'velvet')).toBe(0);
+  });
+});
+
+describe('fabricColourSuffix', () => {
+  it('formats fabric + colour', () => {
+    expect(fabricColourSuffix('Velvet', 'Sand')).toBe(' · Velvet / Sand');
+  });
+  it('returns empty when either is missing', () => {
+    expect(fabricColourSuffix(null, null)).toBe('');
+    expect(fabricColourSuffix('Velvet', null)).toBe('');
+    expect(fabricColourSuffix(undefined, 'Sand')).toBe('');
   });
 });

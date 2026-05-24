@@ -10,6 +10,7 @@ import {
   useProductSizes,
   useSizeLibrary,
   useProductPricingRealtime,
+  useProductFabrics,
   useAddons,
   type AddonRow,
 } from '../lib/queries';
@@ -20,6 +21,7 @@ import {
   type FlatConfigSnapshot,
 } from '../state/cart';
 import { CustomBuilder } from './CustomBuilder';
+import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import { SofaCellsPreview } from '../components/SofaCellsPreview';
 import { Topbar } from '../components/Topbar';
 import styles from './Configurator.module.css';
@@ -87,6 +89,7 @@ export const Configurator = () => {
   const product = useProduct(productId);
   const bundles = useProductBundles(productId);
   const compartments = useProductCompartments(productId);
+  const productFabrics = useProductFabrics(productId);
   useProductPricingRealtime(productId);
 
   const [picked, setPicked] = useState<string | null>(null);
@@ -103,6 +106,10 @@ export const Configurator = () => {
   // surface in the topbar action slot per UI_REFERENCE.md.
   const [quickFlip, setQuickFlip] = useState<'L' | 'R'>('R');
   const [activeDepth, setActiveDepth] = useState<Depth>('24');
+  // Chosen fabric + colour (spec 2026-05-24). Required before Add-to-Cart for
+  // sofas; the picker resolves labels/hex/surcharge so the snapshot + LIVE
+  // TOTAL render without another lookup.
+  const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
 
   const sizes = useProductSizes(productId);
   const sizeLib = useSizeLibrary();
@@ -259,12 +266,15 @@ export const Configurator = () => {
     return { bundle: b, price: row?.price ?? null, active: row?.active ?? false };
   });
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
-  const sofaTotal = pickedSofaRow?.price ?? 0;
-  const canAddSofa = pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null;
+  // Fabric surcharge folds onto the bundle price (caller-applied; see spec §3.2).
+  const sofaTotal = (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? (fabricSel?.surcharge ?? 0) : 0);
+  // Sofas require a fabric + colour before Add-to-Cart (G6).
+  const canAddSofa = pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null && fabricSel != null;
 
   const handleAddSofa = () => {
     if (!canAddSofa || pickedSofaRow == null || pickedSofaRow.price == null) return;
     const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
+    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -275,10 +285,16 @@ export const Configurator = () => {
       // headrest ("+ N Headrest") on this quick-pick line (F3).
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
       seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
-      total: pickedSofaRow.price,
+      // Fabric + colour (spec 2026-05-24) — surcharge folded into total.
+      fabricId: fabricSel?.fabricId,
+      colourId: fabricSel?.colourId,
+      fabricLabel: fabricSel?.fabricLabel,
+      colourLabel: fabricSel?.colourLabel,
+      colourHex: fabricSel?.colourHex ?? undefined,
+      total: pickedSofaRow.price + (fabricSel?.surcharge ?? 0),
       summary: lShape
-        ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"`
-        : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"`,
+        ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
+        : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot);
     navigate('/catalog');
@@ -487,6 +503,14 @@ export const Configurator = () => {
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
             depth={activeDepth}
+            fabricBlock={
+              <FabricColourPicker
+                productFabrics={productFabrics.data ?? []}
+                fabricId={fabricSel?.fabricId ?? null}
+                colourId={fabricSel?.colourId ?? null}
+                onChange={setFabricSel}
+              />
+            }
           />
         ) : (
           <CustomBuilder
@@ -887,6 +911,8 @@ interface SofaQuickPickProps {
   quickFlip: 'L' | 'R';
   onFlipChange: (flip: 'L' | 'R') => void;
   depth: Depth;
+  /** Fabric + Colour picker, rendered in the rail below the layout grid. */
+  fabricBlock?: React.ReactNode;
 }
 
 // Maps a bundle id (+ flip orientation for L-shape variants) to the public
@@ -1003,7 +1029,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1101,12 +1127,15 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             );
           })}
         </div>
+        {fabricBlock}
       </aside>
 
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
           {heroCells ? (
-            <SofaCellsPreview cells={heroCells} depth={depth} />
+            <div className={styles.qpHeroCells}>
+              <SofaCellsPreview cells={heroCells} depth={depth} />
+            </div>
           ) : (
           <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
             <img

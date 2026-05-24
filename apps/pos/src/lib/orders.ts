@@ -97,6 +97,10 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
           ...(l.config.depth ? { depth: l.config.depth } : {}),
           ...(l.config.seatUpgradeLabel ? { seatUpgradeLabel: l.config.seatUpgradeLabel } : {}),
           ...(l.config.seatUpgradeFootrest !== undefined ? { seatUpgradeFootrest: l.config.seatUpgradeFootrest } : {}),
+          ...(l.config.fabricId ? { fabricId: l.config.fabricId } : {}),
+          ...(l.config.colourId ? { colourId: l.config.colourId } : {}),
+          ...(l.config.fabricLabel ? { fabricLabel: l.config.fabricLabel } : {}),
+          ...(l.config.colourLabel ? { colourLabel: l.config.colourLabel } : {}),
         },
       };
     }

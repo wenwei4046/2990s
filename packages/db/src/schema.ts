@@ -279,6 +279,42 @@ export const productBundles = pgTable('product_bundles', {
   pk: primaryKey({ columns: [t.productId, t.bundleId] }),
 }));
 
+/* ─────────────────────────── Sofa fabric & colour ───────────────────── */
+// Global fabric library + nested colours, plus a per-Model opt-in/surcharge
+// table. Mirrors compartment_library/product_compartments. Fabric tiers add a
+// transparent surcharge (whole MYR); colour is free. (Spec 2026-05-24, G1–G3.)
+
+export const fabricLibrary = pgTable('fabric_library', {
+  id:               text('id').primaryKey(),                     // 'linen','velvet','leather-pu'
+  label:            text('label').notNull(),                     // 'Linen'
+  tier:             text('tier').notNull().default('standard'),  // 'standard' | 'premium' (display)
+  defaultSurcharge: integer('default_surcharge').notNull().default(0), // seed default add-on
+  swatchKey:        text('swatch_key'),                          // optional R2 texture; else hex chip
+  active:           boolean('active').notNull().default(true),
+  sortOrder:        integer('sort_order').notNull().default(0),
+});
+
+export const fabricColours = pgTable('fabric_colours', {
+  fabricId:  text('fabric_id').notNull().references(() => fabricLibrary.id, { onDelete: 'cascade' }),
+  colourId:  text('colour_id').notNull(),                        // 'sand','charcoal'
+  label:     text('label').notNull(),                            // 'Sand'
+  swatchHex: text('swatch_hex'),                                 // '#D8C7A8' chip
+  swatchKey: text('swatch_key'),                                 // optional R2 image
+  active:    boolean('active').notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.fabricId, t.colourId] }),
+}));
+
+export const productFabrics = pgTable('product_fabrics', {
+  productId: uuid('product_id').notNull().references(() => products.id, { onDelete: 'cascade' }),
+  fabricId:  text('fabric_id').notNull().references(() => fabricLibrary.id),
+  active:    boolean('active').notNull().default(true),          // the per-Model "勾选"
+  surcharge: integer('surcharge').notNull().default(0),          // seeded from default_surcharge
+}, (t) => ({
+  pk: primaryKey({ columns: [t.productId, t.fabricId] }),
+}));
+
 /* ─────────────────────────── Add-ons ────────────────────────────────── */
 
 export const addons = pgTable('addons', {
@@ -864,6 +900,14 @@ export type SlipUploadStatus  = (typeof slipUploadStatus.enumValues)[number];
 export type PaymentKind       = (typeof paymentKind.enumValues)[number];
 export type PricingKind       = (typeof pricingKind.enumValues)[number];
 export type StaffRole         = (typeof staffRole.enumValues)[number];
+
+/* Sofa fabric & colour (spec 2026-05-24) */
+export type FabricLibraryRow    = typeof fabricLibrary.$inferSelect;
+export type NewFabricLibraryRow = typeof fabricLibrary.$inferInsert;
+export type FabricColourRow     = typeof fabricColours.$inferSelect;
+export type NewFabricColourRow  = typeof fabricColours.$inferInsert;
+export type ProductFabricRow    = typeof productFabrics.$inferSelect;
+export type NewProductFabricRow = typeof productFabrics.$inferInsert;
 
 /* Manufacturing module types (HOOKKA port) */
 export type MfgProduct               = typeof mfgProducts.$inferSelect;

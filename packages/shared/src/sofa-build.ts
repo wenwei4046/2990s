@@ -60,6 +60,19 @@ export interface SofaProductPricing {
   /** true → upgraded seat opens a footrest (power recliner/incliner/slide/leg);
    *  false → no footrest (headrest). Defaults to true when omitted. */
   seatUpgradeFootrest?: boolean;
+  /** Per-Model fabric availability + surcharge (spec 2026-05-24). Optional so
+   *  callers that don't price fabric (e.g. plan-view) can omit it.
+   *  `computeSofaPrice` ignores this — surcharge is a caller-applied line add. */
+  fabrics?: SofaProductPricingFabric[];
+}
+
+export interface SofaProductPricingFabric {
+  fabricId: string;
+  active: boolean;
+  surcharge: number;
+  /** Active colour ids for this fabric — the server uses them to validate the
+   *  chosen colour. Display labels/hex are loaded separately for the UI. */
+  colourIds: string[];
 }
 
 export interface BundleDef {
@@ -537,6 +550,25 @@ const compRow = (pricing: SofaProductPricing, compartmentId: string): SofaProduc
 
 const bundleRow = (pricing: SofaProductPricing, bundleId: string): SofaProductPricingBundle | undefined =>
   pricing.bundles.find((b) => b.bundleId === bundleId);
+
+/** Surcharge for an ACTIVE fabric on this Model, else 0. Pure; used by the POS
+ *  LIVE TOTAL. The server (`computeOrderTotal`) does strict validation before
+ *  adding the same value. */
+export const fabricSurchargeFor = (
+  pricing: SofaProductPricing,
+  fabricId: string | undefined,
+): number => {
+  if (!fabricId) return 0;
+  const f = pricing.fabrics?.find((x) => x.fabricId === fabricId && x.active);
+  return f?.surcharge ?? 0;
+};
+
+/** Display-only " · <fabric> / <colour>" suffix for an invoice / cart sofa line.
+ *  Empty string when either label is missing. */
+export const fabricColourSuffix = (
+  fabricLabel?: string | null,
+  colourLabel?: string | null,
+): string => (fabricLabel && colourLabel ? ` · ${fabricLabel} / ${colourLabel}` : '');
 
 const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): SofaGroupPrice => {
   const cellIds = group.map((c, i) => c.id ?? `__cell_${i}`);

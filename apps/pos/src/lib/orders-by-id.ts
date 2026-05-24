@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { describeSofaLine } from '@2990s/shared';
+import { describeSofaLine, fabricColourSuffix } from '@2990s/shared';
 import { supabase } from './supabase';
 
 export interface OrderDetail {
@@ -80,6 +80,8 @@ export const useOrderById = (orderId: string | undefined) =>
         if (config && config.kind === 'sofa') {
           description = describeSofaLine(config);
           if (config.depth) description += ` · ${config.depth}"`;  // F5: show depth
+          // Fabric + colour on the invoice line (spec 2026-05-24).
+          description += fabricColourSuffix(config.fabricLabel, config.colourLabel);
         }
         return {
           product_id:   i.product_id,
