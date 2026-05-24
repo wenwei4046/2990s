@@ -68,6 +68,40 @@ export const usePurchaseInvoiceDetail = (id: string | null) => useQuery({
   queryFn: () => authedFetch<{ purchaseInvoice: any; items: any[] }>(`/purchase-invoices/${id}`),
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
+export const usePostPurchaseInvoice = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch(`/purchase-invoices/${id}/post`, { method: 'PATCH' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', id] });
+    },
+  });
+};
+export const useRecordPiPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, amountCenti, notes }: { id: string; amountCenti: number; notes?: string }) =>
+      authedFetch(`/purchase-invoices/${id}/payment`, {
+        method: 'PATCH', body: JSON.stringify({ amountCenti, notes }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', vars.id] });
+    },
+  });
+};
+export const useCancelPurchaseInvoice = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch(`/purchase-invoices/${id}/cancel`, { method: 'PATCH' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', id] });
+    },
+  });
+};
+
 export const useCreatePurchaseInvoice = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -192,6 +226,20 @@ export const useCreateMfgDeliveryOrder = () => {
   });
 };
 
+export const useUpdateMfgDeliveryOrderStatus = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      authedFetch(`/delivery-orders-mfg/${id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+    },
+  });
+};
+
 /* ── Sales Invoice ───────────────────────────────────────────────────── */
 export const useSalesInvoices = (status?: string) => baseQuery<{ salesInvoices: any[] }>(['sales-invoices', status ?? 'all'], `/sales-invoices${status ? `?status=${status}` : ''}`);
 export const useSalesInvoiceDetail = (id: string | null) => useQuery({
@@ -204,6 +252,33 @@ export const useCreateSalesInvoice = () => {
   return useMutation({
     mutationFn: (body: unknown) => authedFetch<{ id: string; invoiceNumber: string }>(`/sales-invoices`, { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sales-invoices'] }),
+  });
+};
+
+export const useUpdateSalesInvoiceStatus = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      authedFetch(`/sales-invoices/${id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+    },
+  });
+};
+export const useRecordSiPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, amountCenti, notes }: { id: string; amountCenti: number; notes?: string }) =>
+      authedFetch(`/sales-invoices/${id}/payment`, {
+        method: 'PATCH', body: JSON.stringify({ amountCenti, notes }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+    },
   });
 };
 

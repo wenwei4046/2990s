@@ -11,7 +11,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, X, Send, Ban, FileText } from 'lucide-react';
+import { Plus, X, Send, Ban, FileText, Printer } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   usePurchaseOrders,
@@ -401,6 +401,20 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
 
         {po && (
           <footer className={styles.drawerFooter}>
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => {
+                // Dynamic import — PDF chunk is shared with SO/DO so it's cached
+                // after first use on any flow.
+                import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
+                  generatePurchaseOrderPdf(po, items),
+                ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+            >
+              <Printer {...ICON} />
+              <span>Print PDF</span>
+            </Button>
             {po.status === 'DRAFT' && (
               <Button
                 variant="ghost"
