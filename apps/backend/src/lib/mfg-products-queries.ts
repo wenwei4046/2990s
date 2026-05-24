@@ -109,6 +109,11 @@ export function useMfgProducts(opts?: { category?: MfgCategory; search?: string 
       return res.products;
     },
     staleTime: 30_000,
+    // Surface schema-missing errors (HTTP 500 'relation does not exist')
+    // immediately instead of cycling through 3 default retries + exponential
+    // backoff (~7s of "Loading…" before the error banner shows).
+    retry: 1,
+    retryDelay: 800,
   });
 }
 
@@ -151,6 +156,9 @@ export function useMaintenanceConfig(scope = 'master') {
     queryFn: () =>
       authedFetch<MaintenanceResolved>(`/maintenance-config/resolved?scope=${encodeURIComponent(scope)}`),
     staleTime: 60_000,
+    // See useMfgProducts comment — settle errors fast for the migration-pending case.
+    retry: 1,
+    retryDelay: 800,
   });
 }
 
