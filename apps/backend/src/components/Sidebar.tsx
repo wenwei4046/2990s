@@ -97,6 +97,7 @@ export const Sidebar = () => {
     { kind: 'group', label: 'B2B Sales' },
     { kind: 'link', to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders (B2B)' },
     { kind: 'link', to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
+    { kind: 'link', to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
     { kind: 'link', to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
     { kind: 'link', to: '/consignment', icon: <Boxes {...ICON_PROPS} />, label: 'Consignment' },
     { kind: 'link', to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },

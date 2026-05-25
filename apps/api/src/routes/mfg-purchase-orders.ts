@@ -181,6 +181,116 @@ mfgPurchaseOrders.post('/', async (c) => {
   return c.json({ id: header.id, poNumber: header.po_number }, 201);
 });
 
+// ── POST /from-sos ────────────────────────────────────────────────────
+// Create POs from selected Sales Order items. For each SO item, looks up
+// the MAIN supplier binding via supplier_material_bindings. Groups items
+// by supplier_id and creates ONE PO per supplier. Returns the list of
+// created PO ids/numbers so the UI can summarize.
+//
+// Body: { soItems: [{ soDocNo, itemCode, itemName, qty }] }
+mfgPurchaseOrders.post('/from-sos', async (c) => {
+  const supabase = c.get('supabase');
+  const user = c.get('user');
+  let body: { soItems?: Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }> };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const soItems = body.soItems ?? [];
+  if (soItems.length === 0) return c.json({ error: 'so_items_required' }, 400);
+
+  // Resolve main supplier per item via supplier_material_bindings.
+  const codes = [...new Set(soItems.map((it) => it.itemCode))];
+  const { data: bindings } = await supabase
+    .from('supplier_material_bindings')
+    .select('material_code, supplier_id, supplier_sku, unit_price_centi, currency')
+    .in('material_code', codes)
+    .eq('material_kind', 'mfg_product')
+    .order('is_main_supplier', { ascending: false });
+
+  // Group by material_code → first row (main supplier or lowest price).
+  const mainByCode = new Map<string, { supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>();
+  for (const b of (bindings ?? []) as Array<{ material_code: string; supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>) {
+    if (!mainByCode.has(b.material_code)) mainByCode.set(b.material_code, b);
+  }
+
+  // Items without a binding can't be PO'd.
+  const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
+  if (noBinding.length > 0) {
+    return c.json({
+      error: 'missing_bindings',
+      message: 'Some items have no main supplier binding',
+      itemCodes: noBinding.map((it) => it.itemCode),
+    }, 400);
+  }
+
+  // Group items by supplier.
+  type Line = { itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number };
+  const bySupplier = new Map<string, { currency: string; lines: Line[] }>();
+  for (const it of soItems) {
+    const b = mainByCode.get(it.itemCode)!;
+    const bucket = bySupplier.get(b.supplier_id) ?? { currency: b.currency, lines: [] };
+    bucket.lines.push({
+      itemCode: it.itemCode,
+      itemName: it.itemName,
+      qty: it.qty,
+      supplierSku: b.supplier_sku,
+      unitPriceCenti: b.unit_price_centi,
+    });
+    bySupplier.set(b.supplier_id, bucket);
+  }
+
+  // Generate PO numbers + create one PO per supplier.
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count: monthCount } = await supabase
+    .from('purchase_orders')
+    .select('id', { head: true, count: 'exact' })
+    .like('po_number', `PO-${yymm}-%`);
+  let counter = monthCount ?? 0;
+
+  const created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }> = [];
+  for (const [supplierId, bucket] of bySupplier.entries()) {
+    counter += 1;
+    const poNumber = `PO-${yymm}-${String(counter).padStart(3, '0')}`;
+    const subtotal = bucket.lines.reduce((s, l) => s + l.qty * l.unitPriceCenti, 0);
+
+    const { data: headerData, error: hErr } = await supabase
+      .from('purchase_orders')
+      .insert({
+        po_number: poNumber,
+        supplier_id: supplierId,
+        status: 'DRAFT',
+        currency: bucket.currency,
+        subtotal_centi: subtotal,
+        tax_centi: 0,
+        total_centi: subtotal,
+        notes: `From SOs: ${[...new Set(soItems.map((i) => i.soDocNo))].join(', ')}`,
+        created_by: user.id,
+      })
+      .select('id, po_number')
+      .single();
+    if (hErr) continue;
+    const header = headerData as unknown as { id: string; po_number: string };
+
+    const rows = bucket.lines.map((l) => ({
+      purchase_order_id: header.id,
+      material_kind: 'mfg_product',
+      material_code: l.itemCode,
+      material_name: l.itemName,
+      supplier_sku: l.supplierSku,
+      qty: l.qty,
+      unit_price_centi: l.unitPriceCenti,
+      line_total_centi: l.qty * l.unitPriceCenti,
+    }));
+    const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
+    if (iErr) {
+      await supabase.from('purchase_orders').delete().eq('id', header.id);
+      continue;
+    }
+    created.push({ id: header.id, poNumber: header.po_number, supplierId, lineCount: bucket.lines.length });
+  }
+
+  return c.json({ created, total: created.length }, 201);
+});
+
 // ── Submit / cancel ──────────────────────────────────────────────────
 mfgPurchaseOrders.patch('/:id/submit', async (c) => {
   const id = c.req.param('id');

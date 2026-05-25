@@ -149,6 +149,13 @@ export const GrnDetail = () => {
         </div>
         <div className={styles.actions}>
           <span className={`${styles.statusPill} ${GRN_STATUS_CLASS[grn.status] ?? ''}`}>{grn.status}</span>
+          <Button variant="ghost" size="md" onClick={() => {
+            import('../lib/grn-pdf').then(({ generateGrnPdf }) => generateGrnPdf(grn, items))
+              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+          }}>
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
           {!isDraft && rejectedItems.length > 0 && (
             <Button variant="ghost" size="md" onClick={raisePurchaseReturn} disabled={createPr.isPending}>
               <Undo2 {...ICON} />
@@ -304,6 +311,13 @@ export const PurchaseInvoiceDetail = () => {
           <span className={`${styles.statusPill} ${PI_STATUS_CLASS[pi.status] ?? ''}`}>
             {pi.status.replace('_', ' ')}
           </span>
+          <Button variant="ghost" size="md" onClick={() => {
+            import('../lib/purchase-invoice-pdf').then(({ generatePurchaseInvoicePdf }) => generatePurchaseInvoicePdf(pi, items))
+              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+          }}>
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
           {isDraft && (
             <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
               <CheckCircle2 {...ICON} />
@@ -622,6 +636,13 @@ export const SalesInvoiceDetail = () => {
           <span className={`${styles.statusPill} ${SI_STATUS_CLASS[si.status] ?? ''}`}>
             {si.status.replace('_', ' ')}
           </span>
+          <Button variant="ghost" size="md" onClick={() => {
+            import('../lib/sales-invoice-pdf').then(({ generateSalesInvoicePdf }) => generateSalesInvoicePdf(si, items))
+              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+          }}>
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
           {isDraft && (
             <Button variant="primary" size="md"
               onClick={() => updateStatus.mutate({ id: id!, status: 'ISSUED' })}
@@ -1170,6 +1191,13 @@ export const PurchaseReturnDetail = () => {
         </div>
         <div className={styles.actions}>
           <span className={`${styles.statusPill} ${PR_STATUS_CLASS[pr.status] ?? ''}`}>{pr.status}</span>
+          <Button variant="ghost" size="md" onClick={() => {
+            import('../lib/purchase-return-pdf').then(({ generatePurchaseReturnPdf }) => generatePurchaseReturnPdf(pr, items))
+              .catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+          }}>
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
           {isDraft && (
             <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
               <CheckCircle2 {...ICON} />

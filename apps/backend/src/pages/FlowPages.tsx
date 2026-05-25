@@ -12,7 +12,7 @@ import { Button } from '@2990s/design-system';
 import {
   useGrns, usePurchaseInvoices, useMfgSalesOrders, useMfgDeliveryOrders,
   useSalesInvoices, useConsignments, useDeliveryReturns,
-  usePurchaseReturns,
+  usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
 import {
   CreateGrnDrawer, CreatePurchaseInvoiceDrawer, CreateSalesOrderDrawer,
@@ -84,8 +84,31 @@ export const Grns = () => {
   const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { data, isLoading, error } = useGrns(status === 'all' ? undefined : status);
   const rows = useMemo(() => data?.grns ?? [], [data]);
+  const prFromGrns = usePurchaseReturnFromGrns();
+
+  const toggle = (id: string) => {
+    setSelectedIds((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  };
+  const selected = rows.filter((r: any) => selectedIds.has(r.id));
+  const allPosted = selected.every((r: any) => r.status === 'POSTED');
+  const sameSupplier = new Set(selected.map((r: any) => r.supplier?.id ?? r.supplier_id)).size <= 1;
+
+  const convertToPr = () => {
+    if (selected.length === 0) return;
+    if (!allPosted) { alert('Only POSTED GRNs can be converted to a Purchase Return.'); return; }
+    if (!sameSupplier) { alert('All selected GRNs must be from the same supplier.'); return; }
+    prFromGrns.mutate({ grnIds: [...selectedIds] }, {
+      onSuccess: (res) => {
+        alert(`Created Purchase Return ${res.returnNumber} from ${res.grnCount} GRNs (${res.lineCount} rejected lines).`);
+        setSelectedIds(new Set());
+        navigate(`/purchase-returns/${res.id}`);
+      },
+      onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`),
+    });
+  };
 
   return (
     <div className={styles.page}>
@@ -98,15 +121,48 @@ export const Grns = () => {
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} GRN`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="If first deploy: apply migration 0042 against Supabase." />}
+
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(232, 107, 58, 0.08)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>
+            {selectedIds.size} selected
+            {!allPosted && ' · ⚠️ All must be POSTED'}
+            {!sameSupplier && ' · ⚠️ Mixed suppliers'}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+            <Button variant="primary" size="sm"
+              onClick={convertToPr}
+              disabled={prFromGrns.isPending || !allPosted || !sameSupplier}>
+              {prFromGrns.isPending ? 'Converting…' : `Raise Purchase Return (${selectedIds.size})`}
+            </Button>
+          </span>
+        </div>
+      )}
+
       <div className={styles.tableCard}>
         <table className={styles.table}>
-          <thead><tr><th>GRN #</th><th>PO #</th><th>Supplier</th><th>Received</th><th>DN Ref</th><th>Status</th></tr></thead>
+          <thead><tr>
+            <th style={{ width: 36 }}></th>
+            <th>GRN #</th><th>PO #</th><th>Supplier</th><th>Received</th><th>DN Ref</th><th>Status</th>
+          </tr></thead>
           <tbody>
-            {isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
+            {isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
               <tr key={r.id}
                 onClick={() => navigate(`/grns/${r.id}`)}
                 style={{ cursor: 'pointer' }}>
+                <td onClick={(e) => { e.stopPropagation(); toggle(r.id); }}>
+                  <input type="checkbox" checked={selectedIds.has(r.id)}
+                    onChange={() => toggle(r.id)}
+                    onClick={(e) => e.stopPropagation()} />
+                </td>
                 <td><span className={styles.codeChip}>{r.grn_number}</span></td>
                 <td><span className={styles.codeChip}>{r.purchase_order?.po_number ?? '—'}</span></td>
                 <td>{r.supplier?.name ?? '—'}</td>
@@ -116,7 +172,7 @@ export const Grns = () => {
               </tr>
             ))}
             {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={6} className={styles.emptyRow}>No GRNs yet — click "New GRN" to start.</td></tr>
+              <tr><td colSpan={7} className={styles.emptyRow}>No GRNs yet — click "New GRN" to start.</td></tr>
             )}
           </tbody>
         </table>

@@ -19,6 +19,7 @@ import {
 } from './pages/FlowPages';
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
 import { Inventory } from './pages/Inventory';
+import { Drivers } from './pages/Drivers';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
   ConsignmentDetail, PurchaseReturnDetail,
@@ -38,6 +39,7 @@ export const router = createBrowserRouter([
       { path: 'products', element: <Products /> },
       { path: 'fabric-tracking', element: <FabricTracking /> },
       { path: 'inventory', element: <Inventory /> },
+      { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       { path: 'purchase-orders', element: <PurchaseOrders /> },
