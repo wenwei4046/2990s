@@ -82,6 +82,79 @@ grns.post('/', async (c) => {
   return c.json({ id: h.id, grnNumber: h.grn_number }, 201);
 });
 
+// ── POST /from-pos ─────────────────────────────────────────────────────
+// Batch-convert multiple POs into ONE GRN. Validates same supplier across
+// all POs. Pre-fills qty_received + qty_accepted with the outstanding qty
+// (po_item.qty - po_item.received_qty) per line. Returns the new GRN's id
+// so the UI can navigate to its detail page for review.
+grns.post('/from-pos', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { purchaseOrderIds?: string[]; deliveryNoteRef?: string; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const poIds = body.purchaseOrderIds ?? [];
+  if (poIds.length === 0) return c.json({ error: 'po_ids_required' }, 400);
+
+  // Load POs to verify same supplier + grab po_number for traceability.
+  const { data: pos, error: poErr } = await sb.from('purchase_orders')
+    .select('id, po_number, supplier_id, status')
+    .in('id', poIds);
+  if (poErr) return c.json({ error: 'load_failed', reason: poErr.message }, 500);
+  const poList = (pos ?? []) as Array<{ id: string; po_number: string; supplier_id: string; status: string }>;
+  if (poList.length === 0) return c.json({ error: 'pos_not_found' }, 404);
+
+  const supplierIds = new Set(poList.map((p) => p.supplier_id));
+  if (supplierIds.size > 1) {
+    return c.json({ error: 'mixed_suppliers', message: 'All selected POs must be from the same supplier' }, 400);
+  }
+  const supplierId = [...supplierIds][0]!;
+
+  // Load PO items with outstanding qty.
+  const { data: items } = await sb.from('purchase_order_items')
+    .select('id, purchase_order_id, material_kind, material_code, material_name, qty, received_qty, unit_price_centi')
+    .in('purchase_order_id', poIds);
+  const itemList = ((items ?? []) as Array<{
+    id: string; purchase_order_id: string; material_kind: string; material_code: string;
+    material_name: string; qty: number; received_qty: number; unit_price_centi: number;
+  }>).filter((it) => it.qty - (it.received_qty ?? 0) > 0);
+
+  if (itemList.length === 0) return c.json({ error: 'nothing_outstanding', message: 'All PO items are already fully received' }, 400);
+
+  // Generate GRN number using same pattern as the single-POST endpoint.
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count } = await sb.from('grns').select('id', { head: true, count: 'exact' }).like('grn_number', `GRN-${yymm}-%`);
+  const grnNumber = `GRN-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+
+  const poNumbersJoined = poList.map((p) => p.po_number).join(', ');
+  const { data: header, error: hErr } = await sb.from('grns').insert({
+    grn_number: grnNumber,
+    purchase_order_id: poList[0]!.id,                    // primary PO ref (first one)
+    supplier_id: supplierId,
+    received_at: new Date().toISOString().slice(0, 10),
+    delivery_note_ref: body.deliveryNoteRef ?? null,
+    notes: `Batch-converted from ${poList.length} POs: ${poNumbersJoined}${body.notes ? ` · ${body.notes}` : ''}`,
+    created_by: user.id,
+  }).select('id, grn_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; grn_number: string };
+
+  const rows = itemList.map((it) => ({
+    grn_id: h.id,
+    purchase_order_item_id: it.id,
+    material_kind: it.material_kind,
+    material_code: it.material_code,
+    material_name: it.material_name,
+    qty_received: it.qty - (it.received_qty ?? 0),
+    qty_accepted: it.qty - (it.received_qty ?? 0),
+    qty_rejected: 0,
+    unit_price_centi: it.unit_price_centi,
+  }));
+  const { error: iErr } = await sb.from('grn_items').insert(rows);
+  if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  return c.json({ id: h.id, grnNumber: h.grn_number, poCount: poList.length, lineCount: itemList.length }, 201);
+});
+
 grns.patch('/:id/post', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
 

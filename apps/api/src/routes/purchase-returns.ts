@@ -116,6 +116,86 @@ purchaseReturns.post('/', async (c) => {
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
+// Batch-convert multiple POSTED GRNs into ONE Purchase Return. Aggregates
+// all qty_rejected lines across the selected GRNs (must share a supplier).
+purchaseReturns.post('/from-grns', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { grnIds?: string[]; reason?: string; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const grnIds = body.grnIds ?? [];
+  if (grnIds.length === 0) return c.json({ error: 'grn_ids_required' }, 400);
+
+  // Load GRNs to verify same supplier + POSTED state.
+  const { data: grns, error: grnErr } = await sb.from('grns')
+    .select('id, grn_number, supplier_id, purchase_order_id, status')
+    .in('id', grnIds);
+  if (grnErr) return c.json({ error: 'load_failed', reason: grnErr.message }, 500);
+  const grnList = (grns ?? []) as Array<{ id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string }>;
+  if (grnList.length === 0) return c.json({ error: 'grns_not_found' }, 404);
+
+  const notPosted = grnList.filter((g) => g.status !== 'POSTED');
+  if (notPosted.length > 0) {
+    return c.json({ error: 'not_all_posted', message: `These GRNs are not POSTED: ${notPosted.map((g) => g.grn_number).join(', ')}` }, 400);
+  }
+  const supplierIds = new Set(grnList.map((g) => g.supplier_id));
+  if (supplierIds.size > 1) {
+    return c.json({ error: 'mixed_suppliers', message: 'All selected GRNs must be from the same supplier' }, 400);
+  }
+  const supplierId = [...supplierIds][0]!;
+
+  // Load rejected items across all GRNs.
+  const { data: items } = await sb.from('grn_items')
+    .select('id, grn_id, material_kind, material_code, material_name, qty_rejected, rejection_reason, unit_price_centi')
+    .in('grn_id', grnIds)
+    .gt('qty_rejected', 0);
+  const rejectedItems = ((items ?? []) as Array<{
+    id: string; grn_id: string; material_kind: string; material_code: string; material_name: string;
+    qty_rejected: number; rejection_reason: string | null; unit_price_centi: number;
+  }>);
+  if (rejectedItems.length === 0) {
+    return c.json({ error: 'no_rejected_qty', message: 'None of the selected GRNs have rejected items' }, 400);
+  }
+
+  // Generate PR number.
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count } = await sb.from('purchase_returns').select('id', { head: true, count: 'exact' }).like('return_number', `PRT-${yymm}-%`);
+  const returnNumber = `PRT-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+
+  const grnNumbersJoined = grnList.map((g) => g.grn_number).join(', ');
+  const totalRefund = rejectedItems.reduce((s, it) => s + (it.qty_rejected * it.unit_price_centi), 0);
+
+  const { data: header, error: hErr } = await sb.from('purchase_returns').insert({
+    return_number: returnNumber,
+    purchase_order_id: grnList[0]!.purchase_order_id,
+    grn_id: grnList[0]!.id,                              // primary GRN ref
+    supplier_id: supplierId,
+    return_date: new Date().toISOString().slice(0, 10),
+    reason: body.reason ?? `Batch from ${grnList.length} GRNs: ${grnNumbersJoined}`,
+    refund_centi: totalRefund,
+    notes: body.notes ?? null,
+    created_by: user.id,
+  }).select('id, return_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; return_number: string };
+
+  const rows = rejectedItems.map((it) => ({
+    purchase_return_id: h.id,
+    grn_item_id: it.id,
+    material_kind: it.material_kind,
+    material_code: it.material_code,
+    material_name: it.material_name,
+    qty_returned: it.qty_rejected,
+    unit_price_centi: it.unit_price_centi,
+    line_refund_centi: it.qty_rejected * it.unit_price_centi,
+    reason: it.rejection_reason,
+  }));
+  const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
+  if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  return c.json({ id: h.id, returnNumber: h.return_number, grnCount: grnList.length, lineCount: rejectedItems.length }, 201);
+});
+
 purchaseReturns.patch('/:id/post', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   const { data, error } = await sb.from('purchase_returns').update({

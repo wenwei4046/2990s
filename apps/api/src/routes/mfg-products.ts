@@ -104,6 +104,61 @@ mfgProducts.post('/', async (c) => {
   return c.json(data, 201);
 });
 
+// ── POST /batch-import ─────────────────────────────────────────────────
+// Bulk upsert from a CSV import. Body: { rows: [{ code, name, category, ... }] }.
+// Upserts by code (ON CONFLICT DO UPDATE). Returns count inserted/updated.
+mfgProducts.post('/batch-import', async (c) => {
+  let body: { rows?: Array<Record<string, unknown>> };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const list = body.rows ?? [];
+  if (list.length === 0) return c.json({ error: 'rows_required' }, 400);
+  if (list.length > 500) return c.json({ error: 'too_many', message: 'Max 500 rows per import' }, 400);
+
+  const supabase = c.get('supabase');
+  let upserted = 0;
+  const failures: Array<{ code: string; reason: string }> = [];
+
+  for (const r of list) {
+    const code = String(r.code ?? '').trim();
+    const name = String(r.name ?? '').trim();
+    const category = String(r.category ?? '').trim();
+    if (!code || !name || !VALID_CATEGORIES.has(category)) {
+      failures.push({ code, reason: 'missing code/name or invalid category' });
+      continue;
+    }
+    const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const id = `mfg-${rand.replace(/-/g, '').slice(0, 12)}`;
+    const row: Record<string, unknown> = {
+      id,
+      code,
+      name,
+      category,
+      status: String(r.status ?? 'ACTIVE'),
+      description: (r.description as string) ?? null,
+      base_model: (r.base_model as string) ?? null,
+      size_label: (r.size_label as string) ?? null,
+      base_price_sen: r.base_price_sen == null || r.base_price_sen === '' ? null : Number(r.base_price_sen),
+      price1_sen: r.price1_sen == null || r.price1_sen === '' ? null : Number(r.price1_sen),
+      cost_price_sen: r.cost_price_sen == null || r.cost_price_sen === '' ? 0 : Number(r.cost_price_sen),
+      unit_m3_milli: r.unit_m3_milli == null || r.unit_m3_milli === '' ? 0 : Number(r.unit_m3_milli),
+      fabric_usage_centi: r.fabric_usage_centi == null || r.fabric_usage_centi === '' ? 0 : Number(r.fabric_usage_centi),
+      production_time_minutes: r.production_time_minutes == null || r.production_time_minutes === '' ? 0 : Number(r.production_time_minutes),
+      branding: (r.branding as string) ?? null,
+      fabric_color: (r.fabric_color as string) ?? null,
+    };
+    const { error } = await supabase.from('mfg_products').upsert(row, { onConflict: 'code' });
+    if (error) {
+      failures.push({ code, reason: error.message });
+    } else {
+      upserted += 1;
+    }
+  }
+
+  return c.json({ upserted, failed: failures.length, failures: failures.slice(0, 50) });
+});
+
 // ── GET /:id ───────────────────────────────────────────────────────────
 mfgProducts.get('/:id', async (c) => {
   const id = c.req.param('id');

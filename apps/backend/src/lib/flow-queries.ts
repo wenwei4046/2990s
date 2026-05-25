@@ -39,6 +39,48 @@ const baseQuery = <T>(key: string[], path: string) => useQuery({
   retryDelay: 800,
 });
 
+/* ── Batch conversions ──────────────────────────────────────────────── */
+export const useGrnFromPos = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { purchaseOrderIds: string[]; deliveryNoteRef?: string; notes?: string }) =>
+      authedFetch<{ id: string; grnNumber: string; poCount: number; lineCount: number }>(
+        `/grns/from-pos`, { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+};
+
+export const usePurchaseReturnFromGrns = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { grnIds: string[]; reason?: string; notes?: string }) =>
+      authedFetch<{ id: string; returnNumber: string; grnCount: number; lineCount: number }>(
+        `/purchase-returns/from-grns`, { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
+export const usePoFromSos = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { soItems: Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }> }) =>
+      authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
+        `/mfg-purchase-orders/from-sos`, { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+};
+
 /* ── GRN ─────────────────────────────────────────────────────────────── */
 export const useGrns = (status?: string) => baseQuery<{ grns: any[] }>(['grns', status ?? 'all'], `/grns${status ? `?status=${status}` : ''}`);
 export const useGrnDetail = (id: string | null) => useQuery({

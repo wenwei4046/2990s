@@ -30,6 +30,7 @@ import {
   type MaterialKind,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
+import { useGrnFromPos } from '../lib/flow-queries';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -62,11 +63,49 @@ type Drawer =
 export const PurchaseOrders = () => {
   const [status, setStatus] = useState<'all' | PoStatus>('all');
   const [drawer, setDrawer] = useState<Drawer>({ kind: 'closed' });
+  // Multi-select state — batch-convert N POs into one GRN.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const grnFromPos = useGrnFromPos();
 
   const { data, isLoading, error } = usePurchaseOrders({
     status: status === 'all' ? undefined : status,
   });
   const rows = useMemo(() => data ?? [], [data]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const selectedRows = useMemo(
+    () => rows.filter((r) => selectedIds.has(r.id)),
+    [rows, selectedIds],
+  );
+  const selectedSuppliers = useMemo(
+    () => new Set(selectedRows.map((r) => r.supplier_id)),
+    [selectedRows],
+  );
+
+  const convertToGrn = () => {
+    if (selectedRows.length === 0) return;
+    if (selectedSuppliers.size > 1) {
+      alert('All selected POs must be from the same supplier. Convert per supplier in separate batches.');
+      return;
+    }
+    grnFromPos.mutate(
+      { purchaseOrderIds: [...selectedIds] },
+      {
+        onSuccess: (res) => {
+          alert(`Created GRN ${res.grnNumber} from ${res.poCount} POs (${res.lineCount} lines).`);
+          setSelectedIds(new Set());
+          setDrawer({ kind: 'detail', poId: res.id });
+        },
+      },
+    );
+  };
 
   return (
     <div className={styles.page}>
@@ -115,10 +154,35 @@ export const PurchaseOrders = () => {
         </div>
       )}
 
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(232, 107, 58, 0.08)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+          gap: 'var(--space-3)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>
+            {selectedIds.size} selected
+            {selectedSuppliers.size > 1 && ' · ⚠️ Mixed suppliers — narrow to one to convert'}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+            <Button variant="primary" size="sm"
+              onClick={convertToGrn}
+              disabled={grnFromPos.isPending || selectedSuppliers.size !== 1}>
+              {grnFromPos.isPending ? 'Converting…' : `Convert to GRN (${selectedIds.size})`}
+            </Button>
+          </span>
+        </div>
+      )}
+
       <div className={styles.tableCard}>
         <table className={styles.table}>
           <thead>
             <tr>
+              <th style={{ width: 36 }}></th>
               <th>PO #</th>
               <th>Supplier</th>
               <th>Date</th>
@@ -129,9 +193,14 @@ export const PurchaseOrders = () => {
             </tr>
           </thead>
           <tbody>
-            {isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
+            {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((po) => (
               <tr key={po.id} onClick={() => setDrawer({ kind: 'detail', poId: po.id })}>
+                <td onClick={(e) => { e.stopPropagation(); toggleSelect(po.id); }}>
+                  <input type="checkbox" checked={selectedIds.has(po.id)}
+                    onChange={() => toggleSelect(po.id)}
+                    onClick={(e) => e.stopPropagation()} />
+                </td>
                 <td><span className={styles.codeChip}>{po.po_number}</span></td>
                 <td>{po.supplier?.name ?? po.supplier?.code ?? '—'}</td>
                 <td>{po.po_date}</td>
@@ -151,7 +220,7 @@ export const PurchaseOrders = () => {
               </tr>
             ))}
             {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>No POs yet — click "New PO" to start.</td></tr>
+              <tr><td colSpan={8} className={styles.emptyRow}>No POs yet — click "New PO" to start.</td></tr>
             )}
           </tbody>
         </table>
