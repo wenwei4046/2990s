@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Trash2, BookmarkPlus, Check, Pencil, ArrowLeft } from 'lucide-react';
+import { Trash2, BookmarkPlus, Check, Pencil, Plus } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
-import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
+import { useSaveQuote } from '../lib/quotes';
 import styles from './CartContents.module.css';
 
 export type CartContentsVariant = 'page' | 'rail';
@@ -23,13 +23,11 @@ export const CartContents = ({ variant, onContinue }: Props) => {
   const sourceQuoteId = useCart((s) => s.sourceQuoteId);
   const subtotal = cartSubtotal(lines);
   const saveQuote = useSaveQuote();
-  const updateQuote = useUpdateQuote();
 
   const [savingQuote, setSavingQuote] = useState(false);
   const [quoteName, setQuoteName] = useState('');
   const [quotePhone, setQuotePhone] = useState('');
   const [savedConfirm, setSavedConfirm] = useState(false);
-  const [savedAsUpdate, setSavedAsUpdate] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
   const submitSaveQuote = async () => {
@@ -50,29 +48,10 @@ export const CartContents = ({ variant, onContinue }: Props) => {
       setSavingQuote(false);
       setQuoteName('');
       setQuotePhone('');
-      setSavedAsUpdate(false);
       setSavedConfirm(true);
       setTimeout(() => setSavedConfirm(false), 2400);
     } catch (err) {
       setSaveErr(err instanceof Error ? err.message : 'Failed to save quote');
-    }
-  };
-
-  // Re-saving a cart that was loaded from a quote updates that quote in place —
-  // no name re-entry, no duplicate. Clears the cart like a fresh save: pressing
-  // Update means "save the draft, not buying yet" (to buy, staff use Convert to
-  // Sales Order, which keeps the cart and consumes the quote on confirm).
-  const handleUpdateQuote = async () => {
-    if (!sourceQuoteId) return;
-    setSaveErr(null);
-    try {
-      await updateQuote.mutateAsync({ id: sourceQuoteId, cart: lines, subtotal, total: subtotal });
-      clear();
-      setSavedAsUpdate(true);
-      setSavedConfirm(true);
-      setTimeout(() => setSavedConfirm(false), 2400);
-    } catch (err) {
-      setSaveErr(err instanceof Error ? err.message : 'Failed to update quote');
     }
   };
 
@@ -92,7 +71,7 @@ export const CartContents = ({ variant, onContinue }: Props) => {
       {savedConfirm && (
         <div className={styles.savedBanner}>
           <Check size={16} strokeWidth={1.75} />
-          {savedAsUpdate ? 'Quote updated.' : 'Quote saved.'} Open <Link to="/quotes">Saved quotes</Link> to load it later.
+          Quote saved. Open <Link to="/quotes">Saved quotes</Link> to load it later.
         </div>
       )}
 
@@ -166,26 +145,15 @@ export const CartContents = ({ variant, onContinue }: Props) => {
           <span className="t-eyebrow">Subtotal</span>
           <PriceTag amount={subtotal} size={variant === 'rail' ? 'md' : 'lg'} />
         </div>
-        {saveErr && !savingQuote && <p className={styles.quoteErr}>{saveErr}</p>}
         <div className={styles.actions}>
-          {variant === 'page' && (
-            <div className={styles.backWrap}>
-              <Button variant="secondary" onClick={() => navigate('/catalog')}>
-                <ArrowLeft size={14} strokeWidth={1.75} />
-                Back to catalog
-              </Button>
-            </div>
-          )}
           <Button variant="secondary" onClick={clear}>Clear</Button>
           {!savingQuote && variant === 'page' && (
             sourceQuoteId ? (
-              <Button
-                variant="secondary"
-                onClick={handleUpdateQuote}
-                disabled={lines.length === 0 || updateQuote.isPending}
-              >
-                <BookmarkPlus size={14} strokeWidth={1.75} />
-                {updateQuote.isPending ? 'Updating…' : 'Update quote'}
+              // Loaded from a quote: keep the cart and head back to the catalog
+              // to keep adding items to this quote's set.
+              <Button variant="secondary" onClick={() => navigate('/catalog')}>
+                <Plus size={14} strokeWidth={1.75} />
+                Continue add on
               </Button>
             ) : (
               <Button
