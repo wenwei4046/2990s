@@ -214,6 +214,10 @@ export const products = pgTable('products', {
   pricingKind:  pricingKind('pricing_kind').notNull().default('tbc'),
 
   name:        text('name').notNull(),
+  // Friendly "real name" shown in catalogue/cart/configurator (e.g. 'Pllao').
+  // The technical model code (e.g. 'SF 5130') lives in modelCode and surfaces
+  // ONLY on the Sales Order as "<model_code> · <name>". NULL for non-sofas.
+  modelCode:   text('model_code'),
   detail:      text('detail'),
   sizeDisplay: text('size_display'),                // free-text 'Queen, 152×190'
   imgKey:      text('img_key'),                     // R2 key for hero image
