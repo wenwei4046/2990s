@@ -55,29 +55,33 @@ BEGIN
   INSERT INTO products
     (id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, visible, stock)
   VALUES
+    -- size_display = NULL for every mattress (Loo, 2026-05-26: do NOT show the
+    -- thickness + soft/firm eyebrow on the catalogue card — same as the sofas).
+    -- Firmness still distinguishes the paired Models via `name` (e.g. Ketta
+    -- Soft / Ketta Firm); thickness is reference-only and lives nowhere on POS.
     -- 2990s — Ketta (8"), Akka (12"), Arrus (12"); Soft + Firm each
-    ('dddddddd-dddd-dddd-dddd-dddddddd0001','MAT-2990-KETTA-S','mattress','brand-2990s','size_variants','Ketta Soft','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.','8" Soft',v_soft,v_soft,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0002','MAT-2990-KETTA-F','mattress','brand-2990s','size_variants','Ketta Firm','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.','8" Firm',v_firm,v_firm,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0003','MAT-2990-AKKA-S','mattress','brand-2990s','size_variants','Akka Soft','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.','12" Soft',v_soft,v_soft,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0004','MAT-2990-AKKA-F','mattress','brand-2990s','size_variants','Akka Firm','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.','12" Firm',v_firm,v_firm,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0005','MAT-2990-ARRUS-S','mattress','brand-2990s','size_variants','Arrus Soft','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.','12" Soft',v_soft,v_soft,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0006','MAT-2990-ARRUS-F','mattress','brand-2990s','size_variants','Arrus Firm','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.','12" Firm',v_firm,v_firm,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0001','MAT-2990-KETTA-S','mattress','brand-2990s','size_variants','Ketta Soft','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.',NULL,v_soft,v_soft,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0002','MAT-2990-KETTA-F','mattress','brand-2990s','size_variants','Ketta Firm','Crafted with natural latex resilience, this mattress gently follows the body with clean, responsive support for calm, comfortable nights.',NULL,v_firm,v_firm,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0003','MAT-2990-AKKA-S','mattress','brand-2990s','size_variants','Akka Soft','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.',NULL,v_soft,v_soft,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0004','MAT-2990-AKKA-F','mattress','brand-2990s','size_variants','Akka Firm','Built with spring support and latex comfort, this mattress brings grounded stability, gentle cushioning and lasting comfort through the night.',NULL,v_firm,v_firm,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0005','MAT-2990-ARRUS-S','mattress','brand-2990s','size_variants','Arrus Soft','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.',NULL,v_soft,v_soft,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0006','MAT-2990-ARRUS-F','mattress','brand-2990s','size_variants','Arrus Firm','Designed for smooth everyday rest, this mattress blends spring support with foam cushioning for a balanced, effortless sleep feel.',NULL,v_firm,v_firm,true,99),
 
     -- Carres — Balance (12"), Whisper (12" S/F), Embrace (14" S/F), Cloudrest (14" tbc)
-    ('dddddddd-dddd-dddd-dddd-dddddddd0007','MAT-CAR-BALANCE','mattress','brand-carres','size_variants','Balance','Designed for balanced support and cooling comfort, this mattress combines spring, foam, latex and cooling fabric for a stable yet comfortable sleep feel.','12"',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0008','MAT-CAR-WHISPER-S','mattress','brand-carres','size_variants','Whisper Soft','Made for quiet, gentle rest, this mattress blends reloop fiber and latex for a light, breathable sleep feel with soft and steady support.','12" Soft',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0009','MAT-CAR-WHISPER-F','mattress','brand-carres','size_variants','Whisper Firm','Made for quiet, gentle rest, this mattress blends reloop fiber and latex for a light, breathable sleep feel with soft and steady support.','12" Firm',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0010','MAT-CAR-EMBRACE-S','mattress','brand-carres','size_variants','Embrace Soft','Created for a more embracing sleep experience, this mattress combines spring, foam, memory foam and cooling fabric for plush comfort and lasting support.','14" Soft',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0011','MAT-CAR-EMBRACE-F','mattress','brand-carres','size_variants','Embrace Firm','Created for a more embracing sleep experience, this mattress combines spring, foam, memory foam and cooling fabric for plush comfort and lasting support.','14" Firm',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0012','MAT-CAR-CLOUDREST','mattress','brand-carres','size_variants','Cloudrest',NULL,'14"',v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0007','MAT-CAR-BALANCE','mattress','brand-carres','size_variants','Balance','Designed for balanced support and cooling comfort, this mattress combines spring, foam, latex and cooling fabric for a stable yet comfortable sleep feel.',NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0008','MAT-CAR-WHISPER-S','mattress','brand-carres','size_variants','Whisper Soft','Made for quiet, gentle rest, this mattress blends reloop fiber and latex for a light, breathable sleep feel with soft and steady support.',NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0009','MAT-CAR-WHISPER-F','mattress','brand-carres','size_variants','Whisper Firm','Made for quiet, gentle rest, this mattress blends reloop fiber and latex for a light, breathable sleep feel with soft and steady support.',NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0010','MAT-CAR-EMBRACE-S','mattress','brand-carres','size_variants','Embrace Soft','Created for a more embracing sleep experience, this mattress combines spring, foam, memory foam and cooling fabric for plush comfort and lasting support.',NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0011','MAT-CAR-EMBRACE-F','mattress','brand-carres','size_variants','Embrace Firm','Created for a more embracing sleep experience, this mattress combines spring, foam, memory foam and cooling fabric for plush comfort and lasting support.',NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0012','MAT-CAR-CLOUDREST','mattress','brand-carres','size_variants','Cloudrest',NULL,NULL,v_img,v_img,true,99),
 
     -- HappiSleep — 6 uniquely-named cooling models (descriptions TBC)
-    ('dddddddd-dddd-dddd-dddd-dddddddd0013','MAT-HS-GRIDCOOL','mattress','brand-happisleep','size_variants','GridCool',NULL,'10" Soft',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0014','MAT-HS-DEWCOOL','mattress','brand-happisleep','size_variants','DewCool',NULL,'10" Firm',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0015','MAT-HS-PURECOOL','mattress','brand-happisleep','size_variants','PureCool',NULL,'12" Soft',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0016','MAT-HS-ACECOOL','mattress','brand-happisleep','size_variants','AceCool',NULL,'12" Firm',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0017','MAT-HS-MISTCOOL','mattress','brand-happisleep','size_variants','MistCool',NULL,'14" Soft',v_img,v_img,true,99),
-    ('dddddddd-dddd-dddd-dddd-dddddddd0018','MAT-HS-FROSTCOOL','mattress','brand-happisleep','size_variants','FrostCool',NULL,'14" Firm',v_img,v_img,true,99)
+    ('dddddddd-dddd-dddd-dddd-dddddddd0013','MAT-HS-GRIDCOOL','mattress','brand-happisleep','size_variants','GridCool',NULL,NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0014','MAT-HS-DEWCOOL','mattress','brand-happisleep','size_variants','DewCool',NULL,NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0015','MAT-HS-PURECOOL','mattress','brand-happisleep','size_variants','PureCool',NULL,NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0016','MAT-HS-ACECOOL','mattress','brand-happisleep','size_variants','AceCool',NULL,NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0017','MAT-HS-MISTCOOL','mattress','brand-happisleep','size_variants','MistCool',NULL,NULL,v_img,v_img,true,99),
+    ('dddddddd-dddd-dddd-dddd-dddddddd0018','MAT-HS-FROSTCOOL','mattress','brand-happisleep','size_variants','FrostCool',NULL,NULL,v_img,v_img,true,99)
   ON CONFLICT (id) DO UPDATE SET
     sku = EXCLUDED.sku, category_id = EXCLUDED.category_id, series_id = EXCLUDED.series_id,
     pricing_kind = EXCLUDED.pricing_kind, name = EXCLUDED.name, detail = EXCLUDED.detail,
