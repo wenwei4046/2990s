@@ -239,6 +239,23 @@ export function useCreateBinding() {
   });
 }
 
+// Batch-create N bindings in one round-trip. Backend de-dupes against any
+// material already bound for this supplier and returns counts.
+export function useCreateBindingsBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ supplierId, bindings }: { supplierId: string; bindings: NewBinding[] }) =>
+      authedFetch<{ inserted: number; skipped: number; bindings: BindingRow[] }>(
+        `/suppliers/${supplierId}/bindings/batch`,
+        { method: 'POST', body: JSON.stringify({ bindings }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
+      qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+    },
+  });
+}
+
 export function useUpdateBinding() {
   const qc = useQueryClient();
   return useMutation({
@@ -327,6 +344,7 @@ export function useCreatePurchaseOrder() {
     mutationFn: (body: {
       supplierId: string;
       currency?: Currency;
+      poDate?: string;
       expectedAt?: string;
       notes?: string;
       items: NewPoItem[];

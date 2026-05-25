@@ -139,20 +139,24 @@ mfgPurchaseOrders.post('/', async (c) => {
     };
   });
 
+  const headerInsert: Record<string, unknown> = {
+    po_number: poNumber,
+    supplier_id: supplierId,
+    status: 'DRAFT',
+    currency,
+    expected_at: (body.expectedAt as string | undefined) ?? null,
+    notes: (body.notes as string | undefined) ?? null,
+    subtotal_centi: subtotal,
+    tax_centi: 0,
+    total_centi: subtotal,
+    created_by: user.id,
+  };
+  // Optional poDate — if absent, the column default (now()) wins.
+  if (body.poDate) headerInsert.po_date = body.poDate;
+
   const { data: headerData, error: hErr } = await supabase
     .from('purchase_orders')
-    .insert({
-      po_number: poNumber,
-      supplier_id: supplierId,
-      status: 'DRAFT',
-      currency,
-      expected_at: (body.expectedAt as string | undefined) ?? null,
-      notes: (body.notes as string | undefined) ?? null,
-      subtotal_centi: subtotal,
-      tax_centi: 0,
-      total_centi: subtotal,
-      created_by: user.id,
-    })
+    .insert(headerInsert)
     .select(HEADER_COLS)
     .single();
 

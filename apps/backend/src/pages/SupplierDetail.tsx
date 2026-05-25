@@ -23,20 +23,25 @@ import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
-  TrendingUp, Package, Plus, Pencil, Trash2, Star, X,
+  TrendingUp, Package, Plus, Pencil, Trash2, Star, X, Save, Search,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useSupplierDetail,
   useSupplierScorecard,
+  useUpdateSupplier,
   useCreateBinding,
+  useCreateBindingsBatch,
   useUpdateBinding,
   useDeleteBinding,
   type BindingRow,
   type MaterialKind,
   type Currency,
+  type SupplierRow,
   type SupplierStatus,
+  type NewBinding,
 } from '../lib/suppliers-queries';
+import { useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -106,9 +111,14 @@ export const SupplierDetail = () => {
   }, [score]);
 
   // SKU dialog state — modal for create / edit.
+  //   'closed'      — nothing open
+  //   'multi'       — multi-select picker from Products (batch-add bindings)
+  //   'edit:row'    — edit one existing binding
   const [skuDialog, setSkuDialog] = useState<
-    { mode: 'closed' } | { mode: 'create' } | { mode: 'edit'; binding: BindingRow }
+    { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }
   >({ mode: 'closed' });
+
+  const [editingInfo, setEditingInfo] = useState(false);
 
   if (detail.isLoading) {
     return (
@@ -158,25 +168,12 @@ export const SupplierDetail = () => {
       </div>
 
       {/* ── Supplier Info ──────────────────────────────────────────── */}
-      <section className={styles.card}>
-        <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Supplier Info</h2>
-        </header>
-        <div className={styles.cardBody}>
-          <div className={styles.infoGrid}>
-            <InfoCell label="Contact" value={supplier.contact_person ?? '—'} />
-            <InfoCell label="Email" value={supplier.email ?? '—'} />
-            <InfoCell label="Phone" value={supplier.phone ?? supplier.whatsapp_number ?? '—'} />
-            <InfoCell label="Payment terms" value={supplier.payment_terms ?? '—'} />
-            {supplier.address && (
-              <div className={`${styles.infoCell} ${styles.infoCellFull}`}>
-                <span className={styles.infoLabel}>Address</span>
-                <span className={styles.infoValue}>{supplier.address}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </section>
+      <SupplierInfoCard
+        supplier={supplier}
+        editing={editingInfo}
+        onEdit={() => setEditingInfo(true)}
+        onClose={() => setEditingInfo(false)}
+      />
 
       {/* ── KPI tiles ──────────────────────────────────────────────── */}
       <section className={styles.kpiGrid}>
@@ -226,9 +223,9 @@ export const SupplierDetail = () => {
               ({bindings.length} {bindings.length === 1 ? 'code' : 'codes'})
             </span>
           </h2>
-          <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'create' })}>
+          <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'multi' })}>
             <Plus {...ICON} />
-            <span>Add SKU Mapping</span>
+            <span>Add SKU Mappings</span>
           </Button>
         </header>
         <SkuMappingsTable
@@ -250,11 +247,18 @@ export const SupplierDetail = () => {
         <LastTenPOsTable rows={score?.last10POs ?? []} />
       </section>
 
-      {/* ── SKU dialog (modal) ────────────────────────────────────── */}
-      {skuDialog.mode !== 'closed' && (
+      {/* ── SKU dialogs (modals) ──────────────────────────────────── */}
+      {skuDialog.mode === 'multi' && (
+        <MultiSkuPickerDialog
+          supplierId={id!}
+          existingBindings={bindings}
+          onClose={() => setSkuDialog({ mode: 'closed' })}
+        />
+      )}
+      {skuDialog.mode === 'edit' && (
         <SkuFormDialog
           supplierId={id!}
-          editing={skuDialog.mode === 'edit' ? skuDialog.binding : null}
+          editing={skuDialog.binding}
           onClose={() => setSkuDialog({ mode: 'closed' })}
         />
       )}
@@ -655,4 +659,444 @@ const SkuFormDialog = ({
       </div>
     </div>
   );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Supplier Info card with inline edit (all fields)
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SupplierInfoCard = ({
+  supplier,
+  editing,
+  onEdit,
+  onClose,
+}: {
+  supplier: SupplierRow;
+  editing: boolean;
+  onEdit: () => void;
+  onClose: () => void;
+}) => {
+  const update = useUpdateSupplier();
+  const [form, setForm] = useState({
+    code: supplier.code,
+    name: supplier.name,
+    contactPerson: supplier.contact_person ?? '',
+    email: supplier.email ?? '',
+    phone: supplier.phone ?? '',
+    whatsappNumber: supplier.whatsapp_number ?? '',
+    paymentTerms: supplier.payment_terms ?? '',
+    address: supplier.address ?? '',
+    state: supplier.state ?? '',
+    notes: supplier.notes ?? '',
+  });
+
+  const setF = (k: keyof typeof form, v: string) => setForm((s) => ({ ...s, [k]: v }));
+
+  const save = () => {
+    update.mutate({ id: supplier.id, ...form } as Partial<SupplierRow> & { id: string }, {
+      onSuccess: onClose,
+    });
+  };
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Supplier Info</h2>
+        {!editing ? (
+          <Button variant="ghost" size="sm" onClick={onEdit}>
+            <Pencil {...ICON} />
+            <span>Edit</span>
+          </Button>
+        ) : (
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button variant="primary" size="sm" onClick={save} disabled={update.isPending}>
+              <Save {...ICON} />
+              <span>{update.isPending ? 'Saving…' : 'Save'}</span>
+            </Button>
+          </span>
+        )}
+      </header>
+      <div className={styles.cardBody}>
+        {!editing ? (
+          <div className={styles.infoGrid}>
+            <InfoCell label="Code" value={supplier.code} />
+            <InfoCell label="Name" value={supplier.name} />
+            <InfoCell label="Contact" value={supplier.contact_person ?? '—'} />
+            <InfoCell label="Email" value={supplier.email ?? '—'} />
+            <InfoCell label="Phone" value={supplier.phone ?? '—'} />
+            <InfoCell label="WhatsApp" value={supplier.whatsapp_number ?? '—'} />
+            <InfoCell label="Payment terms" value={supplier.payment_terms ?? '—'} />
+            <InfoCell label="State" value={supplier.state ?? '—'} />
+            {supplier.address && (
+              <div className={`${styles.infoCell} ${styles.infoCellFull}`}>
+                <span className={styles.infoLabel}>Address</span>
+                <span className={styles.infoValue}>{supplier.address}</span>
+              </div>
+            )}
+            {supplier.notes && (
+              <div className={`${styles.infoCell} ${styles.infoCellFull}`}>
+                <span className={styles.infoLabel}>Notes</span>
+                <span className={styles.infoValue}>{supplier.notes}</span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className={styles.formGrid}>
+            <EditField label="Code" value={form.code} onChange={(v) => setF('code', v)} />
+            <EditField label="Name" value={form.name} onChange={(v) => setF('name', v)} />
+            <EditField label="Contact Person" value={form.contactPerson} onChange={(v) => setF('contactPerson', v)} />
+            <EditField label="Email" value={form.email} onChange={(v) => setF('email', v)} />
+            <EditField label="Phone" value={form.phone} onChange={(v) => setF('phone', v)} />
+            <EditField label="WhatsApp" value={form.whatsappNumber} onChange={(v) => setF('whatsappNumber', v)} />
+            <EditField label="Payment Terms" value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} />
+            <EditField label="State" value={form.state} onChange={(v) => setF('state', v)} />
+            <EditField label="Address" value={form.address} onChange={(v) => setF('address', v)} multiline />
+            <EditField label="Notes" value={form.notes} onChange={(v) => setF('notes', v)} multiline />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
+
+const EditField = ({
+  label, value, onChange, multiline,
+}: {
+  label: string; value: string; onChange: (v: string) => void; multiline?: boolean;
+}) => (
+  <label className={`${styles.field} ${multiline ? styles.formGridFull : ''}`}>
+    <span className={styles.fieldLabel}>{label}</span>
+    {multiline ? (
+      <textarea
+        className={styles.fieldInput}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ minHeight: 60, resize: 'vertical' }}
+      />
+    ) : (
+      <input
+        className={styles.fieldInput}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    )}
+  </label>
+);
+
+/* ════════════════════════════════════════════════════════════════════════
+   Multi-SKU Picker — pick N products from mfg_products, then fill in
+   supplier_sku / price / lead time / moq for each, batch-create.
+   ════════════════════════════════════════════════════════════════════════ */
+
+type MultiDraft = {
+  materialCode: string;
+  materialName: string;
+  supplierSku: string;
+  unitPriceCenti: number;
+  leadTimeDays: number;
+  moq: number;
+  isMainSupplier: boolean;
+};
+
+const CATEGORY_CHIPS: { value: 'all' | MfgCategory; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'BEDFRAME', label: 'Bedframe' },
+  { value: 'SOFA', label: 'Sofa' },
+  { value: 'MATTRESS', label: 'Mattress' },
+  { value: 'ACCESSORY', label: 'Accessory' },
+  { value: 'SERVICE', label: 'Service' },
+];
+
+const MultiSkuPickerDialog = ({
+  supplierId,
+  existingBindings,
+  onClose,
+}: {
+  supplierId: string;
+  existingBindings: BindingRow[];
+  onClose: () => void;
+}) => {
+  const batch = useCreateBindingsBatch();
+  const [step, setStep] = useState<1 | 2>(1);
+  const [category, setCategory] = useState<'all' | MfgCategory>('all');
+  const [search, setSearch] = useState('');
+  const products = useMfgProducts({
+    category: category === 'all' ? undefined : category,
+    search: search.trim() || undefined,
+  });
+
+  const alreadyBound = useMemo(
+    () => new Set(existingBindings.map((b) => `${b.material_kind}|${b.material_code}`)),
+    [existingBindings],
+  );
+
+  const [picked, setPicked] = useState<Record<string, MfgProductRow>>({});
+  const pickedCount = Object.keys(picked).length;
+  const [drafts, setDrafts] = useState<Record<string, MultiDraft>>({});
+
+  const toggleProduct = (p: MfgProductRow) => {
+    if (alreadyBound.has(`mfg_product|${p.code}`)) return;
+    setPicked((s) => {
+      const next = { ...s };
+      if (next[p.id]) delete next[p.id];
+      else next[p.id] = p;
+      return next;
+    });
+  };
+
+  const goNext = () => {
+    const seeded: Record<string, MultiDraft> = {};
+    for (const p of Object.values(picked)) {
+      seeded[p.code] = drafts[p.code] ?? {
+        materialCode: p.code,
+        materialName: p.name,
+        supplierSku: '',
+        unitPriceCenti: p.base_price_sen ?? 0,
+        leadTimeDays: 7,
+        moq: 1,
+        isMainSupplier: false,
+      };
+    }
+    setDrafts(seeded);
+    setStep(2);
+  };
+
+  const setDraft = (code: string, patch: Partial<MultiDraft>) => {
+    setDrafts((s) => ({ ...s, [code]: { ...s[code]!, ...patch } }));
+  };
+
+  const submit = () => {
+    const list: NewBinding[] = Object.values(drafts).map((d) => ({
+      materialKind: 'mfg_product' as MaterialKind,
+      materialCode: d.materialCode,
+      materialName: d.materialName,
+      supplierSku: d.supplierSku.trim() || d.materialCode,
+      unitPriceCenti: d.unitPriceCenti,
+      currency: 'MYR' as Currency,
+      leadTimeDays: d.leadTimeDays,
+      moq: d.moq,
+      isMainSupplier: d.isMainSupplier,
+    }));
+    if (list.length === 0) { onClose(); return; }
+    batch.mutate({ supplierId, bindings: list }, {
+      onSuccess: (res) => {
+        if (res.skipped > 0) {
+          alert(`Inserted ${res.inserted} mapping${res.inserted === 1 ? '' : 's'}; skipped ${res.skipped} already bound.`);
+        }
+        onClose();
+      },
+    });
+  };
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <div
+        className={styles.modal}
+        style={{ width: 'min(900px, 95vw)', maxHeight: '90vh' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className={styles.modalHeader}>
+          <h3 className={styles.modalTitle}>
+            {step === 1 ? `Pick products to map · ${pickedCount} selected` : `Fill in supplier codes · ${pickedCount} products`}
+          </h3>
+          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
+            <X {...ICON} />
+          </button>
+        </header>
+
+        {step === 1 ? (
+          <>
+            <div className={styles.modalBody} style={{ paddingBottom: 'var(--space-3)' }}>
+              <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+                {CATEGORY_CHIPS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setCategory(c.value)}
+                    style={{
+                      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-13)', fontWeight: 600,
+                      padding: 'var(--space-2) var(--space-3)',
+                      borderRadius: 'var(--radius-pill)',
+                      border: category === c.value ? '1px solid var(--c-ink)' : '1px solid var(--line)',
+                      background: category === c.value ? 'var(--c-ink)' : 'var(--c-paper)',
+                      color: category === c.value ? 'var(--c-cream)' : 'var(--c-ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+                <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+                  <Search {...ICON} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
+                  <input
+                    type="search"
+                    placeholder="Search code / name / description…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    style={{
+                      width: '100%', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-14)',
+                      background: 'var(--c-paper)', border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: 'var(--space-2) var(--space-3) var(--space-2) var(--space-7)',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+              </div>
+              <div style={{ maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 36 }}></th>
+                      <th>Code</th>
+                      <th>Description</th>
+                      <th>Category</th>
+                      <th>Size</th>
+                      <th className={styles.tableRight}>Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.isLoading && (
+                      <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>
+                    )}
+                    {!products.isLoading && (products.data ?? []).length === 0 && (
+                      <tr><td colSpan={6} className={styles.emptyRow}>No products match.</td></tr>
+                    )}
+                    {!products.isLoading && (products.data ?? []).map((p) => {
+                      const bound = alreadyBound.has(`mfg_product|${p.code}`);
+                      const isPicked = Boolean(picked[p.id]);
+                      return (
+                        <tr
+                          key={p.id}
+                          onClick={() => toggleProduct(p)}
+                          style={{
+                            cursor: bound ? 'not-allowed' : 'pointer',
+                            opacity: bound ? 0.4 : 1,
+                            background: isPicked ? 'rgba(232, 107, 58, 0.06)' : undefined,
+                          }}
+                          title={bound ? 'Already bound to this supplier' : ''}
+                        >
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={isPicked}
+                              disabled={bound}
+                              onChange={() => toggleProduct(p)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </td>
+                          <td className={styles.codeCell}>{p.code}</td>
+                          <td>{p.name}</td>
+                          <td className={styles.muted}>{p.category}</td>
+                          <td className={styles.muted}>{p.size_label ?? '—'}</td>
+                          <td className={styles.priceCell}>{p.base_price_sen ? `RM ${(p.base_price_sen / 100).toFixed(2)}` : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <footer className={styles.modalFooter}>
+              <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+              <Button variant="primary" size="md" onClick={goNext} disabled={pickedCount === 0}>
+                <span>Next · Fill supplier codes ({pickedCount})</span>
+              </Button>
+            </footer>
+          </>
+        ) : (
+          <>
+            <div className={styles.modalBody} style={{ paddingBottom: 'var(--space-3)' }}>
+              <p className={styles.infoLabel} style={{ marginBottom: 'var(--space-3)' }}>
+                Fill in each product's supplier-side code + price + lead time. Leave Supplier SKU blank to use our internal code.
+              </p>
+              <div style={{ maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Our Code · Name</th>
+                      <th>Supplier SKU</th>
+                      <th className={styles.tableRight}>Unit Price (RM)</th>
+                      <th className={styles.tableRight}>Lead (d)</th>
+                      <th className={styles.tableRight}>MOQ</th>
+                      <th>Main</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.values(drafts).map((d) => (
+                      <tr key={d.materialCode}>
+                        <td>
+                          <div className={styles.codeCell}>{d.materialCode}</div>
+                          <div className={styles.muted}>{d.materialName}</div>
+                        </td>
+                        <td>
+                          <input
+                            value={d.supplierSku}
+                            onChange={(e) => setDraft(d.materialCode, { supplierSku: e.target.value })}
+                            placeholder="(blank = same as our code)"
+                            style={smallInputStyle}
+                          />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={(d.unitPriceCenti / 100).toFixed(2)}
+                            onChange={(e) => setDraft(d.materialCode, {
+                              unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
+                            })}
+                            style={{ ...smallInputStyle, width: 100, textAlign: 'right' }}
+                          />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="number"
+                            value={d.leadTimeDays}
+                            onChange={(e) => setDraft(d.materialCode, { leadTimeDays: Number(e.target.value) || 0 })}
+                            style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
+                          />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="number"
+                            value={d.moq}
+                            onChange={(e) => setDraft(d.materialCode, { moq: Number(e.target.value) || 0 })}
+                            style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={d.isMainSupplier}
+                            onChange={(e) => setDraft(d.materialCode, { isMainSupplier: e.target.checked })}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <footer className={styles.modalFooter}>
+              <Button variant="ghost" size="md" onClick={() => setStep(1)}>← Back</Button>
+              <Button variant="primary" size="md" onClick={submit} disabled={batch.isPending}>
+                {batch.isPending ? 'Saving…' : `Save ${pickedCount} mapping${pickedCount === 1 ? '' : 's'}`}
+              </Button>
+            </footer>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const smallInputStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 'var(--fs-13)',
+  background: 'var(--c-cream)',
+  border: '1px solid var(--line)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '4px 8px',
+  outline: 'none',
 };

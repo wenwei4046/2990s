@@ -11,7 +11,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, X, Send, Ban, FileText, Printer } from 'lucide-react';
+import { Plus, X, Send, Ban, FileText, Printer, Truck, Package, Search } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   usePurchaseOrders,
@@ -21,12 +21,15 @@ import {
   useCancelPurchaseOrder,
   useSuppliers,
   useSupplierDetail,
+  useSuppliersForMaterial,
   type PoStatus,
   type PoHeaderRow,
   type BindingRow,
   type Currency,
   type NewPoItem,
+  type MaterialKind,
 } from '../lib/suppliers-queries';
+import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -163,38 +166,86 @@ export const PurchaseOrders = () => {
 };
 
 /* ─────────────────── Create PO Drawer ──────────────────────────────── */
+//
+// Two starting modes (commander 2026-05-25):
+//   Mode "supplier" — pick supplier → list their bindings → tick + qty per row
+//   Mode "item"     — pick a product → list suppliers that carry it → pick
+//                     one → add to draft → can stack multiple items per PO
+//                     as long as they all map to the SAME supplier.
+//
+// After items chosen, both modes converge into the same "header + summary"
+// section: expected date, notes, currency (read-only from binding), submit.
+
+type Mode = 'supplier' | 'item';
+type PickedLine = { binding: BindingRow; qty: number };
 
 const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
-  const suppliers = useSuppliers({ status: 'ACTIVE' });
-  const [supplierId, setSupplierId] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>('supplier');
+  const [poDate, setPoDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [expectedAt, setExpectedAt] = useState('');
   const [notes, setNotes] = useState('');
-  const supplierDetail = useSupplierDetail(supplierId);
   const create = useCreatePurchaseOrder();
 
-  const bindings = supplierDetail.data?.bindings ?? [];
+  // ── Supplier-mode state ─────────────────────────────────────────────
+  const suppliers = useSuppliers({ status: 'ACTIVE' });
+  const [supplierId, setSupplierId] = useState<string | null>(null);
+  const supplierDetail = useSupplierDetail(supplierId);
+  const supplierBindings = supplierDetail.data?.bindings ?? [];
   const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
-  const onQty = (bindingId: string, qty: number) =>
-    setQtyMap((s) => ({ ...s, [bindingId]: Math.max(0, qty || 0) }));
 
-  const lineItems = useMemo<Array<{ binding: BindingRow; qty: number }>>(() => {
-    return bindings
-      .map((b) => ({ binding: b, qty: qtyMap[b.id] ?? 0 }))
-      .filter((r) => r.qty > 0);
-  }, [bindings, qtyMap]);
-
-  const subtotalCenti = useMemo(
-    () => lineItems.reduce((s, r) => s + r.qty * r.binding.unit_price_centi, 0),
-    [lineItems],
+  // ── Item-mode state ─────────────────────────────────────────────────
+  // User picks one product → we look up all suppliers for it → user picks
+  // one binding row → adds (binding, qty) to itemModeLines.
+  const [itemSearch, setItemSearch] = useState('');
+  const itemModeProducts = useMfgProducts({ search: itemSearch.trim() || undefined });
+  const [itemModeMaterial, setItemModeMaterial] = useState<{ kind: MaterialKind; code: string } | null>(null);
+  const matSuppliers = useSuppliersForMaterial(
+    itemModeMaterial?.kind ?? null,
+    itemModeMaterial?.code ?? null,
   );
+  const [itemModeLines, setItemModeLines] = useState<PickedLine[]>([]);
+  // The supplier "locks" once the first item is added — subsequent items must
+  // be from the same supplier (since one PO = one supplier).
+  const lockedSupplierId = itemModeLines[0]?.binding.supplier_id ?? null;
 
-  const currency = bindings[0]?.currency ?? 'MYR';
+  // ── Compute lines + totals ──────────────────────────────────────────
+  const supplierModeLines: PickedLine[] = useMemo(
+    () => supplierBindings.map((b) => ({ binding: b, qty: qtyMap[b.id] ?? 0 })).filter((r) => r.qty > 0),
+    [supplierBindings, qtyMap],
+  );
+  const lines = mode === 'supplier' ? supplierModeLines : itemModeLines;
+  const subtotalCenti = useMemo(
+    () => lines.reduce((s, r) => s + r.qty * r.binding.unit_price_centi, 0),
+    [lines],
+  );
+  const currency = lines[0]?.binding.currency ?? 'MYR';
+  const finalSupplierId = mode === 'supplier' ? supplierId : lockedSupplierId;
+
+  const setItemLineQty = (bindingId: string, qty: number) => {
+    setItemModeLines((s) =>
+      s.map((r) => (r.binding.id === bindingId ? { ...r, qty: Math.max(0, qty) } : r)).filter((r) => r.qty > 0),
+    );
+  };
+  const removeItemLine = (bindingId: string) => {
+    setItemModeLines((s) => s.filter((r) => r.binding.id !== bindingId));
+  };
+
+  const addItemBinding = (binding: BindingRow) => {
+    if (lockedSupplierId && binding.supplier_id !== lockedSupplierId) {
+      alert('All items in a PO must come from the same supplier. Start a new PO for a different supplier.');
+      return;
+    }
+    if (itemModeLines.some((r) => r.binding.id === binding.id)) return;
+    setItemModeLines((s) => [...s, { binding, qty: 1 }]);
+    setItemModeMaterial(null);  // close the suppliers list, ready for next item
+    setItemSearch('');
+  };
 
   const submit = () => {
-    if (!supplierId) return alert('Pick a supplier.');
-    if (lineItems.length === 0) return alert('Add at least one item with qty > 0.');
+    if (!finalSupplierId) return alert('Pick a supplier (or add an item) first.');
+    if (lines.length === 0) return alert('Add at least one item with qty > 0.');
 
-    const items: NewPoItem[] = lineItems.map((r) => ({
+    const items: NewPoItem[] = lines.map((r) => ({
       materialKind: r.binding.material_kind,
       materialCode: r.binding.material_code,
       materialName: r.binding.material_name,
@@ -203,14 +254,10 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
       unitPriceCenti: r.binding.unit_price_centi,
       bindingId: r.binding.id,
     }));
-
     create.mutate(
-      { supplierId, currency, expectedAt: expectedAt || undefined, notes: notes || undefined, items },
+      { supplierId: finalSupplierId, currency, poDate, expectedAt: expectedAt || undefined, notes: notes || undefined, items },
       {
-        onSuccess: (res) => {
-          alert(`PO created: ${res.poNumber}`);
-          onClose();
-        },
+        onSuccess: (res) => { alert(`PO created: ${res.poNumber}`); onClose(); },
       },
     );
   };
@@ -225,87 +272,231 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
         </header>
 
         <div className={styles.drawerBody}>
+          {/* ── Date + Mode picker ─────────────────────────────────── */}
           <div className={styles.section}>
-            <p className={styles.eyebrow}>1. Pick Supplier</p>
-            <select
-              className={styles.fieldSelect}
-              value={supplierId ?? ''}
-              onChange={(e) => setSupplierId(e.target.value || null)}
-            >
-              <option value="">— Select supplier —</option>
-              {suppliers.data?.map((s) => (
-                <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
-              ))}
-            </select>
+            <p className={styles.eyebrow}>1. Date · How do you want to start?</p>
+            <div className={styles.formGrid}>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>PO Date</span>
+                <input
+                  type="date"
+                  className={styles.fieldInput}
+                  value={poDate}
+                  onChange={(e) => setPoDate(e.target.value)}
+                />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Expected Delivery</span>
+                <input
+                  type="date"
+                  className={styles.fieldInput}
+                  value={expectedAt}
+                  onChange={(e) => setExpectedAt(e.target.value)}
+                />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+              <ModeChip active={mode === 'supplier'} onClick={() => { setMode('supplier'); setItemModeLines([]); }}>
+                <Truck {...ICON} />
+                <span>From Supplier</span>
+              </ModeChip>
+              <ModeChip active={mode === 'item'} onClick={() => { setMode('item'); setSupplierId(null); setQtyMap({}); }}>
+                <Package {...ICON} />
+                <span>From Item</span>
+              </ModeChip>
+            </div>
           </div>
 
-          {supplierId && (
+          {/* ── Supplier mode body ─────────────────────────────────── */}
+          {mode === 'supplier' && (
             <>
               <div className={styles.section}>
-                <p className={styles.eyebrow}>2. Add Items (qty per binding)</p>
-                {supplierDetail.isLoading && <p>Loading bindings…</p>}
-                {bindings.length === 0 && !supplierDetail.isLoading && (
-                  <p className={styles.bannerWarn}>
-                    This supplier has no material bindings. Add bindings on the Suppliers page first.
+                <p className={styles.eyebrow}>2. Pick Supplier</p>
+                <select
+                  className={styles.fieldSelect}
+                  value={supplierId ?? ''}
+                  onChange={(e) => setSupplierId(e.target.value || null)}
+                >
+                  <option value="">— Select supplier —</option>
+                  {suppliers.data?.map((s) => (
+                    <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {supplierId && (
+                <div className={styles.section}>
+                  <p className={styles.eyebrow}>3. Items the supplier carries — set qty per row</p>
+                  {supplierDetail.isLoading && <p>Loading bindings…</p>}
+                  {supplierBindings.length === 0 && !supplierDetail.isLoading && (
+                    <p className={styles.bannerWarn}>
+                      This supplier has no material bindings yet. Add SKU mappings on the supplier detail page first.
+                    </p>
+                  )}
+                  {supplierBindings.map((b) => (
+                    <div key={b.id} className={styles.bindingRow}>
+                      <span className={styles.bindingIcon}>·</span>
+                      <div className={styles.bindingMaterial}>
+                        <span className={styles.bindingCode}>{b.material_code}</span>
+                        <span className={styles.bindingName}>{b.material_name}</span>
+                      </div>
+                      <span className={styles.bindingSku}>{b.supplier_sku}</span>
+                      <span className={styles.bindingPrice}>{fmtMoney(b.unit_price_centi, b.currency)}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        className={styles.fieldInput}
+                        style={{ width: 80, textAlign: 'right' }}
+                        placeholder="qty"
+                        value={qtyMap[b.id] ?? ''}
+                        onChange={(e) => setQtyMap((s) => ({ ...s, [b.id]: Math.max(0, Number(e.target.value) || 0) }))}
+                      />
+                      <span className={styles.bindingMeta}>
+                        {qtyMap[b.id] ? fmtMoney(qtyMap[b.id]! * b.unit_price_centi, b.currency) : '—'}
+                      </span>
+                      <span />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── Item mode body ─────────────────────────────────────── */}
+          {mode === 'item' && (
+            <>
+              <div className={styles.section}>
+                <p className={styles.eyebrow}>2. Search a Product → pick a Supplier</p>
+                {lockedSupplierId && (
+                  <p className={styles.eyebrow} style={{ color: 'var(--c-burnt)', marginBottom: 'var(--space-2)' }}>
+                    Locked to supplier {(suppliers.data ?? []).find((s) => s.id === lockedSupplierId)?.name ?? lockedSupplierId} — all subsequent items must use the same supplier.
                   </p>
                 )}
-                {bindings.map((b) => (
-                  <div key={b.id} className={styles.bindingRow}>
-                    <span className={styles.bindingIcon}>·</span>
-                    <div className={styles.bindingMaterial}>
-                      <span className={styles.bindingCode}>{b.material_code}</span>
-                      <span className={styles.bindingName}>{b.material_name}</span>
-                    </div>
-                    <span className={styles.bindingSku}>{b.supplier_sku}</span>
-                    <span className={styles.bindingPrice}>{fmtMoney(b.unit_price_centi, b.currency)}</span>
-                    <input
-                      type="number"
-                      min={0}
-                      className={styles.fieldInput}
-                      style={{ width: 80, textAlign: 'right' }}
-                      placeholder="qty"
-                      value={qtyMap[b.id] ?? ''}
-                      onChange={(e) => onQty(b.id, Number(e.target.value))}
-                    />
-                    <span className={styles.bindingMeta}>
-                      {qtyMap[b.id] ? fmtMoney(qtyMap[b.id]! * b.unit_price_centi, b.currency) : '—'}
-                    </span>
-                    <span />
-                  </div>
-                ))}
-              </div>
-
-              <div className={styles.section}>
-                <p className={styles.eyebrow}>3. Header</p>
-                <div className={styles.formGrid}>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Expected delivery</span>
-                    <input
-                      type="date"
-                      className={styles.fieldInput}
-                      value={expectedAt}
-                      onChange={(e) => setExpectedAt(e.target.value)}
-                    />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Currency</span>
-                    <input className={styles.fieldInput} value={currency} disabled />
-                  </label>
-                  <label className={`${styles.field} ${styles.formGridFull}`}>
-                    <span className={styles.fieldLabel}>Notes</span>
-                    <textarea
-                      className={styles.fieldTextarea}
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                    />
-                  </label>
+                <div style={{ position: 'relative' }}>
+                  <Search {...ICON} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
+                  <input
+                    type="search"
+                    placeholder="Search product by code / description…"
+                    value={itemSearch}
+                    onChange={(e) => { setItemSearch(e.target.value); setItemModeMaterial(null); }}
+                    className={styles.fieldInput}
+                    style={{ width: '100%', paddingLeft: 'var(--space-7)' }}
+                  />
                 </div>
+                {itemSearch.trim() && !itemModeMaterial && (
+                  <div style={{ maxHeight: 240, overflowY: 'auto', marginTop: 'var(--space-2)', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
+                    {(itemModeProducts.data ?? []).slice(0, 20).map((p: MfgProductRow) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setItemModeMaterial({ kind: 'mfg_product', code: p.code })}
+                        style={{
+                          width: '100%', textAlign: 'left',
+                          padding: 'var(--space-2) var(--space-3)',
+                          background: 'var(--c-paper)', border: 'none',
+                          borderBottom: '1px solid var(--line)', cursor: 'pointer',
+                        }}
+                      >
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-burnt)', fontWeight: 600 }}>{p.code}</span>{' '}
+                        <span>{p.name}</span>
+                        <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginLeft: 8 }}>· {p.category}</span>
+                      </button>
+                    ))}
+                    {(itemModeProducts.data ?? []).length === 0 && (
+                      <p style={{ padding: 'var(--space-3)', color: 'var(--fg-muted)' }}>No matches.</p>
+                    )}
+                  </div>
+                )}
+
+                {itemModeMaterial && (
+                  <div style={{ marginTop: 'var(--space-3)' }}>
+                    <p className={styles.eyebrow} style={{ marginBottom: 'var(--space-2)' }}>
+                      Suppliers that carry {itemModeMaterial.code}:
+                    </p>
+                    {matSuppliers.isLoading && <p>Loading…</p>}
+                    {!matSuppliers.isLoading && (matSuppliers.data?.bindings ?? []).length === 0 && (
+                      <p className={styles.bannerWarn}>
+                        No supplier mappings for this item yet. Add it on a supplier's detail page first.
+                      </p>
+                    )}
+                    {(matSuppliers.data?.bindings ?? []).map((b) => {
+                      const disabled = Boolean(lockedSupplierId) && b.supplier_id !== lockedSupplierId;
+                      return (
+                        <div key={b.id} className={styles.bindingRow}
+                          style={{ opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}
+                          onClick={() => !disabled && addItemBinding(b)}
+                          title={disabled ? 'Different supplier — start another PO' : 'Click to add to this PO'}
+                        >
+                          <span className={styles.bindingIcon}>
+                            {b.is_main_supplier ? '★' : '·'}
+                          </span>
+                          <div className={styles.bindingMaterial}>
+                            <span className={styles.bindingCode}>{b.supplier?.code ?? b.supplier_id.slice(0, 6)}</span>
+                            <span className={styles.bindingName}>{b.supplier?.name ?? '—'}</span>
+                          </div>
+                          <span className={styles.bindingSku}>{b.supplier_sku}</span>
+                          <span className={styles.bindingPrice}>{fmtMoney(b.unit_price_centi, b.currency)}</span>
+                          <span className={styles.bindingMeta}>{b.lead_time_days}d lead</span>
+                          <span className={styles.bindingMeta}>MOQ {b.moq}</span>
+                          <Button variant="ghost" size="sm" disabled={disabled} onClick={(e) => { e.stopPropagation(); !disabled && addItemBinding(b); }}>
+                            <Plus {...ICON} />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
+              {itemModeLines.length > 0 && (
+                <div className={styles.section}>
+                  <p className={styles.eyebrow}>3. Items added to this PO ({itemModeLines.length})</p>
+                  {itemModeLines.map((r) => (
+                    <div key={r.binding.id} className={styles.bindingRow}>
+                      <span className={styles.bindingIcon}>·</span>
+                      <div className={styles.bindingMaterial}>
+                        <span className={styles.bindingCode}>{r.binding.material_code}</span>
+                        <span className={styles.bindingName}>{r.binding.material_name}</span>
+                      </div>
+                      <span className={styles.bindingSku}>{r.binding.supplier_sku}</span>
+                      <span className={styles.bindingPrice}>{fmtMoney(r.binding.unit_price_centi, r.binding.currency)}</span>
+                      <input
+                        type="number" min={0}
+                        className={styles.fieldInput}
+                        style={{ width: 80, textAlign: 'right' }}
+                        value={r.qty}
+                        onChange={(e) => setItemLineQty(r.binding.id, Number(e.target.value) || 0)}
+                      />
+                      <span className={styles.bindingMeta}>
+                        {fmtMoney(r.qty * r.binding.unit_price_centi, r.binding.currency)}
+                      </span>
+                      <Button variant="ghost" size="sm" onClick={() => removeItemLine(r.binding.id)}>
+                        <X {...ICON} />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── Notes + Summary (shared across modes) ─────────────── */}
+          {finalSupplierId && (
+            <>
+              <div className={styles.section}>
+                <p className={styles.eyebrow}>Notes</p>
+                <textarea
+                  className={styles.fieldTextarea ?? styles.fieldInput}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={3}
+                  style={{ width: '100%' }}
+                />
+              </div>
               <div className={styles.section}>
                 <p className={styles.eyebrow}>Summary</p>
                 <p style={{ fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-24)', color: 'var(--c-burnt)', fontWeight: 800 }}>
-                  Subtotal: {fmtMoney(subtotalCenti, currency)} · {lineItems.length} line items
+                  Subtotal: {fmtMoney(subtotalCenti, currency)} · {lines.length} line items
                 </p>
               </div>
             </>
@@ -318,7 +509,7 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
             variant="primary"
             size="md"
             onClick={submit}
-            disabled={create.isPending || !supplierId || lineItems.length === 0}
+            disabled={create.isPending || !finalSupplierId || lines.length === 0}
           >
             {create.isPending ? 'Creating…' : 'Create PO (Draft)'}
           </Button>
@@ -327,6 +518,31 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
     </>
   );
 };
+
+const ModeChip = ({
+  active, onClick, children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    style={{
+      display: 'inline-flex', alignItems: 'center', gap: 8,
+      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-13)', fontWeight: 600,
+      padding: 'var(--space-2) var(--space-4)',
+      borderRadius: 'var(--radius-pill)',
+      border: active ? '1px solid var(--c-ink)' : '1px solid var(--line)',
+      background: active ? 'var(--c-ink)' : 'var(--c-paper)',
+      color: active ? 'var(--c-cream)' : 'var(--c-ink)',
+      cursor: 'pointer',
+    }}
+  >
+    {children}
+  </button>
+);
 
 /* ─────────────────── Detail PO Drawer ──────────────────────────────── */
 

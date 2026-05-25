@@ -206,6 +206,69 @@ suppliers.post('/:id/bindings', async (c) => {
   return c.json({ binding: data }, 201);
 });
 
+// Batch-create bindings — multi-select from Products app maps to N bindings
+// in a single POST. Each row may have its own supplier_sku/price/lead/moq.
+// Skips materials already bound for this supplier (returns count skipped).
+suppliers.post('/:id/bindings/batch', async (c) => {
+  const supplierId = c.req.param('id');
+  let body: { bindings?: Array<Record<string, unknown>> };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const list = body.bindings;
+  if (!Array.isArray(list) || list.length === 0) return c.json({ error: 'bindings_required' }, 400);
+
+  const supabase = c.get('supabase');
+
+  // Pre-check: drop rows already bound for this supplier (avoid 23505).
+  const codes = list.map((b) => String(b.materialCode ?? '')).filter(Boolean);
+  const { data: existing } = await supabase
+    .from('supplier_material_bindings')
+    .select('material_code, material_kind')
+    .eq('supplier_id', supplierId)
+    .in('material_code', codes);
+  const seen = new Set<string>(
+    ((existing ?? []) as Array<{ material_code: string; material_kind: string }>)
+      .map((r) => `${r.material_kind}|${r.material_code}`),
+  );
+
+  const rows: Array<Record<string, unknown>> = [];
+  let skipped = 0;
+  for (const b of list) {
+    const kind = String(b.materialKind ?? 'mfg_product');
+    if (!MATERIAL_KINDS.has(kind)) continue;
+    if (!b.materialCode || !b.materialName || !b.supplierSku) continue;
+    const key = `${kind}|${b.materialCode}`;
+    if (seen.has(key)) { skipped += 1; continue; }
+    const currency = String(b.currency ?? 'MYR');
+    if (!CURRENCIES.has(currency)) continue;
+    rows.push({
+      supplier_id: supplierId,
+      material_kind: kind,
+      material_code: b.materialCode,
+      material_name: b.materialName,
+      supplier_sku: b.supplierSku,
+      unit_price_centi: typeof b.unitPriceCenti === 'number' ? b.unitPriceCenti : 0,
+      currency,
+      lead_time_days: typeof b.leadTimeDays === 'number' ? b.leadTimeDays : 0,
+      moq: typeof b.moq === 'number' ? b.moq : 0,
+      is_main_supplier: Boolean(b.isMainSupplier),
+      notes: (b.notes as string | undefined) ?? null,
+    });
+    seen.add(key);
+  }
+
+  if (rows.length === 0) return c.json({ inserted: 0, skipped });
+
+  const { data, error } = await supabase
+    .from('supplier_material_bindings')
+    .insert(rows)
+    .select(BINDING_COLS);
+  if (error) {
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
+  return c.json({ inserted: (data ?? []).length, skipped, bindings: data ?? [] }, 201);
+});
+
 suppliers.patch('/:id/bindings/:bindingId', async (c) => {
   const bindingId = c.req.param('bindingId');
   let body: Record<string, unknown>;
