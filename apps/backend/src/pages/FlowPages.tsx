@@ -12,6 +12,7 @@ import { Button } from '@2990s/design-system';
 import {
   useGrns, usePurchaseInvoices, useMfgSalesOrders, useMfgDeliveryOrders,
   useSalesInvoices, useConsignments, useDeliveryReturns,
+  usePurchaseReturns,
 } from '../lib/flow-queries';
 import {
   CreateGrnDrawer, CreatePurchaseInvoiceDrawer, CreateSalesOrderDrawer,
@@ -370,6 +371,7 @@ const CO_CHIPS: Chip[] = [
 ];
 
 export const ConsignmentPage = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useConsignments(status === 'all' ? undefined : status);
@@ -392,7 +394,9 @@ export const ConsignmentPage = () => {
           <tbody>
             {isLoading && <tr><td colSpan={5} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}>
+              <tr key={r.id}
+                onClick={() => navigate(`/consignment/${r.id}`)}
+                style={{ cursor: 'pointer' }}>
                 <td><span className={styles.codeChip}>{r.consignment_number}</span></td>
                 <td>{r.debtor_name}</td>
                 <td>{r.branch_location ?? '—'}</td>
@@ -463,6 +467,67 @@ export const DeliveryReturnsPage = () => {
           </tbody>
         </table>
       {open && <CreateDeliveryReturnDrawer onClose={() => setOpen(false)} />}
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Purchase Returns — we return goods to the supplier
+   ════════════════════════════════════════════════════════════════════════ */
+const PRT_CHIPS: Chip[] = [
+  { value: 'all', label: 'All' }, { value: 'DRAFT', label: 'Draft' },
+  { value: 'POSTED', label: 'Posted' }, { value: 'COMPLETED', label: 'Completed' },
+  { value: 'CANCELLED', label: 'Cancelled' },
+];
+
+export const PurchaseReturnsPage = () => {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState('all');
+  const { data, isLoading, error } = usePurchaseReturns(status === 'all' ? undefined : status);
+  const rows = useMemo(() => data?.purchaseReturns ?? [], [data]);
+
+  return (
+    <div className={styles.page}>
+      <Header
+        title="Purchase Returns"
+        subtitle="Defects / oversupply / wrong items returned to the supplier"
+        newLabel="New Purchase Return"
+        onNew={() => alert('Create from a GRN — open the GRN detail page and use "Raise Purchase Return". Inline create coming soon.')}
+      />
+      <StatusChips chips={PRT_CHIPS} active={status} onPick={setStatus} />
+      <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} returns`}</p>
+      {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0048." />}
+      <div className={styles.tableCard}>
+        <table className={styles.table}>
+          <thead><tr>
+            <th>Return #</th><th>Supplier</th><th>Linked PO</th><th>Linked GRN</th>
+            <th>Date</th><th>Reason</th>
+            <th style={{ textAlign: 'right' }}>Refund</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
+            {!isLoading && rows.map((r: any) => (
+              <tr key={r.id}
+                onClick={() => navigate(`/purchase-returns/${r.id}`)}
+                style={{ cursor: 'pointer' }}>
+                <td><span className={styles.codeChip}>{r.return_number}</span></td>
+                <td>{r.supplier?.name ?? '—'}</td>
+                <td><span className={styles.codeChip}>{r.purchase_order?.po_number ?? '—'}</span></td>
+                <td><span className={styles.codeChip}>{r.grn?.grn_number ?? '—'}</span></td>
+                <td>{r.return_date}</td>
+                <td className={styles.muted}>{r.reason ?? '—'}</td>
+                <td className={styles.priceCell}>{fmtMoney(r.refund_centi)}</td>
+                <td><span className={styles.statusPill}>{r.status}</span></td>
+              </tr>
+            ))}
+            {!isLoading && !error && rows.length === 0 && (
+              <tr><td colSpan={8} className={styles.emptyRow}>
+                No purchase returns yet. Open a GRN with rejected items and use "Raise Purchase Return".
+              </td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

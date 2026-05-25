@@ -1,18 +1,24 @@
 // ----------------------------------------------------------------------------
-// Four document detail pages — GRN, Purchase Invoice, Delivery Order, Sales
-// Invoice. Same shell (header + cards + line items + status bar), per-module
-// differences kept in the body. Shared CSS in DocDetail.module.css.
+// Six document detail pages — GRN, Purchase Invoice, Delivery Order, Sales
+// Invoice, Consignment, Purchase Return. Same shell (header + cards + line
+// items + status bar), per-module differences kept in the body. Shared CSS
+// in DocDetail.module.css.
 //
 // Routes:
 //   /grns/:id                  → GrnDetail
 //   /purchase-invoices/:id     → PurchaseInvoiceDetail
 //   /mfg-delivery-orders/:id   → DeliveryOrderDetail
 //   /sales-invoices/:id        → SalesInvoiceDetail
+//   /consignment/:id           → ConsignmentDetail
+//   /purchase-returns/:id      → PurchaseReturnDetail
 // ----------------------------------------------------------------------------
 
 import { useState } from 'react';
-import { Link, useParams } from 'react-router';
-import { ArrowLeft, FileText, Printer, X, CheckCircle2, Truck, AlertCircle, ClipboardCheck } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router';
+import {
+  ArrowLeft, FileText, Printer, X, CheckCircle2, Truck, AlertCircle,
+  ClipboardCheck, Boxes, Undo2, Plus,
+} from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrnDetail,
@@ -26,6 +32,15 @@ import {
   useSalesInvoiceDetail,
   useUpdateSalesInvoiceStatus,
   useRecordSiPayment,
+  useConsignmentDetail,
+  useUpdateConsignmentStatus,
+  useAddConsignmentNote,
+  usePostConsignmentNote,
+  usePurchaseReturnDetail,
+  useCreatePurchaseReturn,
+  usePostPurchaseReturn,
+  useCompletePurchaseReturn,
+  useCancelPurchaseReturn,
 } from '../lib/flow-queries';
 import styles from './DocDetail.module.css';
 
@@ -64,25 +79,58 @@ const GRN_STATUS_CLASS: Record<string, string> = {
 
 export const GrnDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const detail = useGrnDetail(id ?? null);
   const post = usePostGrn();
+  const createPr = useCreatePurchaseReturn();
 
   if (detail.isLoading) return <Loading />;
   if (detail.isError || !detail.data?.grn) return <NotFound back="/grns" error={detail.error} />;
 
   const grn = detail.data.grn as Record<string, unknown> & {
+    id: string;
     grn_number: string; status: string; received_at: string; delivery_note_ref: string | null;
     notes: string | null; posted_at: string | null;
+    supplier_id: string;
+    purchase_order_id: string | null;
     supplier?: { code: string; name: string };
     purchase_order?: { id: string; po_number: string };
   };
   const items = (detail.data.items as Array<Record<string, unknown> & {
+    id: string;
+    material_kind: string;
     material_code: string; material_name: string; qty_received: number; qty_accepted: number;
     qty_rejected: number; rejection_reason: string | null; unit_price_centi: number;
   }>) ?? [];
 
   const isDraft = grn.status === 'DRAFT';
   const lineTotal = items.reduce((s, it) => s + it.qty_accepted * it.unit_price_centi, 0);
+  const rejectedItems = items.filter((it) => it.qty_rejected > 0);
+
+  const raisePurchaseReturn = () => {
+    if (rejectedItems.length === 0) {
+      alert('No rejected qty on any line. Add rejected qty to the GRN first.');
+      return;
+    }
+    createPr.mutate({
+      supplierId: grn.supplier_id,
+      purchaseOrderId: grn.purchase_order_id,
+      grnId: grn.id,
+      reason: 'Defects from GRN ' + grn.grn_number,
+      items: rejectedItems.map((it) => ({
+        grnItemId: it.id,
+        materialKind: it.material_kind,
+        materialCode: it.material_code,
+        materialName: it.material_name,
+        qtyReturned: it.qty_rejected,
+        unitPriceCenti: it.unit_price_centi,
+        lineRefundCenti: it.qty_rejected * it.unit_price_centi,
+        reason: it.rejection_reason ?? undefined,
+      })),
+    }, {
+      onSuccess: (data) => { navigate(`/purchase-returns/${data.id}`); },
+    });
+  };
 
   return (
     <div className={styles.page}>
@@ -101,6 +149,12 @@ export const GrnDetail = () => {
         </div>
         <div className={styles.actions}>
           <span className={`${styles.statusPill} ${GRN_STATUS_CLASS[grn.status] ?? ''}`}>{grn.status}</span>
+          {!isDraft && rejectedItems.length > 0 && (
+            <Button variant="ghost" size="md" onClick={raisePurchaseReturn} disabled={createPr.isPending}>
+              <Undo2 {...ICON} />
+              <span>{createPr.isPending ? 'Creating…' : 'Raise Purchase Return'}</span>
+            </Button>
+          )}
           {isDraft && (
             <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
               <CheckCircle2 {...ICON} />
@@ -741,6 +795,493 @@ const PaymentModal = ({
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={saving}>
             {saving ? 'Saving…' : 'Record'}
+          </Button>
+        </footer>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   5. Consignment Detail — stock placed at customer branch + OUT/RETURN notes
+   ════════════════════════════════════════════════════════════════════════ */
+
+const CONSIGN_STATUS_CLASS: Record<string, string> = {
+  AT_BRANCH: styles.statusInProgress ?? '',
+  SOLD:      styles.statusOk ?? '',
+  RETURNED:  styles.statusClosed ?? '',
+  DAMAGED:   styles.statusBad ?? '',
+};
+
+export const ConsignmentDetail = () => {
+  const { id } = useParams<{ id: string }>();
+  const detail = useConsignmentDetail(id ?? null);
+  const updateStatus = useUpdateConsignmentStatus();
+  const postNote = usePostConsignmentNote();
+  const [noteModal, setNoteModal] = useState<'OUT' | 'RETURN' | null>(null);
+
+  if (detail.isLoading) return <Loading />;
+  if (detail.isError || !detail.data?.consignment) return <NotFound back="/consignment" error={detail.error} />;
+
+  const co = detail.data.consignment as Record<string, unknown> & {
+    consignment_number: string; status: string; placed_at: string;
+    debtor_code: string | null; debtor_name: string; branch_location: string | null;
+    notes: string | null;
+  };
+  const items = (detail.data.items as Array<Record<string, unknown> & {
+    item_code: string; description: string | null;
+    qty_placed: number; qty_sold: number; qty_returned: number; qty_damaged: number;
+    unit_price_centi: number;
+  }>) ?? [];
+  const notes = (detail.data.notes as Array<Record<string, unknown> & {
+    note_number: string; note_type: 'OUT' | 'RETURN'; note_date: string;
+    driver_name: string | null; signed_at: string | null;
+  }>) ?? [];
+
+  const totalPlaced = items.reduce((s, it) => s + it.qty_placed, 0);
+  const totalSold = items.reduce((s, it) => s + it.qty_sold, 0);
+  const totalReturned = items.reduce((s, it) => s + it.qty_returned, 0);
+  const totalDamaged = items.reduce((s, it) => s + it.qty_damaged, 0);
+  const totalAtBranch = totalPlaced - totalSold - totalReturned - totalDamaged;
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.headerRow}>
+        <div className={styles.titleBlock}>
+          <Link to="/consignment" className={styles.backBtn}><ArrowLeft {...ICON} /><span>Back</span></Link>
+          <div>
+            <h1 className={styles.title}>
+              <Boxes size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+              {co.consignment_number}
+            </h1>
+            <p className={styles.subtitle}>
+              {co.debtor_name}{co.branch_location && ` · ${co.branch_location}`} · placed {fmtDate(co.placed_at)}
+            </p>
+          </div>
+        </div>
+        <div className={styles.actions}>
+          <span className={`${styles.statusPill} ${CONSIGN_STATUS_CLASS[co.status] ?? ''}`}>{co.status.replace('_', ' ')}</span>
+        </div>
+      </div>
+
+      <section className={styles.card}>
+        <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Customer · Placement</h2></header>
+        <div className={styles.cardBody}>
+          <div className={styles.infoGrid}>
+            <InfoCell label="Debtor" value={`${co.debtor_code ?? ''}${co.debtor_code ? ' · ' : ''}${co.debtor_name}`} />
+            <InfoCell label="Branch" value={co.branch_location ?? '—'} />
+            <InfoCell label="Placed At" value={fmtDate(co.placed_at)} />
+            <InfoCell label="Status" value={co.status.replace('_', ' ')} />
+            {co.notes && <div className={styles.infoCellFull}><span className={styles.infoLabel}>Notes</span><div className={styles.infoValue}>{co.notes}</div></div>}
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.card}>
+        <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Items ({items.length})</h2></header>
+        {items.length === 0 ? <p className={styles.emptyRow}>No items.</p> : (
+          <table className={styles.table}>
+            <thead><tr>
+              <th>Item</th>
+              <th className={styles.tableRight}>Placed</th>
+              <th className={styles.tableRight}>Sold</th>
+              <th className={styles.tableRight}>Returned</th>
+              <th className={styles.tableRight}>Damaged</th>
+              <th className={styles.tableRight}>At Branch</th>
+              <th className={styles.tableRight}>Unit Price</th>
+            </tr></thead>
+            <tbody>
+              {items.map((it) => {
+                const atBranch = it.qty_placed - it.qty_sold - it.qty_returned - it.qty_damaged;
+                return (
+                  <tr key={it.id as string}>
+                    <td><div className={styles.codeCell}>{it.item_code}</div><div className={styles.muted}>{it.description ?? '—'}</div></td>
+                    <td className={styles.tableRight}>{it.qty_placed}</td>
+                    <td className={styles.tableRight}>{it.qty_sold}</td>
+                    <td className={styles.tableRight}>{it.qty_returned}</td>
+                    <td className={`${styles.tableRight} ${it.qty_damaged > 0 ? '' : styles.muted}`}
+                        style={it.qty_damaged > 0 ? { color: 'var(--c-festive-b, #B8331F)' } : undefined}>
+                      {it.qty_damaged}
+                    </td>
+                    <td className={styles.tableRight} style={{ fontWeight: 600 }}>{atBranch}</td>
+                    <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className={styles.card}>
+        <div className={styles.cardBody}>
+          <div className={styles.totalsGrid}>
+            <div className={styles.totalRow}><span className={styles.totalLabel}>Total Placed</span><span className={styles.totalValue}>{totalPlaced}</span></div>
+            <div className={styles.totalRow}><span className={styles.totalLabel}>Total Sold</span><span className={styles.totalValue} style={{ color: 'var(--c-secondary-a, #2F5D4F)' }}>{totalSold}</span></div>
+            <div className={styles.totalRow}><span className={styles.totalLabel}>Total Returned</span><span className={styles.totalValue}>{totalReturned}</span></div>
+            <div className={styles.totalRow}><span className={styles.totalLabel}>Total Damaged</span><span className={styles.totalValue} style={{ color: totalDamaged > 0 ? 'var(--c-festive-b, #B8331F)' : undefined }}>{totalDamaged}</span></div>
+            <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
+              <span className={styles.totalLabel}>Remaining At Branch</span>
+              <span className={styles.grandTotal}>{totalAtBranch}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Notes ({notes.length})</h2>
+          <span className={styles.actions}>
+            <Button variant="ghost" size="sm" onClick={() => setNoteModal('OUT')}>
+              <Plus {...ICON} /><span>OUT note</span>
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => setNoteModal('RETURN')}>
+              <Undo2 {...ICON} /><span>RETURN note</span>
+            </Button>
+          </span>
+        </header>
+        {notes.length === 0 ? <p className={styles.emptyRow}>No notes yet. OUT = dispatch to branch. RETURN = pull back unsold.</p> : (
+          <table className={styles.table}>
+            <thead><tr>
+              <th>Note #</th><th>Type</th><th>Date</th><th>Driver</th><th>Status</th><th className={styles.tableRight}>Action</th>
+            </tr></thead>
+            <tbody>
+              {notes.map((n) => (
+                <tr key={n.id as string}>
+                  <td className={styles.codeCell}>{n.note_number}</td>
+                  <td>
+                    <span className={`${styles.statusPill} ${n.note_type === 'OUT' ? styles.statusInProgress : styles.statusOk}`}>
+                      {n.note_type}
+                    </span>
+                  </td>
+                  <td className={styles.muted}>{fmtDate(n.note_date)}</td>
+                  <td className={styles.muted}>{n.driver_name ?? '—'}</td>
+                  <td className={styles.muted}>{n.signed_at ? `Posted ${fmtDate(n.signed_at)}` : 'Draft'}</td>
+                  <td className={styles.tableRight}>
+                    {!n.signed_at && (
+                      <Button variant="ghost" size="sm"
+                        onClick={() => postNote.mutate({ id: id!, noteId: n.id as string })}
+                        disabled={postNote.isPending}>
+                        <CheckCircle2 {...ICON} /><span>Post</span>
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {co.status === 'AT_BRANCH' && (
+        <section className={styles.card}>
+          <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Move to next stage</h2></header>
+          <div className={styles.cardBody}>
+            <div className={styles.statusBar}>
+              <Button variant="primary" size="sm"
+                onClick={() => updateStatus.mutate({ id: id!, status: 'SOLD' })}
+                disabled={updateStatus.isPending}>
+                <span>Mark Sold</span>
+              </Button>
+              <Button variant="ghost" size="sm"
+                onClick={() => updateStatus.mutate({ id: id!, status: 'RETURNED' })}
+                disabled={updateStatus.isPending}>
+                <span>Mark Returned</span>
+              </Button>
+              <Button variant="ghost" size="sm"
+                onClick={() => updateStatus.mutate({ id: id!, status: 'DAMAGED' })}
+                disabled={updateStatus.isPending}>
+                <span>Mark Damaged</span>
+              </Button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {noteModal && (
+        <CreateConsignmentNoteModal
+          consignmentId={id!}
+          type={noteModal}
+          items={items}
+          onClose={() => setNoteModal(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+/* Modal for creating an OUT or RETURN note. Lets you tick which items + qty
+   to include from the parent consignment_order_items list. */
+const CreateConsignmentNoteModal = ({
+  consignmentId,
+  type,
+  items,
+  onClose,
+}: {
+  consignmentId: string;
+  type: 'OUT' | 'RETURN';
+  items: Array<{ id?: string; item_code: string; description: string | null; qty_placed: number; qty_sold: number; qty_returned: number }>;
+  onClose: () => void;
+}) => {
+  const addNote = useAddConsignmentNote();
+  const [driverName, setDriverName] = useState('');
+  const [vehicle, setVehicle] = useState('');
+  const [lineQty, setLineQty] = useState<Record<string, number>>({});
+
+  const submit = () => {
+    const lines = items
+      .filter((it) => (lineQty[it.id as string] ?? 0) > 0)
+      .map((it) => ({
+        consignmentItemId: it.id,
+        itemCode: it.item_code,
+        description: it.description ?? undefined,
+        qty: lineQty[it.id as string],
+      }));
+    if (lines.length === 0) { alert('Tick at least one item with qty > 0.'); return; }
+    addNote.mutate(
+      { id: consignmentId, noteType: type, driverName, vehicle, items: lines },
+      { onSuccess: onClose },
+    );
+  };
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <div className={styles.modal} style={{ width: 'min(640px, 95vw)' }} onClick={(e) => e.stopPropagation()}>
+        <header className={styles.modalHeader}>
+          <h3 className={styles.modalTitle}>
+            New {type} Note · {type === 'OUT' ? 'Dispatch to branch' : 'Pull unsold stock back'}
+          </h3>
+          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
+        </header>
+        <div className={styles.modalBody} style={{ gap: 'var(--space-3)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Driver Name</span>
+              <input className={styles.fieldInput} value={driverName} onChange={(e) => setDriverName(e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Vehicle</span>
+              <input className={styles.fieldInput} value={vehicle} onChange={(e) => setVehicle(e.target.value)} />
+            </label>
+          </div>
+          <table className={styles.table}>
+            <thead><tr>
+              <th>Item</th>
+              <th className={styles.tableRight}>{type === 'OUT' ? 'Placed' : 'At branch'}</th>
+              <th className={styles.tableRight}>Qty for this note</th>
+            </tr></thead>
+            <tbody>
+              {items.map((it) => {
+                const remaining = type === 'OUT' ? it.qty_placed : (it.qty_placed - it.qty_sold - it.qty_returned);
+                return (
+                  <tr key={it.id as string}>
+                    <td>
+                      <div className={styles.codeCell}>{it.item_code}</div>
+                      <div className={styles.muted}>{it.description ?? '—'}</div>
+                    </td>
+                    <td className={`${styles.tableRight} ${styles.muted}`}>{remaining}</td>
+                    <td className={styles.tableRight}>
+                      <input
+                        type="number"
+                        min={0}
+                        max={remaining}
+                        value={lineQty[it.id as string] ?? 0}
+                        onChange={(e) => setLineQty((s) => ({ ...s, [it.id as string]: Number(e.target.value) || 0 }))}
+                        style={{
+                          width: 70, textAlign: 'right',
+                          fontFamily: 'var(--font-mono)',
+                          background: 'var(--c-cream)',
+                          border: '1px solid var(--c-orange)',
+                          borderRadius: 'var(--radius-sm)',
+                          padding: '4px 8px',
+                          outline: 'none',
+                        }}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <footer className={styles.modalFooter}>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={addNote.isPending}>
+            {addNote.isPending ? 'Saving…' : `Create ${type} Note`}
+          </Button>
+        </footer>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   6. Purchase Return Detail — Post → Complete (with credit note ref)
+   ════════════════════════════════════════════════════════════════════════ */
+
+const PR_STATUS_CLASS: Record<string, string> = {
+  DRAFT:     styles.statusDraft ?? '',
+  POSTED:    styles.statusInProgress ?? '',
+  COMPLETED: styles.statusOk ?? '',
+  CANCELLED: styles.statusBad ?? '',
+};
+
+export const PurchaseReturnDetail = () => {
+  const { id } = useParams<{ id: string }>();
+  const detail = usePurchaseReturnDetail(id ?? null);
+  const post = usePostPurchaseReturn();
+  const complete = useCompletePurchaseReturn();
+  const cancel = useCancelPurchaseReturn();
+  const [cnModal, setCnModal] = useState(false);
+
+  if (detail.isLoading) return <Loading />;
+  if (detail.isError || !detail.data?.purchaseReturn) return <NotFound back="/purchase-returns" error={detail.error} />;
+
+  const pr = detail.data.purchaseReturn as Record<string, unknown> & {
+    return_number: string; status: string; return_date: string;
+    reason: string | null; refund_centi: number; credit_note_ref: string | null;
+    posted_at: string | null; completed_at: string | null; notes: string | null;
+    supplier?: { code: string; name: string };
+    purchase_order?: { id: string; po_number: string };
+    grn?: { id: string; grn_number: string };
+  };
+  const items = (detail.data.items as Array<Record<string, unknown> & {
+    material_code: string; material_name: string; qty_returned: number;
+    unit_price_centi: number; line_refund_centi: number; reason: string | null;
+  }>) ?? [];
+
+  const isDraft = pr.status === 'DRAFT';
+  const isPosted = pr.status === 'POSTED';
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.headerRow}>
+        <div className={styles.titleBlock}>
+          <Link to="/purchase-returns" className={styles.backBtn}><ArrowLeft {...ICON} /><span>Back</span></Link>
+          <div>
+            <h1 className={styles.title}>
+              <Undo2 size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+              {pr.return_number}
+            </h1>
+            <p className={styles.subtitle}>
+              To {pr.supplier?.name ?? '—'} · {fmtDate(pr.return_date)} · refund {fmtRm(pr.refund_centi)}
+            </p>
+          </div>
+        </div>
+        <div className={styles.actions}>
+          <span className={`${styles.statusPill} ${PR_STATUS_CLASS[pr.status] ?? ''}`}>{pr.status}</span>
+          {isDraft && (
+            <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
+              <CheckCircle2 {...ICON} />
+              <span>{post.isPending ? 'Posting…' : 'Post to Supplier'}</span>
+            </Button>
+          )}
+          {isPosted && (
+            <Button variant="primary" size="md" onClick={() => setCnModal(true)}>
+              <span>Mark Completed</span>
+            </Button>
+          )}
+          {pr.status !== 'COMPLETED' && pr.status !== 'CANCELLED' && (
+            <Button variant="ghost" size="sm" onClick={() => {
+              if (confirm(`Cancel ${pr.return_number}? Cannot be undone.`)) cancel.mutate(id!);
+            }}>
+              <span>Cancel</span>
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <section className={styles.card}>
+        <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Return Info</h2></header>
+        <div className={styles.cardBody}>
+          <div className={styles.infoGrid}>
+            <InfoCell label="Supplier" value={`${pr.supplier?.code ?? '—'} · ${pr.supplier?.name ?? ''}`} />
+            <InfoCell label="Linked PO" value={pr.purchase_order
+              ? <Link to={`/purchase-orders?focus=${pr.purchase_order.id}`} className={styles.infoLink}>{pr.purchase_order.po_number}</Link>
+              : '—'} />
+            <InfoCell label="Linked GRN" value={pr.grn
+              ? <Link to={`/grns/${pr.grn.id}`} className={styles.infoLink}>{pr.grn.grn_number}</Link>
+              : '—'} />
+            <InfoCell label="Reason" value={pr.reason ?? '—'} />
+            <InfoCell label="Posted At" value={fmtDate(pr.posted_at)} />
+            <InfoCell label="Completed At" value={fmtDate(pr.completed_at)} />
+            <InfoCell label="Supplier Credit Note #" value={pr.credit_note_ref ?? '—'} />
+            <InfoCell label="Total Refund" value={fmtRm(pr.refund_centi)} />
+            {pr.notes && <div className={styles.infoCellFull}><span className={styles.infoLabel}>Notes</span><div className={styles.infoValue}>{pr.notes}</div></div>}
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.card}>
+        <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Returned Items ({items.length})</h2></header>
+        {items.length === 0 ? <p className={styles.emptyRow}>No items.</p> : (
+          <table className={styles.table}>
+            <thead><tr>
+              <th>Material</th>
+              <th className={styles.tableRight}>Qty</th>
+              <th className={styles.tableRight}>Unit Price</th>
+              <th className={styles.tableRight}>Refund</th>
+              <th>Reason</th>
+            </tr></thead>
+            <tbody>
+              {items.map((it) => (
+                <tr key={it.id as string}>
+                  <td><div className={styles.codeCell}>{it.material_code}</div><div className={styles.muted}>{it.material_name}</div></td>
+                  <td className={styles.tableRight}>{it.qty_returned}</td>
+                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
+                  <td className={styles.priceCell}>{fmtRm(it.line_refund_centi)}</td>
+                  <td className={styles.muted}>{it.reason ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {cnModal && (
+        <CompleteReturnModal
+          returnNumber={pr.return_number}
+          onClose={() => setCnModal(false)}
+          onSubmit={(ref) => complete.mutate({ id: id!, creditNoteRef: ref }, { onSuccess: () => setCnModal(false) })}
+          saving={complete.isPending}
+        />
+      )}
+    </div>
+  );
+};
+
+const CompleteReturnModal = ({
+  returnNumber,
+  onClose,
+  onSubmit,
+  saving,
+}: {
+  returnNumber: string;
+  onClose: () => void;
+  onSubmit: (creditNoteRef: string) => void;
+  saving: boolean;
+}) => {
+  const [ref, setRef] = useState('');
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <header className={styles.modalHeader}>
+          <h3 className={styles.modalTitle}>Complete {returnNumber}</h3>
+          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON} /></button>
+        </header>
+        <div className={styles.modalBody}>
+          <p className={styles.fieldLabel}>Enter the supplier's credit note number (or leave blank if N/A).</p>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Supplier Credit Note #</span>
+            <input className={styles.fieldInput}
+              value={ref} onChange={(e) => setRef(e.target.value)}
+              placeholder="e.g. CN-2025-0042" />
+          </label>
+        </div>
+        <footer className={styles.modalFooter}>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" onClick={() => onSubmit(ref.trim())} disabled={saving}>
+            {saving ? 'Saving…' : 'Mark Completed'}
           </Button>
         </footer>
       </div>

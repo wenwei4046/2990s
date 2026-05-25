@@ -70,6 +70,61 @@ consignment.post('/', async (c) => {
   return c.json({ id: h.id, consignmentNumber: h.consignment_number }, 201);
 });
 
+// Move the consignment order to a new status (AT_BRANCH → SOLD / RETURNED /
+// DAMAGED). When the customer reports sale-through we flip SOLD so the
+// downstream Sales Invoice can be issued; RETURNED for pull-back; DAMAGED
+// for write-offs.
+consignment.patch('/:id/status', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  let body: { status?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!body.status || !['AT_BRANCH', 'SOLD', 'RETURNED', 'DAMAGED'].includes(body.status)) {
+    return c.json({ error: 'invalid_status' }, 400);
+  }
+  const { data, error } = await sb.from('consignment_orders').update({
+    status: body.status, updated_at: new Date().toISOString(),
+  }).eq('id', id).select('id, status').single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ consignment: data });
+});
+
+// Post a consignment note. For RETURN notes we roll the qty back onto
+// consignment_order_items.qty_returned (a soft restock signal). Marks
+// signed_at on the note so the post is one-shot.
+consignment.patch('/:id/notes/:noteId/post', async (c) => {
+  const sb = c.get('supabase'); const noteId = c.req.param('noteId');
+
+  const { data: note } = await sb.from('consignment_notes')
+    .select('id, note_type, signed_at')
+    .eq('id', noteId).maybeSingle();
+  if (!note) return c.json({ error: 'note_not_found' }, 404);
+  const n = note as { id: string; note_type: string; signed_at: string | null };
+  if (n.signed_at) return c.json({ error: 'already_posted', message: 'Already signed' }, 409);
+
+  if (n.note_type === 'RETURN') {
+    const { data: items } = await sb.from('consignment_note_items')
+      .select('consignment_item_id, qty')
+      .eq('consignment_note_id', noteId);
+    for (const it of (items ?? []) as Array<{ consignment_item_id: string | null; qty: number }>) {
+      if (!it.consignment_item_id) continue;
+      const { data: orderItem } = await sb.from('consignment_order_items')
+        .select('qty_returned')
+        .eq('id', it.consignment_item_id).maybeSingle();
+      if (!orderItem) continue;
+      const oi = orderItem as { qty_returned: number };
+      await sb.from('consignment_order_items').update({
+        qty_returned: oi.qty_returned + it.qty,
+      }).eq('id', it.consignment_item_id);
+    }
+  }
+
+  const { error: noteErr } = await sb.from('consignment_notes').update({
+    signed_at: new Date().toISOString(),
+  }).eq('id', noteId);
+  if (noteErr) return c.json({ error: 'post_failed', reason: noteErr.message }, 500);
+  return c.json({ ok: true, noteId, type: n.note_type });
+});
+
 consignment.post('/:id/notes', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: Record<string, unknown>;

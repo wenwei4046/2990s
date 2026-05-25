@@ -296,6 +296,93 @@ export const useCreateConsignment = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['consignments'] }),
   });
 };
+export const useUpdateConsignmentStatus = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      authedFetch(`/consignment/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['consignments'] });
+      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
+    },
+  });
+};
+export const useAddConsignmentNote = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ id: string; noteNumber: string }>(`/consignment/${id}/notes`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
+    },
+  });
+};
+export const usePostConsignmentNote = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
+      authedFetch(`/consignment/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
+    },
+  });
+};
+
+/* ── Purchase Returns ────────────────────────────────────────────────── */
+export const usePurchaseReturns = (status?: string) => baseQuery<{ purchaseReturns: any[] }>(
+  ['purchase-returns', status ?? 'all'],
+  `/purchase-returns${status ? `?status=${status}` : ''}`,
+);
+export const usePurchaseReturnDetail = (id: string | null) => useQuery({
+  queryKey: ['purchase-return-detail', id],
+  queryFn: () => authedFetch<{ purchaseReturn: any; items: any[] }>(`/purchase-returns/${id}`),
+  enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
+});
+export const useCreatePurchaseReturn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: unknown) =>
+      authedFetch<{ id: string; returnNumber: string }>(`/purchase-returns`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['purchase-returns'] }),
+  });
+};
+export const usePostPurchaseReturn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch(`/purchase-returns/${id}/post`, { method: 'PATCH' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+      qc.invalidateQueries({ queryKey: ['purchase-return-detail', id] });
+    },
+  });
+};
+export const useCompletePurchaseReturn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, creditNoteRef }: { id: string; creditNoteRef?: string }) =>
+      authedFetch(`/purchase-returns/${id}/complete`, {
+        method: 'PATCH', body: JSON.stringify({ creditNoteRef }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+      qc.invalidateQueries({ queryKey: ['purchase-return-detail', vars.id] });
+    },
+  });
+};
+export const useCancelPurchaseReturn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch(`/purchase-returns/${id}/cancel`, { method: 'PATCH' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+      qc.invalidateQueries({ queryKey: ['purchase-return-detail', id] });
+    },
+  });
+};
 
 /* ── Delivery Returns ────────────────────────────────────────────────── */
 export const useDeliveryReturns = (status?: string) => baseQuery<{ deliveryReturns: any[] }>(['delivery-returns', status ?? 'all'], `/delivery-returns${status ? `?status=${status}` : ''}`);
