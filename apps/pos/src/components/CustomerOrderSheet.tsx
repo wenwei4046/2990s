@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useCatalog, type CatalogProduct } from '../lib/queries';
-import { useSaveQuote } from '../lib/quotes';
+import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
 import styles from './CustomerOrderSheet.module.css';
 
 interface Props {
@@ -46,10 +46,12 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
   }, [catalog.data]);
 
   const saveQuote = useSaveQuote();
+  const updateQuote = useUpdateQuote();
   const [savingQuote, setSavingQuote] = useState(false);
   const [quoteName, setQuoteName] = useState('');
   const [quotePhone, setQuotePhone] = useState('');
   const [savedConfirm, setSavedConfirm] = useState(false);
+  const [savedAsUpdate, setSavedAsUpdate] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
   // Esc closes the sheet. Body scroll locks while open so the catalog
@@ -88,10 +90,27 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
       setSavingQuote(false);
       setQuoteName('');
       setQuotePhone('');
+      setSavedAsUpdate(false);
       setSavedConfirm(true);
       setTimeout(() => setSavedConfirm(false), 2400);
     } catch (err) {
       setSaveErr(err instanceof Error ? err.message : 'Failed to save quote');
+    }
+  };
+
+  // Save the current cart back into the loaded quote, then clear (the draft is
+  // parked). "Continue add on" is the keep-cart-and-shop-more path instead.
+  const handleUpdateQuote = async () => {
+    if (!sourceQuoteId) return;
+    setSaveErr(null);
+    try {
+      await updateQuote.mutateAsync({ id: sourceQuoteId, cart: lines, subtotal, total: subtotal });
+      clear();
+      setSavedAsUpdate(true);
+      setSavedConfirm(true);
+      setTimeout(() => setSavedConfirm(false), 2400);
+    } catch (err) {
+      setSaveErr(err instanceof Error ? err.message : 'Failed to update quote');
     }
   };
 
@@ -135,7 +154,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
         {savedConfirm && (
           <div className={styles.savedBanner}>
             <Check size={16} strokeWidth={1.75} />
-            Quote saved. Open <Link to="/quotes" onClick={onClose}>Saved quotes</Link> to load it later.
+            {savedAsUpdate ? 'Quote updated.' : 'Quote saved.'} Open <Link to="/quotes" onClick={onClose}>Saved quotes</Link> to load it later.
           </div>
         )}
 
@@ -233,6 +252,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 <sup>RM</sup>{fmtMYR(subtotal)}
               </span>
             </div>
+            {saveErr && !savingQuote && <p className={styles.quoteErr}>{saveErr}</p>}
             <div className={styles.cta}>
               <button type="button" className={styles.ghost} onClick={clear}>
                 <Trash2 size={14} strokeWidth={1.75} />
@@ -240,14 +260,25 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
               </button>
               {!savingQuote && (
                 sourceQuoteId ? (
-                  <button
-                    type="button"
-                    className={styles.ghost}
-                    onClick={() => { onClose(); navigate('/catalog'); }}
-                  >
-                    <Plus size={14} strokeWidth={1.75} />
-                    Continue add on
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className={styles.ghost}
+                      onClick={() => { onClose(); navigate('/catalog'); }}
+                    >
+                      <Plus size={14} strokeWidth={1.75} />
+                      Continue add on
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.ghost}
+                      onClick={handleUpdateQuote}
+                      disabled={updateQuote.isPending}
+                    >
+                      <BookmarkPlus size={14} strokeWidth={1.75} />
+                      {updateQuote.isPending ? 'Updating…' : 'Update Quote'}
+                    </button>
+                  </>
                 ) : (
                   <button
                     type="button"
