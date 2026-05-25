@@ -58,6 +58,19 @@ salesInvoices.post('/', async (c) => {
       description: (it.description as string) ?? null,
       qty, unit_price_centi: unit, discount_centi: disc, tax_centi: tax, line_total_centi: lineTotal,
       notes: (it.notes as string | undefined) ?? null,
+      /* PR #44 — preserve variants from SO/DO line */
+      item_group: (it.itemGroup as string) ?? null,
+      description2: (it.description2 as string) ?? null,
+      uom: (it.uom as string) ?? 'UNIT',
+      variants: (it.variants as unknown) ?? null,
+      gap_inches: (it.gapInches as number | null) ?? null,
+      divan_height_inches: (it.divanHeightInches as number | null) ?? null,
+      divan_price_sen: Number(it.divanPriceSen ?? 0),
+      leg_height_inches: (it.legHeightInches as number | null) ?? null,
+      leg_price_sen: Number(it.legPriceSen ?? 0),
+      custom_specials: (it.customSpecials as unknown) ?? null,
+      line_suffix: (it.lineSuffix as string) ?? null,
+      special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
     };
   });
 
