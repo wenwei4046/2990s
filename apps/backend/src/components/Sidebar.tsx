@@ -85,7 +85,9 @@ export const Sidebar = () => {
     { kind: 'link', to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
     { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Tracking' },
     { kind: 'link', to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
-    { kind: 'link', to: '/addons', icon: <PlusCircle {...ICON_PROPS} />, label: 'Add-on products' },
+    // Add-on products page is consolidated into Products & Maintenance — sidebar
+    // entry removed per commander 2026-05-25. Route still exists if linked
+    // from elsewhere; just hidden from nav.
     { kind: 'group', label: 'Procurement' },
     { kind: 'link', to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
     { kind: 'link', to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
