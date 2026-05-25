@@ -99,17 +99,22 @@ export interface CartLine {
 
 interface CartState {
   lines: CartLine[];
+  /** Set when the cart was loaded from a saved quote. The quote is consumed
+   *  (deleted) only when the order is confirmed — NOT on load — so reviewing a
+   *  quote never destroys the saved draft. Cleared on clear()/restore(). */
+  sourceQuoteId: string | null;
   addConfigured: (config: CartConfig, opts?: { editingKey?: string }) => string;
   setQty: (key: string, qty: number) => void;
   remove: (key: string) => void;
   clear: () => void;
-  restore: (lines: CartLine[]) => void;
+  restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
 
 export const useCart = create<CartState>()(
   persist(
     (set, get) => ({
       lines: [],
+      sourceQuoteId: null,
 
       addConfigured(config, opts) {
         const editingKey = opts?.editingKey;
@@ -135,11 +140,11 @@ export const useCart = create<CartState>()(
       },
 
       clear() {
-        set({ lines: [] });
+        set({ lines: [], sourceQuoteId: null });
       },
 
-      restore(lines) {
-        set({ lines: lines.map((l) => ({ ...l })) });
+      restore(lines, sourceQuoteId = null) {
+        set({ lines: lines.map((l) => ({ ...l })), sourceQuoteId });
       },
     }),
     {

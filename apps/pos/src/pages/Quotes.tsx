@@ -30,10 +30,10 @@ export const Quotes = () => {
 
   const loadQuote = (q: QuoteRow) => {
     if (!q.cart || q.cart.length === 0) return;
-    restore(q.cart);
-    // Mark the quote as deleted (simple "consumed" flow). Coordinators still
-    // see it via audit if we add a 'converted' status flow later.
-    del.mutate(q.id);
+    // Load into the cart and REMEMBER the source quote — do NOT delete it here.
+    // The quote is consumed only when the order is confirmed (Handover submit),
+    // so reviewing/loading a draft never destroys it. Explicit Delete still removes it.
+    restore(q.cart, q.id);
     navigate('/cart');
   };
 
@@ -70,6 +70,7 @@ export const Quotes = () => {
           </Link>
         </div>
       ) : (
+        <>
         <div className={styles.grid}>
           {list.data!.map((q) => (
             <article key={q.id} className={styles.card}>
@@ -135,6 +136,15 @@ export const Quotes = () => {
             </article>
           ))}
         </div>
+        <div className={styles.backRow}>
+          <Link to="/catalog">
+            <Button variant="secondary">
+              <ArrowLeft size={16} strokeWidth={1.75} />
+              Back to catalog
+            </Button>
+          </Link>
+        </div>
+        </>
       )}
     </main>
     </>
