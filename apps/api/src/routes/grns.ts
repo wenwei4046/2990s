@@ -108,13 +108,21 @@ grns.post('/from-pos', async (c) => {
   }
   const supplierId = [...supplierIds][0]!;
 
-  // Load PO items with outstanding qty.
+  // Load PO items with outstanding qty (+ variant fields for PR #44).
   const { data: items } = await sb.from('purchase_order_items')
-    .select('id, purchase_order_id, material_kind, material_code, material_name, qty, received_qty, unit_price_centi')
+    .select('id, purchase_order_id, material_kind, material_code, material_name, qty, received_qty, unit_price_centi, ' +
+      'item_group, description, description2, uom, variants, gap_inches, divan_height_inches, divan_price_sen, ' +
+      'leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi, unit_cost_centi')
     .in('purchase_order_id', poIds);
-  const itemList = ((items ?? []) as Array<{
+  const itemList = ((items ?? []) as unknown as Array<{
     id: string; purchase_order_id: string; material_kind: string; material_code: string;
     material_name: string; qty: number; received_qty: number; unit_price_centi: number;
+    item_group?: string | null; description?: string | null; description2?: string | null;
+    uom?: string; variants?: unknown; gap_inches?: number | null;
+    divan_height_inches?: number | null; divan_price_sen?: number;
+    leg_height_inches?: number | null; leg_price_sen?: number;
+    custom_specials?: unknown; line_suffix?: string | null; special_order_price_sen?: number;
+    discount_centi?: number; unit_cost_centi?: number;
   }>).filter((it) => it.qty - (it.received_qty ?? 0) > 0);
 
   if (itemList.length === 0) return c.json({ error: 'nothing_outstanding', message: 'All PO items are already fully received' }, 400);
@@ -148,6 +156,21 @@ grns.post('/from-pos', async (c) => {
     qty_accepted: it.qty - (it.received_qty ?? 0),
     qty_rejected: 0,
     unit_price_centi: it.unit_price_centi,
+    /* PR #44 — preserve variants from PO line */
+    item_group: it.item_group ?? null,
+    description: it.description ?? null,
+    description2: it.description2 ?? null,
+    uom: it.uom ?? 'UNIT',
+    variants: it.variants ?? null,
+    gap_inches: it.gap_inches ?? null,
+    divan_height_inches: it.divan_height_inches ?? null,
+    divan_price_sen: it.divan_price_sen ?? 0,
+    leg_height_inches: it.leg_height_inches ?? null,
+    leg_price_sen: it.leg_price_sen ?? 0,
+    custom_specials: it.custom_specials ?? null,
+    line_suffix: it.line_suffix ?? null,
+    special_order_price_sen: it.special_order_price_sen ?? 0,
+    discount_centi: it.discount_centi ?? 0,
   }));
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }

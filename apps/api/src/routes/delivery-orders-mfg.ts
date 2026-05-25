@@ -73,16 +73,36 @@ deliveryOrdersMfg.post('/', async (c) => {
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const h = header as unknown as { id: string; do_number: string };
 
-  const rows = items.map((it) => ({
-    delivery_order_id: h.id,
-    so_item_id: (it.soItemId as string | undefined) ?? null,
-    item_code: it.itemCode,
-    description: (it.description as string) ?? null,
-    qty: Number(it.qty ?? 1),
-    m3_milli: Number(it.m3Milli ?? 0),
-    unit_price_centi: Number(it.unitPriceCenti ?? 0),
-    notes: (it.notes as string) ?? null,
-  }));
+  const rows = items.map((it) => {
+    const qty = Number(it.qty ?? 1);
+    const unitPrice = Number(it.unitPriceCenti ?? 0);
+    const discount = Number(it.discountCenti ?? 0);
+    return {
+      delivery_order_id: h.id,
+      so_item_id: (it.soItemId as string | undefined) ?? null,
+      item_code: it.itemCode,
+      description: (it.description as string) ?? null,
+      qty,
+      m3_milli: Number(it.m3Milli ?? 0),
+      unit_price_centi: unitPrice,
+      notes: (it.notes as string) ?? null,
+      /* PR #44 — preserve variants from SO line */
+      item_group: (it.itemGroup as string) ?? null,
+      description2: (it.description2 as string) ?? null,
+      uom: (it.uom as string) ?? 'UNIT',
+      variants: (it.variants as unknown) ?? null,
+      gap_inches: (it.gapInches as number | null) ?? null,
+      divan_height_inches: (it.divanHeightInches as number | null) ?? null,
+      divan_price_sen: Number(it.divanPriceSen ?? 0),
+      leg_height_inches: (it.legHeightInches as number | null) ?? null,
+      leg_price_sen: Number(it.legPriceSen ?? 0),
+      custom_specials: (it.customSpecials as unknown) ?? null,
+      line_suffix: (it.lineSuffix as string) ?? null,
+      special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+      discount_centi: discount,
+      line_total_centi: (qty * unitPrice) - discount,
+    };
+  });
   const { error: iErr } = await sb.from('delivery_order_items').insert(rows);
   if (iErr) { await sb.from('delivery_orders').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   return c.json({ id: h.id, doNumber: h.do_number }, 201);
