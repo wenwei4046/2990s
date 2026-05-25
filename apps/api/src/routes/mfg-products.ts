@@ -37,7 +37,7 @@ mfgProducts.get('/', async (c) => {
     .select(
       'id, code, name, category, description, base_model, size_label, base_price_sen, price1_sen, ' +
         'unit_m3_milli, fabric_usage_centi, production_time_minutes, status, sku_code, ' +
-        'fabric_color, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
+        'fabric_color, branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
     )
     .eq('status', 'ACTIVE')
     .order('code', { ascending: true });
@@ -87,6 +87,7 @@ mfgProducts.patch('/:id', async (c) => {
     notes?: string;
     defaultVariants?: unknown;
     seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }>;
+    branding?: string | null;
   };
   try {
     body = (await c.req.json()) as typeof body;
@@ -122,6 +123,10 @@ mfgProducts.patch('/:id', async (c) => {
   }
   if (body.defaultVariants !== undefined) {
     updates.default_variants = body.defaultVariants;
+  }
+  if (body.branding !== undefined) {
+    const trimmed = typeof body.branding === 'string' ? body.branding.trim() : null;
+    updates.branding = trimmed ? trimmed : null;
   }
   // Sofa tier matrix — diff per (height × tier) slot so the audit trail
   // captures each change instead of a single opaque blob write.

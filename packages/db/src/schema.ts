@@ -1374,6 +1374,10 @@ export const mfgProducts = pgTable('mfg_products', {
   subAssemblies:          jsonb('sub_assemblies'),                // string[] e.g. ['Divan','Headboard']
   skuCode:                text('sku_code'),
   fabricColor:            text('fabric_color'),
+  // Free-text brand label — used mainly for MATTRESS SKUs (Sealy / King Koil /
+  // Dunlopillo / etc.). Shown as a dedicated column on the Mattress filter
+  // view; available for other categories too if useful.
+  branding:               text('branding'),
   pieces:                 jsonb('pieces'),                        // { count, names: string[] }
   seatHeightPrices:       jsonb('seat_height_prices'),            // [{height,priceSen}]
   defaultVariants:        jsonb('default_variants'),              // {fabricCode,divanHeight,legHeight,gap,specials}
