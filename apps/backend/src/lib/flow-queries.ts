@@ -235,6 +235,59 @@ export const useDeleteMfgSalesOrderItem = () => {
   });
 };
 
+/* PR #35 — SO status change + price override audit hooks */
+export type SoStatusChange = {
+  id: string;
+  doc_no: string;
+  from_status: string | null;
+  to_status: string;
+  changed_by: string | null;
+  notes: string | null;
+  auto_actions: unknown;
+  created_at: string;
+};
+export const useMfgSalesOrderStatusChanges = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-order-status-changes', docNo],
+  queryFn: () => authedFetch<{ statusChanges: SoStatusChange[] }>(`/mfg-sales-orders/${docNo}/status-changes`).then((r) => r.statusChanges),
+  enabled: Boolean(docNo),
+  staleTime: 30_000,
+});
+
+export type SoPriceOverride = {
+  id: string;
+  doc_no: string;
+  item_id: string;
+  item_code: string;
+  original_price_sen: number;
+  override_price_sen: number;
+  reason: string | null;
+  approved_by: string | null;
+  created_at: string;
+};
+export const useMfgSalesOrderPriceOverrides = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-order-price-overrides', docNo],
+  queryFn: () => authedFetch<{ overrides: SoPriceOverride[] }>(`/mfg-sales-orders/${docNo}/price-overrides`).then((r) => r.overrides),
+  enabled: Boolean(docNo),
+  staleTime: 30_000,
+});
+
+export const useOverrideMfgSoLinePrice = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, itemId, overridePriceSen, reason }: {
+      docNo: string; itemId: string; overridePriceSen: number; reason?: string;
+    }) =>
+      authedFetch<{ ok: boolean; itemId: string; newPrice: number }>(
+        `/mfg-sales-orders/${docNo}/items/${itemId}/override`,
+        { method: 'POST', body: JSON.stringify({ overridePriceSen, reason }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-price-overrides', vars.docNo] });
+    },
+  });
+};
+
 export type DebtorSuggestion = {
   debtor_code: string | null;
   debtor_name: string | null;
