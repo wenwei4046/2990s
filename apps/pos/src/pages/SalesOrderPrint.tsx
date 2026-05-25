@@ -172,7 +172,7 @@ const ItemsTable = ({ order }: { order: OrderDetail }) => (
         <tr key={i}>
           <td className={styles.colSku}>{l.product_sku ?? '—'}</td>
           <td className={styles.colDesc}>
-            {l.product_name}
+            {l.product_model_code ? `${l.product_model_code} · ${l.product_name}` : l.product_name}
             {l.description && <span className={styles.lineDesc}>{l.description}</span>}
           </td>
           <td className={styles.colQty}>{l.qty}</td>

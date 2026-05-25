@@ -29,6 +29,9 @@ export interface OrderDetail {
     product_id:   string;
     product_name: string;
     product_sku:  string | null;
+    /** Technical model code (e.g. "SF 5130"). Sofa-only; null otherwise.
+     *  Shown ONLY on the Sales Order as "<model_code> · <product_name>". */
+    product_model_code: string | null;
     qty:          number;
     unit_price:   number;
     line_total:   number;
@@ -68,7 +71,7 @@ export const useOrderById = (orderId: string | undefined) =>
         .from('order_items')
         .select(`
           product_id, qty, unit_price, line_total, config,
-          products ( name, sku, category_id )
+          products ( name, sku, category_id, model_code )
         `)
         .eq('order_id', orderId)
         .eq('kind', 'product');
@@ -90,6 +93,7 @@ export const useOrderById = (orderId: string | undefined) =>
           product_id:   i.product_id,
           product_name: i.products?.name ?? '',
           product_sku:  i.products?.sku ?? null,
+          product_model_code: i.products?.model_code ?? null,
           qty:          i.qty,
           unit_price:   i.unit_price ?? 0,
           line_total:   i.line_total,

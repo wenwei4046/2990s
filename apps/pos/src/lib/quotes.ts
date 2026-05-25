@@ -93,7 +93,7 @@ interface UpdateQuoteInput {
   total: number;
 }
 
-// Update an open quote's cart in place (PUT /quotes/:id). Used when a loaded
+// Update an open quote's cart in place (PATCH /quotes/:id). Used when a loaded
 // quote is edited and re-saved — keeps the same quote (and its customer name)
 // instead of creating a duplicate.
 export const useUpdateQuote = () => {
@@ -103,7 +103,7 @@ export const useUpdateQuote = () => {
       if (!API_URL) throw new Error('VITE_API_URL is not set');
       const token = await getToken();
       const res = await fetch(`${API_URL}/quotes/${encodeURIComponent(input.id)}`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: {
           authorization: `Bearer ${token}`,
           'content-type': 'application/json',
@@ -112,7 +112,7 @@ export const useUpdateQuote = () => {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '<no body>');
-        throw new Error(`PUT /quotes failed (${res.status}): ${text}`);
+        throw new Error(`PATCH /quotes failed (${res.status}): ${text}`);
       }
       return res.json();
     },

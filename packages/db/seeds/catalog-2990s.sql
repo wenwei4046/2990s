@@ -43,27 +43,38 @@
 DO $$
 BEGIN
   -- ── 1) Products (15 sofa_build) ──────────────────────────────────────────
+  --   name      = friendly "real name" (Loo, 2026-05-26) — shown in catalogue,
+  --               cart and configurator.
+  --   model_code= technical code ('AM 9036') — surfaced ONLY on the Sales Order
+  --               as "<model_code> · <name>".
+  --   img_key   = hero photo, hosted as a POS static asset (apps/pos/public/
+  --               catalog/sofa-*.jpg) → absolute pages.dev URL so POS + Backend
+  --               both resolve it. thumb_key = same file. NOTE: the photo for
+  --               SF 5130 (Pllao) was delivered mis-numbered "5095" — 5130 is
+  --               the correct code (Loo, 2026-05-26).
   INSERT INTO products
-    (id, sku, category_id, pricing_kind, name, detail, size_display, visible, stock, recliner_upgrade_price)
+    (id, sku, category_id, pricing_kind, name, model_code, detail, size_display, img_key, thumb_key, visible, stock, recliner_upgrade_price)
   VALUES
-    ('cccccccc-cccc-cccc-cccc-cccccccc0001','SOF-AM9036', 'sofa','sofa_build','AM 9036',  NULL,                                              'Depths: 24"/30"',          true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0002','SOF-AM9038', 'sofa','sofa_build','AM 9038',  NULL,                                              'Depths: 24"/30"',          true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0003','SOF-SF9050', 'sofa','sofa_build','SF 9050',  '2-seater with wood console',                      'Depths: 24"/26"/28"/30"',  true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0004','SOF-AM9053', 'sofa','sofa_build','AM 9053',  'Power incliner upgrade (+RM990/seat)',            'Depths: 24"/30"',          true, 99, 990),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0005','SOF-AM9070', 'sofa','sofa_build','AM 9070',  'Includes headrest',                               NULL,                       true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0006','SOF-AM9071', 'sofa','sofa_build','AM 9071',  NULL,                                              NULL,                       true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0007','SOF-SF5119', 'sofa','sofa_build','SF 5119',  'Power leg upgrade (+RM490/seat); wood console option', 'Depth: 30"',          true, 99, 490),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0008','SOF-SF5080', 'sofa','sofa_build','SF 5080',  'Stool option (Track 2)',                          NULL,                       true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0009','SOF-SF5130', 'sofa','sofa_build','SF 5130',  NULL,                                              NULL,                       true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0010','SOF-DSL8019','sofa','sofa_build','DSL 8019', 'Power incliner upgrade (+RM990/seat)',            'Depth: 30"',               true, 99, 990),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0011','SOF-DSL8020','sofa','sofa_build','DSL 8020', NULL,                                              'Depths: 24"/30"',          true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0012','SOF-DSL8027','sofa','sofa_build','DSL 8027', 'Power slide upgrade (+RM990/seat)',               'Depth: 32"',               true, 99, 990),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0013','SOF-5531',   'sofa','sofa_build','5531',     NULL,                                              'Depths: 24"/28"',          true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0014','SOF-5535',   'sofa','sofa_build','5535',     NULL,                                              'Depths: 24"/28"/30"',      true, 99,   0),
-    ('cccccccc-cccc-cccc-cccc-cccccccc0015','SOF-5539',   'sofa','sofa_build','5539',     'Corner: 1B + Corner + 2A',                        NULL,                       true, 99,   0)
+    ('cccccccc-cccc-cccc-cccc-cccccccc0001','SOF-AM9036', 'sofa','sofa_build','Ommbuc','AM 9036', NULL,                                              'Depths: 24"/30"',          'https://2990s-pos.pages.dev/catalog/sofa-am9036.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-am9036.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0002','SOF-AM9038', 'sofa','sofa_build','Lotti', 'AM 9038', NULL,                                              'Depths: 24"/30"',          'https://2990s-pos.pages.dev/catalog/sofa-am9038.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-am9038.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0003','SOF-SF9050', 'sofa','sofa_build','Pantti','SF 9050', '2-seater with wood console',                      'Depths: 24"/26"/28"/30"',  'https://2990s-pos.pages.dev/catalog/sofa-sf9050.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-sf9050.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0004','SOF-AM9053', 'sofa','sofa_build','Siyyp', 'AM 9053', 'Power incliner upgrade (+RM990/seat)',            'Depths: 24"/30"',          'https://2990s-pos.pages.dev/catalog/sofa-am9053.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-am9053.jpg', true, 99, 990),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0005','SOF-AM9070', 'sofa','sofa_build','Annsa', 'AM 9070', 'Includes headrest',                               NULL,                       'https://2990s-pos.pages.dev/catalog/sofa-am9070.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-am9070.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0006','SOF-AM9071', 'sofa','sofa_build','Krron', 'AM 9071', NULL,                                              NULL,                       'https://2990s-pos.pages.dev/catalog/sofa-am9071.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-am9071.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0007','SOF-SF5119', 'sofa','sofa_build','Lyyar', 'SF 5119', 'Power leg upgrade (+RM490/seat); wood console option', 'Depth: 30"',          'https://2990s-pos.pages.dev/catalog/sofa-sf5119.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-sf5119.jpg', true, 99, 490),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0008','SOF-SF5080', 'sofa','sofa_build','Blatt', 'SF 5080', 'Stool option (Track 2)',                          NULL,                       'https://2990s-pos.pages.dev/catalog/sofa-sf5080.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-sf5080.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0009','SOF-SF5130', 'sofa','sofa_build','Pllao', 'SF 5130', NULL,                                              NULL,                       'https://2990s-pos.pages.dev/catalog/sofa-sf5130.jpg', 'https://2990s-pos.pages.dev/catalog/sofa-sf5130.jpg', true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0010','SOF-DSL8019','sofa','sofa_build','Qubbu', 'DSL 8019','Power incliner upgrade (+RM990/seat)',            'Depth: 30"',               'https://2990s-pos.pages.dev/catalog/sofa-dsl8019.jpg','https://2990s-pos.pages.dev/catalog/sofa-dsl8019.jpg',true, 99, 990),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0011','SOF-DSL8020','sofa','sofa_build','Telluc','DSL 8020', NULL,                                             'Depths: 24"/30"',          'https://2990s-pos.pages.dev/catalog/sofa-dsl8020.jpg','https://2990s-pos.pages.dev/catalog/sofa-dsl8020.jpg',true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0012','SOF-DSL8027','sofa','sofa_build','Boaat', 'DSL 8027','Power slide upgrade (+RM990/seat)',               'Depth: 32"',               'https://2990s-pos.pages.dev/catalog/sofa-dsl8027.jpg','https://2990s-pos.pages.dev/catalog/sofa-dsl8027.jpg',true, 99, 990),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0013','SOF-5531',   'sofa','sofa_build','Xammar','5531',     NULL,                                              'Depths: 24"/28"',          'https://2990s-pos.pages.dev/catalog/sofa-5531.jpg',   'https://2990s-pos.pages.dev/catalog/sofa-5531.jpg',   true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0014','SOF-5535',   'sofa','sofa_build','Trrbu', '5535',     NULL,                                              'Depths: 24"/28"/30"',      'https://2990s-pos.pages.dev/catalog/sofa-5535.jpg',   'https://2990s-pos.pages.dev/catalog/sofa-5535.jpg',   true, 99,   0),
+    ('cccccccc-cccc-cccc-cccc-cccccccc0015','SOF-5539',   'sofa','sofa_build','Booqit','5539',     'Corner: 1B + Corner + 2A',                        NULL,                       'https://2990s-pos.pages.dev/catalog/sofa-5539.jpg',   'https://2990s-pos.pages.dev/catalog/sofa-5539.jpg',   true, 99,   0)
   ON CONFLICT (id) DO UPDATE SET
-    sku = EXCLUDED.sku, name = EXCLUDED.name, detail = EXCLUDED.detail,
-    size_display = EXCLUDED.size_display, pricing_kind = EXCLUDED.pricing_kind,
+    sku = EXCLUDED.sku, name = EXCLUDED.name, model_code = EXCLUDED.model_code,
+    detail = EXCLUDED.detail, size_display = EXCLUDED.size_display,
+    img_key = EXCLUDED.img_key, thumb_key = EXCLUDED.thumb_key,
+    pricing_kind = EXCLUDED.pricing_kind,
     recliner_upgrade_price = EXCLUDED.recliner_upgrade_price,
     visible = EXCLUDED.visible, stock = EXCLUDED.stock, updated_at = now();
 
