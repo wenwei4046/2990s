@@ -168,10 +168,18 @@ const SkuMasterTab = () => {
 
   const rows = useMemo(() => products ?? [], [products]);
   const isSofaView = category === 'SOFA';
+  const isMattressView = category === 'MATTRESS';
   const sofaSizes = config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
 
-  // Total column count (header colspan for loading/empty states)
-  const colCount = 3 + (isSofaView ? 1 + sofaSizes.length : 2 + 2) + 1 + 1; // code + desc + (model+sizes OR cat+size+P2+P1) + unit + variants
+  // Total column count (header colspan for loading/empty states):
+  //   - Sofa: code + desc + model + N sizes + unit + variants
+  //   - Mattress: code + desc + branding + size + price + unit  (no variants)
+  //   - Other: code + desc + category + size + P2 + P1 + unit + variants
+  const colCount = isSofaView
+    ? 3 + sofaSizes.length + 1 + 1
+    : isMattressView
+      ? 6
+      : 8;
 
   return (
     <>
@@ -266,6 +274,12 @@ const SkuMasterTab = () => {
                     <th key={s} style={{ textAlign: 'right' }}>{s}</th>
                   ))}
                 </>
+              ) : isMattressView ? (
+                <>
+                  <th>Branding</th>
+                  <th>Size</th>
+                  <th style={{ textAlign: 'right' }}>Price</th>
+                </>
               ) : (
                 <>
                   <th>Category</th>
@@ -275,7 +289,7 @@ const SkuMasterTab = () => {
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
-              <th>Variants</th>
+              {!isMattressView && <th>Variants</th>}
             </tr>
           </thead>
           <tbody>
@@ -292,6 +306,7 @@ const SkuMasterTab = () => {
                 row={row}
                 editMode={editMode}
                 isSofaView={isSofaView}
+                isMattressView={isMattressView}
                 sofaSizes={sofaSizes}
                 tier={tier}
               />
@@ -323,11 +338,12 @@ const SkuMasterTab = () => {
 };
 
 const ProductRow = ({
-  row, editMode, isSofaView, sofaSizes, tier,
+  row, editMode, isSofaView, isMattressView, sofaSizes, tier,
 }: {
   row: MfgProductRow;
   editMode: boolean;
   isSofaView: boolean;
+  isMattressView: boolean;
   sofaSizes: string[];
   tier: Tier;
 }) => {
@@ -336,6 +352,7 @@ const ProductRow = ({
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
   const [draftBase, setDraftBase] = useState<number | null>(null);
   const [draftP1, setDraftP1] = useState<number | null>(null);
+  const [draftBranding, setDraftBranding] = useState<string | null>(null);
   const update = useUpdateMfgProductPrices();
 
   // The effective array we read from — draft if mid-edit, else the server row.
@@ -379,6 +396,40 @@ const ProductRow = ({
             );
           })}
         </>
+      ) : isMattressView ? (
+        <>
+          {/* Branding cell — editable text input in edit mode. */}
+          <td>
+            {editMode ? (
+              <BrandingInput
+                value={draftBranding ?? row.branding ?? ''}
+                onCommit={(v) => {
+                  setDraftBranding(v);
+                  update.mutate({ id: row.id, branding: v });
+                }}
+              />
+            ) : (
+              row.branding
+                ? <span className={styles.catPill}>{row.branding}</span>
+                : <span className={styles.priceEmpty}>—</span>
+            )}
+          </td>
+          <td>{row.size_label ?? '—'}</td>
+          {/* Single Price column for mattress — uses base_price_sen. */}
+          <td className={(draftBase ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
+            {editMode ? (
+              <PriceInput
+                valueSen={draftBase ?? row.base_price_sen}
+                onCommit={(v) => {
+                  setDraftBase(v);
+                  flushBedframePrice('basePriceSen', v);
+                }}
+              />
+            ) : (
+              fmtRm(row.base_price_sen)
+            )}
+          </td>
+        </>
       ) : (
         <>
           <td><span className={styles.catPill}>{row.category}</span></td>
@@ -412,13 +463,51 @@ const ProductRow = ({
         </>
       )}
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
-      <td>
-        <Button variant="ghost" size="sm" disabled={editMode}>
-          <Settings2 {...ICON_PROPS} />
-          <span>Configure</span>
-        </Button>
-      </td>
+      {!isMattressView && (
+        <td>
+          <Button variant="ghost" size="sm" disabled={editMode}>
+            <Settings2 {...ICON_PROPS} />
+            <span>Configure</span>
+          </Button>
+        </td>
+      )}
     </tr>
+  );
+};
+
+/* Free-text branding input for Mattress rows. Commits on blur or Enter. */
+const BrandingInput = ({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (v: string | null) => void;
+}) => {
+  const [local, setLocal] = useState<string>(value);
+  const commit = () => {
+    const t = local.trim();
+    if (t === value.trim()) return;
+    onCommit(t.length ? t : null);
+  };
+  return (
+    <input
+      type="text"
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      placeholder="e.g. Sealy"
+      style={{
+        width: 140,
+        fontFamily: 'var(--font-sans)',
+        fontSize: 'var(--fs-13)',
+        background: 'var(--c-cream)',
+        border: '1px solid var(--c-orange)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '3px 8px',
+        outline: 'none',
+      }}
+    />
   );
 };
 

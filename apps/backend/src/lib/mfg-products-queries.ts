@@ -68,6 +68,8 @@ export type MfgProductRow = {
   status: 'ACTIVE' | 'INACTIVE';
   sku_code: string | null;
   fabric_color: string | null;
+  /** Free-text brand label — mainly used for MATTRESS SKUs. */
+  branding: string | null;
   sub_assemblies: unknown;
   pieces: unknown;
   /** Sofa-only: flat array of `{ height, priceSen, tier? }` from seat_height_prices
@@ -140,6 +142,7 @@ export function useUpdateMfgProductPrices() {
       price1Sen?: number | null;
       costPriceSen?: number | null;
       seatHeightPrices?: SeatHeightPrice[];
+      branding?: string | null;
       notes?: string;
     }) => {
       const { id, ...body } = args;
