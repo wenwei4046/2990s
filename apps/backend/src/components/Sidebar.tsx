@@ -84,9 +84,10 @@ export const Sidebar = () => {
     { kind: 'group', label: 'Catalog' },
     { kind: 'link', to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
     { kind: 'link', to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
-    { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Tracking' },
+    { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Converter' },
     { kind: 'link', to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
-    { kind: 'link', to: '/warehouses', icon: <PackageCheck {...ICON_PROPS} />, label: 'Warehouses' },
+    // Warehouses sidebar entry removed (PR #38) — it's now a sub-tab inside
+    // /inventory. Route still exists if someone has it bookmarked.
     // Add-on products page is consolidated into Products & Maintenance — sidebar
     // entry removed per commander 2026-05-25. Route still exists if linked
     // from elsewhere; just hidden from nav.

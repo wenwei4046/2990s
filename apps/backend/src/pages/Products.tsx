@@ -25,28 +25,30 @@ import {
   Upload,
   Edit3,
   Search,
-  Settings2,
   History,
   Package,
   Trash2,
   Plus,
   X,
+  Truck,
+  Star,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useMfgProductPriceHistory,
   useCreateMfgProduct,
   useMaintenanceConfig,
   useMaintenanceConfigHistory,
   useSaveMaintenanceConfig,
+  useMfgProductSuppliers,
   type MfgCategory,
   type MfgProductRow,
   type MaintenanceConfig,
   type PricedOption,
   type SeatHeightPrice,
   type SofaPriceTier,
+  type ProductSupplierRow,
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
@@ -176,19 +178,20 @@ const SkuMasterTab = () => {
 
   // Drawer + modal state
   const [newSkuOpen, setNewSkuOpen] = useState(false);
-  const [configureRow, setConfigureRow] = useState<MfgProductRow | null>(null);
-  const [historyRow, setHistoryRow] = useState<MfgProductRow | null>(null);
+  const [suppliersRow, setSuppliersRow] = useState<MfgProductRow | null>(null);
   const [importing, setImporting] = useState(false);
 
   // Total column count (header colspan for loading/empty states):
-  //   - Sofa: code + desc + model + N sizes + unit + variants
-  //   - Mattress: code + desc + branding + size + price + unit  (no variants)
-  //   - Other: code + desc + category + size + P2 + P1 + unit + variants
+  //   PR #38 — Configure + History columns removed. Double-click a row to
+  //   open the Suppliers drawer.
+  //   - Sofa: code + desc + model + N sizes + unit
+  //   - Mattress: code + desc + branding + size + price + unit
+  //   - Other: code + desc + category + size + P2 + P1 + unit
   const colCount = isSofaView
-    ? 3 + sofaSizes.length + 1 + 1
+    ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
-      : 8;
+      : 7;
 
   return (
     <>
@@ -302,7 +305,6 @@ const SkuMasterTab = () => {
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
-              {!isMattressView && <th>Variants</th>}
             </tr>
           </thead>
           <tbody>
@@ -322,8 +324,7 @@ const SkuMasterTab = () => {
                 isMattressView={isMattressView}
                 sofaSizes={sofaSizes}
                 tier={tier}
-                onConfigure={setConfigureRow}
-                onHistory={setHistoryRow}
+                onOpenSuppliers={setSuppliersRow}
               />
             ))}
             {!isLoading && !error && rows.length === 0 && (
@@ -350,15 +351,14 @@ const SkuMasterTab = () => {
       </div>
 
       {newSkuOpen && <NewSkuDrawer onClose={() => setNewSkuOpen(false)} />}
-      {configureRow && <ConfigureProductDrawer row={configureRow} onClose={() => setConfigureRow(null)} />}
-      {historyRow && <PriceHistoryDialog row={historyRow} onClose={() => setHistoryRow(null)} />}
+      {suppliersRow && <ProductSuppliersDrawer row={suppliersRow} onClose={() => setSuppliersRow(null)} />}
       {importing && <ImportSkusDialog onClose={() => setImporting(false)} />}
     </>
   );
 };
 
 const ProductRow = ({
-  row, editMode, isSofaView, isMattressView, sofaSizes, tier, onConfigure, onHistory,
+  row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
 }: {
   row: MfgProductRow;
   editMode: boolean;
@@ -366,8 +366,7 @@ const ProductRow = ({
   isMattressView: boolean;
   sofaSizes: string[];
   tier: Tier;
-  onConfigure?: (row: MfgProductRow) => void;
-  onHistory?: (row: MfgProductRow) => void;
+  onOpenSuppliers?: (row: MfgProductRow) => void;
 }) => {
   // Local draft of the seat_height_prices array — buffers user edits before
   // committing on blur. Reset whenever the row's data changes upstream.
@@ -391,7 +390,12 @@ const ProductRow = ({
   };
 
   return (
-    <tr className={styles.rowCompact}>
+    <tr
+      className={styles.rowCompact}
+      onDoubleClick={() => !editMode && onOpenSuppliers?.(row)}
+      title="Double-click to see suppliers for this product"
+      style={{ cursor: editMode ? 'default' : 'pointer' }}
+    >
       <td><span className={styles.codeChip}>{row.code}</span></td>
       <td>
         <div className={styles.nameCompact}>{row.name}</div>
@@ -491,22 +495,6 @@ const ProductRow = ({
         </>
       )}
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
-      {!isMattressView && (
-        <td>
-          <span style={{ display: 'inline-flex', gap: 4 }}>
-            <Button variant="ghost" size="sm" disabled={editMode}
-              onClick={() => onConfigure?.(row)}>
-              <Settings2 {...ICON_PROPS} />
-              <span>Configure</span>
-            </Button>
-            <Button variant="ghost" size="sm" disabled={editMode}
-              onClick={() => onHistory?.(row)}
-              title="Price history">
-              <History {...ICON_PROPS} />
-            </Button>
-          </span>
-        </td>
-      )}
     </tr>
   );
 };
@@ -1270,162 +1258,11 @@ const Field = ({
 );
 
 /* ════════════════════════════════════════════════════════════════════════
-   Configure drawer — edit sub_assemblies / pieces / default_variants
+   PR #38 — ProductSuppliersDrawer
+   Double-click a product row to see every supplier that carries it,
+   their supplier-side SKU + unit price + lead time. The MAIN supplier
+   (used by default on POs) is starred and pinned to the top.
    ════════════════════════════════════════════════════════════════════════ */
-
-const ConfigureProductDrawer = ({ row, onClose }: { row: MfgProductRow; onClose: () => void }) => {
-  const update = useUpdateMfgProductPrices();
-  const initialSubs = Array.isArray(row.sub_assemblies) ? (row.sub_assemblies as string[]) : [];
-  const initialPieces = (row.pieces && typeof row.pieces === 'object'
-    ? row.pieces as { count: number; names: string[] }
-    : { count: 0, names: [] });
-  const initialVariants = (row.default_variants && typeof row.default_variants === 'object'
-    ? row.default_variants as Record<string, string>
-    : {});
-
-  const [subs, setSubs] = useState<string[]>(initialSubs);
-  const [subDraft, setSubDraft] = useState('');
-  const [piecesCount, setPiecesCount] = useState<number>(initialPieces.count ?? 0);
-  const [pieceNames, setPieceNames] = useState<string[]>(initialPieces.names ?? []);
-  const [variants, setVariants] = useState<Record<string, string>>(initialVariants);
-
-  const addSub = () => {
-    const t = subDraft.trim();
-    if (!t) return;
-    setSubs((s) => [...s, t]);
-    setSubDraft('');
-  };
-  const removeSub = (i: number) => setSubs((s) => s.filter((_, idx) => idx !== i));
-
-  const submit = () => {
-    update.mutate({
-      id: row.id,
-      subAssemblies: subs,
-      pieces: { count: piecesCount, names: pieceNames.filter((n) => n.trim()) },
-      defaultVariants: variants,
-    }, { onSuccess: onClose });
-  };
-
-  return (
-    <div className={styles.drawerBackdrop} onClick={onClose}>
-      <aside className={styles.drawer} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.drawerHeader}>
-          <div>
-            <h2 className={styles.drawerTitle}>Configure · {row.code}</h2>
-            <p style={{ margin: '2px 0 0', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.name}</p>
-          </div>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
-        </header>
-        <div className={styles.drawerBody}>
-          {/* Sub-Assemblies */}
-          <div className={styles.section}>
-            <p className={styles.eyebrow}>Sub-Assemblies ({subs.length})</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-              {subs.map((s, i) => (
-                <span key={`${s}-${i}`} className={styles.codeChip}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  {s}
-                  <button type="button" onClick={() => removeSub(i)}
-                    style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)' }}>
-                    <X size={11} strokeWidth={2} />
-                  </button>
-                </span>
-              ))}
-              {subs.length === 0 && <span style={{ color: 'var(--fg-soft)', fontSize: 'var(--fs-12)' }}>None yet.</span>}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                className={styles.fieldInput}
-                placeholder="e.g. Divan, Headboard"
-                value={subDraft}
-                onChange={(e) => setSubDraft(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') addSub(); }}
-                style={{ flex: 1 }}
-              />
-              <Button variant="primary" size="sm" onClick={addSub}>
-                <Plus {...ICON_PROPS} /><span>Add</span>
-              </Button>
-            </div>
-          </div>
-
-          {/* Pieces */}
-          <div className={styles.section}>
-            <p className={styles.eyebrow}>Pieces</p>
-            <div className={styles.formGrid}>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Total Piece Count</span>
-                <input type="number" className={styles.fieldInput}
-                  value={piecesCount}
-                  onChange={(e) => setPiecesCount(Number(e.target.value) || 0)} />
-              </label>
-            </div>
-            <textarea
-              className={styles.fieldInput}
-              style={{ width: '100%', marginTop: 8, minHeight: 70 }}
-              placeholder="Piece names — one per line"
-              value={pieceNames.join('\n')}
-              onChange={(e) => setPieceNames(e.target.value.split('\n'))}
-            />
-          </div>
-
-          {/* Default Variants */}
-          <div className={styles.section}>
-            <p className={styles.eyebrow}>Default Variants</p>
-            <div className={styles.formGrid}>
-              <VariantField label="Fabric Code" value={variants.fabricCode ?? ''} onChange={(v) => setVariants((s) => ({ ...s, fabricCode: v }))} />
-              <VariantField label="Divan Height" value={variants.divanHeight ?? ''} onChange={(v) => setVariants((s) => ({ ...s, divanHeight: v }))} />
-              <VariantField label="Leg Height" value={variants.legHeight ?? ''} onChange={(v) => setVariants((s) => ({ ...s, legHeight: v }))} />
-              <VariantField label="Gap" value={variants.gap ?? ''} onChange={(v) => setVariants((s) => ({ ...s, gap: v }))} />
-              <VariantField label="Specials" value={variants.specials ?? ''} onChange={(v) => setVariants((s) => ({ ...s, specials: v }))} fullWidth />
-            </div>
-          </div>
-        </div>
-        <footer className={styles.drawerFooter}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={update.isPending}>
-            {update.isPending ? 'Saving…' : 'Save Configuration'}
-          </Button>
-        </footer>
-      </aside>
-    </div>
-  );
-};
-
-const VariantField = ({
-  label, value, onChange, fullWidth,
-}: {
-  label: string; value: string;
-  onChange: (v: string) => void;
-  fullWidth?: boolean;
-}) => (
-  <label className={`${styles.field} ${fullWidth ? styles.formGridFull : ''}`}>
-    <span className={styles.fieldLabel}>{label}</span>
-    <input className={styles.fieldInput} value={value} onChange={(e) => onChange(e.target.value)} />
-  </label>
-);
-
-/* ════════════════════════════════════════════════════════════════════════
-   Price History dialog — shows master_price_history for this product
-   ════════════════════════════════════════════════════════════════════════ */
-
-const FIELD_LABELS: Record<string, string> = {
-  base_price_sen: 'Base Price (P2)',
-  price1_sen:     'Price 1',
-  cost_price_sen: 'Cost Price',
-};
-
-const prettifyField = (f: string): string => {
-  if (FIELD_LABELS[f]) return FIELD_LABELS[f]!;
-  if (f.startsWith('seat_height:')) {
-    const [, rest] = f.split(':');
-    const [height, tier] = (rest ?? '').split('|');
-    return `Sofa ${height}" · ${(tier ?? 'PRICE_2').replace('PRICE_', 'P')}`;
-  }
-  return f;
-};
-
-const fmtRmSafe = (sen: number | null): string =>
-  sen == null ? '—' : `RM ${(sen / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const fmtDateTime = (iso: string): string => {
   const d = new Date(iso);
@@ -1434,9 +1271,14 @@ const fmtDateTime = (iso: string): string => {
     : iso;
 };
 
-const PriceHistoryDialog = ({ row, onClose }: { row: MfgProductRow; onClose: () => void }) => {
-  const hist = useMfgProductPriceHistory(row.id);
-  const rows = hist.data?.history ?? [];
+const fmtRmCenti = (centi: number): string =>
+  `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const ProductSuppliersDrawer = ({
+  row, onClose,
+}: { row: MfgProductRow; onClose: () => void }) => {
+  const q = useMfgProductSuppliers(row.id);
+  const suppliers = q.data?.suppliers ?? [];
 
   return (
     <div className={styles.drawerBackdrop} onClick={onClose}>
@@ -1455,61 +1297,91 @@ const PriceHistoryDialog = ({ row, onClose }: { row: MfgProductRow; onClose: () 
       >
         <header className={styles.drawerHeader}>
           <div>
-            <h2 className={styles.drawerTitle}>Price history</h2>
-            <p style={{ margin: '2px 0 0', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{row.code} · {row.name}</p>
-          </div>
-          <button type="button" className={styles.iconBtn} onClick={onClose}><X {...ICON_PROPS} /></button>
-        </header>
-        <div style={{ flex: 1, overflowY: 'auto', padding: 0 }}>
-          {hist.isLoading && <p style={{ padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>Loading…</p>}
-          {!hist.isLoading && rows.length === 0 && (
-            <p style={{ padding: 'var(--space-5)', textAlign: 'center', color: 'var(--fg-muted)' }}>
-              No price changes recorded yet.
+            <h2 className={styles.drawerTitle}>
+              <Truck {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+              Suppliers · <span className={styles.codeChip}>{row.code}</span>
+            </h2>
+            <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+              {row.name}{row.description ? ` — ${row.description}` : ''}
             </p>
+          </div>
+          <button type="button" className={styles.iconBtn} onClick={onClose}>
+            <X {...ICON_PROPS} />
+          </button>
+        </header>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+          {q.isLoading && (
+            <p style={{ textAlign: 'center', color: 'var(--fg-muted)' }}>Loading suppliers…</p>
           )}
-          {!hist.isLoading && rows.length > 0 && (
-            <table className={styles.table}>
+          {!q.isLoading && suppliers.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--fg-muted)' }}>
+              <Truck size={32} strokeWidth={1.5} />
+              <div style={{ marginTop: 8 }}>No suppliers carry this product yet.</div>
+              <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+                Go to Suppliers → Detail → Add Mapping to link a supplier to this SKU.
+              </div>
+            </div>
+          )}
+          {!q.isLoading && suppliers.length > 0 && (
+            <table className={styles.table} style={{ width: '100%' }}>
               <thead>
                 <tr>
-                  <th>When</th>
-                  <th>Field</th>
-                  <th style={{ textAlign: 'right' }}>Old</th>
-                  <th style={{ textAlign: 'right' }}>New</th>
-                  <th style={{ textAlign: 'right' }}>Δ</th>
-                  <th>Reason</th>
+                  <th style={{ width: 32 }}></th>
+                  <th>Supplier</th>
+                  <th>Supplier SKU</th>
+                  <th style={{ textAlign: 'right' }}>Unit Price</th>
+                  <th style={{ textAlign: 'right' }}>Lead (d)</th>
+                  <th style={{ textAlign: 'right' }}>MOQ</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
-                  const oldV = r.old_value_sen ?? 0;
-                  const newV = r.new_value_sen ?? 0;
-                  const delta = newV - oldV;
-                  const deltaColor = delta > 0 ? 'var(--c-secondary-a, #2F5D4F)'
-                    : delta < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
-                  return (
-                    <tr key={r.id}>
-                      <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{fmtDateTime(r.changed_at)}</td>
-                      <td>{prettifyField(r.field)}</td>
-                      <td className={styles.numCell}>{fmtRmSafe(r.old_value_sen)}</td>
-                      <td className={styles.numCell}>{fmtRmSafe(r.new_value_sen)}</td>
-                      <td className={styles.numCell} style={{ color: deltaColor, fontWeight: 600 }}>
-                        {delta > 0 ? '+' : ''}{fmtRmSafe(delta)}
-                      </td>
-                      <td style={{ color: 'var(--fg-muted)' }}>{r.reason ?? '—'}</td>
-                    </tr>
-                  );
-                })}
+                {suppliers.map((s: ProductSupplierRow) => (
+                  <tr key={s.id} style={{
+                    background: s.is_main_supplier ? 'rgba(232, 107, 58, 0.06)' : undefined,
+                  }}>
+                    <td style={{ textAlign: 'center' }}>
+                      {s.is_main_supplier && (
+                        <Star size={14} strokeWidth={2} style={{ color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: s.is_main_supplier ? 700 : 400 }}>
+                        {s.suppliers?.name ?? '—'}
+                      </div>
+                      <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                        {s.suppliers?.code ?? ''}{s.suppliers?.phone ? ` · ${s.suppliers.phone}` : ''}
+                      </div>
+                    </td>
+                    <td>
+                      {s.supplier_sku
+                        ? <span className={styles.codeChip}>{s.supplier_sku}</span>
+                        : <span style={{ color: 'var(--fg-muted)' }}>(same as our code)</span>}
+                    </td>
+                    <td className={styles.numCell}>
+                      {fmtRmCenti(s.unit_price_centi)}{s.currency !== 'MYR' ? ` ${s.currency}` : ''}
+                    </td>
+                    <td className={styles.numCell}>{s.lead_time_days || '—'}</td>
+                    <td className={styles.numCell}>{s.moq || '—'}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}
         </div>
+
         <footer className={styles.drawerFooter}>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginRight: 'auto' }}>
+            <Star size={11} strokeWidth={2} style={{ verticalAlign: 'middle', color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
+            {' '}Main supplier — used by default when generating POs.
+          </p>
           <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
         </footer>
       </div>
     </div>
   );
 };
+
 
 /* ════════════════════════════════════════════════════════════════════════
    Maintenance History dialog — shows config snapshots over time

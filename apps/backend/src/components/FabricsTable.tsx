@@ -14,6 +14,7 @@ import { Layers, Check, X } from 'lucide-react';
 import {
   useUpdateFabricTier,
   useUpdateFabricSupplierCode,
+  useUpdateFabricDescription,
   type FabricTier,
   type FabricTierField,
   type FabricTrackingRow,
@@ -98,7 +99,7 @@ const FabricRow = ({ row }: { row: FabricTrackingRow }) => {
   return (
     <tr>
       <td><span className={styles.codeChip}>{row.fabric_code}</span></td>
-      <td>{row.fabric_description ?? '—'}</td>
+      <td><DescriptionCell id={row.id} value={row.fabric_description ?? ''} /></td>
       <td><SupplierCodeCell id={row.id} value={row.supplier_code ?? ''} /></td>
       <td>
         <button
@@ -171,6 +172,64 @@ const SupplierCodeCell = ({ id, value }: { id: string; value: string }) => {
           else if (e.key === 'Escape') cancel();
         }}
         onBlur={commit}
+      />
+      <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
+        <Check size={14} strokeWidth={1.75} />
+      </button>
+      <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={cancel} title="Cancel">
+        <X size={14} strokeWidth={1.75} />
+      </button>
+    </span>
+  );
+};
+
+/* PR #38 — Click-to-edit Description cell. Same UX as SupplierCodeCell. */
+const DescriptionCell = ({ id, value }: { id: string; value: string }) => {
+  const update = useUpdateFabricDescription();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === value.trim()) {
+      setEditing(false);
+      return;
+    }
+    update.mutate(
+      { id, description: trimmed.length ? trimmed : null },
+      { onSettled: () => setEditing(false) },
+    );
+  };
+
+  const cancel = () => { setDraft(value); setEditing(false); };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className={value ? styles.supplierCodeChip : styles.supplierCodeEmpty}
+        onClick={() => { setDraft(value); setEditing(true); }}
+        title="Click to edit description"
+        style={{ width: '100%', textAlign: 'left' }}
+      >
+        {value || '+ Add description'}
+      </button>
+    );
+  }
+
+  return (
+    <span className={styles.supplierCodeEditor}>
+      <input
+        autoFocus
+        className={styles.supplierCodeInput}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          else if (e.key === 'Escape') cancel();
+        }}
+        onBlur={commit}
+        style={{ minWidth: 220 }}
       />
       <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
         <Check size={14} strokeWidth={1.75} />

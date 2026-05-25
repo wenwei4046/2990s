@@ -123,3 +123,20 @@ export function useUpdateFabricSupplierCode() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
   });
 }
+
+/* PR #38 — Make fabric description editable from the converter table. */
+export function useUpdateFabricDescription() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: string; description: string | null }) => {
+      return authedFetch<{ ok: true; description: string | null }>(
+        `/fabric-tracking/${args.id}/description`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ description: args.description }),
+        },
+      );
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}

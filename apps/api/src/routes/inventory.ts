@@ -93,7 +93,7 @@ inventory.get('/', async (c) => {
 
   const tableName = showAll ? 'v_inventory_all_skus' : 'inventory_balances';
   const cols = showAll
-    ? 'warehouse_id, warehouse_code, warehouse_name, product_code, product_name, category, size_label, qty, last_movement_at, value_sen'
+    ? 'warehouse_id, warehouse_code, warehouse_name, product_code, product_name, category, size_label, qty, last_movement_at, value_sen, main_supplier_code, main_supplier_name'
     : 'warehouse_id, product_code, product_name, qty, last_movement_at';
 
   let q = sb.from(tableName).select(cols);
@@ -111,6 +111,29 @@ inventory.get('/', async (c) => {
 
   const { data: whs } = await sb.from('warehouses').select('id, code, name').eq('is_active', true);
   return c.json({ balances: data ?? [], warehouses: whs ?? [] });
+});
+
+/* ── Product totals (AutoCount-style list view) — PR #38 ─────────────────
+   One row per product_code with summed qty across all warehouses + main
+   supplier. Double-click a row in the UI to drill into per-warehouse
+   breakdown via GET /inventory?showAll=true&search=... */
+inventory.get('/products', async (c) => {
+  const sb = c.get('supabase');
+  const search = c.req.query('search');
+  const category = c.req.query('category');
+
+  let q = sb.from('v_inventory_product_totals').select('*');
+  if (search) q = q.or(`product_code.ilike.%${search}%,product_name.ilike.%${search}%`);
+  if (category && category !== 'all') q = q.eq('category', category);
+
+  const { data, error } = await q.order('product_code');
+  if (error) {
+    if (/relation .* does not exist/i.test(error.message)) {
+      return c.json({ error: 'migration_pending', reason: 'Run migrations 0050/0053/0054.' }, 500);
+    }
+    return c.json({ error: 'load_failed', reason: error.message }, 500);
+  }
+  return c.json({ products: data ?? [] });
 });
 
 inventory.get('/movements', async (c) => {
