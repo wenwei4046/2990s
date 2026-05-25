@@ -44,7 +44,7 @@ fabricTracking.get('/', async (c) => {
         'sofa_price_tier, bedframe_price_tier, price_centi, soh_centi, ' +
         'po_outstanding_centi, last_month_usage_centi, one_week_usage_centi, ' +
         'two_weeks_usage_centi, one_month_usage_centi, shortage_centi, ' +
-        'reorder_point_centi, supplier, lead_time_days',
+        'reorder_point_centi, supplier, supplier_code, lead_time_days',
     )
     .order('fabric_code', { ascending: true });
 
@@ -58,6 +58,39 @@ fabricTracking.get('/', async (c) => {
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ fabrics: data ?? [] });
+});
+
+// Set the supplier's own code for this fabric (what we print on POs sent to
+// the supplier). Single supplier per fabric — multi-supplier still goes
+// through supplier_material_bindings.
+fabricTracking.patch('/:id/supplier-code', async (c) => {
+  const id = c.req.param('id');
+  let body: { supplierCode?: string | null };
+  try {
+    body = (await c.req.json()) as typeof body;
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const supabase = c.get('supabase');
+  const trimmed = typeof body.supplierCode === 'string' ? body.supplierCode.trim() : null;
+  const next = trimmed === '' ? null : trimmed;
+
+  const { error } = await supabase
+    .from('fabric_trackings')
+    .update({ supplier_code: next })
+    .eq('id', id);
+
+  if (error) {
+    if (error.code === '42501' || /permission denied/i.test(error.message)) {
+      return c.json({ error: 'forbidden', reason: error.message }, 403);
+    }
+    if (/column .* does not exist/i.test(error.message)) {
+      return c.json({ error: 'migration_pending', reason: 'Run migration 0046 against Supabase.' }, 500);
+    }
+    return c.json({ error: 'update_failed', reason: error.message }, 500);
+  }
+  return c.json({ ok: true, supplierCode: next });
 });
 
 fabricTracking.patch('/:id/tier', async (c) => {
