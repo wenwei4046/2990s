@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
+import { useDeleteQuote } from '../lib/quotes';
 import { useAddons, useLocalities, useDeliveryFeeConfig, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
 import { computeDeliveryFee } from '@2990s/shared/pricing';
@@ -68,6 +69,7 @@ export const Handover = () => {
   const auth = useAuth();
   const lines = useCart((s) => s.lines);
   const clear = useCart((s) => s.clear);
+  const sourceQuoteId = useCart((s) => s.sourceQuoteId);
   const subtotal = cartSubtotal(lines);
 
   // Captures the canvas signature at submit time so we persist the exact ink
@@ -86,6 +88,7 @@ export const Handover = () => {
   const [serverError, setServerError] = useState<string | null>(null);
 
   const createOrder = useCreateOrder();
+  const deleteQuote = useDeleteQuote();
   const addons = useAddons();
   const localities = useLocalities();
   const catalog = useCatalog();
@@ -214,6 +217,10 @@ export const Handover = () => {
         uploadSessionId: form.slipUploadSessionId ?? undefined,
         signatureData: signatureRef.current?.getDataUrl() ?? undefined,
       });
+      // Consume the originating quote (if this cart was loaded from one) now
+      // that the order is confirmed. Best-effort — a failed delete must not
+      // block the confirmation; clear() then resets sourceQuoteId.
+      if (sourceQuoteId) deleteQuote.mutate(sourceQuoteId);
       clear();
       navigate(`/confirmed/${encodeURIComponent(result.id)}`, { replace: true });
     } catch (err) {
