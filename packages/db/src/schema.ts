@@ -1273,7 +1273,7 @@ export const deliveryReturnItems = pgTable('delivery_return_items', {
    ════════════════════════════════════════════════════════════════════════ */
 
 export const mfgProductCategory = pgEnum('mfg_product_category', [
-  'SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS',
+  'SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS', 'SERVICE',
 ]);
 
 export const mfgProductStatus = pgEnum('mfg_product_status', [
@@ -1398,6 +1398,11 @@ export const fabricTrackings = pgTable('fabric_trackings', {
   shortageCenti:        integer('shortage_centi').notNull().default(0),
   reorderPointCenti:    integer('reorder_point_centi').notNull().default(0),
   supplier:             text('supplier'),
+  // Supplier's own SKU/code for this fabric. Used when we send a PO to the
+  // supplier — the printed line item shows THEIR code, not our internal
+  // fabric_code (HOOKKA's two-code mapping pattern). Single supplier per
+  // fabric; multi-supplier needs supplier_material_bindings.
+  supplierCode:         text('supplier_code'),
   leadTimeDays:         integer('lead_time_days').notNull().default(0),
 }, (t) => ({
   idxCode: index('idx_fabric_trackings_code').on(t.fabricCode),

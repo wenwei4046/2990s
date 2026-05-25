@@ -45,6 +45,8 @@ import {
   type SeatHeightPrice,
   type SofaPriceTier,
 } from '../lib/mfg-products-queries';
+import { useFabricTrackings } from '../lib/fabric-queries';
+import { FabricsTable } from '../components/FabricsTable';
 import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
@@ -97,6 +99,7 @@ const CATEGORIES: { value: MfgCategory | 'all'; label: string }[] = [
   { value: 'BEDFRAME', label: 'Bedframe' },
   { value: 'SOFA', label: 'Sofa' },
   { value: 'MATTRESS', label: 'Mattress' },
+  { value: 'SERVICE', label: 'Service' },
 ];
 
 const fmtRm = (sen: number | null): string => {
@@ -537,6 +540,11 @@ const MaintenanceTab = () => {
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<MaintenanceConfig | null>(null);
 
+  // Count fabric_trackings rows for the left-rail "Fabrics (N)" badge.
+  // Lightweight query (cached 30s) — uses the same hook as the panel itself.
+  const fabricsList = useFabricTrackings();
+  const fabricsCount = fabricsList.data?.length ?? 0;
+
   const config = draft ?? resolved.data?.data ?? null;
   const active = MAINTENANCE_TABS.find((t) => t.key === activeKey)!;
 
@@ -602,7 +610,7 @@ const MaintenanceTab = () => {
           <div key={section}>
             <div className={styles.maintSection}>{section}</div>
             {MAINTENANCE_TABS.filter((t) => t.section === section).map((t) => {
-              const count = countItems(config, t.key);
+              const count = t.key === 'fabrics' ? fabricsCount : countItems(config, t.key);
               return (
                 <button
                   key={t.key}
@@ -696,12 +704,7 @@ const MaintenanceList = ({
   const [draftPrice, setDraftPrice] = useState('0.00');
 
   if (listKey === 'fabrics') {
-    return (
-      <div className={styles.bannerWarn}>
-        Fabrics editor reads from <code>fabric_trackings</code> — wire-up
-        coming with the Fabric Tracking page.
-      </div>
-    );
+    return <FabricsMaintenancePanel />;
   }
 
   // ── String[] tabs (gaps, sofaSizes) ───────────────────────────────────
@@ -943,6 +946,49 @@ const MaintenanceList = ({
       )}
 
       {!priced && !editMode && <p className={styles.eyebrow}>No surcharge pricing for this list.</p>}
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Fabrics sub-tab body — embeds the shared FabricsTable so the same editor
+   shows up on /fabric-tracking and Products → Maintenance → Common → Fabrics.
+   Has its own slim search bar so the 122-row list stays usable in-place.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const FabricsMaintenancePanel = () => {
+  const [search, setSearch] = useState('');
+  const { data, isLoading, error } = useFabricTrackings({
+    search: search.trim() || undefined,
+  });
+  const rows = data ?? [];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <div style={{ position: 'relative', maxWidth: 360 }}>
+        <Search
+          {...ICON_PROPS}
+          style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }}
+        />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by code or description…"
+          style={{
+            width: '100%',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-14)',
+            background: 'var(--c-paper)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-md)',
+            padding: 'var(--space-2) var(--space-3) var(--space-2) var(--space-7)',
+            color: 'var(--c-ink)',
+            outline: 'none',
+          }}
+        />
+      </div>
+      <FabricsTable rows={rows} isLoading={isLoading} error={error} />
     </div>
   );
 };

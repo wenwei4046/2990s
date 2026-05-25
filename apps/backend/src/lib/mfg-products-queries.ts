@@ -40,7 +40,7 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 /* ────────────────────────── Types ────────────────────────────────────── */
 
-export type MfgCategory = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS';
+export type MfgCategory = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS' | 'SERVICE';
 
 export type SofaPriceTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
 

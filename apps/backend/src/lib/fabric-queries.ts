@@ -54,6 +54,7 @@ export type FabricTrackingRow = {
   shortage_centi: number;
   reorder_point_centi: number;
   supplier: string | null;
+  supplier_code: string | null;
   lead_time_days: number;
 };
 
@@ -86,6 +87,22 @@ export function useUpdateFabricTier() {
         method: 'PATCH',
         body: JSON.stringify({ field: args.field, tier: args.tier }),
       });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}
+
+export function useUpdateFabricSupplierCode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: string; supplierCode: string | null }) => {
+      return authedFetch<{ ok: true; supplierCode: string | null }>(
+        `/fabric-tracking/${args.id}/supplier-code`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ supplierCode: args.supplierCode }),
+        },
+      );
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
   });
