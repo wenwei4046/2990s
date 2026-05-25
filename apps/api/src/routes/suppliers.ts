@@ -32,9 +32,15 @@ const SUPPLIER_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'BLOCKED']);
 const CURRENCIES = new Set(['MYR', 'RMB', 'USD', 'SGD']);
 const MATERIAL_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
 
+/* PR #40 — full master record (Commander 2026-05-26 AutoCount parity) */
 const SUPPLIER_COLS =
   'id, code, name, whatsapp_number, email, contact_person, phone, address, state, ' +
-  'payment_terms, status, rating, notes, created_at, updated_at';
+  'payment_terms, status, rating, notes, supplier_type, category, tin_number, ' +
+  'business_reg_no, postcode, area, mobile, fax, website, attention, business_nature, ' +
+  'currency, statement_type, aging_basis, credit_limit_sen, created_at, updated_at';
+
+const STATEMENT_TYPES = new Set(['OPEN_ITEM', 'BALANCE_FORWARD', 'NO_STATEMENT']);
+const AGING_BASES = new Set(['INVOICE_DATE', 'DUE_DATE']);
 
 const BINDING_COLS =
   'id, supplier_id, material_kind, material_code, material_name, supplier_sku, ' +
@@ -98,6 +104,22 @@ suppliers.post('/', async (c) => {
     status: SUPPLIER_STATUSES.has(body.status as string) ? body.status : 'ACTIVE',
     rating: typeof body.rating === 'number' ? body.rating : 0,
     notes: (body.notes as string) ?? null,
+    /* PR #40 — full master record */
+    supplier_type: (body.supplierType as string) ?? null,
+    category: (body.category as string) ?? null,
+    tin_number: (body.tinNumber as string) ?? null,
+    business_reg_no: (body.businessRegNo as string) ?? null,
+    postcode: (body.postcode as string) ?? null,
+    area: (body.area as string) ?? null,
+    mobile: (body.mobile as string) ?? null,
+    fax: (body.fax as string) ?? null,
+    website: (body.website as string) ?? null,
+    attention: (body.attention as string) ?? null,
+    business_nature: (body.businessNature as string) ?? null,
+    currency: CURRENCIES.has(body.currency as string) ? body.currency : 'MYR',
+    statement_type: STATEMENT_TYPES.has(body.statementType as string) ? body.statementType : 'OPEN_ITEM',
+    aging_basis: AGING_BASES.has(body.agingBasis as string) ? body.agingBasis : 'INVOICE_DATE',
+    credit_limit_sen: typeof body.creditLimitSen === 'number' ? body.creditLimitSen : 0,
   };
 
   const supabase = c.get('supabase');
@@ -124,12 +146,27 @@ suppliers.patch('/:id', async (c) => {
     ['email', 'email'], ['contactPerson', 'contact_person'], ['phone', 'phone'],
     ['address', 'address'], ['state', 'state'], ['paymentTerms', 'payment_terms'],
     ['rating', 'rating'], ['notes', 'notes'],
+    /* PR #40 — full master record */
+    ['supplierType', 'supplier_type'], ['category', 'category'],
+    ['tinNumber', 'tin_number'], ['businessRegNo', 'business_reg_no'],
+    ['postcode', 'postcode'], ['area', 'area'], ['mobile', 'mobile'],
+    ['fax', 'fax'], ['website', 'website'], ['attention', 'attention'],
+    ['businessNature', 'business_nature'], ['creditLimitSen', 'credit_limit_sen'],
   ];
   for (const [from, to] of map) {
     if (body[from] !== undefined) updates[to] = body[from];
   }
   if (body.status !== undefined && SUPPLIER_STATUSES.has(body.status as string)) {
     updates.status = body.status;
+  }
+  if (body.currency !== undefined && CURRENCIES.has(body.currency as string)) {
+    updates.currency = body.currency;
+  }
+  if (body.statementType !== undefined && STATEMENT_TYPES.has(body.statementType as string)) {
+    updates.statement_type = body.statementType;
+  }
+  if (body.agingBasis !== undefined && AGING_BASES.has(body.agingBasis as string)) {
+    updates.aging_basis = body.agingBasis;
   }
 
   const supabase = c.get('supabase');

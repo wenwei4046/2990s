@@ -32,6 +32,9 @@ export type Currency = 'MYR' | 'RMB' | 'USD' | 'SGD';
 export type MaterialKind = 'mfg_product' | 'fabric' | 'raw';
 export type PoStatus = 'DRAFT' | 'SUBMITTED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
 
+export type StatementType = 'OPEN_ITEM' | 'BALANCE_FORWARD' | 'NO_STATEMENT';
+export type AgingBasis    = 'INVOICE_DATE' | 'DUE_DATE';
+
 export type SupplierRow = {
   id: string;
   code: string;
@@ -46,6 +49,22 @@ export type SupplierRow = {
   status: SupplierStatus;
   rating: number;
   notes: string | null;
+  /* PR #40 — full master record (Commander 2026-05-26 AutoCount parity) */
+  supplier_type: string | null;
+  category: string | null;
+  tin_number: string | null;
+  business_reg_no: string | null;
+  postcode: string | null;
+  area: string | null;
+  mobile: string | null;
+  fax: string | null;
+  website: string | null;
+  attention: string | null;
+  business_nature: string | null;
+  currency: Currency;
+  statement_type: StatementType;
+  aging_basis: AgingBasis;
+  credit_limit_sen: number;
   created_at: string;
   updated_at: string;
 };

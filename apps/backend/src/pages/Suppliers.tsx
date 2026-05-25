@@ -202,12 +202,24 @@ const CreateForm = ({ onClose }: { onClose: () => void }) => {
   const [form, setForm] = useState<Record<string, string | number>>({
     code: '',
     name: '',
+    /* PR #40 — full master record */
+    supplierType: '',
+    category: '',
+    tinNumber: '',
+    businessRegNo: '',
     contactPerson: '',
+    attention: '',
     phone: '',
+    mobile: '',
+    fax: '',
     whatsappNumber: '',
     email: '',
+    website: '',
     address: '',
+    postcode: '',
+    area: '',
     state: '',
+    businessNature: '',
     paymentTerms: '',
     rating: 0,
     notes: '',
@@ -250,18 +262,38 @@ const SupplierFields = ({
   onChange: (k: string, v: string | number) => void;
 }) => (
   <div className={styles.section}>
-    <p className={styles.eyebrow}>Supplier Info</p>
+    <p className={styles.eyebrow}>Identity</p>
     <div className={styles.formGrid}>
-      <Field label="Code *" value={(form.code as string) ?? ''} onChange={(v) => onChange('code', v)} />
-      <Field label="Name *" value={(form.name as string) ?? ''} onChange={(v) => onChange('name', v)} />
+      <Field label="Credit Account *" value={(form.code as string) ?? ''} onChange={(v) => onChange('code', v)} />
+      <Field label="Company Name *" value={(form.name as string) ?? ''} onChange={(v) => onChange('name', v)} />
+      <Field label="Supplier Type" value={(form.supplierType as string) ?? ''} onChange={(v) => onChange('supplierType', v)} />
+      <Field label="Category" value={(form.category as string) ?? ''} onChange={(v) => onChange('category', v)} />
+      <Field label="TIN Number" value={(form.tinNumber as string) ?? ''} onChange={(v) => onChange('tinNumber', v)} />
+      <Field label="Business Reg No" value={(form.businessRegNo as string) ?? ''} onChange={(v) => onChange('businessRegNo', v)} />
+    </div>
+    <p className={styles.eyebrow} style={{ marginTop: 'var(--space-3)' }}>Contact</p>
+    <div className={styles.formGrid}>
       <Field label="Contact Person" value={(form.contactPerson as string) ?? ''} onChange={(v) => onChange('contactPerson', v)} />
+      <Field label="Attention" value={(form.attention as string) ?? ''} onChange={(v) => onChange('attention', v)} />
       <Field label="Phone" value={(form.phone as string) ?? ''} onChange={(v) => onChange('phone', v)} />
+      <Field label="Mobile" value={(form.mobile as string) ?? ''} onChange={(v) => onChange('mobile', v)} />
       <Field label="WhatsApp" value={(form.whatsappNumber as string) ?? ''} onChange={(v) => onChange('whatsappNumber', v)} />
+      <Field label="Fax" value={(form.fax as string) ?? ''} onChange={(v) => onChange('fax', v)} />
       <Field label="Email" value={(form.email as string) ?? ''} onChange={(v) => onChange('email', v)} />
-      <Field label="State" value={(form.state as string) ?? ''} onChange={(v) => onChange('state', v)} />
+      <Field label="Website" value={(form.website as string) ?? ''} onChange={(v) => onChange('website', v)} />
+    </div>
+    <p className={styles.eyebrow} style={{ marginTop: 'var(--space-3)' }}>Commercial</p>
+    <div className={styles.formGrid}>
       <Field label="Payment Terms" value={(form.paymentTerms as string) ?? ''} onChange={(v) => onChange('paymentTerms', v)} />
+      <Field label="Business Nature" value={(form.businessNature as string) ?? ''} onChange={(v) => onChange('businessNature', v)} />
+    </div>
+    <p className={styles.eyebrow} style={{ marginTop: 'var(--space-3)' }}>Address</p>
+    <div className={styles.formGrid}>
+      <Field label="State" value={(form.state as string) ?? ''} onChange={(v) => onChange('state', v)} />
+      <Field label="Area" value={(form.area as string) ?? ''} onChange={(v) => onChange('area', v)} />
+      <Field label="Postcode" value={(form.postcode as string) ?? ''} onChange={(v) => onChange('postcode', v)} />
       <Field
-        label="Address"
+        label="Billing Address"
         value={(form.address as string) ?? ''}
         onChange={(v) => onChange('address', v)}
         multiline
