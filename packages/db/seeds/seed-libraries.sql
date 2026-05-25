@@ -104,7 +104,7 @@ ON CONFLICT (id) DO UPDATE SET
 -- ─── Initial showrooms ──────────────────────────────────────────────────────
 -- Single showroom at MVP. New rows added when 2990's expands.
 INSERT INTO showrooms (id, showroom_code, name, address, phone, active, sort_order) VALUES
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid, 'KL', 'Showroom KL', 'Lot 1, Jalan Showroom, KL', '+60 3 1234 5678', TRUE, 1)
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid, 'KL', 'Showroom KL', '51, Jln Utara, Pjs 12, 46200 Petaling Jaya, Selangor', '+60 3 1234 5678', TRUE, 1)
 ON CONFLICT (id) DO NOTHING;
 
 -- ─── Initial staff (PLACEHOLDER — replace before production deploy) ─────────
