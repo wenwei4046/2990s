@@ -9,6 +9,12 @@
   padding: 12px 24px;
   background: #fff;
   border-bottom: 1px solid var(--line);
+  /* Stick to the top while the page scrolls so the step nav, Quotes/My orders,
+     cart pill, and the Configurator's LIVE TOTAL + Add-to-Cart stay reachable
+     through a long catalog. Modals (sheet 60, drift 1000) + FAB (40) sit above
+     this z-index, so it never bleeds through them. */
+  position: sticky;
+  top: 0;
   z-index: 30;
 }
 
