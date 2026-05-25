@@ -981,6 +981,32 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   processingDate:    date('processing_date'),
   salesExemptionExpiry: date('sales_exemption_expiry'),
 
+  // ── Additions from PR #35 (HOOKKA-aligned + ERPNext-style naming) ────
+  // Customer master link (existing customers table; we still keep debtor_name
+  // as a denormalised snapshot for display speed)
+  customerId:        uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }),
+  customerState:     text('customer_state'),
+  // Customer PO — 3 structured fields + optional scanned image base64
+  customerPo:        text('customer_po'),
+  customerPoId:      text('customer_po_id'),
+  customerPoDate:    date('customer_po_date'),
+  customerPoImageB64: text('customer_po_image_b64'),
+  // Multi-branch customer (HOOKKA uses delivery_hubs FK; we keep nullable
+  // uuid + snapshot text so 2990s isn't forced to mirror delivery_hubs yet)
+  hubId:             uuid('hub_id'),
+  hubName:           text('hub_name'),
+  // Delivery date granularity
+  customerDeliveryDate: date('customer_delivery_date'),
+  internalExpectedDd: date('internal_expected_dd'),
+  linkedDoDocNo:     text('linked_do_doc_no'),
+  // Multi-address (in addition to legacy address1-4)
+  shipToAddress:     text('ship_to_address'),
+  billToAddress:     text('bill_to_address'),
+  installToAddress:  text('install_to_address'),
+  // Money + overdue
+  subtotalSen:       integer('subtotal_sen'),
+  overdue:           text('overdue'),                       // 'PENDING' | 'DUE' | 'OVERDUE' | null
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
   updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -989,6 +1015,7 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   idxDebtor:   index('idx_mso_debtor').on(t.debtorCode),
   idxStatus:   index('idx_mso_status').on(t.status),
   idxBranding: index('idx_mso_branding').on(t.branding),
+  idxCustomer: index('idx_mso_customer').on(t.customerId),
 }));
 
 export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
@@ -1021,11 +1048,58 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
   unitCostCenti:     integer('unit_cost_centi').notNull().default(0),
   lineCostCenti:     integer('line_cost_centi').notNull().default(0),
   lineMarginCenti:   integer('line_margin_centi').notNull().default(0),
+
+  // ── PR #35 additions — bedframe variant pricing + sofa line suffix +
+  // free-text "custom specials" (mix of predefined + user-typed surcharges)
+  gapInches:         integer('gap_inches'),
+  divanHeightInches: integer('divan_height_inches'),
+  divanPriceSen:     integer('divan_price_sen').notNull().default(0),
+  legHeightInches:   integer('leg_height_inches'),
+  legPriceSen:       integer('leg_price_sen').notNull().default(0),
+  customSpecials:    jsonb('custom_specials'),               // [{ description, surchargeSen }]
+  lineSuffix:        text('line_suffix'),                    // '-01', '-02' for sofa modules
+  specialOrderPriceSen: integer('special_order_price_sen').notNull().default(0),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),
   idxItemCode:  index('idx_mso_items_item').on(t.itemCode),
   idxItemGroup: index('idx_mso_items_group').on(t.itemGroup),
+}));
+
+/* ─────────────────────────── SO audit trails ──────────────────────────
+   Two append-only tables driving the Sales Order detail page audit panels.
+   - mfgSoStatusChanges: every transition with actor + notes + auto-actions
+   - mfgSoPriceOverrides: every line-price override with approver + reason
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const mfgSoStatusChanges = pgTable('mfg_so_status_changes', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  docNo:        text('doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  fromStatus:   text('from_status'),
+  toStatus:     text('to_status').notNull(),
+  changedBy:    uuid('changed_by').references(() => staff.id, { onDelete: 'set null' }),
+  notes:        text('notes'),
+  autoActions:  jsonb('auto_actions'),                       // string[] e.g. ['createProductionOrders']
+  createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDoc: index('idx_so_status_changes_doc').on(t.docNo),
+  idxAt:  index('idx_so_status_changes_at').on(t.createdAt),
+}));
+
+export const mfgSoPriceOverrides = pgTable('mfg_so_price_overrides', {
+  id:                 uuid('id').primaryKey().defaultRandom(),
+  docNo:              text('doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  itemId:             uuid('item_id').notNull().references(() => mfgSalesOrderItems.id, { onDelete: 'cascade' }),
+  itemCode:           text('item_code').notNull(),
+  originalPriceSen:   integer('original_price_sen').notNull(),
+  overridePriceSen:   integer('override_price_sen').notNull(),
+  reason:             text('reason'),
+  approvedBy:         uuid('approved_by').references(() => staff.id, { onDelete: 'set null' }),
+  createdAt:          timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDoc:  index('idx_so_overrides_doc').on(t.docNo),
+  idxItem: index('idx_so_overrides_item').on(t.itemId),
 }));
 
 /* DO — delivery orders (we → customer) */

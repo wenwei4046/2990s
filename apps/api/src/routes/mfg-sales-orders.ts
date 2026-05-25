@@ -137,13 +137,96 @@ mfgSalesOrders.post('/', async (c) => {
   return c.json({ docNo }, 201);
 });
 
+// Status transition with audit row. Reads the prior status, updates, then
+// inserts to mfg_so_status_changes — best-effort (audit failure does NOT
+// roll back the status change).
 mfgSalesOrders.patch('/:docNo/status', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
-  let body: { status?: string }; try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+  let body: { status?: string; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
-  const { data, error } = await sb.from('mfg_sales_orders').update({ status: body.status, updated_at: new Date().toISOString() }).eq('doc_no', docNo).select('doc_no, status').single();
+
+  const { data: prev } = await sb.from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
+  const fromStatus = (prev as { status: string } | null)?.status ?? null;
+
+  const { data, error } = await sb.from('mfg_sales_orders').update({
+    status: body.status, updated_at: new Date().toISOString(),
+  }).eq('doc_no', docNo).select('doc_no, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  // Audit row — best-effort.
+  await sb.from('mfg_so_status_changes').insert({
+    doc_no: docNo,
+    from_status: fromStatus,
+    to_status: body.status,
+    changed_by: user.id,
+    notes: body.notes ?? null,
+  });
+
   return c.json({ salesOrder: data });
+});
+
+// GET — list status change history for the SO detail timeline.
+mfgSalesOrders.get('/:docNo/status-changes', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const { data, error } = await sb.from('mfg_so_status_changes')
+    .select('id, doc_no, from_status, to_status, changed_by, notes, auto_actions, created_at')
+    .eq('doc_no', docNo)
+    .order('created_at', { ascending: false });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ statusChanges: data ?? [] });
+});
+
+// GET — list line price overrides for the audit panel.
+mfgSalesOrders.get('/:docNo/price-overrides', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const { data, error } = await sb.from('mfg_so_price_overrides')
+    .select('id, doc_no, item_id, item_code, original_price_sen, override_price_sen, reason, approved_by, created_at')
+    .eq('doc_no', docNo)
+    .order('created_at', { ascending: false });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ overrides: data ?? [] });
+});
+
+// POST — override the price on a single line item. Captures the original
+// in the audit row so we never lose the history.
+mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  const user = c.get('user');
+  let body: { overridePriceSen?: number; reason?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const newPrice = Number(body.overridePriceSen ?? 0);
+  if (!Number.isFinite(newPrice) || newPrice < 0) return c.json({ error: 'invalid_price' }, 400);
+
+  const { data: item } = await sb.from('mfg_sales_order_items')
+    .select('id, doc_no, item_code, unit_price_centi, qty, discount_centi')
+    .eq('id', itemId).maybeSingle();
+  if (!item) return c.json({ error: 'item_not_found' }, 404);
+  const i = item as { id: string; doc_no: string; item_code: string; unit_price_centi: number; qty: number; discount_centi: number };
+  if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
+
+  // Audit first (so we don't lose original even if the update fails)
+  await sb.from('mfg_so_price_overrides').insert({
+    doc_no: docNo,
+    item_id: itemId,
+    item_code: i.item_code,
+    original_price_sen: i.unit_price_centi,
+    override_price_sen: newPrice,
+    reason: body.reason ?? null,
+    approved_by: user.id,
+  });
+
+  const newLineTotal = (i.qty * newPrice) - i.discount_centi;
+  const { error } = await sb.from('mfg_sales_order_items').update({
+    unit_price_centi: newPrice,
+    total_centi: newLineTotal,
+    total_inc_centi: newLineTotal,
+    balance_centi: newLineTotal,
+    line_margin_centi: newLineTotal - 0,  // line_cost_centi stays; margin recomputed by item PATCH path
+  }).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  return c.json({ ok: true, itemId, newPrice });
 });
 
 // ── PATCH header — edit debtor info, addresses, note, etc. ───────────
@@ -160,6 +243,16 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['address4', 'address4'], ['phone', 'phone'], ['note', 'note'],
     ['remark2', 'remark2'], ['remark3', 'remark3'], ['remark4', 'remark4'],
     ['soDate', 'so_date'], ['currency', 'currency'],
+    // PR #35 — new header fields
+    ['customerId', 'customer_id'], ['customerState', 'customer_state'],
+    ['customerPo', 'customer_po'], ['customerPoId', 'customer_po_id'],
+    ['customerPoDate', 'customer_po_date'], ['customerPoImageB64', 'customer_po_image_b64'],
+    ['hubId', 'hub_id'], ['hubName', 'hub_name'],
+    ['customerDeliveryDate', 'customer_delivery_date'],
+    ['internalExpectedDd', 'internal_expected_dd'],
+    ['linkedDoDocNo', 'linked_do_doc_no'],
+    ['shipToAddress', 'ship_to_address'], ['billToAddress', 'bill_to_address'],
+    ['installToAddress', 'install_to_address'],
   ];
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const [from, to] of map) {
