@@ -16,6 +16,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 
 export const purchaseReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseReturns.use('*', supabaseAuth);
@@ -116,12 +117,43 @@ purchaseReturns.post('/', async (c) => {
 });
 
 purchaseReturns.patch('/:id/post', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   const { data, error } = await sb.from('purchase_returns').update({
     status: 'POSTED', posted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }).eq('id', id).eq('status', 'DRAFT').select('id, status, posted_at').single();
+  }).eq('id', id).eq('status', 'DRAFT').select('id, status, posted_at, return_number, grn_id').single();
   if (error) return c.json({ error: 'post_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_draft' }, 409);
+
+  // ── Inventory OUT — qty leaves the warehouse the GRN landed in. ─────
+  const header = data as { id: string; return_number: string; grn_id: string | null };
+  // Resolve warehouse from the linked GRN; fall back to default.
+  let warehouseId: string | null = null;
+  if (header.grn_id) {
+    const { data: grn } = await sb.from('grns').select('warehouse_id').eq('id', header.grn_id).maybeSingle();
+    warehouseId = (grn as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+  }
+  if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
+
+  if (warehouseId) {
+    const { data: items } = await sb.from('purchase_return_items')
+      .select('material_code, material_name, qty_returned')
+      .eq('purchase_return_id', id);
+    const movements = ((items ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number }>)
+      .filter((it) => it.qty_returned > 0)
+      .map((it) => ({
+        movement_type: 'OUT' as const,
+        warehouse_id: warehouseId!,
+        product_code: it.material_code,
+        product_name: it.material_name,
+        qty: it.qty_returned,
+        source_doc_type: 'PURCHASE_RETURN' as const,
+        source_doc_id: id,
+        source_doc_no: header.return_number,
+        performed_by: user.id,
+      }));
+    if (movements.length > 0) await writeMovements(sb, movements);
+  }
+
   return c.json({ purchaseReturn: data });
 });
 

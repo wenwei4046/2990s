@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 
 export const consignment = new Hono<{ Bindings: Env; Variables: Variables }>();
 consignment.use('*', supabaseAuth);
@@ -90,22 +91,29 @@ consignment.patch('/:id/status', async (c) => {
 
 // Post a consignment note. For RETURN notes we roll the qty back onto
 // consignment_order_items.qty_returned (a soft restock signal). Marks
-// signed_at on the note so the post is one-shot.
+// signed_at on the note so the post is one-shot. Inventory side-effect:
+// OUT note → stock leaves the warehouse; RETURN note → stock comes back.
 consignment.patch('/:id/notes/:noteId/post', async (c) => {
-  const sb = c.get('supabase'); const noteId = c.req.param('noteId');
+  const sb = c.get('supabase'); const noteId = c.req.param('noteId'); const user = c.get('user');
 
   const { data: note } = await sb.from('consignment_notes')
-    .select('id, note_type, signed_at')
+    .select('id, note_type, signed_at, warehouse_id, note_number')
     .eq('id', noteId).maybeSingle();
   if (!note) return c.json({ error: 'note_not_found' }, 404);
-  const n = note as { id: string; note_type: string; signed_at: string | null };
+  const n = note as { id: string; note_type: string; signed_at: string | null; warehouse_id: string | null; note_number: string };
   if (n.signed_at) return c.json({ error: 'already_posted', message: 'Already signed' }, 409);
 
+  // Load items once — used both for restocking qty_returned and for the
+  // inventory movement insert below.
+  const { data: items } = await sb.from('consignment_note_items')
+    .select('consignment_item_id, item_code, description, qty')
+    .eq('consignment_note_id', noteId);
+  const noteItems = (items ?? []) as Array<{
+    consignment_item_id: string | null; item_code: string; description: string | null; qty: number;
+  }>;
+
   if (n.note_type === 'RETURN') {
-    const { data: items } = await sb.from('consignment_note_items')
-      .select('consignment_item_id, qty')
-      .eq('consignment_note_id', noteId);
-    for (const it of (items ?? []) as Array<{ consignment_item_id: string | null; qty: number }>) {
+    for (const it of noteItems) {
       if (!it.consignment_item_id) continue;
       const { data: orderItem } = await sb.from('consignment_order_items')
         .select('qty_returned')
@@ -122,6 +130,29 @@ consignment.patch('/:id/notes/:noteId/post', async (c) => {
     signed_at: new Date().toISOString(),
   }).eq('id', noteId);
   if (noteErr) return c.json({ error: 'post_failed', reason: noteErr.message }, 500);
+
+  // ── Inventory movement ───────────────────────────────────────────────
+  // OUT note posted → stock leaves the warehouse (OUT).
+  // RETURN note posted → stock comes back to the warehouse (IN).
+  const warehouseId = n.warehouse_id ?? (await defaultWarehouseId(sb));
+  if (warehouseId && noteItems.length > 0) {
+    const movementType = n.note_type === 'RETURN' ? 'IN' : 'OUT';
+    const movements = noteItems
+      .filter((it) => it.qty > 0)
+      .map((it) => ({
+        movement_type: movementType as 'IN' | 'OUT',
+        warehouse_id: warehouseId,
+        product_code: it.item_code,
+        product_name: it.description,
+        qty: it.qty,
+        source_doc_type: 'CONSIGNMENT_NOTE' as const,
+        source_doc_id: noteId,
+        source_doc_no: n.note_number,
+        performed_by: user.id,
+      }));
+    if (movements.length > 0) await writeMovements(sb, movements);
+  }
+
   return c.json({ ok: true, noteId, type: n.note_type });
 });
 
