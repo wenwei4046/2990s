@@ -133,6 +133,22 @@ export type PoItemRow = {
   line_total_centi: number;
   received_qty: number;
   notes: string | null;
+  /* PR #41 — variant fields (migration 0056) */
+  item_group?: string | null;
+  description?: string | null;
+  description2?: string | null;
+  uom?: string;
+  discount_centi?: number;
+  unit_cost_centi?: number;
+  gap_inches?: number | null;
+  divan_height_inches?: number | null;
+  divan_price_sen?: number;
+  leg_height_inches?: number | null;
+  leg_price_sen?: number;
+  custom_specials?: unknown;
+  line_suffix?: string | null;
+  special_order_price_sen?: number;
+  variants?: Record<string, unknown> | null;
 };
 
 /* ── Suppliers ──────────────────────────────────────────────────────── */
@@ -355,6 +371,22 @@ export type NewPoItem = {
   unitPriceCenti: number;
   bindingId?: string;
   notes?: string;
+  /* PR #41 — variant fields */
+  itemGroup?: string;
+  description?: string;
+  description2?: string;
+  uom?: string;
+  discountCenti?: number;
+  unitCostCenti?: number;
+  gapInches?: number | null;
+  divanHeightInches?: number | null;
+  divanPriceSen?: number;
+  legHeightInches?: number | null;
+  legPriceSen?: number;
+  customSpecials?: unknown;
+  lineSuffix?: string;
+  specialOrderPriceSen?: number;
+  variants?: Record<string, unknown>;
 };
 
 export function useCreatePurchaseOrder() {
@@ -366,13 +398,67 @@ export function useCreatePurchaseOrder() {
       poDate?: string;
       expectedAt?: string;
       notes?: string;
-      items: NewPoItem[];
+      items?: NewPoItem[];                     // PR #41 — optional, allow blank-draft
     }) =>
       authedFetch<{ id: string; poNumber: string }>(`/mfg-purchase-orders`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+  });
+}
+
+/* PR #41 — header PATCH + item CRUD endpoints for the new PO detail page */
+export function useUpdatePurchaseOrderHeader() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: {
+      id: string; poDate?: string; expectedAt?: string;
+      currency?: Currency; notes?: string; supplierId?: string;
+    }) => authedFetch<{ purchaseOrder: PoHeaderRow }>(`/mfg-purchase-orders/${id}`, {
+      method: 'PATCH', body: JSON.stringify(body),
+    }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+}
+
+export function useAddPurchaseOrderItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, ...body }: NewPoItem & { poId: string }) =>
+      authedFetch<{ item: PoItemRow }>(`/mfg-purchase-orders/${poId}/items`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+    },
+  });
+}
+
+export function useUpdatePurchaseOrderItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, itemId, ...body }: Partial<NewPoItem> & { poId: string; itemId: string }) =>
+      authedFetch<{ ok: true }>(`/mfg-purchase-orders/${poId}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+    },
+  });
+}
+
+export function useDeletePurchaseOrderItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, itemId }: { poId: string; itemId: string }) =>
+      authedFetch<void>(`/mfg-purchase-orders/${poId}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+    },
   });
 }
 

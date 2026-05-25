@@ -22,6 +22,7 @@ import { Inventory } from './pages/Inventory';
 import { Drivers } from './pages/Drivers';
 import { Accounting } from './pages/Accounting';
 import { Warehouses } from './pages/Warehouses';
+import { PurchaseOrderDetail } from './pages/PurchaseOrderDetail';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
   ConsignmentDetail, PurchaseReturnDetail,
@@ -46,6 +47,7 @@ export const router = createBrowserRouter([
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       { path: 'purchase-orders', element: <PurchaseOrders /> },
+      { path: 'purchase-orders/:id', element: <PurchaseOrderDetail /> },
       { path: 'grns', element: <Grns /> },
       { path: 'grns/:id', element: <GrnDetail /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
