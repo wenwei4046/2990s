@@ -18,6 +18,7 @@ import {
   SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage, PurchaseReturnsPage,
 } from './pages/FlowPages';
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
+import { Inventory } from './pages/Inventory';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
   ConsignmentDetail, PurchaseReturnDetail,
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: 'sku-master', element: <SkuMaster /> },
       { path: 'products', element: <Products /> },
       { path: 'fabric-tracking', element: <FabricTracking /> },
+      { path: 'inventory', element: <Inventory /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       { path: 'purchase-orders', element: <PurchaseOrders /> },

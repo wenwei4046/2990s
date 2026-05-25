@@ -84,6 +84,7 @@ export const Sidebar = () => {
     { kind: 'link', to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
     { kind: 'link', to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
     { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Tracking' },
+    { kind: 'link', to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
     { kind: 'link', to: '/addons', icon: <PlusCircle {...ICON_PROPS} />, label: 'Add-on products' },
     { kind: 'group', label: 'Procurement' },
     { kind: 'link', to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },

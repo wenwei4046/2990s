@@ -1556,6 +1556,50 @@ export type NewMaintenanceConfigRow  = typeof maintenanceConfigHistory.$inferIns
 export type MasterPriceHistoryRow    = typeof masterPriceHistory.$inferSelect;
 export type NewMasterPriceHistoryRow = typeof masterPriceHistory.$inferInsert;
 
+/* ════════════════════════════════════════════════════════════════════════
+   Inventory — trading-company model (commander 2026-05-25)
+   2 warehouses (KL + 2990 PJ). GRN-post / Consignment-RETURN = IN.
+   DO-dispatch / Purchase-Return / Consignment-OUT = OUT.
+   Balance per (warehouse, product) = SUM(movements) — exposed via the
+   inventory_balances VIEW (defined in 0050 migration; not in Drizzle).
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const inventoryMovementType = pgEnum('inventory_movement_type', [
+  'IN', 'OUT', 'ADJUSTMENT', 'TRANSFER',
+]);
+
+export const warehouses = pgTable('warehouses', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  code:       text('code').notNull().unique(),    // 'KL', 'PJ'
+  name:       text('name').notNull(),
+  location:   text('location'),
+  isActive:   boolean('is_active').notNull().default(true),
+  isDefault:  boolean('is_default').notNull().default(false),
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:  timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxActive: index('idx_warehouses_active').on(t.isActive),
+}));
+
+export const inventoryMovements = pgTable('inventory_movements', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  movementType:   inventoryMovementType('movement_type').notNull(),
+  warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
+  productCode:    text('product_code').notNull(),
+  productName:    text('product_name'),
+  qty:            integer('qty').notNull(),
+  sourceDocType:  text('source_doc_type'),  // 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN' | 'ADJUSTMENT'
+  sourceDocId:    uuid('source_doc_id'),
+  sourceDocNo:    text('source_doc_no'),
+  notes:          text('notes'),
+  performedBy:    uuid('performed_by').references(() => staff.id, { onDelete: 'set null' }),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxWarehouseProduct: index('idx_inv_mov_warehouse_product').on(t.warehouseId, t.productCode),
+  idxDoc:              index('idx_inv_mov_doc').on(t.sourceDocType, t.sourceDocId),
+  idxCreated:          index('idx_inv_mov_created').on(t.createdAt),
+}));
+
 /* MaintenanceConfig — the JSON blob shape stored in maintenanceConfigHistory.config */
 export type PricedOption = { value: string; priceSen: number };
 export type MaintenanceConfig = {

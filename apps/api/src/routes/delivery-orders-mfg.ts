@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
@@ -88,14 +89,50 @@ deliveryOrdersMfg.post('/', async (c) => {
 });
 
 deliveryOrdersMfg.patch('/:id/status', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string }; try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
   const ts: Record<string, string> = { updated_at: new Date().toISOString() };
   if (body.status === 'DISPATCHED') ts.dispatched_at = new Date().toISOString();
   if (body.status === 'SIGNED') ts.signed_at = new Date().toISOString();
   if (body.status === 'DELIVERED') ts.delivered_at = new Date().toISOString();
+
+  // Load the prior status so we only fire stock-out on the FIRST transition
+  // into DISPATCHED (subsequent toggles back into DISPATCHED would
+  // duplicate movements).
+  const { data: prev } = await sb.from('delivery_orders').select('status, warehouse_id, do_number').eq('id', id).maybeSingle();
+  const wasDispatched = (prev as { status?: string } | null)?.status
+    ? ['DISPATCHED','IN_TRANSIT','SIGNED','DELIVERED','INVOICED'].includes((prev as { status: string }).status)
+    : false;
+
   const { data, error } = await sb.from('delivery_orders').update({ status: body.status, ...ts }).eq('id', id).select('id, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  // ── Inventory OUT — only on the first DISPATCHED transition. ─────────
+  if (body.status === 'DISPATCHED' && !wasDispatched) {
+    const { data: items } = await sb.from('delivery_order_items')
+      .select('item_code, description, qty')
+      .eq('delivery_order_id', id);
+    const warehouseId = (prev as { warehouse_id: string | null } | null)?.warehouse_id
+      ?? (await defaultWarehouseId(sb));
+    const doNo = (prev as { do_number: string } | null)?.do_number ?? id;
+    if (warehouseId && items) {
+      const movements = (items as Array<{ item_code: string; description: string | null; qty: number }>)
+        .filter((it) => it.qty > 0)
+        .map((it) => ({
+          movement_type: 'OUT' as const,
+          warehouse_id: warehouseId,
+          product_code: it.item_code,
+          product_name: it.description,
+          qty: it.qty,
+          source_doc_type: 'DO' as const,
+          source_doc_id: id,
+          source_doc_no: doNo,
+          performed_by: user.id,
+        }));
+      if (movements.length > 0) await writeMovements(sb, movements);
+    }
+  }
+
   return c.json({ deliveryOrder: data });
 });

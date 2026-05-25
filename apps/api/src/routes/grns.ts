@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
@@ -82,10 +83,17 @@ grns.post('/', async (c) => {
 });
 
 grns.patch('/:id/post', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+
+  // Load the full GRN + items so we know the warehouse + qty_accepted per item.
+  const { data: grnHeader } = await sb.from('grns')
+    .select('grn_number, warehouse_id')
+    .eq('id', id).maybeSingle();
+  const { data: items } = await sb.from('grn_items')
+    .select('purchase_order_item_id, qty_accepted, material_code, material_name')
+    .eq('grn_id', id);
 
   // Roll up qty_accepted onto purchase_order_items.received_qty
-  const { data: items } = await sb.from('grn_items').select('purchase_order_item_id, qty_accepted').eq('grn_id', id);
   if (items) {
     for (const it of items) {
       const poiId = (it as { purchase_order_item_id: string | null }).purchase_order_item_id;
@@ -103,5 +111,27 @@ grns.patch('/:id/post', async (c) => {
   }).eq('id', id).eq('status', 'DRAFT').select('id, status, posted_at').single();
   if (error) return c.json({ error: 'post_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_draft' }, 409);
+
+  // ── Inventory IN per item — best effort, doesn't roll back the post. ─
+  const grnNo = (grnHeader as { grn_number: string } | null)?.grn_number ?? id;
+  const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
+    ?? (await defaultWarehouseId(sb));
+  if (warehouseId && items) {
+    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null }>)
+      .filter((it) => it.qty_accepted > 0)
+      .map((it) => ({
+        movement_type: 'IN' as const,
+        warehouse_id: warehouseId,
+        product_code: it.material_code,
+        product_name: it.material_name,
+        qty: it.qty_accepted,
+        source_doc_type: 'GRN' as const,
+        source_doc_id: id,
+        source_doc_no: grnNo,
+        performed_by: user.id,
+      }));
+    if (movements.length > 0) await writeMovements(sb, movements);
+  }
+
   return c.json({ grn: data });
 });
