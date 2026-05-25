@@ -42,6 +42,12 @@ export type InventoryBalance = {
   product_name: string | null;
   qty: number;
   last_movement_at: string | null;
+  /* showAll=true rows include these */
+  warehouse_code?: string;
+  warehouse_name?: string;
+  category?: 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
+  size_label?: string | null;
+  value_sen?: number;
 };
 
 export type InventoryMovement = {
@@ -51,6 +57,8 @@ export type InventoryMovement = {
   product_code: string;
   product_name: string | null;
   qty: number;
+  unit_cost_sen?: number;
+  total_cost_sen?: number;
   source_doc_type: string | null;
   source_doc_id: string | null;
   source_doc_no: string | null;
@@ -59,28 +67,143 @@ export type InventoryMovement = {
   created_at: string;
 };
 
-export function useWarehouses() {
+export type InventoryLot = {
+  id: string;
+  warehouse_id: string;
+  warehouse_code?: string;
+  product_code: string;
+  product_name: string | null;
+  qty_received: number;
+  qty_remaining: number;
+  unit_cost_sen: number;
+  remaining_value_sen?: number;
+  received_at: string;
+  source_doc_type: string | null;
+  source_doc_no: string | null;
+};
+
+export type CogsEntry = {
+  id: string;
+  consumed_at: string;
+  warehouse_id: string;
+  warehouse_code: string;
+  product_code: string;
+  qty_consumed: number;
+  unit_cost_sen: number;
+  total_cost_sen: number;
+  source_doc_type: string | null;
+  source_doc_no: string | null;
+  lot_received_at: string;
+  lot_source_doc_no: string | null;
+};
+
+export type InventoryValueRow = {
+  warehouse_id: string;
+  warehouse_code: string;
+  product_code: string;
+  product_name: string | null;
+  qty_on_hand: number;
+  value_sen: number;
+  avg_unit_cost_sen: number;
+};
+
+export function useWarehouses(opts?: { includeInactive?: boolean }) {
   return useQuery({
-    queryKey: ['warehouses'],
-    queryFn: () => authedFetch<{ warehouses: Warehouse[] }>(`/inventory/warehouses`).then((r) => r.warehouses),
+    queryKey: ['warehouses', opts?.includeInactive ?? false],
+    queryFn: () => {
+      const qs = opts?.includeInactive ? '?includeInactive=true' : '';
+      return authedFetch<{ warehouses: Warehouse[] }>(`/inventory/warehouses${qs}`).then((r) => r.warehouses);
+    },
     staleTime: 5 * 60_000,
     retry: 1,
   });
 }
 
-export function useInventoryBalances(opts?: { warehouseId?: string; search?: string }) {
+export function useInventoryBalances(opts?: {
+  warehouseId?: string;
+  search?: string;
+  category?: string;
+  showAll?: boolean;
+}) {
   return useQuery({
-    queryKey: ['inventory', 'balances', opts?.warehouseId ?? 'all', opts?.search ?? ''],
+    queryKey: ['inventory', 'balances', opts ?? {}],
     queryFn: () => {
       const params = new URLSearchParams();
       if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
       if (opts?.search) params.set('search', opts.search);
+      if (opts?.category && opts.category !== 'all') params.set('category', opts.category);
+      if (opts?.showAll) params.set('showAll', 'true');
       return authedFetch<{ balances: InventoryBalance[]; warehouses: Warehouse[] }>(
         `/inventory${params.toString() ? `?${params.toString()}` : ''}`,
       );
     },
     staleTime: 30_000,
     retry: 1,
+  });
+}
+
+export function useInventoryLots(productCode: string | null, opts?: { warehouseId?: string; includeClosed?: boolean }) {
+  return useQuery({
+    queryKey: ['inventory', 'lots', productCode, opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
+      if (opts?.includeClosed) params.set('includeClosed', 'true');
+      return authedFetch<{ lots: InventoryLot[] }>(
+        `/inventory/lots/${encodeURIComponent(productCode ?? '')}${params.toString() ? `?${params.toString()}` : ''}`,
+      ).then((r) => r.lots);
+    },
+    enabled: Boolean(productCode),
+    staleTime: 30_000,
+  });
+}
+
+export function useCogsEntries(opts?: { warehouseId?: string; productCode?: string; from?: string; to?: string }) {
+  return useQuery({
+    queryKey: ['inventory', 'cogs', opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
+      if (opts?.productCode) params.set('productCode', opts.productCode);
+      if (opts?.from) params.set('from', opts.from);
+      if (opts?.to) params.set('to', opts.to);
+      return authedFetch<{ cogs: CogsEntry[] }>(
+        `/inventory/cogs${params.toString() ? `?${params.toString()}` : ''}`,
+      ).then((r) => r.cogs);
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useInventoryValue(opts?: { warehouseId?: string }) {
+  return useQuery({
+    queryKey: ['inventory', 'value', opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
+      return authedFetch<{ value: InventoryValueRow[] }>(
+        `/inventory/value${params.toString() ? `?${params.toString()}` : ''}`,
+      ).then((r) => r.value);
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateWarehouse() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { code: string; name: string; location?: string; isDefault?: boolean }) =>
+      authedFetch<{ warehouse: Warehouse }>(`/inventory/warehouses`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['warehouses'] }),
+  });
+}
+
+export function useUpdateWarehouse() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; code?: string; name?: string; location?: string; isActive?: boolean; isDefault?: boolean }) =>
+      authedFetch<{ warehouse: Warehouse }>(`/inventory/warehouses/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['warehouses'] }),
   });
 }
 

@@ -17,6 +17,10 @@ type MovementInput = {
   product_code: string;
   product_name?: string | null;
   qty: number;                              // always positive
+  /** PR #37 — for IN rows: per-unit cost in sen. Trigger uses this to
+   *  create the FIFO lot. OUT rows leave this unset; the trigger computes
+   *  the consumed cost from the lots it pulls from. */
+  unit_cost_sen?: number;
   source_doc_type: 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN';
   source_doc_id: string;
   source_doc_no: string;
