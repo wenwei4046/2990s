@@ -143,6 +143,9 @@ export function useUpdateMfgProductPrices() {
       costPriceSen?: number | null;
       seatHeightPrices?: SeatHeightPrice[];
       branding?: string | null;
+      subAssemblies?: string[];
+      pieces?: { count: number; names: string[] } | null;
+      defaultVariants?: Record<string, unknown>;
       notes?: string;
     }) => {
       const { id, ...body } = args;
@@ -157,12 +160,55 @@ export function useUpdateMfgProductPrices() {
   });
 }
 
+export type MasterPriceHistoryRow = {
+  id: string;
+  product_code: string;
+  field: string;
+  old_value_sen: number | null;
+  new_value_sen: number | null;
+  reason: string | null;
+  changed_at: string;
+  changed_by: string | null;
+};
+
 export function useMfgProductPriceHistory(id: string | null) {
   return useQuery({
     queryKey: ['mfg-product-price-history', id],
-    queryFn: () => authedFetch<{ history: unknown[] }>(`/mfg-products/${id}/price-history`),
+    queryFn: () => authedFetch<{ history: MasterPriceHistoryRow[] }>(`/mfg-products/${id}/price-history`),
     enabled: Boolean(id),
     staleTime: 30_000,
+  });
+}
+
+/** Body shape for POST /mfg-products. id + status default server-side. */
+export type NewMfgProductInput = {
+  code: string;
+  name: string;
+  category: MfgCategory;
+  description?: string;
+  baseModel?: string;
+  sizeCode?: string;
+  sizeLabel?: string;
+  basePriceSen?: number | null;
+  price1Sen?: number | null;
+  costPriceSen?: number | null;
+  unitM3Milli?: number;
+  fabricUsageCenti?: number;
+  productionTimeMinutes?: number;
+  branding?: string;
+  fabricColor?: string;
+};
+
+export function useCreateMfgProduct() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NewMfgProductInput) =>
+      authedFetch<{ id: string; code: string }>(`/mfg-products`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
   });
 }
 

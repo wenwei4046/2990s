@@ -111,6 +111,17 @@ fabricTracking.patch('/:id/tier', async (c) => {
 
   const col = TIER_FIELD_TO_COL[body.field]!;
   const supabase = c.get('supabase');
+
+  // Load the fabric code before update so we can count affected products
+  // tagged with this fabric_color. This gives the UI a "propagation hint"
+  // — N products now use the new tier when their price is read.
+  const { data: fabric } = await supabase
+    .from('fabric_trackings')
+    .select('fabric_code')
+    .eq('id', id)
+    .maybeSingle();
+  const fabricCode = (fabric as { fabric_code: string } | null)?.fabric_code ?? null;
+
   const updates: Record<string, string> = { [col]: body.tier };
   const { error } = await supabase.from('fabric_trackings').update(updates).eq('id', id);
 
@@ -120,5 +131,21 @@ fabricTracking.patch('/:id/tier', async (c) => {
     }
     return c.json({ error: 'update_failed', reason: error.message }, 500);
   }
-  return c.json({ ok: true });
+
+  // Count downstream products. Sofa tier change affects SOFA + ACCESSORY
+  // SKUs (HOOKKA convention); bedframe tier change only affects BEDFRAME.
+  let affectedProducts = 0;
+  if (fabricCode) {
+    const targetCategories = body.field === 'bedframePriceTier'
+      ? ['BEDFRAME']
+      : ['SOFA', 'ACCESSORY'];
+    const { count } = await supabase
+      .from('mfg_products')
+      .select('id', { head: true, count: 'exact' })
+      .eq('fabric_color', fabricCode)
+      .in('category', targetCategories);
+    affectedProducts = count ?? 0;
+  }
+
+  return c.json({ ok: true, affectedProducts, fabricCode });
 });

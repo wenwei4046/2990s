@@ -83,12 +83,28 @@ export function useUpdateFabricTier() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (args: { id: string; field: FabricTierField; tier: FabricTier }) => {
-      return authedFetch<{ ok: true }>(`/fabric-tracking/${args.id}/tier`, {
-        method: 'PATCH',
-        body: JSON.stringify({ field: args.field, tier: args.tier }),
-      });
+      return authedFetch<{ ok: true; affectedProducts: number; fabricCode: string | null }>(
+        `/fabric-tracking/${args.id}/tier`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ field: args.field, tier: args.tier }),
+        },
+      );
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+    onSuccess: (res, vars) => {
+      qc.invalidateQueries({ queryKey: ['fabric-tracking'] });
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });  // price display might shift
+      if (res.affectedProducts > 0) {
+        const tierLabel = vars.tier.replace('PRICE_', 'P');
+        const fieldLabel = vars.field === 'bedframePriceTier' ? 'bedframe' : 'sofa';
+        // Light-touch toast — for now use alert since 2990s has no toast system.
+        // eslint-disable-next-line no-alert
+        alert(
+          `Tier updated → ${tierLabel}. ${res.affectedProducts} ${fieldLabel} product${res.affectedProducts === 1 ? '' : 's'} ` +
+          `tagged with fabric ${res.fabricCode ?? ''} now reflect the new tier when read.`,
+        );
+      }
+    },
   });
 }
 

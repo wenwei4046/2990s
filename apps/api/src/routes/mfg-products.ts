@@ -50,6 +50,60 @@ mfgProducts.get('/', async (c) => {
   return c.json({ products: data ?? [] });
 });
 
+// ── POST / ─────────────────────────────────────────────────────────────
+// Create a new mfg_product. id is text PK — we generate a short uuid-ish
+// id since the existing import uses Excel-style ids like 'mfg-xxxxxxx'.
+const VALID_CATEGORIES = new Set(['SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS', 'SERVICE']);
+mfgProducts.post('/', async (c) => {
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const code = String(body.code ?? '').trim();
+  const name = String(body.name ?? '').trim();
+  const category = String(body.category ?? '').trim();
+  if (!code)  return c.json({ error: 'code_required' }, 400);
+  if (!name)  return c.json({ error: 'name_required' }, 400);
+  if (!VALID_CATEGORIES.has(category)) return c.json({ error: 'invalid_category', allowed: [...VALID_CATEGORIES] }, 400);
+
+  const supabase = c.get('supabase');
+  // Generate a stable id matching the existing seed convention. crypto is
+  // global in CF Workers; fall back if absent.
+  const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const id = `mfg-${rand.replace(/-/g, '').slice(0, 12)}`;
+
+  const row: Record<string, unknown> = {
+    id,
+    code,
+    name,
+    category,
+    status: 'ACTIVE',
+    description: (body.description as string) ?? null,
+    base_model: (body.baseModel as string) ?? null,
+    size_code: (body.sizeCode as string) ?? null,
+    size_label: (body.sizeLabel as string) ?? null,
+    base_price_sen: body.basePriceSen == null ? null : Number(body.basePriceSen),
+    price1_sen: body.price1Sen == null ? null : Number(body.price1Sen),
+    cost_price_sen: body.costPriceSen == null ? 0 : Number(body.costPriceSen),
+    unit_m3_milli: body.unitM3Milli == null ? 0 : Number(body.unitM3Milli),
+    fabric_usage_centi: body.fabricUsageCenti == null ? 0 : Number(body.fabricUsageCenti),
+    production_time_minutes: body.productionTimeMinutes == null ? 0 : Number(body.productionTimeMinutes),
+    branding: (body.branding as string) ?? null,
+    fabric_color: (body.fabricColor as string) ?? null,
+  };
+
+  const { data, error } = await supabase.from('mfg_products').insert(row).select('id, code').single();
+  if (error) {
+    if (error.code === '23505') return c.json({ error: 'duplicate_code', reason: error.message }, 409);
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
+  return c.json(data, 201);
+});
+
 // ── GET /:id ───────────────────────────────────────────────────────────
 mfgProducts.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -86,6 +140,8 @@ mfgProducts.patch('/:id', async (c) => {
     costPriceSen?: number | null;
     notes?: string;
     defaultVariants?: unknown;
+    subAssemblies?: unknown;
+    pieces?: unknown;
     seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }>;
     branding?: string | null;
   };
@@ -123,6 +179,12 @@ mfgProducts.patch('/:id', async (c) => {
   }
   if (body.defaultVariants !== undefined) {
     updates.default_variants = body.defaultVariants;
+  }
+  if (body.subAssemblies !== undefined) {
+    updates.sub_assemblies = body.subAssemblies;
+  }
+  if (body.pieces !== undefined) {
+    updates.pieces = body.pieces;
   }
   if (body.branding !== undefined) {
     const trimmed = typeof body.branding === 'string' ? body.branding.trim() : null;
