@@ -823,6 +823,23 @@ export const purchaseOrderItems = pgTable('purchase_order_items', {
   lineTotalCenti:   integer('line_total_centi').notNull(),
   receivedQty:      integer('received_qty').notNull().default(0), // updated by GRN (when ported)
   notes:            text('notes'),
+  /* PR #41 — Variant fields (migration 0056). Mirrors mfg_sales_order_items
+     so SO→PO and PO→GRN conversions preserve sofa color / bedframe D1 etc. */
+  gapInches:               integer('gap_inches'),
+  divanHeightInches:       integer('divan_height_inches'),
+  divanPriceSen:           integer('divan_price_sen').notNull().default(0),
+  legHeightInches:         integer('leg_height_inches'),
+  legPriceSen:             integer('leg_price_sen').notNull().default(0),
+  customSpecials:          jsonb('custom_specials'),
+  lineSuffix:              text('line_suffix'),
+  specialOrderPriceSen:    integer('special_order_price_sen').notNull().default(0),
+  variants:                jsonb('variants'),               // { fabricColor, seatHeight, ... }
+  itemGroup:               text('item_group'),              // 'sofa'|'bedframe'|'mattress'|'accessory'|'service'
+  description:             text('description'),
+  description2:            text('description2'),
+  uom:                     text('uom').notNull().default('UNIT'),
+  discountCenti:           integer('discount_centi').notNull().default(0),
+  unitCostCenti:           integer('unit_cost_centi').notNull().default(0),
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxPo: index('idx_po_items_po').on(t.purchaseOrderId),

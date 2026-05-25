@@ -11,7 +11,8 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Plus, X, Send, Ban, FileText, Printer, Truck, Package, Search } from 'lucide-react';
+import { useNavigate } from 'react-router';
+import { Plus, X, Send, Ban, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   usePurchaseOrders,
@@ -63,6 +64,7 @@ type Drawer =
 export const PurchaseOrders = () => {
   const [status, setStatus] = useState<'all' | PoStatus>('all');
   const [drawer, setDrawer] = useState<Drawer>({ kind: 'closed' });
+  const navigate = useNavigate();
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const grnFromPos = useGrnFromPos();
@@ -195,7 +197,7 @@ export const PurchaseOrders = () => {
           <tbody>
             {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((po) => (
-              <tr key={po.id} onClick={() => setDrawer({ kind: 'detail', poId: po.id })}>
+              <tr key={po.id} onClick={() => navigate(`/purchase-orders/${po.id}`)}>
                 <td onClick={(e) => { e.stopPropagation(); toggleSelect(po.id); }}>
                   <input type="checkbox" checked={selectedIds.has(po.id)}
                     onChange={() => toggleSelect(po.id)}
@@ -226,7 +228,15 @@ export const PurchaseOrders = () => {
         </table>
       </div>
 
-      {drawer.kind === 'create' && <CreatePoDrawer onClose={() => setDrawer({ kind: 'closed' })} />}
+      {drawer.kind === 'create' && (
+        <CreatePoDrawer
+          onClose={() => setDrawer({ kind: 'closed' })}
+          onCreated={(id) => {
+            setDrawer({ kind: 'closed' });
+            navigate(`/purchase-orders/${id}`);
+          }}
+        />
+      )}
       {drawer.kind === 'detail' && (
         <DetailPoDrawer poId={drawer.poId} onClose={() => setDrawer({ kind: 'closed' })} />
       )}
@@ -245,14 +255,18 @@ export const PurchaseOrders = () => {
 // After items chosen, both modes converge into the same "header + summary"
 // section: expected date, notes, currency (read-only from binding), submit.
 
-type Mode = 'supplier' | 'item';
+type Mode = 'supplier' | 'item' | 'blank';
 type PickedLine = { binding: BindingRow; qty: number };
 
-const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
-  const [mode, setMode] = useState<Mode>('supplier');
+const CreatePoDrawer = ({ onClose, onCreated }: {
+  onClose: () => void;
+  onCreated: (id: string, poNumber: string) => void;
+}) => {
+  const [mode, setMode] = useState<Mode>('blank');                       // PR #41 — default Blank Draft
   const [poDate, setPoDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [expectedAt, setExpectedAt] = useState('');
   const [notes, setNotes] = useState('');
+  const [blankSupplierId, setBlankSupplierId] = useState<string | null>(null);
   const create = useCreatePurchaseOrder();
 
   // ── Supplier-mode state ─────────────────────────────────────────────
@@ -310,11 +324,16 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
     setItemSearch('');
   };
 
+  // PR #41 — mode='blank' supports raw PO creation (just supplier + dates).
+  // User then adds items on the detail page with full per-category variants.
   const submit = () => {
-    if (!finalSupplierId) return alert('Pick a supplier (or add an item) first.');
-    if (lines.length === 0) return alert('Add at least one item with qty > 0.');
+    const supplierForBlank = mode === 'blank' ? blankSupplierId : finalSupplierId;
+    if (!supplierForBlank) return alert('Pick a supplier first.');
+    if (mode !== 'blank' && lines.length === 0) {
+      return alert('Add at least one item with qty > 0 (or switch to Blank Draft to start raw).');
+    }
 
-    const items: NewPoItem[] = lines.map((r) => ({
+    const items: NewPoItem[] = mode === 'blank' ? [] : lines.map((r) => ({
       materialKind: r.binding.material_kind,
       materialCode: r.binding.material_code,
       materialName: r.binding.material_name,
@@ -324,9 +343,20 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
       bindingId: r.binding.id,
     }));
     create.mutate(
-      { supplierId: finalSupplierId, currency, poDate, expectedAt: expectedAt || undefined, notes: notes || undefined, items },
       {
-        onSuccess: (res) => { alert(`PO created: ${res.poNumber}`); onClose(); },
+        supplierId: supplierForBlank,
+        currency: mode === 'blank' ? 'MYR' : currency,
+        poDate,
+        expectedAt: expectedAt || undefined,
+        notes: notes || undefined,
+        items,
+      },
+      {
+        onSuccess: (res) => {
+          // PR #41 — redirect to detail page so commander can add items
+          // line-by-line with the per-category variant editor.
+          onCreated(res.id, res.poNumber);
+        },
       },
     );
   };
@@ -365,6 +395,10 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
               </label>
             </div>
             <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+              <ModeChip active={mode === 'blank'} onClick={() => { setMode('blank'); setSupplierId(null); setItemModeLines([]); setQtyMap({}); }}>
+                <Edit3 {...ICON} />
+                <span>Blank Draft</span>
+              </ModeChip>
               <ModeChip active={mode === 'supplier'} onClick={() => { setMode('supplier'); setItemModeLines([]); }}>
                 <Truck {...ICON} />
                 <span>From Supplier</span>
@@ -375,6 +409,28 @@ const CreatePoDrawer = ({ onClose }: { onClose: () => void }) => {
               </ModeChip>
             </div>
           </div>
+
+          {/* ── Blank Draft mode body (raw — SO-style) ─────────────── */}
+          {mode === 'blank' && (
+            <div className={styles.section}>
+              <p className={styles.eyebrow}>2. Pick Supplier (items added on the detail page)</p>
+              <select
+                className={styles.fieldSelect}
+                value={blankSupplierId ?? ''}
+                onChange={(e) => setBlankSupplierId(e.target.value || null)}
+              >
+                <option value="">— Select supplier —</option>
+                {suppliers.data?.map((s) => (
+                  <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                ))}
+              </select>
+              <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                Blank Draft: PO is created with just supplier + dates. You add line items
+                on the PO detail page — including per-category variants (sofa color,
+                bedframe divan / leg / special). Mirrors the Sales Order flow.
+              </p>
+            </div>
+          )}
 
           {/* ── Supplier mode body ─────────────────────────────────── */}
           {mode === 'supplier' && (

@@ -34,7 +34,11 @@ const HEADER_COLS =
 
 const ITEM_COLS =
   'id, purchase_order_id, binding_id, material_kind, material_code, material_name, ' +
-  'supplier_sku, qty, unit_price_centi, line_total_centi, received_qty, notes, created_at';
+  'supplier_sku, qty, unit_price_centi, line_total_centi, received_qty, notes, created_at, ' +
+  /* PR #41 — variant fields (migration 0056) */
+  'item_group, description, description2, uom, discount_centi, unit_cost_centi, ' +
+  'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+  'custom_specials, line_suffix, special_order_price_sen, variants';
 
 // ── List ──────────────────────────────────────────────────────────────
 mfgPurchaseOrders.get('/', async (c) => {
@@ -90,10 +94,10 @@ mfgPurchaseOrders.post('/', async (c) => {
   const supplierId = body.supplierId as string | undefined;
   if (!supplierId) return c.json({ error: 'supplier_id_required' }, 400);
 
-  const items = body.items as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(items) || items.length === 0) {
-    return c.json({ error: 'items_required' }, 400);
-  }
+  // PR #41 — allow blank-draft creation (no items). Commander 2026-05-26:
+  // PO needs to be "raw" — start with just supplier + date, add items
+  // line-by-line on the detail page (matches SO flow).
+  const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const currency = ((body.currency as string) ?? 'MYR').toUpperCase();
   if (!VALID_CURRENCIES.has(currency)) return c.json({ error: 'invalid_currency' }, 400);
@@ -170,12 +174,14 @@ mfgPurchaseOrders.post('/', async (c) => {
   // populated. Project-wide pattern; see apps/api/src/routes/admin.ts L97.
   const header = headerData as unknown as { id: string; po_number: string };
 
-  const itemsToInsert = itemRows.map((r) => ({ ...r, purchase_order_id: header.id }));
-  const { error: iErr } = await supabase.from('purchase_order_items').insert(itemsToInsert);
-  if (iErr) {
-    // Best-effort rollback of header so we don't leak a no-items PO.
-    await supabase.from('purchase_orders').delete().eq('id', header.id);
-    return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+  if (itemRows.length > 0) {
+    const itemsToInsert = itemRows.map((r) => ({ ...r, purchase_order_id: header.id }));
+    const { error: iErr } = await supabase.from('purchase_order_items').insert(itemsToInsert);
+    if (iErr) {
+      // Best-effort rollback of header so we don't leak a no-items PO.
+      await supabase.from('purchase_orders').delete().eq('id', header.id);
+      return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+    }
   }
 
   return c.json({ id: header.id, poNumber: header.po_number }, 201);
@@ -289,6 +295,132 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   }
 
   return c.json({ created, total: created.length }, 201);
+});
+
+/* ── PR #41 — PATCH header (po_date, expected_at, currency, notes) ── */
+mfgPurchaseOrders.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of [
+    ['poDate', 'po_date'], ['expectedAt', 'expected_at'], ['currency', 'currency'],
+    ['notes', 'notes'], ['supplierId', 'supplier_id'],
+  ] as const) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_orders').update(updates).eq('id', id).select('*').single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ purchaseOrder: data });
+});
+
+/* ── PR #41 — PO line items: add / edit / delete ─────────────────────── */
+async function recomputePoTotals(sb: any, poId: string) {
+  const { data: items } = await sb.from('purchase_order_items')
+    .select('line_total_centi')
+    .eq('purchase_order_id', poId);
+  const subtotal = (items ?? []).reduce((s: number, r: any) => s + (r.line_total_centi ?? 0), 0);
+  await sb.from('purchase_orders').update({
+    subtotal_centi: subtotal,
+    total_centi: subtotal,
+    updated_at: new Date().toISOString(),
+  }).eq('id', poId);
+}
+
+mfgPurchaseOrders.post('/:id/items', async (c) => {
+  const poId = c.req.param('id');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
+  if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const qty = Number(it.qty ?? 1);
+  const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+  const discountCenti = Number(it.discountCenti ?? 0);
+  const lineTotal = (qty * unitPriceCenti) - discountCenti;
+
+  const row: Record<string, unknown> = {
+    purchase_order_id: poId,
+    binding_id: (it.bindingId as string) ?? null,
+    material_kind: (it.materialKind as string) ?? 'mfg_product',
+    material_code: it.materialCode,
+    material_name: it.materialName,
+    supplier_sku: (it.supplierSku as string) ?? null,
+    qty,
+    unit_price_centi: unitPriceCenti,
+    line_total_centi: lineTotal,
+    notes: (it.notes as string) ?? null,
+    /* PR #41 — variant fields */
+    gap_inches: (it.gapInches as number) ?? null,
+    divan_height_inches: (it.divanHeightInches as number) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+    variants: (it.variants as unknown) ?? null,
+    item_group: (it.itemGroup as string) ?? null,
+    description: (it.description as string) ?? null,
+    description2: (it.description2 as string) ?? null,
+    uom: (it.uom as string) ?? 'UNIT',
+    discount_centi: discountCenti,
+    unit_cost_centi: Number(it.unitCostCenti ?? 0),
+  };
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_order_items').insert(row).select('*').single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  await recomputePoTotals(sb, poId);
+  return c.json({ item: data }, 201);
+});
+
+mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
+  const poId = c.req.param('id'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+
+  const { data: prev } = await sb.from('purchase_order_items')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi')
+    .eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  const qty = it.qty !== undefined ? Number(it.qty) : (prev as any).qty;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as any).unit_price_centi;
+  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : (prev as any).discount_centi;
+  const lineTotal = (qty * unit) - discount;
+
+  const updates: Record<string, unknown> = {
+    qty, unit_price_centi: unit, discount_centi: discount, line_total_centi: lineTotal,
+  };
+  for (const [from, to] of [
+    ['materialCode', 'material_code'], ['materialName', 'material_name'],
+    ['supplierSku', 'supplier_sku'], ['itemGroup', 'item_group'],
+    ['description', 'description'], ['description2', 'description2'],
+    ['uom', 'uom'], ['unitCostCenti', 'unit_cost_centi'], ['notes', 'notes'],
+    ['gapInches', 'gap_inches'], ['divanHeightInches', 'divan_height_inches'],
+    ['divanPriceSen', 'divan_price_sen'], ['legHeightInches', 'leg_height_inches'],
+    ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
+    ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
+    ['variants', 'variants'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+
+  const { error } = await sb.from('purchase_order_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  await recomputePoTotals(sb, poId);
+  return c.json({ ok: true });
+});
+
+mfgPurchaseOrders.delete('/:id/items/:itemId', async (c) => {
+  const poId = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase');
+  const { error } = await sb.from('purchase_order_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  await recomputePoTotals(sb, poId);
+  return c.body(null, 204);
 });
 
 // ── Submit / cancel ──────────────────────────────────────────────────
