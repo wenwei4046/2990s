@@ -260,25 +260,15 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
               </button>
               {!savingQuote && (
                 sourceQuoteId ? (
-                  <>
-                    <button
-                      type="button"
-                      className={styles.ghost}
-                      onClick={() => { onClose(); navigate('/catalog'); }}
-                    >
-                      <Plus size={14} strokeWidth={1.75} />
-                      Continue add on
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.ghost}
-                      onClick={handleUpdateQuote}
-                      disabled={updateQuote.isPending}
-                    >
-                      <BookmarkPlus size={14} strokeWidth={1.75} />
-                      {updateQuote.isPending ? 'Updating…' : 'Update Quote'}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className={styles.ghost}
+                    onClick={handleUpdateQuote}
+                    disabled={updateQuote.isPending}
+                  >
+                    <BookmarkPlus size={14} strokeWidth={1.75} />
+                    {updateQuote.isPending ? 'Updating…' : 'Update Quote'}
+                  </button>
                 ) : (
                   <button
                     type="button"
