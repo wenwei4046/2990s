@@ -133,6 +133,16 @@ const PartiesRow = ({ order }: { order: OrderDetail }) => {
       .join(' '),
   ].filter(Boolean) as string[];
 
+  // Showroom address → 2 lines: street, then "postcode city state". The address
+  // is one string, so split at the 5-digit Malaysian postcode rather than at
+  // every comma (which would stack 5 short lines).
+  const showroomAddr = order.showroom?.address || COMPANY_LEGAL.showroomLine;
+  const showroomParts = showroomAddr.split(',').map((p) => p.trim()).filter(Boolean);
+  const pcIdx = showroomParts.findIndex((p) => /^\d{5}\b/.test(p));
+  const showroomAddrLines = pcIdx > 0
+    ? [showroomParts.slice(0, pcIdx).join(', '), showroomParts.slice(pcIdx).join(', ')]
+    : [showroomAddr];
+
   return (
     <div className={styles.partiesRow}>
       <div className={styles.partyBox}>
@@ -148,7 +158,7 @@ const PartiesRow = ({ order }: { order: OrderDetail }) => {
       <div className={styles.partyBox}>
         <div className={styles.partyLabel}>Sold by</div>
         <div className={styles.partyName}>{order.showroom?.name ?? 'Showroom'}</div>
-        {(order.showroom?.address || COMPANY_LEGAL.showroomLine).split(', ').map((line, i) => (
+        {showroomAddrLines.map((line, i) => (
           <div key={i} className={styles.partyLine}>{line}</div>
         ))}
       </div>
