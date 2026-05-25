@@ -20,6 +20,7 @@ import {
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
 import { Inventory } from './pages/Inventory';
 import { Drivers } from './pages/Drivers';
+import { Accounting } from './pages/Accounting';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
   ConsignmentDetail, PurchaseReturnDetail,
@@ -58,6 +59,7 @@ export const router = createBrowserRouter([
       { path: 'delivery-returns', element: <DeliveryReturnsPage /> },
       { path: 'purchase-returns', element: <PurchaseReturnsPage /> },
       { path: 'purchase-returns/:id', element: <PurchaseReturnDetail /> },
+      { path: 'accounting', element: <Accounting /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
