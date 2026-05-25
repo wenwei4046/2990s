@@ -6,6 +6,7 @@
 // create drawers come in follow-up). 2990s tokens, no Tailwind.
 
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -79,6 +80,7 @@ const GRN_CHIPS: Chip[] = [
 ];
 
 export const Grns = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useGrns(status === 'all' ? undefined : status);
@@ -101,7 +103,9 @@ export const Grns = () => {
           <tbody>
             {isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}>
+              <tr key={r.id}
+                onClick={() => navigate(`/grns/${r.id}`)}
+                style={{ cursor: 'pointer' }}>
                 <td><span className={styles.codeChip}>{r.grn_number}</span></td>
                 <td><span className={styles.codeChip}>{r.purchase_order?.po_number ?? '—'}</span></td>
                 <td>{r.supplier?.name ?? '—'}</td>
@@ -130,6 +134,7 @@ const PI_CHIPS: Chip[] = [
 ];
 
 export const PurchaseInvoicesPage = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = usePurchaseInvoices(status === 'all' ? undefined : status);
@@ -152,7 +157,9 @@ export const PurchaseInvoicesPage = () => {
           <tbody>
             {isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}>
+              <tr key={r.id}
+                onClick={() => navigate(`/purchase-invoices/${r.id}`)}
+                style={{ cursor: 'pointer' }}>
                 <td><span className={styles.codeChip}>{r.invoice_number}</span></td>
                 <td>{r.supplier?.name ?? '—'}</td>
                 <td>{r.invoice_date}</td>
@@ -183,6 +190,7 @@ const MSO_CHIPS: Chip[] = [
 ];
 
 export const MfgSalesOrdersPage = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgSalesOrders(status === 'all' ? undefined : status);
@@ -208,7 +216,11 @@ export const MfgSalesOrdersPage = () => {
           <tbody>
             {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.doc_no}>
+              <tr
+                key={r.doc_no}
+                onClick={() => navigate(`/mfg-sales-orders/${r.doc_no}`)}
+                style={{ cursor: 'pointer' }}
+              >
                 <td><span className={styles.codeChip}>{r.doc_no}</span></td>
                 <td>{r.so_date}</td>
                 <td>{r.debtor_name}</td>
@@ -241,6 +253,7 @@ const DO_CHIPS: Chip[] = [
 ];
 
 export const MfgDeliveryOrdersPage = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgDeliveryOrders(status === 'all' ? undefined : status);
@@ -265,7 +278,9 @@ export const MfgDeliveryOrdersPage = () => {
           <tbody>
             {isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}>
+              <tr key={r.id}
+                onClick={() => navigate(`/mfg-delivery-orders/${r.id}`)}
+                style={{ cursor: 'pointer' }}>
                 <td><span className={styles.codeChip}>{r.do_number}</span></td>
                 <td><span className={styles.codeChip}>{r.so_doc_no ?? '—'}</span></td>
                 <td>{r.debtor_name}</td>
@@ -296,6 +311,7 @@ const SI_CHIPS: Chip[] = [
 ];
 
 export const SalesInvoicesPage = () => {
+  const navigate = useNavigate();
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useSalesInvoices(status === 'all' ? undefined : status);
@@ -321,7 +337,9 @@ export const SalesInvoicesPage = () => {
           <tbody>
             {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}>
+              <tr key={r.id}
+                onClick={() => navigate(`/sales-invoices/${r.id}`)}
+                style={{ cursor: 'pointer' }}>
                 <td><span className={styles.codeChip}>{r.invoice_number}</span></td>
                 <td><span className={styles.codeChip}>{r.so_doc_no ?? '—'}</span></td>
                 <td>{r.debtor_name}</td>

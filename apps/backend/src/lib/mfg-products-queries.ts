@@ -42,6 +42,16 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type MfgCategory = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS';
 
+export type SofaPriceTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
+
+export type SeatHeightPrice = {
+  height: string;
+  priceSen: number;
+  /** Missing tier means legacy row — treat as PRICE_2 (HOOKKA's historic default,
+      kept so we don't have to one-shot migrate existing data). */
+  tier?: SofaPriceTier;
+};
+
 export type MfgProductRow = {
   id: string;
   code: string;
@@ -60,8 +70,9 @@ export type MfgProductRow = {
   fabric_color: string | null;
   sub_assemblies: unknown;
   pieces: unknown;
-  /** Sofa-only: array of { height: "24", priceSen: 50000 } from seat_height_prices JSONB. */
-  seat_height_prices: Array<{ height: string; priceSen: number }> | null;
+  /** Sofa-only: flat array of `{ height, priceSen, tier? }` from seat_height_prices
+      JSONB. A sofa SKU can carry up to (sizes × 3 tiers) entries. */
+  seat_height_prices: SeatHeightPrice[] | null;
   default_variants: unknown;
   updated_at: string;
 };
@@ -128,6 +139,7 @@ export function useUpdateMfgProductPrices() {
       basePriceSen?: number | null;
       price1Sen?: number | null;
       costPriceSen?: number | null;
+      seatHeightPrices?: SeatHeightPrice[];
       notes?: string;
     }) => {
       const { id, ...body } = args;

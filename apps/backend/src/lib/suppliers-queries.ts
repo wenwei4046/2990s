@@ -88,7 +88,17 @@ export type PoHeaderRow = {
   created_at: string;
   created_by: string;
   updated_at: string;
-  supplier?: { id: string; code: string; name: string } | null;
+  // Detail endpoint also includes contact_person/phone/email/address; list
+  // endpoint only fills id/code/name. Both shapes assignable here.
+  supplier?: {
+    id: string;
+    code: string;
+    name: string;
+    contact_person?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    address?: string | null;
+  } | null;
 };
 
 export type PoItemRow = {

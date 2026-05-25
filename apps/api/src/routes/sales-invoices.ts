@@ -89,9 +89,35 @@ salesInvoices.patch('/:id/status', async (c) => {
   let body: { status?: string }; try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
   const ts: Record<string, string> = { updated_at: new Date().toISOString() };
-  if (body.status === 'SENT') ts.sent_at = new Date().toISOString();
+  if (body.status === 'SENT' || body.status === 'ISSUED') ts.sent_at = new Date().toISOString();
   if (body.status === 'PAID') ts.paid_at = new Date().toISOString();
   const { data, error } = await sb.from('sales_invoices').update({ status: body.status, ...ts }).eq('id', id).select('id, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ salesInvoice: data });
+});
+
+// Record a payment received from the customer. Auto-transitions PARTIALLY_PAID
+// → PAID when paid_centi reaches total_centi.
+salesInvoices.patch('/:id/payment', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  let body: { amountCenti?: number; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const amount = Number(body.amountCenti ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: 'invalid_amount' }, 400);
+
+  const { data: cur } = await sb.from('sales_invoices').select('paid_centi, total_centi, status').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const c0 = cur as { paid_centi: number; total_centi: number; status: string };
+  if (c0.status === 'CANCELLED' || c0.status === 'DRAFT') return c.json({ error: 'not_payable', message: 'SI must be issued before payment' }, 409);
+
+  const newPaid = c0.paid_centi + amount;
+  const newStatus = newPaid >= c0.total_centi ? 'PAID' : 'PARTIALLY_PAID';
+  const ts: Record<string, string> = { updated_at: new Date().toISOString() };
+  if (newStatus === 'PAID') ts.paid_at = new Date().toISOString();
+
+  const { data, error } = await sb.from('sales_invoices').update({
+    paid_centi: newPaid, status: newStatus, ...ts,
+  }).eq('id', id).select('id, paid_centi, status').single();
+  if (error) return c.json({ error: 'payment_failed', reason: error.message }, 500);
   return c.json({ salesInvoice: data });
 });

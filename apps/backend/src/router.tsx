@@ -17,6 +17,10 @@ import {
   Grns, PurchaseInvoicesPage, MfgSalesOrdersPage, MfgDeliveryOrdersPage,
   SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage,
 } from './pages/FlowPages';
+import { SalesOrderDetail } from './pages/SalesOrderDetail';
+import {
+  GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
+} from './pages/DocDetailPages';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -35,10 +39,15 @@ export const router = createBrowserRouter([
       { path: 'suppliers/:id', element: <SupplierDetail /> },
       { path: 'purchase-orders', element: <PurchaseOrders /> },
       { path: 'grns', element: <Grns /> },
+      { path: 'grns/:id', element: <GrnDetail /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
+      { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
+      { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
       { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
+      { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
       { path: 'sales-invoices', element: <SalesInvoicesPage /> },
+      { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
       { path: 'consignment', element: <ConsignmentPage /> },
       { path: 'delivery-returns', element: <DeliveryReturnsPage /> },
       { path: 'audit-log', element: <AuditLog /> },

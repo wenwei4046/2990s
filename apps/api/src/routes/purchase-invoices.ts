@@ -93,3 +93,38 @@ purchaseInvoices.patch('/:id/post', async (c) => {
   if (!data) return c.json({ error: 'not_draft' }, 409);
   return c.json({ purchaseInvoice: data });
 });
+
+// Record a payment against the PI. Adds to paid_centi and auto-transitions
+// status: paid_centi == total → PAID, paid_centi > 0 && < total → PARTIALLY_PAID.
+purchaseInvoices.patch('/:id/payment', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  let body: { amountCenti?: number; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const amount = Number(body.amountCenti ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) return c.json({ error: 'invalid_amount' }, 400);
+
+  const { data: cur } = await sb.from('purchase_invoices').select('paid_centi, total_centi, status').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const c0 = cur as { paid_centi: number; total_centi: number; status: string };
+  if (c0.status === 'CANCELLED' || c0.status === 'DRAFT') return c.json({ error: 'not_payable', message: 'PI must be posted before payment' }, 409);
+
+  const newPaid = c0.paid_centi + amount;
+  const newStatus = newPaid >= c0.total_centi ? 'PAID' : 'PARTIALLY_PAID';
+  const ts: Record<string, string> = { updated_at: new Date().toISOString() };
+
+  const { data, error } = await sb.from('purchase_invoices').update({
+    paid_centi: newPaid, status: newStatus, ...ts,
+  }).eq('id', id).select('id, paid_centi, status').single();
+  if (error) return c.json({ error: 'payment_failed', reason: error.message }, 500);
+  return c.json({ purchaseInvoice: data });
+});
+
+purchaseInvoices.patch('/:id/cancel', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  const { data, error } = await sb.from('purchase_invoices').update({
+    status: 'CANCELLED', updated_at: new Date().toISOString(),
+  }).eq('id', id).neq('status', 'PAID').select('id, status').single();
+  if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
+  return c.json({ purchaseInvoice: data });
+});
