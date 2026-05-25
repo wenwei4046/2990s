@@ -901,6 +901,15 @@ const MaintenanceList = ({
       setDraftValue('');
     };
 
+    /* PR #40 — Commander 2026-05-26: existing rows must be editable, not
+       just deletable. The string[] flow (gaps / sofaSizes) was missing
+       inline edit — added below. */
+    const updateAt = (idx: number, newVal: string) => {
+      const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+      (next[listKey] as string[])[idx] = newVal;
+      onChange(next);
+    };
+
     return (
       <div className={styles.maintList}>
         {items.map((v, i) => (
@@ -909,7 +918,29 @@ const MaintenanceList = ({
               <History {...ICON_PROPS} />
             </button>
             <span className={styles.maintRowIdx}>{i + 1}</span>
-            <span className={styles.maintRowValue}>{v}</span>
+            <span className={styles.maintRowValue}>
+              {editMode ? (
+                <input
+                  type="text"
+                  value={v}
+                  onChange={(e) => updateAt(i, e.target.value)}
+                  style={{
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--fs-16)',
+                    fontWeight: 600,
+                    background: 'var(--c-cream)',
+                    border: '1px solid var(--c-orange)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '4px 8px',
+                    outline: 'none',
+                    width: '100%',
+                    maxWidth: 280,
+                  }}
+                />
+              ) : (
+                v
+              )}
+            </span>
             {editMode ? (
               <button
                 type="button"

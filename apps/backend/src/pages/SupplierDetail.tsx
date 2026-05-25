@@ -677,16 +677,28 @@ const SupplierInfoCard = ({
   onClose: () => void;
 }) => {
   const update = useUpdateSupplier();
+  /* PR #40 — full master record form (Commander 2026-05-26 AutoCount parity) */
   const [form, setForm] = useState({
-    code: supplier.code,
-    name: supplier.name,
+    code: supplier.code,                                     // Credit Account
+    name: supplier.name,                                     // Company Name
+    supplierType: supplier.supplier_type ?? '',              // 'Matrix', etc
+    category: supplier.category ?? '',                       // 'Bedframe', 'Fabric', ...
+    tinNumber: supplier.tin_number ?? '',
+    businessRegNo: supplier.business_reg_no ?? '',
     contactPerson: supplier.contact_person ?? '',
+    attention: supplier.attention ?? '',
     email: supplier.email ?? '',
     phone: supplier.phone ?? '',
+    mobile: supplier.mobile ?? '',
+    fax: supplier.fax ?? '',
+    website: supplier.website ?? '',
     whatsappNumber: supplier.whatsapp_number ?? '',
     paymentTerms: supplier.payment_terms ?? '',
     address: supplier.address ?? '',
+    postcode: supplier.postcode ?? '',
+    area: supplier.area ?? '',
     state: supplier.state ?? '',
+    businessNature: supplier.business_nature ?? '',
     notes: supplier.notes ?? '',
   });
 
@@ -720,17 +732,29 @@ const SupplierInfoCard = ({
       <div className={styles.cardBody}>
         {!editing ? (
           <div className={styles.infoGrid}>
-            <InfoCell label="Code" value={supplier.code} />
-            <InfoCell label="Name" value={supplier.name} />
-            <InfoCell label="Contact" value={supplier.contact_person ?? '—'} />
+            <InfoCell label="Credit Account" value={supplier.code} />
+            <InfoCell label="Company Name" value={supplier.name} />
+            <InfoCell label="Supplier Type" value={supplier.supplier_type ?? '—'} />
+            <InfoCell label="Category" value={supplier.category ?? '—'} />
+            <InfoCell label="TIN Number" value={supplier.tin_number ?? '—'} />
+            <InfoCell label="Business Reg No" value={supplier.business_reg_no ?? '—'} />
+            <InfoCell label="Contact Person" value={supplier.contact_person ?? '—'} />
+            <InfoCell label="Attention" value={supplier.attention ?? '—'} />
             <InfoCell label="Email" value={supplier.email ?? '—'} />
             <InfoCell label="Phone" value={supplier.phone ?? '—'} />
+            <InfoCell label="Mobile" value={supplier.mobile ?? '—'} />
+            <InfoCell label="Fax" value={supplier.fax ?? '—'} />
             <InfoCell label="WhatsApp" value={supplier.whatsapp_number ?? '—'} />
-            <InfoCell label="Payment terms" value={supplier.payment_terms ?? '—'} />
+            <InfoCell label="Website" value={supplier.website ?? '—'} />
+            <InfoCell label="Payment Terms" value={supplier.payment_terms ?? '—'} />
+            <InfoCell label="Currency" value={supplier.currency} />
             <InfoCell label="State" value={supplier.state ?? '—'} />
+            <InfoCell label="Postcode" value={supplier.postcode ?? '—'} />
+            <InfoCell label="Area" value={supplier.area ?? '—'} />
+            <InfoCell label="Business Nature" value={supplier.business_nature ?? '—'} />
             {supplier.address && (
               <div className={`${styles.infoCell} ${styles.infoCellFull}`}>
-                <span className={styles.infoLabel}>Address</span>
+                <span className={styles.infoLabel}>Billing Address</span>
                 <span className={styles.infoValue}>{supplier.address}</span>
               </div>
             )}
@@ -743,15 +767,30 @@ const SupplierInfoCard = ({
           </div>
         ) : (
           <div className={styles.formGrid}>
-            <EditField label="Code" value={form.code} onChange={(v) => setF('code', v)} />
-            <EditField label="Name" value={form.name} onChange={(v) => setF('name', v)} />
+            {/* Identity */}
+            <EditField label="Credit Account *" value={form.code} onChange={(v) => setF('code', v)} />
+            <EditField label="Company Name *" value={form.name} onChange={(v) => setF('name', v)} />
+            <EditField label="Supplier Type" value={form.supplierType} onChange={(v) => setF('supplierType', v)} placeholder="Matrix / Distributor / Maker" />
+            <EditField label="Category" value={form.category} onChange={(v) => setF('category', v)} placeholder="Bedframe / Fabric / Hardware" />
+            <EditField label="TIN Number" value={form.tinNumber} onChange={(v) => setF('tinNumber', v)} />
+            <EditField label="Business Reg No" value={form.businessRegNo} onChange={(v) => setF('businessRegNo', v)} />
+            {/* Contact */}
             <EditField label="Contact Person" value={form.contactPerson} onChange={(v) => setF('contactPerson', v)} />
+            <EditField label="Attention" value={form.attention} onChange={(v) => setF('attention', v)} />
             <EditField label="Email" value={form.email} onChange={(v) => setF('email', v)} />
             <EditField label="Phone" value={form.phone} onChange={(v) => setF('phone', v)} />
+            <EditField label="Mobile" value={form.mobile} onChange={(v) => setF('mobile', v)} />
+            <EditField label="Fax" value={form.fax} onChange={(v) => setF('fax', v)} />
             <EditField label="WhatsApp" value={form.whatsappNumber} onChange={(v) => setF('whatsappNumber', v)} />
-            <EditField label="Payment Terms" value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} />
+            <EditField label="Website" value={form.website} onChange={(v) => setF('website', v)} />
+            {/* Commercial */}
+            <EditField label="Payment Terms" value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} placeholder="NET 30 / COD / etc" />
+            <EditField label="Business Nature" value={form.businessNature} onChange={(v) => setF('businessNature', v)} />
+            {/* Address */}
             <EditField label="State" value={form.state} onChange={(v) => setF('state', v)} />
-            <EditField label="Address" value={form.address} onChange={(v) => setF('address', v)} multiline />
+            <EditField label="Area" value={form.area} onChange={(v) => setF('area', v)} />
+            <EditField label="Postcode" value={form.postcode} onChange={(v) => setF('postcode', v)} />
+            <EditField label="Billing Address" value={form.address} onChange={(v) => setF('address', v)} multiline />
             <EditField label="Notes" value={form.notes} onChange={(v) => setF('notes', v)} multiline />
           </div>
         )}
@@ -761,9 +800,10 @@ const SupplierInfoCard = ({
 };
 
 const EditField = ({
-  label, value, onChange, multiline,
+  label, value, onChange, multiline, placeholder,
 }: {
-  label: string; value: string; onChange: (v: string) => void; multiline?: boolean;
+  label: string; value: string; onChange: (v: string) => void;
+  multiline?: boolean; placeholder?: string;
 }) => (
   <label className={`${styles.field} ${multiline ? styles.formGridFull : ''}`}>
     <span className={styles.fieldLabel}>{label}</span>
@@ -772,6 +812,7 @@ const EditField = ({
         className={styles.fieldInput}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
         style={{ minHeight: 60, resize: 'vertical' }}
       />
     ) : (
@@ -779,6 +820,7 @@ const EditField = ({
         className={styles.fieldInput}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
       />
     )}
   </label>

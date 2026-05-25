@@ -708,19 +708,35 @@ export const poStatus = pgEnum('po_status', [
 
 export const suppliers = pgTable('suppliers', {
   id:             uuid('id').primaryKey().defaultRandom(),
-  code:           text('code').notNull().unique(),
-  name:           text('name').notNull(),
+  code:           text('code').notNull().unique(),                          // Credit Account ('400-B002')
+  name:           text('name').notNull(),                                   // Company Name
   whatsappNumber: text('whatsapp_number'),
   email:          text('email'),
   // HOOKKA-port fields (migration 0041): full master record for purchasing.
   contactPerson:  text('contact_person'),
   phone:          text('phone'),
-  address:        text('address'),
+  address:        text('address'),                                          // Billing Address (multiline)
   state:          text('state'),
-  paymentTerms:   text('payment_terms'),                  // free-form 'NET 30', 'COD'
+  paymentTerms:   text('payment_terms'),                                    // free-form 'NET 30', 'COD'
   status:         supplierStatus('status').notNull().default('ACTIVE'),
-  rating:         integer('rating').notNull().default(0), // 0-5 scale
+  rating:         integer('rating').notNull().default(0),                   // 0-5 scale
   notes:          text('notes'),
+  /* PR #40 — Commander 2026-05-26 AutoCount parity (migration 0055) */
+  supplierType:   text('supplier_type'),                                    // 'Matrix', 'Distributor', 'Maker', ...
+  category:       text('category'),                                         // 'Bedframe', 'Fabric', 'Hardware', ...
+  tinNumber:      text('tin_number'),
+  businessRegNo: text('business_reg_no'),
+  postcode:       text('postcode'),
+  area:           text('area'),
+  mobile:         text('mobile'),
+  fax:            text('fax'),
+  website:        text('website'),
+  attention:      text('attention'),
+  businessNature: text('business_nature'),
+  currency:       text('currency').notNull().default('MYR'),
+  statementType:  text('statement_type').notNull().default('OPEN_ITEM'),    // OPEN_ITEM | BALANCE_FORWARD | NO_STATEMENT
+  agingBasis:     text('aging_basis').notNull().default('INVOICE_DATE'),    // INVOICE_DATE | DUE_DATE
+  creditLimitSen: integer('credit_limit_sen').notNull().default(0),         // 0 = unlimited
   createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
