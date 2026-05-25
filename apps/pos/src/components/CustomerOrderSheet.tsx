@@ -51,6 +51,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
   const [quoteName, setQuoteName] = useState('');
   const [quotePhone, setQuotePhone] = useState('');
   const [savedConfirm, setSavedConfirm] = useState(false);
+  const [savedAsUpdate, setSavedAsUpdate] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
   // Esc closes the sheet. Body scroll locks while open so the catalog
@@ -89,6 +90,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
       setSavingQuote(false);
       setQuoteName('');
       setQuotePhone('');
+      setSavedAsUpdate(false);
       setSavedConfirm(true);
       setTimeout(() => setSavedConfirm(false), 2400);
     } catch (err) {
@@ -97,12 +99,16 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
   };
 
   // Re-saving a cart loaded from a quote updates that quote in place — no name
-  // re-entry, no duplicate. Keeps the cart so the salesperson can carry on.
+  // re-entry, no duplicate. Clears the cart like a fresh save: Update means
+  // "save the draft, not buying yet" (to buy, staff use Convert to Sales Order,
+  // which keeps the cart and consumes the quote on confirm).
   const handleUpdateQuote = async () => {
     if (!sourceQuoteId) return;
     setSaveErr(null);
     try {
       await updateQuote.mutateAsync({ id: sourceQuoteId, cart: lines, subtotal, total: subtotal });
+      clear();
+      setSavedAsUpdate(true);
       setSavedConfirm(true);
       setTimeout(() => setSavedConfirm(false), 2400);
     } catch (err) {
@@ -150,7 +156,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
         {savedConfirm && (
           <div className={styles.savedBanner}>
             <Check size={16} strokeWidth={1.75} />
-            {sourceQuoteId ? 'Quote updated.' : 'Quote saved.'} Open <Link to="/quotes" onClick={onClose}>Saved quotes</Link> to load it later.
+            {savedAsUpdate ? 'Quote updated.' : 'Quote saved.'} Open <Link to="/quotes" onClick={onClose}>Saved quotes</Link> to load it later.
           </div>
         )}
 
