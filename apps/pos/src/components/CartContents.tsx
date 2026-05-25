@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
-import { Trash2, BookmarkPlus, Check } from 'lucide-react';
+import { Link, useNavigate } from 'react-router';
+import { Trash2, BookmarkPlus, Check, Pencil } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
@@ -15,6 +15,7 @@ interface Props {
 }
 
 export const CartContents = ({ variant, onContinue }: Props) => {
+  const navigate = useNavigate();
   const lines = useCart((s) => s.lines);
   const remove = useCart((s) => s.remove);
   const setQty = useCart((s) => s.setQty);
@@ -81,6 +82,11 @@ export const CartContents = ({ variant, onContinue }: Props) => {
             variant={variant}
             onRemove={remove}
             onSetQty={setQty}
+            onEdit={
+              variant === 'page' && l.config.kind !== 'flat'
+                ? () => navigate(`/configure/${l.config.productId}?edit=${l.key}`)
+                : undefined
+            }
           />
         ))}
       </ul>
@@ -159,11 +165,12 @@ export const CartContents = ({ variant, onContinue }: Props) => {
   );
 };
 
-const Line = ({ line, variant, onRemove, onSetQty }: {
+const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
   line: CartLine;
   variant: CartContentsVariant;
   onRemove: (k: string) => void;
   onSetQty: (k: string, q: number) => void;
+  onEdit?: () => void;
 }) => (
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
     <div className={styles.lineMain}>
@@ -186,10 +193,19 @@ const Line = ({ line, variant, onRemove, onSetQty }: {
       >+</button>
     </div>
     <div className={styles.lineTotal}>{fmtRM(line.qty * line.config.total)}</div>
-    <IconButton
-      icon={<Trash2 size={18} strokeWidth={1.75} />}
-      aria-label="Remove line"
-      onClick={() => onRemove(line.key)}
-    />
+    <div className={styles.lineActions}>
+      {onEdit && (
+        <IconButton
+          icon={<Pencil size={16} strokeWidth={1.75} />}
+          aria-label="Edit line"
+          onClick={onEdit}
+        />
+      )}
+      <IconButton
+        icon={<Trash2 size={18} strokeWidth={1.75} />}
+        aria-label="Remove line"
+        onClick={() => onRemove(line.key)}
+      />
+    </div>
   </li>
 );

@@ -1,16 +1,103 @@
-/* Bedframe colour + dimension options — sits in the Configurator rail for
-   bedframe_build Models, styled to match FabricColourPicker / qpCard. */
+/* Bedframe colour + dimension options — dropdowns in the Configurator rail for
+   bedframe_build Models, kept compact so the rail doesn't scroll. Specials stay
+   a multi-select chip row (a dropdown can't express multi-select). */
 
-.block {
-  padding: 16px 0 4px;
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
   border-top: 1px solid var(--line);
-  margin-top: 16px;
 }
-.block:first-of-type {
+.row:first-child {
   border-top: none;
-  margin-top: 8px;
+  padding-top: 4px;
 }
 
+.rowLabel {
+  flex: 0 0 auto;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.req {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.muted {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* Native select styled to the brand — chevron is our own (appearance:none kills
+   the platform arrow). On tablet the closed control opens the native picker. */
+.selectWrap {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 62%;
+}
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+  padding: 9px 34px 9px 12px;
+  background: var(--c-paper);
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.select:focus {
+  outline: none;
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.14);
+}
+.selectSwatch {
+  padding-left: 34px;
+}
+.swatchDot {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1px solid rgba(34, 31, 32, 0.2);
+  pointer-events: none;
+}
+.chevron {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-muted);
+  pointer-events: none;
+}
+
+/* Specials — multi-select chips. */
+.specialsBlock {
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
 .head {
   display: flex;
   align-items: baseline;
@@ -25,42 +112,14 @@
   text-transform: uppercase;
   color: var(--c-burnt);
 }
-.req {
+.opt {
   font-family: var(--font-sans);
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--c-orange);
-}
-
-.muted {
-  font-family: var(--font-sans);
-  font-size: 12px;
   color: var(--fg-muted);
-  padding: 12px 0;
 }
 
-/* Colour swatches — same language as the sofa fabric colour row. */
-.colourRow {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.swatch {
-  appearance: none;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border-radius: 8px;
-  border: 1px solid rgba(34, 31, 32, 0.2);
-  cursor: pointer;
-}
-.swatchOn {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c-orange);
-}
-
-/* Single-select option chips (gap / leg / divan / total) + multi-select
-   specials. min-height keeps a 40px+ touch target on tablet. */
 .chipRow {
   display: flex;
   gap: 8px;

@@ -189,6 +189,11 @@ interface CustomBuilderProps {
   cells: Cell[];
   setCells: Dispatch<SetStateAction<Cell[]>>;
   onAdded: () => void;
+  /** Cart line key when editing an existing custom-sofa line. The first split
+   *  group replaces this line in place; any extra groups append as new lines. */
+  editingKey?: string;
+  /** Fabric to pre-select when editing (re-derived from the line snapshot). */
+  initialFabric?: FabricSelection | null;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -211,7 +216,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -654,6 +659,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // folds onto each sofa line.
   const productFabrics = useProductFabrics(productId);
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
+  // When editing an existing custom-sofa line, seed the fabric picker once from
+  // the line snapshot (resolved + passed by the parent). Guarded so the staff's
+  // manual changes after hydration aren't clobbered on re-render.
+  const fabricHydratedRef = useRef(false);
+  useEffect(() => {
+    if (initialFabric && !fabricHydratedRef.current) {
+      setFabricSel(initialFabric);
+      fabricHydratedRef.current = true;
+    }
+  }, [initialFabric]);
   const fabricSurcharge = fabricSel?.surcharge ?? 0;
   const canAdd = cells.length > 0 && allClosed && fabricSel != null;
 
@@ -676,6 +691,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // adjust (qty / remove) individually rather than as one merged blob.
     const cellById = new Map<string, Cell>();
     for (const c of cells) { if (c.id) cellById.set(c.id, c); }
+    // When editing, the first emitted line replaces the original; extra groups
+    // (staff added a second sofa during the edit) append as new lines.
+    let usedEditKey = false;
     for (let i = 0; i < priceResult.groups.length; i++) {
       const g = priceResult.groups[i]!;
       const groupCells = g.cellIds
@@ -705,7 +723,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         total: g.finalPrice + fabricSurcharge,
         summary,
       };
-      addConfigured(snapshot);
+      addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
+      usedEditKey = true;
     }
     onAdded();
   };
@@ -1287,7 +1306,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
                 : !fabricSel
                   ? 'Choose a fabric'
-                  : 'Add to cart'}
+                  : editingKey
+                    ? 'Save changes'
+                    : 'Add to cart'}
           </Button>
         </footer>
       </section>
