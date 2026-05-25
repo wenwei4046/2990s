@@ -8,7 +8,7 @@ INSERT INTO bedframe_options (id, kind, value, surcharge, active, sort_order) VA
   -- mattress gap
   ('gap-4','gap','4"',0,true,1),('gap-5','gap','5"',0,true,2),('gap-6','gap','6"',0,true,3),
   ('gap-7','gap','7"',0,true,4),('gap-8','gap','8"',0,true,5),('gap-9','gap','9"',0,true,6),
-  ('gap-10','gap','10"',0,true,7),
+  ('gap-10','gap','10"',0,true,7),('gap-14','gap','14"',0,true,8),('gap-16','gap','16"',0,true,9),
   -- leg height
   ('leg-noleg','leg_height','No Leg',0,true,1),('leg-1','leg_height','1"',0,true,2),
   ('leg-2','leg_height','2"',0,true,3),('leg-4','leg_height','4"',0,true,4),

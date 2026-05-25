@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM, BUNDLES, findModule, moduleFootprint, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
@@ -12,6 +12,8 @@ import {
   useProductPricingRealtime,
   useProductFabrics,
   useAddons,
+  useBedframeColours,
+  useBedframeOptions,
   type AddonRow,
 } from '../lib/queries';
 import {
@@ -152,6 +154,98 @@ export const Configurator = () => {
   const sizeLib = useSizeLibrary();
   const addons = useAddons();
   const addConfigured = useCart((s) => s.addConfigured);
+  const cartLines = useCart((s) => s.lines);
+
+  // ─── Edit mode ───────────────────────────────────────────────────────────
+  // The cart's Edit button navigates to /configure/:productId?edit=<lineKey>.
+  // We resolve the line, hydrate this Configurator's local state ONCE (after the
+  // queries that kind needs have loaded), then Add-to-Cart replaces in place via
+  // editingKey instead of appending a new line.
+  const [searchParams] = useSearchParams();
+  const editKey = searchParams.get('edit');
+  const editingLine = useMemo(
+    () => (editKey ? cartLines.find((l) => l.key === editKey) ?? null : null),
+    [editKey, cartLines],
+  );
+  const isEditing = editingLine != null && editingLine.config.productId === productId;
+  const hydratedRef = useRef(false);
+  // Defensive reset — edit always enters from /cart on a fresh mount, but if the
+  // target key/product changes the one-shot guard shouldn't stay latched.
+  useEffect(() => { hydratedRef.current = false; }, [editKey, productId]);
+
+  // Bedframe colour + option libraries (also used by <BedframeOptions>; React
+  // Query dedupes). The parent needs them to rebuild bfSel labels + surcharges
+  // when editing a bedframe line.
+  const bedframeColours = useBedframeColours(productId);
+  const bedframeOptions = useBedframeOptions();
+
+  // One-shot hydration from the edited cart line. Waits for the per-kind query
+  // data so re-derived surcharges/labels are accurate, not stale 0s.
+  useEffect(() => {
+    if (!isEditing || hydratedRef.current || !editingLine) return;
+    const cfg = editingLine.config;
+
+    if (cfg.kind === 'size') {
+      setPickedSizeId(cfg.sizeId);
+      const next: Record<string, number> = {};
+      for (const e of cfg.addonExtras ?? []) next[e.addonId] = e.qty;
+      setPillowExtras(next);
+      hydratedRef.current = true;
+    } else if (cfg.kind === 'bedframe') {
+      if (bedframeColours.data == null || bedframeOptions.data == null) return;
+      const cRow = bedframeColours.data.find((c) => c.id === cfg.colourId);
+      const optById = new Map(bedframeOptions.data.map((o) => [o.id, o]));
+      const gap = cfg.gapId ? optById.get(cfg.gapId) : undefined;
+      const leg = optById.get(cfg.legHeightId);
+      const divan = cfg.divanHeightId ? optById.get(cfg.divanHeightId) : undefined;
+      setPickedSizeId(cfg.sizeId);
+      setBfSizeOther(cfg.sizeOther ?? '');
+      setBfSel({
+        colourId: cfg.colourId,
+        colourLabel: cRow?.label ?? cfg.colourLabel ?? null,
+        colourHex: cRow?.swatchHex ?? cfg.colourHex ?? null,
+        colourSurcharge: cRow?.surcharge ?? 0,
+        gapId: cfg.gapId ?? null,
+        gapLabel: gap?.value ?? cfg.gapLabel ?? null,
+        gapSurcharge: gap?.surcharge ?? 0,
+        legId: cfg.legHeightId,
+        legLabel: leg?.value ?? cfg.legHeightLabel ?? null,
+        legSurcharge: leg?.surcharge ?? 0,
+        divanId: cfg.divanHeightId ?? null,
+        divanLabel: divan?.value ?? cfg.divanHeightLabel ?? null,
+        divanSurcharge: divan?.surcharge ?? 0,
+        specials: (cfg.specialIds ?? []).map((id, i) => {
+          const o = optById.get(id);
+          return { id, label: o?.value ?? cfg.specialLabels?.[i] ?? '', surcharge: o?.surcharge ?? 0 };
+        }),
+      });
+      hydratedRef.current = true;
+    } else if (cfg.kind === 'sofa') {
+      if (productFabrics.data == null) return;
+      setActiveDepth(cfg.depth ?? '24');
+      if (cfg.fabricId && cfg.colourId) {
+        const pf = productFabrics.data.find((f) => f.fabricId === cfg.fabricId);
+        setFabricSel({
+          fabricId: cfg.fabricId,
+          colourId: cfg.colourId,
+          fabricLabel: cfg.fabricLabel ?? '',
+          colourLabel: cfg.colourLabel ?? '',
+          colourHex: cfg.colourHex ?? null,
+          surcharge: pf?.surcharge ?? 0,
+        });
+      }
+      if (cfg.cells && cfg.cells.length > 0) {
+        setMode('custom');
+        setSofaCells(cfg.cells);
+      } else if (cfg.bundleId) {
+        setMode('quick');
+        setPicked(cfg.bundleId);
+        if (cfg.summary?.includes('L-facing')) setQuickFlip('L');
+        else if (cfg.summary?.includes('R-facing')) setQuickFlip('R');
+      }
+      hydratedRef.current = true;
+    }
+  }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data, productFabrics.data]);
 
   // Build the SofaProductPricing struct that the shared pure functions expect.
   const sofaPricing = useMemo<SofaProductPricing>(() => ({
@@ -277,7 +371,7 @@ export const Configurator = () => {
   const canAddBedframe =
     isBedframe && pickedSize != null && pickedSize.active && pickedSize.price != null &&
     bfSel.colourId != null && bfSel.legId != null &&
-    (isDivan || (bfSel.gapId != null && bfSel.divanId != null && bfSel.totalId != null));
+    (isDivan || (bfSel.gapId != null && bfSel.divanId != null));
 
   const handleAddBedframe = () => {
     if (!canAddBedframe || pickedSize == null || pickedSize.price == null || bfSel.colourId == null || bfSel.legId == null) return;
@@ -286,7 +380,6 @@ export const Configurator = () => {
     if (bfSel.gapLabel) parts.push(`Gap ${bfSel.gapLabel}`);
     if (bfSel.legLabel) parts.push(`Leg ${bfSel.legLabel}`);
     if (bfSel.divanLabel) parts.push(`Divan ${bfSel.divanLabel}`);
-    if (bfSel.totalLabel) parts.push(`Total ${bfSel.totalLabel}`);
     if (bfSel.specials.length > 0) parts.push(bfSel.specials.map((s) => s.label).join(' + '));
     const snapshot: BedframeConfigSnapshot = {
       kind: 'bedframe',
@@ -301,15 +394,14 @@ export const Configurator = () => {
       legHeightId: bfSel.legId,
       legHeightLabel: bfSel.legLabel,
       ...(bfSel.divanId ? { divanHeightId: bfSel.divanId, divanHeightLabel: bfSel.divanLabel } : {}),
-      ...(bfSel.totalId ? { totalHeightId: bfSel.totalId, totalHeightLabel: bfSel.totalLabel } : {}),
       ...(bfSel.specials.length > 0
         ? { specialIds: bfSel.specials.map((s) => s.id), specialLabels: bfSel.specials.map((s) => s.label) }
         : {}),
       total: bedframeTotal,
       summary: parts.join(' · '),
     };
-    addConfigured(snapshot);
-    navigate('/catalog');
+    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    navigate(isEditing ? '/cart' : '/catalog');
   };
 
   const handleAddSize = () => {
@@ -329,8 +421,8 @@ export const Configurator = () => {
       summary: `${pickedSize.label}${extraSummary}`,
       addonExtras: extrasArr.length > 0 ? extrasArr : undefined,
     };
-    addConfigured(snapshot);
-    navigate('/catalog');
+    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    navigate(isEditing ? '/cart' : '/catalog');
   };
 
   const bumpExtra = (addonId: string, delta: number) => {
@@ -381,8 +473,8 @@ export const Configurator = () => {
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
     };
-    addConfigured(snapshot);
-    navigate('/catalog');
+    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    navigate(isEditing ? '/cart' : '/catalog');
   };
 
   // Topbar action slot for size_variants: product chip + LIVE TOTAL +
@@ -427,7 +519,7 @@ export const Configurator = () => {
         disabled={!canAddSize}
         onClick={handleAddSize}
       >
-        + Add to Cart
+        {isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -474,7 +566,7 @@ export const Configurator = () => {
         disabled={!canAddBedframe}
         onClick={handleAddBedframe}
       >
-        + Add to Cart
+        {isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -520,7 +612,7 @@ export const Configurator = () => {
         disabled={!canAddSofa}
         onClick={handleAddSofa}
       >
-        + Add to Cart
+        {isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
     </span>
   ) : undefined;
@@ -653,7 +745,9 @@ export const Configurator = () => {
             depth={activeDepth}
             cells={sofaCells}
             setCells={setSofaCells}
-            onAdded={() => navigate('/catalog')}
+            editingKey={isEditing && editKey ? editKey : undefined}
+            initialFabric={isEditing ? fabricSel : null}
+            onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />
         )
       )}

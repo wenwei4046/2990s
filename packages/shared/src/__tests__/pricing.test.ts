@@ -61,6 +61,8 @@ const bedframeInfo = (productId = 'bed-1'): ServerProductInfo => ({
   ],
   bedframeOptions: [
     { id: 'gap-6',              surcharge: 0,   active: true },
+    { id: 'gap-14',             surcharge: 0,   active: true },
+    { id: 'gap-16',             surcharge: 0,   active: true },
     { id: 'leg-4',              surcharge: 0,   active: true },
     { id: 'leg-7',              surcharge: 160, active: true },
     { id: 'divan-8',            surcharge: 0,   active: true },
@@ -83,6 +85,24 @@ describe('computeOrderTotal — bedframe', () => {
     );
     // size 2990 + 0 colour + 0 options
     expect(t.total).toBe(2990);
+  });
+
+  it('reprices with no totalHeightId (Total height removed from the POS configurator)', () => {
+    const t = computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'sand', gapId: 'gap-6', legHeightId: 'leg-4', divanHeightId: 'divan-8' })] as never,
+      map,
+    );
+    expect(t.total).toBe(2990);
+  });
+
+  it('accepts the newly-seeded 14" / 16" mattress gap options', () => {
+    for (const gapId of ['gap-14', 'gap-16']) {
+      const t = computeOrderTotal(
+        [bedLine({ sizeId: 'queen', colourId: 'sand', gapId, legHeightId: 'leg-4', divanHeightId: 'divan-8' })] as never,
+        map,
+      );
+      expect(t.total).toBe(2990);
+    }
   });
 
   it('priced colour + priced options add surcharges', () => {

@@ -128,6 +128,12 @@
   text-align: right;
 }
 
+.lineActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .quotePanel {
   background: var(--c-cream);
   border: 1px solid var(--c-burnt);
