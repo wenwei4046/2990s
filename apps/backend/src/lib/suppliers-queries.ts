@@ -137,6 +137,38 @@ export function useSupplierDetail(id: string | null) {
   });
 }
 
+export type SupplierScorecard = {
+  supplierId: string;
+  onTimeRate: number;
+  defectRate: number;
+  averageLeadDays: number;
+  totalPOs: number;
+  receivedPOs: number;
+  onTimeCount: number;
+  last10POs: Array<{
+    id: string;
+    poNo: string;
+    status: PoStatus;
+    poDate: string;
+    expectedDate: string | null;
+    receivedDate: string | null;
+    totalCenti: number;
+    orderedQty: number;
+    receivedQty: number;
+  }>;
+};
+
+export function useSupplierScorecard(id: string | null) {
+  return useQuery({
+    queryKey: ['supplier-scorecard', id],
+    queryFn: () => authedFetch<SupplierScorecard>(`/suppliers/${id}/scorecard`),
+    enabled: Boolean(id),
+    staleTime: 60_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
 export function useCreateSupplier() {
   const qc = useQueryClient();
   return useMutation({

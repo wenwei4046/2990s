@@ -11,6 +11,7 @@ import { Customers } from './pages/Customers';
 import { Products } from './pages/Products';
 import { FabricTracking } from './pages/FabricTracking';
 import { Suppliers } from './pages/Suppliers';
+import { SupplierDetail } from './pages/SupplierDetail';
 import { PurchaseOrders } from './pages/PurchaseOrders';
 import {
   Grns, PurchaseInvoicesPage, MfgSalesOrdersPage, MfgDeliveryOrdersPage,
@@ -31,6 +32,7 @@ export const router = createBrowserRouter([
       { path: 'products', element: <Products /> },
       { path: 'fabric-tracking', element: <FabricTracking /> },
       { path: 'suppliers', element: <Suppliers /> },
+      { path: 'suppliers/:id', element: <SupplierDetail /> },
       { path: 'purchase-orders', element: <PurchaseOrders /> },
       { path: 'grns', element: <Grns /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },

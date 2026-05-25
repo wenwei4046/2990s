@@ -262,6 +262,103 @@ suppliers.delete('/:id/bindings/:bindingId', async (c) => {
   return c.body(null, 204);
 });
 
+// ── Scorecard: live PO + GRN aggregation for KPI tiles ───────────────
+//
+// Returns:
+//   { onTimeRate %, defectRate %, averageLeadDays, totalPOs, receivedPOs,
+//     onTimeCount, last10POs: [...] }
+//
+// Computed live (NOT from a cached supplier_scorecards row — keep this
+// single endpoint truthful while volumes stay low). Promote to a view +
+// nightly refresh job if/when PO volume passes a few hundred per supplier.
+suppliers.get('/:id/scorecard', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  const { data: pos, error: posErr } = await supabase
+    .from('purchase_orders')
+    .select('id, po_number, status, po_date, expected_at, received_at, total_centi')
+    .eq('supplier_id', id)
+    .order('po_date', { ascending: false });
+
+  if (posErr) return c.json({ error: 'load_failed', reason: posErr.message }, 500);
+
+  const all = pos ?? [];
+  const totalPOs = all.length;
+  const receivedRows = all.filter((p) => p.status === 'RECEIVED' && p.received_at);
+
+  let onTimeCount = 0;
+  let leadDaysSum = 0;
+  for (const p of receivedRows) {
+    if (p.expected_at && p.received_at) {
+      const rec = new Date(p.received_at).getTime();
+      const exp = new Date(p.expected_at).getTime();
+      if (Number.isFinite(rec) && Number.isFinite(exp) && rec <= exp) onTimeCount += 1;
+    }
+    if (p.received_at && p.po_date) {
+      const rec = new Date(p.received_at).getTime();
+      const ord = new Date(p.po_date).getTime();
+      if (Number.isFinite(rec) && Number.isFinite(ord)) {
+        leadDaysSum += Math.max(0, Math.round((rec - ord) / 86400000));
+      }
+    }
+  }
+
+  const receivedPOs = receivedRows.length;
+  const onTimeRate = receivedPOs > 0 ? (onTimeCount / receivedPOs) * 100 : 0;
+  const averageLeadDays = receivedPOs > 0 ? leadDaysSum / receivedPOs : 0;
+
+  // Defect rate = rejected_qty / received_qty across this supplier's posted GRNs.
+  const { data: grnAgg } = await supabase
+    .from('grn_items')
+    .select('qty_received, qty_rejected, grn:grns!inner(supplier_id, status)')
+    .eq('grn.supplier_id', id)
+    .eq('grn.status', 'POSTED');
+
+  let totalReceived = 0;
+  let totalRejected = 0;
+  for (const row of (grnAgg ?? []) as Array<{ qty_received: number; qty_rejected: number }>) {
+    totalReceived += row.qty_received || 0;
+    totalRejected += row.qty_rejected || 0;
+  }
+  const defectRate = totalReceived > 0 ? (totalRejected / totalReceived) * 100 : 0;
+
+  // Last 10 POs with ordered/received qty totals
+  const last10Raw = all.slice(0, 10);
+  const last10POs = await Promise.all(
+    last10Raw.map(async (po) => {
+      const { data: items } = await supabase
+        .from('purchase_order_items')
+        .select('qty, received_qty')
+        .eq('purchase_order_id', po.id);
+      const orderedQty = (items ?? []).reduce((s, r) => s + (r.qty || 0), 0);
+      const receivedQty = (items ?? []).reduce((s, r) => s + (r.received_qty || 0), 0);
+      return {
+        id: po.id,
+        poNo: po.po_number,
+        status: po.status,
+        poDate: po.po_date,
+        expectedDate: po.expected_at,
+        receivedDate: po.received_at,
+        totalCenti: po.total_centi,
+        orderedQty,
+        receivedQty,
+      };
+    }),
+  );
+
+  return c.json({
+    supplierId: id,
+    onTimeRate,
+    defectRate,
+    averageLeadDays,
+    totalPOs,
+    receivedPOs,
+    onTimeCount,
+    last10POs,
+  });
+});
+
 // ── Reverse lookup: who supplies this material? ──────────────────────
 suppliers.get('/material/:kind/:code', async (c) => {
   const kind = c.req.param('kind');
