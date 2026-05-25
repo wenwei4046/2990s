@@ -163,7 +163,7 @@ grns.patch('/:id/post', async (c) => {
     .select('grn_number, warehouse_id')
     .eq('id', id).maybeSingle();
   const { data: items } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, material_code, material_name')
+    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi')
     .eq('grn_id', id);
 
   // Roll up qty_accepted onto purchase_order_items.received_qty
@@ -190,7 +190,7 @@ grns.patch('/:id/post', async (c) => {
   const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
     ?? (await defaultWarehouseId(sb));
   if (warehouseId && items) {
-    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null }>)
+    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null }>)
       .filter((it) => it.qty_accepted > 0)
       .map((it) => ({
         movement_type: 'IN' as const,
@@ -198,6 +198,9 @@ grns.patch('/:id/post', async (c) => {
         product_code: it.material_code,
         product_name: it.material_name,
         qty: it.qty_accepted,
+        /* PR #37 — pass unit cost into the movement so the FIFO trigger
+           can create a lot with the correct cost basis. */
+        unit_cost_sen: Number(it.unit_price_centi ?? 0),
         source_doc_type: 'GRN' as const,
         source_doc_id: id,
         source_doc_no: grnNo,

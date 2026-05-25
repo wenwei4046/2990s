@@ -1662,6 +1662,10 @@ export const inventoryMovements = pgTable('inventory_movements', {
   productCode:    text('product_code').notNull(),
   productName:    text('product_name'),
   qty:            integer('qty').notNull(),
+  /* PR #37 — per-unit cost in sen. IN: provided by caller (from GRN/PI).
+     OUT: computed by the FIFO trigger from consumed lots. */
+  unitCostSen:    integer('unit_cost_sen').default(0),
+  totalCostSen:   integer('total_cost_sen').default(0),
   sourceDocType:  text('source_doc_type'),  // 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN' | 'ADJUSTMENT'
   sourceDocId:    uuid('source_doc_id'),
   sourceDocNo:    text('source_doc_no'),
@@ -1672,6 +1676,48 @@ export const inventoryMovements = pgTable('inventory_movements', {
   idxWarehouseProduct: index('idx_inv_mov_warehouse_product').on(t.warehouseId, t.productCode),
   idxDoc:              index('idx_inv_mov_doc').on(t.sourceDocType, t.sourceDocId),
   idxCreated:          index('idx_inv_mov_created').on(t.createdAt),
+}));
+
+/* PR #37 — FIFO lots (one row per IN) + consumptions (FIFO consumes per OUT).
+   The DB-side trigger fn_inventory_movement_fifo() maintains these. */
+export const inventoryLots = pgTable('inventory_lots', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
+  productCode:    text('product_code').notNull(),
+  productName:    text('product_name'),
+  qtyReceived:    integer('qty_received').notNull(),
+  qtyRemaining:   integer('qty_remaining').notNull(),
+  unitCostSen:    integer('unit_cost_sen').notNull().default(0),
+  receivedAt:     timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+  sourceDocType:  text('source_doc_type'),
+  sourceDocId:    uuid('source_doc_id'),
+  sourceDocNo:    text('source_doc_no'),
+  movementId:     uuid('movement_id'),
+  notes:          text('notes'),
+  createdBy:      uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxWhProduct: index('idx_inv_lots_wh_product').on(t.warehouseId, t.productCode, t.receivedAt),
+}));
+
+export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  lotId:          uuid('lot_id').notNull().references(() => inventoryLots.id, { onDelete: 'cascade' }),
+  warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
+  productCode:    text('product_code').notNull(),
+  qtyConsumed:    integer('qty_consumed').notNull(),
+  unitCostSen:    integer('unit_cost_sen').notNull(),
+  totalCostSen:   integer('total_cost_sen').notNull(),
+  consumedAt:     timestamp('consumed_at', { withTimezone: true }).notNull().defaultNow(),
+  sourceDocType:  text('source_doc_type'),
+  sourceDocId:    uuid('source_doc_id'),
+  sourceDocNo:    text('source_doc_no'),
+  movementId:     uuid('movement_id'),
+  createdBy:      uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxLot:      index('idx_inv_cons_lot').on(t.lotId),
+  idxDoc:      index('idx_inv_cons_doc').on(t.sourceDocType, t.sourceDocId),
+  idxConsumed: index('idx_inv_cons_consumed').on(t.consumedAt),
 }));
 
 /* MaintenanceConfig — the JSON blob shape stored in maintenanceConfigHistory.config */
