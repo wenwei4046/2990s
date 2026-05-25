@@ -42,6 +42,13 @@
 
 DO $$
 BEGIN
+  -- ── 0) Brand series guard — every current sofa is the 2990's brand (Loo,
+  --        2026-05-26 → the "2990'S" badge shows on every sofa card, §6 below).
+  --        Idempotent so this seed is self-contained even if it runs before
+  --        mattress-catalog.sql (which also seeds this series row). ───────────
+  INSERT INTO series (id, label, active) VALUES ('brand-2990s', '2990''s', true)
+  ON CONFLICT (id) DO NOTHING;
+
   -- ── 1) Products (15 sofa_build) ──────────────────────────────────────────
   --   name      = friendly "real name" (Loo, 2026-05-26) — shown in catalogue,
   --               cart and configurator.
@@ -174,4 +181,12 @@ BEGIN
   UPDATE products SET depth_options='32'          WHERE sku='SOF-DSL8027';
   UPDATE products SET depth_options='24,28'       WHERE sku='SOF-5531';
   UPDATE products SET depth_options='24,28,30'    WHERE sku='SOF-5535';
+
+  -- ── 6) Brand series (Loo, 2026-05-26). Every current sofa is the 2990's
+  --        brand → set series_id so the catalogue card shows the "2990'S" badge
+  --        (mirrors the mattress brand badges; series 'brand-2990s' guaranteed
+  --        by §0 above). ──────────────────────────────────────────────────────
+  UPDATE products SET series_id='brand-2990s'
+  WHERE id BETWEEN 'cccccccc-cccc-cccc-cccc-cccccccc0001'
+              AND 'cccccccc-cccc-cccc-cccc-cccccccc0015';
 END $$;
