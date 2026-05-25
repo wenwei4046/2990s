@@ -48,6 +48,25 @@ export type InventoryBalance = {
   category?: 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
   size_label?: string | null;
   value_sen?: number;
+  main_supplier_code?: string | null;
+  main_supplier_name?: string | null;
+};
+
+/* PR #38 — Product totals view (one row per SKU, summed qty across warehouses) */
+export type InventoryProductTotal = {
+  product_code: string;
+  product_name: string;
+  category: 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
+  size_label: string | null;
+  base_price_sen: number | null;
+  price1_sen: number | null;
+  branding: string | null;
+  total_qty: number;
+  total_value_sen: number;
+  last_movement_at: string | null;
+  main_supplier_code: string | null;
+  main_supplier_name: string | null;
+  main_supplier_price_centi: number | null;
 };
 
 export type InventoryMovement = {
@@ -139,6 +158,39 @@ export function useInventoryBalances(opts?: {
     },
     staleTime: 30_000,
     retry: 1,
+  });
+}
+
+/* PR #38 — AutoCount-style: one row per SKU, totals across all warehouses */
+export function useInventoryProductTotals(opts?: { search?: string; category?: string }) {
+  return useQuery({
+    queryKey: ['inventory', 'product-totals', opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.search) params.set('search', opts.search);
+      if (opts?.category && opts.category !== 'all') params.set('category', opts.category);
+      return authedFetch<{ products: InventoryProductTotal[] }>(
+        `/inventory/products${params.toString() ? `?${params.toString()}` : ''}`,
+      ).then((r) => r.products);
+    },
+    staleTime: 30_000,
+  });
+}
+
+/* PR #38 — Per-warehouse breakdown for a single product (drilldown drawer) */
+export function useInventoryProductBreakdown(productCode: string | null) {
+  return useQuery({
+    queryKey: ['inventory', 'breakdown', productCode],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      params.set('search', productCode ?? '');
+      params.set('showAll', 'true');
+      return authedFetch<{ balances: InventoryBalance[]; warehouses: Warehouse[] }>(
+        `/inventory?${params.toString()}`,
+      );
+    },
+    enabled: Boolean(productCode),
+    staleTime: 30_000,
   });
 }
 

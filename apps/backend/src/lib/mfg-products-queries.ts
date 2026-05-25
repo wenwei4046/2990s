@@ -180,6 +180,35 @@ export function useMfgProductPriceHistory(id: string | null) {
   });
 }
 
+/* PR #38 — Suppliers carrying a given product (via supplier_material_bindings). */
+export type ProductSupplierRow = {
+  id: string;
+  supplier_id: string;
+  supplier_sku: string;
+  unit_price_centi: number;
+  currency: string;
+  lead_time_days: number;
+  moq: number;
+  is_main_supplier: boolean;
+  notes: string | null;
+  suppliers: {
+    code: string;
+    name: string;
+    phone: string | null;
+  } | null;
+};
+export function useMfgProductSuppliers(id: string | null) {
+  return useQuery({
+    queryKey: ['mfg-product-suppliers', id],
+    queryFn: () => authedFetch<{
+      product: { code: string; name: string; category: string };
+      suppliers: ProductSupplierRow[];
+    }>(`/mfg-products/${id}/suppliers`),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+  });
+}
+
 /** Body shape for POST /mfg-products. id + status default server-side. */
 export type NewMfgProductInput = {
   code: string;

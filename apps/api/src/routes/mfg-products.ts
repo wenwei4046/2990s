@@ -321,3 +321,34 @@ mfgProducts.get('/:id/price-history', async (c) => {
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ history: data ?? [] });
 });
+
+// ── GET /:id/suppliers ────────────────────────────────────────────────
+// PR #38 — Returns every supplier that carries this product (via
+// supplier_material_bindings), with their supplier-side SKU + price +
+// lead time + is_main flag. Used by the Products page double-click drawer.
+mfgProducts.get('/:id/suppliers', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  const { data: product, error: pErr } = await supabase
+    .from('mfg_products')
+    .select('code, name, category')
+    .eq('id', id)
+    .maybeSingle();
+  if (pErr) return c.json({ error: 'load_failed', reason: pErr.message }, 500);
+  if (!product) return c.json({ error: 'not_found' }, 404);
+
+  const { data, error } = await supabase
+    .from('supplier_material_bindings')
+    .select(`
+      id, supplier_id, supplier_sku, unit_price_centi, currency,
+      lead_time_days, moq, is_main_supplier, notes,
+      suppliers(code, name, phone)
+    `)
+    .eq('material_code', (product as { code: string }).code)
+    .order('is_main_supplier', { ascending: false })
+    .order('unit_price_centi', { ascending: true });
+
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ product, suppliers: data ?? [] });
+});

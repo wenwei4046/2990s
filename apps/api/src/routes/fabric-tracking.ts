@@ -93,6 +93,29 @@ fabricTracking.patch('/:id/supplier-code', async (c) => {
   return c.json({ ok: true, supplierCode: next });
 });
 
+/* PR #38 — Make fabric description editable from the Fabric Converter table. */
+fabricTracking.patch('/:id/description', async (c) => {
+  const id = c.req.param('id');
+  let body: { description?: string | null };
+  try { body = (await c.req.json()) as typeof body; }
+  catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const supabase = c.get('supabase');
+  const trimmed = typeof body.description === 'string' ? body.description.trim() : null;
+  const next = trimmed === '' ? null : trimmed;
+
+  const { error } = await supabase
+    .from('fabric_trackings')
+    .update({ fabric_description: next })
+    .eq('id', id);
+
+  if (error) {
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    return c.json({ error: 'update_failed', reason: error.message }, 500);
+  }
+  return c.json({ ok: true, description: next });
+});
+
 fabricTracking.patch('/:id/tier', async (c) => {
   const id = c.req.param('id');
   let body: { field?: string; tier?: string };
