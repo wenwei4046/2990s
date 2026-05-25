@@ -10,6 +10,7 @@ import {
   ArrowRight,
   ShoppingBag,
   Check,
+  Pencil,
 } from 'lucide-react';
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useCatalog, type CatalogProduct } from '../lib/queries';
@@ -155,6 +156,11 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 onRemove={() => remove(line.key)}
                 onDec={() => setQty(line.key, line.qty - 1)}
                 onInc={() => setQty(line.key, line.qty + 1)}
+                onEdit={
+                  line.config.kind !== 'flat'
+                    ? () => { onClose(); navigate(`/configure/${line.config.productId}?edit=${line.key}`); }
+                    : undefined
+                }
               />
             ))
           )}
@@ -263,9 +269,12 @@ interface CartItemProps {
   onRemove: () => void;
   onDec: () => void;
   onInc: () => void;
+  /** Re-open the configurator pre-filled to edit this line. Omitted for flat
+   *  products (no options to change). */
+  onEdit?: () => void;
 }
 
-const CartItem = ({ line, product, onRemove, onDec, onInc }: CartItemProps) => {
+const CartItem = ({ line, product, onRemove, onDec, onInc, onEdit }: CartItemProps) => {
   const photo = product?.thumb_key ?? product?.img_key ?? null;
   const lineTotal = line.qty * line.config.total;
   return (
@@ -293,14 +302,26 @@ const CartItem = ({ line, product, onRemove, onDec, onInc }: CartItemProps) => {
         </div>
       </div>
       <div className={styles.itemRight}>
-        <button
-          type="button"
-          className={styles.itemRemove}
-          onClick={onRemove}
-          aria-label="Remove"
-        >
-          <X size={14} strokeWidth={1.75} />
-        </button>
+        <div className={styles.itemActions}>
+          {onEdit && (
+            <button
+              type="button"
+              className={styles.itemEdit}
+              onClick={onEdit}
+              aria-label="Edit"
+            >
+              <Pencil size={14} strokeWidth={1.75} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.itemRemove}
+            onClick={onRemove}
+            aria-label="Remove"
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </div>
         <span className={styles.itemPrice}>
           <sup>RM</sup>{fmtMYR(lineTotal)}
         </span>
