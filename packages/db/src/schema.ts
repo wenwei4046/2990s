@@ -1261,6 +1261,59 @@ export const deliveryReturnItems = pgTable('delivery_return_items', {
 }));
 
 /* ════════════════════════════════════════════════════════════════════════
+   Purchase Returns — we return purchased goods back to the supplier.
+   Mirrors the GRN flow in reverse. Linked to PO + (optional) GRN so the
+   audit trail closes: PO → GRN → (defects discovered) → PurchaseReturn.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const purchaseReturnStatus = pgEnum('purchase_return_status', [
+  'DRAFT',       // builder is still adding items
+  'POSTED',      // sent to supplier, awaiting confirmation
+  'COMPLETED',   // supplier confirmed refund / credit-note
+  'CANCELLED',   // returned items kept after all
+]);
+
+export const purchaseReturns = pgTable('purchase_returns', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  returnNumber:      text('return_number').notNull().unique(),       // 'PRT-2605-001'
+  purchaseOrderId:   uuid('purchase_order_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  grnId:             uuid('grn_id').references(() => grns.id, { onDelete: 'set null' }),
+  supplierId:        uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  returnDate:        date('return_date').notNull().defaultNow(),
+  reason:            text('reason'),                                 // 'DEFECT'|'WRONG_ITEM'|'OVERSUPPLY'|free text
+  status:            purchaseReturnStatus('status').notNull().default('DRAFT'),
+  postedAt:          timestamp('posted_at', { withTimezone: true }),
+  completedAt:       timestamp('completed_at', { withTimezone: true }),
+  creditNoteRef:     text('credit_note_ref'),                        // supplier's CN# once issued
+  refundCenti:       integer('refund_centi').notNull().default(0),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPo:       index('idx_pr_po').on(t.purchaseOrderId),
+  idxSupplier: index('idx_pr_supplier').on(t.supplierId),
+  idxStatus:   index('idx_pr_status').on(t.status),
+}));
+
+export const purchaseReturnItems = pgTable('purchase_return_items', {
+  id:                    uuid('id').primaryKey().defaultRandom(),
+  purchaseReturnId:      uuid('purchase_return_id').notNull().references(() => purchaseReturns.id, { onDelete: 'cascade' }),
+  grnItemId:             uuid('grn_item_id').references(() => grnItems.id, { onDelete: 'set null' }),
+  materialKind:          materialKind('material_kind').notNull(),
+  materialCode:          text('material_code').notNull(),
+  materialName:          text('material_name').notNull(),
+  qtyReturned:           integer('qty_returned').notNull(),
+  unitPriceCenti:        integer('unit_price_centi').notNull().default(0),
+  lineRefundCenti:       integer('line_refund_centi').notNull().default(0),
+  reason:                text('reason'),                             // per-line reason if mixed
+  notes:                 text('notes'),
+  createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPr: index('idx_pr_items_pr').on(t.purchaseReturnId),
+}));
+
+/* ════════════════════════════════════════════════════════════════════════
    Manufacturing modules — ported from HOOKKA ERP (2026-05-24)
    ────────────────────────────────────────────────────────────────────────
    Coexists with retail `products` table:

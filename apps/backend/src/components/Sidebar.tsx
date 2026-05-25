@@ -90,6 +90,7 @@ export const Sidebar = () => {
     { kind: 'link', to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
     { kind: 'link', to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
     { kind: 'link', to: '/purchase-invoices', icon: <Receipt {...ICON_PROPS} />, label: 'Purchase Invoices' },
+    { kind: 'link', to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
     { kind: 'group', label: 'B2B Sales' },
     { kind: 'link', to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders (B2B)' },
     { kind: 'link', to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },

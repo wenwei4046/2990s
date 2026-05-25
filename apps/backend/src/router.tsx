@@ -15,11 +15,12 @@ import { SupplierDetail } from './pages/SupplierDetail';
 import { PurchaseOrders } from './pages/PurchaseOrders';
 import {
   Grns, PurchaseInvoicesPage, MfgSalesOrdersPage, MfgDeliveryOrdersPage,
-  SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage,
+  SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage, PurchaseReturnsPage,
 } from './pages/FlowPages';
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
+  ConsignmentDetail, PurchaseReturnDetail,
 } from './pages/DocDetailPages';
 
 export const router = createBrowserRouter([
@@ -49,7 +50,10 @@ export const router = createBrowserRouter([
       { path: 'sales-invoices', element: <SalesInvoicesPage /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
       { path: 'consignment', element: <ConsignmentPage /> },
+      { path: 'consignment/:id', element: <ConsignmentDetail /> },
       { path: 'delivery-returns', element: <DeliveryReturnsPage /> },
+      { path: 'purchase-returns', element: <PurchaseReturnsPage /> },
+      { path: 'purchase-returns/:id', element: <PurchaseReturnDetail /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
