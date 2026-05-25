@@ -219,6 +219,11 @@
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+/* Pushes the "Back to catalog" button to the far left while the commit
+   actions (Clear / Save / Continue) stay right-aligned. */
+.backWrap {
+  margin-right: auto;
+}
 .rail .actions {
   flex-direction: column;
   align-items: stretch;

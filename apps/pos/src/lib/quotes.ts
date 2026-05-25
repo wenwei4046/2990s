@@ -86,6 +86,42 @@ export const useSaveQuote = () => {
   });
 };
 
+interface UpdateQuoteInput {
+  id: string;
+  cart: CartLine[];
+  subtotal: number;
+  total: number;
+}
+
+// Update an open quote's cart in place (PUT /quotes/:id). Used when a loaded
+// quote is edited and re-saved — keeps the same quote (and its customer name)
+// instead of creating a duplicate.
+export const useUpdateQuote = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: UpdateQuoteInput) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/quotes/${encodeURIComponent(input.id)}`, {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ cart: input.cart, subtotal: input.subtotal, total: input.total }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '<no body>');
+        throw new Error(`PUT /quotes failed (${res.status}): ${text}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['quotes'] });
+    },
+  });
+};
+
 export const useDeleteQuote = () => {
   const qc = useQueryClient();
   return useMutation({

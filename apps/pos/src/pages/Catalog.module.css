@@ -72,7 +72,9 @@
   flex-direction: column;
   gap: 4px;
   position: sticky;
-  top: var(--space-3);
+  /* Clear the sticky topbar (~60px) so the category rail parks just below it
+     instead of tucking underneath. */
+  top: 76px;
   /* White panel + subtle shadow lifts the rail off the cream page so categories
      read as a distinct card instead of blending in (matches Order summary +
      Quotes card treatment). */
@@ -81,7 +83,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-4) var(--space-3);
-  max-height: calc(100vh - var(--space-7));
+  max-height: calc(100vh - 92px);
   overflow-y: auto;
 }
 

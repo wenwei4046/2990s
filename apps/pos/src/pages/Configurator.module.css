@@ -216,7 +216,8 @@
   flex-direction: column;
   gap: var(--space-4);
   position: sticky;
-  top: var(--space-3);
+  /* Clear the now-sticky topbar so the rail parks just below it when scrolling. */
+  top: 76px;
 }
 
 .railSection {
