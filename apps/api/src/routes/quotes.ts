@@ -117,11 +117,13 @@ quotes.post('/', async (c) => {
   return c.json({ quote: data }, 201);
 });
 
-// PUT /quotes/:id — update an OPEN quote's cart in place (sales own; RLS-scoped
+// PATCH /quotes/:id — update an OPEN quote's cart in place (sales own; RLS-scoped
 // by quotes_update). Used when a loaded quote is edited and re-saved, so the
 // salesperson doesn't re-enter the customer name and spawn a duplicate quote.
 // Customer name/phone are intentionally left untouched (the cart is what changes).
-quotes.put('/:id', async (c) => {
+// PATCH (not PUT) because the CORS allowlist already permits it and it's a
+// partial update.
+quotes.patch('/:id', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
 
