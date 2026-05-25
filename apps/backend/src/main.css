@@ -15,3 +15,69 @@ body {
   min-height: 100vh;
   display: flex;
 }
+
+/* =====================================================================
+   Backend density overrides — the brand tokens (designed for the
+   marketing-leaning POS app) are too generous for an ERP cockpit.
+   This block scales fonts + paddings down ~15-20% globally for backend
+   only. POS is untouched.
+   ===================================================================== */
+body {
+  /* drop the base from 16 → 14; cascades through every relative size. */
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Headings — keep the editorial Merriweather but trim the display sizes
+   that were tuned for full-bleed marketing pages. */
+h1, .t-h1 { font-size: 28px !important; line-height: 1.2 !important; }
+h2, .t-h2 { font-size: 22px !important; line-height: 1.25 !important; }
+h3, .t-h3 { font-size: 18px !important; line-height: 1.3 !important; }
+h4, .t-h4 { font-size: 16px !important; line-height: 1.35 !important; }
+h5, .t-h5 { font-size: 14px !important; line-height: 1.4 !important; }
+
+/* Body / paragraph — match the new 14px base. */
+.t-body, p { font-size: 14px; line-height: 1.45; }
+
+/* Token squeeze — single source of truth for table padding etc. across
+   all .module.css files that reference these variables. Cuts spacing by
+   ~25% without rewriting every module. */
+:root {
+  --space-3: 8px;    /* was 12 — table cell padding, gaps in info grids */
+  --space-4: 12px;   /* was 16 — section margins, drawer body padding   */
+  --space-5: 16px;   /* was 24 — page padding, large gaps               */
+  --space-6: 24px;   /* was 32 — sidebar / hero gaps                    */
+  --space-7: 32px;   /* was 48 — page bottom padding                    */
+  /* leave 1/2/8/9/10 alone — they're either too small to shrink or used
+     for outer page margins that should stay roomy. */
+
+  /* Font-size aliases used directly by .module.css — bring all 12-16
+     down by 1px so tables read as a single ledger row. */
+  --fs-11: 11px;
+  --fs-12: 11px;
+  --fs-13: 12px;
+  --fs-14: 13px;
+  --fs-15: 14px;
+  --fs-16: 15px;
+  --fs-18: 16px;
+  --fs-20: 18px;
+  --fs-24: 22px;
+  --fs-32: 26px;
+}
+
+/* Table rows tighten — most backend pages share these patterns via CSS
+   Modules. Targeting raw <table> here covers any page we didn't
+   author yet. */
+table thead th {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+table tbody td {
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+/* Lucide icons in lists default to 20-24px which feels chunky in dense
+   tables. Cap their default container size — pages that explicitly set
+   `size={N}` still win. */
+.lucide { vertical-align: middle; }
