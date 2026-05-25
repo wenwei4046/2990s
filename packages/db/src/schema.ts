@@ -1686,3 +1686,73 @@ export type MaintenanceConfig = {
   sofaSpecials:   PricedOption[];   // Sofa
   sofaSizes:      string[];         // Sofa — no surcharge
 };
+
+/* ════════════════════════════════════════════════════════════════════════
+   Accounting — simple double-entry layer
+   Migration 0052. Five concepts:
+     - accounts (chart of accounts)
+     - journal_entries (header)
+     - journal_entry_lines (Dr/Cr lines)
+     - v_gl_entries (view, flat GL stream)
+     - v_account_balances / v_ar_aging / v_ap_aging (views, not modeled here)
+
+   Posting model:
+     SI confirm   → Dr AR,        Cr Sales Revenue
+     SI payment   → Dr Cash/Bank, Cr AR
+     PI confirm   → Dr Inventory, Cr AP
+     PI payment   → Dr AP,        Cr Cash/Bank
+
+   PR #36 (Commander "OK A" 2026-05-25) — ERPNext is the conceptual
+   reference, not the codebase. Odoo is NOT used (AGPL).
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const accounts = pgTable('accounts', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  accountCode:  text('account_code').notNull().unique(),
+  accountName:  text('account_name').notNull(),
+  accountType:  text('account_type').notNull(),     // 'ASSET'|'LIABILITY'|'EQUITY'|'INCOME'|'EXPENSE'
+  parentCode:   text('parent_code'),
+  isActive:     boolean('is_active').notNull().default(true),
+  createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxType: index('idx_accounts_type').on(t.accountType),
+}));
+
+export const journalEntries = pgTable('journal_entries', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  jeNo:           text('je_no').notNull().unique(),
+  entryDate:      date('entry_date').notNull().defaultNow(),
+  sourceType:     text('source_type').notNull(),       // 'SI'|'PI'|'SI_PAYMENT'|'PI_PAYMENT'|'MANUAL'
+  sourceDocNo:    text('source_doc_no'),
+  narration:      text('narration'),
+  totalDebitSen:  integer('total_debit_sen').notNull().default(0),
+  totalCreditSen: integer('total_credit_sen').notNull().default(0),
+  posted:         boolean('posted').notNull().default(false),
+  postedAt:       timestamp('posted_at', { withTimezone: true }),
+  postedBy:       uuid('posted_by').references(() => staff.id, { onDelete: 'set null' }),
+  reversed:       boolean('reversed').notNull().default(false),
+  reversedByJe:   uuid('reversed_by_je'),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:      uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxDate:   index('idx_je_date').on(t.entryDate),
+  idxSource: index('idx_je_source').on(t.sourceType, t.sourceDocNo),
+  idxPosted: index('idx_je_posted').on(t.posted),
+}));
+
+export const journalEntryLines = pgTable('journal_entry_lines', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  journalEntryId:  uuid('journal_entry_id').notNull().references(() => journalEntries.id, { onDelete: 'cascade' }),
+  lineNo:          integer('line_no').notNull(),
+  accountCode:     text('account_code').notNull().references(() => accounts.accountCode, { onDelete: 'restrict' }),
+  debitSen:        integer('debit_sen').notNull().default(0),
+  creditSen:       integer('credit_sen').notNull().default(0),
+  partyType:       text('party_type'),       // 'CUSTOMER'|'SUPPLIER'
+  partyCode:       text('party_code'),
+  partyName:       text('party_name'),
+  notes:           text('notes'),
+}, (t) => ({
+  idxJe:      index('idx_jel_je').on(t.journalEntryId),
+  idxAccount: index('idx_jel_account').on(t.accountCode),
+  idxParty:   index('idx_jel_party').on(t.partyType, t.partyCode),
+}));
