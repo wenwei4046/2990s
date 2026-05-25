@@ -19,7 +19,7 @@
 //       effective-date drawer.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Download,
   Upload,
@@ -164,6 +164,9 @@ const SkuMasterTab = () => {
   const [search, setSearch] = useState('');
   const [editMode, setEditMode] = useState(false);
   const [tier, setTier] = useState<Tier>('PRICE_2');
+  // PR #39 — Model filter chip row (visible only on Sofa view).
+  // Distinct base_model values pulled from current rows. 'all' = no filter.
+  const [modelFilter, setModelFilter] = useState<string>('all');
 
   const { data: products, isLoading, error } = useMfgProducts({
     category: category === 'all' ? undefined : category,
@@ -171,10 +174,29 @@ const SkuMasterTab = () => {
   });
   const config = useMaintenanceConfig('master');
 
-  const rows = useMemo(() => products ?? [], [products]);
+  const allRows = useMemo(() => products ?? [], [products]);
   const isSofaView = category === 'SOFA';
   const isMattressView = category === 'MATTRESS';
   const sofaSizes = config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
+
+  // PR #39 — distinct base_model values for Sofa view (e.g. 5530, 5531).
+  const sofaModels = useMemo<string[]>(() => {
+    if (!isSofaView) return [];
+    const s = new Set<string>();
+    for (const r of allRows) if (r.base_model) s.add(r.base_model);
+    return Array.from(s).sort();
+  }, [allRows, isSofaView]);
+
+  // Apply Model filter (only when on Sofa view + a specific model picked).
+  const rows = useMemo(() => {
+    if (!isSofaView || modelFilter === 'all') return allRows;
+    return allRows.filter((r) => r.base_model === modelFilter);
+  }, [allRows, isSofaView, modelFilter]);
+
+  // Reset Model filter when leaving Sofa view
+  useEffect(() => {
+    if (!isSofaView && modelFilter !== 'all') setModelFilter('all');
+  }, [isSofaView, modelFilter]);
 
   // Drawer + modal state
   const [newSkuOpen, setNewSkuOpen] = useState(false);
@@ -259,6 +281,27 @@ const SkuMasterTab = () => {
           )}
         </div>
       </div>
+
+      {/* PR #39 — Model filter chips, Sofa view only */}
+      {isSofaView && sofaModels.length > 1 && (
+        <div className={styles.categoryChips} style={{ marginTop: 'var(--space-2)' }}>
+          <CategoryChip
+            active={modelFilter === 'all'}
+            onClick={() => setModelFilter('all')}
+          >
+            All Models
+          </CategoryChip>
+          {sofaModels.map((m) => (
+            <CategoryChip
+              key={m}
+              active={modelFilter === m}
+              onClick={() => setModelFilter(m)}
+            >
+              {m}
+            </CategoryChip>
+          ))}
+        </div>
+      )}
 
       <p className={styles.eyebrow}>
         {isLoading

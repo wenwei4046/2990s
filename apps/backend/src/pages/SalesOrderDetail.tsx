@@ -39,6 +39,13 @@ import {
   type SoPriceOverride,
 } from '../lib/flow-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import {
+  useLocalities,
+  distinctStates,
+  citiesInState,
+  postcodesInCity,
+  BUILDING_TYPES,
+} from '../lib/localities-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
 
@@ -409,19 +416,31 @@ const CustomerCard = ({
       compile. */
   locked?: boolean;
 }) => {
+  // PR #39 — POS-aligned customer + address form. Maps:
+  //   • address1, address2 → free-text lines (POS "Address line 1/2")
+  //   • address3           → city (cascade from localities)
+  //   • address4           → postcode (cascade from city)
+  //   • customer_state     → state (cascade source — PR #35 column)
+  //   • venue              → reused for Building Type (POS dropdown)
+  // Agent + Branding kept (B2B-specific, commander 2026-05-26).
+  // POS field "Salesperson" → Agent column on the SO.
+  const localities = useLocalities();
+  const localityRows = localities.data ?? [];
+
   const [form, setForm] = useState({
     debtorCode: header.debtor_code ?? '',
     debtorName: header.debtor_name ?? '',
     agent: header.agent ?? '',
     branding: header.branding ?? '',
-    venue: header.venue ?? '',
+    buildingType: header.venue ?? '',                  // venue col reused
     ref: header.ref ?? '',
     poDocNo: header.po_doc_no ?? '',
     phone: header.phone ?? '',
     address1: header.address1 ?? '',
     address2: header.address2 ?? '',
-    address3: header.address3 ?? '',
-    address4: header.address4 ?? '',
+    city: header.address3 ?? '',
+    postcode: header.address4 ?? '',
+    state: header.customer_state ?? '',
     note: header.note ?? '',
   });
   const [showSuggest, setShowSuggest] = useState(false);
@@ -436,20 +455,32 @@ const CustomerCard = ({
       debtorName: header.debtor_name ?? '',
       agent: header.agent ?? '',
       branding: header.branding ?? '',
-      venue: header.venue ?? '',
+      buildingType: header.venue ?? '',
       ref: header.ref ?? '',
       poDocNo: header.po_doc_no ?? '',
       phone: header.phone ?? '',
       address1: header.address1 ?? '',
       address2: header.address2 ?? '',
-      address3: header.address3 ?? '',
-      address4: header.address4 ?? '',
+      city: header.address3 ?? '',
+      postcode: header.address4 ?? '',
+      state: header.customer_state ?? '',
       note: header.note ?? '',
     });
   }, [header]);
 
-  const set = (k: keyof typeof form, v: string) =>
+  const set = <K extends keyof typeof form>(k: K, v: string) =>
     setForm((s) => ({ ...s, [k]: v }));
+
+  // Cascade derivations
+  const states = useMemo(() => distinctStates(localityRows), [localityRows]);
+  const cities = useMemo(
+    () => (form.state ? citiesInState(localityRows, form.state) : []),
+    [localityRows, form.state],
+  );
+  const postcodes = useMemo(
+    () => (form.state && form.city ? postcodesInCity(localityRows, form.state, form.city) : []),
+    [localityRows, form.state, form.city],
+  );
 
   const applySuggestion = (d: DebtorSuggestion) => {
     setForm((s) => ({
@@ -459,22 +490,42 @@ const CustomerCard = ({
       phone: d.phone ?? s.phone,
       address1: d.address1 ?? s.address1,
       address2: d.address2 ?? s.address2,
-      address3: d.address3 ?? s.address3,
-      address4: d.address4 ?? s.address4,
+      city: d.address3 ?? s.city,
+      postcode: d.address4 ?? s.postcode,
     }));
     setShowSuggest(false);
   };
+
+  // Payload we send to PATCH — map the form back to the DB column names.
+  const buildPayload = () => ({
+    debtorCode: form.debtorCode,
+    debtorName: form.debtorName,
+    agent: form.agent,
+    branding: form.branding,
+    venue: form.buildingType,                        // venue col stores building type
+    ref: form.ref,
+    poDocNo: form.poDocNo,
+    phone: form.phone,
+    address1: form.address1,
+    address2: form.address2,
+    address3: form.city,                             // city → address3
+    address4: form.postcode,                         // postcode → address4
+    customerState: form.state,                       // state → customer_state (PR #35)
+    note: form.note,
+  });
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Customer · Addresses</h2>
-        <Button variant="primary" size="sm" onClick={() => onSave(form)} disabled={saving}>
+        <Button variant="primary" size="sm" onClick={() => onSave(buildPayload())} disabled={saving}>
           <Save {...ICON} />
           <span>{saving ? 'Saving…' : 'Save'}</span>
         </Button>
       </header>
       <div className={styles.cardBody}>
+        {/* ── Customer row ────────────────────────────────────────── */}
+        <p className={styles.subHead}>Customer</p>
         <div className={styles.formGrid4}>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Debtor Code</span>
@@ -526,9 +577,12 @@ const CustomerCard = ({
               onChange={(e) => set('branding', e.target.value)} />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Venue</span>
-            <input className={styles.fieldInput} value={form.venue}
-              onChange={(e) => set('venue', e.target.value)} />
+            <span className={styles.fieldLabel}>Building Type</span>
+            <select className={styles.fieldSelect} value={form.buildingType}
+              onChange={(e) => set('buildingType', e.target.value)}>
+              <option value="">—</option>
+              {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
           </label>
 
           <label className={styles.field}>
@@ -546,27 +600,60 @@ const CustomerCard = ({
             <input className={styles.fieldInput} value={form.note}
               onChange={(e) => set('note', e.target.value)} />
           </label>
+        </div>
 
-          <label className={`${styles.field} ${styles.fieldFull}`}>
+        {/* ── Address row ─────────────────────────────────────────── */}
+        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Delivery Address</p>
+        <div className={styles.formGrid4}>
+          <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
             <span className={styles.fieldLabel}>Address Line 1</span>
             <input className={styles.fieldInput} value={form.address1}
+              placeholder="Unit, street, area"
               onChange={(e) => set('address1', e.target.value)} />
           </label>
-          <label className={`${styles.field} ${styles.fieldFull}`}>
+          <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
             <span className={styles.fieldLabel}>Address Line 2</span>
             <input className={styles.fieldInput} value={form.address2}
+              placeholder="Apt, floor, building (optional)"
               onChange={(e) => set('address2', e.target.value)} />
           </label>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Address Line 3 (City / Postcode)</span>
-            <input className={styles.fieldInput} value={form.address3}
-              onChange={(e) => set('address3', e.target.value)} />
+
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>State</span>
+            <select className={styles.fieldSelect} value={form.state}
+              onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
+              disabled={localities.isLoading}>
+              <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
+              {states.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
           </label>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Address Line 4 (State / Country)</span>
-            <input className={styles.fieldInput} value={form.address4}
-              onChange={(e) => set('address4', e.target.value)} />
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>City</span>
+            <select className={styles.fieldSelect} value={form.city}
+              onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
+              disabled={!form.state}>
+              <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
+              {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Postcode</span>
+            <select className={styles.fieldSelect} value={form.postcode}
+              onChange={(e) => set('postcode', e.target.value)}
+              disabled={!form.city}>
+              <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
+              {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>Sales Location</span>
+            <span className={styles.fieldInput} style={{
+              display: 'inline-flex', alignItems: 'center', height: 32,
+              color: 'var(--fg-muted)',
+            }}>
+              {header.sales_location ?? '—'}
+            </span>
+          </div>
         </div>
       </div>
     </section>
@@ -739,6 +826,16 @@ const LineItemModal = ({
   const productsQuery = useMfgProducts({ search: search.trim() || undefined });
   const candidates = productsQuery.data ?? [];
 
+  // PR #39 — Track the FULL picked product so we can read
+  // seat_height_prices for sofa pricing. Sofa tier defaults to PRICE_2
+  // (the "base"), commander can change later via "Override price".
+  const [picked, setPicked] = useState<import('../lib/mfg-products-queries').MfgProductRow | null>(null);
+
+  // Manual unit-price override — when commander types in the Unit Price
+  // box, we stop auto-recomputing. Tracked separately so any variant
+  // change doesn't overwrite their edit.
+  const [manualPrice, setManualPrice] = useState(false);
+
   const [draft, setDraft] = useState<LinePayload>({
     itemCode: editing?.item_code ?? '',
     itemGroup: editing?.item_group ?? 'others',
@@ -753,18 +850,60 @@ const LineItemModal = ({
   });
 
   const pickProduct = (p: import('../lib/mfg-products-queries').MfgProductRow) => {
+    setPicked(p);
+    setManualPrice(false);
     setDraft((s) => ({
       ...s,
       itemCode: p.code,
       itemGroup: p.category.toLowerCase(),
       description: p.name,
       unitPriceCenti: p.base_price_sen ?? 0,
+      variants: {},                              // reset variants on new product
     }));
     setSearch(p.code);
   };
 
   const setVariant = (k: string, v: string | number) =>
     setDraft((s) => ({ ...s, variants: { ...s.variants, [k]: v } }));
+
+  /* ── Auto-recompute unit price from base + variant surcharges ─────
+     Formula matches HOOKKA pricing.ts:
+       unitPriceSen = basePriceSen + divanPriceSen + legPriceSen + specialSen
+     For Sofa: basePriceSen comes from product.seat_height_prices
+     when a seat height is picked (defaults to PRICE_2 tier).
+     For Bedframe: basePriceSen is the product's base_price_sen.
+     Skip if user has manually overridden the price. */
+  useEffect(() => {
+    if (manualPrice || !maint || !picked) return;
+    const category = draft.itemGroup.toUpperCase();
+    let basePriceSen = picked.base_price_sen ?? 0;
+    let extraSen = 0;
+
+    if (category === 'SOFA') {
+      // Sofa base price comes from seat_height_prices (PRICE_2 default tier)
+      const sh = String(draft.variants.seatHeight ?? '');
+      if (sh && Array.isArray(picked.seat_height_prices)) {
+        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
+          .find((p) => p.height === sh && p.tier === 'PRICE_2');
+        if (match) basePriceSen = match.priceSen;
+      }
+      const legV = String(draft.variants.legHeight ?? '');
+      const specV = String(draft.variants.special ?? '');
+      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      extraSen += maint.sofaSpecials.find((o) => o.value === specV)?.priceSen ?? 0;
+    } else if (category === 'BEDFRAME') {
+      const divanV = String(draft.variants.divanHeight ?? '');
+      const legV = String(draft.variants.legHeight ?? '');
+      const specV = String(draft.variants.special ?? '');
+      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
+      extraSen += maint.legHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      extraSen += maint.specials.find((o) => o.value === specV)?.priceSen ?? 0;
+    }
+
+    const newPrice = basePriceSen + extraSen;
+    setDraft((s) => (s.unitPriceCenti === newPrice ? s : { ...s, unitPriceCenti: newPrice }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
 
   const lineTotal = (draft.qty * draft.unitPriceCenti) - draft.discountCenti;
 
@@ -851,19 +990,19 @@ const LineItemModal = ({
               ) : (
                 <div className={styles.formGrid4}>
                   <VariantSelect
-                    label="Seat Size"
-                    options={maint.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
-                    value={String(draft.variants.seatSize ?? '')}
-                    onChange={(v) => setVariant('seatSize', v)}
+                    label="Seat Height"
+                    options={maint.sofaSizes.map((s) => {
+                      // Surface the product's PRICE_2 sen for this height as
+                      // hint, so the dropdown shows e.g. "28 (RM 649.00)".
+                      const sh = picked?.seat_height_prices && Array.isArray(picked.seat_height_prices)
+                        ? (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
+                            .find((p) => p.height === s && p.tier === 'PRICE_2')
+                        : null;
+                      return { value: s, priceSen: sh?.priceSen ?? 0 };
+                    })}
+                    value={String(draft.variants.seatHeight ?? '')}
+                    onChange={(v) => setVariant('seatHeight', v)}
                   />
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Fabric Color</span>
-                    <input
-                      className={styles.fieldInput}
-                      value={String(draft.variants.fabricColor ?? '')}
-                      onChange={(e) => setVariant('fabricColor', e.target.value)}
-                    />
-                  </label>
                   <VariantSelect
                     label="Leg Height"
                     options={maint.sofaLegHeights}
@@ -876,6 +1015,14 @@ const LineItemModal = ({
                     value={String(draft.variants.special ?? '')}
                     onChange={(v) => setVariant('special', v)}
                   />
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Fabric Color (free text)</span>
+                    <input
+                      className={styles.fieldInput}
+                      value={String(draft.variants.fabricColor ?? '')}
+                      onChange={(e) => setVariant('fabricColor', e.target.value)}
+                    />
+                  </label>
                 </div>
               )}
             </div>
@@ -891,10 +1038,20 @@ const LineItemModal = ({
                   onChange={(e) => setDraft((s) => ({ ...s, qty: Number(e.target.value) || 0 }))} />
               </label>
               <label className={styles.field}>
-                <span className={styles.fieldLabel}>Unit Price (RM)</span>
+                <span className={styles.fieldLabel}>
+                  Unit Price (RM)
+                  {!manualPrice && picked && (
+                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
+                      · auto
+                    </span>
+                  )}
+                </span>
                 <input type="number" step="0.01" className={styles.fieldInput}
                   value={(draft.unitPriceCenti / 100).toFixed(2)}
-                  onChange={(e) => setDraft((s) => ({ ...s, unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 }))} />
+                  onChange={(e) => {
+                    setManualPrice(true);
+                    setDraft((s) => ({ ...s, unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 }));
+                  }} />
               </label>
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Discount (RM)</span>
