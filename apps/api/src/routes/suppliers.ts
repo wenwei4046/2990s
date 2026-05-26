@@ -37,7 +37,7 @@ const SUPPLIER_COLS =
   'id, code, name, whatsapp_number, email, contact_person, phone, address, state, ' +
   'payment_terms, status, rating, notes, supplier_type, category, tin_number, ' +
   'business_reg_no, postcode, area, mobile, fax, website, attention, business_nature, ' +
-  'currency, statement_type, aging_basis, credit_limit_sen, created_at, updated_at';
+  'currency, statement_type, aging_basis, credit_limit_sen, country, created_at, updated_at';
 
 const STATEMENT_TYPES = new Set(['OPEN_ITEM', 'BALANCE_FORWARD', 'NO_STATEMENT']);
 const AGING_BASES = new Set(['INVOICE_DATE', 'DUE_DATE']);
@@ -107,6 +107,8 @@ suppliers.post('/', async (c) => {
     /* PR #40 — full master record */
     supplier_type: (body.supplierType as string) ?? null,
     category: (body.category as string) ?? null,
+    /* PR #47 — country (defaults Malaysia at DB level) */
+    country: (body.country as string) ?? 'Malaysia',
     tin_number: (body.tinNumber as string) ?? null,
     business_reg_no: (body.businessRegNo as string) ?? null,
     postcode: (body.postcode as string) ?? null,
@@ -147,7 +149,7 @@ suppliers.patch('/:id', async (c) => {
     ['address', 'address'], ['state', 'state'], ['paymentTerms', 'payment_terms'],
     ['rating', 'rating'], ['notes', 'notes'],
     /* PR #40 — full master record */
-    ['supplierType', 'supplier_type'], ['category', 'category'],
+    ['supplierType', 'supplier_type'], ['category', 'category'], ['country', 'country'],
     ['tinNumber', 'tin_number'], ['businessRegNo', 'business_reg_no'],
     ['postcode', 'postcode'], ['area', 'area'], ['mobile', 'mobile'],
     ['fax', 'fax'], ['website', 'website'], ['attention', 'attention'],

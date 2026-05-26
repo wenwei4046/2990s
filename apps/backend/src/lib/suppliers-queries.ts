@@ -61,6 +61,7 @@ export type SupplierRow = {
   website: string | null;
   attention: string | null;
   business_nature: string | null;
+  country: string;                          // PR #47 — default 'Malaysia'
   currency: Currency;
   statement_type: StatementType;
   aging_basis: AgingBasis;

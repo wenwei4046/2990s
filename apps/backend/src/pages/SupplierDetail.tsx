@@ -42,6 +42,12 @@ import {
   type NewBinding,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
+import {
+  useLocalities,
+  distinctStates,
+  COUNTRIES,
+  PAYMENT_TERMS_OPTIONS,
+} from '../lib/localities-queries';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -698,6 +704,7 @@ const SupplierInfoCard = ({
     postcode: supplier.postcode ?? '',
     area: supplier.area ?? '',
     state: supplier.state ?? '',
+    country: supplier.country ?? 'Malaysia',
     businessNature: supplier.business_nature ?? '',
     notes: supplier.notes ?? '',
   });
@@ -748,6 +755,7 @@ const SupplierInfoCard = ({
             <InfoCell label="Website" value={supplier.website ?? '—'} />
             <InfoCell label="Payment Terms" value={supplier.payment_terms ?? '—'} />
             <InfoCell label="Currency" value={supplier.currency} />
+            <InfoCell label="Country" value={supplier.country ?? 'Malaysia'} />
             <InfoCell label="State" value={supplier.state ?? '—'} />
             <InfoCell label="Postcode" value={supplier.postcode ?? '—'} />
             <InfoCell label="Area" value={supplier.area ?? '—'} />
@@ -784,10 +792,15 @@ const SupplierInfoCard = ({
             <EditField label="WhatsApp" value={form.whatsappNumber} onChange={(v) => setF('whatsappNumber', v)} />
             <EditField label="Website" value={form.website} onChange={(v) => setF('website', v)} />
             {/* Commercial */}
-            <EditField label="Payment Terms" value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} placeholder="NET 30 / COD / etc" />
+            <PaymentTermsSelect value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} />
             <EditField label="Business Nature" value={form.businessNature} onChange={(v) => setF('businessNature', v)} />
-            {/* Address */}
-            <EditField label="State" value={form.state} onChange={(v) => setF('state', v)} />
+            {/* Address — PR #47: Country + State cascade */}
+            <CountrySelect value={form.country} onChange={(v) => {
+              setF('country', v);
+              // Reset state if country changes (states are country-specific)
+              if (v !== form.country) setF('state', '');
+            }} />
+            <StateSelect country={form.country} value={form.state} onChange={(v) => setF('state', v)} />
             <EditField label="Area" value={form.area} onChange={(v) => setF('area', v)} />
             <EditField label="Postcode" value={form.postcode} onChange={(v) => setF('postcode', v)} />
             <EditField label="Billing Address" value={form.address} onChange={(v) => setF('address', v)} multiline />
@@ -1141,4 +1154,80 @@ const smallInputStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-sm)',
   padding: '4px 8px',
   outline: 'none',
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   PR #47 — Country + State + Payment Terms dropdowns (commander 2026-05-26)
+   ════════════════════════════════════════════════════════════════════════ */
+
+const CountrySelect = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>Country</span>
+    <select className={styles.fieldInput} value={value || 'Malaysia'} onChange={(e) => onChange(e.target.value)}>
+      {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
+  </label>
+);
+
+const StateSelect = ({
+  country, value, onChange,
+}: { country: string; value: string; onChange: (v: string) => void }) => {
+  const localities = useLocalities();
+  // Only Malaysia has a locality dataset; other countries fall back to free text.
+  const malaysiaStates = useMemo(
+    () => (localities.data ? distinctStates(localities.data) : []),
+    [localities.data],
+  );
+
+  if (country === 'Malaysia') {
+    return (
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>State</span>
+        <select className={styles.fieldInput} value={value} onChange={(e) => onChange(e.target.value)}
+          disabled={localities.isLoading}>
+          <option value="">{localities.isLoading ? 'Loading…' : '— Pick state —'}</option>
+          {malaysiaStates.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </label>
+    );
+  }
+  // Other countries — free text fallback
+  return (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>State / Province</span>
+      <input className={styles.fieldInput} value={value} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+};
+
+const PaymentTermsSelect = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => {
+  /* When user picks "Custom", we surface a second input so they can type a
+     bespoke term (e.g. "NET 45 with 2% early discount"). We treat any value
+     not in the preset list as "Custom" mode. */
+  const isPreset = PAYMENT_TERMS_OPTIONS.includes(value as (typeof PAYMENT_TERMS_OPTIONS)[number]) && value !== 'Custom';
+  const [customMode, setCustomMode] = useState(!isPreset && Boolean(value));
+
+  return (
+    <label className={styles.field}>
+      <span className={styles.fieldLabel}>Payment Terms</span>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <select className={styles.fieldInput} style={{ flex: customMode ? 0.5 : 1 }}
+          value={customMode ? 'Custom' : (isPreset ? value : '')}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === 'Custom') { setCustomMode(true); onChange(''); }
+            else { setCustomMode(false); onChange(v); }
+          }}>
+          <option value="">— Pick term —</option>
+          {PAYMENT_TERMS_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {customMode && (
+          <input className={styles.fieldInput} style={{ flex: 1 }}
+            placeholder="Type custom term"
+            value={value}
+            onChange={(e) => onChange(e.target.value)} />
+        )}
+      </div>
+    </label>
+  );
 };

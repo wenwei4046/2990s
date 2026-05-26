@@ -721,7 +721,9 @@ export const suppliers = pgTable('suppliers', {
   phone:          text('phone'),
   address:        text('address'),                                          // Billing Address (multiline)
   state:          text('state'),
-  paymentTerms:   text('payment_terms'),                                    // free-form 'NET 30', 'COD'
+  /* PR #47 — country drives State cascade from my_localities */
+  country:        text('country').notNull().default('Malaysia'),
+  paymentTerms:   text('payment_terms'),                                    // dropdown: 'COD' | 'NET 7' | 'NET 30' | etc
   status:         supplierStatus('status').notNull().default('ACTIVE'),
   rating:         integer('rating').notNull().default(0),                   // 0-5 scale
   notes:          text('notes'),
