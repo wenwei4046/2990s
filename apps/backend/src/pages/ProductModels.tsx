@@ -164,17 +164,25 @@ function FilterChip({
 /* ────────────────────────── + New Model dialog ─────────────────────────── */
 
 function NewModelDialog({ onClose }: { onClose: () => void }) {
+  const [branding, setBranding] = useState('');
   const [modelCode, setModelCode] = useState('');
   const [name, setName] = useState('');
   const [category, setCategory] = useState<MfgCategory>('SOFA');
   const [description, setDescription] = useState('');
   const createMut = useCreateProductModel();
 
+  // Branding is required for the 3 product categories that auto-generate SKU
+  // names from "{branding} {category} ({size})". Accessory/Service skip the
+  // brand because they don't use the generator.
+  const needsBranding = category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS';
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!modelCode.trim() || !name.trim()) return;
+    if (needsBranding && !branding.trim()) return;
     createMut.mutate(
       {
+        branding: branding.trim() || null,
         modelCode: modelCode.trim(),
         name: name.trim(),
         category,
@@ -189,29 +197,55 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
       <form className={styles.modal} onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2 className={styles.modalTitle}>New Model</h2>
         <p className={styles.modalSub}>
-          Models are templates — SKU variants stay on the SKU Master page and link
-          back via the new "base model" column. Pick allowed options after saving.
+          Models are templates. SKU codes are auto-generated from the template
+          below — open a Model once, tick the options it offers, then add codes
+          in one click.
         </p>
 
+        {needsBranding && (
+          <label className={styles.field}>
+            <span className="t-eyebrow">Branding *</span>
+            <input
+              type="text"
+              value={branding}
+              onChange={(e) => setBranding(e.target.value)}
+              placeholder={
+                category === 'SOFA' ? 'e.g. HOUZS / 2990S'
+                : category === 'BEDFRAME' ? 'e.g. HILTON / FENRIR / CODY'
+                : 'e.g. SEALY / KING KOIL'
+              }
+              required={needsBranding}
+              autoFocus
+            />
+          </label>
+        )}
+
         <label className={styles.field}>
-          <span className="t-eyebrow">Model code</span>
+          <span className="t-eyebrow">Model code *</span>
           <input
             type="text"
             value={modelCode}
             onChange={(e) => setModelCode(e.target.value)}
-            placeholder="e.g. 5538 / 1004"
-            autoFocus
+            placeholder={
+              category === 'SOFA' ? 'e.g. 5530 / 5530B'
+              : category === 'BEDFRAME' ? 'e.g. 1003 / 1003A'
+              : 'e.g. PURE / FIRMNESS'
+            }
             required
           />
         </label>
 
         <label className={styles.field}>
-          <span className="t-eyebrow">Name</span>
+          <span className="t-eyebrow">Name *</span>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. SOFA 5538 / VICTORIA BEDFRAME"
+            placeholder={
+              category === 'SOFA' ? 'e.g. SOFA 5530'
+              : category === 'BEDFRAME' ? 'e.g. HILTON BEDFRAME'
+              : 'e.g. SEALY MATTRESS'
+            }
             required
           />
         </label>
@@ -232,6 +266,12 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
           />
         </label>
 
+        <TemplatePreview
+          category={category}
+          branding={branding}
+          modelCode={modelCode}
+        />
+
         {createMut.isError && (
           <div className={styles.errorBanner}>
             {createMut.error instanceof Error ? createMut.error.message : 'Create failed'}
@@ -245,6 +285,54 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
           </Button>
         </footer>
       </form>
+    </div>
+  );
+}
+
+/* ─────────── Code-generation template preview ────────────────────────────
+   Shows commander a worked example of how SKU codes + names get built from
+   his current inputs. Updates live as he types. */
+function TemplatePreview({
+  category, branding, modelCode,
+}: { category: MfgCategory; branding: string; modelCode: string }) {
+  const br = branding.trim() || '{branding}';
+  const mc = modelCode.trim() || '{code}';
+  let codeFmt = '', nameFmt = '', exampleCode = '', exampleName = '';
+
+  if (category === 'SOFA') {
+    codeFmt = '{model_code}-{compartment}';
+    nameFmt = '{branding} SOFA {compartment}';
+    exampleCode = `${mc}-1A(LHF)`;
+    exampleName = `${br} SOFA 1A(LHF)`;
+  } else if (category === 'BEDFRAME') {
+    codeFmt = '{model_code}-({size})';
+    nameFmt = '{branding} BEDFRAME ({size_label})';
+    exampleCode = `${mc}-(K)`;
+    exampleName = `${br} BEDFRAME (6FT)`;
+  } else if (category === 'MATTRESS') {
+    codeFmt = '{model_code}-({size})';
+    nameFmt = '{branding} ({size_label})';
+    exampleCode = `${mc}-(K)`;
+    exampleName = `${br} (6FT)`;
+  } else {
+    return null;
+  }
+
+  return (
+    <div className={styles.tplBox}>
+      <div className={styles.tplHead}>SKU template — preview</div>
+      <div className={styles.tplRow}>
+        <span className={styles.tplLabel}>code</span>
+        <code className={styles.tplFmt}>{codeFmt}</code>
+        <span className={styles.tplArrow}>→</span>
+        <code className={styles.tplExample}>{exampleCode}</code>
+      </div>
+      <div className={styles.tplRow}>
+        <span className={styles.tplLabel}>name</span>
+        <code className={styles.tplFmt}>{nameFmt}</code>
+        <span className={styles.tplArrow}>→</span>
+        <code className={styles.tplExample}>{exampleName}</code>
+      </div>
     </div>
   );
 }

@@ -53,6 +53,7 @@ export const ProductModelDetail = () => {
   const generateMut = useGenerateModelSkus();
   const maintenance = useMaintenanceConfig('master');
 
+  const [branding, setBranding] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [allowed, setAllowed] = useState<AllowedOptions>({});
@@ -61,6 +62,7 @@ export const ProductModelDetail = () => {
   // Sync local form when server row arrives or refetches.
   useEffect(() => {
     if (!data?.model) return;
+    setBranding(data.model.branding ?? '');
     setName(data.model.name);
     setDescription(data.model.description ?? '');
     setAllowed(data.model.allowed_options ?? {});
@@ -82,6 +84,7 @@ export const ProductModelDetail = () => {
     if (!id) return;
     updateMut.mutate({
       id,
+      branding: branding.trim() || null,
       name,
       description: description.trim() || null,
       allowedOptions: allowed,
@@ -149,13 +152,31 @@ export const ProductModelDetail = () => {
             <span className="t-eyebrow">Category</span>
             <input type="text" value={model.category} readOnly className={styles.readonly} />
           </label>
-          <label className={`${styles.field} ${styles.fieldSpan2}`}>
+          <label className={styles.field}>
+            <span className="t-eyebrow">Branding {(model.category === 'SOFA' || model.category === 'BEDFRAME' || model.category === 'MATTRESS') && '*'}</span>
+            <input
+              type="text"
+              value={branding}
+              onChange={(e) => setBranding(e.target.value)}
+              placeholder={
+                model.category === 'SOFA' ? 'e.g. HOUZS'
+                : model.category === 'BEDFRAME' ? 'e.g. HILTON / FENRIR / CODY'
+                : model.category === 'MATTRESS' ? 'e.g. SEALY'
+                : '—'
+              }
+            />
+          </label>
+          <label className={styles.field}>
             <span className="t-eyebrow">Name</span>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. HILTON BEDFRAME"
+              placeholder={
+                model.category === 'SOFA' ? 'e.g. SOFA 5530'
+                : model.category === 'BEDFRAME' ? 'e.g. HILTON BEDFRAME'
+                : 'e.g. SEALY MATTRESS'
+              }
             />
           </label>
           <label className={`${styles.field} ${styles.fieldSpan2}`}>

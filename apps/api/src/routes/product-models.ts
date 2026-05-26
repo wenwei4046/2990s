@@ -27,6 +27,11 @@ productModels.use('*', supabaseAuth);
 const CATEGORIES = ['SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE'] as const;
 
 const CreateBody = z.object({
+  // PR #65 — Branding is required for SOFA/BEDFRAME/MATTRESS so the SKU-name
+  // template ("HILTON BEDFRAME (6FT)") has the brand to lead with.
+  // ACCESSORY/SERVICE skip the brand check because they aren't part of the
+  // per-Model code generator.
+  branding:       z.string().trim().max(80).optional().nullable(),
   modelCode:      z.string().trim().min(1).max(32),
   name:           z.string().trim().min(1).max(200),
   category:       z.enum(CATEGORIES),
@@ -34,9 +39,13 @@ const CreateBody = z.object({
   photoUrl:       z.string().trim().url().optional().nullable(),
   allowedOptions: z.record(z.unknown()).optional(),
   active:         z.boolean().optional(),
-});
+}).refine(
+  (v) => v.category === 'ACCESSORY' || v.category === 'SERVICE' || (v.branding && v.branding.length > 0),
+  { message: 'branding_required_for_product_category', path: ['branding'] },
+);
 
 const PatchBody = z.object({
+  branding:       z.string().trim().max(80).nullable().optional(),
   modelCode:      z.string().trim().min(1).max(32).optional(),
   name:           z.string().trim().min(1).max(200).optional(),
   // category cannot be patched once set — it would orphan SKUs in the other category.
@@ -46,7 +55,7 @@ const PatchBody = z.object({
   active:         z.boolean().optional(),
 });
 
-const COLS = 'id, model_code, name, category, description, photo_url, allowed_options, active, created_at, updated_at';
+const COLS = 'id, branding, model_code, name, category, description, photo_url, allowed_options, active, created_at, updated_at';
 
 // ── GET / ──────────────────────────────────────────────────────────────────
 productModels.get('/', async (c) => {
@@ -96,6 +105,7 @@ productModels.post('/', async (c) => {
 
   const supabase = c.get('supabase');
   const insert = {
+    branding:        parsed.data.branding ?? null,
     model_code:      parsed.data.modelCode,
     name:            parsed.data.name,
     category:        parsed.data.category,
@@ -129,6 +139,7 @@ productModels.patch('/:id', async (c) => {
   // Build the partial update — only include keys the client actually sent so
   // we don't overwrite columns with `undefined` (Supabase treats that as NULL).
   const u: Record<string, unknown> = {};
+  if (parsed.data.branding !== undefined)       u.branding        = parsed.data.branding;
   if (parsed.data.modelCode !== undefined)      u.model_code      = parsed.data.modelCode;
   if (parsed.data.name !== undefined)           u.name            = parsed.data.name;
   if (parsed.data.description !== undefined)    u.description     = parsed.data.description;
@@ -197,13 +208,18 @@ productModels.post('/:id/generate-skus', async (c) => {
 
   const { data: model, error: mErr } = await supabase
     .from('product_models')
-    .select('id, model_code, name, category, allowed_options')
+    .select('id, branding, model_code, name, category, allowed_options')
     .eq('id', id)
     .maybeSingle();
   if (mErr) return c.json({ error: 'load_failed', reason: mErr.message }, 500);
   if (!model) return c.json({ error: 'not_found' }, 404);
 
   const opts = (model.allowed_options ?? {}) as Record<string, string[]>;
+  // PR #65 — Branding-driven SKU name template. Commander 2026-05-26:
+  // "HILTON BEDFRAME (6FT)" should come from branding=HILTON + category=BEDFRAME
+  // + size_label=6FT — not from the Model's internal name. Falls back to "" if
+  // branding is missing so the generator still works in edge cases.
+  const brand = (model.branding ?? '').trim();
 
   // Compute the SKU rows we'd like to materialize.
   type GenRow = { code: string; name: string; size_code: string | null; size_label: string | null };
@@ -215,23 +231,46 @@ productModels.post('/:id/generate-skus', async (c) => {
       return c.json({ error: 'no_compartments', reason: 'Allowed Options → Compartments is empty. Toggle at least one before generating.' }, 400);
     }
     for (const comp of comps) {
+      // SOFA template:
+      //   code = {model_code}-{compartment}        e.g. 5530-1A(LHF)
+      //   name = {branding} SOFA {compartment}     e.g. HOUZS SOFA 1A(LHF)
       wanted.push({
         code:       `${model.model_code}-${comp}`,
-        name:       `SOFA ${model.model_code} ${comp}`,
+        name:       `${brand ? `${brand} ` : ''}SOFA ${comp}`,
         size_code:  null,
         size_label: null,
       });
     }
-  } else if (model.category === 'BEDFRAME' || model.category === 'MATTRESS') {
+  } else if (model.category === 'BEDFRAME') {
     const sizes = opts.sizes ?? [];
     if (sizes.length === 0) {
       return c.json({ error: 'no_sizes', reason: 'Allowed Options → Sizes is empty. Toggle at least one before generating.' }, 400);
     }
     for (const sz of sizes) {
       const label = BED_SIZE_LABELS[sz] ?? sz;
+      // BEDFRAME template:
+      //   code = {model_code}-({size_code})        e.g. 1003-(K)
+      //   name = {branding} BEDFRAME ({size_label}) e.g. HILTON BEDFRAME (6FT)
       wanted.push({
         code:       `${model.model_code}-(${sz})`,
-        name:       `${model.name} (${label})`,
+        name:       `${brand ? `${brand} ` : ''}BEDFRAME (${label})`,
+        size_code:  sz,
+        size_label: label,
+      });
+    }
+  } else if (model.category === 'MATTRESS') {
+    const sizes = opts.sizes ?? [];
+    if (sizes.length === 0) {
+      return c.json({ error: 'no_sizes', reason: 'Allowed Options → Sizes is empty. Toggle at least one before generating.' }, 400);
+    }
+    for (const sz of sizes) {
+      const label = BED_SIZE_LABELS[sz] ?? sz;
+      // MATTRESS template:
+      //   code = {model_code}-({size_code})        e.g. PURE-(K)
+      //   name = {branding} ({size_label})          e.g. SEALY (6FT)
+      wanted.push({
+        code:       `${model.model_code}-(${sz})`,
+        name:       `${brand ? `${brand} ` : ''}(${label})`.trim(),
         size_code:  sz,
         size_label: label,
       });
@@ -279,6 +318,9 @@ productModels.post('/:id/generate-skus', async (c) => {
       base_model: model.model_code,
       size_code:  w.size_code,
       size_label: w.size_label,
+      // PR #65 — mirror branding onto the SKU row too so it shows up in the
+      // SKU Master list without having to JOIN product_models on read.
+      branding:   model.branding ?? null,
       model_id:   model.id,
       status:     'ACTIVE',
       created_at: now,
