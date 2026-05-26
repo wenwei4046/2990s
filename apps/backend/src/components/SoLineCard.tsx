@@ -105,8 +105,18 @@ export const SoLineCard = ({
     setSearch(p.code);
   };
 
-  const setVariant = (k: string, v: string | number) =>
+  const setVariant = (k: string, v: string | number | string[]) =>
     onChange({ variants: { ...draft.variants, [k]: v } });
+
+  /* PR #127 — HOOKKA multi-select Special Orders. `variants.specials`
+     (string[]) is the new canonical key; legacy `variants.special`
+     (single string) is migrated on read so old saved drafts open
+     correctly. */
+  const specialsList = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v.map(String).filter(Boolean);
+    if (typeof v === 'string' && v) return [v];
+    return [];
+  };
 
   /* Auto-recompute unit price — same formula as PR #114 SoLineItemModal:
      unitPriceSen = basePriceSen + Σ(variant surcharges).
@@ -126,24 +136,56 @@ export const SoLineCard = ({
         if (match) basePriceSen = match.priceSen;
       }
       const legV  = String(draft.variants.legHeight ?? '');
-      const specV = String(draft.variants.special ?? '');
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen  ?? 0;
-      extraSen += maint.sofaSpecials  .find((o) => o.value === specV)?.priceSen ?? 0;
+      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
+      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      for (const s of specs) extraSen += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
     } else if (category === 'bedframe') {
       const divanV = String(draft.variants.divanHeight ?? '');
       const totalV = String(draft.variants.totalHeight ?? '');
       const legV   = String(draft.variants.legHeight ?? '');
-      const specV  = String(draft.variants.special ?? '');
+      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
       extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
       extraSen += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
       extraSen += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
-      extraSen += maint.specials    .find((o) => o.value === specV)?.priceSen  ?? 0;
+      for (const s of specs) extraSen += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
     }
 
     const newPrice = basePriceSen + extraSen;
     if (draft.unitPriceCenti !== newPrice) onChange({ unitPriceCenti: newPrice });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
+
+  /* PR #127 — Footer pricing breakdown. Mirrors the auto-recompute so
+     the displayed components always match the unit-price input. */
+  const { basePriceSen, extraSen } = useMemo(() => {
+    if (!maint || !picked) return { basePriceSen: draft.unitPriceCenti, extraSen: 0 };
+    const category = draft.itemGroup.toLowerCase();
+    let base = picked.base_price_sen ?? 0;
+    let extra = 0;
+    if (category === 'sofa') {
+      const sh = String(draft.variants.seatHeight ?? '');
+      if (sh && Array.isArray(picked.seat_height_prices)) {
+        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
+          .find((p) => p.height === sh && p.tier === 'PRICE_2');
+        if (match) base = match.priceSen;
+      }
+      const legV  = String(draft.variants.legHeight ?? '');
+      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
+      extra += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      for (const s of specs) extra += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
+    } else if (category === 'bedframe') {
+      const divanV = String(draft.variants.divanHeight ?? '');
+      const totalV = String(draft.variants.totalHeight ?? '');
+      const legV   = String(draft.variants.legHeight ?? '');
+      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
+      extra += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
+      extra += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
+      extra += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
+      for (const s of specs) extra += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
+    }
+    return { basePriceSen: base, extraSen: extra };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, draft.variants, draft.itemGroup, maint]);
 
   const lineTotal = useMemo(
     () => Math.max(0, draft.qty * draft.unitPriceCenti - draft.discountCenti),
@@ -281,13 +323,16 @@ export const SoLineCard = ({
                 value={String(draft.variants.gap ?? '')}
                 onChange={(v) => setVariant('gap', v)}
               />
-              <VariantSelect
-                label="Special"
-                options={maint.specials}
-                value={String(draft.variants.special ?? '')}
-                onChange={(v) => setVariant('special', v)}
-              />
             </div>
+          )}
+          {/* PR #127 — Special Orders multi-select for bedframe */}
+          {draft.itemGroup === 'bedframe' && (
+            <SpecialsMultiSelect
+              label="Special Orders"
+              options={maint.specials}
+              picked={specialsList(draft.variants.specials ?? draft.variants.special)}
+              onChange={(arr) => setVariant('specials', arr)}
+            />
           )}
 
           {/* SOFA — seat / leg / fabric / color / divan / special */}
@@ -341,13 +386,16 @@ export const SoLineCard = ({
                 value={String(draft.variants.divanHeight ?? '')}
                 onChange={(v) => setVariant('divanHeight', v)}
               />
-              <VariantSelect
-                label="Special"
-                options={maint.sofaSpecials}
-                value={String(draft.variants.special ?? '')}
-                onChange={(v) => setVariant('special', v)}
-              />
             </div>
+          )}
+          {/* PR #127 — Special Orders multi-select for sofa */}
+          {draft.itemGroup === 'sofa' && (
+            <SpecialsMultiSelect
+              label="Special Orders"
+              options={maint.sofaSpecials}
+              picked={specialsList(draft.variants.specials ?? draft.variants.special)}
+              onChange={(arr) => setVariant('specials', arr)}
+            />
           )}
 
           {/* MATTRESS — size only */}
@@ -429,16 +477,47 @@ export const SoLineCard = ({
             />
           </label>
         </div>
+
+        {/* PR #127 — HOOKKA-style footer breakdown */}
+        {picked && (
+          <div style={{
+            marginTop: 8,
+            display: 'grid',
+            gap: 4,
+            padding: 'var(--space-2) var(--space-3)',
+            background: 'var(--c-cream)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-12)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
+              <span>Base price</span><span>{fmtRm(basePriceSen)}</span>
+            </div>
+            {extraSen > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
+                <span>+ Variant surcharges</span><span>+ {fmtRm(extraSen)}</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
+              <span>Unit price × {draft.qty}{draft.discountCenti > 0 ? ` − ${fmtRm(draft.discountCenti)} discount` : ''}</span>
+              <span>{fmtRm(draft.unitPriceCenti)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--c-burnt)', fontSize: 'var(--fs-14)', borderTop: '1px solid var(--line)', paddingTop: 4, marginTop: 2 }}>
+              <span>Line total</span><span>{fmtRm(lineTotal)}</span>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── Remark ───────────────────────────────────────────────────── */}
+      {/* ── Line Notes (PR #127 — renamed from Remark) ───────────────── */}
       <label className={styles.field}>
-        <span className={styles.fieldLabel}>Remark</span>
+        <span className={styles.fieldLabel}>Line Notes</span>
         <input
           className={styles.fieldInput}
           value={draft.remark}
           onChange={(e) => onChange({ remark: e.target.value })}
-          placeholder="Optional line note (e.g. delivery instructions)"
+          placeholder="Free-text for this line (e.g. customer's special request)"
         />
       </label>
     </div>
@@ -465,3 +544,85 @@ const VariantSelect = ({
     </select>
   </label>
 );
+
+/* PR #127 — HOOKKA-style multi-select for Special Orders. Collapsible
+   chip row with a count badge in the header. Replaces single-select
+   dropdown for bedframe + sofa categories. */
+const SpecialsMultiSelect = ({
+  label, options, picked, onChange,
+}: {
+  label:    string;
+  options:  Array<{ value: string; priceSen: number }>;
+  picked:   string[];
+  onChange: (next: string[]) => void;
+}) => {
+  const [open, setOpen] = useState(picked.length > 0);
+  const toggle = (v: string) => {
+    const next = picked.includes(v) ? picked.filter((x) => x !== v) : [...picked, v];
+    onChange(next);
+  };
+  return (
+    <div style={{ marginTop: 'var(--space-3)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: 'transparent',
+          border: '1px dashed var(--line-strong)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '6px 10px',
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--fs-13)',
+          color: 'var(--fg)',
+          cursor: 'pointer',
+          width: '100%',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span>
+          <span style={{ fontWeight: 600 }}>{label}</span>
+          {picked.length > 0 && (
+            <span style={{ marginLeft: 8, color: 'var(--c-orange)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
+              ({picked.length} selected)
+            </span>
+          )}
+        </span>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {options.length === 0 && (
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              No specials configured in Maintenance.
+            </span>
+          )}
+          {options.map((o) => {
+            const on = picked.includes(o.value);
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => toggle(o.value)}
+                style={{
+                  background: on ? 'var(--c-orange)' : 'var(--c-paper)',
+                  color: on ? 'var(--bg)' : 'var(--fg)',
+                  border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line-strong)'}`,
+                  borderRadius: 999,
+                  padding: '4px 12px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--fs-12)',
+                  cursor: 'pointer',
+                }}
+              >
+                {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
