@@ -616,13 +616,19 @@ const ProductRow = ({
           style={{ cursor: 'pointer' }}
         />
       </td>
-      {/* PR #89 — click code chip to edit. Stops row double-click handler
-          from firing on the cell. */}
+      {/* PR #89 — click code chip to edit.
+          PR #95 — Commander 2026-05-26: "容易不小心点到 Edit，你应该点 Edit
+          Price 那边就可以进来修改了". Gate click-to-edit behind editMode so
+          the chip is read-only until commander explicitly hits "Edit Prices".
+          When editMode is off the cell stops bubble propagation but stays
+          a plain text/chip, so accidental clicks during row drilldown can't
+          drop into the input. */}
       <td onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
         <EditableTextCell
           value={row.code}
           chipClassName={styles.codeChip}
           ariaLabel="Edit product code"
+          editable={editMode}
           onSave={(val) => update.mutate({ id: row.id, code: val })}
         />
       </td>
@@ -635,6 +641,7 @@ const ProductRow = ({
           chipClassName={styles.nameCompact}
           inline
           ariaLabel="Edit description"
+          editable={editMode}
           onSave={(val) => update.mutate({ id: row.id, name: val })}
         />
         {row.description && <div className={styles.nameSubCompact}>{row.description}</div>}
@@ -2141,7 +2148,7 @@ const ImportSkusDialog = ({ onClose }: { onClose: () => void }) => (
    (no chip pill); inline=false uses chipClassName for the resting state.
    ════════════════════════════════════════════════════════════════════════ */
 const EditableTextCell = ({
-  value, chipClassName, ariaLabel, onSave, inline = false,
+  value, chipClassName, ariaLabel, onSave, inline = false, editable = true,
 }: {
   value:          string;
   /** CSS-module class — typed loose so `styles.foo` (which TS treats as
@@ -2152,6 +2159,11 @@ const EditableTextCell = ({
   ariaLabel:      string;
   onSave:         (val: string) => void;
   inline?:        boolean;
+  /** PR #95 — Commander 2026-05-26: gate click-to-edit behind the parent
+      table's edit mode. When false, the cell renders as plain text/chip
+      and any click is ignored. Defaults to true so existing callers
+      (Fabric Converter description cell, etc.) keep working. */
+  editable?:      boolean;
 }) => {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState(value);
@@ -2169,6 +2181,15 @@ const EditableTextCell = ({
   const cancel = () => { setDraft(value); setEditing(false); };
 
   if (!editing) {
+    // PR #95 — Read-only mode. Same visual chip / inline text but no
+    // click target, no cursor pointer, no "Click to edit" tooltip.
+    if (!editable) {
+      return inline ? (
+        <span className={chipClassName}>{value}</span>
+      ) : (
+        <span className={chipClassName}>{value}</span>
+      );
+    }
     return inline ? (
       <div
         role="button"
