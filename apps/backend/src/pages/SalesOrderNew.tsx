@@ -260,96 +260,13 @@ export const SalesOrderNew = () => {
         </div>
       </div>
 
-      {/* ── PR #121 — Order Details (POS layout) ─────────────────────
-           Commander 2026-05-26: "Order Details 那边就跟着我的 POS System
-           的一模一样". Single tight card with Customer autocomplete +
-           Delivery Hub + PO/SO No + Reference + dates + notes. Sits
-           ABOVE the deeper Customer / Address / Emergency cards so the
-           common-case "existing customer" flow stays one card. */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Order Details</h2>
-        </div>
-        <div className={styles.cardBody}>
-          <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer *</span>
-              <input
-                type="text"
-                list="so-debtor-list"
-                value={debtorName}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setDebtorName(v);
-                  // If the typed value matches a known debtor (picked from datalist),
-                  // adopt its code + phone + addresses so the deeper Customer card
-                  // shows the snapshot — saves commander typing the same info twice.
-                  const picked = (debtors.data?.debtors ?? []).find((d) => d.debtor_name === v);
-                  if (picked) {
-                    if (picked.debtor_code) setDebtorCode(picked.debtor_code);
-                    if (picked.phone && !phone) setPhone(picked.phone);
-                    if (picked.address1 && !address1) setAddress1(picked.address1);
-                    if (picked.address2 && !address2) setAddress2(picked.address2);
-                  }
-                }}
-                placeholder="Type 2+ chars to search prior customers…"
-                className={styles.fieldInput}
-                required
-              />
-              <datalist id="so-debtor-list">
-                {(debtors.data?.debtors ?? []).map((d, i) => (
-                  <option key={`${d.debtor_code ?? 'nc'}-${i}`} value={d.debtor_name ?? ''}>
-                    {[d.debtor_code, d.phone].filter(Boolean).join(' · ')}
-                  </option>
-                ))}
-              </datalist>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Delivery Hub *</span>
-              <select value={hubId} onChange={(e) => setHubId(e.target.value)} className={styles.fieldInput} required>
-                <option value="">— Pick a hub / warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer PO No.</span>
-              <input type="text" value={customerPo} onChange={(e) => setCustomerPo(e.target.value)} className={styles.fieldInput} placeholder="e.g. PO-AK-2026-001" />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer SO No.</span>
-              <input type="text" value={customerSoNo} onChange={(e) => setCustomerSoNo(e.target.value)} className={styles.fieldInput} placeholder="Customer's own SO# (from their ERP)" />
-            </label>
-
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Reference</span>
-              <input type="text" value={ref} onChange={(e) => setRef(e.target.value)} className={styles.fieldInput} placeholder="Optional free-text ref" />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Company SO Date</span>
-              <input type="date" value={soDate} onChange={(e) => setSoDate(e.target.value)} className={styles.fieldInput} />
-            </label>
-
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer Delivery Date</span>
-              <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className={styles.fieldInput} />
-            </label>
-            <label className={`${styles.field} ${styles.fieldSpan2 ?? ''}`} style={{ gridColumn: '1 / -1' }}>
-              <span className={styles.fieldLabel}>Notes</span>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Internal notes — visible on the SO detail page"
-                className={styles.fieldInput}
-                rows={3}
-                style={{ resize: 'vertical', minHeight: 80 }}
-              />
-            </label>
-          </div>
-        </div>
-      </section>
+      {/* PR #129 — Commander 2026-05-26: "order details 不需要 删掉".
+          Dropped the PR #121 "Order Details" card entirely. State vars
+          (debtorCode / customerPo / customerSoNo / ref / hubId / soDate)
+          stay declared and are still sent on submit — the existing
+          Customer / Address / Emergency / Dates cards below cover the
+          common-case flow. Notes lives in its own card at the bottom
+          again (restored). */}
 
       {/* ── Customer ────────────────────────────────────────────────── */}
       <section className={styles.card}>
@@ -685,8 +602,23 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* PR #121 — bottom Notes section removed; Notes now lives inside the
-          top Order Details card (POS layout). */}
+      {/* PR #129 — Notes restored to its own bottom card now that the
+          Order Details card is gone. */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Notes</h2>
+        </div>
+        <div className={styles.cardBody}>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Internal notes — visible on the SO detail page only"
+            className={styles.fieldInput}
+            rows={3}
+            style={{ minHeight: 80, resize: 'vertical', width: '100%' }}
+          />
+        </div>
+      </section>
     </div>
   );
 };
