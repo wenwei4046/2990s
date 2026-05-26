@@ -155,15 +155,26 @@
 .row:hover {
   background: var(--c-cream);
 }
+/* PR #110 — Commander 2026-05-26: "字体为什么没有 standardise". Live
+   inspection showed Code chip was running ui-monospace + 11px while
+   Name was Poppins + 12px → the columns looked like two different
+   typesetting systems on the same row. Aligned both to:
+     - var(--font-sans)  (Poppins everywhere — no mono pill)
+     - var(--fs-13)      (same size)
+     - 500 weight        (same visual gravity)
+   Code keeps the cream pill so it still reads as a "code" chip, but
+   the type itself matches the Name column letter-for-letter. */
 .codeChip {
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  font-weight: 500;
   background: var(--c-cream);
-  padding: 2px 8px;
+  padding: 2px 10px;
   border-radius: 999px;
   border: 1px solid var(--line);
   color: var(--c-ink);
   display: inline-block;
+  letter-spacing: 0.01em;
 }
 .codeChipLink {
   text-decoration: none;
@@ -177,8 +188,8 @@
 .nameText {
   font-family: var(--font-sans);
   font-size: var(--fs-13);
-  color: var(--c-ink);
   font-weight: 500;
+  color: var(--c-ink);
 }
 
 .statusPill {
