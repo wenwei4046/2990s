@@ -151,9 +151,23 @@ export const SalesOrderNew = () => {
 
   const canSave = debtorName.trim().length > 0;
 
+  /* PR #125 — Commander 2026-05-26: "Processing Date 跟 Delivery Date 可以
+     两个都没有，或者两个都有，但不能一个有一个没有". XOR is rejected — a
+     processing date with no delivery date (or vice versa) is incomplete data
+     that breaks downstream production scheduling + customer comms. */
+  const datesXor = (processingDate.trim() !== '') !== (deliveryDate.trim() !== '');
+
   const onSave = () => {
     if (!canSave) {
       window.alert('Customer name is required.');
+      return;
+    }
+    if (datesXor) {
+      window.alert(
+        'Processing Date and Delivery Date must be set together.\n\n' +
+        'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
+        'cause scheduling issues.',
+      );
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
@@ -238,7 +252,7 @@ export const SalesOrderNew = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || !canSave}
+            disabled={create.isPending || !canSave || datesXor}
           >
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Save SO (Draft)'}
@@ -564,6 +578,25 @@ export const SalesOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody}>
+          {/* PR #125 — Both-or-neither rule. Commander: "可以两个都没有，
+              或者两个都有，但不能一个有一个没有". XOR state → red banner
+              + Save disabled until commander resolves. */}
+          {datesXor && (
+            <div
+              style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: 'var(--space-2) var(--space-3)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 'var(--fs-12)',
+                fontWeight: 600,
+                marginBottom: 'var(--space-3)',
+              }}
+            >
+              ⚠ Fill in BOTH dates or leave BOTH empty — partial dates aren't allowed.
+            </div>
+          )}
           <div className={styles.formGrid2}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
@@ -572,6 +605,7 @@ export const SalesOrderNew = () => {
                 value={processingDate}
                 onChange={(e) => setProcessingDate(e.target.value)}
                 className={styles.fieldInput}
+                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
               />
             </label>
             <label className={styles.field}>
@@ -581,6 +615,7 @@ export const SalesOrderNew = () => {
                 value={deliveryDate}
                 onChange={(e) => setDeliveryDate(e.target.value)}
                 className={styles.fieldInput}
+                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
               />
             </label>
           </div>
