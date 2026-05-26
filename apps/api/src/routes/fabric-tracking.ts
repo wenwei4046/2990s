@@ -64,6 +64,8 @@ fabricTracking.post('/', async (c) => {
     sofa_price_tier: (body.sofaPriceTier as string) ?? null,
     bedframe_price_tier: (body.bedframePriceTier as string) ?? null,
     supplier_code: (body.supplierCode as string) ?? null,
+    /* Migration 0063 — collection name. */
+    series: (body.series as string) ?? null,
     price_centi: typeof body.priceCenti === 'number' ? body.priceCenti : 0,
   };
 
@@ -101,6 +103,7 @@ fabricTracking.post('/bulk-upsert', async (c) => {
     ['supplier',            'supplier'],
     ['sofaPriceTier',       'sofa_price_tier'],
     ['bedframePriceTier',   'bedframe_price_tier'],
+    ['series',              'series'],
   ];
   const INT_COLS: Array<[string, string]> = [
     ['priceCenti',              'price_centi'],
@@ -182,7 +185,7 @@ fabricTracking.get('/', async (c) => {
         'sofa_price_tier, bedframe_price_tier, price_centi, soh_centi, ' +
         'po_outstanding_centi, last_month_usage_centi, one_week_usage_centi, ' +
         'two_weeks_usage_centi, one_month_usage_centi, shortage_centi, ' +
-        'reorder_point_centi, supplier, supplier_code, lead_time_days',
+        'reorder_point_centi, supplier, supplier_code, lead_time_days, series',
     )
     .order('fabric_code', { ascending: true });
 
@@ -196,6 +199,34 @@ fabricTracking.get('/', async (c) => {
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ fabrics: data ?? [] });
+});
+
+/* Migration 0063 — Inline-edit Series cell from the Fabric Converter table. */
+fabricTracking.patch('/:id/series', async (c) => {
+  const id = c.req.param('id');
+  let body: { series?: string | null };
+  try { body = (await c.req.json()) as typeof body; }
+  catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const supabase = c.get('supabase');
+  const trimmed = typeof body.series === 'string' ? body.series.trim() : null;
+  const next = trimmed === '' ? null : trimmed;
+
+  const { error } = await supabase
+    .from('fabric_trackings')
+    .update({ series: next })
+    .eq('id', id);
+
+  if (error) {
+    if (error.code === '42501' || /permission denied/i.test(error.message)) {
+      return c.json({ error: 'forbidden', reason: error.message }, 403);
+    }
+    if (/column .* does not exist/i.test(error.message)) {
+      return c.json({ error: 'migration_pending', reason: 'Run migration 0063 against Supabase.' }, 500);
+    }
+    return c.json({ error: 'update_failed', reason: error.message }, 500);
+  }
+  return c.json({ ok: true, series: next });
 });
 
 // Set the supplier's own code for this fabric (what we print on POs sent to

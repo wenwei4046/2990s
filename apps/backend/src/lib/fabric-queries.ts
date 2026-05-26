@@ -56,6 +56,8 @@ export type FabricTrackingRow = {
   supplier: string | null;
   supplier_code: string | null;
   lead_time_days: number;
+  /* Migration 0063 — collection name (free text, e.g. "KOONA VELVET H2O"). */
+  series: string | null;
 };
 
 export function useFabricTrackings(opts?: {
@@ -124,6 +126,23 @@ export function useUpdateFabricSupplierCode() {
   });
 }
 
+/* Migration 0063 — Inline-edit Series cell from the Fabric Converter table. */
+export function useUpdateFabricSeries() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: string; series: string | null }) => {
+      return authedFetch<{ ok: true; series: string | null }>(
+        `/fabric-tracking/${args.id}/series`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ series: args.series }),
+        },
+      );
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}
+
 /* PR #38 — Make fabric description editable from the converter table. */
 export function useUpdateFabricDescription() {
   const qc = useQueryClient();
@@ -150,6 +169,7 @@ export type NewFabric = {
   sofaPriceTier?: FabricTier;
   bedframePriceTier?: FabricTier;
   supplierCode?: string;
+  series?: string;
   priceCenti?: number;
 };
 export function useCreateFabric() {

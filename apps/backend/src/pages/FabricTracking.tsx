@@ -120,6 +120,7 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
     fabricCode: '',
     fabricDescription: '',
     supplierCode: '',
+    series: '',
     sofaPriceTier: 'PRICE_2' as FabricTier,
     bedframePriceTier: 'PRICE_2' as FabricTier,
   });
@@ -136,6 +137,7 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
       fabricCode: form.fabricCode.trim(),
       fabricDescription: form.fabricDescription.trim() || undefined,
       supplierCode: form.supplierCode.trim() || undefined,
+      series: form.series.trim() || undefined,
       sofaPriceTier: form.sofaPriceTier,
       bedframePriceTier: form.bedframePriceTier,
     }, {
@@ -181,6 +183,13 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
           <input className={styles.searchInput} style={{ width: '100%' }}
             value={form.fabricDescription} placeholder="e.g. IVORY / FABRIC"
             onChange={(e) => set('fabricDescription', e.target.value)} />
+        </label>
+
+        <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
+          <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 4 }}>Series (collection name)</div>
+          <input className={styles.searchInput} style={{ width: '100%' }}
+            value={form.series} placeholder="e.g. KOONA VELVET H2O"
+            onChange={(e) => set('series', e.target.value)} />
         </label>
 
         <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
