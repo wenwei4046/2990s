@@ -35,7 +35,16 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
     throw new Error(`${res.status} ${res.statusText}: ${detail}`);
   }
-  return (await res.json()) as T;
+  // PR #98 — Commander 2026-05-26: bulk SKU delete reported "Deleted 0/22.
+  // 22 failed" with "Unexpected end of JSON input" even though the server
+  // actually deleted every row. Cause: DELETE returns 204 No Content (empty
+  // body, REST convention); this helper unconditionally called res.json()
+  // which throws on an empty body. Handle 204 / empty bodies cleanly so
+  // callers typed authedFetch<void> resolve instead of rejecting.
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 /* ────────────────────────── Types ────────────────────────────────────── */
