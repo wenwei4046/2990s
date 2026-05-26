@@ -1,0 +1,211 @@
+/* ProductModelDetail — matches the visual language of SupplierDetail / SO
+   detail pages: cream page, white cards, chip-style option toggles. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  max-width: 1280px;
+}
+
+.loading {
+  padding: var(--space-6);
+  font-family: var(--font-sans);
+  color: var(--fg-muted);
+}
+
+.errorBanner {
+  padding: var(--space-3) var(--space-4);
+  background: rgba(184, 51, 31, 0.08);
+  color: var(--c-festive-b);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+}
+
+/* ─── Header ──────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  text-decoration: none;
+  width: max-content;
+}
+.back:hover { color: var(--fg); }
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.titleRow h1 { margin: 0; }
+.titleName {
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-15);
+}
+
+.catPill, .statusPill {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--c-paper);
+  letter-spacing: 0.04em;
+}
+.statusPill.active {
+  background: rgba(38, 95, 73, 0.12);
+  color: var(--c-evergreen, #265F49);
+  border-color: rgba(38, 95, 73, 0.3);
+}
+.statusPill.inactive {
+  background: rgba(150, 150, 150, 0.12);
+  color: var(--fg-muted);
+}
+
+.headerActions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* ─── Card ────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.cardTitle {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-17);
+  font-weight: 600;
+}
+.cardHeadRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+}
+.cardSub {
+  margin: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+}
+
+/* ─── Field grid ──────────────────────────────────────────────────────── */
+.fieldGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.fieldSpan2 { grid-column: 1 / -1; }
+.field input, .field textarea {
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--c-paper);
+  color: var(--fg);
+  resize: vertical;
+}
+.field input:focus, .field textarea:focus {
+  outline: none;
+  border-color: var(--c-orange);
+}
+.readonly {
+  background: var(--c-cream) !important;
+  color: var(--fg-muted) !important;
+  cursor: not-allowed;
+}
+
+/* ─── Option groups + chips ───────────────────────────────────────────── */
+.optGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.optHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.optHint {
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+}
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.chip {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--c-paper);
+  color: var(--fg);
+  cursor: pointer;
+  transition: all 120ms ease-out;
+}
+.chip:hover { border-color: var(--c-orange); }
+.chipOn {
+  background: var(--c-orange);
+  color: var(--bg);
+  border-color: var(--c-orange);
+}
+
+/* ─── SKU table ───────────────────────────────────────────────────────── */
+.skuTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+}
+.skuTable th, .skuTable td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.skuTable th {
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+.skuTable code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  background: var(--c-cream);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
