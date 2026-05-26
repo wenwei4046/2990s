@@ -544,14 +544,16 @@ const SkuMasterTab = () => {
         <NewModelDialog
           onClose={() => setNewModelOpen(false)}
           initialCategory={initialCategoryForDialog}
-          onCreated={(modelId) => {
-            // PR #73 — after the Model is saved, take commander straight to
-            // the Model Detail page so he can hit "Add codes…" and pick
-            // which variants to materialise. The picker reads the
-            // Maintenance pool + format for him.
+          onCreated={(_modelId) => {
+            // PR #103 — Commander 2026-05-26: "为什么 create code 会跳
+            // 第二页的界面". The bulk dialog already generates SKUs in one
+            // shot (the "Create 1×5 = 5 SKUs" button) — no reason to also
+            // drag commander onto the Model detail page afterwards. Just
+            // refresh both Modular + SKU Master lists in place and close
+            // the dialog. New rows surface where commander already is.
             qc.invalidateQueries({ queryKey: ['product-models'] });
+            qc.invalidateQueries({ queryKey: ['mfg-products'] });
             setNewModelOpen(false);
-            window.location.href = `/product-models/${modelId}`;
           }}
         />
       )}
