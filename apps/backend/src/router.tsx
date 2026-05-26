@@ -31,6 +31,7 @@ import { PurchaseOrderNew } from './pages/PurchaseOrderNew';
 import { PurchaseOrderFromSo } from './pages/PurchaseOrderFromSo';
 import { GrnNew } from './pages/GrnNew';
 import { PurchaseInvoiceNew } from './pages/PurchaseInvoiceNew';
+import { PurchaseReturnNew } from './pages/PurchaseReturnNew';
 import { Outstanding } from './pages/Outstanding';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
@@ -80,6 +81,7 @@ export const router = createBrowserRouter([
       { path: 'consignment/:id', element: <ConsignmentDetail /> },
       { path: 'delivery-returns', element: <DeliveryReturnsPage /> },
       { path: 'purchase-returns', element: <PurchaseReturnsPage /> },
+      { path: 'purchase-returns/new', element: <PurchaseReturnNew /> },
       { path: 'purchase-returns/:id', element: <PurchaseReturnDetail /> },
       { path: 'accounting', element: <Accounting /> },
       { path: 'outstanding', element: <Outstanding /> },

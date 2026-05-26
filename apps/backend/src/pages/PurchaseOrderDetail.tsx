@@ -209,6 +209,15 @@ export const PurchaseOrderDetail = () => {
               <span>Receive Goods</span>
             </Button>
           )}
+          {/* PR — Phase 4: "Raise Return" available once any qty has been
+              received. Pre-fills the return page with this PO's lines +
+              supplier. */}
+          {(po.status === 'PARTIALLY_RECEIVED' || po.status === 'RECEIVED') && (
+            <Button variant="ghost" size="md"
+              onClick={() => navigate(`/purchase-returns/new?poId=${po.id}`)}>
+              <span>Raise Return</span>
+            </Button>
+          )}
         </div>
       </div>
 

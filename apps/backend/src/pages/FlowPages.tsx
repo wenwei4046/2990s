@@ -553,7 +553,10 @@ export const PurchaseReturnsPage = () => {
         title="Purchase Returns"
         subtitle="Defects / oversupply / wrong items returned to the supplier"
         newLabel="New Purchase Return"
-        onNew={() => alert('Create from a GRN — open the GRN detail page and use "Raise Purchase Return". Inline create coming soon.')}
+        // PR — Phase 4: opens free-form return page. Commander picks
+        // supplier + lines manually. To pre-fill from a GRN or PO, use
+        // the "Raise Return" button on the respective detail page.
+        onNew={() => navigate('/purchase-returns/new')}
       />
       <StatusChips chips={PRT_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} returns`}</p>

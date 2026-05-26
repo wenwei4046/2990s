@@ -174,6 +174,15 @@ export const GrnDetail = () => {
               <span>Generate Invoice</span>
             </Button>
           )}
+          {/* PR — Phase 4: "Raise Return" (free-form). Different from the
+              "Raise Purchase Return" button above which auto-converts only
+              rejected qty. This lands on the full-page picker where
+              commander adjusts which lines + how much to return. */}
+          {!isDraft && grn.status !== 'CLOSED' && (
+            <Button variant="ghost" size="md" onClick={() => navigate(`/purchase-returns/new?grnId=${id}`)}>
+              <span>Raise Return</span>
+            </Button>
+          )}
         </div>
       </div>
 
