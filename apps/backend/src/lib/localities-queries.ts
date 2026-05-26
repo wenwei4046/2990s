@@ -2,12 +2,38 @@
 // Localities — Malaysia postcode dataset. Mirrors apps/pos/src/lib useLocalities.
 // Used by the Sales Order Customer Card to drive cascading state → city →
 // postcode dropdowns (matches POS Handover screen, PR #39).
+// PR #160 — write mutations added so the Settings → Localities tab can
+// add/edit/delete states/cities/postcodes (commander 2026-05-27).
 // ----------------------------------------------------------------------------
 
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
+const API_URL = import.meta.env.VITE_API_URL;
+
+async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+      authorization: `Bearer ${token}`,
+      ...(init?.body ? { 'content-type': 'application/json' } : {}),
+    },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 export interface LocalityRow {
+  id?: string;
   postcode: string;
   city: string;
   state: string;
@@ -19,30 +45,60 @@ const LOCALITY_PAGE = 1000;
 export const useLocalities = () =>
   useQuery({
     queryKey: ['my_localities'],
-    staleTime: Infinity,
-    gcTime: Infinity,
+    staleTime: 30_000,
     queryFn: async (): Promise<LocalityRow[]> => {
       const all: LocalityRow[] = [];
       for (let from = 0; ; from += LOCALITY_PAGE) {
         const { data, error } = await supabase
           .from('my_localities')
-          .select('postcode, city, state, state_code')
+          .select('id, postcode, city, state, state_code')
           .order('state')
           .order('city')
           .order('postcode')
           .range(from, from + LOCALITY_PAGE - 1);
         if (error) throw error;
         const page = (data ?? []) as Array<{
-          postcode: string; city: string; state: string; state_code: string;
+          id: string; postcode: string; city: string; state: string; state_code: string;
         }>;
         for (const r of page) {
-          all.push({ postcode: r.postcode, city: r.city, state: r.state, stateCode: r.state_code });
+          all.push({ id: r.id, postcode: r.postcode, city: r.city, state: r.state, stateCode: r.state_code });
         }
         if (page.length < LOCALITY_PAGE) break;
       }
       return all;
     },
   });
+
+/* PR #160 — CRUD mutations for the Localities settings tab. */
+export const useCreateLocality = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { state: string; stateCode: string; city: string; postcode: string }) =>
+      authedFetch<{ locality: { id: string } }>('/localities', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
+  });
+};
+
+export const useUpdateLocality = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string; state?: string; stateCode?: string; city?: string; postcode?: string }) =>
+      authedFetch(`/localities/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
+  });
+};
+
+export const useDeleteLocality = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch(`/localities/${id}`, { method: 'DELETE' }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
+  });
+};
 
 /* Derive distinct states, then cities for a state, then postcodes for state+city.
    Used by the cascading dropdowns in the SO customer card. */
