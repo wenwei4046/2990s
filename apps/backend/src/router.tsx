@@ -30,6 +30,7 @@ import { PurchaseOrderDetail } from './pages/PurchaseOrderDetail';
 import { PurchaseOrderNew } from './pages/PurchaseOrderNew';
 import { PurchaseOrderFromSo } from './pages/PurchaseOrderFromSo';
 import { GrnNew } from './pages/GrnNew';
+import { PurchaseInvoiceNew } from './pages/PurchaseInvoiceNew';
 import { Outstanding } from './pages/Outstanding';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
@@ -65,6 +66,7 @@ export const router = createBrowserRouter([
       { path: 'grns/new', element: <GrnNew /> },
       { path: 'grns/:id', element: <GrnDetail /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
+      { path: 'purchase-invoices/new', element: <PurchaseInvoiceNew /> },
       { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.

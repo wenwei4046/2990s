@@ -207,7 +207,9 @@ export const PurchaseInvoicesPage = () => {
         title="Purchase Invoices"
         subtitle="Supplier invoices to us"
         newLabel="New Invoice"
-        onNew={() => setOpen(true)}
+        // PR — Phase 3: PI is created from a GRN (auto-pulls accepted lines).
+        // Bouncing to GRN list forces commander to pick the right GRN first.
+        onNew={() => navigate('/grns')}
       />
       <StatusChips chips={PI_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} invoices`}</p>
