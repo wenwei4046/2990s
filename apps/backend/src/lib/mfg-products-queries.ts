@@ -82,14 +82,20 @@ export type MfgProductRow = {
 export type PricedOption = { value: string; priceSen: number };
 
 export type MaintenanceConfig = {
-  divanHeights:   PricedOption[];
-  legHeights:     PricedOption[];
-  totalHeights:   PricedOption[];
-  gaps:           string[];
-  specials:       PricedOption[];
-  sofaLegHeights: PricedOption[];
-  sofaSpecials:   PricedOption[];
-  sofaSizes:      string[];
+  divanHeights:    PricedOption[];
+  legHeights:      PricedOption[];
+  totalHeights:    PricedOption[];
+  gaps:            string[];
+  specials:        PricedOption[];
+  sofaLegHeights:  PricedOption[];
+  sofaSpecials:    PricedOption[];
+  sofaSizes:       string[];
+  // PR #50 — master pools that drive Model.allowed_options ticking + the
+  // "+ Add Code" wizard. Optional on the wire because old maintenance rows
+  // don't have them; the UI seeds defaults on first read.
+  bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
+  sofaCompartments?: string[];   // ['1A-LHF','1A-RHF','1NA',...] — sofa compartment codes
+  mattressSizes?:    string[];   // ['K','Q','S','SS']
 };
 
 export type MaintenanceResolved = {

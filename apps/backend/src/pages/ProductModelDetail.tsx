@@ -31,17 +31,18 @@ import styles from './ProductModelDetail.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-// Hard-coded sofa compartments mirror the SKU Master Compartments modal
-// (image 2 in the commander's brief). Promote to a /compartments lookup
-// API later if commander wants to add new shapes.
-const SOFA_COMPARTMENTS = [
+// Fallback pools used only when the global Maintenance config doesn't have the
+// pool keys yet (older deployments). Commander manages the real lists from
+// the Maintenance page → Bedframe Sizes / Sofa Compartments / Mattress Sizes
+// sub-tabs (PR #50). These constants exist so the UI never renders blank.
+const FALLBACK_SOFA_COMPARTMENTS = [
   '1A-LHF', '1A-RHF', '1B-LHF', '1B-RHF', '1NA',
   '2A-LHF', '2A-RHF', '2B-LHF', '2B-RHF', '2NA', '2S',
   '3S', 'CNR', 'L-LHF', 'L-RHF',
-] as const;
+];
 
-const BEDFRAME_SIZES = ['K', 'Q', 'S', 'SS', 'SK', 'SP'] as const;
-const MATTRESS_SIZES = ['K', 'Q', 'S', 'SS'] as const;
+const FALLBACK_BEDFRAME_SIZES = ['K', 'Q', 'S', 'SS', 'SK', 'SP'];
+const FALLBACK_MATTRESS_SIZES = ['K', 'Q', 'S', 'SS'];
 
 export const ProductModelDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -181,6 +182,7 @@ export const ProductModelDetail = () => {
           <SofaAllowedOptions
             allowed={allowed}
             onChange={setAllowed}
+            sofaCompartments={maintenance.data?.data?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS}
             sofaSizes={maintenance.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']}
             sofaLegHeights={(maintenance.data?.data?.sofaLegHeights ?? []).map((o) => o.value)}
             sofaSpecials={(maintenance.data?.data?.sofaSpecials ?? []).map((o) => o.value)}
@@ -191,6 +193,7 @@ export const ProductModelDetail = () => {
           <BedframeAllowedOptions
             allowed={allowed}
             onChange={setAllowed}
+            sizes={maintenance.data?.data?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES}
             divanHeights={(maintenance.data?.data?.divanHeights ?? []).map((o) => o.value)}
             totalHeights={(maintenance.data?.data?.totalHeights ?? []).map((o) => o.value)}
             gaps={maintenance.data?.data?.gaps ?? []}
@@ -200,7 +203,11 @@ export const ProductModelDetail = () => {
         )}
 
         {model.category === 'MATTRESS' && (
-          <MattressAllowedOptions allowed={allowed} onChange={setAllowed} />
+          <MattressAllowedOptions
+            allowed={allowed}
+            onChange={setAllowed}
+            sizes={maintenance.data?.data?.mattressSizes ?? FALLBACK_MATTRESS_SIZES}
+          />
         )}
 
         {(model.category === 'ACCESSORY' || model.category === 'SERVICE') && (
@@ -312,16 +319,20 @@ function ChipToggle({
 }
 
 function SofaAllowedOptions({
-  allowed, onChange, sofaSizes, sofaLegHeights, sofaSpecials,
+  allowed, onChange, sofaCompartments, sofaSizes, sofaLegHeights, sofaSpecials,
 }: {
   allowed: AllowedOptions; onChange: (next: AllowedOptions) => void;
-  sofaSizes: string[]; sofaLegHeights: string[]; sofaSpecials: string[];
+  sofaCompartments: string[]; sofaSizes: string[];
+  sofaLegHeights: string[]; sofaSpecials: string[];
 }) {
   return (
     <>
-      <OptionGroup label="Compartments" hint="Which seat/corner shapes this Model offers">
+      <OptionGroup
+        label="Compartments"
+        hint="Which seat/corner shapes this Model offers · pool managed in Maintenance"
+      >
         <ChipToggle
-          options={[...SOFA_COMPARTMENTS]}
+          options={sofaCompartments}
           selected={allowed.compartments ?? []}
           onChange={(next) => onChange({ ...allowed, compartments: next })}
         />
@@ -356,17 +367,20 @@ function SofaAllowedOptions({
 }
 
 function BedframeAllowedOptions({
-  allowed, onChange, divanHeights, totalHeights, gaps, legHeights, specials,
+  allowed, onChange, sizes, divanHeights, totalHeights, gaps, legHeights, specials,
 }: {
   allowed: AllowedOptions; onChange: (next: AllowedOptions) => void;
-  divanHeights: string[]; totalHeights: string[]; gaps: string[];
+  sizes: string[]; divanHeights: string[]; totalHeights: string[]; gaps: string[];
   legHeights: string[]; specials: string[];
 }) {
   return (
     <>
-      <OptionGroup label="Sizes" hint="Bed sizes this Model is offered in">
+      <OptionGroup
+        label="Sizes"
+        hint="Bed sizes this Model is offered in · pool managed in Maintenance"
+      >
         <ChipToggle
-          options={[...BEDFRAME_SIZES]}
+          options={sizes}
           selected={allowed.sizes ?? []}
           onChange={(next) => onChange({ ...allowed, sizes: next })}
         />
@@ -421,12 +435,15 @@ function BedframeAllowedOptions({
 }
 
 function MattressAllowedOptions({
-  allowed, onChange,
-}: { allowed: AllowedOptions; onChange: (next: AllowedOptions) => void }) {
+  allowed, onChange, sizes,
+}: { allowed: AllowedOptions; onChange: (next: AllowedOptions) => void; sizes: string[] }) {
   return (
-    <OptionGroup label="Sizes" hint="Mattress sizes this Model is sold in">
+    <OptionGroup
+      label="Sizes"
+      hint="Mattress sizes this Model is sold in · pool managed in Maintenance"
+    >
       <ChipToggle
-        options={[...MATTRESS_SIZES]}
+        options={sizes}
         selected={allowed.sizes ?? []}
         onChange={(next) => onChange({ ...allowed, sizes: next })}
       />
