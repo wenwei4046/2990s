@@ -46,6 +46,7 @@ import {
   postcodesInCity,
   BUILDING_TYPES,
 } from '../lib/localities-queries';
+import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
 
@@ -121,6 +122,17 @@ type SoHeader = {
   install_to_address: string | null;
   subtotal_sen: number | null;
   overdue: string | null;
+  /* PR #46 — POS handover */
+  email: string | null;
+  customer_type: string | null;
+  salesperson_id: string | null;
+  city: string | null;
+  postcode: string | null;
+  building_type: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  emergency_contact_relationship: string | null;
+  target_date: string | null;
 };
 
 type SoItem = {
@@ -426,44 +438,57 @@ const CustomerCard = ({
   // POS field "Salesperson" → Agent column on the SO.
   const localities = useLocalities();
   const localityRows = localities.data ?? [];
+  const staffQ = useStaff();
+  const staffList = (staffQ.data ?? []).filter((s) => s.active);
 
+  /* PR #46 — Form shape now matches POS handover schema. Renamed
+     debtor → customer; building_type promoted to proper column;
+     branding + ref + venue dropped per commander 2026-05-26. */
   const [form, setForm] = useState({
-    debtorCode: header.debtor_code ?? '',
-    debtorName: header.debtor_name ?? '',
-    agent: header.agent ?? '',
-    branding: header.branding ?? '',
-    buildingType: header.venue ?? '',                  // venue col reused
-    ref: header.ref ?? '',
+    customerCode: header.debtor_code ?? '',
+    customerName: header.debtor_name ?? '',
+    email: header.email ?? '',
+    customerType: header.customer_type ?? '',
+    salespersonId: header.salesperson_id ?? '',
+    buildingType: header.building_type ?? header.venue ?? '',
     poDocNo: header.po_doc_no ?? '',
     phone: header.phone ?? '',
     address1: header.address1 ?? '',
     address2: header.address2 ?? '',
-    city: header.address3 ?? '',
-    postcode: header.address4 ?? '',
+    city: header.city ?? header.address3 ?? '',
+    postcode: header.postcode ?? header.address4 ?? '',
     state: header.customer_state ?? '',
+    emergencyContactName: header.emergency_contact_name ?? '',
+    emergencyContactPhone: header.emergency_contact_phone ?? '',
+    emergencyContactRelationship: header.emergency_contact_relationship ?? '',
+    targetDate: header.target_date ?? '',
     note: header.note ?? '',
   });
   const [showSuggest, setShowSuggest] = useState(false);
-  const debtorQuery = useDebtorSearch(form.debtorName);
+  const debtorQuery = useDebtorSearch(form.customerName);
   const suggestions = (debtorQuery.data?.debtors ?? []).filter(
-    (d) => (d.debtor_name ?? '').toLowerCase() !== form.debtorName.trim().toLowerCase(),
+    (d) => (d.debtor_name ?? '').toLowerCase() !== form.customerName.trim().toLowerCase(),
   );
 
   useEffect(() => {
     setForm({
-      debtorCode: header.debtor_code ?? '',
-      debtorName: header.debtor_name ?? '',
-      agent: header.agent ?? '',
-      branding: header.branding ?? '',
-      buildingType: header.venue ?? '',
-      ref: header.ref ?? '',
+      customerCode: header.debtor_code ?? '',
+      customerName: header.debtor_name ?? '',
+      email: header.email ?? '',
+      customerType: header.customer_type ?? '',
+      salespersonId: header.salesperson_id ?? '',
+      buildingType: header.building_type ?? header.venue ?? '',
       poDocNo: header.po_doc_no ?? '',
       phone: header.phone ?? '',
       address1: header.address1 ?? '',
       address2: header.address2 ?? '',
-      city: header.address3 ?? '',
-      postcode: header.address4 ?? '',
+      city: header.city ?? header.address3 ?? '',
+      postcode: header.postcode ?? header.address4 ?? '',
       state: header.customer_state ?? '',
+      emergencyContactName: header.emergency_contact_name ?? '',
+      emergencyContactPhone: header.emergency_contact_phone ?? '',
+      emergencyContactRelationship: header.emergency_contact_relationship ?? '',
+      targetDate: header.target_date ?? '',
       note: header.note ?? '',
     });
   }, [header]);
@@ -485,8 +510,8 @@ const CustomerCard = ({
   const applySuggestion = (d: DebtorSuggestion) => {
     setForm((s) => ({
       ...s,
-      debtorCode: d.debtor_code ?? s.debtorCode,
-      debtorName: d.debtor_name ?? s.debtorName,
+      customerCode: d.debtor_code ?? s.customerCode,
+      customerName: d.debtor_name ?? s.customerName,
       phone: d.phone ?? s.phone,
       address1: d.address1 ?? s.address1,
       address2: d.address2 ?? s.address2,
@@ -496,21 +521,28 @@ const CustomerCard = ({
     setShowSuggest(false);
   };
 
-  // Payload we send to PATCH — map the form back to the DB column names.
+  /* PR #46 — Payload uses the proper column names now. Sales Location +
+     Agent are NOT in this form — they auto-populate from the logged-in
+     POS user (Sales Location = staff.showroom; Agent legacy column kept
+     for B2B manual cases). */
   const buildPayload = () => ({
-    debtorCode: form.debtorCode,
-    debtorName: form.debtorName,
-    agent: form.agent,
-    branding: form.branding,
-    venue: form.buildingType,                        // venue col stores building type
-    ref: form.ref,
+    debtorCode: form.customerCode,
+    debtorName: form.customerName,
+    email: form.email,
+    customerType: form.customerType,
+    salespersonId: form.salespersonId || null,
+    buildingType: form.buildingType,
     poDocNo: form.poDocNo,
     phone: form.phone,
     address1: form.address1,
     address2: form.address2,
-    address3: form.city,                             // city → address3
-    address4: form.postcode,                         // postcode → address4
-    customerState: form.state,                       // state → customer_state (PR #35)
+    city: form.city,
+    postcode: form.postcode,
+    customerState: form.state,
+    emergencyContactName: form.emergencyContactName,
+    emergencyContactPhone: form.emergencyContactPhone,
+    emergencyContactRelationship: form.emergencyContactRelationship,
+    targetDate: form.targetDate || null,
     note: form.note,
   });
 
@@ -524,20 +556,20 @@ const CustomerCard = ({
         </Button>
       </header>
       <div className={styles.cardBody}>
-        {/* ── Customer row ────────────────────────────────────────── */}
+        {/* ── Customer row (POS-aligned, PR #46) ─────────────────── */}
         <p className={styles.subHead}>Customer</p>
         <div className={styles.formGrid4}>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Debtor Code</span>
-            <input className={styles.fieldInput} value={form.debtorCode}
-              onChange={(e) => set('debtorCode', e.target.value)} />
+            <span className={styles.fieldLabel}>Customer Code</span>
+            <input className={styles.fieldInput} value={form.customerCode}
+              onChange={(e) => set('customerCode', e.target.value)} />
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 3' }}>
-            <span className={styles.fieldLabel}>Debtor Name *</span>
+            <span className={styles.fieldLabel}>Customer Name *</span>
             <input
               className={styles.fieldInput}
-              value={form.debtorName}
-              onChange={(e) => { set('debtorName', e.target.value); setShowSuggest(true); }}
+              value={form.customerName}
+              onChange={(e) => { set('customerName', e.target.value); setShowSuggest(true); }}
               onFocus={() => setShowSuggest(true)}
               onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
             />
@@ -562,20 +594,35 @@ const CustomerCard = ({
           </label>
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Phone</span>
+            <span className={styles.fieldLabel}>Phone *</span>
             <input className={styles.fieldInput} value={form.phone}
               onChange={(e) => set('phone', e.target.value)} />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Agent</span>
-            <input className={styles.fieldInput} value={form.agent}
-              onChange={(e) => set('agent', e.target.value)} />
+            <span className={styles.fieldLabel}>Email *</span>
+            <input type="email" className={styles.fieldInput} value={form.email}
+              onChange={(e) => set('email', e.target.value)} />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Branding</span>
-            <input className={styles.fieldInput} value={form.branding}
-              onChange={(e) => set('branding', e.target.value)} />
+            <span className={styles.fieldLabel}>Customer Type</span>
+            <select className={styles.fieldSelect} value={form.customerType}
+              onChange={(e) => set('customerType', e.target.value)}>
+              <option value="">—</option>
+              <option value="NEW">New</option>
+              <option value="EXISTING">Existing</option>
+            </select>
           </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Salesperson</span>
+            <select className={styles.fieldSelect} value={form.salespersonId}
+              onChange={(e) => set('salespersonId', e.target.value)}>
+              <option value="">— Pick staff —</option>
+              {staffList.map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
+              ))}
+            </select>
+          </label>
+
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Building Type</span>
             <select className={styles.fieldSelect} value={form.buildingType}
@@ -584,21 +631,47 @@ const CustomerCard = ({
               {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Reference</span>
-            <input className={styles.fieldInput} value={form.ref}
-              onChange={(e) => set('ref', e.target.value)} />
-          </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Customer PO #</span>
             <input className={styles.fieldInput} value={form.poDocNo}
               onChange={(e) => set('poDocNo', e.target.value)} />
           </label>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 2' }}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Target Date</span>
+            <input type="date" className={styles.fieldInput} value={form.targetDate}
+              onChange={(e) => set('targetDate', e.target.value)} />
+          </label>
+          <label className={`${styles.field}`}>
             <span className={styles.fieldLabel}>Note</span>
             <input className={styles.fieldInput} value={form.note}
               onChange={(e) => set('note', e.target.value)} />
+          </label>
+        </div>
+
+        {/* ── Emergency contact (PR #46) ───────────────────────────── */}
+        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>
+          Emergency Contact <span className={styles.muted} style={{ fontWeight: 400 }}>
+            — used only if we can't reach the customer on delivery day
+          </span>
+        </p>
+        <div className={styles.formGrid4}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Contact Name</span>
+            <input className={styles.fieldInput} value={form.emergencyContactName}
+              placeholder="e.g. Lim Mei Hua"
+              onChange={(e) => set('emergencyContactName', e.target.value)} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Relationship</span>
+            <input className={styles.fieldInput} value={form.emergencyContactRelationship}
+              placeholder="Spouse / Parent / Sibling …"
+              onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
+          </label>
+          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+            <span className={styles.fieldLabel}>Phone</span>
+            <input className={styles.fieldInput} value={form.emergencyContactPhone}
+              placeholder="+60 12 345 6789"
+              onChange={(e) => set('emergencyContactPhone', e.target.value)} />
           </label>
         </div>
 
