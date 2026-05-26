@@ -60,7 +60,7 @@ import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
 
-type TopTab = 'sku' | 'models' | 'maintenance';
+type TopTab = 'sku' | 'modular' | 'maintenance';
 
 
 export const Products = () => {
@@ -81,11 +81,22 @@ export const Products = () => {
             >
               SKU Master
             </button>
-            {/* PR #73 — "Models" tab removed per commander. The Model
-                creation flow is now entry-pointed from the + New SKU
-                button on SKU Master (active category pre-fills the
-                dialog). /product-models route still serves direct links
-                from existing Model Detail back-link. */}
+            {/* PR #84 — Commander 2026-05-26 wanted a dedicated place to
+                manage per-Model specs (allowed options, thickness, etc.)
+                separately from "create code" and SKU adjustments. The
+                Modular tab routes into the same ProductModels list that
+                used to live under /product-models — restoring an entry
+                point (PR #73 removed the old Models tab; this is its
+                replacement with a clearer name). */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'modular'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('modular')}
+            >
+              Modular
+            </button>
             <button
               type="button"
               role="tab"
@@ -100,7 +111,7 @@ export const Products = () => {
       </header>
 
       {topTab === 'sku' && <SkuMasterTab />}
-      {topTab === 'models' && <ProductModels />}
+      {topTab === 'modular' && <ProductModels />}
       {topTab === 'maintenance' && <MaintenanceTab />}
     </div>
   );
