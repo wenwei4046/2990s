@@ -36,7 +36,6 @@ import {
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
-import { SofaSetInline } from '../components/SofaSetInline';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -118,6 +117,17 @@ export const SalesOrderNew = () => {
   const [processingDate, setProcessingDate] = useState('');
   const [deliveryDate,   setDeliveryDate]   = useState('');
 
+  // ── Payment (PR #148) ──────────────────────────────────────────────
+  // Commander 2026-05-26: "为什么我的 POS 里面的 Payment 那个 Module 还没
+  // 搬进来呢". Mirror the POS handover + Detail-page Payment card on the
+  // New SO form so commander can capture method + deposit at create time.
+  type PaymentMethod = 'cash' | 'transfer' | 'merchant' | 'installment' | '';
+  const [paymentMethod,     setPaymentMethod]     = useState<PaymentMethod>('');
+  const [installmentMonths, setInstallmentMonths] = useState<number | null>(null);
+  const [merchantProvider,  setMerchantProvider]  = useState<string>('');
+  const [depositCenti,      setDepositCenti]      = useState<number>(0);
+  const [paidCenti,         setPaidCenti]         = useState<number>(0);
+
   // ── Notes ──────────────────────────────────────────────────────────
   const [note, setNote] = useState('');
 
@@ -133,27 +143,13 @@ export const SalesOrderNew = () => {
   const addLine  = () => setLines((prev) => [...prev, newLine()]);
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
 
-  // PR #142 / #145 — Sofa Set: commander picks a base_model + multi-selects
-  // modules from an inline picker bar at the top of LINES (HOOKKA-style,
-  // no modal). Returns N { itemCode, description, unitPriceCenti } rows
-  // that we splice in as N draft lines (one per picked module). Variants
-  // start empty — commander fills line 1's seat/leg/fabric, then the
-  // post-add cascade fan-out propagates the missing keys to lines 2…N.
-  const addSofaSet = (modules: { itemCode: string; description: string; unitPriceCenti: number }[]) => {
-    setLines((prev) => {
-      // Replace the trailing fully-empty seed line if it exists, else append.
-      const next = prev.filter((l) => l !== prev[prev.length - 1] || l.itemCode.trim() !== '');
-      const newLines = modules.map((m) => ({
-        ...emptySoLine(),
-        rid:            `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        itemCode:       m.itemCode,
-        itemGroup:      'sofa',
-        description:    m.description,
-        unitPriceCenti: m.unitPriceCenti,
-      }));
-      return [...next, ...newLines];
-    });
-  };
+  /* PR #148 — Commander 2026-05-26: "Hookka 是随着我选的第一个东西，自动
+     detect 是不是 sofa、bed frame 还是 mattress". The standalone Sofa Set
+     inline bar (PR #142 / #145) was a separate widget that didn't match
+     HOOKKA — commander wants the line cards themselves to be the only
+     entry point. Each SoLineCard already auto-detects category from the
+     picked SKU, and the master-follower cascade (PR #147) keeps variants
+     in sync, so the explicit Sofa Set picker was extra clutter. Removed. */
 
   /* PR #142 / #145 / #147 — Master-follower cascade.
      Commander 2026-05-26:
@@ -282,18 +278,25 @@ export const SalesOrderNew = () => {
         ref: ref || undefined,
         hubId: hubId || undefined,
         hubName: hubName || undefined,
-        // Address — only sent when "fill later" isn't checked
-        ...(fillAddressLater ? {} : {
-          address1: address1 || undefined,
-          address2: address2 || undefined,
-          customerState: state || undefined,
-          city: city || undefined,
-          postcode: postcode || undefined,
-          buildingType: buildingType || undefined,
-        }),
+        /* PR #148 — Address handling: address1/2 skipped when fill-later
+           is on, but State/City/Postcode/BuildingType always submit.
+           Commander: "Fill in Address Later 也只是 Address 1 跟 2 不需要
+           填写而已. State, City, Postcode 还是需要填写的". */
+        address1: fillAddressLater ? undefined : (address1 || undefined),
+        address2: fillAddressLater ? undefined : (address2 || undefined),
+        customerState: state || undefined,
+        city: city || undefined,
+        postcode: postcode || undefined,
+        buildingType: buildingType || undefined,
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
         emergencyContactPhone:        emergencyPhone || undefined,
+        /* PR #148 — Payment fields. Mirror POS handover + Detail-page card. */
+        paymentMethod:     paymentMethod || undefined,
+        installmentMonths: installmentMonths ?? undefined,
+        merchantProvider:  merchantProvider || undefined,
+        depositCenti:      depositCenti || undefined,
+        paidCenti:         paidCenti || undefined,
         /* PR #121 — Processing Date → internal_expected_dd, Delivery Date →
            customer_delivery_date. The API maps these snake-case columns
            directly. */
@@ -457,8 +460,16 @@ export const SalesOrderNew = () => {
             </div>
           </label>
 
-          <div className={styles.formGrid2} style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}>
-            <label className={`${styles.field} ${styles.fieldFull}`}>
+          {/* PR #148 — Commander 2026-05-26: "就算选择 Fill in Address Later，
+              也只是 Address 1 跟 2 不需要填写而已. State、City 还有 Postcode
+              还是需要填写的". Only Address Line 1/2 get dimmed when the
+              "fill later" checkbox is on. State/City/Postcode/Building
+              still capture so we know the region for tax + logistics. */}
+          <div className={styles.formGrid2}>
+            <label
+              className={`${styles.field} ${styles.fieldFull}`}
+              style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
+            >
               <span className={styles.fieldLabel}>Address Line 1</span>
               <input
                 type="text"
@@ -468,7 +479,10 @@ export const SalesOrderNew = () => {
                 className={styles.fieldInput}
               />
             </label>
-            <label className={`${styles.field} ${styles.fieldFull}`}>
+            <label
+              className={`${styles.field} ${styles.fieldFull}`}
+              style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
+            >
               <span className={styles.fieldLabel}>Address Line 2</span>
               <input
                 type="text"
@@ -641,13 +655,9 @@ export const SalesOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          {/* PR #145 — Inline Sofa Set picker. Commander 2026-05-26: "我的
-              点选 Multiple Select Product Code 怎么跟我的 Hookka 那边不一
-              样呢". HOOKKA's pattern is inline (Category → Model →
-              Modules dropdown) inside the line entry form, NOT a modal.
-              Sits above the line cards as a quick-add bar. */}
-          <SofaSetInline onAdd={addSofaSet} />
-
+          {/* PR #148 — Sofa Set bar removed. Each SoLineCard's product
+              picker already auto-detects category from the picked SKU,
+              and the master-follower cascade keeps variants in sync. */}
           {lines.map((line, idx) => (
             <SoLineCard
               key={line.rid}
@@ -700,6 +710,166 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
+      {/* PR #148 — Payment card on the New SO form (mirrors POS handover +
+          SO Detail). Commander 2026-05-26: "为什么我的 POS 里面的 Payment
+          那个 Module 还没搬进来呢". */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Payment</h2>
+        </div>
+        <div className={styles.cardBody}>
+          {/* Method buttons — same 4 as POS / SO Detail */}
+          <p className={styles.subHead}>Method</p>
+          <div className={styles.formGrid2} style={{ marginBottom: 'var(--space-2)' }}>
+            {([
+              ['merchant',    'Merchant',           'Card via GHL / HLB / MBB / PBB'],
+              ['transfer',    'Bank transfer / DuitNow', 'Slip required'],
+              ['installment', 'Installment',        '0% — 6 or 12 months'],
+              ['cash',        'Cash',               'Cash received at counter'],
+            ] as const).map(([m, label, hint]) => {
+              const active = paymentMethod === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    setPaymentMethod(m);
+                    if (m !== 'installment') setInstallmentMonths(null);
+                    if (m !== 'merchant')    setMerchantProvider('');
+                    if (m === 'installment' && !installmentMonths) setInstallmentMonths(6);
+                    if (m === 'merchant'    && !merchantProvider)  setMerchantProvider('GHL');
+                  }}
+                  style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+                    gap: 2, padding: 'var(--space-3)', textAlign: 'left',
+                    background: active ? 'rgba(232, 107, 58, 0.10)' : 'var(--c-paper)',
+                    border: '1px solid ' + (active ? 'var(--c-orange)' : 'var(--line)'),
+                    borderRadius: 'var(--radius-md)',
+                    color: active ? 'var(--c-burnt)' : 'var(--c-ink)',
+                    cursor: 'pointer', fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  <strong style={{ fontSize: 'var(--fs-13)' }}>{label}</strong>
+                  <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{hint}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Merchant sub-pills */}
+          {paymentMethod === 'merchant' && (
+            <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <span className={styles.fieldLabel}>Merchant</span>
+              {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setMerchantProvider(p)}
+                  style={{
+                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
+                    border: '1px solid ' + (merchantProvider === p ? 'var(--c-orange)' : 'var(--line)'),
+                    background: merchantProvider === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                    color: merchantProvider === p ? 'var(--c-burnt)' : 'var(--c-ink)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Installment term */}
+          {paymentMethod === 'installment' && (
+            <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+              <span className={styles.fieldLabel}>Term</span>
+              {([6, 12] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setInstallmentMonths(m)}
+                  style={{
+                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
+                    border: '1px solid ' + (installmentMonths === m ? 'var(--c-orange)' : 'var(--line)'),
+                    background: installmentMonths === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                    color: installmentMonths === m ? 'var(--c-burnt)' : 'var(--c-ink)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {m} months
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Amounts row */}
+          <p className={styles.subHead} style={{ marginTop: 'var(--space-4)' }}>Amounts</p>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Subtotal</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 32,
+                fontFamily: 'var(--font-mono)', color: 'var(--c-ink)', fontWeight: 600,
+              }}>
+                {fmtRm(subtotalCenti)}
+              </span>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>
+                Deposit (RM)
+                {depositCenti > 0 && depositCenti === Math.round(subtotalCenti / 2) && (
+                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
+                )}
+              </span>
+              <input
+                type="number" step="0.01" min={0}
+                className={styles.fieldInput}
+                value={(depositCenti / 100).toFixed(2)}
+                onChange={(e) => setDepositCenti(Math.round(Number(e.target.value) * 100) || 0)}
+              />
+              <button
+                type="button"
+                onClick={() => setDepositCenti(Math.round(subtotalCenti / 2))}
+                disabled={subtotalCenti === 0}
+                style={{
+                  marginTop: 4,
+                  background: 'transparent', border: 'none',
+                  color: subtotalCenti === 0 ? 'var(--fg-muted)' : 'var(--c-orange)',
+                  cursor: subtotalCenti === 0 ? 'not-allowed' : 'pointer',
+                  fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0, textAlign: 'left',
+                }}
+              >
+                Set 50% deposit ({fmtRm(Math.round(subtotalCenti / 2))})
+              </button>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Paid (RM)</span>
+              <input
+                type="number" step="0.01" min={0}
+                className={styles.fieldInput}
+                value={(paidCenti / 100).toFixed(2)}
+                onChange={(e) => setPaidCenti(Math.round(Number(e.target.value) * 100) || 0)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Balance</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 32,
+                fontFamily: 'var(--font-mono)',
+                color: paidCenti >= subtotalCenti && subtotalCenti > 0
+                  ? 'var(--c-secondary-a, #2F5D4F)'
+                  : 'var(--c-ink)',
+                fontWeight: 600,
+              }}>
+                {fmtRm(Math.max(0, subtotalCenti - paidCenti))}
+              </span>
+            </label>
+          </div>
+        </div>
+      </section>
+
       {/* PR #129 — Notes restored to its own bottom card now that the
           Order Details card is gone. */}
       <section className={styles.card}>
@@ -718,8 +888,6 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* PR #145 — Sofa Set is now rendered INLINE inside the LINES card
-          (see <SofaSetInline> above), no modal. */}
     </div>
   );
 };
