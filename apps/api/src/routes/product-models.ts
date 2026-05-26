@@ -235,9 +235,12 @@ productModels.post('/:id/generate-skus', async (c) => {
   // Per-category templates mirror the existing 2990's catalogue:
   //
   //   BEDFRAME  code:  {model_code}-({size_code})                  1003-(K)
-  //             name:  {model.name} ({size_label}) ({dim})         HILTON BEDFRAME (6FT) (183X190CM)
+  //             name:  {branding?} BEDFRAME ({size_label}) ({dim}) HILTON BEDFRAME (6FT) (183X190CM)
+  //                                                                BEDFRAME (6FT) (183X190CM)  (no branding)
   //             — if size is SK/SP the label already IS the dimensions,
   //               so we skip the second parens and emit only ({label}).
+  //             — branding prefix added in PR #83 to match FE
+  //               DEFAULT_FORMATS.bedframeName + commander's expectation.
   //
   //   MATTRESS  code:  {model_code} MATT ({size_code})             2990-NF AKKA-FIRM MATT (K)
   //             name:  {branding?} {model.name} MATTRESS ({w}x{l}x{thickness}CM)
@@ -306,12 +309,24 @@ productModels.post('/:id/generate-skus', async (c) => {
     if (sizesArr.length === 0) {
       return c.json({ error: 'no_sizes', reason: 'Allowed Options → Sizes is empty. Toggle at least one before generating.' }, 400);
     }
+    // PR #83 — Commander 2026-05-26: "我明明在 Bedframe 填写了 Hilton，可是
+    // hilton 却没有出来". Server-side template was using bare `${modelName}`,
+    // ignoring the branding column. Frontend DEFAULT_FORMATS already
+    // expected `{branding} BEDFRAME (...)`. Align server with FE so a
+    // Bedframe Model with branding="Hilton" generates "Hilton BEDFRAME
+    // (6FT) (183X190CM)" instead of the bare "BEDFRAME (...)" that just
+    // confused commander. Empty branding → prefix dropped (no leading
+    // space). Note: modelName is intentionally NOT in the output here —
+    // the BEDFRAME word + branding is the convention; modelName stays
+    // for the Models-list display only.
+    const branding = (model.branding ?? '').trim();
+    const prefix   = branding ? `${branding} ` : '';
     for (const sz of sizesArr) {
       const info  = SIZE_INFO[sz];
       const label = info?.label ?? sz;
       const dim   = info?.dim ?? '';
       // "HILTON BEDFRAME (6FT) (183X190CM)" vs "HILTON(A) BEDFRAME (200X200CM)"
-      const namePart = dim ? `${modelName} (${label}) (${dim})` : `${modelName} (${label})`;
+      const namePart = dim ? `${prefix}BEDFRAME (${label}) (${dim})` : `${prefix}BEDFRAME (${label})`;
       wanted.push({
         code:       `${model.model_code}-(${sz})`,
         name:       namePart.trim(),
