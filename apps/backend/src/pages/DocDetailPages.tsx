@@ -168,6 +168,12 @@ export const GrnDetail = () => {
               <span>{post.isPending ? 'Posting…' : 'Post GRN'}</span>
             </Button>
           )}
+          {/* PR — Phase 3: only POSTED GRNs can produce a Purchase Invoice. */}
+          {!isDraft && grn.status !== 'CLOSED' && (
+            <Button variant="primary" size="md" onClick={() => navigate(`/purchase-invoices/new?grnId=${id}`)}>
+              <span>Generate Invoice</span>
+            </Button>
+          )}
         </div>
       </div>
 
