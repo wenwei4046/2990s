@@ -21,8 +21,8 @@ const HEADER =
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
-  /* PR #143 — Payment (migration 0068) */
-  'payment_method, installment_months, merchant_provider, deposit_centi, paid_centi, ' +
+  /* PR #143 + #150 — Payment (migrations 0068 + 0069) */
+  'payment_method, installment_months, merchant_provider, approval_code, deposit_centi, paid_centi, ' +
   'created_at, created_by, updated_at';
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
@@ -166,12 +166,13 @@ mfgSalesOrders.post('/', async (c) => {
     customer_po: (body.customerPo as string) ?? null,
     hub_id: (body.hubId as string) ?? null,
     hub_name: (body.hubName as string) ?? null,
-    /* PR #148 — Payment fields on create (mirror PATCH handler). Lets
-       commander set payment_method + deposit_centi straight from the New
-       SO form, without needing to open the detail page after creation. */
+    /* PR #148 + #150 — Payment fields on create (mirror PATCH handler).
+       Lets commander set payment_method + deposit_centi straight from the
+       New SO form, including approval_code for merchant transactions. */
     payment_method:     (body.paymentMethod as string) ?? null,
     installment_months: typeof body.installmentMonths === 'number' ? body.installmentMonths : null,
     merchant_provider:  (body.merchantProvider as string) ?? null,
+    approval_code:      (body.approvalCode as string) ?? null,
     deposit_centi:      typeof body.depositCenti === 'number' ? body.depositCenti : 0,
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
     created_by: user.id,
@@ -312,10 +313,11 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['emergencyContactPhone', 'emergency_contact_phone'],
     ['emergencyContactRelationship', 'emergency_contact_relationship'],
     ['targetDate', 'target_date'],
-    /* PR #143 — Payment fields */
+    /* PR #143 + #150 — Payment fields */
     ['paymentMethod', 'payment_method'],
     ['installmentMonths', 'installment_months'],
     ['merchantProvider', 'merchant_provider'],
+    ['approvalCode', 'approval_code'],
     ['depositCenti', 'deposit_centi'],
     ['paidCenti', 'paid_centi'],
   ];

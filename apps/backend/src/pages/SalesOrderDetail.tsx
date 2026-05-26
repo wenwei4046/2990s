@@ -133,10 +133,13 @@ type SoHeader = {
   emergency_contact_phone: string | null;
   emergency_contact_relationship: string | null;
   target_date: string | null;
-  /* PR #143 — Payment (mirrors POS handover) */
-  payment_method: string | null;        // cash | transfer | merchant | installment
-  installment_months: number | null;    // 6 | 12
+  /* PR #143 + #150 — Payment. Installment is a sub-type of merchant
+     (not its own top-level method). approval_code captured for the
+     terminal auth slip. */
+  payment_method: string | null;        // cash | transfer | merchant
+  installment_months: number | null;    // 6 | 12 — NULL = normal swipe; valid only when method=merchant
   merchant_provider: string | null;     // GHL | HLB | MBB | PBB
+  approval_code: string | null;
   deposit_centi: number;
   paid_centi: number;
 };
@@ -1433,7 +1436,8 @@ const AddressCard = ({
    0068 columns on mfg_sales_orders.
    ════════════════════════════════════════════════════════════════════════ */
 
-type PaymentMethod = 'cash' | 'transfer' | 'merchant' | 'installment';
+/* PR #150 — 3 top-level methods. Installment is a SUB-TYPE of merchant. */
+type PaymentMethod = 'cash' | 'transfer' | 'merchant';
 
 const PaymentCard = ({
   header,
@@ -1453,6 +1457,7 @@ const PaymentCard = ({
     method:          (header.payment_method as PaymentMethod | null) ?? '',
     installment:     header.installment_months ?? null,
     merchant:        header.merchant_provider ?? '',
+    approvalCode:    header.approval_code ?? '',
     depositCenti:    header.deposit_centi ?? 0,
     paidCenti:       header.paid_centi ?? 0,
   });
@@ -1462,6 +1467,7 @@ const PaymentCard = ({
       method:          (header.payment_method as PaymentMethod | null) ?? '',
       installment:     header.installment_months ?? null,
       merchant:        header.merchant_provider ?? '',
+      approvalCode:    header.approval_code ?? '',
       depositCenti:    header.deposit_centi ?? 0,
       paidCenti:       header.paid_centi ?? 0,
     });
@@ -1471,8 +1477,9 @@ const PaymentCard = ({
     setForm((s) => ({
       ...s,
       method: m,
-      installment: m === 'installment' ? (s.installment ?? 6) : null,
-      merchant:    m === 'merchant'    ? (s.merchant || 'GHL') : '',
+      installment: m === 'merchant' ? s.installment : null,
+      merchant:    m === 'merchant' ? (s.merchant || 'GHL') : '',
+      approvalCode: m === 'merchant' ? s.approvalCode : '',
     }));
 
   const balanceCenti = Math.max(0, grandTotal - form.paidCenti);
@@ -1484,6 +1491,7 @@ const PaymentCard = ({
       paymentMethod:     form.method || null,
       installmentMonths: form.installment,
       merchantProvider:  form.merchant || null,
+      approvalCode:      form.approvalCode || null,
       depositCenti:      form.depositCenti,
       paidCenti:         form.paidCenti,
     });
@@ -1528,69 +1536,103 @@ const PaymentCard = ({
         </Button>
       </header>
       <div className={styles.cardBody}>
-        {/* Method picker — 4 buttons, 2x2 */}
+        {/* Method picker — 3 buttons. Installment nested under Merchant. */}
         <p className={styles.subHead}>Method</p>
         <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-          {methodBtn('merchant',    'Merchant',           'Card via GHL / HLB / MBB / PBB')}
+          {methodBtn('merchant',    'Merchant',                'Card via GHL / HLB / MBB / PBB')}
           {methodBtn('transfer',    'Bank transfer / DuitNow', 'Slip required')}
-        </div>
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          {methodBtn('installment', 'Installment',        '0% — 6 or 12 months')}
-          {methodBtn('cash',        'Cash',               'Cash received at counter')}
+          {methodBtn('cash',        'Cash',                    'Cash received at counter')}
         </div>
 
-        {/* Sub-options */}
+        {/* Merchant sub-section: Provider + Type + Approval code (PR #150) */}
         {form.method === 'merchant' && (
-          <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span className={styles.fieldLabel}>Merchant</span>
-            {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                disabled={locked}
-                onClick={() => setForm((s) => ({ ...s, merchant: p }))}
-                style={{
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 'var(--fs-12)',
-                  fontWeight: 600,
-                  padding: '4px 12px',
-                  borderRadius: 'var(--radius-pill)',
-                  border: '1px solid ' + (form.merchant === p ? 'var(--c-orange)' : 'var(--line)'),
-                  background: form.merchant === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                  color: form.merchant === p ? 'var(--c-burnt)' : 'var(--c-ink)',
-                  cursor: locked ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        )}
+          <div style={{
+            marginTop: 'var(--space-3)',
+            padding: 'var(--space-3)',
+            background: 'var(--c-cream)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-md)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--space-3)',
+          }}>
+            {/* Provider */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+              <span className={styles.fieldLabel}>Merchant</span>
+              {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  disabled={locked}
+                  onClick={() => setForm((s) => ({ ...s, merchant: p }))}
+                  style={{
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--fs-12)',
+                    fontWeight: 600,
+                    padding: '4px 12px',
+                    borderRadius: 'var(--radius-pill)',
+                    border: '1px solid ' + (form.merchant === p ? 'var(--c-orange)' : 'var(--line)'),
+                    background: form.merchant === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                    color: form.merchant === p ? 'var(--c-burnt)' : 'var(--c-ink)',
+                    cursor: locked ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
 
-        {form.method === 'installment' && (
-          <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <span className={styles.fieldLabel}>Term</span>
-            {([6, 12] as const).map((m) => (
+            {/* Type: Normal vs Installment */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+              <span className={styles.fieldLabel}>Type</span>
               <button
-                key={m}
                 type="button"
                 disabled={locked}
-                onClick={() => setForm((s) => ({ ...s, installment: m }))}
+                onClick={() => setForm((s) => ({ ...s, installment: null }))}
                 style={{
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 'var(--fs-12)',
-                  fontWeight: 600,
-                  padding: '4px 12px',
-                  borderRadius: 'var(--radius-pill)',
-                  border: '1px solid ' + (form.installment === m ? 'var(--c-orange)' : 'var(--line)'),
-                  background: form.installment === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                  color: form.installment === m ? 'var(--c-burnt)' : 'var(--c-ink)',
+                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                  padding: '4px 12px', borderRadius: 'var(--radius-pill)',
+                  border: '1px solid ' + (form.installment === null ? 'var(--c-orange)' : 'var(--line)'),
+                  background: form.installment === null ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                  color: form.installment === null ? 'var(--c-burnt)' : 'var(--c-ink)',
                   cursor: locked ? 'not-allowed' : 'pointer',
                 }}
               >
-                {m} months
+                Normal Swipe
               </button>
-            ))}
+              {([6, 12] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  disabled={locked}
+                  onClick={() => setForm((s) => ({ ...s, installment: m }))}
+                  style={{
+                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
+                    border: '1px solid ' + (form.installment === m ? 'var(--c-orange)' : 'var(--line)'),
+                    background: form.installment === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                    color: form.installment === m ? 'var(--c-burnt)' : 'var(--c-ink)',
+                    cursor: locked ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Installment · {m} months
+                </button>
+              ))}
+            </div>
+
+            {/* Approval Code */}
+            <label className={styles.field} style={{ maxWidth: 320 }}>
+              <span className={styles.fieldLabel}>Approval Code</span>
+              <input
+                type="text"
+                value={form.approvalCode}
+                disabled={locked}
+                onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
+                placeholder="Auth code from terminal receipt"
+                className={styles.fieldInput}
+                style={{ fontFamily: 'var(--font-mono)' }}
+              />
+            </label>
           </div>
         )}
 

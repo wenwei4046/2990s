@@ -1110,9 +1110,13 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
      totals. Strict enum on POS side (`payment_method` pgEnum); free text
      here so a B2B SO that doesn't go through POS can still carry the same
      concept. */
-  paymentMethod:        text('payment_method'),       // cash | transfer | merchant | installment
-  installmentMonths:    integer('installment_months'), // 6 | 12, NULL otherwise
+  /* PR #150 — Installment is a sub-type of MERCHANT (not its own
+     top-level method). Commander: "event installment 也是 under
+     merchant 的". approval_code added for the bank auth slip number. */
+  paymentMethod:        text('payment_method'),       // cash | transfer | merchant
+  installmentMonths:    integer('installment_months'), // 6 | 12 — NULL = normal swipe; only valid when method='merchant'
   merchantProvider:     text('merchant_provider'),    // GHL | HLB | MBB | PBB
+  approvalCode:         text('approval_code'),        // auth code from terminal receipt
   depositCenti:         integer('deposit_centi').notNull().default(0),
   paidCenti:            integer('paid_centi').notNull().default(0),
 
