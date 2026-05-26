@@ -202,24 +202,30 @@ const SkuMasterTab = () => {
   const isMattressView = category === 'MATTRESS';
   const sofaSizes = config.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
 
-  // PR #39 — distinct base_model values for Sofa view (e.g. 5530, 5531).
-  const sofaModels = useMemo<string[]>(() => {
-    if (!isSofaView) return [];
+  // PR #39 + #107 — distinct base_model values for the current category.
+  // Commander 2026-05-26: "为什么 bedframe 没有像 sofa 那样". Extended from
+  // SOFA-only to BEDFRAME + MATTRESS too so commander can narrow the SKU
+  // list to a single Model (Hilton bedframes, Purezone mattresses, etc.).
+  // ACCESSORY + SERVICE skip the filter — they don't carry a base_model.
+  const supportsModelFilter = category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS';
+  const categoryModels = useMemo<string[]>(() => {
+    if (!supportsModelFilter) return [];
     const s = new Set<string>();
     for (const r of allRows) if (r.base_model) s.add(r.base_model);
     return Array.from(s).sort();
-  }, [allRows, isSofaView]);
+  }, [allRows, supportsModelFilter]);
 
-  // Apply Model filter (only when on Sofa view + a specific model picked).
+  // Apply Model filter (only when current category supports it + a specific
+  // model is picked).
   const rows = useMemo(() => {
-    if (!isSofaView || modelFilter === 'all') return allRows;
+    if (!supportsModelFilter || modelFilter === 'all') return allRows;
     return allRows.filter((r) => r.base_model === modelFilter);
-  }, [allRows, isSofaView, modelFilter]);
+  }, [allRows, supportsModelFilter, modelFilter]);
 
-  // Reset Model filter when leaving Sofa view
+  // Reset Model filter when leaving a category that doesn't support it
   useEffect(() => {
-    if (!isSofaView && modelFilter !== 'all') setModelFilter('all');
-  }, [isSofaView, modelFilter]);
+    if (!supportsModelFilter && modelFilter !== 'all') setModelFilter('all');
+  }, [supportsModelFilter, modelFilter]);
 
   // Drawer + modal state
   const [newSkuOpen, setNewSkuOpen] = useState(false);
@@ -414,8 +420,9 @@ const SkuMasterTab = () => {
         </div>
       </div>
 
-      {/* PR #39 — Model filter chips, Sofa view only */}
-      {isSofaView && sofaModels.length > 1 && (
+      {/* PR #39 + #107 — Model filter chips, available on SOFA / BEDFRAME /
+          MATTRESS. ACCESSORY + SERVICE skip — no base_model on those rows. */}
+      {supportsModelFilter && categoryModels.length > 1 && (
         <div className={styles.categoryChips} style={{ marginTop: 'var(--space-2)' }}>
           <CategoryChip
             active={modelFilter === 'all'}
@@ -423,7 +430,7 @@ const SkuMasterTab = () => {
           >
             All Models
           </CategoryChip>
-          {sofaModels.map((m) => (
+          {categoryModels.map((m) => (
             <CategoryChip
               key={m}
               active={modelFilter === m}
