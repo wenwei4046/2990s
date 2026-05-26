@@ -38,6 +38,7 @@ import {
   useMfgProducts,
   useUpdateMfgProductPrices,
   useCreateMfgProduct,
+  useDeleteMfgProduct,
   useMaintenanceConfig,
   useMaintenanceConfigHistory,
   useSaveMaintenanceConfig,
@@ -224,17 +225,72 @@ const SkuMasterTab = () => {
   const initialCategoryForDialog: MfgCategory | undefined =
     category === 'all' ? undefined : (category as MfgCategory);
 
+  // PR #82 (Commander 2026-05-26) — multi-select delete. Set<id> tracks
+  // ticked rows; select-all checkbox toggles every visible row.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const deleteMut = useDeleteMfgProduct();
+  const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someSelected = !allSelected && visibleIds.some((id) => selectedIds.has(id));
+  const toggleRow = (id: string) =>
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  const toggleAllVisible = () =>
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      if (allSelected) {
+        for (const id of visibleIds) n.delete(id);
+      } else {
+        for (const id of visibleIds) n.add(id);
+      }
+      return n;
+    });
+  // Drop selections that disappeared from the visible list (category /
+  // search change). Prevents "Delete 3" claiming rows that aren't on
+  // screen.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const vis = new Set(visibleIds);
+      const next = new Set<string>();
+      for (const id of prev) if (vis.has(id)) next.add(id);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleIds]);
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    // eslint-disable-next-line no-alert
+    if (!confirm(`Delete ${selectedIds.size} SKU${selectedIds.size === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    setDeleting(true);
+    const ids = Array.from(selectedIds);
+    const results = await Promise.all(ids.map((id) =>
+      deleteMut.mutateAsync(id).then(() => ({ id, ok: true as const })).catch((e) => ({ id, ok: false as const, err: e instanceof Error ? e.message : String(e) })),
+    ));
+    setDeleting(false);
+    setSelectedIds(new Set());
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length > 0) {
+      // eslint-disable-next-line no-alert
+      alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed — usually means the SKU is referenced by an order / PO line.`);
+    }
+  };
+
   // Total column count (header colspan for loading/empty states):
+  //   PR #82 — leading checkbox column added (+1).
   //   PR #38 — Configure + History columns removed. Double-click a row to
   //   open the Suppliers drawer.
-  //   - Sofa: code + desc + model + N sizes + unit
-  //   - Mattress: code + desc + branding + size + price + unit
-  //   - Other: code + desc + category + size + P2 + P1 + unit
-  const colCount = isSofaView
+  //   - Sofa: select + code + desc + model + N sizes + unit
+  //   - Mattress: select + code + desc + branding + size + price + unit
+  //   - Other: select + code + desc + category + size + P2 + P1 + unit
+  const colCount = 1 + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
-      : 7;
+      : 7);
 
   return (
     <>
@@ -274,6 +330,20 @@ const SkuMasterTab = () => {
             <Plus {...ICON_PROPS} />
             <span>New SKU</span>
           </Button>
+          {/* PR #82 — only render the bulk Delete button when at least one row
+              is ticked, so the toolbar stays compact in normal use. */}
+          {selectedIds.size > 0 && (
+            <Button
+              variant="secondary"
+              size="md"
+              onClick={bulkDelete}
+              disabled={deleting}
+              style={{ color: 'var(--c-festive-b, #B8331F)' }}
+            >
+              <Trash2 {...ICON_PROPS} />
+              <span>{deleting ? 'Deleting…' : `Delete ${selectedIds.size}`}</span>
+            </Button>
+          )}
           <Button
             variant={editMode ? 'secondary' : 'primary'}
             size="md"
@@ -345,6 +415,18 @@ const SkuMasterTab = () => {
         <table className={`${styles.table} ${styles.tableCompact}`}>
           <thead>
             <tr>
+              {/* PR #82 — leading select-all checkbox. Indeterminate when
+                  partial selection on visible rows. */}
+              <th style={{ width: 32 }}>
+                <input
+                  type="checkbox"
+                  aria-label="Select all visible SKUs"
+                  checked={allSelected}
+                  ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                  onChange={toggleAllVisible}
+                  style={{ cursor: 'pointer' }}
+                />
+              </th>
               <th>Product Code</th>
               <th>Description</th>
               {isSofaView ? (
@@ -389,6 +471,8 @@ const SkuMasterTab = () => {
                 sofaSizes={sofaSizes}
                 tier={tier}
                 onOpenSuppliers={setSuppliersRow}
+                selected={selectedIds.has(row.id)}
+                onToggleSelected={() => toggleRow(row.id)}
               />
             ))}
             {!isLoading && !error && rows.length === 0 && (
@@ -438,6 +522,7 @@ const SkuMasterTab = () => {
 
 const ProductRow = ({
   row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
+  selected, onToggleSelected,
 }: {
   row: MfgProductRow;
   editMode: boolean;
@@ -446,6 +531,10 @@ const ProductRow = ({
   sofaSizes: string[];
   tier: Tier;
   onOpenSuppliers?: (row: MfgProductRow) => void;
+  /** PR #82 — multi-select state lives on SkuMasterTab; row just renders
+      the checkbox + reports clicks. */
+  selected:         boolean;
+  onToggleSelected: () => void;
 }) => {
   // Local draft of the seat_height_prices array — buffers user edits before
   // committing on blur. Reset whenever the row's data changes upstream.
@@ -475,6 +564,17 @@ const ProductRow = ({
       title="Double-click to see suppliers for this product"
       style={{ cursor: editMode ? 'default' : 'pointer' }}
     >
+      {/* PR #82 — row checkbox. stopPropagation so clicking the box
+          doesn't bubble into the double-click "open suppliers" handler. */}
+      <td style={{ width: 32 }} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.code}`}
+          checked={selected}
+          onChange={onToggleSelected}
+          style={{ cursor: 'pointer' }}
+        />
+      </td>
       <td><span className={styles.codeChip}>{row.code}</span></td>
       <td>
         <div className={styles.nameCompact}>{row.name}</div>
