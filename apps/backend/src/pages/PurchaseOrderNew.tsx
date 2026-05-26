@@ -293,7 +293,8 @@ export const PurchaseOrderNew = () => {
             disabled={create.isPending || !supplierId}
           >
             <Save {...ICON} />
-            {create.isPending ? 'Saving…' : 'Save PO (Draft)'}
+            {/* PR #131 — Commander: PO 不需要进入 DRAFT. POST creates SUBMITTED. */}
+            {create.isPending ? 'Creating…' : 'Create PO'}
           </Button>
         </div>
       </div>

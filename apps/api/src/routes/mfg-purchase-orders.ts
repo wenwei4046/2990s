@@ -155,10 +155,15 @@ mfgPurchaseOrders.post('/', async (c) => {
     };
   });
 
+  /* PR #131 — Commander 2026-05-26: "PO 是直接 create 的，不需要进入 DRAFT".
+     Skip the DRAFT staging step — POST creates SUBMITTED directly with
+     submitted_at = now(). DRAFT remains a valid state for legacy rows +
+     PATCH /submit still works for any callers that want piecewise authoring. */
   const headerInsert: Record<string, unknown> = {
     po_number: poNumber,
     supplier_id: supplierId,
-    status: 'DRAFT',
+    status: 'SUBMITTED',
+    submitted_at: new Date().toISOString(),
     currency,
     expected_at: (body.expectedAt as string | undefined) ?? null,
     notes: (body.notes as string | undefined) ?? null,
@@ -278,7 +283,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       .insert({
         po_number: poNumber,
         supplier_id: supplierId,
-        status: 'DRAFT',
+        // PR #131 — Convert-from-SO bulk path also lands SUBMITTED.
+        status: 'SUBMITTED',
+        submitted_at: new Date().toISOString(),
         currency: bucket.currency,
         subtotal_centi: subtotal,
         tax_centi: 0,
