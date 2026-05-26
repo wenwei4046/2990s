@@ -159,6 +159,33 @@
   font-family: var(--font-sans);
   font-size: var(--fs-12);
 }
+
+/* PR #87 — "All / None" mini buttons that flank each chip row's header.
+   Commander wanted the default mental model to be "everything's allowed, I
+   just turn off the ones I don't sell" — so empty pools start with all chips
+   lit, and these mini buttons let him bulk-flip both ways. */
+.optBulk {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 4px;
+}
+.optBulkBtn {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--c-paper);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: all 120ms ease-out;
+}
+.optBulkBtn:hover {
+  border-color: var(--c-orange);
+  color: var(--c-orange);
+}
 .chipRow {
   display: flex;
   flex-wrap: wrap;

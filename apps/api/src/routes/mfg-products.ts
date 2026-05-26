@@ -215,6 +215,10 @@ mfgProducts.patch('/:id', async (c) => {
     pieces?: unknown;
     seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }>;
     branding?: string | null;
+    /** PR #87 — per-SKU active toggle. Commander uses this from the Model
+        detail "SKU variants" table to mark individual SKUs as no longer sold
+        without having to delete the row (preserves stock + history). */
+    status?: 'ACTIVE' | 'INACTIVE';
     /* PR #89 (Commander 2026-05-26) — inline edit of SKU code + name from
        SKU Master. Unique-constraint on code → 23505 surfaces as 409. */
     code?: string;
@@ -264,6 +268,11 @@ mfgProducts.patch('/:id', async (c) => {
   if (body.branding !== undefined) {
     const trimmed = typeof body.branding === 'string' ? body.branding.trim() : null;
     updates.branding = trimmed ? trimmed : null;
+  }
+  // PR #87 — per-SKU active toggle. Stored as 'ACTIVE' | 'INACTIVE' to match
+  // the rest of the schema (matches mfg_products.status default in inserts).
+  if (body.status === 'ACTIVE' || body.status === 'INACTIVE') {
+    updates.status = body.status;
   }
   /* PR #89 — code + name inline edit from SKU Master. code is unique;
      duplicate triggers 23505 below. Both trimmed; empty rejected to keep

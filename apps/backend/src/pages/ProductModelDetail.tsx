@@ -20,13 +20,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Layers, Save, Trash2, Wand2, X } from 'lucide-react';
+import { ArrowLeft, Layers, Save, Trash2, Wand2, X, Power, PowerOff } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
-import { useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useMaintenanceConfig, useUpdateMfgProductStatus } from '../lib/mfg-products-queries';
 import { SIZE_INFO } from '../lib/size-info';
 import styles from './ProductModelDetail.module.css';
 
@@ -52,6 +52,7 @@ export const ProductModelDetail = () => {
   const updateMut = useUpdateProductModel();
   const deleteMut = useDeleteProductModel();
   const generateMut = useGenerateModelSkus();
+  const statusMut = useUpdateMfgProductStatus();
   const maintenance = useMaintenanceConfig('master');
 
   const [branding, setBranding] = useState('');
@@ -60,14 +61,59 @@ export const ProductModelDetail = () => {
   const [allowed, setAllowed] = useState<AllowedOptions>({});
   const [addCodesOpen, setAddCodesOpen] = useState(false);
 
-  // Sync local form when server row arrives or refetches.
+  // PR #87 — Commander 2026-05-26: "正常 Allow Option 都是全开的，只有关起来
+  // 的" (= "Allow Options should default to all-on; only what you turn off is
+  // excluded"). Mental model flipped: instead of "tick the ones you offer",
+  // every relevant pool key gets pre-filled with the full Maintenance pool
+  // on first load. Toggle-off = exclusion. Empty list still means "no
+  // restriction" downstream — the auto-fill is a UX layer only.
+  const cfg = maintenance.data?.data;
   useEffect(() => {
     if (!data?.model) return;
     setBranding(data.model.branding ?? '');
     setName(data.model.name);
     setDescription(data.model.description ?? '');
-    setAllowed(data.model.allowed_options ?? {});
-  }, [data?.model?.id, data?.model?.updated_at]);
+
+    const saved = data.model.allowed_options ?? {};
+    const next: AllowedOptions = { ...saved };
+    const fillIfEmpty = (key: keyof AllowedOptions, pool: string[]) => {
+      const cur = (next as Record<string, unknown>)[key];
+      if (pool.length > 0 && (!Array.isArray(cur) || cur.length === 0)) {
+        (next as Record<string, unknown>)[key] = [...pool];
+      }
+    };
+    // Pull global pools the same way the panels do below so the auto-fill
+    // matches what commander sees.
+    const sofaComps = cfg?.sofaCompartments ?? FALLBACK_SOFA_COMPARTMENTS;
+    const sofaSizes = cfg?.sofaSizes ?? ['24', '26', '28', '30', '32', '35'];
+    const sofaLegs  = (cfg?.sofaLegHeights ?? []).map((o) => o.value);
+    const sofaSpec  = (cfg?.sofaSpecials ?? []).map((o) => o.value);
+    const bfSizes   = cfg?.bedframeSizes ?? FALLBACK_BEDFRAME_SIZES;
+    const divan     = (cfg?.divanHeights ?? []).map((o) => o.value);
+    const totalH    = (cfg?.totalHeights ?? []).map((o) => o.value);
+    const gaps      = cfg?.gaps ?? [];
+    const legs      = (cfg?.legHeights ?? []).map((o) => o.value);
+    const specials  = (cfg?.specials ?? []).map((o) => o.value);
+    const matSizes  = cfg?.mattressSizes ?? FALLBACK_MATTRESS_SIZES;
+
+    if (data.model.category === 'SOFA') {
+      fillIfEmpty('compartments', sofaComps);
+      fillIfEmpty('sizes',        sofaSizes);
+      fillIfEmpty('leg_heights',  sofaLegs);
+      fillIfEmpty('specials',     sofaSpec);
+    } else if (data.model.category === 'BEDFRAME') {
+      fillIfEmpty('sizes',         bfSizes);
+      fillIfEmpty('divan_heights', divan);
+      fillIfEmpty('total_heights', totalH);
+      fillIfEmpty('gaps',          gaps);
+      fillIfEmpty('leg_heights',   legs);
+      fillIfEmpty('specials',      specials);
+    } else if (data.model.category === 'MATTRESS') {
+      fillIfEmpty('sizes', matSizes);
+    }
+    setAllowed(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.model?.id, data?.model?.updated_at, cfg]);
 
   if (isLoading) return <div className={styles.loading}>Loading model…</div>;
   if (error) {
@@ -196,9 +242,10 @@ export const ProductModelDetail = () => {
       <section className={styles.card}>
         <h2 className={styles.cardTitle}>Allowed options</h2>
         <p className={styles.cardSub}>
-          Toggle on only the variants this Model actually offers. SO/PO line
-          picker (and PR #50's auto-SKU-generator) reads from these. Empty =
-          no restriction (falls back to global Maintenance pool).
+          Every variant from the global Maintenance pool starts ticked on. Toggle
+          off the ones this Model doesn't sell — only ticked variants surface
+          when you "Add codes" or when the SO/PO line picker offers a variant.
+          Use "All / None" beside each row to bulk-flip.
         </p>
 
         {model.category === 'SOFA' && (
@@ -289,18 +336,59 @@ export const ProductModelDetail = () => {
       <section className={styles.card}>
         <div className={styles.cardHeadRow}>
           <h2 className={styles.cardTitle}>SKU variants ({data.skus.length})</h2>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setAddCodesOpen(true)}
-          >
-            <Wand2 {...ICON} /> Add codes…
-          </Button>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+            {/* PR #87 — Commander 2026-05-26: "正常 default 都是全开的，但也
+                要有一个关掉的 button". Bulk-toggle every variant in this Model
+                so a discontinued line can be parked off the SO/PO picker in
+                one click without losing its row / history / pricing. */}
+            {data.skus.length > 0 && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={statusMut.isPending || data.skus.every((s) => s.status === 'ACTIVE')}
+                  onClick={() => {
+                    const inactive = data.skus.filter((s) => s.status !== 'ACTIVE');
+                    if (inactive.length === 0) return;
+                    inactive.forEach((s) => statusMut.mutate({ id: s.id, status: 'ACTIVE' }));
+                  }}
+                  title="Activate every SKU under this Model"
+                >
+                  <Power {...ICON} /> All on
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={statusMut.isPending || data.skus.every((s) => s.status !== 'ACTIVE')}
+                  onClick={() => {
+                    const active = data.skus.filter((s) => s.status === 'ACTIVE');
+                    if (active.length === 0) return;
+                    if (!window.confirm(
+                      `Deactivate all ${active.length} SKU(s) under ${model.model_code}? They stop showing on SO/PO pickers until re-activated.`,
+                    )) return;
+                    active.forEach((s) => statusMut.mutate({ id: s.id, status: 'INACTIVE' }));
+                  }}
+                  title="Deactivate every SKU under this Model"
+                >
+                  <PowerOff {...ICON} /> All off
+                </Button>
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setAddCodesOpen(true)}
+            >
+              <Wand2 {...ICON} /> Add codes…
+            </Button>
+          </div>
         </div>
         <p className={styles.cardSub}>
           Each row is a separate SKU with its own code, stock, cost, and pricing.
           Open code once at the Model layer; "Generate variants" stamps out one
           SKU row per allowed-option combination so you don't open codes 20 times.
+          Click an ACTIVE/INACTIVE pill to flip a single variant off the picker
+          without deleting the row.
         </p>
         {data.skus.length === 0 ? (
           <p className={styles.cardSub}>
@@ -326,9 +414,25 @@ export const ProductModelDetail = () => {
                   <td>{sku.name}</td>
                   <td>{sku.size_label ?? sku.size_code ?? '—'}</td>
                   <td>
-                    <span className={`${styles.statusPill} ${sku.status === 'ACTIVE' ? styles.active : styles.inactive}`}>
+                    {/* PR #87 — Status pill is now a button. One click flips
+                        ACTIVE↔INACTIVE via PATCH /mfg-products/:id. Disabled
+                        while a bulk toggle is in flight to avoid racing the
+                        per-row mutation against bulk fan-out. */}
+                    <button
+                      type="button"
+                      className={`${styles.statusPill} ${sku.status === 'ACTIVE' ? styles.active : styles.inactive}`}
+                      style={{ cursor: 'pointer', border: '1px solid var(--line)' }}
+                      disabled={statusMut.isPending}
+                      onClick={() => statusMut.mutate({
+                        id: sku.id,
+                        status: sku.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE',
+                      })}
+                      title={sku.status === 'ACTIVE'
+                        ? 'Click to deactivate · removes from SO/PO picker'
+                        : 'Click to activate · returns to SO/PO picker'}
+                    >
                       {sku.status}
-                    </span>
+                    </button>
                   </td>
                   <td style={{ textAlign: 'right' }}>{formatRM(sku.cost_price_sen)}</td>
                   <td style={{ textAlign: 'right' }}>{formatRM(sku.base_price_sen ?? 0)}</td>
@@ -657,6 +761,37 @@ function ChipToggle({
   );
 }
 
+/** PR #87 — Bulk-toggle pair injected into each OptionGroup header. Commander
+    wants every chip group to default to all-on and offer one-click All / None
+    so a Model with 20 sizes doesn't need 20 individual taps to set up. */
+function BulkChipToggle({
+  options, selected, onChange,
+}: { options: string[]; selected: string[]; onChange: (next: string[]) => void }) {
+  if (options.length === 0) return null;
+  return (
+    <span className={styles.optBulk}>
+      <button
+        type="button"
+        className={styles.optBulkBtn}
+        onClick={() => onChange([...options])}
+        disabled={selected.length === options.length}
+        title="Tick every option"
+      >
+        All
+      </button>
+      <button
+        type="button"
+        className={styles.optBulkBtn}
+        onClick={() => onChange([])}
+        disabled={selected.length === 0}
+        title="Untick every option"
+      >
+        None
+      </button>
+    </span>
+  );
+}
+
 function SofaAllowedOptions({
   allowed, onChange, sofaCompartments, sofaSizes, sofaLegHeights, sofaSpecials,
 }: {
@@ -669,6 +804,13 @@ function SofaAllowedOptions({
       <OptionGroup
         label="Compartments"
         hint="Which seat/corner shapes this Model offers · pool managed in Maintenance"
+        bulk={(
+          <BulkChipToggle
+            options={sofaCompartments}
+            selected={allowed.compartments ?? []}
+            onChange={(next) => onChange({ ...allowed, compartments: next })}
+          />
+        )}
       >
         <ChipToggle
           options={sofaCompartments}
@@ -676,7 +818,17 @@ function SofaAllowedOptions({
           onChange={(next) => onChange({ ...allowed, compartments: next })}
         />
       </OptionGroup>
-      <OptionGroup label="Seat sizes (inches)" hint="Depth-of-seat variants this Model is built in">
+      <OptionGroup
+        label="Seat sizes (inches)"
+        hint="Depth-of-seat variants this Model is built in"
+        bulk={(
+          <BulkChipToggle
+            options={sofaSizes}
+            selected={allowed.sizes ?? []}
+            onChange={(next) => onChange({ ...allowed, sizes: next })}
+          />
+        )}
+      >
         <ChipToggle
           options={sofaSizes}
           selected={allowed.sizes ?? []}
@@ -684,7 +836,17 @@ function SofaAllowedOptions({
         />
       </OptionGroup>
       {sofaLegHeights.length > 0 && (
-        <OptionGroup label="Leg heights" hint="Subset of the global sofa leg pool">
+        <OptionGroup
+          label="Leg heights"
+          hint="Subset of the global sofa leg pool"
+          bulk={(
+            <BulkChipToggle
+              options={sofaLegHeights}
+              selected={allowed.leg_heights ?? []}
+              onChange={(next) => onChange({ ...allowed, leg_heights: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={sofaLegHeights}
             selected={allowed.leg_heights ?? []}
@@ -693,7 +855,17 @@ function SofaAllowedOptions({
         </OptionGroup>
       )}
       {sofaSpecials.length > 0 && (
-        <OptionGroup label="Specials" hint="Recliner / storage upgrades this Model supports">
+        <OptionGroup
+          label="Specials"
+          hint="Recliner / storage upgrades this Model supports"
+          bulk={(
+            <BulkChipToggle
+              options={sofaSpecials}
+              selected={allowed.specials ?? []}
+              onChange={(next) => onChange({ ...allowed, specials: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={sofaSpecials}
             selected={allowed.specials ?? []}
@@ -717,6 +889,13 @@ function BedframeAllowedOptions({
       <OptionGroup
         label="Sizes"
         hint="Bed sizes this Model is offered in · pool managed in Maintenance"
+        bulk={(
+          <BulkChipToggle
+            options={sizes}
+            selected={allowed.sizes ?? []}
+            onChange={(next) => onChange({ ...allowed, sizes: next })}
+          />
+        )}
       >
         <ChipToggle
           options={sizes}
@@ -725,7 +904,16 @@ function BedframeAllowedOptions({
         />
       </OptionGroup>
       {divanHeights.length > 0 && (
-        <OptionGroup label="Divan heights">
+        <OptionGroup
+          label="Divan heights"
+          bulk={(
+            <BulkChipToggle
+              options={divanHeights}
+              selected={allowed.divan_heights ?? []}
+              onChange={(next) => onChange({ ...allowed, divan_heights: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={divanHeights}
             selected={allowed.divan_heights ?? []}
@@ -734,7 +922,16 @@ function BedframeAllowedOptions({
         </OptionGroup>
       )}
       {totalHeights.length > 0 && (
-        <OptionGroup label="Total heights">
+        <OptionGroup
+          label="Total heights"
+          bulk={(
+            <BulkChipToggle
+              options={totalHeights}
+              selected={allowed.total_heights ?? []}
+              onChange={(next) => onChange({ ...allowed, total_heights: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={totalHeights}
             selected={allowed.total_heights ?? []}
@@ -743,7 +940,16 @@ function BedframeAllowedOptions({
         </OptionGroup>
       )}
       {gaps.length > 0 && (
-        <OptionGroup label="Gaps">
+        <OptionGroup
+          label="Gaps"
+          bulk={(
+            <BulkChipToggle
+              options={gaps}
+              selected={allowed.gaps ?? []}
+              onChange={(next) => onChange({ ...allowed, gaps: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={gaps}
             selected={allowed.gaps ?? []}
@@ -752,7 +958,16 @@ function BedframeAllowedOptions({
         </OptionGroup>
       )}
       {legHeights.length > 0 && (
-        <OptionGroup label="Leg heights">
+        <OptionGroup
+          label="Leg heights"
+          bulk={(
+            <BulkChipToggle
+              options={legHeights}
+              selected={allowed.leg_heights ?? []}
+              onChange={(next) => onChange({ ...allowed, leg_heights: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={legHeights}
             selected={allowed.leg_heights ?? []}
@@ -761,7 +976,16 @@ function BedframeAllowedOptions({
         </OptionGroup>
       )}
       {specials.length > 0 && (
-        <OptionGroup label="Specials">
+        <OptionGroup
+          label="Specials"
+          bulk={(
+            <BulkChipToggle
+              options={specials}
+              selected={allowed.specials ?? []}
+              onChange={(next) => onChange({ ...allowed, specials: next })}
+            />
+          )}
+        >
           <ChipToggle
             options={specials}
             selected={allowed.specials ?? []}
@@ -780,6 +1004,13 @@ function MattressAllowedOptions({
     <OptionGroup
       label="Sizes"
       hint="Mattress sizes this Model is sold in · pool managed in Maintenance"
+      bulk={(
+        <BulkChipToggle
+          options={sizes}
+          selected={allowed.sizes ?? []}
+          onChange={(next) => onChange({ ...allowed, sizes: next })}
+        />
+      )}
     >
       <ChipToggle
         options={sizes}
@@ -790,12 +1021,23 @@ function MattressAllowedOptions({
   );
 }
 
-function OptionGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function OptionGroup({
+  label, hint, children, bulk,
+}: {
+  label:    string;
+  hint?:    string;
+  children: React.ReactNode;
+  /** PR #87 — Optional bulk-toggle slot rendered at the right edge of the
+      header row. Each chip-group panel passes a <BulkChipToggle> here so
+      All / None sit inline with the eyebrow label. */
+  bulk?:    React.ReactNode;
+}) {
   return (
     <div className={styles.optGroup}>
       <div className={styles.optHead}>
         <span className="t-eyebrow">{label}</span>
         {hint && <span className={styles.optHint}>{hint}</span>}
+        {bulk}
       </div>
       {children}
     </div>

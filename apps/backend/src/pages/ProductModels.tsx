@@ -9,7 +9,7 @@
 // Model layer. The plain SKU list lives on /products (SkuMasterTab).
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Layers, Search, Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -211,6 +211,28 @@ export function NewModelDialog({
   const createMut   = useCreateProductModel();
   const generateMut = useGenerateModelSkus();
 
+  // PR #87 — Commander 2026-05-26: bulk pickers should default to all-on so a
+  // new Model is born offering every variant from the global pool; commander
+  // toggles off what doesn't apply. Re-runs on pool change so a Maintenance
+  // edit (e.g. adding SP to bedframe sizes) doesn't leave the dialog stale.
+  const _sizesPool = (category === 'MATTRESS'
+    ? maintenance.data?.data?.mattressSizes
+    : maintenance.data?.data?.bedframeSizes) ?? [];
+  const _compsPool = maintenance.data?.data?.sofaCompartments ?? [];
+  useEffect(() => {
+    if ((category === 'MATTRESS' || category === 'BEDFRAME') && _sizesPool.length > 0) {
+      setPickedSizes(new Set(_sizesPool));
+    } else {
+      setPickedSizes(new Set());
+    }
+    if (category === 'SOFA' && _compsPool.length > 0) {
+      setPickedComps(new Set(_compsPool));
+    } else {
+      setPickedComps(new Set());
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, _sizesPool.length, _compsPool.length]);
+
   const sharedCount = (category === 'SOFA') ? pickedComps.size : pickedSizes.size;
   const totalSkus   = rows.length * sharedCount;
 
@@ -308,10 +330,11 @@ export function NewModelDialog({
     }
   };
 
-  const sizesPool = (category === 'MATTRESS'
-    ? maintenance.data?.data?.mattressSizes
-    : maintenance.data?.data?.bedframeSizes) ?? [];
-  const compsPool = maintenance.data?.data?.sofaCompartments ?? [];
+  // Aliased to the same pools the auto-fill effect already computed so the
+  // InlineAllowedOptions below + the All / None buttons inside it work off a
+  // single source.
+  const sizesPool = _sizesPool;
+  const compsPool = _compsPool;
 
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
@@ -358,7 +381,7 @@ export function NewModelDialog({
         {(category === 'MATTRESS' || category === 'BEDFRAME') && (
           <InlineAllowedOptions
             label={`Sizes (apply to all ${rows.length} row${rows.length === 1 ? '' : 's'})`}
-            hint="Tick the sizes every Model in this batch is sold in · pool from Maintenance"
+            hint="Defaults to every size — untick what this batch doesn't sell · pool from Maintenance"
             options={sizesPool}
             picked={pickedSizes}
             onToggle={(v) => setPickedSizes((prev) => {
@@ -366,6 +389,7 @@ export function NewModelDialog({
               if (n.has(v)) n.delete(v); else n.add(v);
               return n;
             })}
+            onSetAll={(vs) => setPickedSizes(new Set(vs))}
             formatChip={(code) => {
               const info = SIZE_INFO[code];
               return info ? `${code} · ${info.label}` : code;
@@ -375,7 +399,7 @@ export function NewModelDialog({
         {category === 'SOFA' && (
           <InlineAllowedOptions
             label={`Compartments (apply to all ${rows.length} row${rows.length === 1 ? '' : 's'})`}
-            hint="Tick the compartments every Sofa in this batch offers · pool from Maintenance"
+            hint="Defaults to every compartment — untick what this batch doesn't offer · pool from Maintenance"
             options={compsPool}
             picked={pickedComps}
             onToggle={(v) => setPickedComps((prev) => {
@@ -383,6 +407,7 @@ export function NewModelDialog({
               if (n.has(v)) n.delete(v); else n.add(v);
               return n;
             })}
+            onSetAll={(vs) => setPickedComps(new Set(vs))}
           />
         )}
 
@@ -504,17 +529,20 @@ function ModelRowCard({
 
 /* ─────────── Inline allowed-options chip toggle ──────────────────────────
    Used in NewModelDialog so commander can pick sizes/compartments without
-   navigating to the Model detail page after create. Empty selection is
-   valid — same convention as detail-page Allowed Options (allowed_options
-   key just doesn't get set, falls back to global Maintenance pool). */
+   navigating to the Model detail page after create. PR #87 — Defaults to
+   all-on (the parent useEffect pre-fills picked with the full pool); All /
+   None mini-buttons live inline with the label so commander can flip every
+   chip in one tap. Untick = excluded from the batch's auto-generated SKUs. */
 function InlineAllowedOptions({
-  label, hint, options, picked, onToggle, formatChip,
+  label, hint, options, picked, onToggle, onSetAll, formatChip,
 }: {
   label:       string;
   hint:        string;
   options:     string[];
   picked:      Set<string>;
   onToggle:    (value: string) => void;
+  /** PR #87 — Bulk setter. Receives the full pool (for All) or [] (for None). */
+  onSetAll?:   (values: string[]) => void;
   /** Optional pretty-formatter (e.g. SIZE_INFO enrichment). Defaults to raw. */
   formatChip?: (value: string) => string;
 }) {
@@ -528,9 +556,63 @@ function InlineAllowedOptions({
       </div>
     );
   }
+  const allOn  = picked.size === options.length;
+  const allOff = picked.size === 0;
   return (
     <div className={styles.field}>
-      <span className="t-eyebrow">{label}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span className="t-eyebrow">{label}</span>
+        {/* PR #87 — All / None bulk-toggle. Sits inline with the label so
+            commander can flip every chip without reaching for each one
+            individually (e.g. "5 sizes, 15 compartments" in a fresh SOFA
+            Model). */}
+        {onSetAll && (
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+            <button
+              type="button"
+              onClick={() => onSetAll(options)}
+              disabled={allOn}
+              style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-11)',
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                padding: '2px 8px',
+                borderRadius: 999,
+                border: '1px solid var(--line)',
+                background: 'var(--c-paper)',
+                color: allOn ? 'var(--fg-muted)' : 'var(--fg)',
+                cursor: allOn ? 'default' : 'pointer',
+                opacity: allOn ? 0.5 : 1,
+              }}
+              title="Tick every option"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetAll([])}
+              disabled={allOff}
+              style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-11)',
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                padding: '2px 8px',
+                borderRadius: 999,
+                border: '1px solid var(--line)',
+                background: 'var(--c-paper)',
+                color: allOff ? 'var(--fg-muted)' : 'var(--fg)',
+                cursor: allOff ? 'default' : 'pointer',
+                opacity: allOff ? 0.5 : 1,
+              }}
+              title="Untick every option"
+            >
+              None
+            </button>
+          </span>
+        )}
+      </div>
       <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 6, display: 'block' }}>
         {hint}
       </span>

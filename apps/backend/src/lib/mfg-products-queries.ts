@@ -192,6 +192,28 @@ export function useUpdateMfgProductPrices() {
   });
 }
 
+/** PR #87 — Per-SKU active toggle, used from the Model detail page's
+ *  "SKU variants" table. Commander hits this when a specific SKU stops
+ *  selling (e.g. a size variant gets discontinued) — the row stays with its
+ *  history, stock, and pricing intact, but the SO/PO line picker stops
+ *  surfacing it. Re-activating is a single click back. */
+export function useUpdateMfgProductStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: string; status: 'ACTIVE' | 'INACTIVE' }) => {
+      const { id, status } = args;
+      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+      qc.invalidateQueries({ queryKey: ['product-models'] });
+    },
+  });
+}
+
 export type MasterPriceHistoryRow = {
   id: string;
   product_code: string;

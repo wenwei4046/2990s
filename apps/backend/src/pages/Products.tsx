@@ -2037,7 +2037,11 @@ const EditableTextCell = ({
   value, chipClassName, ariaLabel, onSave, inline = false,
 }: {
   value:          string;
-  chipClassName:  string;
+  /** CSS-module class — typed loose so `styles.foo` (which TS treats as
+      `string | undefined`) flows in without callers having to coalesce.
+      PR #87 merge fix: PR #89 landed with this typed `string` which broke
+      the build under `tsc -b --noEmit`. */
+  chipClassName:  string | undefined;
   ariaLabel:      string;
   onSave:         (val: string) => void;
   inline?:        boolean;
