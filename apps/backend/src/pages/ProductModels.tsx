@@ -18,7 +18,7 @@ import {
   type ProductModelRow,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, type MfgCategory } from '../lib/mfg-products-queries';
-import { SIZE_INFO } from '../lib/size-info';
+import { resolveSizeInfo } from '../lib/size-info';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -416,8 +416,10 @@ export function NewModelDialog({
             })}
             onSetAll={(vs) => setPickedSizes(new Set(vs))}
             formatChip={(code) => {
-              const info = SIZE_INFO[code];
-              return info ? `${code} · ${info.label}` : code;
+              // PR #92 — consult Maintenance override so commander relabel
+              // (K → "Super K") rides through the chip preview live.
+              const info = resolveSizeInfo(code, maintenance.data?.data);
+              return info.label && info.label !== code ? `${code} · ${info.label}` : code;
             }}
           />
         )}

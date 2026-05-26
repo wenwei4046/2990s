@@ -43,3 +43,53 @@ export function formatSizeRich(code: string): string {
   if (info.dim) return `${code} · ${info.label} · ${info.dim}`;
   return `${code} · ${info.label}`;
 }
+
+/** PR #92 — Resolve a size code into label + dimensions with Maintenance
+ *  override on top of the static SIZE_INFO map. Commander edits sizeLabels
+ *  from Maintenance > Bedframe Sizes; this helper is the single read path
+ *  used by every chip / generator / picker so a relabel ripples cleanly.
+ *
+ *  Lookup order per field:
+ *    label:      cfg.sizeLabels[code].label → SIZE_INFO[code].label → code
+ *    dimensions: cfg.sizeLabels[code].dimensions → SIZE_INFO[code].dim → ''
+ *    w / l:      parsed from override dimensions when present → SIZE_INFO → 0
+ *
+ *  An unknown code with no override falls back to itself for the label
+ *  (matches the previous SIZE_INFO[code] ?? code behaviour at every call
+ *  site).
+ */
+export function resolveSizeInfo(
+  code: string,
+  cfg?: { sizeLabels?: Record<string, { label?: string; dimensions?: string } | undefined> } | null,
+): SizeInfo {
+  const override = cfg?.sizeLabels?.[code];
+  const base = SIZE_INFO[code];
+  const label = override?.label?.trim() || base?.label || code;
+  const dim   = override?.dimensions?.trim() || base?.dim || '';
+
+  // Parse width × length from the (possibly overridden) dimensions string
+  // so {width} / {length} placeholders in the mattress name template keep
+  // working when commander changes "183X190CM" to "180X200CM".
+  let w = base?.w ?? 0;
+  let l = base?.l ?? 0;
+  if (override?.dimensions) {
+    const m = override.dimensions.trim().match(/^(\d+)\s*[xX×]\s*(\d+)/);
+    if (m && m[1] && m[2]) {
+      w = parseInt(m[1], 10);
+      l = parseInt(m[2], 10);
+    }
+  }
+  return { label, dim, w, l };
+}
+
+/** PR #92 — Rich format variant that reads from Maintenance overrides.
+ *  Same output shape as formatSizeRich but honours commander's edits. */
+export function formatSizeRichWithCfg(
+  code: string,
+  cfg?: { sizeLabels?: Record<string, { label?: string; dimensions?: string } | undefined> } | null,
+): string {
+  const info = resolveSizeInfo(code, cfg);
+  if (!info.label || info.label === code) return code;
+  if (info.dim) return `${code} · ${info.label} · ${info.dim}`;
+  return `${code} · ${info.label}`;
+}

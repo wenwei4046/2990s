@@ -196,6 +196,31 @@ const SIZE_INFO: Record<string, { label: string; dim: string; w: number; l: numb
   SP: { label: '220X220CM', dim: '',          w: 220, l: 220 },
 };
 
+/** PR #92 — Resolve a size code with the Maintenance sizeLabels override on
+ *  top of the static SIZE_INFO table. Mirrors the resolveSizeInfo() helper
+ *  in apps/backend/src/lib/size-info.ts so server-rendered SKU names pick
+ *  up commander's relabel ("K → Super K · 200X200CM") the moment he saves
+ *  the Maintenance row. */
+function resolveSizeInfoServer(
+  code: string,
+  overrides?: Record<string, { label?: string; dimensions?: string } | undefined> | null,
+): { label: string; dim: string; w: number; l: number } {
+  const o = overrides?.[code];
+  const base = SIZE_INFO[code];
+  const label = o?.label?.trim() || base?.label || code;
+  const dim   = o?.dimensions?.trim() || base?.dim || '';
+  let w = base?.w ?? 0;
+  let l = base?.l ?? 0;
+  if (o?.dimensions) {
+    const m = o.dimensions.trim().match(/^(\d+)\s*[xX×]\s*(\d+)/);
+    if (m && m[1] && m[2]) {
+      w = parseInt(m[1], 10);
+      l = parseInt(m[2], 10);
+    }
+  }
+  return { label, dim, w, l };
+}
+
 productModels.post('/:id/generate-skus', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
@@ -226,6 +251,28 @@ productModels.post('/:id/generate-skus', async (c) => {
     .maybeSingle();
   if (mErr) return c.json({ error: 'load_failed', reason: mErr.message }, 500);
   if (!model) return c.json({ error: 'not_found' }, 404);
+
+  // PR #92 — Maintenance sizeLabels override. Load the resolved maintenance
+  // config so generated SKU names pick up commander's relabel ("K → 6FT (NEW)"
+  // / "183X190CM → 180X200CM") without a code change. Best-effort: if the
+  // load fails we fall back to the static SIZE_INFO map below.
+  let sizeOverrides: Record<string, { label?: string; dimensions?: string }> | null = null;
+  try {
+    const { data: cfgRow } = await supabase
+      .from('maintenance_config')
+      .select('config')
+      .eq('scope', 'master')
+      .lte('effective_from', new Date().toISOString().slice(0, 10))
+      .order('effective_from', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const blob = cfgRow?.config as { sizeLabels?: typeof sizeOverrides } | undefined;
+    if (blob?.sizeLabels && typeof blob.sizeLabels === 'object') {
+      sizeOverrides = blob.sizeLabels;
+    }
+  } catch {
+    // Swallow — generator stays functional with static SIZE_INFO.
+  }
 
   const opts = (model.allowed_options ?? {}) as Record<string, unknown>;
   // Commander 2026-05-26 spec (PR #66): the SKU name is driven by the Model
@@ -327,9 +374,9 @@ productModels.post('/:id/generate-skus', async (c) => {
     const branding = (model.branding ?? '').trim();
     const prefix   = branding ? `${branding} ` : '';
     for (const sz of sizesArr) {
-      const info  = SIZE_INFO[sz];
-      const label = info?.label ?? sz;
-      const dim   = info?.dim ?? '';
+      const info  = resolveSizeInfoServer(sz, sizeOverrides);
+      const label = info.label;
+      const dim   = info.dim;
       // "HILTON BEDFRAME (6FT) (183X190CM)" vs "HILTON(A) BEDFRAME (200X200CM)"
       const namePart = dim ? `${prefix}BEDFRAME (${label}) (${dim})` : `${prefix}BEDFRAME (${label})`;
       wanted.push({
@@ -352,14 +399,14 @@ productModels.post('/:id/generate-skus', async (c) => {
     const branding = (model.branding ?? '').trim();
     const prefix   = branding ? `${branding} ` : '';
     for (const sz of sizesArr) {
-      const info  = SIZE_INFO[sz];
-      const label = info?.label ?? sz;
+      const info  = resolveSizeInfoServer(sz, sizeOverrides);
+      const label = info.label;
       // Mattress dimensions include thickness so "(183x190x31CM)" is the goal.
       // Note lowercase 'x' to match commander's existing data.
       let dimPart: string;
-      if (info && mattressThickness != null) {
+      if (info.w && info.l && mattressThickness != null) {
         dimPart = `${info.w}x${info.l}x${mattressThickness}CM`;
-      } else if (info?.dim) {
+      } else if (info.dim) {
         dimPart = info.dim.toLowerCase(); // bedframe-style fallback if thickness not set
       } else {
         dimPart = label;

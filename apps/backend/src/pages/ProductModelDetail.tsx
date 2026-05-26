@@ -27,7 +27,7 @@ import {
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useUpdateMfgProductStatus } from '../lib/mfg-products-queries';
-import { SIZE_INFO } from '../lib/size-info';
+import { resolveSizeInfo } from '../lib/size-info';
 import styles from './ProductModelDetail.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -464,6 +464,7 @@ export const ProductModelDetail = () => {
             mattressCode: maintenance.data?.data?.mattressCodeFormat,
             mattressName: maintenance.data?.data?.mattressNameFormat,
           }}
+          sizeLabels={maintenance.data?.data?.sizeLabels}
           existingCodes={data.skus.map((s) => s.code)}
           onClose={() => setAddCodesOpen(false)}
         />
@@ -536,6 +537,10 @@ function computeCandidates(
   allowed: AOpts,
   mattressThicknessCm: number | null,
   fmt: FormatTemplates,
+  /** PR #92 — Maintenance overrides (sizeLabels map). Threaded in so the
+      Add codes preview reflects commander's relabel ("K → Super K") instead
+      of staying stuck on the static SIZE_INFO. */
+  cfg?: { sizeLabels?: Record<string, { label?: string; dimensions?: string } | undefined> } | null,
 ): Candidate[] {
   if (category === 'SOFA') {
     const codeFmt = fmt.sofaCode?.trim() || DEFAULT_FORMATS.sofaCode;
@@ -554,9 +559,9 @@ function computeCandidates(
     const codeFmt = fmt.bedframeCode?.trim() || DEFAULT_FORMATS.bedframeCode;
     const nameFmt = fmt.bedframeName?.trim() || DEFAULT_FORMATS.bedframeName;
     return (allowed.sizes ?? []).map((sz) => {
-      const info  = SIZE_INFO[sz];
-      const label = info?.label ?? sz;
-      const dim   = info?.dim ?? '';
+      const info  = resolveSizeInfo(sz, cfg);
+      const label = info.label;
+      const dim   = info.dim;
       const vars = {
         branding, model_code: modelCode, model_name: modelName,
         size: sz, size_label: label, dimensions: dim,
@@ -578,14 +583,14 @@ function computeCandidates(
     // dangling "-NF " in the output.
     const brandingNf = branding.trim() ? `${branding.trim()}-NF ` : '';
     return (allowed.sizes ?? []).map((sz) => {
-      const info  = SIZE_INFO[sz];
-      const label = info?.label ?? sz;
+      const info  = resolveSizeInfo(sz, cfg);
+      const label = info.label;
       const vars: Record<string, string> = {
         branding, model_code: modelCode, model_name: modelName,
         branding_nf: brandingNf,
         size: sz, size_label: label,
-        width:     info ? String(info.w) : '',
-        length:    info ? String(info.l) : '',
+        width:     info.w ? String(info.w) : '',
+        length:    info.l ? String(info.l) : '',
         thickness: mattressThicknessCm != null ? String(mattressThicknessCm) : '',
       };
       return {
@@ -600,7 +605,7 @@ function computeCandidates(
 }
 
 function AddCodesModal({
-  modelId, modelCode, modelName, branding, category, allowed, mattressThicknessCm, formats, existingCodes, onClose,
+  modelId, modelCode, modelName, branding, category, allowed, mattressThicknessCm, formats, sizeLabels, existingCodes, onClose,
 }: {
   modelId: string;
   modelCode: string;
@@ -610,14 +615,17 @@ function AddCodesModal({
   allowed: AOpts;
   mattressThicknessCm: number | null;
   formats: FormatTemplates;
+  /** PR #92 — Maintenance sizeLabels override threaded in so the candidate
+      preview reflects commander's relabel before generating SKUs. */
+  sizeLabels?: Record<string, { label?: string; dimensions?: string } | undefined>;
   existingCodes: string[];
   onClose: () => void;
 }) {
   const generateMut = useGenerateModelSkus();
   const existingSet = useMemo(() => new Set(existingCodes), [existingCodes]);
   const candidates = useMemo(
-    () => computeCandidates(category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats),
-    [category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats],
+    () => computeCandidates(category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats, { sizeLabels }),
+    [category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats, sizeLabels],
   );
   // Default: tick every NEW code (existing ones can't be ticked anyway).
   const [picked, setPicked] = useState<Set<string>>(

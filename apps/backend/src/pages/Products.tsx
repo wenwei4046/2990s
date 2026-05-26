@@ -53,7 +53,7 @@ import {
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
-import { formatSizeRich } from '../lib/size-info';
+import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
 import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
@@ -875,8 +875,8 @@ const MAINTENANCE_TABS: {
   // live here because they're shared by multiple Models and back the bulk
   // SKU generator — they're conceptually "Products Maintenance" rather than
   // per-category variant config.
-  { key: 'bedframeSizes',    label: 'Bedframe Sizes',    description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, SK, SP).', priced: false, section: 'Products Maintenance' },
-  { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Products Maintenance' },
+  { key: 'bedframeSizes',    label: 'Bedframe Sizes',    description: 'Bedframe sizes — edit code · label · dimensions (e.g. K · 6FT · 183X190CM). Used in generated SKU names.', priced: false, section: 'Products Maintenance' },
+  { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress sizes — edit code · label · dimensions. Used in generated SKU names + width/length placeholders.', priced: false, section: 'Products Maintenance' },
   { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
 ];
 
@@ -1127,9 +1127,27 @@ const MaintenanceList = ({
       onChange(next);
     };
 
+    // PR #92 — Commander 2026-05-26: "King, 6FT, 183 那些，如果我要改的话，
+    // 怎么样去改呢？" For bedframe/mattress sizes, editMode now exposes 3
+    // columns: code | label | dimensions. The code stays in the
+    // bedframeSizes string[]; label + dimensions land in a parallel
+    // sizeLabels override keyed by code. Read path goes through
+    // resolveSizeInfo() so the rest of the app picks the override up.
+    const isSizeRow = listKey === 'bedframeSizes' || listKey === 'mattressSizes';
+    const updateLabel = (code: string, field: 'label' | 'dimensions', val: string) => {
+      const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+      const labels = (next.sizeLabels ?? {}) as Record<string, { label?: string; dimensions?: string }>;
+      const cur    = labels[code] ?? {};
+      labels[code] = { ...cur, [field]: val };
+      next.sizeLabels = labels;
+      onChange(next);
+    };
     return (
       <div className={styles.maintList}>
-        {items.map((v, i) => (
+        {items.map((v, i) => {
+          const labelOv = config.sizeLabels?.[v];
+          const resolved = isSizeRow ? resolveSizeInfo(v, config) : null;
+          return (
           <div key={`${v}-${i}`} className={styles.maintRow}>
             <button type="button" className={styles.maintRowIcon} title="History">
               <History {...ICON_PROPS} />
@@ -1137,31 +1155,89 @@ const MaintenanceList = ({
             <span className={styles.maintRowIdx}>{i + 1}</span>
             <span className={styles.maintRowValue}>
               {editMode ? (
-                <input
-                  type="text"
-                  value={v}
-                  onChange={(e) => updateAt(i, e.target.value)}
-                  style={{
-                    fontFamily: 'var(--font-sans)',
-                    fontSize: 'var(--fs-16)',
-                    fontWeight: 600,
-                    background: 'var(--c-cream)',
-                    border: '1px solid var(--c-orange)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '4px 8px',
-                    outline: 'none',
-                    width: '100%',
-                    maxWidth: 280,
-                  }}
-                />
+                isSizeRow ? (
+                  // PR #92 — Inline 3-input editor (code · label · dimensions)
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={v}
+                      onChange={(e) => updateAt(i, e.target.value)}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 'var(--fs-14)',
+                        fontWeight: 600,
+                        background: 'var(--c-cream)',
+                        border: '1px solid var(--c-orange)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 8px',
+                        outline: 'none',
+                        width: 80,
+                      }}
+                      title="Size code (e.g. K)"
+                    />
+                    <span style={{ color: 'var(--fg-muted)', fontWeight: 700 }}>·</span>
+                    <input
+                      type="text"
+                      placeholder="Label e.g. 6FT"
+                      value={labelOv?.label ?? resolved?.label ?? ''}
+                      onChange={(e) => updateLabel(v, 'label', e.target.value)}
+                      style={{
+                        fontFamily: 'var(--font-sans)',
+                        fontSize: 'var(--fs-14)',
+                        background: 'var(--c-cream)',
+                        border: '1px solid var(--line-strong)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 8px',
+                        outline: 'none',
+                        width: 110,
+                      }}
+                    />
+                    <span style={{ color: 'var(--fg-muted)', fontWeight: 700 }}>·</span>
+                    <input
+                      type="text"
+                      placeholder="Dimensions e.g. 183X190CM"
+                      value={labelOv?.dimensions ?? resolved?.dim ?? ''}
+                      onChange={(e) => updateLabel(v, 'dimensions', e.target.value)}
+                      style={{
+                        fontFamily: 'var(--font-sans)',
+                        fontSize: 'var(--fs-14)',
+                        background: 'var(--c-cream)',
+                        border: '1px solid var(--line-strong)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '4px 8px',
+                        outline: 'none',
+                        width: 170,
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={v}
+                    onChange={(e) => updateAt(i, e.target.value)}
+                    style={{
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-16)',
+                      fontWeight: 600,
+                      background: 'var(--c-cream)',
+                      border: '1px solid var(--c-orange)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '4px 8px',
+                      outline: 'none',
+                      width: '100%',
+                      maxWidth: 280,
+                    }}
+                  />
+                )
               ) : (
                 /* PR #77 — enrich bedframe/mattress size codes with their
                    imperial label + cm dimensions so the bare "K" row reads
                    as "K · 6FT · 183x190CM". String stored unchanged — only
                    display is enriched. Other list types (gaps, sofa
-                   compartments, sofa seat sizes) fall back to raw value. */
-                (listKey === 'bedframeSizes' || listKey === 'mattressSizes')
-                  ? formatSizeRich(v)
+                   compartments, sofa seat sizes) fall back to raw value.
+                   PR #92 — display path now consults sizeLabels override. */
+                isSizeRow
+                  ? formatSizeRichWithCfg(v, config)
                   : v
               )}
             </span>
@@ -1179,7 +1255,8 @@ const MaintenanceList = ({
               <span />
             )}
           </div>
-        ))}
+          );
+        })}
 
         {editMode && (
           <div
