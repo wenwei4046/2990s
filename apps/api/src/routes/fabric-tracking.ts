@@ -32,6 +32,57 @@ const TIER_FIELD_TO_COL: Record<string, string> = {
   bedframePriceTier: 'bedframe_price_tier',
 };
 
+/* PR #43 — Create new fabric. Commander 2026-05-26: Fabric Converter
+   was missing the "+ New Fabric" capability. */
+fabricTracking.post('/', async (c) => {
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; }
+  catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const fabricCode = String(body.fabricCode ?? '').trim();
+  if (!fabricCode) return c.json({ error: 'fabric_code_required' }, 400);
+
+  const cat = body.fabricCategory as string | undefined;
+  if (cat && !VALID_CATEGORIES.has(cat)) return c.json({ error: 'invalid_category' }, 400);
+
+  // id is text PK — use the fabric_code (uppercased) as the id by convention.
+  // Allow caller to override via explicit `id`.
+  const id = String(body.id ?? fabricCode.toUpperCase().replace(/\s+/g, '_'));
+
+  const row: Record<string, unknown> = {
+    id,
+    fabric_code: fabricCode,
+    fabric_description: (body.fabricDescription as string) ?? null,
+    fabric_category: cat ?? null,
+    sofa_price_tier: (body.sofaPriceTier as string) ?? null,
+    bedframe_price_tier: (body.bedframePriceTier as string) ?? null,
+    supplier_code: (body.supplierCode as string) ?? null,
+    price_centi: typeof body.priceCenti === 'number' ? body.priceCenti : 0,
+  };
+
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('fabric_trackings').insert(row).select('*').single();
+  if (error) {
+    if (error.code === '23505') return c.json({ error: 'duplicate_code' }, 409);
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
+  return c.json({ fabric: data }, 201);
+});
+
+/* PR #43 — Delete fabric. */
+fabricTracking.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  const sb = c.get('supabase');
+  const { error } = await sb.from('fabric_trackings').delete().eq('id', id);
+  if (error) {
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    if (error.code === '23503') return c.json({ error: 'fabric_in_use', reason: 'Fabric is referenced by a product or PO; remove those links first.' }, 409);
+    return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  }
+  return c.body(null, 204);
+});
+
 fabricTracking.get('/', async (c) => {
   const category = c.req.query('category');
   const search = c.req.query('search');

@@ -1171,28 +1171,42 @@ const FabricsMaintenancePanel = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <div style={{ position: 'relative', maxWidth: 360 }}>
-        <Search
-          {...ICON_PROPS}
-          style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }}
-        />
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by code or description…"
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+        <div style={{ position: 'relative', flex: 1, maxWidth: 360 }}>
+          <Search
+            {...ICON_PROPS}
+            style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }}
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by code or description…"
+            style={{
+              width: '100%',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-14)',
+              background: 'var(--c-paper)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-2) var(--space-3) var(--space-2) var(--space-7)',
+              color: 'var(--c-ink)',
+              outline: 'none',
+            }}
+          />
+        </div>
+        {/* PR #43 — Link to Fabric Converter for "+ New Fabric". Same data,
+            same edits. Keeping the create modal on one page only to avoid
+            duplicate UI state. */}
+        <a
+          href="/fabric-tracking"
           style={{
-            width: '100%',
-            fontFamily: 'var(--font-sans)',
-            fontSize: 'var(--fs-14)',
-            background: 'var(--c-paper)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-md)',
-            padding: 'var(--space-2) var(--space-3) var(--space-2) var(--space-7)',
-            color: 'var(--c-ink)',
-            outline: 'none',
-          }}
-        />
+            fontSize: 'var(--fs-13)', color: 'var(--c-burnt)',
+            textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}>
+          <Plus {...ICON_PROPS} />
+          <span>New fabric in Fabric Converter →</span>
+        </a>
       </div>
       <FabricsTable rows={rows} isLoading={isLoading} error={error} />
     </div>
