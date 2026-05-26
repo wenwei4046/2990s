@@ -105,6 +105,8 @@ export type PoHeaderRow = {
   submitted_at: string | null;
   received_at: string | null;
   cancelled_at: string | null;
+  /** PR #77 — default ship-to warehouse for every line on this PO. */
+  purchase_location_id: string | null;
   created_at: string;
   created_by: string;
   updated_at: string;
@@ -150,6 +152,10 @@ export type PoItemRow = {
   line_suffix?: string | null;
   special_order_price_sen?: number;
   variants?: Record<string, unknown> | null;
+  /** PR #77 — per-line delivery date + ship-to warehouse (both inherit from
+      PO header when null). */
+  delivery_date?: string | null;
+  warehouse_id?: string | null;
 };
 
 /* ── Suppliers ──────────────────────────────────────────────────────── */
@@ -388,6 +394,9 @@ export type NewPoItem = {
   lineSuffix?: string;
   specialOrderPriceSen?: number;
   variants?: Record<string, unknown>;
+  /* PR #77 — per-line ship-to overrides; both null = inherit from PO header */
+  deliveryDate?: string | null;
+  warehouseId?: string | null;
 };
 
 export function useCreatePurchaseOrder() {
@@ -416,6 +425,8 @@ export function useUpdatePurchaseOrderHeader() {
     mutationFn: ({ id, ...body }: {
       id: string; poDate?: string; expectedAt?: string;
       currency?: Currency; notes?: string; supplierId?: string;
+      /** PR #77 — default ship-to warehouse for every line on this PO. */
+      purchaseLocationId?: string | null;
     }) => authedFetch<{ purchaseOrder: PoHeaderRow }>(`/mfg-purchase-orders/${id}`, {
       method: 'PATCH', body: JSON.stringify(body),
     }),
