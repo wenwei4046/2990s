@@ -618,7 +618,13 @@ type FormatTemplates = {
 
 const DEFAULT_FORMATS = {
   bedframeCode: '{model_code}-({size})',
-  bedframeName: '{branding} BEDFRAME ({size_label}) ({dimensions})',
+  // PR #100 — Commander 2026-05-26: match the mattress convention by
+  // inserting {model_name} so generated descriptions read "TRION BEDFRAME
+  // (6FT) (183X190CM)" instead of just "BEDFRAME (6FT) (…)". applyFormat
+  // collapses empty {} pairs so a missing branding or model_name still
+  // produces a clean string. Mirrors apps/api/src/routes/product-models.ts
+  // §BEDFRAME.
+  bedframeName: '{branding} {model_name} BEDFRAME ({size_label}) ({dimensions})',
   sofaCode:     '{model_code}-{compartment}',
   // PR #81 — Match commander's legacy sample "SOFA 5530 1A(LHF)". The old
   // template ('{model_name} {compartment}') worked only when commander

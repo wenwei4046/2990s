@@ -1532,11 +1532,14 @@ const FORMAT_FIELDS: Record<CodeFormatKey, FormatFieldMap> = {
     codeKey:     'bedframeCodeFormat',
     nameKey:     'bedframeNameFormat',
     codeDefault: '{model_code}-({size})',
-    nameDefault: '{branding} BEDFRAME ({size_label}) ({dimensions})',
+    // PR #100 — include {model_name} so output matches mattress convention
+    // (e.g. "TRION BEDFRAME (6FT) (183X190CM)"). Mirrors DEFAULT_FORMATS
+    // in ProductModelDetail.tsx and API §BEDFRAME branch.
+    nameDefault: '{branding} {model_name} BEDFRAME ({size_label}) ({dimensions})',
     sample: {
       branding:    'HILTON',
       model_code:  '1003',
-      model_name:  'HILTON BEDFRAME',
+      model_name:  'TRION',
       size:        'K',
       size_label:  '6FT',
       dimensions:  '183X190CM',
