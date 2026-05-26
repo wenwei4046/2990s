@@ -273,12 +273,6 @@ export const PurchaseOrderNew = () => {
     );
   };
 
-  // Inline styles for the items grid — avoids adding a whole new module CSS
-  // file for one table. Header row + body rows share grid template so
-  // columns line up exactly with their header.
-  const gridTemplate = 'minmax(180px, 1.4fr) minmax(160px, 1.4fr) 70px 110px 100px 130px 150px 110px 32px';
-  const cellPad = 'var(--space-2) var(--space-2)';
-
   return (
     <div className={styles.page}>
       {/* Top bar — same shape as PurchaseOrderDetail */}
@@ -506,200 +500,60 @@ export const PurchaseOrderNew = () => {
               : `Pick any item from ${(allSkus.data ?? []).length} SKUs — supplier auto-narrows`}
           </span>
         </div>
-        <div className={styles.cardBody}>
-          {/* Grid header row */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: gridTemplate,
-            gap: 'var(--space-2)',
-            padding: cellPad,
-            fontFamily: 'var(--font-button)',
-            fontSize: 'var(--fs-11)',
-            fontWeight: 600,
-            letterSpacing: '0.10em',
-            textTransform: 'uppercase',
-            color: 'var(--fg-soft)',
-            borderBottom: '1px solid var(--line)',
-          }}>
-            <div>Item Code / Supplier SKU</div>
-            <div>Description / Variants</div>
-            <div style={{ textAlign: 'right' }}>Qty</div>
-            <div style={{ textAlign: 'right' }}>Unit Price</div>
-            <div style={{ textAlign: 'right' }}>Discount</div>
-            <div>Delivery Date</div>
-            <div>Ship-to Location</div>
-            <div style={{ textAlign: 'right' }}>Total</div>
-            <div></div>
-          </div>
-
-          {/* Grid body — each line is a row group (main row + variant sub-row).
-              PR #126: Item Code cell shows internal+supplier code stacked;
-              Description cell shows description+variant pills stacked. */}
-          {lines.map((l) => {
+        <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          {/* PR #129 — Card-per-line layout. Commander 2026-05-26: "其实有很
+              多字都塞在了一个小小的格子里，你可能 UI 整个要再整理过一下".
+              Replaces the 9-column cramped grid with breathing-room cards
+              (same shape as SoLineCard from PR #125). Each card has 4
+              sections: identity (item + supplier code), description,
+              variants (per category), pricing. */}
+          {lines.map((l, idx) => {
             const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - (l.discountCenti ?? 0));
-            const variantSummary = Object.entries(l.variants)
-              .filter(([_, v]) => v !== null && v !== undefined && v !== '')
-              .map(([k, v]) => `${k}=${v}`)
-              .join(' · ');
+            const categoryLabel = l.category?.toUpperCase() ?? 'UNSET';
+            const showVariants  = l.category && ['sofa', 'bedframe', 'mattress'].includes(l.category) && maint;
+
             return (
-              <div key={l.rid} style={{ borderBottom: '1px solid var(--line)' }}>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: gridTemplate,
-                    gap: 'var(--space-2)',
-                    alignItems: 'flex-start',
-                    padding: cellPad,
-                  }}
-                >
-                  {/* Item Code — 2 stacked inputs: our internal + supplier's */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <input
-                      type="text"
-                      list={`bindings-${l.rid}`}
-                      value={l.materialCode}
-                      onChange={(e) => {
-                        const code = e.target.value;
-                        if (supplierId) {
-                          // Supplier-first flow — match against this supplier's
-                          // bindings (existing behaviour).
-                          const match = bindings.find((b) => b.material_code === code);
-                          if (match) pickBinding(l.rid, match);
-                          else setLine(l.rid, { materialCode: code, bindingId: undefined, category: categoryForCode(code) });
-                        } else {
-                          // Item-first flow — datalist offered all mfg_products.
-                          // Look the code up against a SKU; if found, copy its
-                          // name in. Always queue the reverse-supplier lookup so
-                          // the effect above can auto-set or surface the hint.
-                          const sku = (allSkus.data ?? []).find((p) => p.code === code);
-                          setLine(l.rid, {
-                            materialCode: code,
-                            materialName: sku?.name ?? l.materialName,
-                            bindingId: undefined,
-                            category: sku?.category.toLowerCase(),
-                          });
-                          setPendingItemPick(code ? { rid: l.rid, code } : null);
-                        }
-                      }}
-                      placeholder="Internal code…"
-                      className={styles.fieldInput}
-                      style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}
-                      aria-label="Our internal item code"
-                    />
-                    <input
-                      type="text"
-                      value={l.supplierSku ?? ''}
-                      onChange={(e) => setLine(l.rid, { supplierSku: e.target.value })}
-                      placeholder="Supplier's code…"
-                      className={styles.fieldInput}
-                      style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 'var(--fs-12)',
-                        background: 'var(--c-cream)',
-                        color: 'var(--fg-muted)',
-                      }}
-                      aria-label="Supplier's own SKU"
-                    />
-                    <datalist id={`bindings-${l.rid}`}>
-                      {supplierId
-                        // Supplier picked → narrow to that supplier's bindings.
-                        ? bindings.map((b) => (
-                            <option key={b.id} value={b.material_code}>
-                              {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
-                            </option>
-                          ))
-                        // No supplier yet → offer every active mfg_product SKU.
-                        : (allSkus.data ?? []).map((p) => (
-                            <option key={p.id} value={p.code}>
-                              {p.name} · {p.category}
-                            </option>
-                          ))
-                      }
-                    </datalist>
-                  </div>
-                  {/* Description — input on top, variant summary chip below */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <input
-                      type="text"
-                      value={l.materialName}
-                      onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
-                      placeholder="(auto-filled if bound)"
-                      className={styles.fieldInput}
-                      style={{ fontSize: 'var(--fs-13)' }}
-                    />
-                    {variantSummary ? (
-                      <div style={{
+              <div
+                key={l.rid}
+                style={{
+                  background: 'var(--c-paper)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: 'var(--space-4)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-3)',
+                }}
+              >
+                {/* Card header — Line N · category badge · line total · remove */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                    <span style={{
+                      fontFamily: 'var(--font-button)',
+                      fontSize: 'var(--fs-12)',
+                      fontWeight: 700,
+                      letterSpacing: '0.10em',
+                      color: 'var(--fg-muted)',
+                    }}>
+                      LINE {idx + 1}
+                    </span>
+                    {l.category && (
+                      <span style={{
+                        fontFamily: 'var(--font-button)',
                         fontSize: 'var(--fs-11)',
-                        color: 'var(--fg-muted)',
-                        fontFamily: 'var(--font-mono)',
-                        padding: '2px 6px',
-                        background: 'var(--c-cream)',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--line)',
+                        fontWeight: 700,
+                        letterSpacing: '0.10em',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-pill)',
+                        background: 'rgba(166, 71, 30, 0.12)',
+                        color: 'var(--c-burnt)',
                       }}>
-                        {variantSummary}
-                      </div>
-                    ) : (
-                      l.category && ['sofa', 'bedframe', 'mattress'].includes(l.category) && (
-                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', fontStyle: 'italic' }}>
-                          Fill variants below ↓
-                        </div>
-                      )
+                        {categoryLabel}
+                      </span>
                     )}
                   </div>
-                  <div>
-                    <input
-                      type="number" min={0} step={1}
-                      value={l.qty}
-                      onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type="number" min={0} step={0.01}
-                      value={(l.unitPriceCenti / 100).toFixed(2)}
-                      onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type="number" min={0} step={0.01}
-                      value={((l.discountCenti ?? 0) / 100).toFixed(2)}
-                      onChange={(e) => setLine(l.rid, { discountCenti: Math.round(Number(e.target.value) * 100) })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
-                    />
-                  </div>
-                  <div>
-                    <input
-                      type="date"
-                      value={l.deliveryDate ?? ''}
-                      onChange={(e) => setLine(l.rid, { deliveryDate: e.target.value })}
-                      className={styles.fieldInput}
-                      style={{ fontSize: 'var(--fs-12)' }}
-                    />
-                  </div>
-                  <div>
-                    <select
-                      value={l.warehouseId ?? ''}
-                      onChange={(e) => setLine(l.rid, { warehouseId: e.target.value })}
-                      className={styles.fieldInput}
-                      style={{ fontSize: 'var(--fs-12)' }}
-                    >
-                      <option value="">— Inherit Purchase Location —</option>
-                      {(warehouses.data ?? []).map((w) => (
-                        <option key={w.id} value={w.id}>{w.code}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', paddingTop: 8 }}>
-                    {fmtRm(lineTotalCenti, currency)}
-                  </div>
-                  <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                    <span className={styles.previewPrice}>{fmtRm(lineTotalCenti, currency)}</span>
                     <button
                       type="button"
                       onClick={() => dropLine(l.rid)}
@@ -710,37 +564,104 @@ export const PurchaseOrderNew = () => {
                         cursor: 'pointer',
                         color: 'var(--c-festive-b, #B8331F)',
                         padding: 4,
+                        display: 'inline-flex',
                       }}
                     >
-                      <Trash2 {...SM_ICON} />
+                      <Trash2 {...ICON} />
                     </button>
                   </div>
                 </div>
 
-                {/* PR #126 — Per-category variant editor sub-row. Renders below
-                    the main line when the picked SKU is sofa / bedframe /
-                    mattress. Pulls the same maintenance dropdowns SO uses. */}
-                {l.category && ['sofa', 'bedframe', 'mattress'].includes(l.category) && maint && (
-                  <div
-                    style={{
-                      padding: 'var(--space-2) var(--space-3) var(--space-3)',
-                      background: 'var(--c-cream)',
-                      borderTop: '1px dashed var(--line)',
-                    }}
-                  >
+                {/* Identity row — Internal code + Supplier SKU side by side */}
+                <div className={styles.formGrid2}>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Item Code (Internal)</span>
+                    <input
+                      type="text"
+                      list={`bindings-${l.rid}`}
+                      value={l.materialCode}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        if (supplierId) {
+                          const match = bindings.find((b) => b.material_code === code);
+                          if (match) pickBinding(l.rid, match);
+                          else setLine(l.rid, { materialCode: code, bindingId: undefined, category: categoryForCode(code) });
+                        } else {
+                          const sku = (allSkus.data ?? []).find((p) => p.code === code);
+                          setLine(l.rid, {
+                            materialCode: code,
+                            materialName: sku?.name ?? l.materialName,
+                            bindingId: undefined,
+                            category: sku?.category.toLowerCase(),
+                          });
+                          setPendingItemPick(code ? { rid: l.rid, code } : null);
+                        }
+                      }}
+                      placeholder="Type or pick our internal SKU…"
+                      className={styles.fieldInput}
+                      style={{ fontFamily: 'var(--font-mono)' }}
+                    />
+                    <datalist id={`bindings-${l.rid}`}>
+                      {supplierId
+                        ? bindings.map((b) => (
+                            <option key={b.id} value={b.material_code}>
+                              {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
+                            </option>
+                          ))
+                        : (allSkus.data ?? []).map((p) => (
+                            <option key={p.id} value={p.code}>
+                              {p.name} · {p.category}
+                            </option>
+                          ))
+                      }
+                    </datalist>
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Supplier SKU</span>
+                    <input
+                      type="text"
+                      value={l.supplierSku ?? ''}
+                      onChange={(e) => setLine(l.rid, { supplierSku: e.target.value })}
+                      placeholder="Supplier's own code (auto-fills from binding)"
+                      className={styles.fieldInput}
+                      style={{ fontFamily: 'var(--font-mono)' }}
+                    />
+                  </label>
+                </div>
+
+                {/* Description — full width */}
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>Description</span>
+                  <input
+                    type="text"
+                    value={l.materialName}
+                    onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
+                    placeholder="(auto-filled if bound — editable for one-off purchases)"
+                    className={styles.fieldInput}
+                  />
+                </label>
+
+                {/* Per-category variant editor (PR #126 logic, PR #129 card layout) */}
+                {showVariants && (
+                  <div style={{
+                    background: 'var(--c-cream)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: 'var(--space-3)',
+                  }}>
                     <div style={{
                       fontFamily: 'var(--font-button)',
                       fontSize: 'var(--fs-11)',
-                      fontWeight: 600,
-                      letterSpacing: '0.10em',
+                      fontWeight: 700,
+                      letterSpacing: '0.16em',
                       textTransform: 'uppercase',
-                      color: 'var(--fg-soft)',
-                      marginBottom: 6,
+                      color: 'var(--fg-muted)',
+                      marginBottom: 'var(--space-2)',
                     }}>
                       {l.category} Variants
                     </div>
 
-                    {/* BEDFRAME — fabric, color, design, total height */}
+                    {/* BEDFRAME — Fabric · Color · Design · Total Height */}
                     {l.category === 'bedframe' && (
                       <div className={styles.formGrid4}>
                         <label className={styles.field}>
@@ -771,7 +692,7 @@ export const PurchaseOrderNew = () => {
                           <span className={styles.fieldLabel}>Design</span>
                           <input
                             className={styles.fieldInput}
-                            placeholder="Free-text design / pattern"
+                            placeholder="Pattern / design"
                             value={String(l.variants.design ?? '')}
                             onChange={(e) => setVariant(l.rid, 'design', e.target.value)}
                           />
@@ -784,7 +705,7 @@ export const PurchaseOrderNew = () => {
                             onChange={(e) => setVariant(l.rid, 'totalHeight', e.target.value)}
                           >
                             <option value="">—</option>
-                            {maint.totalHeights.map((o) => (
+                            {maint!.totalHeights.map((o) => (
                               <option key={o.value} value={o.value}>{o.value}</option>
                             ))}
                           </select>
@@ -792,7 +713,7 @@ export const PurchaseOrderNew = () => {
                       </div>
                     )}
 
-                    {/* SOFA — seat height, leg height */}
+                    {/* SOFA — Seat · Leg · Fabric · Color */}
                     {l.category === 'sofa' && (
                       <div className={styles.formGrid4}>
                         <label className={styles.field}>
@@ -803,7 +724,7 @@ export const PurchaseOrderNew = () => {
                             onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
                           >
                             <option value="">—</option>
-                            {maint.sofaSizes.map((s) => (
+                            {maint!.sofaSizes.map((s) => (
                               <option key={s} value={s}>{s}</option>
                             ))}
                           </select>
@@ -816,7 +737,7 @@ export const PurchaseOrderNew = () => {
                             onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
                           >
                             <option value="">—</option>
-                            {maint.sofaLegHeights.map((o) => (
+                            {maint!.sofaLegHeights.map((o) => (
                               <option key={o.value} value={o.value}>{o.value}</option>
                             ))}
                           </select>
@@ -848,7 +769,7 @@ export const PurchaseOrderNew = () => {
                       </div>
                     )}
 
-                    {/* MATTRESS — size + branding (mattress's main attribute) */}
+                    {/* MATTRESS — Size · Branding */}
                     {l.category === 'mattress' && (
                       <div className={styles.formGrid4}>
                         <label className={styles.field}>
@@ -859,8 +780,8 @@ export const PurchaseOrderNew = () => {
                             onChange={(e) => setVariant(l.rid, 'size', e.target.value)}
                           >
                             <option value="">—</option>
-                            {(maint.mattressSizes ?? []).map((s) => {
-                              const lbl = maint.sizeLabels?.[s]?.label;
+                            {(maint!.mattressSizes ?? []).map((s) => {
+                              const lbl = maint!.sizeLabels?.[s]?.label;
                               return (
                                 <option key={s} value={s}>
                                   {s}{lbl ? ` · ${lbl}` : ''}
@@ -882,6 +803,62 @@ export const PurchaseOrderNew = () => {
                     )}
                   </div>
                 )}
+
+                {/* Pricing row — Qty · Unit Price · Discount · Delivery · Ship-to */}
+                <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Qty</span>
+                    <input
+                      type="number" min={0} step={1}
+                      value={l.qty}
+                      onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) })}
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right' }}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Unit Price ({currency})</span>
+                    <input
+                      type="number" min={0} step={0.01}
+                      value={(l.unitPriceCenti / 100).toFixed(2)}
+                      onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) })}
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right' }}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Discount ({currency})</span>
+                    <input
+                      type="number" min={0} step={0.01}
+                      value={((l.discountCenti ?? 0) / 100).toFixed(2)}
+                      onChange={(e) => setLine(l.rid, { discountCenti: Math.round(Number(e.target.value) * 100) })}
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right' }}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Delivery Date</span>
+                    <input
+                      type="date"
+                      value={l.deliveryDate ?? ''}
+                      onChange={(e) => setLine(l.rid, { deliveryDate: e.target.value })}
+                      className={styles.fieldInput}
+                    />
+                  </label>
+                  <label className={styles.field}>
+                    <span className={styles.fieldLabel}>Ship-to Location</span>
+                    <select
+                      value={l.warehouseId ?? ''}
+                      onChange={(e) => setLine(l.rid, { warehouseId: e.target.value })}
+                      className={styles.fieldInput}
+                    >
+                      <option value="">— Inherit Purchase Location —</option>
+                      {(warehouses.data ?? []).map((w) => (
+                        <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
             );
           })}
@@ -895,8 +872,7 @@ export const PurchaseOrderNew = () => {
               justifyContent: 'center',
               gap: 6,
               width: '100%',
-              padding: '10px 12px',
-              marginTop: 'var(--space-3)',
+              padding: '12px 14px',
               border: '1px dashed var(--c-orange)',
               borderRadius: 'var(--radius-md)',
               background: 'transparent',
@@ -907,7 +883,7 @@ export const PurchaseOrderNew = () => {
               cursor: 'pointer',
             }}
           >
-            <Plus {...SM_ICON} /> Add line item
+            <Plus {...ICON} /> Add another item
           </button>
         </div>
       </section>
