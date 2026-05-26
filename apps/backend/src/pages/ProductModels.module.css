@@ -176,7 +176,10 @@
   display: inline-block;
   /* PR #137 — dropped letter-spacing: 0.01em so the chip's text renders
      letter-for-letter identical to .nameText (commander: "字体 standardise
-     掉"). The pill wrapper stays for the visual code/name distinction. */
+     掉"). The pill wrapper stays for the visual code/name distinction.
+     PR #138 — UPPERCASE to match SKU Master / product code style
+     ("应该全部大写啊 像product code那样"). */
+  text-transform: uppercase;
 }
 
 /* PR #137 — whole-row double-click. Commander: "我希望指向那个 row，就可以
@@ -203,6 +206,9 @@
   font-size: var(--fs-13);
   font-weight: 500;
   color: var(--c-ink);
+  /* PR #138 — UPPERCASE so Name column matches Code chip ("还是要有全部
+     小写 应该全部大写啊 像product code那样"). */
+  text-transform: uppercase;
 }
 
 .statusPill {
