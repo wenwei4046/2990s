@@ -281,13 +281,12 @@ export const SalesOrderDetail = () => {
         locked={isLocked}
       />
 
-      {/* ── Multi-address card (ship-to / bill-to / install-to) ── */}
-      <AddressCard
-        header={header}
-        onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
-        saving={updateHeader.isPending}
-        locked={isLocked}
-      />
+      {/* PR #140 — Commander 2026-05-26: "这个 multi address、customer PO
+          这些是什么？" The Multi-Address · Customer PO · Schedule card was
+          a HOOKKA leftover (ship-to / bill-to / install-to / customer PO
+          No / PO ID / PO Date). We don't model 3-way addresses or track
+          the customer's own PO numbers. Dropped entirely; Processing
+          Date + Delivery Date now live inside the Customer card below. */}
 
       {/* ── Line items ──────────────────────────────────────────── */}
       <section className={styles.card}>
@@ -444,6 +443,13 @@ const CustomerCard = ({
   /* PR #46 — Form shape now matches POS handover schema. Renamed
      debtor → customer; building_type promoted to proper column;
      branding + ref + venue dropped per commander 2026-05-26. */
+  // PR #140 — Commander 2026-05-26 drop list:
+  //   - poDocNo (Customer PO #)   → "customer PO 不需要"
+  //   - targetDate                → replaced by Processing + Delivery Date
+  // PR #140 — add list:
+  //   - processingDate (= internal_expected_dd column, just renamed for UI)
+  //   - customerDeliveryDate
+  // The DB column `internal_expected_dd` stays — only the label changes.
   const [form, setForm] = useState({
     customerCode: header.debtor_code ?? '',
     customerName: header.debtor_name ?? '',
@@ -451,7 +457,6 @@ const CustomerCard = ({
     customerType: header.customer_type ?? '',
     salespersonId: header.salesperson_id ?? '',
     buildingType: header.building_type ?? header.venue ?? '',
-    poDocNo: header.po_doc_no ?? '',
     phone: header.phone ?? '',
     address1: header.address1 ?? '',
     address2: header.address2 ?? '',
@@ -461,7 +466,8 @@ const CustomerCard = ({
     emergencyContactName: header.emergency_contact_name ?? '',
     emergencyContactPhone: header.emergency_contact_phone ?? '',
     emergencyContactRelationship: header.emergency_contact_relationship ?? '',
-    targetDate: header.target_date ?? '',
+    processingDate: header.internal_expected_dd ?? '',
+    customerDeliveryDate: header.customer_delivery_date ?? '',
     note: header.note ?? '',
   });
   const [showSuggest, setShowSuggest] = useState(false);
@@ -478,7 +484,6 @@ const CustomerCard = ({
       customerType: header.customer_type ?? '',
       salespersonId: header.salesperson_id ?? '',
       buildingType: header.building_type ?? header.venue ?? '',
-      poDocNo: header.po_doc_no ?? '',
       phone: header.phone ?? '',
       address1: header.address1 ?? '',
       address2: header.address2 ?? '',
@@ -488,7 +493,8 @@ const CustomerCard = ({
       emergencyContactName: header.emergency_contact_name ?? '',
       emergencyContactPhone: header.emergency_contact_phone ?? '',
       emergencyContactRelationship: header.emergency_contact_relationship ?? '',
-      targetDate: header.target_date ?? '',
+      processingDate: header.internal_expected_dd ?? '',
+      customerDeliveryDate: header.customer_delivery_date ?? '',
       note: header.note ?? '',
     });
   }, [header]);
@@ -532,7 +538,6 @@ const CustomerCard = ({
     customerType: form.customerType,
     salespersonId: form.salespersonId || null,
     buildingType: form.buildingType,
-    poDocNo: form.poDocNo,
     phone: form.phone,
     address1: form.address1,
     address2: form.address2,
@@ -542,7 +547,11 @@ const CustomerCard = ({
     emergencyContactName: form.emergencyContactName,
     emergencyContactPhone: form.emergencyContactPhone,
     emergencyContactRelationship: form.emergencyContactRelationship,
-    targetDate: form.targetDate || null,
+    /* PR #140 — Processing Date persists to internal_expected_dd column
+       (renamed in the UI per commander 2026-05-26: "internal expected date
+       是 Hookka 用的"). targetDate field dropped. */
+    internalExpectedDd: form.processingDate || null,
+    customerDeliveryDate: form.customerDeliveryDate || null,
     note: form.note,
   });
 
@@ -631,17 +640,19 @@ const CustomerCard = ({
               {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </label>
+          {/* PR #140 — Processing + Delivery Date replace Target Date.
+              Same fields the New SO form has; keeps create + edit in sync. */}
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer PO #</span>
-            <input className={styles.fieldInput} value={form.poDocNo}
-              onChange={(e) => set('poDocNo', e.target.value)} />
+            <span className={styles.fieldLabel}>Processing Date</span>
+            <input type="date" className={styles.fieldInput} value={form.processingDate}
+              onChange={(e) => set('processingDate', e.target.value)} />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Target Date</span>
-            <input type="date" className={styles.fieldInput} value={form.targetDate}
-              onChange={(e) => set('targetDate', e.target.value)} />
+            <span className={styles.fieldLabel}>Delivery Date</span>
+            <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
+              onChange={(e) => set('customerDeliveryDate', e.target.value)} />
           </label>
-          <label className={`${styles.field}`}>
+          <label className={`${styles.field}`} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Note</span>
             <input className={styles.fieldInput} value={form.note}
               onChange={(e) => set('note', e.target.value)} />
