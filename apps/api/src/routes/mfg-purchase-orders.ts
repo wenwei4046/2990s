@@ -434,6 +434,122 @@ mfgPurchaseOrders.delete('/:id/items/:itemId', async (c) => {
   return c.body(null, 204);
 });
 
+/* ── PR #78 — Convert from Sales Order ─────────────────────────────────
+   Commander 2026-05-26 (AutoCount parity): "可以点击 Convert from Sales
+   Order，也可以点击 Convert from Purchase Request 或者 Quotation 这种
+   类型的". Copies an SO's items into the current draft PO. SO items
+   keep their existing variants / description / pricing as snapshots.
+
+   Body: { soDocNo: string, itemIds?: string[] }
+   - When itemIds is omitted, every non-cancelled SO item is copied.
+   - When provided, only those item ids get copied.
+   - Skips SO items whose item_code is already on this PO (no dupes).
+   - Returns count copied + skipped + the new PO item rows.
+   ────────────────────────────────────────────────────────────────────── */
+mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
+  const poId = c.req.param('id');
+  let body: { soDocNo?: string; itemIds?: string[] } = {};
+  try { body = (await c.req.json().catch(() => ({}))) as typeof body; } catch { /* allow empty */ }
+  const soDocNo = (body.soDocNo ?? '').trim();
+  if (!soDocNo) return c.json({ error: 'so_doc_no_required' }, 400);
+  const filterIds = Array.isArray(body.itemIds) && body.itemIds.length > 0
+    ? new Set(body.itemIds)
+    : null;
+
+  const sb = c.get('supabase');
+
+  // Verify the target PO exists + is editable.
+  const { data: po, error: poErr } = await sb
+    .from('purchase_orders')
+    .select('id, status, supplier_id')
+    .eq('id', poId)
+    .maybeSingle();
+  if (poErr) return c.json({ error: 'load_failed', reason: poErr.message }, 500);
+  if (!po) return c.json({ error: 'po_not_found' }, 404);
+  if (po.status !== 'DRAFT') {
+    return c.json({ error: 'po_not_draft', reason: `Cannot convert into a ${po.status} PO.` }, 409);
+  }
+
+  // Read SO items (non-cancelled only).
+  const { data: soItems, error: soErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('id, item_code, description, description2, item_group, qty, unit_price_centi, discount_centi, unit_cost_centi, variants, uom, remark')
+    .eq('doc_no', soDocNo)
+    .eq('cancelled', false);
+  if (soErr) return c.json({ error: 'so_load_failed', reason: soErr.message }, 500);
+  if (!soItems || soItems.length === 0) {
+    return c.json({ error: 'so_has_no_items', reason: `Sales Order ${soDocNo} has no items to convert.` }, 404);
+  }
+
+  const wanted = filterIds
+    ? (soItems as Array<{ id: string }>).filter((r) => filterIds!.has(r.id))
+    : soItems;
+
+  if (wanted.length === 0) {
+    return c.json({ error: 'no_items_selected', reason: 'None of the picked SO items matched.' }, 400);
+  }
+
+  // Find which item_codes already exist on the PO so we don't double-insert.
+  const codes = (wanted as Array<{ item_code: string }>).map((r) => r.item_code);
+  const { data: existing } = await sb
+    .from('purchase_order_items')
+    .select('material_code')
+    .eq('purchase_order_id', poId)
+    .in('material_code', codes);
+  const existingSet = new Set((existing ?? []).map((r: { material_code: string }) => r.material_code));
+
+  type SoItem = {
+    item_code: string; description: string | null; description2: string | null;
+    item_group: string | null; qty: number; unit_price_centi: number;
+    discount_centi: number | null; unit_cost_centi: number | null;
+    variants: unknown; uom: string | null; remark: string | null;
+  };
+  const toInsert = (wanted as SoItem[]).filter((r) => !existingSet.has(r.item_code));
+  if (toInsert.length === 0) {
+    return c.json({ copied: 0, skipped: wanted.length, reason: 'All matching SO items already exist on the PO.' });
+  }
+
+  const rows = toInsert.map((it) => {
+    const qty = Number(it.qty ?? 1);
+    const unit = Number(it.unit_price_centi ?? 0);
+    const disc = Number(it.discount_centi ?? 0);
+    return {
+      purchase_order_id: poId,
+      material_kind:    'mfg_product',
+      material_code:    it.item_code,
+      material_name:    it.description ?? it.item_code,
+      supplier_sku:     null,
+      qty,
+      unit_price_centi: unit,
+      line_total_centi: (qty * unit) - disc,
+      received_qty:     0,
+      notes:            it.remark ?? null,
+      item_group:       it.item_group ?? null,
+      description:      it.description ?? null,
+      description2:     it.description2 ?? null,
+      uom:              it.uom ?? 'UNIT',
+      discount_centi:   disc,
+      unit_cost_centi:  Number(it.unit_cost_centi ?? 0),
+      variants:         (it.variants as unknown) ?? null,
+    };
+  });
+
+  const { data: inserted, error: insErr } = await sb
+    .from('purchase_order_items')
+    .insert(rows)
+    .select(ITEM_COLS);
+  if (insErr) return c.json({ error: 'insert_failed', reason: insErr.message }, 500);
+
+  await recomputePoTotals(sb, poId);
+
+  return c.json({
+    copied: rows.length,
+    skipped: existingSet.size,
+    sourceDocNo: soDocNo,
+    items: inserted ?? [],
+  });
+});
+
 // ── Submit / cancel ──────────────────────────────────────────────────
 mfgPurchaseOrders.patch('/:id/submit', async (c) => {
   const id = c.req.param('id');

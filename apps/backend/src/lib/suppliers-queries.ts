@@ -399,6 +399,23 @@ export type NewPoItem = {
   warehouseId?: string | null;
 };
 
+/** PR #78 — Convert a Sales Order's items into the current PO. Returns the
+    server's { copied, skipped } counts so the UI can toast. */
+export function useConvertPoFromSo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, soDocNo, itemIds }: { poId: string; soDocNo: string; itemIds?: string[] }) =>
+      authedFetch<{ copied: number; skipped: number; sourceDocNo: string }>(
+        `/mfg-purchase-orders/${poId}/convert-from-so`,
+        { method: 'POST', body: JSON.stringify({ soDocNo, itemIds }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+}
+
 export function useCreatePurchaseOrder() {
   const qc = useQueryClient();
   return useMutation({

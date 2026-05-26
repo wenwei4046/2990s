@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Send, Ban,
+  ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Send, Ban, ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -30,6 +30,7 @@ import {
   useCancelPurchaseOrder,
   useSuppliers,
   useSupplierDetail,
+  useConvertPoFromSo,
   type PoItemRow,
   type NewPoItem,
   type BindingRow,
@@ -64,6 +65,9 @@ export const PurchaseOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseOrderDetail(id ?? null);
   const updateHeader = useUpdatePurchaseOrderHeader();
+  // PR #78 — Convert from SO mutation. Pop a prompt for SO doc_no, the
+  // server copies non-cancelled items into this PO (skipping dupes).
+  const convertFromSo = useConvertPoFromSo();
   const submit = useSubmitPurchaseOrder();
   const cancel = useCancelPurchaseOrder();
   const addItem = useAddPurchaseOrderItem();
@@ -132,6 +136,41 @@ export const PurchaseOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* PR #78 — Convert from Sales Order. Only shown while DRAFT.
+              Server copies non-cancelled SO items into this PO; existing
+              line items with the same material_code are left alone. */}
+          {po.status === 'DRAFT' && (
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => {
+                const docNo = window.prompt(
+                  'Convert from Sales Order — enter SO doc no (e.g. SO-009001):',
+                );
+                if (!docNo) return;
+                convertFromSo.mutate(
+                  { poId: po.id, soDocNo: docNo.trim() },
+                  {
+                    onSuccess: (res) => {
+                      window.alert(
+                        `Copied ${res.copied} item${res.copied === 1 ? '' : 's'} from ${res.sourceDocNo}.`
+                        + (res.skipped > 0 ? ` Skipped ${res.skipped} (already on this PO).` : ''),
+                      );
+                    },
+                    onError: (err) => {
+                      window.alert(
+                        `Convert failed: ${err instanceof Error ? err.message : String(err)}`,
+                      );
+                    },
+                  },
+                );
+              }}
+              disabled={convertFromSo.isPending}
+            >
+              <ArrowRightLeft {...ICON} />
+              <span>{convertFromSo.isPending ? 'Converting…' : 'Convert from SO'}</span>
+            </Button>
+          )}
           {po.status === 'DRAFT' && (
             <Button variant="primary" size="md"
               onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
