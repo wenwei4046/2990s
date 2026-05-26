@@ -148,17 +148,29 @@ export function useUpdateProductModel() {
   });
 }
 
-/** PR #49 / #51 — "Open a code, don't open it 20 times" generator. Reads the
-    Model's allowed_options and INSERTs one mfg_products row per combination.
-    When `codes` is omitted, generates ALL combos. When provided, generates only
-    the listed codes (the "+ Add Code" tick-picker workflow). */
+/** PR #49 / #51 / #69 — Generator. Two modes:
+ *    - `rows: [{code, name, size_code?, size_label?}]` — client supplies the
+ *      exact rows to materialise (computed from local allowed_options state).
+ *      Bypasses the DB's saved allowed_options so commander doesn't have to
+ *      click "Save changes" before "Add codes".
+ *    - `codes: string[]` — server materialises the cartesian product from the
+ *      saved allowed_options, then INSERTs only the listed codes.
+ *    - neither — server materialises everything from saved allowed_options.
+ */
 export function useGenerateModelSkus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (args: { id: string; codes?: string[] }) => {
+    mutationFn: async (args: {
+      id: string;
+      rows?:  Array<{ code: string; name: string; size_code?: string | null; size_label?: string | null }>;
+      codes?: string[];
+    }) => {
+      const body: Record<string, unknown> = {};
+      if (args.rows && args.rows.length > 0) body.rows = args.rows;
+      else if (args.codes && args.codes.length > 0) body.codes = args.codes;
       return authedFetch<{ generated: number; skipped: number; codes: string[] }>(
         `/product-models/${args.id}/generate-skus`,
-        { method: 'POST', body: JSON.stringify({ codes: args.codes ?? null }) },
+        { method: 'POST', body: JSON.stringify(body) },
       );
     },
     onSuccess: (_, vars) => {

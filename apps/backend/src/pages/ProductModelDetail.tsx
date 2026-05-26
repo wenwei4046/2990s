@@ -153,15 +153,15 @@ export const ProductModelDetail = () => {
             <input type="text" value={model.category} readOnly className={styles.readonly} />
           </label>
           <label className={styles.field}>
-            <span className="t-eyebrow">Branding {(model.category === 'SOFA' || model.category === 'BEDFRAME' || model.category === 'MATTRESS') && '*'}</span>
+            <span className="t-eyebrow">Branding (optional)</span>
             <input
               type="text"
               value={branding}
               onChange={(e) => setBranding(e.target.value)}
               placeholder={
                 model.category === 'SOFA' ? 'e.g. HOUZS'
-                : model.category === 'BEDFRAME' ? 'e.g. HILTON / FENRIR / CODY'
-                : model.category === 'MATTRESS' ? 'e.g. SEALY'
+                : model.category === 'BEDFRAME' ? 'usually encoded in Name; leave blank'
+                : model.category === 'MATTRESS' ? 'e.g. 2990S / SEALY'
                 : '—'
               }
             />
@@ -375,17 +375,23 @@ const SIZE_INFO: Record<string, { label: string; dim: string; w: number; l: numb
   SP: { label: '220X220CM', dim: '',          w: 220, l: 220 },
 };
 
+/** Candidate row carries the same fields the API's `rows` payload accepts so
+    the modal can send them straight through without re-deriving server-side. */
+type Candidate = { code: string; name: string; size_code: string | null; size_label: string | null };
+
 function computeCandidates(
   category: string,
   modelCode: string,
   modelName: string,
   allowed: AOpts,
   mattressThicknessCm: number | null,
-): Array<{ code: string; name: string }> {
+): Candidate[] {
   if (category === 'SOFA') {
     return (allowed.compartments ?? []).map((comp) => ({
-      code: `${modelCode}-${comp}`,
-      name: `${modelName} ${comp}`.trim(),
+      code:       `${modelCode}-${comp}`,
+      name:       `${modelName} ${comp}`.trim(),
+      size_code:  null,
+      size_label: null,
     }));
   }
   if (category === 'BEDFRAME') {
@@ -393,23 +399,31 @@ function computeCandidates(
       const info  = SIZE_INFO[sz];
       const label = info?.label ?? sz;
       const namePart = info?.dim ? `${modelName} (${label}) (${info.dim})` : `${modelName} (${label})`;
-      return { code: `${modelCode}-(${sz})`, name: namePart.trim() };
+      return {
+        code:       `${modelCode}-(${sz})`,
+        name:       namePart.trim(),
+        size_code:  sz,
+        size_label: label,
+      };
     });
   }
   if (category === 'MATTRESS') {
     return (allowed.sizes ?? []).map((sz) => {
       const info  = SIZE_INFO[sz];
+      const label = info?.label ?? sz;
       let dimPart: string;
       if (info && mattressThicknessCm != null) {
         dimPart = `${info.w}x${info.l}x${mattressThicknessCm}CM`;
       } else if (info?.dim) {
         dimPart = info.dim.toLowerCase();
       } else {
-        dimPart = info?.label ?? sz;
+        dimPart = label;
       }
       return {
-        code: `${modelCode} MATT (${sz})`,
-        name: `${modelName} (${dimPart})`.trim(),
+        code:       `${modelCode} MATT (${sz})`,
+        name:       `${modelName} (${dimPart})`.trim(),
+        size_code:  sz,
+        size_label: label,
       };
     });
   }
@@ -456,8 +470,20 @@ function AddCodesModal({
       window.alert('Pick at least one code to add.');
       return;
     }
+    // PR #69 — send the FULL rows the modal computed locally so the API
+    // doesn't need the saved allowed_options. Commander used to hit
+    // `no_sizes` when she ticked sizes but didn't click Save Changes
+    // before clicking Add codes.
+    const rows = candidates
+      .filter((c) => picked.has(c.code) && !existingSet.has(c.code))
+      .map((c) => ({
+        code:       c.code,
+        name:       c.name,
+        size_code:  c.size_code,
+        size_label: c.size_label,
+      }));
     generateMut.mutate(
-      { id: modelId, codes: Array.from(picked) },
+      { id: modelId, rows },
       {
         onSuccess: (res) => {
           window.alert(
