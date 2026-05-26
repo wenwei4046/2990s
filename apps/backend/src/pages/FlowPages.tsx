@@ -116,7 +116,11 @@ export const Grns = () => {
         title="Goods Receipt Notes"
         subtitle="GRN — receive stock against PO"
         newLabel="New GRN"
-        onNew={() => setOpen(true)}
+        // PR — Phase 2: New GRN flow starts from a PO Detail "Receive
+        // Goods" button (so the GRN is bound to a PO + items pre-fill).
+        // Clicking "New GRN" on the list bounces to the PO list so
+        // commander picks the PO first.
+        onNew={() => navigate('/purchase-orders')}
       />
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} GRN`}</p>

@@ -15,7 +15,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Send, Ban, ArrowRightLeft,
 } from 'lucide-react';
@@ -63,6 +63,7 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
 
 export const PurchaseOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const detail = usePurchaseOrderDetail(id ?? null);
   const updateHeader = useUpdatePurchaseOrderHeader();
   // PR #78 — Convert from SO mutation. Pop a prompt for SO doc_no, the
@@ -197,6 +198,15 @@ export const PurchaseOrderDetail = () => {
               onClick={() => { if (confirm(`Cancel PO ${po.po_number}?`)) cancel.mutate(po.id); }}>
               <Ban {...ICON} />
               <span>Cancel</span>
+            </Button>
+          )}
+          {/* PR — Phase 2: "Receive Goods" → /grns/new?poId=X. Only shown
+              once the PO is SUBMITTED or PARTIALLY_RECEIVED so DRAFT POs
+              don't trigger inventory writes prematurely. */}
+          {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
+            <Button variant="primary" size="md"
+              onClick={() => navigate(`/grns/new?poId=${po.id}`)}>
+              <span>Receive Goods</span>
             </Button>
           )}
         </div>
