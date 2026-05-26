@@ -13,6 +13,7 @@ import {
   findSnap,
   hasArmConflict,
   reclinerEligible,
+  isAccessoryModule,
   summarizeSofaCells,
   type Cell,
   type Depth,
@@ -566,6 +567,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       if (!analysis?.closed) return;
       const groupCells = analysis.group;
       if (groupCells.length === 0) return;
+      // Never rewrite a group that includes an accessory (console / stool) to
+      // its canonical seat-only SKUs — that would delete the accessory cell
+      // entirely (e.g. 1A + WC-45 + 2A matches the 3S signature, whose canonical
+      // [1A,2A] is closed and would replace the console). The PO layer
+      // (cellsToPoSkus) already splits accessories onto their own lines, so the
+      // canvas safely keeps the user's modules exactly as laid out.
+      if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return;
       const groupIds = new Set(
         groupCells.map((c) => c.id).filter((x): x is string => x != null),
       );
@@ -1194,6 +1202,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             if (!g.bundle) return null;
             const groupCells = analyses[i]?.group;
             if (!groupCells || groupCells.length === 0) return null;
+            // Skip when the group includes an accessory (console / stool). The
+            // bundle composite PNG depicts only the seat shell but is sized to
+            // the WHOLE group bbox — including the accessory's width — so it
+            // paints over and hides the console underneath (it only reappeared
+            // in "Edit modules", which suppresses this overlay). Mirror
+            // describeSofaLine's hasAccessory rule: keep every compartment
+            // visible by drawing the individual module silhouettes instead.
+            if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return null;
             // Skip when the modular shape isn't actually closed. groupPrice
             // intentionally treats a lone handed module (1A-RHF, 2B-RHF, …)
             // as a 1S/2S bundle for PO + pricing (factory ships a complete
