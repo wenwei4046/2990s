@@ -1,22 +1,27 @@
 // ----------------------------------------------------------------------------
-// SalesOrderNew — full-page Create SO at /mfg-sales-orders/new (PR #106).
+// SalesOrderNew — full-page Create SO at /mfg-sales-orders/new.
 //
-// Commander 2026-05-26: "我是要直接整个一个 Full 的界面" — the old side-
-// drawer is replaced by a full-page form modelled after PurchaseOrderNew
-// (PR #103, AutoCount parity). This is PR 1 of a 3-PR rebuild:
+// PR #113 — POS-aligned customer fields. Commander 2026-05-26 compared this
+// page with the POS handover screen (Customer / Address / Emergency / Target
+// date) and pointed out the backend form was missing every field beyond a
+// debtor name + 4 generic address lines. The schema (migration 0060_so_pos_
+// alignment) already carries email, customer_type, salesperson_id, city,
+// postcode, building_type, emergency_contact_*, target_date — they just
+// weren't exposed in this form.
 //
-//   PR 1 (this) — Move the existing CreateSalesOrderDrawer field set into a
-//                 dedicated route. Layout mirrors PurchaseOrderNew. No new
-//                 fields, no new line-item shape — just relocate.
-//   PR 2        — Order Details card per POS pattern (Customer dropdown,
-//                 Delivery Hub, Customer PO No / SO No, Reference, SO Date,
-//                 Customer Delivery Date, Notes).
-//   PR 3        — Line Items per HOOKKA pattern (Product picker + Size +
-//                 Fabric + Qty + Base Price + Gap + Divan / Leg / Total
-//                 Height + Special Orders dropdown + custom items + Notes).
+// Layout:
+//   CUSTOMER card        — Debtor Name * · Phone · Email · Salesperson · Customer Type
+//   DELIVERY ADDRESS     — Address 1 · Address 2 · State (cascade) · City (cascade)
+//                          · Postcode · Building Type · "fill later" checkbox
+//   EMERGENCY CONTACT    — Name · Relationship · Phone
+//   TARGET DATE          — single date picker (POS calls it "target install date")
+//   LINES                — existing inline line-item table (PR 3 will swap the
+//                          plain-text item code for a Product picker + per-
+//                          category variant fields)
+//   NOTE                 — internal notes
 //
-// CreateSalesOrderDrawer in FlowDrawers.tsx is left in place (unused) until
-// PR 2 lands and we can delete it confidently.
+// Saves a single POST to /mfg-sales-orders with all fields filled in camelCase
+// (API §POST handler maps each to its snake_case column).
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
@@ -24,22 +29,36 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreateMfgSalesOrder } from '../lib/flow-queries';
+import { useStaff } from '../lib/admin-queries';
+import {
+  useLocalities, distinctStates, citiesInState, postcodesInCity,
+  BUILDING_TYPES,
+} from '../lib/localities-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-const SO_GROUPS    = ['bedframe', 'sofa', 'mattress', 'accessory', 'others'] as const;
-const SO_BRANDINGS = ['AKEMI', 'ZANOTTI', 'ERGOTEX', 'DUNLOPILLO', 'OTHER'] as const;
+const SO_GROUPS = ['bedframe', 'sofa', 'mattress', 'accessory', 'others'] as const;
+
+/* PR #113 — Customer type matches the POS handover dropdown. The column is
+   free-text on the schema, but we constrain to two values here so the SO
+   list filters stay clean. */
+const CUSTOMER_TYPES = ['NEW', 'EXISTING'] as const;
+
+/* PR #113 — Relationship dropdown for emergency contact. Mirrors POS list. */
+const RELATIONSHIP_OPTIONS = [
+  'Spouse', 'Parent', 'Child', 'Sibling', 'Relative', 'Friend', 'Colleague', 'Other',
+] as const;
 
 type DraftLine = {
   rid: string;
-  itemGroup:       (typeof SO_GROUPS)[number];
-  itemCode:        string;
-  description:     string;
-  qty:             number;
-  unitPriceCenti:  number;
-  discountCenti:   number;
-  unitCostCenti:   number;
+  itemGroup:      (typeof SO_GROUPS)[number];
+  itemCode:       string;
+  description:    string;
+  qty:            number;
+  unitPriceCenti: number;
+  discountCenti:  number;
+  unitCostCenti:  number;
 };
 
 const newLine = (group: (typeof SO_GROUPS)[number] = 'bedframe'): DraftLine => ({
@@ -56,23 +75,37 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 export const SalesOrderNew = () => {
   const navigate = useNavigate();
   const create   = useCreateMfgSalesOrder();
+  const staff    = useStaff();
+  const loc      = useLocalities();
 
-  // ── Header state ────────────────────────────────────────────────────
-  const [debtorCode, setDebtorCode] = useState('');
-  const [debtorName, setDebtorName] = useState('');
-  const [agent,      setAgent]      = useState('');
-  const [branding,   setBranding]   = useState('');
-  const [venue,      setVenue]      = useState('');
-  const [poDocNo,    setPoDocNo]    = useState('');
-  const [ref,        setRef]        = useState('');
-  const [address1,   setAddress1]   = useState('');
-  const [address2,   setAddress2]   = useState('');
-  const [address3,   setAddress3]   = useState('');
-  const [address4,   setAddress4]   = useState('');
-  const [phone,      setPhone]      = useState('');
-  const [note,       setNote]       = useState('');
+  // ── Customer fields ────────────────────────────────────────────────
+  const [debtorName,    setDebtorName]    = useState('');
+  const [phone,         setPhone]         = useState('');
+  const [email,         setEmail]         = useState('');
+  const [salespersonId, setSalespersonId] = useState('');
+  const [customerType,  setCustomerType]  = useState<'NEW' | 'EXISTING' | ''>('');
 
-  // ── Items state ─────────────────────────────────────────────────────
+  // ── Delivery address ───────────────────────────────────────────────
+  const [fillAddressLater, setFillAddressLater] = useState(false);
+  const [address1,    setAddress1]    = useState('');
+  const [address2,    setAddress2]    = useState('');
+  const [state,       setState]       = useState('');
+  const [city,        setCity]        = useState('');
+  const [postcode,    setPostcode]    = useState('');
+  const [buildingType, setBuildingType] = useState<typeof BUILDING_TYPES[number] | ''>('');
+
+  // ── Emergency contact ──────────────────────────────────────────────
+  const [emergencyName,  setEmergencyName]   = useState('');
+  const [emergencyRel,   setEmergencyRel]    = useState<typeof RELATIONSHIP_OPTIONS[number] | ''>('');
+  const [emergencyPhone, setEmergencyPhone]  = useState('');
+
+  // ── Target date ────────────────────────────────────────────────────
+  const [targetDate, setTargetDate] = useState('');
+
+  // ── Notes ──────────────────────────────────────────────────────────
+  const [note, setNote] = useState('');
+
+  // ── Items state ────────────────────────────────────────────────────
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
 
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
@@ -90,11 +123,20 @@ export const SalesOrderNew = () => {
     [lines],
   );
 
+  // ── Locality cascades ──────────────────────────────────────────────
+  const locRows = loc.data ?? [];
+  const states  = useMemo(() => distinctStates(locRows), [locRows]);
+  const cities  = useMemo(() => state ? citiesInState(locRows, state) : [], [locRows, state]);
+  const postcodes = useMemo(
+    () => (state && city) ? postcodesInCity(locRows, state, city) : [],
+    [locRows, state, city],
+  );
+
   const canSave = debtorName.trim().length > 0;
 
   const onSave = () => {
     if (!canSave) {
-      window.alert('Debtor name is required.');
+      window.alert('Customer name is required.');
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
@@ -105,9 +147,25 @@ export const SalesOrderNew = () => {
 
     create.mutate(
       {
-        debtorCode, debtorName, agent, branding,
-        venue, poDocNo, ref,
-        address1, address2, address3, address4, phone, note,
+        debtorName,
+        phone: phone || undefined,
+        email: email || undefined,
+        salespersonId: salespersonId || undefined,
+        customerType: customerType || undefined,
+        // Address — only sent when "fill later" isn't checked
+        ...(fillAddressLater ? {} : {
+          address1: address1 || undefined,
+          address2: address2 || undefined,
+          customerState: state || undefined,
+          city: city || undefined,
+          postcode: postcode || undefined,
+          buildingType: buildingType || undefined,
+        }),
+        emergencyContactName:         emergencyName  || undefined,
+        emergencyContactRelationship: emergencyRel   || undefined,
+        emergencyContactPhone:        emergencyPhone || undefined,
+        targetDate: targetDate || undefined,
+        note: note || undefined,
         items: validLines.map((l) => ({
           itemGroup:      l.itemGroup,
           itemCode:       l.itemCode,
@@ -125,9 +183,6 @@ export const SalesOrderNew = () => {
     );
   };
 
-  // Items grid template — keeps header + body in lockstep without a fresh
-  // CSS module file just for this one table. Matches the PurchaseOrderNew
-  // pattern.
   const gridTemplate = '110px minmax(160px, 1.2fr) minmax(180px, 1.6fr) 70px 110px 120px 32px';
   const cellPad = 'var(--space-2) var(--space-2)';
 
@@ -156,7 +211,7 @@ export const SalesOrderNew = () => {
         </div>
       </div>
 
-      {/* Customer card */}
+      {/* ── Customer ────────────────────────────────────────────────── */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Customer</h2>
@@ -164,72 +219,240 @@ export const SalesOrderNew = () => {
         <div className={styles.cardBody}>
           <div className={styles.formGrid2}>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Debtor Code</span>
-              <input type="text" value={debtorCode} onChange={(e) => setDebtorCode(e.target.value)} className={styles.fieldInput} />
+              <span className={styles.fieldLabel}>Full Name *</span>
+              <input
+                type="text"
+                value={debtorName}
+                onChange={(e) => setDebtorName(e.target.value)}
+                className={styles.fieldInput}
+                placeholder="e.g. Lim Mei Hua"
+                required
+              />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Debtor Name *</span>
-              <input type="text" value={debtorName} onChange={(e) => setDebtorName(e.target.value)} className={styles.fieldInput} required />
+              <span className={styles.fieldLabel}>Phone</span>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+60 12 345 6789"
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Email</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="customer@example.com — for receipt & order updates"
+                className={styles.fieldInput}
+              />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Agent</span>
-              <input type="text" value={agent} onChange={(e) => setAgent(e.target.value)} className={styles.fieldInput} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Branding</span>
-              <select value={branding} onChange={(e) => setBranding(e.target.value)} className={styles.fieldInput}>
+              <span className={styles.fieldLabel}>Salesperson</span>
+              <select
+                value={salespersonId}
+                onChange={(e) => setSalespersonId(e.target.value)}
+                className={styles.fieldInput}
+              >
                 <option value="">—</option>
-                {SO_BRANDINGS.map((b) => <option key={b} value={b}>{b}</option>)}
+                {(staff.data ?? []).filter((s) => s.active).map((s) => (
+                  <option key={s.id} value={s.id}>{s.staffCode} · {s.name}</option>
+                ))}
               </select>
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Venue</span>
-              <input type="text" value={venue} onChange={(e) => setVenue(e.target.value)} className={styles.fieldInput} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer PO #</span>
-              <input type="text" value={poDocNo} onChange={(e) => setPoDocNo(e.target.value)} className={styles.fieldInput} />
+              <span className={styles.fieldLabel}>Customer Type</span>
+              <select
+                value={customerType}
+                onChange={(e) => setCustomerType(e.target.value as typeof customerType)}
+                className={styles.fieldInput}
+              >
+                <option value="">—</option>
+                {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t === 'NEW' ? 'New' : 'Existing'}</option>)}
+              </select>
             </label>
           </div>
         </div>
       </section>
 
-      {/* Delivery address card */}
+      {/* ── Delivery Address ────────────────────────────────────────── */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Delivery Address</h2>
         </div>
         <div className={styles.cardBody}>
-          <div className={styles.formGrid2}>
-            <label className={styles.field} style={{ gridColumn: '1 / -1' }}>
-              <span className={styles.fieldLabel}>Address 1</span>
-              <input type="text" value={address1} onChange={(e) => setAddress1(e.target.value)} className={styles.fieldInput} />
+          {/* "Fill in address later" — defers full address capture until
+              dispatch. POS uses the same checkbox so commander can take an
+              order without making the customer wait. */}
+          <label
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)',
+              padding: 'var(--space-3)',
+              background: fillAddressLater ? 'rgba(232, 107, 58, 0.08)' : 'var(--c-cream)',
+              border: '1px solid ' + (fillAddressLater ? 'var(--c-orange)' : 'var(--line)'),
+              borderRadius: 'var(--radius-md)',
+              marginBottom: 'var(--space-3)',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={fillAddressLater}
+              onChange={(e) => setFillAddressLater(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 'var(--fs-14)' }}>Fill in address later</div>
+              <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                Customer hasn't confirmed delivery address yet — we'll capture it before dispatch.
+              </div>
+            </div>
+          </label>
+
+          <div className={styles.formGrid2} style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}>
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Address Line 1</span>
+              <input
+                type="text"
+                value={address1}
+                onChange={(e) => setAddress1(e.target.value)}
+                placeholder="Unit, street, area"
+                className={styles.fieldInput}
+              />
             </label>
-            <label className={styles.field} style={{ gridColumn: '1 / -1' }}>
-              <span className={styles.fieldLabel}>Address 2</span>
-              <input type="text" value={address2} onChange={(e) => setAddress2(e.target.value)} className={styles.fieldInput} />
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Address Line 2</span>
+              <input
+                type="text"
+                value={address2}
+                onChange={(e) => setAddress2(e.target.value)}
+                placeholder="Apt, floor, building (optional)"
+                className={styles.fieldInput}
+              />
+            </label>
+
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>State</span>
+              <select
+                value={state}
+                onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
+                className={styles.fieldInput}
+              >
+                <option value="">—</option>
+                {states.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Address 3</span>
-              <input type="text" value={address3} onChange={(e) => setAddress3(e.target.value)} className={styles.fieldInput} />
+              <span className={styles.fieldLabel}>City</span>
+              <select
+                value={city}
+                onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
+                className={styles.fieldInput}
+                disabled={!state}
+              >
+                <option value="">{state ? '—' : '(Pick state first)'}</option>
+                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Postcode</span>
+              <select
+                value={postcode}
+                onChange={(e) => setPostcode(e.target.value)}
+                className={styles.fieldInput}
+                disabled={!state || !city}
+              >
+                <option value="">{(state && city) ? '—' : '(Pick city first)'}</option>
+                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Address 4</span>
-              <input type="text" value={address4} onChange={(e) => setAddress4(e.target.value)} className={styles.fieldInput} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Phone</span>
-              <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} className={styles.fieldInput} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Ref</span>
-              <input type="text" value={ref} onChange={(e) => setRef(e.target.value)} className={styles.fieldInput} />
+              <span className={styles.fieldLabel}>Building Type</span>
+              <select
+                value={buildingType}
+                onChange={(e) => setBuildingType(e.target.value as typeof buildingType)}
+                className={styles.fieldInput}
+              >
+                <option value="">—</option>
+                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
             </label>
           </div>
         </div>
       </section>
 
-      {/* Items card */}
+      {/* ── Emergency Contact ───────────────────────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Emergency Contact</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Used only if we cannot reach the customer on delivery day
+          </span>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Contact Name</span>
+              <input
+                type="text"
+                value={emergencyName}
+                onChange={(e) => setEmergencyName(e.target.value)}
+                placeholder="e.g. Lim Mei Hua"
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Relationship</span>
+              <select
+                value={emergencyRel}
+                onChange={(e) => setEmergencyRel(e.target.value as typeof emergencyRel)}
+                className={styles.fieldInput}
+              >
+                <option value="">—</option>
+                {RELATIONSHIP_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </label>
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Phone</span>
+              <input
+                type="tel"
+                value={emergencyPhone}
+                onChange={(e) => setEmergencyPhone(e.target.value)}
+                placeholder="+60 12 345 6789"
+                className={styles.fieldInput}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Target Date ─────────────────────────────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Target Date</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Customer's preferred install / use date — drives schedule planning
+          </span>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Target Date</span>
+              <input
+                type="date"
+                value={targetDate}
+                onChange={(e) => setTargetDate(e.target.value)}
+                className={styles.fieldInput}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Items / Lines ───────────────────────────────────────────── */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Lines</h2>
@@ -238,7 +461,6 @@ export const SalesOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody}>
-          {/* Header row */}
           <div style={{
             display: 'grid',
             gridTemplateColumns: gridTemplate,
@@ -261,7 +483,6 @@ export const SalesOrderNew = () => {
             <div></div>
           </div>
 
-          {/* Body rows */}
           {lines.map((l) => {
             const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - l.discountCenti);
             return (
@@ -376,7 +597,7 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* Note card */}
+      {/* ── Note ────────────────────────────────────────────────────── */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Note</h2>
