@@ -102,15 +102,15 @@ export const ProductModelDetail = () => {
     if (!window.confirm(
       `Delete Model "${model.model_code} · ${model.name}"? ${skuCount} SKU(s) will keep their rows but lose the Model link.`,
     )) return;
-    deleteMut.mutate(id, { onSuccess: () => navigate('/product-models') });
+    deleteMut.mutate(id, { onSuccess: () => navigate('/products') });
   };
 
   return (
     <div className={styles.page}>
       {/* Header --------------------------------------------------------- */}
       <header className={styles.header}>
-        <Link to="/product-models" className={styles.back}>
-          <ArrowLeft {...ICON} /> Models
+        <Link to="/products" className={styles.back}>
+          <ArrowLeft {...ICON} /> Products & Maintenance
         </Link>
         <div className={styles.titleRow}>
           <Layers size={20} strokeWidth={1.75} />
