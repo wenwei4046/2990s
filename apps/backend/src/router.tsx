@@ -26,6 +26,7 @@ import { Drivers } from './pages/Drivers';
 import { Accounting } from './pages/Accounting';
 import { Warehouses } from './pages/Warehouses';
 import { PurchaseOrderDetail } from './pages/PurchaseOrderDetail';
+import { PurchaseOrderNew } from './pages/PurchaseOrderNew';
 import { Outstanding } from './pages/Outstanding';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
@@ -53,8 +54,9 @@ export const router = createBrowserRouter([
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
-      { path: 'purchase-orders', element: <PurchaseOrders /> },
-      { path: 'purchase-orders/:id', element: <PurchaseOrderDetail /> },
+      { path: 'purchase-orders',      element: <PurchaseOrders /> },
+      { path: 'purchase-orders/new',  element: <PurchaseOrderNew /> },
+      { path: 'purchase-orders/:id',  element: <PurchaseOrderDetail /> },
       { path: 'grns', element: <Grns /> },
       { path: 'grns/:id', element: <GrnDetail /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
