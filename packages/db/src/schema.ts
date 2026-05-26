@@ -1871,6 +1871,19 @@ export const warehouses = pgTable('warehouses', {
   idxActive: index('idx_warehouses_active').on(t.isActive),
 }));
 
+/* PR #158 — Migration 0071. Commander 2026-05-27: "什么 State 对应哪个
+   Warehouse 也需要设置清楚". One row per Malaysian state mapping to the
+   warehouse that handles dispatch for that region. Used by SO routing +
+   DO hub picking. */
+export const stateWarehouseMappings = pgTable('state_warehouse_mappings', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  state:       text('state').notNull().unique(),
+  warehouseId: uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  notes:       text('notes'),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const inventoryMovements = pgTable('inventory_movements', {
   id:             uuid('id').primaryKey().defaultRandom(),
   movementType:   inventoryMovementType('movement_type').notNull(),

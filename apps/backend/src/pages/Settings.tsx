@@ -22,15 +22,20 @@ import {
 import { PinDrawer } from '../components/PinDrawer';
 import styles from './Settings.module.css';
 
-type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'app';
+type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'localities' | 'app';
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'suppliers', label: 'Suppliers' },
-  { id: 'drivers',   label: 'Drivers' },
-  { id: 'showrooms', label: 'Showrooms' },
-  { id: 'staff',     label: 'Staff' },
-  { id: 'delivery',  label: 'Delivery fees' },
-  { id: 'app',       label: 'App config' },
+  { id: 'suppliers',  label: 'Suppliers' },
+  { id: 'drivers',    label: 'Drivers' },
+  { id: 'showrooms',  label: 'Showrooms' },
+  { id: 'staff',      label: 'Staff' },
+  { id: 'delivery',   label: 'Delivery fees' },
+  /* PR #158 — Commander 2026-05-27: "什么 State 对应哪个 Warehouse 也需要
+     设置清楚". One row per Malaysian state mapping to a warehouse for
+     dispatch routing. States/cities/postcodes themselves come from the
+     my_localities reference table (read-only display, no edit yet). */
+  { id: 'localities', label: 'Localities' },
+  { id: 'app',        label: 'App config' },
 ];
 
 export const Settings = () => {
@@ -79,8 +84,126 @@ export const Settings = () => {
       {tab === 'showrooms' && <ShowroomsTab />}
       {tab === 'staff' && <StaffTab canEdit={isAdmin} />}
       {tab === 'delivery' && <DeliveryFeesTab canEdit={isCoordOrAdmin} />}
+      {tab === 'localities' && <LocalitiesTab canEdit={isCoordOrAdmin} />}
       {tab === 'app' && <AppConfigTab />}
     </div>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────────────
+   LocalitiesTab — PR #158
+   - Top: State → Warehouse mapping CRUD (state_warehouse_mappings table)
+   - Bottom: read-only reference of distinct states from my_localities
+   Cities/postcodes can be browsed via the cascading dropdowns in the New
+   SO form; full CRUD on those rows is out of scope for this PR. */
+
+import {
+  useStateWarehouseMappings,
+  useUpsertStateWarehouseMapping,
+  useDeleteStateWarehouseMapping,
+} from '../lib/state-warehouse-queries';
+import { useWarehouses } from '../lib/inventory-queries';
+import { useLocalities, distinctStates } from '../lib/localities-queries';
+
+const LocalitiesTab = ({ canEdit }: { canEdit: boolean }) => {
+  const mappings = useStateWarehouseMappings();
+  const warehouses = useWarehouses();
+  const localities = useLocalities();
+  const upsert = useUpsertStateWarehouseMapping();
+  const remove = useDeleteStateWarehouseMapping();
+
+  const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
+  const mappedByState = useMemo(() => {
+    const m = new Map<string, { warehouseId: string | null; notes: string | null }>();
+    for (const row of mappings.data?.mappings ?? []) {
+      m.set(row.state, { warehouseId: row.warehouseId, notes: row.notes });
+    }
+    return m;
+  }, [mappings.data]);
+
+  return (
+    <>
+      <div className={styles.readOnlyBanner}>
+        <strong>State → Warehouse mapping.</strong> Pick the dispatch warehouse
+        for each state. When a customer's delivery address is in that state, the
+        SO Detail page suggests this warehouse as the Sales Location automatically.
+        States, cities, and postcodes themselves are read-only references from
+        my_localities — edit those via Supabase Studio for now.
+      </div>
+
+      <div className={styles.tableCard}>
+        {mappings.isLoading || warehouses.isLoading || localities.isLoading ? (
+          <div className={styles.empty}>Loading…</div>
+        ) : states.length === 0 ? (
+          <div className={styles.empty}>No states found in my_localities.</div>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Warehouse</th>
+                <th>Notes</th>
+                {canEdit && <th aria-label="actions" />}
+              </tr>
+            </thead>
+            <tbody>
+              {states.map((state) => {
+                const current = mappedByState.get(state);
+                return (
+                  <tr key={state}>
+                    <td><strong>{state}</strong></td>
+                    <td>
+                      <select
+                        className={styles.input}
+                        value={current?.warehouseId ?? ''}
+                        disabled={!canEdit || upsert.isPending}
+                        onChange={(e) => {
+                          const warehouseId = e.target.value || null;
+                          upsert.mutate({ state, warehouseId, notes: current?.notes ?? null });
+                        }}
+                      >
+                        <option value="">— Unassigned —</option>
+                        {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
+                          <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        className={styles.input}
+                        value={current?.notes ?? ''}
+                        disabled={!canEdit || upsert.isPending}
+                        placeholder="Optional"
+                        onBlur={(e) => {
+                          const notes = e.target.value.trim() || null;
+                          if ((current?.notes ?? null) === notes) return;
+                          upsert.mutate({ state, warehouseId: current?.warehouseId ?? null, notes });
+                        }}
+                      />
+                    </td>
+                    {canEdit && (
+                      <td>
+                        {current && (
+                          <button
+                            type="button"
+                            className={styles.editBtn}
+                            disabled={remove.isPending}
+                            onClick={() => remove.mutate({ state })}
+                            aria-label={`Clear mapping for ${state}`}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
   );
 };
 
