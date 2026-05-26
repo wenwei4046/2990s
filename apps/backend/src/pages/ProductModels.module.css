@@ -174,7 +174,20 @@
   border: 1px solid var(--line);
   color: var(--c-ink);
   display: inline-block;
-  letter-spacing: 0.01em;
+  /* PR #137 — dropped letter-spacing: 0.01em so the chip's text renders
+     letter-for-letter identical to .nameText (commander: "字体 standardise
+     掉"). The pill wrapper stays for the visual code/name distinction. */
+}
+
+/* PR #137 — whole-row double-click. Commander: "我希望指向那个 row，就可以
+   通过双击点进去". Single-click was reverted in PR #110 (triggered on
+   accidental scroll hovers); double-click is a deliberate action so it
+   reads as intent. */
+.modelRow {
+  cursor: pointer;
+}
+.modelRow:hover {
+  background: var(--c-cream);
 }
 .codeChipLink {
   text-decoration: none;

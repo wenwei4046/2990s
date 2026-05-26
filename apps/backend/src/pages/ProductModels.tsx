@@ -194,13 +194,17 @@ export const ProductModels = () => {
             </thead>
             <tbody>
               {rows.map((m) => (
-                // PR #110 — Commander 2026-05-26: PR #108's whole-row click
-                // was triggering accidental jumps when commander scrolled
-                // past or hovered near a row. Reverted to "code chip is
-                // the only click target". Row stays non-interactive; the
-                // chip is a Link (gets proper cursor + middle-click /
-                // cmd-click open in new tab).
-                <tr key={m.id}>
+                // PR #137 — Commander 2026-05-26: "我希望指向那个 row，就可以
+                // 通过双击点进去". Single-click was reverted in PR #110 because
+                // it fired on incidental scroll hovers; double-click is
+                // deliberate enough to read as intent. Row hover gets a
+                // pointer cursor + cream highlight so the affordance is
+                // visible.
+                <tr
+                  key={m.id}
+                  className={styles.modelRow}
+                  onDoubleClick={() => setOpenModelId(m.id)}
+                >
                   <td>
                     <input
                       type="checkbox"
