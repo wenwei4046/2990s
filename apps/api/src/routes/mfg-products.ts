@@ -163,13 +163,63 @@ mfgProducts.post('/batch-import', async (c) => {
 // PR #82 (Commander 2026-05-26) — SKU Master multi-select delete needs a
 // per-row DELETE endpoint. Bulk delete = N parallel DELETE calls from the
 // client (matches the pattern PR #62 used for fabric_trackings wipe).
+//
+// PR #94 (Commander 2026-05-26) — `?force=true` query flag. Test SKUs that
+// have lingering inventory_stock_lots / inventory_movements / supplier_
+// material_bindings rows from earlier QA reject the plain DELETE with a
+// 23503 FK violation. Force mode wipes those side-tables first (by
+// material_code / product_code) then drops the SKU row. Front-end exposes
+// it as a follow-up "Force delete" button after a normal delete fails so
+// commander never destroys side data unintentionally.
 mfgProducts.delete('/:id', async (c) => {
-  const id = c.req.param('id');
+  const id    = c.req.param('id');
+  const force = c.req.query('force') === 'true';
   const supabase = c.get('supabase');
+
+  if (force) {
+    // Resolve the SKU code first — the side tables key off code, not id.
+    const { data: row, error: loadErr } = await supabase
+      .from('mfg_products')
+      .select('code')
+      .eq('id', id)
+      .maybeSingle();
+    if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
+    if (!row)    return c.json({ error: 'not_found' }, 404);
+
+    const code = row.code;
+    const cleanup: Array<{ table: string; column: string; value: string }> = [
+      // Inventory side — stock lots + movements key off product_code.
+      { table: 'inventory_stock_lots',         column: 'product_code',  value: code },
+      { table: 'inventory_movements',          column: 'product_code',  value: code },
+      // Procurement side — supplier ↔ material bindings key off material_code.
+      { table: 'supplier_material_bindings',   column: 'material_code', value: code },
+    ];
+    for (const c2 of cleanup) {
+      const { error: delErr } = await supabase.from(c2.table).delete().eq(c2.column, c2.value);
+      // Best-effort: missing table / no-rows-affected is fine. RLS denial we
+      // surface so commander knows force isn't actually clearing.
+      if (delErr && delErr.code === '42501') {
+        return c.json({ error: 'forbidden', reason: `${c2.table}: ${delErr.message}` }, 403);
+      }
+      // Other errors (e.g. relation does not exist on a fresh deployment)
+      // get swallowed — the SKU delete below will surface anything still
+      // blocking.
+    }
+  }
+
   const { error } = await supabase.from('mfg_products').delete().eq('id', id);
   if (error) {
     if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
-    if (error.code === '23503') return c.json({ error: 'product_in_use', reason: 'Product is referenced by an order / PO / GRN line; remove those first.' }, 409);
+    if (error.code === '23503') {
+      // PR #94 — Echo the actual constraint name back so the UI can suggest
+      // force-delete with a meaningful hint.
+      return c.json({
+        error:      'product_in_use',
+        reason:     'Product is referenced by an order / PO / GRN line; remove those first or use force delete.',
+        constraint: (error as { details?: string }).details ?? null,
+        message:    error.message,
+      }, 409);
+    }
     return c.json({ error: 'delete_failed', reason: error.message }, 500);
   }
   return c.body(null, 204);

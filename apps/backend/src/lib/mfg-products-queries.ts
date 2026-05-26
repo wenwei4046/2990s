@@ -305,12 +305,21 @@ export function useCreateMfgProduct() {
 
 /* PR #82 (Commander 2026-05-26) — DELETE /mfg-products/:id. SKU Master
    multi-select delete fans out N parallel mutateAsync calls; per-row 404
-   / 409 surface as a failed-mutation rejection the caller handles. */
+   / 409 surface as a failed-mutation rejection the caller handles.
+   PR #94 — Optional `force` flag adds ?force=true which wipes
+   inventory_stock_lots / inventory_movements / supplier_material_bindings
+   rows that reference this SKU before dropping it. Front-end exposes
+   force as a follow-up "Force delete" button after a normal delete fails
+   so commander never destroys side data unintentionally. */
 export function useDeleteMfgProduct() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) =>
-      authedFetch<void>(`/mfg-products/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    mutationFn: (args: string | { id: string; force?: boolean }) => {
+      const id    = typeof args === 'string' ? args : args.id;
+      const force = typeof args === 'string' ? false : !!args.force;
+      const qs    = force ? '?force=true' : '';
+      return authedFetch<void>(`/mfg-products/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
     },
