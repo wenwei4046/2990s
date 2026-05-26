@@ -26,7 +26,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Plus, Save, Sofa, X } from 'lucide-react';
+import { ArrowLeft, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreateMfgSalesOrder, useDebtorSearch } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -36,7 +36,7 @@ import {
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
-import { SofaSetDialog } from '../components/SofaSetDialog';
+import { SofaSetInline } from '../components/SofaSetInline';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -133,12 +133,12 @@ export const SalesOrderNew = () => {
   const addLine  = () => setLines((prev) => [...prev, newLine()]);
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
 
-  // PR #142 — Sofa Set Dialog: commander picks a base_model + multi-selects
-  // modules, dialog returns N { itemCode, description, unitPriceCenti } rows
+  // PR #142 / #145 — Sofa Set: commander picks a base_model + multi-selects
+  // modules from an inline picker bar at the top of LINES (HOOKKA-style,
+  // no modal). Returns N { itemCode, description, unitPriceCenti } rows
   // that we splice in as N draft lines (one per picked module). Variants
-  // start empty — commander fills line 1's seat/leg/fabric, then the cascade
-  // effect below propagates to the other modules.
-  const [sofaSetOpen, setSofaSetOpen] = useState(false);
+  // start empty — commander fills line 1's seat/leg/fabric, then the
+  // post-add cascade fan-out propagates the missing keys to lines 2…N.
   const addSofaSet = (modules: { itemCode: string; description: string; unitPriceCenti: number }[]) => {
     setLines((prev) => {
       // Replace the trailing fully-empty seed line if it exists, else append.
@@ -153,16 +153,18 @@ export const SalesOrderNew = () => {
       }));
       return [...next, ...newLines];
     });
-    setSofaSetOpen(false);
   };
 
-  /* PR #142 — Post-add cascade. PR #141 cascades at SKU-pick time, but the
-     Sofa Set Dialog creates lines that already have a code picked AND empty
-     variants — so picking variants on LINE 1 must fan out to the empty
-     LINE 2…N lines of the same category. Watches `lines` and whenever any
-     same-category line has empty variants while an earlier line has them
-     set, copy them over. Stable because the patch becomes a no-op once
-     everything is in sync. */
+  /* PR #142 + #145 — Post-add cascade with KEY-LEVEL MERGE.
+     PR #142 originally skipped any line that already had ANY variants set,
+     so when LINE 1 was filled progressively (Seat first, then Leg later)
+     LINE 2 only inherited the Seat — Leg + Fabric never cascaded because
+     it had a non-empty variants bag after Seat was copied. Commander on
+     live: "为什么只有 Seat Size 带下来了呢". Fixed by merging key-by-key
+     instead: any same-category line gets MISSING keys filled from the
+     first line that has them. Existing non-empty keys on a line are left
+     untouched (so commander can deliberately override one module).
+     Inherited empty strings are not propagated (don't overwrite with ''). */
   useEffect(() => {
     const firstByCategory: Record<string, Record<string, unknown>> = {};
     for (const l of lines) {
@@ -176,9 +178,21 @@ export const SalesOrderNew = () => {
       if (!l.itemGroup) return l;
       const inherited = firstByCategory[l.itemGroup];
       if (!inherited) return l;
-      if (l.variants && Object.keys(l.variants).length > 0) return l;
+      const cur = (l.variants ?? {}) as Record<string, unknown>;
+      const patch: Record<string, unknown> = {};
+      let hasMissing = false;
+      for (const k of Object.keys(inherited)) {
+        const inhVal = inherited[k];
+        if (inhVal === undefined || inhVal === null || inhVal === '') continue;
+        const curVal = cur[k];
+        if (curVal === undefined || curVal === null || curVal === '') {
+          patch[k] = inhVal;
+          hasMissing = true;
+        }
+      }
+      if (!hasMissing) return l;
       didUpdate = true;
-      return { ...l, variants: { ...inherited } };
+      return { ...l, variants: { ...cur, ...patch } };
     });
     if (didUpdate) setLines(next);
   }, [lines]);
@@ -619,6 +633,13 @@ export const SalesOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          {/* PR #145 — Inline Sofa Set picker. Commander 2026-05-26: "我的
+              点选 Multiple Select Product Code 怎么跟我的 Hookka 那边不一
+              样呢". HOOKKA's pattern is inline (Category → Model →
+              Modules dropdown) inside the line entry form, NOT a modal.
+              Sits above the line cards as a quick-add bar. */}
+          <SofaSetInline onAdd={addSofaSet} />
+
           {lines.map((line, idx) => (
             <SoLineCard
               key={line.rid}
@@ -631,57 +652,29 @@ export const SalesOrderNew = () => {
             />
           ))}
 
-          {/* PR #142 — two add buttons:
-              - "+ Add another item" (any category, one line at a time)
-              - "+ Add Sofa Set" (pick a model → multi-select modules → adds
-                N lines at once. Commander: "根据它的 model，给我自己做
-                multiselect，给我自己点完那个 code"). */}
-          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-            <button
-              type="button"
-              onClick={addLine}
-              style={{
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                padding: '12px 14px',
-                background: 'transparent',
-                border: '1px dashed var(--c-orange)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--c-orange)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              <Plus {...ICON} /> Add another item
-            </button>
-            <button
-              type="button"
-              onClick={() => setSofaSetOpen(true)}
-              style={{
-                flex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                padding: '12px 14px',
-                background: 'transparent',
-                border: '1px dashed var(--c-burnt)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--c-burnt)',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              <Sofa {...ICON} /> Add Sofa Set
-            </button>
-          </div>
+          {/* "+ Add another item" stays as the generic single-line add */}
+          <button
+            type="button"
+            onClick={addLine}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              width: '100%',
+              padding: '12px 14px',
+              background: 'transparent',
+              border: '1px dashed var(--c-orange)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--c-orange)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            <Plus {...ICON} /> Add another item
+          </button>
 
           <div style={{
             display: 'flex',
@@ -717,13 +710,8 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* PR #142 — Sofa Set Dialog (model + modules multi-select) */}
-      {sofaSetOpen && (
-        <SofaSetDialog
-          onClose={() => setSofaSetOpen(false)}
-          onAdd={addSofaSet}
-        />
-      )}
+      {/* PR #145 — Sofa Set is now rendered INLINE inside the LINES card
+          (see <SofaSetInline> above), no modal. */}
     </div>
   );
 };

@@ -181,7 +181,9 @@ export const SalesOrderDetail = () => {
 
   // Lock mechanism — once SO leaves DRAFT, edits require explicit override.
   // CANCELLED + CLOSED + INVOICED are also locked (terminal-ish states).
-  const lockedStatuses: SoStatus[] = ['IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'];
+  // PR #145 — IN_PRODUCTION removed from the locked list (trading flow
+  // doesn't use it). READY_TO_SHIP is the new earliest locked state.
+  const lockedStatuses: SoStatus[] = ['READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'];
 
   if (detail.isLoading) {
     return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
@@ -891,10 +893,17 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
    Status transition bar
    ════════════════════════════════════════════════════════════════════════ */
 
+/* PR #145 — Commander 2026-05-26: "这个 2990 整套系统是 trading 公司来的，
+   它不是 manufacturing，不需要 in production". The IN_PRODUCTION stage is
+   a HOOKKA manufacturing concept — trading shops skip straight from
+   CONFIRMED to READY_TO_SHIP (goods already on hand at the warehouse, just
+   waiting for dispatch).
+   The DB enum still carries 'IN_PRODUCTION' (existing rows might use it),
+   but the UI no longer offers it as a forward transition. */
 const NEXT: Record<SoStatus, SoStatus[]> = {
   DRAFT:          ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED:      ['IN_PRODUCTION', 'CANCELLED'],
-  IN_PRODUCTION:  ['READY_TO_SHIP', 'CANCELLED'],
+  CONFIRMED:      ['READY_TO_SHIP', 'CANCELLED'],
+  IN_PRODUCTION:  ['READY_TO_SHIP', 'CANCELLED'], // legacy rows still resolve
   READY_TO_SHIP:  ['SHIPPED'],
   SHIPPED:        ['DELIVERED'],
   DELIVERED:      ['INVOICED'],
