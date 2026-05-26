@@ -795,6 +795,10 @@ export const purchaseOrders = pgTable('purchase_orders', {
   status:      poStatus('status').notNull().default('DRAFT'),
   poDate:      date('po_date').notNull().defaultNow(),
   expectedAt:  date('expected_at'),                        // delivery ETA
+  // PR #77 — Default ship-to warehouse for every line on this PO (mirrors
+  // AutoCount's header "Purchase Location"). Per-line warehouse_id on the
+  // items table overrides when commander wants split delivery.
+  purchaseLocationId: uuid('purchase_location_id').references(() => warehouses.id, { onDelete: 'set null' }),
   currency:    currencyCode('currency').notNull().default('MYR'),
   subtotalCenti: integer('subtotal_centi').notNull().default(0),
   taxCenti:    integer('tax_centi').notNull().default(0),
@@ -846,9 +850,14 @@ export const purchaseOrderItems = pgTable('purchase_order_items', {
   uom:                     text('uom').notNull().default('UNIT'),
   discountCenti:           integer('discount_centi').notNull().default(0),
   unitCostCenti:           integer('unit_cost_centi').notNull().default(0),
+  // PR #77 — per-line delivery date + ship-to warehouse. Both nullable;
+  // empty = inherit from PO header (expected_at + purchase_location_id).
+  deliveryDate:            date('delivery_date'),
+  warehouseId:             uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxPo: index('idx_po_items_po').on(t.purchaseOrderId),
+  idxPo:        index('idx_po_items_po').on(t.purchaseOrderId),
+  idxWarehouse: index('idx_po_items_warehouse').on(t.warehouseId),
 }));
 
 export const purchaseOrderLines = pgTable('purchase_order_lines', {

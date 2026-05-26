@@ -36,6 +36,7 @@ import {
   type SupplierRow,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
+import { useWarehouses } from '../lib/inventory-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -286,12 +287,16 @@ const SupplierCard = ({
 }) => {
   const suppliersQ = useSuppliers();
   const suppliers = suppliersQ.data ?? [];
+  // PR #77 — header Purchase Location dropdown options.
+  const warehousesQ = useWarehouses();
+  const warehouses = warehousesQ.data ?? [];
   const [form, setForm] = useState({
     supplierId: po.supplier_id ?? '',
     poDate: po.po_date ?? '',
     expectedAt: po.expected_at ?? '',
     currency: po.currency ?? 'MYR',
     notes: po.notes ?? '',
+    purchaseLocationId: po.purchase_location_id ?? '',
   });
   // PR #75 — auto-fill supplier info card from /suppliers/:id when chosen.
   // The hook keys on form.supplierId so it refetches on each pick; null
@@ -306,6 +311,7 @@ const SupplierCard = ({
       expectedAt: po.expected_at ?? '',
       currency: po.currency ?? 'MYR',
       notes: po.notes ?? '',
+      purchaseLocationId: po.purchase_location_id ?? '',
     });
   }, [po]);
 
@@ -354,6 +360,18 @@ const SupplierCard = ({
             <span className={styles.fieldLabel}>Expected Delivery</span>
             <input type="date" className={styles.fieldInput} value={form.expectedAt} disabled={locked}
               onChange={(e) => set('expectedAt', e.target.value)} />
+          </label>
+          {/* PR #77 — Purchase Location: default ship-to warehouse for
+              every line on this PO. Each line item can override. */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Purchase Location</span>
+            <select className={styles.fieldSelect} value={form.purchaseLocationId} disabled={locked}
+              onChange={(e) => set('purchaseLocationId', e.target.value)}>
+              <option value="">— No default —</option>
+              {warehouses.filter((w) => w.is_active).map((w) => (
+                <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+              ))}
+            </select>
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>
@@ -444,6 +462,10 @@ const PoLineItemModal = ({
   const productsQuery = useMfgProducts({ search: search.trim() || undefined });
   const candidates = productsQuery.data ?? [];
 
+  // PR #77 — per-line ship-to dropdown options
+  const warehousesQ = useWarehouses();
+  const warehouses = warehousesQ.data ?? [];
+
   // PR #75 — supplier bindings drive the default-state picker. When the PO
   // already has a supplier, show only their bound products until commander
   // hits "Show all" or types a search query.
@@ -473,6 +495,9 @@ const PoLineItemModal = ({
     unitCostCenti: editing?.unit_cost_centi ?? 0,
     variants: (editing?.variants as Record<string, unknown>) ?? {},
     notes: editing?.notes ?? '',
+    // PR #77 — per-line overrides; null = inherit from PO header.
+    deliveryDate: editing?.delivery_date ?? null,
+    warehouseId:  editing?.warehouse_id ?? null,
   });
 
   const pickProduct = (p: import('../lib/mfg-products-queries').MfgProductRow) => {
@@ -789,6 +814,33 @@ const PoLineItemModal = ({
               <span>Line total</span>
               <span className={styles.previewPrice}>{fmtRm(lineTotal, currency)}</span>
             </div>
+          </div>
+
+          {/* PR #77 — per-line delivery + ship-to. Both empty = inherit
+              from PO header (Expected Delivery + Purchase Location). */}
+          <div className={styles.row} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Date (line override)</span>
+              <input
+                type="date"
+                className={styles.fieldInput}
+                value={draft.deliveryDate ?? ''}
+                onChange={(e) => setDraft((s) => ({ ...s, deliveryDate: e.target.value || null }))}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Ship-to Warehouse (line override)</span>
+              <select
+                className={styles.fieldSelect}
+                value={draft.warehouseId ?? ''}
+                onChange={(e) => setDraft((s) => ({ ...s, warehouseId: e.target.value || null }))}
+              >
+                <option value="">— Use PO default —</option>
+                {warehouses.filter((w) => w.is_active).map((w) => (
+                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <label className={styles.field}>

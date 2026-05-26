@@ -30,7 +30,9 @@ const VALID_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
 const HEADER_COLS =
   'id, po_number, supplier_id, status, po_date, expected_at, currency, ' +
   'subtotal_centi, tax_centi, total_centi, notes, submitted_at, received_at, ' +
-  'cancelled_at, created_at, created_by, updated_at';
+  'cancelled_at, created_at, created_by, updated_at, ' +
+  /* PR #77 — default ship-to warehouse for every line on this PO */
+  'purchase_location_id';
 
 const ITEM_COLS =
   'id, purchase_order_id, binding_id, material_kind, material_code, material_name, ' +
@@ -38,7 +40,9 @@ const ITEM_COLS =
   /* PR #41 — variant fields (migration 0056) */
   'item_group, description, description2, uom, discount_centi, unit_cost_centi, ' +
   'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
-  'custom_specials, line_suffix, special_order_price_sen, variants';
+  'custom_specials, line_suffix, special_order_price_sen, variants, ' +
+  /* PR #77 — per-line delivery date + ship-to warehouse */
+  'delivery_date, warehouse_id';
 
 // ── List ──────────────────────────────────────────────────────────────
 mfgPurchaseOrders.get('/', async (c) => {
@@ -306,6 +310,8 @@ mfgPurchaseOrders.patch('/:id', async (c) => {
   for (const [from, to] of [
     ['poDate', 'po_date'], ['expectedAt', 'expected_at'], ['currency', 'currency'],
     ['notes', 'notes'], ['supplierId', 'supplier_id'],
+    // PR #77 — default ship-to warehouse for every line on this PO
+    ['purchaseLocationId', 'purchase_location_id'],
   ] as const) {
     if (body[from] !== undefined) updates[to] = body[from];
   }
@@ -367,6 +373,9 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
     uom: (it.uom as string) ?? 'UNIT',
     discount_centi: discountCenti,
     unit_cost_centi: Number(it.unitCostCenti ?? 0),
+    // PR #77 — per-line ship-to. Both nullable; empty = inherit from header.
+    delivery_date: (it.deliveryDate as string) ?? null,
+    warehouse_id: (it.warehouseId as string) ?? null,
   };
   const sb = c.get('supabase');
   const { data, error } = await sb.from('purchase_order_items').insert(row).select('*').single();
@@ -404,6 +413,8 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
     ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
     ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
     ['variants', 'variants'],
+    // PR #77 — per-line delivery + ship-to overrides
+    ['deliveryDate', 'delivery_date'], ['warehouseId', 'warehouse_id'],
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
   }
