@@ -475,28 +475,57 @@ function InlineAllowedOptions({
       <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 6, display: 'block' }}>
         {hint}
       </span>
+      {/* PR #78 — Square-ish chip grid (Commander 2026-05-26: "做成正方形啊，
+          要不然你看这样子塞着了"). Each chip is a fixed-width tile so they line
+          up cleanly regardless of label length. formatChip returning
+          "K · 6FT" gets split into a two-line tile (code stacked over
+          label). Plain values render single-line and stay centred. */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {options.map((opt) => {
           const isOn = picked.has(opt);
+          const display = formatChip ? formatChip(opt) : opt;
+          const parts = display.split(' · ');
           return (
             <button
               key={opt}
               type="button"
               onClick={() => onToggle(opt)}
               style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                padding: '6px 12px',
-                borderRadius: 'var(--radius-pill)',
+                width: 92,
+                minHeight: 64,
+                display: 'inline-flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 2,
+                padding: '8px 6px',
+                borderRadius: 'var(--radius-md)',
                 border: isOn ? '1px solid var(--c-orange)' : '1px solid var(--line)',
                 background: isOn ? 'var(--c-orange)' : 'var(--c-paper)',
                 color: isOn ? 'var(--c-cream)' : 'var(--c-ink)',
                 cursor: 'pointer',
                 transition: 'all 150ms ease',
+                fontFamily: 'var(--font-mono)',
               }}
+              title={display}
             >
-              {formatChip ? formatChip(opt) : opt}
+              <span style={{ fontSize: 'var(--fs-14)', fontWeight: 700, lineHeight: 1 }}>
+                {parts[0]}
+              </span>
+              {parts[1] && (
+                <span
+                  style={{
+                    fontSize: 'var(--fs-11)',
+                    fontWeight: 500,
+                    lineHeight: 1.1,
+                    opacity: isOn ? 0.92 : 0.65,
+                    textAlign: 'center',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {parts.slice(1).join(' · ')}
+                </span>
+              )}
             </button>
           );
         })}
