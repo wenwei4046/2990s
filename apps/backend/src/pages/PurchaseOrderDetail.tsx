@@ -74,6 +74,10 @@ export const PurchaseOrderDetail = () => {
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
   const maint = useMaintenanceConfig('master');
+  // PR #102 — PO PDF (AutoCount layout) needs the Purchase Location's
+  // human-readable name; the header only carries the warehouse id. Load
+  // warehouses once at the top so the print handler can resolve it.
+  const warehousesQTop = useWarehouses();
 
   const po = detail.data?.purchaseOrder ?? null;
   const items = detail.data?.items ?? [];
@@ -103,8 +107,18 @@ export const PurchaseOrderDetail = () => {
   }
 
   const handlePrint = () => {
+    // PR #102 — pre-resolve purchase_location name (PDF can't hit the API).
+    const wh = (warehousesQTop.data ?? []).find((w) => w.id === po.purchase_location_id);
+    const headerForPdf = {
+      ...po,
+      purchase_location_name: wh ? `${wh.code} · ${wh.name}` : null,
+      // your_ref_no / source_so_doc_no don't have columns yet; pass through
+      // when present on po (forward-compat). Schema follow-up adds them.
+      your_ref_no:      (po as unknown as { your_ref_no?: string | null }).your_ref_no      ?? null,
+      source_so_doc_no: (po as unknown as { source_so_doc_no?: string | null }).source_so_doc_no ?? null,
+    };
     import('../lib/purchase-order-pdf').then(({ generatePurchaseOrderPdf }) =>
-      generatePurchaseOrderPdf(po, items),
+      generatePurchaseOrderPdf(headerForPdf, items),
     ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
