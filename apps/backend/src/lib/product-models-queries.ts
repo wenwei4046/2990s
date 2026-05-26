@@ -30,7 +30,13 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
     throw new Error(`${res.status} ${res.statusText}: ${detail}`);
   }
-  return (await res.json()) as T;
+  // PR #98 — Handle 204 No Content / empty bodies so DELETE callers don't
+  // crash on res.json() of an empty payload. Sister to the fix in
+  // mfg-products-queries.ts.
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 export type ProductModelRow = {
