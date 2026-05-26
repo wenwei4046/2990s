@@ -339,24 +339,28 @@ export function NewModelDialog({
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
       <form
-        className={styles.modal}
+        className={`${styles.modal} ${styles.modalCompact}`}
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
-        style={{ maxWidth: 'min(960px, 95vw)', maxHeight: '90vh', overflowY: 'auto' }}
+        style={{ maxHeight: '90vh', overflowY: 'auto' }}
       >
-        <h2 className={styles.modalTitle}>New Models (bulk)</h2>
-        <p className={styles.modalSub}>
-          Add one row per Model. Pick the sizes / compartments once below — they
-          apply to every row. Submit creates all Models and auto-generates the
-          SKU variants in one shot.
-        </p>
-
-        <label className={styles.field}>
-          <span className="t-eyebrow">Category</span>
-          <select value={category} onChange={(e) => setCategory(e.target.value as MfgCategory)}>
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </label>
+        {/* PR — Commander 2026-05-26: "做成长方形、大一点". Title + category
+            side-by-side so the header doesn't burn three rows before the
+            first Model card. Sub line is shrunk into a single sentence. */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-4)', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <h2 className={styles.modalTitle}>New Models (bulk)</h2>
+            <p className={styles.modalSub} style={{ margin: 0 }}>
+              One row per Model. Pick sizes / compartments below — applied to every row.
+            </p>
+          </div>
+          <label className={styles.compactField} style={{ width: 200 }}>
+            <span>Category</span>
+            <select value={category} onChange={(e) => setCategory(e.target.value as MfgCategory)}>
+              {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+        </div>
 
         {rows.map((row, i) => (
           <ModelRowCard
@@ -472,52 +476,31 @@ function ModelRowCard({
   onChange:  (patch: Partial<ModelRow>) => void;
   onRemove:  () => void;
 }) {
-  return (
-    <div
-      style={{
-        border: '1px solid var(--line)',
-        borderRadius: 'var(--radius-md)',
-        padding: 'var(--space-3)',
-        marginTop: 'var(--space-3)',
-        background: 'var(--c-paper)',
-        position: 'relative',
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span className="t-eyebrow" style={{ color: 'var(--c-orange)' }}>Model {index + 1}</span>
-        {canRemove && (
-          <button
-            type="button"
-            onClick={onRemove}
-            title="Remove this row"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--fg-muted)',
-              cursor: 'pointer',
-              fontSize: 'var(--fs-14)',
-              padding: '2px 6px',
-            }}
-          >
-            ✕
-          </button>
-        )}
-      </div>
+  // PR — Commander 2026-05-26: "才两个就占满屏幕了". Switched the per-row
+  // card from stacked grid (3 visual rows: Branding+Code, Name, Description)
+  // to a single landscape line — # · Branding · Model code · Name · [Thickness]
+  // · Description · ×. At 1200px modal width this fits comfortably, and the
+  // grid-template-columns shifts only to add Thickness for Mattress.
+  // Each row card now collapses from ~180px tall to ~50px tall, so 6+ rows
+  // fit on screen instead of 2.
+  const gridCols =
+    category === 'MATTRESS'
+      ? '28px 110px 150px minmax(160px, 1.4fr) 80px minmax(160px, 1.4fr) 24px'
+      : '28px 110px 150px minmax(160px, 1.4fr) minmax(160px, 1.4fr) 24px';
 
-      {/* PR — Commander 2026-05-26: "UI 要整理一下". Old rigid grid
-          (1fr 2fr 2fr 1fr) overflowed at 760px modal because inputs can't
-          shrink below their placeholder width. Switched to auto-fit minmax
-          so fields wrap to a second row instead of clipping labels like
-          "AKKA-FIRM MAT[T]" on the left. minWidth: 0 on the label lets the
-          input actually shrink inside the grid track. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginBottom: 8 }}>
-        <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
-          <span className="t-eyebrow">Branding</span>
+  return (
+    <div className={styles.compactRowCard}>
+      <div className={styles.compactRowFields} style={{ gridTemplateColumns: gridCols }}>
+        <div className={styles.compactRowBadge}>#{index + 1}</div>
+
+        <label className={styles.compactField}>
+          <span>Branding</span>
           <input type="text" value={row.branding} onChange={(e) => onChange({ branding: e.target.value })}
             placeholder={category === 'MATTRESS' ? '2990S' : ''} />
         </label>
-        <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
-          <span className="t-eyebrow">Model code *</span>
+
+        <label className={styles.compactField}>
+          <span>Model code *</span>
           <input type="text" value={row.modelCode} onChange={(e) => onChange({ modelCode: e.target.value })}
             placeholder={
               category === 'SOFA'     ? '5530' :
@@ -526,8 +509,9 @@ function ModelRowCard({
             }
             required />
         </label>
-        <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
-          <span className="t-eyebrow">Name *</span>
+
+        <label className={styles.compactField}>
+          <span>Name *</span>
           <input type="text" value={row.name} onChange={(e) => onChange({ name: e.target.value })}
             placeholder={
               category === 'SOFA'     ? 'SOFA 5530' :
@@ -536,20 +520,30 @@ function ModelRowCard({
             }
             required />
         </label>
+
         {category === 'MATTRESS' && (
-          <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
-            <span className="t-eyebrow">Thickness (cm) *</span>
+          <label className={styles.compactField}>
+            <span>Thick (cm) *</span>
             <input type="number" inputMode="numeric" min={1} step={1}
               value={row.thicknessCm} onChange={(e) => onChange({ thicknessCm: e.target.value })}
               placeholder="31" required />
           </label>
         )}
-      </div>
 
-      <label className={styles.field} style={{ margin: 0 }}>
-        <span className="t-eyebrow">Description (optional)</span>
-        <input type="text" value={row.description} onChange={(e) => onChange({ description: e.target.value })} />
-      </label>
+        <label className={styles.compactField}>
+          <span>Description</span>
+          <input type="text" value={row.description} onChange={(e) => onChange({ description: e.target.value })}
+            placeholder="optional" />
+        </label>
+
+        {canRemove ? (
+          <button type="button" onClick={onRemove} title="Remove this row" className={styles.compactRowClose}>
+            ✕
+          </button>
+        ) : (
+          <span />
+        )}
+      </div>
     </div>
   );
 }
