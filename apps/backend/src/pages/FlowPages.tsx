@@ -15,7 +15,7 @@ import {
   usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
 import {
-  CreateGrnDrawer, CreatePurchaseInvoiceDrawer, CreateSalesOrderDrawer,
+  CreateGrnDrawer, CreatePurchaseInvoiceDrawer,
   CreateDeliveryOrderDrawer, CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
   CreateDeliveryReturnDrawer,
 } from './FlowDrawers';
@@ -246,7 +246,6 @@ export const PurchaseInvoicesPage = () => {
 
 export const MfgSalesOrdersPage = () => {
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgSalesOrders(undefined);
   const rows = useMemo(() => data?.salesOrders ?? [], [data]);
 
@@ -256,7 +255,11 @@ export const MfgSalesOrdersPage = () => {
         title="Sales Orders (B2B)"
         subtitle="Manufacturer sales orders — HOUZS pattern, separate from retail POS orders"
         newLabel="New SO"
-        onNew={() => setOpen(true)}
+        // PR #106 — "+ New SO" now navigates to a dedicated full-page route
+        // (Commander: "我是要直接整个一个 Full 的界面") instead of opening
+        // the side drawer. CreateSalesOrderDrawer lives in FlowDrawers.tsx
+        // until PR 2 / 3 of the SO rebuild lands, then it can be deleted.
+        onNew={() => navigate('/mfg-sales-orders/new')}
       />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} sales orders`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
@@ -289,7 +292,6 @@ export const MfgSalesOrdersPage = () => {
             )}
           </tbody>
         </table>
-      {open && <CreateSalesOrderDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );

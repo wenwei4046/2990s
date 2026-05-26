@@ -21,6 +21,7 @@ import {
   SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage, PurchaseReturnsPage,
 } from './pages/FlowPages';
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
+import { SalesOrderNew } from './pages/SalesOrderNew';
 import { Inventory } from './pages/Inventory';
 import { Drivers } from './pages/Drivers';
 import { Accounting } from './pages/Accounting';
@@ -62,6 +63,8 @@ export const router = createBrowserRouter([
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
       { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
+      // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
+      { path: 'mfg-sales-orders/new', element: <SalesOrderNew /> },
       { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
       { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
       { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
