@@ -182,9 +182,14 @@ export async function generatePurchaseOrderPdf(header: PoHeader, items: PoItem[]
   // jspdf-autotable's row height adjusts naturally.
   type Row = [string, string, string, string, string, string, string, string];
   const rows: Row[] = items.map((it, idx) => {
-    // Description column carries a multi-line string ("CODE\nDESCRIPTION").
-    // autoTable will wrap on newline so the row grows as needed.
-    const itemAndDesc = `${it.material_code}\n${it.material_name}`;
+    // PR #122 — Commander 2026-05-26: "我们在下单 PO 的时候，它的 item code
+    // 需要设置成我们的 internal code，但是去到 supplier 那边是能看到他们自
+    // 己的 code 的". UI keeps showing our material_code; the printed PO that
+    // gets emailed/posted to the supplier swaps to their SKU. Fall back to
+    // our code only when the line never bound a supplier SKU (free-text /
+    // one-off purchase).
+    const supplierFacingCode = it.supplier_sku?.trim() || it.material_code;
+    const itemAndDesc = `${supplierFacingCode}\n${it.material_name}`;
     return [
       String(idx + 1),
       itemAndDesc,
