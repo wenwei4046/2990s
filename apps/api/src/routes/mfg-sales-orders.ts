@@ -14,6 +14,13 @@ const HEADER =
   'mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi, local_total_centi, balance_centi, ' +
   'total_cost_centi, total_revenue_centi, total_margin_centi, margin_pct_basis, line_count, ' +
   'currency, status, remark2, remark3, remark4, note, processing_date, sales_exemption_expiry, ' +
+  /* PR #35 + #46 — extended PO + POS handover fields */
+  'customer_id, customer_po, customer_po_id, customer_po_date, customer_po_image_b64, hub_id, hub_name, ' +
+  'customer_state, customer_delivery_date, internal_expected_dd, linked_do_doc_no, ' +
+  'ship_to_address, bill_to_address, install_to_address, subtotal_sen, overdue, ' +
+  /* PR #46 — POS handover */
+  'email, customer_type, salesperson_id, city, postcode, building_type, ' +
+  'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
   'created_at, created_by, updated_at';
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
@@ -50,9 +57,14 @@ mfgSalesOrders.get('/:docNo', async (c) => {
 mfgSalesOrders.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
-  if (!body.debtorName) return c.json({ error: 'debtor_name_required' }, 400);
-  const items = body.items as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
+  /* PR #46 — accept customerName as alias for debtorName (rename in flight).
+     Commander 2026-05-26: "Debtor Name 其实可以换成 Customer Name". */
+  const customerName = (body.debtorName ?? body.customerName) as string | undefined;
+  if (!customerName) return c.json({ error: 'customer_name_required' }, 400);
+  /* PR #46 — Items optional. POS handover may create the SO header first,
+     then add items via POST /:docNo/items. Matches PR #41 PO blank-draft
+     pattern. Only B2B-bulk path requires items at create. */
+  const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
   const docNo = await nextDocNo(sb);
@@ -102,8 +114,8 @@ mfgSalesOrders.post('/', async (c) => {
     transfer_to: (body.transferTo as string) ?? null,
     so_date: (body.soDate as string) ?? new Date().toISOString().slice(0, 10),
     branding: (body.branding as string) ?? null,
-    debtor_code: (body.debtorCode as string) ?? null,
-    debtor_name: body.debtorName,
+    debtor_code: (body.debtorCode ?? body.customerCode as string) ?? null,
+    debtor_name: customerName,
     agent: (body.agent as string) ?? null,
     sales_location: (body.salesLocation as string) ?? null,
     ref: (body.ref as string) ?? null,
@@ -127,13 +139,29 @@ mfgSalesOrders.post('/', async (c) => {
     line_count: items.length,
     currency: ((body.currency as string) ?? 'MYR').toUpperCase(),
     note: (body.note as string) ?? null,
+    /* PR #46 — POS handover fields written at create */
+    email: (body.email as string) ?? null,
+    customer_type: (body.customerType as string) ?? null,
+    salesperson_id: (body.salespersonId as string) ?? null,
+    city: (body.city as string) ?? null,
+    postcode: (body.postcode as string) ?? null,
+    building_type: (body.buildingType as string) ?? null,
+    emergency_contact_name: (body.emergencyContactName as string) ?? null,
+    emergency_contact_phone: (body.emergencyContactPhone as string) ?? null,
+    emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
+    target_date: (body.targetDate as string) ?? null,
+    customer_id: (body.customerId as string) ?? null,
+    customer_state: (body.customerState as string) ?? null,
+    customer_delivery_date: (body.customerDeliveryDate as string) ?? null,
     created_by: user.id,
   });
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
 
-  const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
-  const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
-  if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+  if (itemRows.length > 0) {
+    const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
+    const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
+    if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+  }
   return c.json({ docNo }, 201);
 });
 
@@ -253,6 +281,14 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['linkedDoDocNo', 'linked_do_doc_no'],
     ['shipToAddress', 'ship_to_address'], ['billToAddress', 'bill_to_address'],
     ['installToAddress', 'install_to_address'],
+    /* PR #46 — POS handover fields */
+    ['email', 'email'], ['customerType', 'customer_type'],
+    ['salespersonId', 'salesperson_id'],
+    ['city', 'city'], ['postcode', 'postcode'], ['buildingType', 'building_type'],
+    ['emergencyContactName', 'emergency_contact_name'],
+    ['emergencyContactPhone', 'emergency_contact_phone'],
+    ['emergencyContactRelationship', 'emergency_contact_relationship'],
+    ['targetDate', 'target_date'],
   ];
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const [from, to] of map) {

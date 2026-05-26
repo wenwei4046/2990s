@@ -1075,6 +1075,20 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   subtotalSen:       integer('subtotal_sen'),
   overdue:           text('overdue'),                       // 'PENDING' | 'DUE' | 'OVERDUE' | null
 
+  /* PR #46 — POS handover alignment (migration 0060). Commander 2026-05-26:
+     SO 不是 B2B 的, 就是顾客的. POS Customer/Address/Emergency/Target Date
+     phases now round-trip to mfg_sales_orders. */
+  email:                          text('email'),
+  customerType:                   text('customer_type'),              // 'NEW' | 'EXISTING'
+  salespersonId:                  uuid('salesperson_id').references(() => staff.id, { onDelete: 'set null' }),
+  city:                           text('city'),
+  postcode:                       text('postcode'),
+  buildingType:                   text('building_type'),              // Condo / Landed / Apartment / Office / Shop / Other
+  emergencyContactName:           text('emergency_contact_name'),
+  emergencyContactPhone:          text('emergency_contact_phone'),
+  emergencyContactRelationship:   text('emergency_contact_relationship'),
+  targetDate:                     date('target_date'),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
   updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
