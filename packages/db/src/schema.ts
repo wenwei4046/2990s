@@ -1070,6 +1070,10 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   customerPoId:      text('customer_po_id'),
   customerPoDate:    date('customer_po_date'),
   customerPoImageB64: text('customer_po_image_b64'),
+  // PR #121 — customer's own SO number from their ERP. Different concept
+  // from their PO (buy-side ref) and from our `ref` (free-text). Used
+  // when AKEMI/HOUZS cross-reference our SOs against their own.
+  customerSoNo:      text('customer_so_no'),
   // Multi-branch customer (HOOKKA uses delivery_hubs FK; we keep nullable
   // uuid + snapshot text so 2990s isn't forced to mirror delivery_hubs yet)
   hubId:             uuid('hub_id'),

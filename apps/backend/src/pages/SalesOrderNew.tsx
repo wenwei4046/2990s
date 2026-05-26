@@ -28,8 +28,9 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useCreateMfgSalesOrder } from '../lib/flow-queries';
+import { useCreateMfgSalesOrder, useDebtorSearch } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
+import { useWarehouses } from '../lib/inventory-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   BUILDING_TYPES,
@@ -65,11 +66,26 @@ export const SalesOrderNew = () => {
   const loc      = useLocalities();
 
   // ── Customer fields ────────────────────────────────────────────────
+  const [debtorCode,    setDebtorCode]    = useState('');
   const [debtorName,    setDebtorName]    = useState('');
   const [phone,         setPhone]         = useState('');
   const [email,         setEmail]         = useState('');
   const [salespersonId, setSalespersonId] = useState('');
   const [customerType,  setCustomerType]  = useState<'NEW' | 'EXISTING' | ''>('');
+
+  // ── PR #121 — POS-aligned Order Details fields ─────────────────────
+  // Drawing from the POS handover layout (Customer · Delivery Hub ·
+  // Customer PO No · Customer SO No · Reference · Company SO Date ·
+  // Customer Delivery Date · Notes). soDate defaults to today.
+  const [soDate,             setSoDate]             = useState(() => new Date().toISOString().slice(0, 10));
+  const [customerDelivery,   setCustomerDelivery]   = useState('');
+  const [customerPo,         setCustomerPo]         = useState('');
+  const [customerSoNo,       setCustomerSoNo]       = useState('');
+  const [ref,                setRef]                = useState('');
+  const [hubId,              setHubId]              = useState('');
+  const debtors = useDebtorSearch(debtorName.trim().length >= 2 ? debtorName.trim() : '');
+  const warehouses = useWarehouses();
+  const hubName = useMemo(() => (warehouses.data ?? []).find((w) => w.id === hubId)?.name ?? '', [warehouses.data, hubId]);
 
   // ── Delivery address ───────────────────────────────────────────────
   const [fillAddressLater, setFillAddressLater] = useState(false);
@@ -160,10 +176,19 @@ export const SalesOrderNew = () => {
     create.mutate(
       {
         debtorName,
+        debtorCode: debtorCode || undefined,
         phone: phone || undefined,
         email: email || undefined,
         salespersonId: salespersonId || undefined,
         customerType: customerType || undefined,
+        // PR #121 — POS-aligned Order Details fields
+        soDate: soDate || undefined,
+        customerDeliveryDate: customerDelivery || undefined,
+        customerPo: customerPo || undefined,
+        customerSoNo: customerSoNo || undefined,
+        ref: ref || undefined,
+        hubId: hubId || undefined,
+        hubName: hubName || undefined,
         // Address — only sent when "fill later" isn't checked
         ...(fillAddressLater ? {} : {
           address1: address1 || undefined,
@@ -230,6 +255,97 @@ export const SalesOrderNew = () => {
           </Button>
         </div>
       </div>
+
+      {/* ── PR #121 — Order Details (POS layout) ─────────────────────
+           Commander 2026-05-26: "Order Details 那边就跟着我的 POS System
+           的一模一样". Single tight card with Customer autocomplete +
+           Delivery Hub + PO/SO No + Reference + dates + notes. Sits
+           ABOVE the deeper Customer / Address / Emergency cards so the
+           common-case "existing customer" flow stays one card. */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Order Details</h2>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer *</span>
+              <input
+                type="text"
+                list="so-debtor-list"
+                value={debtorName}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDebtorName(v);
+                  // If the typed value matches a known debtor (picked from datalist),
+                  // adopt its code + phone + addresses so the deeper Customer card
+                  // shows the snapshot — saves commander typing the same info twice.
+                  const picked = (debtors.data?.debtors ?? []).find((d) => d.debtor_name === v);
+                  if (picked) {
+                    if (picked.debtor_code) setDebtorCode(picked.debtor_code);
+                    if (picked.phone && !phone) setPhone(picked.phone);
+                    if (picked.address1 && !address1) setAddress1(picked.address1);
+                    if (picked.address2 && !address2) setAddress2(picked.address2);
+                  }
+                }}
+                placeholder="Type 2+ chars to search prior customers…"
+                className={styles.fieldInput}
+                required
+              />
+              <datalist id="so-debtor-list">
+                {(debtors.data?.debtors ?? []).map((d, i) => (
+                  <option key={`${d.debtor_code ?? 'nc'}-${i}`} value={d.debtor_name ?? ''}>
+                    {[d.debtor_code, d.phone].filter(Boolean).join(' · ')}
+                  </option>
+                ))}
+              </datalist>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Hub *</span>
+              <select value={hubId} onChange={(e) => setHubId(e.target.value)} className={styles.fieldInput} required>
+                <option value="">— Pick a hub / warehouse —</option>
+                {(warehouses.data ?? []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer PO No.</span>
+              <input type="text" value={customerPo} onChange={(e) => setCustomerPo(e.target.value)} className={styles.fieldInput} placeholder="e.g. PO-AK-2026-001" />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer SO No.</span>
+              <input type="text" value={customerSoNo} onChange={(e) => setCustomerSoNo(e.target.value)} className={styles.fieldInput} placeholder="Customer's own SO# (from their ERP)" />
+            </label>
+
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Reference</span>
+              <input type="text" value={ref} onChange={(e) => setRef(e.target.value)} className={styles.fieldInput} placeholder="Optional free-text ref" />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Company SO Date</span>
+              <input type="date" value={soDate} onChange={(e) => setSoDate(e.target.value)} className={styles.fieldInput} />
+            </label>
+
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer Delivery Date</span>
+              <input type="date" value={customerDelivery} onChange={(e) => setCustomerDelivery(e.target.value)} className={styles.fieldInput} />
+            </label>
+            <label className={`${styles.field} ${styles.fieldSpan2 ?? ''}`} style={{ gridColumn: '1 / -1' }}>
+              <span className={styles.fieldLabel}>Notes</span>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Internal notes — visible on the SO detail page"
+                className={styles.fieldInput}
+                rows={3}
+                style={{ resize: 'vertical', minHeight: 80 }}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
 
       {/* ── Customer ────────────────────────────────────────────────── */}
       <section className={styles.card}>
@@ -603,22 +719,8 @@ export const SalesOrderNew = () => {
         />
       )}
 
-      {/* ── Note ────────────────────────────────────────────────────── */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Note</h2>
-        </div>
-        <div className={styles.cardBody}>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Internal notes — visible on the SO detail page only"
-            className={styles.fieldInput}
-            rows={3}
-            style={{ minHeight: 80, resize: 'vertical', width: '100%' }}
-          />
-        </div>
-      </section>
+      {/* PR #121 — bottom Notes section removed; Notes now lives inside the
+          top Order Details card (POS layout). */}
     </div>
   );
 };
