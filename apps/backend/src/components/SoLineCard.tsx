@@ -92,8 +92,11 @@ export const SoLineCard = ({
   // type-ahead). Tracks whether the suggestion list is currently visible.
   const [showPicker, setShowPicker]   = useState(false);
 
-  // Keep local search box in sync if parent resets the card.
-  useEffect(() => { setSearch(draft.itemCode ?? ''); }, [draft.itemCode]);
+  // PR #136 — Commander: "Product 那边，收一个 Row 就可以了… 就 show Description
+  // 就行了". After picking we sync the search box to the product NAME (not the
+  // code) so the single row already shows the readable description. The
+  // separate preview line below is removed.
+  useEffect(() => { setSearch(draft.description ?? ''); }, [draft.description]);
 
   const pickProduct = (p: MfgProductRow) => {
     setPicked(p);
@@ -105,8 +108,36 @@ export const SoLineCard = ({
       unitPriceCenti: p.base_price_sen ?? 0,
       variants:       {},
     });
-    setSearch(p.code);
+    setSearch(p.name);
   };
+
+  /* PR #136 — Auto-compute bedframe Total Height = Divan + Leg + Gap.
+     Commander: "Total Height 是不需要选择的。是 Divan + Leg + Gap 自动算出来
+     的". Maintenance values are formatted like "8\"", "4\"", "20\"" — parse
+     the leading number, sum, format back with a quote suffix. */
+  const parseInches = (s: unknown): number => {
+    if (s === null || s === undefined) return 0;
+    const m = String(s).match(/(-?\d+(?:\.\d+)?)/);
+    return m && m[1] ? Number(m[1]) : 0;
+  };
+  const computedTotalHeight = useMemo(() => {
+    if (draft.itemGroup !== 'bedframe') return '';
+    const d = parseInches(draft.variants.divanHeight);
+    const l = parseInches(draft.variants.legHeight);
+    const g = parseInches(draft.variants.gap);
+    if (d === 0 && l === 0 && g === 0) return '';
+    return `${d + l + g}"`;
+  }, [draft.itemGroup, draft.variants.divanHeight, draft.variants.legHeight, draft.variants.gap]);
+
+  // Write the computed value back into the variants bag so it ships to API
+  // alongside the picked divan/leg/gap.
+  useEffect(() => {
+    if (draft.itemGroup !== 'bedframe') return;
+    if (!computedTotalHeight) return;
+    if (String(draft.variants.totalHeight ?? '') === computedTotalHeight) return;
+    onChange({ variants: { ...draft.variants, totalHeight: computedTotalHeight } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computedTotalHeight, draft.itemGroup]);
 
   const setVariant = (k: string, v: string | number | string[]) =>
     onChange({ variants: { ...draft.variants, [k]: v } });
@@ -279,12 +310,11 @@ export const SoLineCard = ({
             onBlur={() => setTimeout(() => setShowPicker(false), 150)}
             onChange={(e) => { setSearch(e.target.value); setShowPicker(true); }}
           />
-          {/* PR #133 — show picker on focus unless user has just picked
-              something (in which case search shows the picked code).
-              Previous guard `search !== draft.itemCode` was also true when
-              both were '' on a fresh form, so the dropdown never opened
-              even though focus + 130 SKUs were loaded. */}
-          {showPicker && candidates.length > 0 && !(draft.itemCode && search === draft.itemCode) && (
+          {/* PR #133/#136 — show picker on focus unless commander has just
+              picked something (in which case search shows the picked
+              description). Guard now checks description, since PR #136
+              switched the visible value from code → name. */}
+          {showPicker && candidates.length > 0 && !(draft.itemCode && search === draft.description) && (
             <ul className={styles.suggestList}>
               {candidates.slice(0, 50).map((p) => (
                 <li key={p.id} className={styles.suggestItem} onMouseDown={() => { pickProduct(p); setShowPicker(false); }}>
@@ -306,12 +336,8 @@ export const SoLineCard = ({
             </ul>
           )}
         </div>
-        {draft.itemCode && (
-          <div className={styles.previewLine} style={{ marginTop: 8 }}>
-            <span><strong>{draft.itemCode}</strong> · {draft.description}</span>
-            <span className={styles.previewPrice}>{fmtRm(draft.unitPriceCenti)}</span>
-          </div>
-        )}
+        {/* PR #136 — preview row removed; the picker input above already
+            shows the description after a pick. */}
       </div>
 
       {/* ── Variant editor (per category) ────────────────────────────── */}
@@ -319,7 +345,9 @@ export const SoLineCard = ({
         <div>
           <p className={styles.subHead}>Variants</p>
 
-          {/* BEDFRAME — divan / leg / gap / total height / specials */}
+          {/* BEDFRAME — divan / leg / gap / [auto] total / fabric / specials.
+              PR #136: Total Height select dropped (auto-computed); Fabric
+              dropdown added (Common Fabrics applies to both bedframe & sofa). */}
           {draft.itemGroup === 'bedframe' && (
             <div className={styles.formGrid4}>
               <VariantSelect
@@ -327,12 +355,6 @@ export const SoLineCard = ({
                 options={maint.divanHeights}
                 value={String(draft.variants.divanHeight ?? '')}
                 onChange={(v) => setVariant('divanHeight', v)}
-              />
-              <VariantSelect
-                label="Total Height"
-                options={maint.totalHeights}
-                value={String(draft.variants.totalHeight ?? '')}
-                onChange={(v) => setVariant('totalHeight', v)}
               />
               <VariantSelect
                 label="Leg Height"
@@ -346,6 +368,36 @@ export const SoLineCard = ({
                 value={String(draft.variants.gap ?? '')}
                 onChange={(v) => setVariant('gap', v)}
               />
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>
+                  Total Height
+                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
+                    · auto
+                  </span>
+                </span>
+                <input
+                  readOnly
+                  className={styles.fieldInput}
+                  value={computedTotalHeight || '—'}
+                  style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                  title="Auto-computed: Divan + Leg + Gap"
+                />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Fabric</span>
+                <select
+                  className={styles.fieldSelect}
+                  value={String(draft.variants.fabricCode ?? '')}
+                  onChange={(e) => setVariant('fabricCode', e.target.value)}
+                >
+                  <option value="">—</option>
+                  {fabrics.map((f) => (
+                    <option key={f.id} value={f.fabric_code}>
+                      {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           )}
           {/* PR #127 — Special Orders multi-select for bedframe */}
@@ -358,7 +410,10 @@ export const SoLineCard = ({
             />
           )}
 
-          {/* SOFA — seat / leg / fabric / color / divan / special */}
+          {/* SOFA — seat / leg / fabric / specials.
+              PR #136: Commander said "Fabric Code 就是 Color Code，为什么会
+              出来两个" — merged into single Fabric dropdown. Divan Height
+              dropped (it's a bedframe attribute, not sofa). */}
           {draft.itemGroup === 'sofa' && (
             <div className={styles.formGrid4}>
               <VariantSelect
@@ -380,7 +435,7 @@ export const SoLineCard = ({
                 onChange={(v) => setVariant('legHeight', v)}
               />
               <label className={styles.field}>
-                <span className={styles.fieldLabel}>Fabric Code</span>
+                <span className={styles.fieldLabel}>Fabric</span>
                 <select
                   className={styles.fieldSelect}
                   value={String(draft.variants.fabricCode ?? '')}
@@ -394,21 +449,6 @@ export const SoLineCard = ({
                   ))}
                 </select>
               </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Color Code</span>
-                <input
-                  className={styles.fieldInput}
-                  placeholder="e.g. PC151-04"
-                  value={String(draft.variants.colorCode ?? '')}
-                  onChange={(e) => setVariant('colorCode', e.target.value)}
-                />
-              </label>
-              <VariantSelect
-                label="Divan Height"
-                options={maint.divanHeights}
-                value={String(draft.variants.divanHeight ?? '')}
-                onChange={(v) => setVariant('divanHeight', v)}
-              />
             </div>
           )}
           {/* PR #127 — Special Orders multi-select for sofa */}
@@ -421,34 +461,13 @@ export const SoLineCard = ({
             />
           )}
 
-          {/* MATTRESS — size only */}
-          {draft.itemGroup === 'mattress' && (
-            <div className={styles.formGrid4}>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Size</span>
-                <select
-                  className={styles.fieldSelect}
-                  value={String(draft.variants.size ?? '')}
-                  onChange={(e) => setVariant('size', e.target.value)}
-                >
-                  <option value="">—</option>
-                  {(maint.mattressSizes ?? []).map((s) => {
-                    const lbl = maint.sizeLabels?.[s]?.label;
-                    return (
-                      <option key={s} value={s}>
-                        {s}{lbl ? ` · ${lbl}` : ''}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
-            </div>
-          )}
-
-          {/* ACCESSORY / OTHERS — no structured variants */}
-          {(draft.itemGroup === 'accessory' || draft.itemGroup === 'others') && (
+          {/* MATTRESS / ACCESSORY / OTHERS — no structured variants.
+              PR #136 — Commander: "Mattress 的 size 应该跟 SKU 已经绑定了的，
+              不需要再填写". Mattress SKU codes like "HAPPI.S ACECOOL MATT (Q)"
+              already encode the size, so the dropdown was redundant. */}
+          {(draft.itemGroup === 'mattress' || draft.itemGroup === 'accessory' || draft.itemGroup === 'others') && (
             <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: 0 }}>
-              No variants for this category — use the remark field below for any free-text details.
+              No variants for this category — use the line notes below for any free-text details.
             </p>
           )}
         </div>
