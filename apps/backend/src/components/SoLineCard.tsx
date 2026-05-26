@@ -279,7 +279,12 @@ export const SoLineCard = ({
             onBlur={() => setTimeout(() => setShowPicker(false), 150)}
             onChange={(e) => { setSearch(e.target.value); setShowPicker(true); }}
           />
-          {showPicker && candidates.length > 0 && search !== draft.itemCode && (
+          {/* PR #133 — show picker on focus unless user has just picked
+              something (in which case search shows the picked code).
+              Previous guard `search !== draft.itemCode` was also true when
+              both were '' on a fresh form, so the dropdown never opened
+              even though focus + 130 SKUs were loaded. */}
+          {showPicker && candidates.length > 0 && !(draft.itemCode && search === draft.itemCode) && (
             <ul className={styles.suggestList}>
               {candidates.slice(0, 50).map((p) => (
                 <li key={p.id} className={styles.suggestItem} onMouseDown={() => { pickProduct(p); setShowPicker(false); }}>
