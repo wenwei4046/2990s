@@ -27,6 +27,12 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // PR #131 fix — raise precache size limit. PR #118 added 2.11 MB
+        // bedframe hero photos which blew past the workbox default of 2 MB
+        // and broke EVERY GH Actions deploy since 2026-05-26 10:39 UTC.
+        // 5 MB gives headroom for future model photos without dropping any
+        // into runtime-only caching.
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /\/api\/products.*/i,
