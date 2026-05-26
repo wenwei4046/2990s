@@ -91,9 +91,23 @@ admin.post('/staff', async (c) => {
     }
     userId = created.user.id;
   } else {
+    // PR #48 — invited user starts with `password_set: false` so the backend
+    // Layout auto-redirects them to /set-password on first sign-in (see
+    // apps/backend/src/components/Layout.tsx). `redirectTo` anchors the magic
+    // link to the production portal so the email link is not blank / not
+    // localhost when Supabase's Site URL defaults are wrong.
+    const portal = c.env.BACKEND_PORTAL_URL;
     const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
       email,
-      { data: { staff_code: input.staffCode, name: input.name, role: input.role } },
+      {
+        data: {
+          staff_code:   input.staffCode,
+          name:         input.name,
+          role:         input.role,
+          password_set: false,
+        },
+        ...(portal ? { redirectTo: `${portal}/set-password` } : {}),
+      },
     );
     if (inviteErr || !invited?.user) {
       return c.json({ error: 'invite_failed', detail: inviteErr?.message ?? 'no user returned' }, 422);

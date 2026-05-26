@@ -43,6 +43,17 @@ export const Layout = () => {
 
   if (loading) return <div className={styles.loading}>Loading…</div>;
   if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+
+  // PR #48 — first-login onboarding. Invited staff land here via the magic
+  // link with `user_metadata.password_set === false` (set by inviteUserByEmail
+  // in admin.ts). Force them through /set-password so they have a real password
+  // before they can do anything else. Existing users have no flag (undefined),
+  // so they're untouched. Recovery sessions land directly on /set-password and
+  // never hit this guard.
+  if (user.user_metadata?.password_set === false && location.pathname !== '/set-password') {
+    return <Navigate to="/set-password" replace />;
+  }
+
   if (!staff) return <Navigate to="/no-access" replace />;
 
   const meta: RouteMeta = ROUTE_META[location.pathname] ?? { title: 'Backend', sub: '' };

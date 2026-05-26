@@ -9,6 +9,10 @@ export interface Env {
   ALLOWED_ORIGINS: string;
   R2_BUCKET_NAME: string;
   R2_ENDPOINT: string;
+  // PR #48 — anchor for invite + recovery magic links. The link's redirectTo
+  // points to `${BACKEND_PORTAL_URL}/set-password` so invited staff land on
+  // the onboarding screen, not the wrong-by-default Supabase Site URL.
+  BACKEND_PORTAL_URL: string;
 
   // Secrets — run `wrangler secret put SUPABASE_ANON_KEY` etc.
   SUPABASE_ANON_KEY: string;
