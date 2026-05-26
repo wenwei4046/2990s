@@ -18,9 +18,9 @@
 // allowed_options to bulk-INSERT mfg_products rows.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Layers, Save, Trash2, Wand2, X, Power, PowerOff } from 'lucide-react';
+import { ArrowLeft, ImagePlus, Layers, Save, Trash2, Wand2, X, Power, PowerOff } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
@@ -28,6 +28,7 @@ import {
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useUpdateMfgProductStatus } from '../lib/mfg-products-queries';
 import { resolveSizeInfo } from '../lib/size-info';
+import { supabase } from '../lib/supabase';
 import styles from './ProductModelDetail.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -60,6 +61,15 @@ export const ProductModelDetail = () => {
   const [description, setDescription] = useState('');
   const [allowed, setAllowed] = useState<AllowedOptions>({});
   const [addCodesOpen, setAddCodesOpen] = useState(false);
+
+  // PR #97 — Commander 2026-05-26: "可以放照片的啊，为什么不能放呢". Photo
+  // upload lives next to Model info, drives `product_models.photo_url` via
+  // the existing PATCH /product-models/:id route. Storage: Supabase Storage
+  // 'model-photos' bucket (migration 0066, public read / staff write).
+  // Auto-save on upload so commander doesn't have to also hit "Save changes".
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoError,     setPhotoError]     = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   // PR #87 — Commander 2026-05-26: "正常 Allow Option 都是全开的，只有关起来
   // 的" (= "Allow Options should default to all-on; only what you turn off is
@@ -152,6 +162,54 @@ export const ProductModelDetail = () => {
     deleteMut.mutate(id, { onSuccess: () => navigate('/products') });
   };
 
+  /** Validate + upload to Supabase Storage, then PATCH the Model with the
+   *  public URL. Bucket policies (migration 0066) grant authenticated INSERT
+   *  on `model-photos`; the bucket is `public: true` so the getPublicUrl
+   *  result is a directly-loadable <img src=…>. */
+  const onPhotoFile = async (file: File) => {
+    if (!id) return;
+    setPhotoError(null);
+    if (!file.type.startsWith('image/')) {
+      setPhotoError('Pick an image file (JPG / PNG / WebP).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setPhotoError('Max 5 MB.');
+      return;
+    }
+    setPhotoUploading(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      // Timestamped filename so the same Model can have multiple uploads in
+      // history without overwrite races; the photo_url column points at the
+      // most recent. Orphans accumulate cheaply — a later cleanup task can
+      // delete files whose URL isn't referenced.
+      const path = `${id}/${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('model-photos')
+        .upload(path, file, { upsert: false, contentType: file.type });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('model-photos').getPublicUrl(path);
+      if (!pub.publicUrl) throw new Error('No public URL returned from Supabase Storage.');
+      await updateMut.mutateAsync({ id, photoUrl: pub.publicUrl });
+    } catch (e) {
+      setPhotoError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPhotoUploading(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
+  };
+
+  const onPhotoRemove = async () => {
+    if (!id) return;
+    setPhotoError(null);
+    try {
+      await updateMut.mutateAsync({ id, photoUrl: null });
+    } catch (e) {
+      setPhotoError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div className={styles.page}>
       {/* Header --------------------------------------------------------- */}
@@ -235,6 +293,68 @@ export const ProductModelDetail = () => {
               placeholder="Optional notes shown on quotations / catalogue printouts"
             />
           </label>
+        </div>
+      </section>
+
+      {/* Photo card (PR #97) ------------------------------------------- */}
+      <section className={styles.card}>
+        <div className={styles.photoRow}>
+          {model.photo_url ? (
+            <div className={styles.photoPreview}>
+              <img src={model.photo_url} alt={`${model.model_code} photo`} />
+              {photoUploading && <div className={styles.photoUploading}>Uploading…</div>}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={styles.photoEmpty}
+              onClick={() => photoInputRef.current?.click()}
+              disabled={photoUploading}
+            >
+              <ImagePlus size={32} strokeWidth={1.5} />
+              <span>{photoUploading ? 'Uploading…' : 'Click to upload photo'}</span>
+            </button>
+          )}
+          <div className={styles.photoSide}>
+            <h2 className={styles.photoSideTitle}>Photo</h2>
+            <p className={styles.photoSideHint}>
+              One photo per Model — flows down to every SKU generated from it.
+              JPG / PNG / WebP, max 5 MB. Stored in Supabase Storage.
+            </p>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className={styles.hiddenInput}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void onPhotoFile(f);
+              }}
+            />
+            <div className={styles.photoActions}>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={photoUploading}
+              >
+                <ImagePlus {...ICON} /> {model.photo_url ? 'Replace photo' : 'Upload photo'}
+              </Button>
+              {model.photo_url && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={onPhotoRemove}
+                  disabled={photoUploading || updateMut.isPending}
+                >
+                  <Trash2 {...ICON} /> Remove
+                </Button>
+              )}
+            </div>
+            {photoError && <div className={styles.photoError}>{photoError}</div>}
+          </div>
         </div>
       </section>
 

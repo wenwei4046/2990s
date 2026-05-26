@@ -143,6 +143,108 @@
   cursor: not-allowed;
 }
 
+/* ─── Photo card (PR #97 — Commander: 可以放照片的啊) ─────────────────── */
+.photoRow {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--space-5);
+  align-items: stretch;
+}
+.photoPreview {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  border-radius: var(--radius-md);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.photoPreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.photoEmpty {
+  width: 220px;
+  height: 220px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--line-strong);
+  background: var(--c-cream);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+  flex-shrink: 0;
+}
+.photoEmpty:hover {
+  border-color: var(--c-orange);
+  color: var(--c-orange);
+}
+.photoSide {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-self: flex-start;
+}
+.photoSideTitle {
+  font-family: var(--font-sans);
+  font-size: var(--fs-15);
+  font-weight: 600;
+  margin: 0;
+}
+.photoSideHint {
+  margin: 0;
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+.photoActions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.photoUploading {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+.photoError {
+  padding: var(--space-2) var(--space-3);
+  background: rgba(184, 51, 31, 0.08);
+  color: var(--c-festive-b);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+}
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
 /* ─── Option groups + chips ───────────────────────────────────────────── */
 .optGroup {
   display: flex;
