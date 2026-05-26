@@ -510,14 +510,12 @@ export const SoLineCard = ({
               onChange={(e) => onChange({ discountCenti: Math.round(Number(e.target.value) * 100) || 0 })}
             />
           </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Unit Cost (RM)</span>
-            <input
-              type="number" step="0.01" className={styles.fieldInput}
-              value={(draft.unitCostCenti / 100).toFixed(2)}
-              onChange={(e) => onChange({ unitCostCenti: Math.round(Number(e.target.value) * 100) || 0 })}
-            />
-          </label>
+          {/* PR #139 — Commander: "Sales Order 怎么需要 Unit Cost 呢？".
+              Cost is for internal margin tracking, not a salesperson input.
+              The SO detail page still shows TOTAL COST + MARGIN, sourced
+              from the SKU's cost on the server side. The unitCostCenti
+              field stays on SoLineDraft (and ships as 0) so existing
+              types don't break. */}
         </div>
 
         {/* PR #127 — HOOKKA-style footer breakdown */}
