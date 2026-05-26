@@ -14,7 +14,7 @@ import { Link } from 'react-router';
 import { Layers, Search, Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
-  useProductModels, useCreateProductModel,
+  useProductModels, useCreateProductModel, useGenerateModelSkus,
   type ProductModelRow,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, type MfgCategory } from '../lib/mfg-products-queries';
@@ -169,124 +169,164 @@ function FilterChip({
 // already filtered to a category, so the user doesn't have to pick again.
 // `onCreated` fires after the Model row is saved — used by SKU Master to
 // trigger the auto-generate flow without showing the Model Detail page.
+// PR #78b — Bulk row shape. Each Model in the batch has its own branding /
+// code / name / thickness / description; sizes (or compartments for SOFA)
+// are shared below all rows and apply to every Model in the batch.
+type ModelRow = {
+  // Stable React key — not sent to the API.
+  rid:         string;
+  branding:    string;
+  modelCode:   string;
+  name:        string;
+  thicknessCm: string;  // MATTRESS only; ignored for other categories
+  description: string;
+};
+
+const emptyRow = (): ModelRow => ({
+  rid:         `r${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  branding:    '',
+  modelCode:   '',
+  name:        '',
+  thicknessCm: '',
+  description: '',
+});
+
 export function NewModelDialog({
   onClose, initialCategory, onCreated,
 }: {
   onClose: () => void;
   initialCategory?: MfgCategory;
+  /** Only fires in single-row mode (rows.length === 1). Used by SKU Master's
+      "+ New SKU" entry-point to chain into the existing auto-generate flow. */
   onCreated?: (modelId: string, category: MfgCategory) => void;
 }) {
-  const [branding, setBranding] = useState('');
-  const [modelCode, setModelCode] = useState('');
-  const [name, setName] = useState('');
-  const [category, setCategory] = useState<MfgCategory>(initialCategory ?? 'SOFA');
-  const [description, setDescription] = useState('');
-  // PR #77 — Mattress-only thickness collected at New Model time so the
-  // (WxLx{thickness}CM) substitution works on first "+ Add Codes" without
-  // a detour to the Model detail page. Stored as allowed_options.
-  // mattress_thickness_cm; later edits still happen on the detail page.
-  const [mattressThicknessCm, setMattressThicknessCm] = useState('');
-  // PR #77b — Inline allowed-options picker. Sizes for MATTRESS/BEDFRAME,
-  // compartments for SOFA. Pre-empts the trip to the Model detail page —
-  // commander can create + immediately "+ Add Codes" without re-opening
-  // anything. Stored as Set<string> for cheap toggle, serialised to array
-  // on submit. Detail-page Allowed Options keeps working for later edits.
+  const [category, setCategory]   = useState<MfgCategory>(initialCategory ?? 'SOFA');
+  const [rows, setRows]           = useState<ModelRow[]>(() => [emptyRow()]);
   const [pickedSizes, setPickedSizes] = useState<Set<string>>(new Set());
   const [pickedComps, setPickedComps] = useState<Set<string>>(new Set());
-  const maintenance = useMaintenanceConfig('master');
-  const createMut = useCreateProductModel();
+  const [batchError, setBatchError]   = useState<string | null>(null);
+  const [submitting,  setSubmitting]  = useState(false);
 
-  // PR #69 — Branding is OPTIONAL across all categories. BEDFRAME / SOFA
-  // typically encode the brand inside the Model name (HILTON BEDFRAME,
-  // SOFA 5530). MATTRESS commander still uses it as separate metadata.
-  // We show the field but never block submit on it.
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!modelCode.trim() || !name.trim()) return;
-    // Build allowedOptions only for fields the user explicitly set. Empty
-    // {} = no restriction yet (matches existing convention).
-    const allowedOptions: Record<string, unknown> = {};
-    if (category === 'MATTRESS') {
-      const t = parseInt(mattressThicknessCm.trim(), 10);
-      if (Number.isFinite(t) && t > 0) allowedOptions.mattress_thickness_cm = t;
-    }
-    if (category === 'MATTRESS' || category === 'BEDFRAME') {
-      if (pickedSizes.size > 0) allowedOptions.sizes = Array.from(pickedSizes);
-    } else if (category === 'SOFA') {
-      if (pickedComps.size > 0) allowedOptions.compartments = Array.from(pickedComps);
-    }
-    createMut.mutate(
-      {
-        branding: branding.trim() || null,
-        modelCode: modelCode.trim(),
-        name: name.trim(),
-        category,
-        description: description.trim() || null,
-        ...(Object.keys(allowedOptions).length > 0 ? { allowedOptions } : {}),
-      },
-      {
-        onSuccess: (res) => {
-          if (onCreated && res.model?.id) onCreated(res.model.id, category);
-          else onClose();
-        },
-      },
-    );
+  const maintenance = useMaintenanceConfig('master');
+  const createMut   = useCreateProductModel();
+  const generateMut = useGenerateModelSkus();
+
+  const sharedCount = (category === 'SOFA') ? pickedComps.size : pickedSizes.size;
+  const totalSkus   = rows.length * sharedCount;
+
+  const updateRow = (rid: string, patch: Partial<ModelRow>) => {
+    setRows((prev) => prev.map((r) => (r.rid === rid ? { ...r, ...patch } : r)));
   };
+  const addRow    = () => setRows((prev) => [...prev, emptyRow()]);
+  const removeRow = (rid: string) =>
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.rid !== rid) : prev));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBatchError(null);
+
+    // Validate every row up front so a half-batch failure isn't possible.
+    for (const r of rows) {
+      if (!r.modelCode.trim() || !r.name.trim()) {
+        setBatchError(`Every row needs a model code + name. Row ${rows.indexOf(r) + 1} is incomplete.`);
+        return;
+      }
+      if (category === 'MATTRESS') {
+        const t = parseInt(r.thicknessCm.trim(), 10);
+        if (!Number.isFinite(t) || t <= 0) {
+          setBatchError(`Mattress thickness required. Row ${rows.indexOf(r) + 1} is missing it.`);
+          return;
+        }
+      }
+    }
+    // Duplicate-code check inside the batch (server would reject the second
+    // one, leaving a confusing half-success — easier to catch here first).
+    const codes = rows.map((r) => r.modelCode.trim());
+    const dup   = codes.find((c, i) => codes.indexOf(c) !== i);
+    if (dup) {
+      setBatchError(`Model code "${dup}" appears more than once in this batch.`);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // Build allowedOptions shared across the batch (sizes or compartments
+      // — same selection applies to every row). Each row layers its own
+      // thickness onto the shared blob for MATTRESS.
+      const sharedSizes = (category === 'MATTRESS' || category === 'BEDFRAME') && pickedSizes.size > 0
+        ? Array.from(pickedSizes) : null;
+      const sharedComps = category === 'SOFA' && pickedComps.size > 0
+        ? Array.from(pickedComps) : null;
+
+      // Create Models in parallel — server protects against duplicate codes
+      // across batches via the existing 23505 path.
+      const createdModels = await Promise.all(rows.map(async (r) => {
+        const allowedOptions: Record<string, unknown> = {};
+        if (sharedSizes) allowedOptions.sizes = sharedSizes;
+        if (sharedComps) allowedOptions.compartments = sharedComps;
+        if (category === 'MATTRESS') {
+          const t = parseInt(r.thicknessCm.trim(), 10);
+          if (Number.isFinite(t) && t > 0) allowedOptions.mattress_thickness_cm = t;
+        }
+        const res = await createMut.mutateAsync({
+          branding:    r.branding.trim() || null,
+          modelCode:   r.modelCode.trim(),
+          name:        r.name.trim(),
+          category,
+          description: r.description.trim() || null,
+          ...(Object.keys(allowedOptions).length > 0 ? { allowedOptions } : {}),
+        });
+        return res.model;
+      }));
+
+      // Auto-generate SKU variants for every Model whose batch had sizes /
+      // compartments selected. Models with neither selected get created but
+      // skip generation (matches the existing "empty allowed_options = no
+      // restriction" semantics — commander can pick later from detail page).
+      let totalGenerated = 0;
+      if (sharedSizes || sharedComps) {
+        const results = await Promise.all(createdModels.map((m) =>
+          generateMut.mutateAsync({ id: m.id }).catch((err) => ({ generated: 0, _err: err })),
+        ));
+        totalGenerated = results.reduce((sum, r) => sum + (r.generated ?? 0), 0);
+      }
+
+      // Single-row + onCreated → chain into the caller's auto-generate flow
+      // (preserved for SKU Master "+ New SKU" entry).
+      if (rows.length === 1 && createdModels[0] && onCreated) {
+        onCreated(createdModels[0].id, category);
+      } else {
+        // eslint-disable-next-line no-alert
+        alert(`Created ${createdModels.length} Model${createdModels.length === 1 ? '' : 's'}` +
+          (totalGenerated > 0 ? ` · auto-generated ${totalGenerated} SKU${totalGenerated === 1 ? '' : 's'}.` : '.'));
+        onClose();
+      }
+    } catch (e2) {
+      setBatchError(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const sizesPool = (category === 'MATTRESS'
+    ? maintenance.data?.data?.mattressSizes
+    : maintenance.data?.data?.bedframeSizes) ?? [];
+  const compsPool = maintenance.data?.data?.sofaCompartments ?? [];
 
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
-      <form className={styles.modal} onClick={(e) => e.stopPropagation()} onSubmit={submit}>
-        <h2 className={styles.modalTitle}>New Model</h2>
+      <form
+        className={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={submit}
+        style={{ maxWidth: 760, maxHeight: '90vh', overflowY: 'auto' }}
+      >
+        <h2 className={styles.modalTitle}>New Models (bulk)</h2>
         <p className={styles.modalSub}>
-          Models are templates. SKU codes are auto-generated from the template
-          below — open a Model once, tick the options it offers, then add codes
-          in one click.
+          Add one row per Model. Pick the sizes / compartments once below — they
+          apply to every row. Submit creates all Models and auto-generates the
+          SKU variants in one shot.
         </p>
-
-        <label className={styles.field}>
-          <span className="t-eyebrow">Branding (optional)</span>
-          <input
-            type="text"
-            value={branding}
-            onChange={(e) => setBranding(e.target.value)}
-            placeholder={
-              category === 'SOFA' ? 'e.g. HOUZS / 2990S'
-              : category === 'BEDFRAME' ? 'usually encoded in Name (HILTON BEDFRAME) — leave blank'
-              : category === 'MATTRESS' ? 'e.g. 2990S / SEALY'
-              : ''
-            }
-          />
-        </label>
-
-        <label className={styles.field}>
-          <span className="t-eyebrow">Model code *</span>
-          <input
-            type="text"
-            value={modelCode}
-            onChange={(e) => setModelCode(e.target.value)}
-            placeholder={
-              category === 'SOFA' ? 'e.g. 5530 / 5530B'
-              : category === 'BEDFRAME' ? 'e.g. 1003 / 1003A'
-              : 'e.g. PURE / FIRMNESS'
-            }
-            required
-          />
-        </label>
-
-        <label className={styles.field}>
-          <span className="t-eyebrow">Name *</span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={
-              category === 'SOFA' ? 'e.g. SOFA 5530'
-              : category === 'BEDFRAME' ? 'e.g. HILTON BEDFRAME'
-              : 'e.g. SEALY MATTRESS'
-            }
-            required
-          />
-        </label>
 
         <label className={styles.field}>
           <span className="t-eyebrow">Category</span>
@@ -295,47 +335,31 @@ export function NewModelDialog({
           </select>
         </label>
 
-        {/* PR #77 — Mattress-only thickness input. Drives the
-            (WxLx{thickness}CM) substitution in the auto-generated SKU name
-            on first "+ Add Codes". Stored as allowed_options.
-            mattress_thickness_cm — same field the detail-page input writes,
-            so future edits still work there. */}
-        {category === 'MATTRESS' && (
-          <label className={styles.field}>
-            <span className="t-eyebrow">Mattress thickness (cm) *</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              min={1}
-              step={1}
-              value={mattressThicknessCm}
-              onChange={(e) => setMattressThicknessCm(e.target.value)}
-              placeholder="e.g. 31 / 30 / 20"
-            />
-          </label>
-        )}
-
-        <label className={styles.field}>
-          <span className="t-eyebrow">Description (optional)</span>
-          <input
-            type="text"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
+        {rows.map((row, i) => (
+          <ModelRowCard
+            key={row.rid}
+            row={row}
+            index={i}
+            category={category}
+            canRemove={rows.length > 1}
+            onChange={(patch) => updateRow(row.rid, patch)}
+            onRemove={() => removeRow(row.rid)}
           />
-        </label>
+        ))}
 
-        {/* PR #77b — Inline allowed-options picker. MATTRESS/BEDFRAME →
-            sizes chips (from maintenance.{mattress,bedframe}Sizes pool).
-            SOFA → compartments chips (from maintenance.sofaCompartments).
-            Empty selection = "no restriction yet", matches detail-page
-            convention (commander can tick more on detail page later). */}
+        <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: -4 }}>
+          <Button variant="ghost" size="sm" type="button" onClick={addRow}>
+            <Plus {...ICON} />
+            <span>Add another Model</span>
+          </Button>
+        </div>
+
+        {/* Shared sizes / compartments — applied to every row in the batch. */}
         {(category === 'MATTRESS' || category === 'BEDFRAME') && (
           <InlineAllowedOptions
-            label="Sizes"
-            hint="Tick the sizes this Model is sold in · pool from Maintenance"
-            options={(category === 'MATTRESS'
-              ? maintenance.data?.data?.mattressSizes
-              : maintenance.data?.data?.bedframeSizes) ?? []}
+            label={`Sizes (apply to all ${rows.length} row${rows.length === 1 ? '' : 's'})`}
+            hint="Tick the sizes every Model in this batch is sold in · pool from Maintenance"
+            options={sizesPool}
             picked={pickedSizes}
             onToggle={(v) => setPickedSizes((prev) => {
               const n = new Set(prev);
@@ -350,9 +374,9 @@ export function NewModelDialog({
         )}
         {category === 'SOFA' && (
           <InlineAllowedOptions
-            label="Compartments"
-            hint="Tick the compartments this Sofa offers · pool from Maintenance"
-            options={maintenance.data?.data?.sofaCompartments ?? []}
+            label={`Compartments (apply to all ${rows.length} row${rows.length === 1 ? '' : 's'})`}
+            hint="Tick the compartments every Sofa in this batch offers · pool from Maintenance"
+            options={compsPool}
             picked={pickedComps}
             onToggle={(v) => setPickedComps((prev) => {
               const n = new Set(prev);
@@ -362,23 +386,18 @@ export function NewModelDialog({
           />
         )}
 
-        <TemplatePreview
-          category={category}
-          modelCode={modelCode}
-          modelName={name}
-          mattressThicknessCm={mattressThicknessCm}
-        />
-
-        {createMut.isError && (
-          <div className={styles.errorBanner}>
-            {createMut.error instanceof Error ? createMut.error.message : 'Create failed'}
-          </div>
+        {batchError && (
+          <div className={styles.errorBanner}>{batchError}</div>
         )}
 
         <footer className={styles.modalFooter}>
           <Button variant="ghost" size="md" type="button" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" type="submit" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create Model'}
+          <Button variant="primary" size="md" type="submit" disabled={submitting}>
+            {submitting
+              ? 'Creating…'
+              : sharedCount > 0
+                ? `Create ${rows.length} × ${sharedCount} = ${totalSkus} SKUs`
+                : `Create ${rows.length} Model${rows.length === 1 ? '' : 's'}`}
           </Button>
         </footer>
       </form>
@@ -386,62 +405,102 @@ export function NewModelDialog({
   );
 }
 
-/* ─────────── Code-generation template preview ────────────────────────────
-   Shows commander a worked example of how SKU codes + names get built from
-   his current inputs. Updates live as he types. */
-function TemplatePreview({
-  category, modelCode, modelName, mattressThicknessCm,
+/* ─────────── Per-row card (bulk mode) ────────────────────────────────────
+   Branding / Model code / Name / (Mattress thickness) / Description plus a
+   little × in the corner so commander can prune the row. Inline preview at
+   the bottom of the card shows the SKU shape this row + the shared sizes
+   below will materialise. */
+function ModelRowCard({
+  row, index, category, canRemove, onChange, onRemove,
 }: {
-  category: MfgCategory;
-  modelCode: string;
-  modelName: string;
-  /** PR #77 — Mattress only; live preview uses the typed value so commander
-      sees the real (183x190x{thickness}CM) before clicking Create. */
-  mattressThicknessCm?: string;
+  row:       ModelRow;
+  index:     number;
+  category:  MfgCategory;
+  canRemove: boolean;
+  onChange:  (patch: Partial<ModelRow>) => void;
+  onRemove:  () => void;
 }) {
-  const mc = modelCode.trim() || '{model_code}';
-  const mn = modelName.trim() || '{model_name}';
-  let codeFmt = '', nameFmt = '', exampleCode = '', exampleName = '';
-
-  if (category === 'SOFA') {
-    codeFmt = '{model_code}-{compartment}';
-    nameFmt = '{model_name} {compartment}';
-    exampleCode = `${mc}-1A(LHF)`;
-    exampleName = `${mn} 1A(LHF)`;
-  } else if (category === 'BEDFRAME') {
-    codeFmt = '{model_code}-({size})';
-    nameFmt = '{model_name} ({size_label}) ({dimensions})';
-    exampleCode = `${mc}-(K)`;
-    exampleName = `${mn} (6FT) (183X190CM)`;
-  } else if (category === 'MATTRESS') {
-    codeFmt = '{model_code} MATT ({size})';
-    nameFmt = '{model_name} (WxLxTCM)';
-    exampleCode = `${mc} MATT (K)`;
-    const tn = mattressThicknessCm ? parseInt(mattressThicknessCm.trim(), 10) : NaN;
-    const tDisplay = Number.isFinite(tn) && tn > 0 ? String(tn) : '{thickness}';
-    exampleName = `${mn} (183x190x${tDisplay}CM)`;
-  } else {
-    return null;
-  }
-
   return (
-    <div className={styles.tplBox}>
-      <div className={styles.tplHead}>SKU template — preview</div>
-      <div className={styles.tplRow}>
-        <span className={styles.tplLabel}>code</span>
-        <code className={styles.tplFmt}>{codeFmt}</code>
-        <span className={styles.tplArrow}>→</span>
-        <code className={styles.tplExample}>{exampleCode}</code>
+    <div
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-3)',
+        marginTop: 'var(--space-3)',
+        background: 'var(--c-paper)',
+        position: 'relative',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span className="t-eyebrow" style={{ color: 'var(--c-orange)' }}>Model {index + 1}</span>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            title="Remove this row"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--fg-muted)',
+              cursor: 'pointer',
+              fontSize: 'var(--fs-14)',
+              padding: '2px 6px',
+            }}
+          >
+            ✕
+          </button>
+        )}
       </div>
-      <div className={styles.tplRow}>
-        <span className={styles.tplLabel}>name</span>
-        <code className={styles.tplFmt}>{nameFmt}</code>
-        <span className={styles.tplArrow}>→</span>
-        <code className={styles.tplExample}>{exampleName}</code>
+
+      <div style={{ display: 'grid', gridTemplateColumns: category === 'MATTRESS' ? '1fr 2fr 2fr 1fr' : '1fr 2fr 2fr', gap: 8, marginBottom: 8 }}>
+        <label className={styles.field} style={{ margin: 0 }}>
+          <span className="t-eyebrow">Branding</span>
+          <input type="text" value={row.branding} onChange={(e) => onChange({ branding: e.target.value })}
+            placeholder={category === 'MATTRESS' ? '2990S' : ''} />
+        </label>
+        <label className={styles.field} style={{ margin: 0 }}>
+          <span className="t-eyebrow">Model code *</span>
+          <input type="text" value={row.modelCode} onChange={(e) => onChange({ modelCode: e.target.value })}
+            placeholder={
+              category === 'SOFA'     ? '5530' :
+              category === 'BEDFRAME' ? '1003' :
+              '2990-NF AKKA-FIRM MATT'
+            }
+            required />
+        </label>
+        <label className={styles.field} style={{ margin: 0 }}>
+          <span className="t-eyebrow">Name *</span>
+          <input type="text" value={row.name} onChange={(e) => onChange({ name: e.target.value })}
+            placeholder={
+              category === 'SOFA'     ? 'SOFA 5530' :
+              category === 'BEDFRAME' ? 'HILTON BEDFRAME' :
+              '2990 AKKA-FIRM MATTRESS'
+            }
+            required />
+        </label>
+        {category === 'MATTRESS' && (
+          <label className={styles.field} style={{ margin: 0 }}>
+            <span className="t-eyebrow">Thickness (cm) *</span>
+            <input type="number" inputMode="numeric" min={1} step={1}
+              value={row.thicknessCm} onChange={(e) => onChange({ thicknessCm: e.target.value })}
+              placeholder="31" required />
+          </label>
+        )}
       </div>
+
+      <label className={styles.field} style={{ margin: 0 }}>
+        <span className="t-eyebrow">Description (optional)</span>
+        <input type="text" value={row.description} onChange={(e) => onChange({ description: e.target.value })} />
+      </label>
     </div>
   );
 }
+
+// PR #78b — TemplatePreview removed (was single-row, lived above the Cancel /
+// Create buttons). Bulk mode shows the SKU shape implicitly via the row
+// inputs + the shared sizes/compartments picker — repeating the preview N
+// times for N rows would be noisy. The hardcoded API templates in
+// apps/api/src/routes/product-models.ts still produce the same shapes.
 
 /* ─────────── Inline allowed-options chip toggle ──────────────────────────
    Used in NewModelDialog so commander can pick sizes/compartments without
