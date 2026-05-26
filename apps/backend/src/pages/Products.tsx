@@ -282,11 +282,41 @@ const SkuMasterTab = () => {
       deleteMut.mutateAsync(id).then(() => ({ id, ok: true as const })).catch((e) => ({ id, ok: false as const, err: e instanceof Error ? e.message : String(e) })),
     ));
     setDeleting(false);
+    const failed = results.filter((r): r is { id: string; ok: false; err: string } => !r.ok);
     setSelectedIds(new Set());
-    const failed = results.filter((r) => !r.ok);
-    if (failed.length > 0) {
+    if (failed.length === 0) return;
+
+    // PR #94 — Commander 2026-05-26: the "Deleted 0 / 6. 6 failed" alert
+    // hid the actual reason behind a generic message. Surface per-row
+    // errors so commander can see WHAT is blocking (inventory lot,
+    // supplier binding, etc.) and offer Force delete as a follow-up.
+    const blockedByRef = failed.filter((f) => /product_in_use|23503|references/i.test(f.err));
+    const sample = failed.slice(0, 3).map((f) => `· ${f.err.slice(0, 160)}`).join('\n');
+    const overflow = failed.length > 3 ? `\n…and ${failed.length - 3} more.` : '';
+    // eslint-disable-next-line no-alert
+    const wantForce = blockedByRef.length > 0 && confirm(
+      `Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed:\n${sample}${overflow}\n\n`
+      + `${blockedByRef.length} of the failures look like inventory / supplier bindings.\n`
+      + `Force delete will wipe those side-table rows first then drop the SKU. Continue?`,
+    );
+    if (!wantForce) {
       // eslint-disable-next-line no-alert
-      alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed — usually means the SKU is referenced by an order / PO line.`);
+      alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed.\n${sample}${overflow}`);
+      return;
+    }
+    setDeleting(true);
+    const retry = await Promise.all(failed.map((f) =>
+      deleteMut.mutateAsync({ id: f.id, force: true }).then(() => ({ id: f.id, ok: true as const })).catch((e) => ({ id: f.id, ok: false as const, err: e instanceof Error ? e.message : String(e) })),
+    ));
+    setDeleting(false);
+    const stillFailed = retry.filter((r) => !r.ok);
+    if (stillFailed.length === 0) {
+      // eslint-disable-next-line no-alert
+      alert(`Force delete cleaned up the remaining ${retry.length} SKU${retry.length === 1 ? '' : 's'}.`);
+    } else {
+      const stillSample = stillFailed.slice(0, 3).map((r) => `· ${r.ok ? '' : r.err.slice(0, 160)}`).join('\n');
+      // eslint-disable-next-line no-alert
+      alert(`Force delete: ${retry.length - stillFailed.length} / ${retry.length} succeeded. ${stillFailed.length} still failed:\n${stillSample}`);
     }
   };
 
