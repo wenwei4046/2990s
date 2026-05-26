@@ -35,6 +35,8 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type ProductModelRow = {
   id: string;
+  /** PR #65 — required for SOFA/BEDFRAME/MATTRESS; drives the SKU-name template. */
+  branding: string | null;
   model_code: string;
   name: string;
   category: MfgCategory;
@@ -102,6 +104,7 @@ export function useCreateProductModel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: {
+      branding?: string | null;
       modelCode: string;
       name: string;
       category: MfgCategory;
@@ -124,6 +127,7 @@ export function useUpdateProductModel() {
   return useMutation({
     mutationFn: async (args: {
       id: string;
+      branding?: string | null;
       modelCode?: string;
       name?: string;
       description?: string | null;

@@ -1622,6 +1622,10 @@ export const mfgProducts = pgTable('mfg_products', {
    ────────────────────────────────────────────────────────────────────────── */
 export const productModels = pgTable('product_models', {
   id:             uuid('id').primaryKey().defaultRandom(),
+  // PR #65 — Branding required at the Model level (Commander 2026-05-26).
+  // Drives the SKU-name template: "HILTON BEDFRAME (6FT)" uses branding=HILTON,
+  // category=BEDFRAME, size_label=6FT. UI enforces non-empty before create.
+  branding:       text('branding'),
   modelCode:      text('model_code').notNull(),
   name:           text('name').notNull(),
   category:       mfgProductCategory('category').notNull(),
