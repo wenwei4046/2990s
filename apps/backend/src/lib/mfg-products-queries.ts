@@ -35,6 +35,10 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
     throw new Error(`${res.status} ${res.statusText}: ${detail}`);
   }
+  // PR #99 — 204 No Content (DELETE endpoints) → skip JSON parse,
+  // res.json() on an empty body throws "Unexpected end of JSON input"
+  // which previously surfaced as "FK constraint" via the bulk-delete UI.
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
