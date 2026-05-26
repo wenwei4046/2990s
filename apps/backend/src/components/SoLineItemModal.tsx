@@ -104,7 +104,7 @@ export const SoLineItemModal = ({
     setSearch(p.code);
   };
 
-  const setVariant = (k: string, v: string | number) =>
+  const setVariant = (k: string, v: string | number | string[]) =>
     setDraft((s) => ({ ...s, variants: { ...s.variants, [k]: v } }));
 
   /* PR #114 — Auto-recompute unit price from base + variant surcharges.
@@ -114,6 +114,14 @@ export const SoLineItemModal = ({
                product.base_price_sen.
      For Bedframe: base = product.base_price_sen.
      Skipped if user manually overrode. */
+  /* PR #125 — multi-select Special Orders. variants.specials is the new
+     canonical key (string[]); legacy variants.special (single string) is
+     migrated on read. specialsList() normalises both shapes. */
+  const specialsList = (v: unknown): string[] => {
+    if (Array.isArray(v)) return v.map(String).filter(Boolean);
+    if (typeof v === 'string' && v) return [v];
+    return [];
+  };
   useEffect(() => {
     if (manualPrice || !maint || !picked) return;
     const category = draft.itemGroup.toLowerCase();
@@ -128,18 +136,18 @@ export const SoLineItemModal = ({
         if (match) basePriceSen = match.priceSen;
       }
       const legV  = String(draft.variants.legHeight ?? '');
-      const specV = String(draft.variants.special ?? '');
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen  ?? 0;
-      extraSen += maint.sofaSpecials  .find((o) => o.value === specV)?.priceSen ?? 0;
+      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
+      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      for (const s of specs) extraSen += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
     } else if (category === 'bedframe') {
       const divanV = String(draft.variants.divanHeight ?? '');
       const totalV = String(draft.variants.totalHeight ?? '');
       const legV   = String(draft.variants.legHeight ?? '');
-      const specV  = String(draft.variants.special ?? '');
+      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
       extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
       extraSen += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
       extraSen += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
-      extraSen += maint.specials    .find((o) => o.value === specV)?.priceSen  ?? 0;
+      for (const s of specs) extraSen += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
     }
     // Mattress / Accessory / Others: no variant surcharges. Base price as-is.
 
@@ -147,6 +155,40 @@ export const SoLineItemModal = ({
     setDraft((s) => (s.unitPriceCenti === newPrice ? s : { ...s, unitPriceCenti: newPrice }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
+
+  /* PR #125 — Base / Unit price footer breakdown helpers.
+     basePriceSen: unit price minus any variant surcharges (what commander
+                   would charge for a "plain" config of this product).
+     extraSen:     the sum of variant surcharges (heights + multi-special). */
+  const { basePriceSen, extraSen } = useMemo(() => {
+    if (!maint || !picked) return { basePriceSen: draft.unitPriceCenti, extraSen: 0 };
+    const category = draft.itemGroup.toLowerCase();
+    let base = picked.base_price_sen ?? 0;
+    let extra = 0;
+    if (category === 'sofa') {
+      const sh = String(draft.variants.seatHeight ?? '');
+      if (sh && Array.isArray(picked.seat_height_prices)) {
+        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
+          .find((p) => p.height === sh && p.tier === 'PRICE_2');
+        if (match) base = match.priceSen;
+      }
+      const legV  = String(draft.variants.legHeight ?? '');
+      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
+      extra += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      for (const s of specs) extra += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
+    } else if (category === 'bedframe') {
+      const divanV = String(draft.variants.divanHeight ?? '');
+      const totalV = String(draft.variants.totalHeight ?? '');
+      const legV   = String(draft.variants.legHeight ?? '');
+      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
+      extra += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
+      extra += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
+      extra += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
+      for (const s of specs) extra += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
+    }
+    return { basePriceSen: base, extraSen: extra };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, draft.variants, draft.itemGroup, maint]);
 
   const lineTotal = useMemo(
     () => Math.max(0, draft.qty * draft.unitPriceCenti - draft.discountCenti),
@@ -234,13 +276,18 @@ export const SoLineItemModal = ({
                     value={String(draft.variants.gap ?? '')}
                     onChange={(v) => setVariant('gap', v)}
                   />
-                  <VariantSelect
-                    label="Special"
-                    options={maint.specials}
-                    value={String(draft.variants.special ?? '')}
-                    onChange={(v) => setVariant('special', v)}
-                  />
                 </div>
+              )}
+              {/* PR #125 — Special Orders is multi-select for bedframe.
+                  HOOKKA pattern: commander toggles N specials at once
+                  (e.g. recliner + storage + USB port), price recomputes. */}
+              {draft.itemGroup === 'bedframe' && (
+                <SpecialsMultiSelect
+                  label="Special Orders"
+                  options={maint.specials}
+                  picked={specialsList(draft.variants.specials ?? draft.variants.special)}
+                  onChange={(arr) => setVariant('specials', arr)}
+                />
               )}
 
               {/* SOFA — fabric code / color code / divan / sofa size /
@@ -295,13 +342,17 @@ export const SoLineItemModal = ({
                     value={String(draft.variants.divanHeight ?? '')}
                     onChange={(v) => setVariant('divanHeight', v)}
                   />
-                  <VariantSelect
-                    label="Special"
-                    options={maint.sofaSpecials}
-                    value={String(draft.variants.special ?? '')}
-                    onChange={(v) => setVariant('special', v)}
-                  />
                 </div>
+              )}
+              {/* PR #125 — Special Orders multi-select for sofa (mirrors
+                  bedframe). HOOKKA pattern: multiple specials at once. */}
+              {draft.itemGroup === 'sofa' && (
+                <SpecialsMultiSelect
+                  label="Special Orders"
+                  options={maint.sofaSpecials}
+                  picked={specialsList(draft.variants.specials ?? draft.variants.special)}
+                  onChange={(arr) => setVariant('specials', arr)}
+                />
               )}
 
               {/* MATTRESS — just size (commander 2026-05-26: "选 size 就够了") */}
@@ -384,17 +435,45 @@ export const SoLineItemModal = ({
                 />
               </label>
             </div>
-            <div className={styles.previewLine} style={{ marginTop: 8 }}>
-              <span>Line total</span>
-              <span className={styles.previewPrice}>{fmtRm(lineTotal)}</span>
+            {/* PR #125 — HOOKKA-style footer breakdown. Shows the four
+                components that make up the final line total so commander
+                can see at a glance where the price is coming from. */}
+            <div style={{
+              marginTop: 8,
+              display: 'grid',
+              gap: 4,
+              padding: 'var(--space-2) var(--space-3)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-12)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
+                <span>Base price</span><span>{fmtRm(basePriceSen)}</span>
+              </div>
+              {extraSen > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
+                  <span>+ Variant surcharges</span><span>+ {fmtRm(extraSen)}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
+                <span>Unit price × {draft.qty}{draft.discountCenti > 0 ? ` − ${fmtRm(draft.discountCenti)} discount` : ''}</span>
+                <span>{fmtRm(draft.unitPriceCenti)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--c-burnt)', fontSize: 'var(--fs-14)', borderTop: '1px solid var(--line)', paddingTop: 4, marginTop: 2 }}>
+                <span>Line total</span><span>{fmtRm(lineTotal)}</span>
+              </div>
             </div>
           </div>
 
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Remark</span>
+            {/* PR #125 — Commander wants "Line Notes" per HOOKKA terminology. */}
+            <span className={styles.fieldLabel}>Line Notes</span>
             <input
               className={styles.fieldInput} value={draft.remark}
               onChange={(e) => setDraft((s) => ({ ...s, remark: e.target.value }))}
+              placeholder="Free-text for this line (e.g. customer's special request)"
             />
           </label>
         </div>
@@ -430,3 +509,86 @@ const VariantSelect = ({
     </select>
   </label>
 );
+
+/* PR #125 — HOOKKA-style multi-select for Special Orders. Renders an
+   expandable chip list with a count badge in the header — clicking
+   the header toggles the picker open/closed, clicking a chip toggles
+   that option. Per-option surcharge appears next to the chip label. */
+const SpecialsMultiSelect = ({
+  label, options, picked, onChange,
+}: {
+  label:    string;
+  options:  Array<{ value: string; priceSen: number }>;
+  picked:   string[];
+  onChange: (next: string[]) => void;
+}) => {
+  const [open, setOpen] = useState(picked.length > 0);
+  const toggle = (v: string) => {
+    const next = picked.includes(v) ? picked.filter((x) => x !== v) : [...picked, v];
+    onChange(next);
+  };
+  return (
+    <div style={{ marginTop: 'var(--space-3)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: 'transparent',
+          border: '1px dashed var(--line-strong)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '6px 10px',
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--fs-13)',
+          color: 'var(--fg)',
+          cursor: 'pointer',
+          width: '100%',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span>
+          <span style={{ fontWeight: 600 }}>{label}</span>
+          {picked.length > 0 && (
+            <span style={{ marginLeft: 8, color: 'var(--c-orange)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
+              ({picked.length} selected)
+            </span>
+          )}
+        </span>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {options.length === 0 && (
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              No specials configured in Maintenance.
+            </span>
+          )}
+          {options.map((o) => {
+            const on = picked.includes(o.value);
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => toggle(o.value)}
+                style={{
+                  background: on ? 'var(--c-orange)' : 'var(--c-paper)',
+                  color: on ? 'var(--bg)' : 'var(--fg)',
+                  border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line-strong)'}`,
+                  borderRadius: 999,
+                  padding: '4px 12px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--fs-12)',
+                  cursor: 'pointer',
+                }}
+              >
+                {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
