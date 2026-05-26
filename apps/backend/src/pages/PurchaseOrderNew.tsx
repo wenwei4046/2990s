@@ -511,7 +511,12 @@ export const PurchaseOrderNew = () => {
           {lines.map((l, idx) => {
             const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - (l.discountCenti ?? 0));
             const categoryLabel = l.category?.toUpperCase() ?? 'UNSET';
-            const showVariants  = l.category && ['sofa', 'bedframe', 'mattress'].includes(l.category) && maint;
+            // PR #135 — drop mattress from the variant editor list.
+            // Commander 2026-05-26: "mattress variant 还有 branding 为什么要带
+            // 出来呢？不需要带出来啊". For mattress SKUs the size + branding
+            // are already encoded in the SKU code itself (e.g. "HAPPI.S
+            // DEWCOOL MATT (S)"), so the editor was just visual noise.
+            const showVariants  = l.category && ['sofa', 'bedframe'].includes(l.category) && maint;
 
             return (
               <div
@@ -798,38 +803,9 @@ export const PurchaseOrderNew = () => {
                       </div>
                     )}
 
-                    {/* MATTRESS — Size · Branding */}
-                    {l.category === 'mattress' && (
-                      <div className={styles.formGrid4}>
-                        <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Size</span>
-                          <select
-                            className={styles.fieldSelect}
-                            value={String(l.variants.size ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'size', e.target.value)}
-                          >
-                            <option value="">—</option>
-                            {(maint!.mattressSizes ?? []).map((s) => {
-                              const lbl = maint!.sizeLabels?.[s]?.label;
-                              return (
-                                <option key={s} value={s}>
-                                  {s}{lbl ? ` · ${lbl}` : ''}
-                                </option>
-                              );
-                            })}
-                          </select>
-                        </label>
-                        <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Branding</span>
-                          <input
-                            className={styles.fieldInput}
-                            placeholder="e.g. AKKA / FIRM / SOFT"
-                            value={String(l.variants.branding ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'branding', e.target.value)}
-                          />
-                        </label>
-                      </div>
-                    )}
+                    {/* PR #135 — mattress block removed: size + branding are
+                        already encoded in the mattress SKU code itself, no
+                        need for a separate editor. */}
                   </div>
                 )}
 
