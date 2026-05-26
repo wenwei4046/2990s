@@ -34,7 +34,13 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
   })}`;
 
 /** PR #114/#125 — Draft payload for one SO line. Matches the shape POST
- *  /mfg-sales-orders and PATCH /mfg-sales-orders/:docNo/items both expect. */
+ *  /mfg-sales-orders and PATCH /mfg-sales-orders/:docNo/items both expect.
+ *  PR #147 — `overriddenKeys` is a client-only audit set (not persisted to
+ *  API) that records which variant keys this line has been MANUALLY edited
+ *  for. The master-follower cascade in SalesOrderNew uses it to decide
+ *  whether to overwrite a follower's variant when LINE 1's changes:
+ *    - key NOT in overriddenKeys → cascade overwrites (follower stays in sync)
+ *    - key IN overriddenKeys     → cascade leaves alone (follower wins) */
 export type SoLineDraft = {
   itemCode:       string;
   itemGroup:      string;        // 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'others'
@@ -46,6 +52,7 @@ export type SoLineDraft = {
   unitCostCenti:  number;
   variants:       Record<string, unknown>;
   remark:         string;
+  overriddenKeys?: string[];
 };
 
 /** Factory for a fresh empty SO line draft. Used by the parent page to
@@ -114,8 +121,9 @@ export const SoLineCard = ({
     /* PR #141 — When commander picks an SKU, if there's already an earlier
        line of the same category with variants filled in, inherit those.
        Sofa as a SET: line 1 sets seat/leg/fabric → lines 2,3,…N carry the
-       same values forward automatically. Commander can still override on
-       each line if they really want a mismatched module. */
+       same values forward automatically.
+       PR #147 — Reset overriddenKeys on a fresh pick: a new product wipes
+       the slate so cascade can repopulate everything cleanly. */
     const inherited = inheritVariantsByCategory?.[category];
     const seedVariants: Record<string, unknown> =
       inherited && Object.keys(inherited).length > 0 ? { ...inherited } : {};
@@ -125,6 +133,7 @@ export const SoLineCard = ({
       description:    p.name,
       unitPriceCenti: p.base_price_sen ?? 0,
       variants:       seedVariants,
+      overriddenKeys: [],
     });
     setSearch(p.name);
   };
@@ -157,8 +166,18 @@ export const SoLineCard = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [computedTotalHeight, draft.itemGroup]);
 
-  const setVariant = (k: string, v: string | number | string[]) =>
-    onChange({ variants: { ...draft.variants, [k]: v } });
+  /* PR #147 — Any user edit through setVariant adds the key to the line's
+     overriddenKeys set. This protects follower lines from cascade overwrite
+     once commander deliberately diverges (e.g. one module in a sofa set
+     uses a different fabric). Master line (LINE 1 of category) is never
+     cascaded onto, so adding the override flag there is harmless. */
+  const setVariant = (k: string, v: string | number | string[]) => {
+    const nextOverrides = Array.from(new Set([...(draft.overriddenKeys ?? []), k]));
+    onChange({
+      variants: { ...draft.variants, [k]: v },
+      overriddenKeys: nextOverrides,
+    });
+  };
 
   /* PR #127 — HOOKKA multi-select Special Orders. `variants.specials`
      (string[]) is the new canonical key; legacy `variants.special`
