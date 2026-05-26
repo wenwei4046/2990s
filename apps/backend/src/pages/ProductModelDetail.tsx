@@ -46,8 +46,24 @@ const FALLBACK_SOFA_COMPARTMENTS = [
 const FALLBACK_BEDFRAME_SIZES = ['K', 'Q', 'S', 'SS', 'SK', 'SP'];
 const FALLBACK_MATTRESS_SIZES = ['K', 'Q', 'S', 'SS'];
 
-export const ProductModelDetail = () => {
-  const { id } = useParams<{ id: string }>();
+// PR #119 — Commander 2026-05-26: "Model detail 页面（DASDA 那个）不该
+// 跳出去独立 URL，应该在 Modular tab 内嵌入". Same component now powers
+// two surfaces:
+//   1. /product-models/:id route (direct deep-link, full-page chrome)
+//   2. <Drawer> overlay on the Modular tab (no route change)
+// `modelId` prop wins over the URL param; `onClose` swaps the header's
+// back-link for an ✕ button and re-routes the delete-success callback
+// to the parent state instead of navigate('/products').
+export const ProductModelDetail = ({
+  modelId,
+  onClose,
+}: {
+  modelId?: string;
+  onClose?: () => void;
+} = {}) => {
+  const { id: paramId } = useParams<{ id: string }>();
+  const id = modelId ?? paramId;
+  const embedded = Boolean(modelId);
   const navigate = useNavigate();
   const { data, isLoading, error } = useProductModel(id);
   const updateMut = useUpdateProductModel();
@@ -159,7 +175,14 @@ export const ProductModelDetail = () => {
     if (!window.confirm(
       `Delete Model "${model.model_code} · ${model.name}"? ${skuCount} SKU(s) will keep their rows but lose the Model link.`,
     )) return;
-    deleteMut.mutate(id, { onSuccess: () => navigate('/products') });
+    deleteMut.mutate(id, {
+      onSuccess: () => {
+        // Embedded mode: close the drawer + let the parent invalidate the
+        // Modular list. Direct-route mode: bounce back to /products.
+        if (embedded && onClose) onClose();
+        else navigate('/products');
+      },
+    });
   };
 
   /** Validate + upload to Supabase Storage, then PATCH the Model with the
@@ -214,9 +237,15 @@ export const ProductModelDetail = () => {
     <div className={styles.page}>
       {/* Header --------------------------------------------------------- */}
       <header className={styles.header}>
-        <Link to="/products" className={styles.back}>
-          <ArrowLeft {...ICON} /> Products & Maintenance
-        </Link>
+        {embedded ? (
+          <button type="button" className={styles.back} onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+            <X {...ICON} /> Close
+          </button>
+        ) : (
+          <Link to="/products" className={styles.back}>
+            <ArrowLeft {...ICON} /> Products & Maintenance
+          </Link>
+        )}
         <div className={styles.titleRow}>
           <Layers size={20} strokeWidth={1.75} />
           <h1 className="t-h2">{model.model_code}</h1>
