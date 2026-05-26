@@ -368,17 +368,24 @@ productModels.post('/:id/generate-skus', async (c) => {
     // Bedframe Model with branding="Hilton" generates "Hilton BEDFRAME
     // (6FT) (183X190CM)" instead of the bare "BEDFRAME (...)" that just
     // confused commander. Empty branding → prefix dropped (no leading
-    // space). Note: modelName is intentionally NOT in the output here —
-    // the BEDFRAME word + branding is the convention; modelName stays
-    // for the Models-list display only.
-    const branding = (model.branding ?? '').trim();
-    const prefix   = branding ? `${branding} ` : '';
+    // space).
+    //
+    // PR #100 — Commander 2026-05-26: "为什么我的 Bedframe Create SKU 的
+    // 时候，Description 没有跟着我们要的那个名字呢？" Mattress includes
+    // the model name (e.g. "2990 AKKA-FIRM MATTRESS (…)"); bedframe was
+    // dropping it ("BEDFRAME (6FT) (…)" with no TRION / HILTON). Inserted
+    // modelName between branding prefix and the BEDFRAME word so symmetry
+    // matches the mattress convention.
+    const branding  = (model.branding ?? '').trim();
+    const prefix    = branding ? `${branding} ` : '';
+    const modelName = (model.name ?? '').trim();
+    const namePrefix = modelName ? `${prefix}${modelName} ` : prefix;
     for (const sz of sizesArr) {
       const info  = resolveSizeInfoServer(sz, sizeOverrides);
       const label = info.label;
       const dim   = info.dim;
-      // "HILTON BEDFRAME (6FT) (183X190CM)" vs "HILTON(A) BEDFRAME (200X200CM)"
-      const namePart = dim ? `${prefix}BEDFRAME (${label}) (${dim})` : `${prefix}BEDFRAME (${label})`;
+      // "TRION BEDFRAME (6FT) (183X190CM)" vs "TRION BEDFRAME (200X200CM)"
+      const namePart = dim ? `${namePrefix}BEDFRAME (${label}) (${dim})` : `${namePrefix}BEDFRAME (${label})`;
       wanted.push({
         code:       `${model.model_code}-(${sz})`,
         name:       namePart.trim(),
