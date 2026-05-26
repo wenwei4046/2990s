@@ -26,7 +26,7 @@
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreateMfgSalesOrder, useDebtorSearch } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -35,7 +35,7 @@ import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   BUILDING_TYPES,
 } from '../lib/localities-queries';
-import { SoLineItemModal, type SoLineDraft } from '../components/SoLineItemModal';
+import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -50,9 +50,14 @@ const RELATIONSHIP_OPTIONS = [
   'Spouse', 'Parent', 'Child', 'Sibling', 'Relative', 'Friend', 'Colleague', 'Other',
 ] as const;
 
-/* PR #114 — Draft line shape mirrors SoLineDraft from SoLineItemModal but
-   adds a stable React id so the local list can re-order / edit. */
+/* PR #114/#125 — Draft line shape mirrors SoLineDraft from SoLineCard but
+   adds a stable React id so the local list can re-order / edit inline. */
 type DraftLine = SoLineDraft & { rid: string };
+
+const newLine = (): DraftLine => ({
+  ...emptySoLine(),
+  rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+});
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', {
@@ -116,33 +121,16 @@ export const SalesOrderNew = () => {
   const [note, setNote] = useState('');
 
   // ── Items state ────────────────────────────────────────────────────
-  // PR #114 — Lines start empty; commander opens the modal to add the first.
-  // Each line carries the full HOOKKA-pattern variant payload (divan / leg /
-  // gap / fabric code / etc.) so server-side conversions preserve everything.
-  const [lines, setLines] = useState<DraftLine[]>([]);
-  const [modalOpen, setModalOpen]     = useState(false);
-  const [editingRid, setEditingRid]   = useState<string | null>(null);
+  // PR #125 — Each line is an inline editable card (HOOKKA pattern). First
+  // card is seeded on mount so commander immediately sees the variant
+  // editor instead of needing to click "+ Add line item" first.
+  const [lines, setLines] = useState<DraftLine[]>(() => [newLine()]);
 
-  const editingDraft = useMemo<SoLineDraft | null>(() => {
-    if (!editingRid) return null;
-    const found = lines.find((l) => l.rid === editingRid);
-    if (!found) return null;
-    const { rid: _rid, ...rest } = found;
-    return rest;
-  }, [editingRid, lines]);
+  const updateLine = (rid: string, patch: Partial<SoLineDraft>) =>
+    setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
 
+  const addLine  = () => setLines((prev) => [...prev, newLine()]);
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
-
-  const onModalSubmit = (line: SoLineDraft) => {
-    if (editingRid) {
-      setLines((prev) => prev.map((l) => (l.rid === editingRid ? { ...line, rid: editingRid } : l)));
-    } else {
-      const rid = `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      setLines((prev) => [...prev, { ...line, rid }]);
-    }
-    setModalOpen(false);
-    setEditingRid(null);
-  };
 
   const subtotalCenti = useMemo(
     () => lines.reduce(
@@ -163,9 +151,23 @@ export const SalesOrderNew = () => {
 
   const canSave = debtorName.trim().length > 0;
 
+  /* PR #125 — Commander 2026-05-26: "Processing Date 跟 Delivery Date 可以
+     两个都没有，或者两个都有，但不能一个有一个没有". XOR is rejected — a
+     processing date with no delivery date (or vice versa) is incomplete data
+     that breaks downstream production scheduling + customer comms. */
+  const datesXor = (processingDate.trim() !== '') !== (deliveryDate.trim() !== '');
+
   const onSave = () => {
     if (!canSave) {
       window.alert('Customer name is required.');
+      return;
+    }
+    if (datesXor) {
+      window.alert(
+        'Processing Date and Delivery Date must be set together.\n\n' +
+        'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
+        'cause scheduling issues.',
+      );
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
@@ -250,7 +252,7 @@ export const SalesOrderNew = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || !canSave}
+            disabled={create.isPending || !canSave || datesXor}
           >
             <Save {...ICON} />
             {create.isPending ? 'Saving…' : 'Save SO (Draft)'}
@@ -576,6 +578,25 @@ export const SalesOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody}>
+          {/* PR #125 — Both-or-neither rule. Commander: "可以两个都没有，
+              或者两个都有，但不能一个有一个没有". XOR state → red banner
+              + Save disabled until commander resolves. */}
+          {datesXor && (
+            <div
+              style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: 'var(--space-2) var(--space-3)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 'var(--fs-12)',
+                fontWeight: 600,
+                marginBottom: 'var(--space-3)',
+              }}
+            >
+              ⚠ Fill in BOTH dates or leave BOTH empty — partial dates aren't allowed.
+            </div>
+          )}
           <div className={styles.formGrid2}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
@@ -584,6 +605,7 @@ export const SalesOrderNew = () => {
                 value={processingDate}
                 onChange={(e) => setProcessingDate(e.target.value)}
                 className={styles.fieldInput}
+                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
               />
             </label>
             <label className={styles.field}>
@@ -593,13 +615,18 @@ export const SalesOrderNew = () => {
                 value={deliveryDate}
                 onChange={(e) => setDeliveryDate(e.target.value)}
                 className={styles.fieldInput}
+                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
               />
             </label>
           </div>
         </div>
       </section>
 
-      {/* ── Items / Lines (PR #114: HOOKKA-pattern modal editor) ──── */}
+      {/* ── Items / Lines (PR #125: HOOKKA-pattern inline cards) ─────
+           Commander 2026-05-26: "为什么我的 add line 需要这样子，而不是跟
+           Hookka 一样". Each line is an inline editable card with product
+           picker + per-category variants + pricing visible at once. The
+           "+ Add another item" button below appends a fresh empty card. */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Lines</h2>
@@ -607,82 +634,28 @@ export const SalesOrderNew = () => {
             {lines.length} line{lines.length === 1 ? '' : 's'} · subtotal {fmtRm(subtotalCenti)}
           </span>
         </div>
-        <div className={styles.cardBody}>
-          {/* List of added lines — read-only summary; edit/delete via icons */}
-          {lines.length === 0 ? (
-            <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: 0, padding: 'var(--space-4) 0', textAlign: 'center' }}>
-              No items yet. Click "Add line item" to pick a product + fill variants.
-            </p>
-          ) : (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '110px minmax(140px, 1fr) minmax(180px, 1.6fr) 60px 110px 100px 60px',
-              gap: 'var(--space-2)',
-              fontSize: 'var(--fs-13)',
-            }}>
-              <div className={styles.fieldLabel}>Group</div>
-              <div className={styles.fieldLabel}>Item Code</div>
-              <div className={styles.fieldLabel}>Description / Variants</div>
-              <div className={styles.fieldLabel} style={{ textAlign: 'right' }}>Qty</div>
-              <div className={styles.fieldLabel} style={{ textAlign: 'right' }}>Unit</div>
-              <div className={styles.fieldLabel} style={{ textAlign: 'right' }}>Total</div>
-              <div></div>
-              {lines.map((l) => {
-                const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - l.discountCenti);
-                const variantSummary = Object.entries(l.variants ?? {})
-                  .filter(([_, v]) => v !== null && v !== undefined && v !== '')
-                  .map(([k, v]) => `${k}=${v}`)
-                  .join(' · ');
-                return (
-                  <div key={l.rid} style={{ display: 'contents' }}>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>{l.itemGroup}</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{l.itemCode}</div>
-                    <div>
-                      <div>{l.description}</div>
-                      {variantSummary && (
-                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
-                          {variantSummary}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{l.qty}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{fmtRm(l.unitPriceCenti)}</div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{fmtRm(lineTotalCenti)}</div>
-                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                      <button
-                        type="button"
-                        title="Edit"
-                        onClick={() => { setEditingRid(l.rid); setModalOpen(true); }}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)' }}
-                      >
-                        <Pencil {...ICON} />
-                      </button>
-                      <button
-                        type="button"
-                        title="Remove"
-                        onClick={() => dropLine(l.rid)}
-                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)' }}
-                      >
-                        <Trash2 {...ICON} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          {lines.map((line, idx) => (
+            <SoLineCard
+              key={line.rid}
+              index={idx}
+              draft={line}
+              onChange={(patch) => updateLine(line.rid, patch)}
+              onRemove={() => dropLine(line.rid)}
+              canRemove={lines.length > 1}
+            />
+          ))}
 
           <button
             type="button"
-            onClick={() => { setEditingRid(null); setModalOpen(true); }}
+            onClick={addLine}
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 6,
               width: '100%',
-              padding: '10px 12px',
-              marginTop: 'var(--space-3)',
+              padding: '12px 14px',
               background: 'transparent',
               border: '1px dashed var(--c-orange)',
               borderRadius: 'var(--radius-md)',
@@ -693,13 +666,13 @@ export const SalesOrderNew = () => {
               cursor: 'pointer',
             }}
           >
-            <Plus {...ICON} /> Add line item
+            <Plus {...ICON} /> Add another item
           </button>
 
           <div style={{
             display: 'flex',
             justifyContent: 'flex-end',
-            marginTop: 'var(--space-4)',
+            marginTop: 'var(--space-2)',
             paddingTop: 'var(--space-3)',
             borderTop: '1px solid var(--line)',
             fontFamily: 'var(--font-mark)',
@@ -711,15 +684,6 @@ export const SalesOrderNew = () => {
           </div>
         </div>
       </section>
-
-      {/* PR #114 — line item modal (search SKU → per-category variants) */}
-      {modalOpen && (
-        <SoLineItemModal
-          initial={editingDraft}
-          onClose={() => { setModalOpen(false); setEditingRid(null); }}
-          onSubmit={onModalSubmit}
-        />
-      )}
 
       {/* PR #121 — bottom Notes section removed; Notes now lives inside the
           top Order Details card (POS layout). */}
