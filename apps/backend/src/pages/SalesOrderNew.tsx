@@ -117,14 +117,16 @@ export const SalesOrderNew = () => {
   const [processingDate, setProcessingDate] = useState('');
   const [deliveryDate,   setDeliveryDate]   = useState('');
 
-  // ── Payment (PR #148) ──────────────────────────────────────────────
-  // Commander 2026-05-26: "为什么我的 POS 里面的 Payment 那个 Module 还没
-  // 搬进来呢". Mirror the POS handover + Detail-page Payment card on the
-  // New SO form so commander can capture method + deposit at create time.
-  type PaymentMethod = 'cash' | 'transfer' | 'merchant' | 'installment' | '';
+  // ── Payment (PR #148 / #150) ──────────────────────────────────────
+  // Commander 2026-05-26: "event installment 也是 under merchant 的".
+  // 3 top-level methods (merchant / transfer / cash); when merchant is
+  // picked we further capture: provider, normal-vs-installment, term
+  // (6/12 if installment), and an approval_code from the auth slip.
+  type PaymentMethod = 'cash' | 'transfer' | 'merchant' | '';
   const [paymentMethod,     setPaymentMethod]     = useState<PaymentMethod>('');
   const [installmentMonths, setInstallmentMonths] = useState<number | null>(null);
   const [merchantProvider,  setMerchantProvider]  = useState<string>('');
+  const [approvalCode,      setApprovalCode]      = useState<string>('');
   const [depositCenti,      setDepositCenti]      = useState<number>(0);
   const [paidCenti,         setPaidCenti]         = useState<number>(0);
 
@@ -291,10 +293,11 @@ export const SalesOrderNew = () => {
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
         emergencyContactPhone:        emergencyPhone || undefined,
-        /* PR #148 — Payment fields. Mirror POS handover + Detail-page card. */
+        /* PR #148 + #150 — Payment fields. Mirror POS handover + Detail-page card. */
         paymentMethod:     paymentMethod || undefined,
         installmentMonths: installmentMonths ?? undefined,
         merchantProvider:  merchantProvider || undefined,
+        approvalCode:      approvalCode || undefined,
         depositCenti:      depositCenti || undefined,
         paidCenti:         paidCenti || undefined,
         /* PR #121 — Processing Date → internal_expected_dd, Delivery Date →
@@ -718,14 +721,14 @@ export const SalesOrderNew = () => {
           <h2 className={styles.cardTitle}>Payment</h2>
         </div>
         <div className={styles.cardBody}>
-          {/* Method buttons — same 4 as POS / SO Detail */}
+          {/* Method buttons — 3 top-level methods. Installment lives under
+              Merchant (PR #150). */}
           <p className={styles.subHead}>Method</p>
-          <div className={styles.formGrid2} style={{ marginBottom: 'var(--space-2)' }}>
+          <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 'var(--space-2)' }}>
             {([
-              ['merchant',    'Merchant',           'Card via GHL / HLB / MBB / PBB'],
-              ['transfer',    'Bank transfer / DuitNow', 'Slip required'],
-              ['installment', 'Installment',        '0% — 6 or 12 months'],
-              ['cash',        'Cash',               'Cash received at counter'],
+              ['merchant', 'Merchant',                  'Card via GHL / HLB / MBB / PBB'],
+              ['transfer', 'Bank transfer / DuitNow',   'Slip required'],
+              ['cash',     'Cash',                      'Cash received at counter'],
             ] as const).map(([m, label, hint]) => {
               const active = paymentMethod === m;
               return (
@@ -734,10 +737,13 @@ export const SalesOrderNew = () => {
                   type="button"
                   onClick={() => {
                     setPaymentMethod(m);
-                    if (m !== 'installment') setInstallmentMonths(null);
-                    if (m !== 'merchant')    setMerchantProvider('');
-                    if (m === 'installment' && !installmentMonths) setInstallmentMonths(6);
-                    if (m === 'merchant'    && !merchantProvider)  setMerchantProvider('GHL');
+                    if (m !== 'merchant') {
+                      setMerchantProvider('');
+                      setInstallmentMonths(null);
+                      setApprovalCode('');
+                    } else if (!merchantProvider) {
+                      setMerchantProvider('GHL');
+                    }
                   }}
                   style={{
                     display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
@@ -756,51 +762,89 @@ export const SalesOrderNew = () => {
             })}
           </div>
 
-          {/* Merchant sub-pills */}
+          {/* Merchant sub-section: provider + type (normal/installment) +
+              term + approval code. All nested under merchant per PR #150. */}
           {paymentMethod === 'merchant' && (
-            <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <span className={styles.fieldLabel}>Merchant</span>
-              {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setMerchantProvider(p)}
-                  style={{
-                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (merchantProvider === p ? 'var(--c-orange)' : 'var(--line)'),
-                    background: merchantProvider === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: merchantProvider === p ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          )}
+            <div style={{
+              marginTop: 'var(--space-3)',
+              padding: 'var(--space-3)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-3)',
+            }}>
+              {/* Provider pills */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                <span className={styles.fieldLabel}>Merchant</span>
+                {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setMerchantProvider(p)}
+                    style={{
+                      fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                      padding: '4px 12px', borderRadius: 'var(--radius-pill)',
+                      border: '1px solid ' + (merchantProvider === p ? 'var(--c-orange)' : 'var(--line)'),
+                      background: merchantProvider === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                      color: merchantProvider === p ? 'var(--c-burnt)' : 'var(--c-ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
 
-          {/* Installment term */}
-          {paymentMethod === 'installment' && (
-            <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <span className={styles.fieldLabel}>Term</span>
-              {([6, 12] as const).map((m) => (
+              {/* Type: Normal vs Installment */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                <span className={styles.fieldLabel}>Type</span>
                 <button
-                  key={m}
                   type="button"
-                  onClick={() => setInstallmentMonths(m)}
+                  onClick={() => setInstallmentMonths(null)}
                   style={{
                     fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
                     padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (installmentMonths === m ? 'var(--c-orange)' : 'var(--line)'),
-                    background: installmentMonths === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: installmentMonths === m ? 'var(--c-burnt)' : 'var(--c-ink)',
+                    border: '1px solid ' + (installmentMonths === null ? 'var(--c-orange)' : 'var(--line)'),
+                    background: installmentMonths === null ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                    color: installmentMonths === null ? 'var(--c-burnt)' : 'var(--c-ink)',
                     cursor: 'pointer',
                   }}
                 >
-                  {m} months
+                  Normal Swipe
                 </button>
-              ))}
+                {([6, 12] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setInstallmentMonths(m)}
+                    style={{
+                      fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+                      padding: '4px 12px', borderRadius: 'var(--radius-pill)',
+                      border: '1px solid ' + (installmentMonths === m ? 'var(--c-orange)' : 'var(--line)'),
+                      background: installmentMonths === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                      color: installmentMonths === m ? 'var(--c-burnt)' : 'var(--c-ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Installment · {m} months
+                  </button>
+                ))}
+              </div>
+
+              {/* Approval code */}
+              <label className={styles.field} style={{ maxWidth: 320 }}>
+                <span className={styles.fieldLabel}>Approval Code</span>
+                <input
+                  type="text"
+                  value={approvalCode}
+                  onChange={(e) => setApprovalCode(e.target.value)}
+                  placeholder="Auth code from terminal receipt"
+                  className={styles.fieldInput}
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                />
+              </label>
             </div>
           )}
 
