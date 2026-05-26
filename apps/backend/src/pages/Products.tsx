@@ -52,12 +52,14 @@ import {
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
-import { ProductModels } from './ProductModels';
+import { ProductModels, NewModelDialog } from './ProductModels';
+import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
 
 type TopTab = 'sku' | 'models' | 'maintenance';
+
 
 export const Products = () => {
   const [topTab, setTopTab] = useState<TopTab>('sku');
@@ -77,15 +79,11 @@ export const Products = () => {
             >
               SKU Master
             </button>
-            <button
-              type="button"
-              role="tab"
-              data-active={topTab === 'models'}
-              className={styles.tabSwitchBtn}
-              onClick={() => setTopTab('models')}
-            >
-              Models
-            </button>
+            {/* PR #73 — "Models" tab removed per commander. The Model
+                creation flow is now entry-pointed from the + New SKU
+                button on SKU Master (active category pre-fills the
+                dialog). /product-models route still serves direct links
+                from existing Model Detail back-link. */}
             <button
               type="button"
               role="tab"
@@ -214,6 +212,16 @@ const SkuMasterTab = () => {
   const [newSkuOpen, setNewSkuOpen] = useState(false);
   const [suppliersRow, setSuppliersRow] = useState<MfgProductRow | null>(null);
   const [importing, setImporting] = useState(false);
+  // PR #73 — "+ New SKU" now opens the Model creation dialog (with the
+  // active category filter pre-filled). The legacy single-SKU drawer
+  // stays around in `newSkuOpen` for the ACCESSORY / SERVICE fall-back
+  // where a Model template isn't useful.
+  const [newModelOpen, setNewModelOpen] = useState(false);
+  const qc = useQueryClient();
+  // Map the SKU Master category-filter values to MfgCategory. `all` becomes
+  // undefined so the dialog defaults to SOFA on its own.
+  const initialCategoryForDialog: MfgCategory | undefined =
+    category === 'all' ? undefined : (category as MfgCategory);
 
   // Total column count (header colspan for loading/empty states):
   //   PR #38 — Configure + History columns removed. Double-click a row to
@@ -261,7 +269,7 @@ const SkuMasterTab = () => {
             <Upload {...ICON_PROPS} />
             <span>Import SKUs</span>
           </Button>
-          <Button variant="ghost" size="md" onClick={() => setNewSkuOpen(true)}>
+          <Button variant="ghost" size="md" onClick={() => setNewModelOpen(true)}>
             <Plus {...ICON_PROPS} />
             <span>New SKU</span>
           </Button>
@@ -406,6 +414,21 @@ const SkuMasterTab = () => {
       </div>
 
       {newSkuOpen && <NewSkuDrawer onClose={() => setNewSkuOpen(false)} />}
+      {newModelOpen && (
+        <NewModelDialog
+          onClose={() => setNewModelOpen(false)}
+          initialCategory={initialCategoryForDialog}
+          onCreated={(modelId) => {
+            // PR #73 — after the Model is saved, take commander straight to
+            // the Model Detail page so he can hit "Add codes…" and pick
+            // which variants to materialise. The picker reads the
+            // Maintenance pool + format for him.
+            qc.invalidateQueries({ queryKey: ['product-models'] });
+            setNewModelOpen(false);
+            window.location.href = `/product-models/${modelId}`;
+          }}
+        />
+      )}
       {suppliersRow && <ProductSuppliersDrawer row={suppliersRow} onClose={() => setSuppliersRow(null)} />}
       {importing && <ImportSkusDialog onClose={() => setImporting(false)} />}
     </>

@@ -163,11 +163,22 @@ function FilterChip({
 
 /* ────────────────────────── + New Model dialog ─────────────────────────── */
 
-function NewModelDialog({ onClose }: { onClose: () => void }) {
+// Exported so SKU Master's "+ New SKU" button can drive the same dialog.
+// `initialCategory` pre-selects the dropdown — used when the SKU Master is
+// already filtered to a category, so the user doesn't have to pick again.
+// `onCreated` fires after the Model row is saved — used by SKU Master to
+// trigger the auto-generate flow without showing the Model Detail page.
+export function NewModelDialog({
+  onClose, initialCategory, onCreated,
+}: {
+  onClose: () => void;
+  initialCategory?: MfgCategory;
+  onCreated?: (modelId: string, category: MfgCategory) => void;
+}) {
   const [branding, setBranding] = useState('');
   const [modelCode, setModelCode] = useState('');
   const [name, setName] = useState('');
-  const [category, setCategory] = useState<MfgCategory>('SOFA');
+  const [category, setCategory] = useState<MfgCategory>(initialCategory ?? 'SOFA');
   const [description, setDescription] = useState('');
   const createMut = useCreateProductModel();
 
@@ -186,7 +197,12 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
         category,
         description: description.trim() || null,
       },
-      { onSuccess: () => onClose() },
+      {
+        onSuccess: (res) => {
+          if (onCreated && res.model?.id) onCreated(res.model.id, category);
+          else onClose();
+        },
+      },
     );
   };
 
