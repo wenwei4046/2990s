@@ -619,14 +619,42 @@ export const PurchaseOrderNew = () => {
                   </label>
                   <label className={styles.field}>
                     <span className={styles.fieldLabel}>Supplier SKU</span>
+                    {/* PR #134 — Bi-directional picker: typing/picking a
+                        supplier_sku reverse-fills the matching binding's
+                        internal materialCode + name + price (same as
+                        picking from the Item Code side). Commander: "怎么
+                        不能选 Supplier Code 呢". Requires supplier picked
+                        first (we only know which bindings to search). */}
                     <input
                       type="text"
+                      list={`supplier-skus-${l.rid}`}
                       value={l.supplierSku ?? ''}
-                      onChange={(e) => setLine(l.rid, { supplierSku: e.target.value })}
-                      placeholder="Supplier's own code (auto-fills from binding)"
+                      onChange={(e) => {
+                        const sku = e.target.value;
+                        if (supplierId) {
+                          const match = bindings.find((b) => b.supplier_sku === sku);
+                          if (match) {
+                            pickBinding(l.rid, match);
+                          } else {
+                            setLine(l.rid, { supplierSku: sku });
+                          }
+                        } else {
+                          setLine(l.rid, { supplierSku: sku });
+                        }
+                      }}
+                      placeholder={supplierId
+                        ? 'Type or pick supplier’s code…'
+                        : 'Pick a supplier first to enable picker'}
                       className={styles.fieldInput}
                       style={{ fontFamily: 'var(--font-mono)' }}
                     />
+                    <datalist id={`supplier-skus-${l.rid}`}>
+                      {supplierId && bindings.map((b) => (
+                        <option key={b.id} value={b.supplier_sku || ''}>
+                          {b.material_code} · {b.material_name} · {fmtRm(b.unit_price_centi, b.currency)}
+                        </option>
+                      ))}
+                    </datalist>
                   </label>
                 </div>
 
