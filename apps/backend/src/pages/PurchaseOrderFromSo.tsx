@@ -21,6 +21,7 @@ import {
   useCreatePosFromSoItems,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
+import { useWarehouses } from '../lib/inventory-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -34,10 +35,17 @@ export const PurchaseOrderFromSo = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingSoItems();
   const create   = useCreatePosFromSoItems();
+  const warehouses = useWarehouses();
 
   // Map<soItemId, { picked: boolean, qty: number }>
   // Defaults: picked = false. When commander ticks, qty = remainingQty.
   const [picks, setPicks] = useState<Record<string, { picked: boolean; qty: number }>>({});
+
+  // PR #157 — Commander 2026-05-26: Expected Delivery + Purchase Location are
+  // required on every PO. Bulk-convert path creates N POs in one click, so
+  // these defaults apply to every PO created.
+  const [expectedAt, setExpectedAt] = useState<string>('');
+  const [purchaseLocationId, setPurchaseLocationId] = useState<string>('');
 
   const items = itemsQ.data ?? [];
 
@@ -75,7 +83,13 @@ export const PurchaseOrderFromSo = () => {
 
   const onSave = () => {
     if (pickedCount === 0) { window.alert('Tick at least one SO line first.'); return; }
-    const body = picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty }));
+    if (!expectedAt) { window.alert('Expected Delivery date is required.'); return; }
+    if (!purchaseLocationId) { window.alert('Purchase Location is required.'); return; }
+    const body = {
+      picks: picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty })),
+      expectedAt,
+      purchaseLocationId,
+    };
     create.mutate(body, {
       onSuccess: (res) => {
         const summary = res.created.map((p) => p.poNumber).join(', ');
@@ -103,17 +117,57 @@ export const PurchaseOrderFromSo = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || pickedCount === 0}
+            disabled={create.isPending || pickedCount === 0 || !expectedAt || !purchaseLocationId}
           >
             <Save {...ICON} />
             {create.isPending
               ? 'Creating…'
               : pickedCount === 0
                 ? 'Pick at least 1 line'
-                : `Create POs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
+                : (!expectedAt || !purchaseLocationId)
+                  ? 'Set delivery + location'
+                  : `Create POs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
           </Button>
         </div>
       </div>
+
+      {/* PR #157 — PO defaults that apply to every PO created from this batch. */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>PO Defaults</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Applied to every PO created from this batch.
+          </span>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Expected Delivery *</span>
+              <input
+                type="date"
+                value={expectedAt}
+                onChange={(e) => setExpectedAt(e.target.value)}
+                className={styles.fieldInput}
+                required
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Purchase Location *</span>
+              <select
+                value={purchaseLocationId}
+                onChange={(e) => setPurchaseLocationId(e.target.value)}
+                className={styles.fieldInput}
+                required
+              >
+                <option value="">— Pick a warehouse —</option>
+                {(warehouses.data ?? []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
 
       <section className={styles.card}>
         <div className={styles.cardHeader}>
