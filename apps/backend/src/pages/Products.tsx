@@ -52,11 +52,12 @@ import {
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
+import { ProductModels } from './ProductModels';
 import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
 
-type TopTab = 'sku' | 'maintenance';
+type TopTab = 'sku' | 'models' | 'maintenance';
 
 export const Products = () => {
   const [topTab, setTopTab] = useState<TopTab>('sku');
@@ -79,6 +80,15 @@ export const Products = () => {
             <button
               type="button"
               role="tab"
+              data-active={topTab === 'models'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('models')}
+            >
+              Models
+            </button>
+            <button
+              type="button"
+              role="tab"
               data-active={topTab === 'maintenance'}
               className={styles.tabSwitchBtn}
               onClick={() => setTopTab('maintenance')}
@@ -89,7 +99,9 @@ export const Products = () => {
         </div>
       </header>
 
-      {topTab === 'sku' ? <SkuMasterTab /> : <MaintenanceTab />}
+      {topTab === 'sku' && <SkuMasterTab />}
+      {topTab === 'models' && <ProductModels />}
+      {topTab === 'maintenance' && <MaintenanceTab />}
     </div>
   );
 };
