@@ -52,6 +52,7 @@ import {
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
+import { formatSizeRich } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
 import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
@@ -1025,7 +1026,14 @@ const MaintenanceList = ({
                   }}
                 />
               ) : (
-                v
+                /* PR #77 — enrich bedframe/mattress size codes with their
+                   imperial label + cm dimensions so the bare "K" row reads
+                   as "K · 6FT · 183x190CM". String stored unchanged — only
+                   display is enriched. Other list types (gaps, sofa
+                   compartments, sofa seat sizes) fall back to raw value. */
+                (listKey === 'bedframeSizes' || listKey === 'mattressSizes')
+                  ? formatSizeRich(v)
+                  : v
               )}
             </span>
             {editMode ? (

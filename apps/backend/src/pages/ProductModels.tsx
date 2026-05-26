@@ -17,7 +17,8 @@ import {
   useProductModels, useCreateProductModel,
   type ProductModelRow,
 } from '../lib/product-models-queries';
-import type { MfgCategory } from '../lib/mfg-products-queries';
+import { useMaintenanceConfig, type MfgCategory } from '../lib/mfg-products-queries';
+import { SIZE_INFO } from '../lib/size-info';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -185,6 +186,14 @@ export function NewModelDialog({
   // a detour to the Model detail page. Stored as allowed_options.
   // mattress_thickness_cm; later edits still happen on the detail page.
   const [mattressThicknessCm, setMattressThicknessCm] = useState('');
+  // PR #77b — Inline allowed-options picker. Sizes for MATTRESS/BEDFRAME,
+  // compartments for SOFA. Pre-empts the trip to the Model detail page —
+  // commander can create + immediately "+ Add Codes" without re-opening
+  // anything. Stored as Set<string> for cheap toggle, serialised to array
+  // on submit. Detail-page Allowed Options keeps working for later edits.
+  const [pickedSizes, setPickedSizes] = useState<Set<string>>(new Set());
+  const [pickedComps, setPickedComps] = useState<Set<string>>(new Set());
+  const maintenance = useMaintenanceConfig('master');
   const createMut = useCreateProductModel();
 
   // PR #69 — Branding is OPTIONAL across all categories. BEDFRAME / SOFA
@@ -200,6 +209,11 @@ export function NewModelDialog({
     if (category === 'MATTRESS') {
       const t = parseInt(mattressThicknessCm.trim(), 10);
       if (Number.isFinite(t) && t > 0) allowedOptions.mattress_thickness_cm = t;
+    }
+    if (category === 'MATTRESS' || category === 'BEDFRAME') {
+      if (pickedSizes.size > 0) allowedOptions.sizes = Array.from(pickedSizes);
+    } else if (category === 'SOFA') {
+      if (pickedComps.size > 0) allowedOptions.compartments = Array.from(pickedComps);
     }
     createMut.mutate(
       {
@@ -310,6 +324,44 @@ export function NewModelDialog({
           />
         </label>
 
+        {/* PR #77b — Inline allowed-options picker. MATTRESS/BEDFRAME →
+            sizes chips (from maintenance.{mattress,bedframe}Sizes pool).
+            SOFA → compartments chips (from maintenance.sofaCompartments).
+            Empty selection = "no restriction yet", matches detail-page
+            convention (commander can tick more on detail page later). */}
+        {(category === 'MATTRESS' || category === 'BEDFRAME') && (
+          <InlineAllowedOptions
+            label="Sizes"
+            hint="Tick the sizes this Model is sold in · pool from Maintenance"
+            options={(category === 'MATTRESS'
+              ? maintenance.data?.data?.mattressSizes
+              : maintenance.data?.data?.bedframeSizes) ?? []}
+            picked={pickedSizes}
+            onToggle={(v) => setPickedSizes((prev) => {
+              const n = new Set(prev);
+              if (n.has(v)) n.delete(v); else n.add(v);
+              return n;
+            })}
+            formatChip={(code) => {
+              const info = SIZE_INFO[code];
+              return info ? `${code} · ${info.label}` : code;
+            }}
+          />
+        )}
+        {category === 'SOFA' && (
+          <InlineAllowedOptions
+            label="Compartments"
+            hint="Tick the compartments this Sofa offers · pool from Maintenance"
+            options={maintenance.data?.data?.sofaCompartments ?? []}
+            picked={pickedComps}
+            onToggle={(v) => setPickedComps((prev) => {
+              const n = new Set(prev);
+              if (n.has(v)) n.delete(v); else n.add(v);
+              return n;
+            })}
+          />
+        )}
+
         <TemplatePreview
           category={category}
           modelCode={modelCode}
@@ -386,6 +438,68 @@ function TemplatePreview({
         <code className={styles.tplFmt}>{nameFmt}</code>
         <span className={styles.tplArrow}>→</span>
         <code className={styles.tplExample}>{exampleName}</code>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────── Inline allowed-options chip toggle ──────────────────────────
+   Used in NewModelDialog so commander can pick sizes/compartments without
+   navigating to the Model detail page after create. Empty selection is
+   valid — same convention as detail-page Allowed Options (allowed_options
+   key just doesn't get set, falls back to global Maintenance pool). */
+function InlineAllowedOptions({
+  label, hint, options, picked, onToggle, formatChip,
+}: {
+  label:       string;
+  hint:        string;
+  options:     string[];
+  picked:      Set<string>;
+  onToggle:    (value: string) => void;
+  /** Optional pretty-formatter (e.g. SIZE_INFO enrichment). Defaults to raw. */
+  formatChip?: (value: string) => string;
+}) {
+  if (options.length === 0) {
+    return (
+      <div className={styles.field}>
+        <span className="t-eyebrow">{label}</span>
+        <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: 0 }}>
+          Maintenance pool is empty — add entries in Maintenance first.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className={styles.field}>
+      <span className="t-eyebrow">{label}</span>
+      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 6, display: 'block' }}>
+        {hint}
+      </span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {options.map((opt) => {
+          const isOn = picked.has(opt);
+          return (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => onToggle(opt)}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-13)',
+                fontWeight: 600,
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-pill)',
+                border: isOn ? '1px solid var(--c-orange)' : '1px solid var(--line)',
+                background: isOn ? 'var(--c-orange)' : 'var(--c-paper)',
+                color: isOn ? 'var(--c-cream)' : 'var(--c-ink)',
+                cursor: 'pointer',
+                transition: 'all 150ms ease',
+              }}
+            >
+              {formatChip ? formatChip(opt) : opt}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

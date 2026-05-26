@@ -27,6 +27,7 @@ import {
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { SIZE_INFO } from '../lib/size-info';
 import styles from './ProductModelDetail.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -373,16 +374,10 @@ export const ProductModelDetail = () => {
    so commander can see what's there and can't double-insert.
    ────────────────────────────────────────────────────────────────────────── */
 
-// Mirrors apps/api/src/routes/product-models.ts SIZE_INFO map. Kept in sync
-// so the picker preview matches what the server actually writes.
-const SIZE_INFO: Record<string, { label: string; dim: string; w: number; l: number }> = {
-  K:  { label: '6FT',       dim: '183X190CM', w: 183, l: 190 },
-  Q:  { label: '5FT',       dim: '152X190CM', w: 152, l: 190 },
-  S:  { label: '3FT',       dim: '90X190CM',  w: 90,  l: 190 },
-  SS: { label: '3.5FT',     dim: '107X190CM', w: 107, l: 190 },
-  SK: { label: '200X200CM', dim: '',          w: 200, l: 200 },
-  SP: { label: '220X220CM', dim: '',          w: 220, l: 220 },
-};
+// SIZE_INFO now lives in ../lib/size-info (imported at top of file) so the
+// New Model dialog + Maintenance pool list can read from the same source of
+// truth. The api copy in apps/api/src/routes/product-models.ts §SIZE_INFO
+// still has to be kept manually in sync (different runtime / package).
 
 /** Candidate row carries the same fields the API's `rows` payload accepts so
     the modal can send them straight through without re-deriving server-side. */
