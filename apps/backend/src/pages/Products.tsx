@@ -680,16 +680,19 @@ const CategoryChip = ({
    ════════════════════════════════════════════════════════════════════════ */
 
 type MaintenanceListKey =
+  | 'bedframeFormat'   // PR #72 — Bedframe code + name template
   | 'bedframeSizes'    // PR #50 — Bedframe size pool (K/Q/S/SS/SK/SP)
   | 'divanHeights'
   | 'totalHeights'
   | 'gaps'
   | 'legHeights'
   | 'specials'
+  | 'sofaFormat'       // PR #72 — Sofa code + name template
   | 'sofaCompartments' // PR #50 — Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, ...)
   | 'sofaSizes'
   | 'sofaLegHeights'
   | 'sofaSpecials'
+  | 'mattressFormat'   // PR #72 — Mattress code + name template
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics';
 
@@ -700,6 +703,9 @@ const MAINTENANCE_TABS: {
   priced: boolean;
   section: 'Bedframe' | 'Sofa' | 'Mattress' | 'Common';
 }[] = [
+  // PR #72 — Code Format sits at the top of each section so commander
+  // sees the SKU template before drilling into the pool sub-tabs.
+  { key: 'bedframeFormat', label: 'Code Format', description: 'Bedframe SKU code + name template. Uses placeholders like {model_code}, {size}, {size_label}, {dimensions}, {branding}.', priced: false, section: 'Bedframe' },
   // PR #50 — Bedframe Sizes pool drives Model.allowed_options + "+ Add Code"
   { key: 'bedframeSizes', label: 'Sizes', description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, etc.)', priced: false, section: 'Bedframe' },
   { key: 'divanHeights', label: 'Divan Heights', description: 'Bedframe divan height options with surcharge pricing', priced: true, section: 'Bedframe' },
@@ -707,12 +713,16 @@ const MAINTENANCE_TABS: {
   { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
   { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'specials', label: 'Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe' },
+  // PR #72 — Sofa code/name template.
+  { key: 'sofaFormat', label: 'Code Format', description: 'Sofa SKU code + name template. Uses placeholders like {model_code}, {compartment}, {model_name}, {branding}.', priced: false, section: 'Sofa' },
   // PR #50 — Sofa Compartments pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...) is the
   // master list the Model.allowed_options ticks against.
   { key: 'sofaCompartments', label: 'Compartments', description: 'Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...). Models tick which they offer.', priced: false, section: 'Sofa' },
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
   { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
+  // PR #72 — Mattress code/name template.
+  { key: 'mattressFormat', label: 'Code Format', description: 'Mattress SKU code + name template. Uses placeholders like {model_code}, {size}, {model_name}, {width}, {length}, {thickness}, {branding}.', priced: false, section: 'Mattress' },
   // PR #50 — Mattress Sizes pool.
   { key: 'mattressSizes', label: 'Sizes', description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Mattress' },
   { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
@@ -880,7 +890,19 @@ const MaintenanceTab = () => {
 
 const countItems = (cfg: MaintenanceConfig, key: MaintenanceListKey): number => {
   if (key === 'fabrics') return 0; // populated from fabric_trackings, not the JSON blob
-  const v = cfg[key];
+  // PR #72 — Code Format sub-tabs are scalar text fields, not arrays. Show
+  // 1 when at least one of the (code, name) templates is non-empty so the
+  // nav-rail count badge reflects "configured" vs "default".
+  if (key === 'bedframeFormat') {
+    return ((cfg.bedframeCodeFormat?.trim() ? 1 : 0) + (cfg.bedframeNameFormat?.trim() ? 1 : 0));
+  }
+  if (key === 'sofaFormat') {
+    return ((cfg.sofaCodeFormat?.trim() ? 1 : 0) + (cfg.sofaNameFormat?.trim() ? 1 : 0));
+  }
+  if (key === 'mattressFormat') {
+    return ((cfg.mattressCodeFormat?.trim() ? 1 : 0) + (cfg.mattressNameFormat?.trim() ? 1 : 0));
+  }
+  const v = cfg[key as keyof MaintenanceConfig];
   return Array.isArray(v) ? v.length : 0;
 };
 
@@ -904,6 +926,19 @@ const MaintenanceList = ({
 
   if (listKey === 'fabrics') {
     return <FabricsMaintenancePanel />;
+  }
+
+  // PR #72 — Code format sub-tab. Edits the per-category code + name
+  // templates that the SKU generator uses (with hardcoded fallback).
+  if (listKey === 'bedframeFormat' || listKey === 'sofaFormat' || listKey === 'mattressFormat') {
+    return (
+      <CodeFormatPanel
+        listKey={listKey}
+        config={config}
+        editMode={editMode}
+        onChange={onChange}
+      />
+    );
   }
 
   // ── String[] tabs (gaps, sofaSizes, + PR #50 pool keys) ──────────────
@@ -1209,6 +1244,175 @@ const MaintenanceList = ({
    shows up on /fabric-tracking and Products → Maintenance → Common → Fabrics.
    Has its own slim search bar so the 122-row list stays usable in-place.
    ════════════════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PR #72 — Per-category code/name format editor.
+   Two text inputs (code template + name template). Live preview substitutes
+   sample values so commander sees what generate-skus will write. Read by
+   the API from maintenance_config; falls back to built-in defaults when
+   blank so existing Models keep working through the switch.
+   ════════════════════════════════════════════════════════════════════════ */
+
+type CodeFormatKey = 'bedframeFormat' | 'sofaFormat' | 'mattressFormat';
+
+interface FormatFieldMap {
+  codeKey:    keyof MaintenanceConfig;
+  nameKey:    keyof MaintenanceConfig;
+  codeDefault: string;
+  nameDefault: string;
+  sample:     Record<string, string>;
+  placeholderHint: string;
+}
+
+const FORMAT_FIELDS: Record<CodeFormatKey, FormatFieldMap> = {
+  bedframeFormat: {
+    codeKey:     'bedframeCodeFormat',
+    nameKey:     'bedframeNameFormat',
+    codeDefault: '{model_code}-({size})',
+    nameDefault: '{branding} BEDFRAME ({size_label}) ({dimensions})',
+    sample: {
+      branding:    'HILTON',
+      model_code:  '1003',
+      model_name:  'HILTON BEDFRAME',
+      size:        'K',
+      size_label:  '6FT',
+      dimensions:  '183X190CM',
+    },
+    placeholderHint: '{branding}, {model_code}, {model_name}, {size}, {size_label}, {dimensions}',
+  },
+  sofaFormat: {
+    codeKey:     'sofaCodeFormat',
+    nameKey:     'sofaNameFormat',
+    codeDefault: '{model_code}-{compartment}',
+    nameDefault: '{model_name} {compartment}',
+    sample: {
+      branding:    'HOUZS',
+      model_code:  '5530',
+      model_name:  'SOFA 5530',
+      compartment: '1A(LHF)',
+    },
+    placeholderHint: '{branding}, {model_code}, {model_name}, {compartment}',
+  },
+  mattressFormat: {
+    codeKey:     'mattressCodeFormat',
+    nameKey:     'mattressNameFormat',
+    codeDefault: '{model_code} MATT ({size})',
+    nameDefault: '{model_name} ({width}x{length}x{thickness}CM)',
+    sample: {
+      branding:    '2990S',
+      model_code:  '2990-NF AKKA-FIRM',
+      model_name:  '2990 AKKA-FIRM MATTRESS',
+      size:        'K',
+      size_label:  '6FT',
+      width:       '183',
+      length:      '190',
+      thickness:   '31',
+    },
+    placeholderHint: '{branding}, {model_code}, {model_name}, {size}, {size_label}, {width}, {length}, {thickness}',
+  },
+};
+
+function substitute(tpl: string, vars: Record<string, string>): string {
+  return tpl.replace(/\{(\w+)\}/g, (_match, k) => vars[k] ?? '');
+}
+
+const CodeFormatPanel = ({
+  listKey, config, editMode, onChange,
+}: {
+  listKey: CodeFormatKey;
+  config: MaintenanceConfig;
+  editMode: boolean;
+  onChange: (next: MaintenanceConfig) => void;
+}) => {
+  const f = FORMAT_FIELDS[listKey];
+  const codeVal = (config[f.codeKey] as string | undefined) ?? '';
+  const nameVal = (config[f.nameKey] as string | undefined) ?? '';
+
+  const codeEffective = codeVal.trim() || f.codeDefault;
+  const nameEffective = nameVal.trim() || f.nameDefault;
+
+  const exampleCode = substitute(codeEffective, f.sample);
+  const exampleName = substitute(nameEffective, f.sample);
+
+  const update = (key: keyof MaintenanceConfig, value: string) => {
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    (next as Record<string, unknown>)[key] = value;
+    onChange(next);
+  };
+
+  const inputStyle = {
+    fontFamily: 'var(--font-mono)',
+    fontSize: 'var(--fs-13)',
+    padding: 'var(--space-3) var(--space-4)',
+    border: '1px solid var(--line-strong)',
+    borderRadius: 'var(--radius-sm)',
+    background: editMode ? 'var(--c-paper)' : 'var(--c-cream)',
+    color: 'var(--fg)',
+    width: '100%',
+    outline: 'none',
+  } as const;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      <div>
+        <div className="t-eyebrow" style={{ marginBottom: 4 }}>Code template</div>
+        <input
+          type="text"
+          readOnly={!editMode}
+          value={codeVal}
+          placeholder={f.codeDefault}
+          onChange={(e) => update(f.codeKey, e.target.value)}
+          style={inputStyle}
+        />
+        <p style={{ margin: '6px 0 0', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          Default if blank: <code>{f.codeDefault}</code>
+        </p>
+      </div>
+
+      <div>
+        <div className="t-eyebrow" style={{ marginBottom: 4 }}>Name template</div>
+        <input
+          type="text"
+          readOnly={!editMode}
+          value={nameVal}
+          placeholder={f.nameDefault}
+          onChange={(e) => update(f.nameKey, e.target.value)}
+          style={inputStyle}
+        />
+        <p style={{ margin: '6px 0 0', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          Default if blank: <code>{f.nameDefault}</code>
+        </p>
+      </div>
+
+      <div style={{
+        background: 'var(--c-cream)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-4)',
+      }}>
+        <div className="t-eyebrow" style={{ marginBottom: 8 }}>Live preview · sample row</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            code
+            <code style={{ marginLeft: 12, background: 'var(--c-orange)', color: 'var(--bg)', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+              {exampleCode}
+            </code>
+          </div>
+          <div style={{ fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            name
+            <code style={{ marginLeft: 12, background: 'var(--c-orange)', color: 'var(--bg)', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+              {exampleName}
+            </code>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+        <strong>Available placeholders:</strong> {f.placeholderHint}
+      </div>
+    </div>
+  );
+};
 
 const FabricsMaintenancePanel = () => {
   const [search, setSearch] = useState('');
