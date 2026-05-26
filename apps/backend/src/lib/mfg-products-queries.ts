@@ -96,6 +96,28 @@ export type MaintenanceConfig = {
   bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
   sofaCompartments?: string[];   // ['1A-LHF','1A-RHF','1NA',...] — sofa compartment codes
   mattressSizes?:    string[];   // ['K','Q','S','SS']
+  // PR #72 — Per-category SKU code + name templates. Commander 2026-05-26:
+  // wants to customise the format himself instead of relying on hardcoded
+  // generators. Optional; the server falls back to its built-in defaults
+  // when these are empty so existing Models keep working.
+  //
+  // Available placeholders (substituted at generate-time):
+  //   {branding}       Model.branding (may be empty)
+  //   {model_code}     Model.model_code
+  //   {model_name}     Model.name (whitespace-trimmed)
+  //   {size}           Size code   (K/Q/S/SS/SK/SP) — BEDFRAME, MATTRESS
+  //   {size_label}     Size label  (6FT, 5FT, 3FT, 3.5FT, 200X200CM, ...)
+  //   {dimensions}     "WxLCM"     (BEDFRAME: 183X190CM, etc.)
+  //   {width}          width cm    (MATTRESS dim parts)
+  //   {length}         length cm
+  //   {thickness}      mattress thickness cm (from Model.allowed_options)
+  //   {compartment}    Sofa compartment code (1A-LHF, 1A-RHF, ...)
+  bedframeCodeFormat?: string;   // default: '{model_code}-({size})'
+  bedframeNameFormat?: string;   // default: '{branding} BEDFRAME ({size_label}) ({dimensions})'
+  sofaCodeFormat?:     string;   // default: '{model_code}-{compartment}'
+  sofaNameFormat?:     string;   // default: '{model_name} {compartment}'
+  mattressCodeFormat?: string;   // default: '{model_code} MATT ({size})'
+  mattressNameFormat?: string;   // default: '{model_name} ({width}x{length}x{thickness}CM)'
 };
 
 export type MaintenanceResolved = {

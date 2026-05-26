@@ -343,6 +343,7 @@ export const ProductModelDetail = () => {
           modelId={id}
           modelCode={model.model_code}
           modelName={model.name}
+          branding={branding}
           category={model.category}
           allowed={allowed}
           mattressThicknessCm={
@@ -350,6 +351,14 @@ export const ProductModelDetail = () => {
               ? (allowed as { mattress_thickness_cm: number }).mattress_thickness_cm
               : null
           }
+          formats={{
+            bedframeCode: maintenance.data?.data?.bedframeCodeFormat,
+            bedframeName: maintenance.data?.data?.bedframeNameFormat,
+            sofaCode:     maintenance.data?.data?.sofaCodeFormat,
+            sofaName:     maintenance.data?.data?.sofaNameFormat,
+            mattressCode: maintenance.data?.data?.mattressCodeFormat,
+            mattressName: maintenance.data?.data?.mattressNameFormat,
+          }}
           existingCodes={data.skus.map((s) => s.code)}
           onClose={() => setAddCodesOpen(false)}
         />
@@ -379,49 +388,84 @@ const SIZE_INFO: Record<string, { label: string; dim: string; w: number; l: numb
     the modal can send them straight through without re-deriving server-side. */
 type Candidate = { code: string; name: string; size_code: string | null; size_label: string | null };
 
+/** PR #72 — per-category code/name format. Client substitutes placeholders
+    using the row's local values, server just INSERTs verbatim. */
+type FormatTemplates = {
+  bedframeCode?: string; bedframeName?: string;
+  sofaCode?:     string; sofaName?:     string;
+  mattressCode?: string; mattressName?: string;
+};
+
+const DEFAULT_FORMATS = {
+  bedframeCode: '{model_code}-({size})',
+  bedframeName: '{branding} BEDFRAME ({size_label}) ({dimensions})',
+  sofaCode:     '{model_code}-{compartment}',
+  sofaName:     '{model_name} {compartment}',
+  mattressCode: '{model_code} MATT ({size})',
+  mattressName: '{model_name} ({width}x{length}x{thickness}CM)',
+} as const;
+
+function applyFormat(tpl: string, vars: Record<string, string>): string {
+  return tpl.replace(/\{(\w+)\}/g, (_m, k) => vars[k] ?? '').trim();
+}
+
 function computeCandidates(
   category: string,
   modelCode: string,
   modelName: string,
+  branding: string,
   allowed: AOpts,
   mattressThicknessCm: number | null,
+  fmt: FormatTemplates,
 ): Candidate[] {
   if (category === 'SOFA') {
-    return (allowed.compartments ?? []).map((comp) => ({
-      code:       `${modelCode}-${comp}`,
-      name:       `${modelName} ${comp}`.trim(),
-      size_code:  null,
-      size_label: null,
-    }));
+    const codeFmt = fmt.sofaCode?.trim() || DEFAULT_FORMATS.sofaCode;
+    const nameFmt = fmt.sofaName?.trim() || DEFAULT_FORMATS.sofaName;
+    return (allowed.compartments ?? []).map((comp) => {
+      const vars = { branding, model_code: modelCode, model_name: modelName, compartment: comp };
+      return {
+        code:       applyFormat(codeFmt, vars),
+        name:       applyFormat(nameFmt, vars),
+        size_code:  null,
+        size_label: null,
+      };
+    });
   }
   if (category === 'BEDFRAME') {
+    const codeFmt = fmt.bedframeCode?.trim() || DEFAULT_FORMATS.bedframeCode;
+    const nameFmt = fmt.bedframeName?.trim() || DEFAULT_FORMATS.bedframeName;
     return (allowed.sizes ?? []).map((sz) => {
       const info  = SIZE_INFO[sz];
       const label = info?.label ?? sz;
-      const namePart = info?.dim ? `${modelName} (${label}) (${info.dim})` : `${modelName} (${label})`;
+      const dim   = info?.dim ?? '';
+      const vars = {
+        branding, model_code: modelCode, model_name: modelName,
+        size: sz, size_label: label, dimensions: dim,
+      };
       return {
-        code:       `${modelCode}-(${sz})`,
-        name:       namePart.trim(),
+        code:       applyFormat(codeFmt, vars),
+        name:       applyFormat(nameFmt, vars).replace(/\s*\(\)\s*/g, ' ').trim(),
         size_code:  sz,
         size_label: label,
       };
     });
   }
   if (category === 'MATTRESS') {
+    const codeFmt = fmt.mattressCode?.trim() || DEFAULT_FORMATS.mattressCode;
+    const nameFmt = fmt.mattressName?.trim() || DEFAULT_FORMATS.mattressName;
     return (allowed.sizes ?? []).map((sz) => {
       const info  = SIZE_INFO[sz];
       const label = info?.label ?? sz;
-      let dimPart: string;
-      if (info && mattressThicknessCm != null) {
-        dimPart = `${info.w}x${info.l}x${mattressThicknessCm}CM`;
-      } else if (info?.dim) {
-        dimPart = info.dim.toLowerCase();
-      } else {
-        dimPart = label;
-      }
+      const vars: Record<string, string> = {
+        branding, model_code: modelCode, model_name: modelName,
+        size: sz, size_label: label,
+        width:     info ? String(info.w) : '',
+        length:    info ? String(info.l) : '',
+        thickness: mattressThicknessCm != null ? String(mattressThicknessCm) : '',
+      };
       return {
-        code:       `${modelCode} MATT (${sz})`,
-        name:       `${modelName} (${dimPart})`.trim(),
+        code:       applyFormat(codeFmt, vars),
+        name:       applyFormat(nameFmt, vars).replace(/\s*\(\)\s*/g, ' ').trim(),
         size_code:  sz,
         size_label: label,
       };
@@ -431,22 +475,24 @@ function computeCandidates(
 }
 
 function AddCodesModal({
-  modelId, modelCode, modelName, category, allowed, mattressThicknessCm, existingCodes, onClose,
+  modelId, modelCode, modelName, branding, category, allowed, mattressThicknessCm, formats, existingCodes, onClose,
 }: {
   modelId: string;
   modelCode: string;
   modelName: string;
+  branding: string;
   category: string;
   allowed: AOpts;
   mattressThicknessCm: number | null;
+  formats: FormatTemplates;
   existingCodes: string[];
   onClose: () => void;
 }) {
   const generateMut = useGenerateModelSkus();
   const existingSet = useMemo(() => new Set(existingCodes), [existingCodes]);
   const candidates = useMemo(
-    () => computeCandidates(category, modelCode, modelName, allowed, mattressThicknessCm),
-    [category, modelCode, modelName, allowed, mattressThicknessCm],
+    () => computeCandidates(category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats),
+    [category, modelCode, modelName, branding, allowed, mattressThicknessCm, formats],
   );
   // Default: tick every NEW code (existing ones can't be ticked anyway).
   const [picked, setPicked] = useState<Set<string>>(
