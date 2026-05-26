@@ -2081,11 +2081,17 @@ const MaintenanceHistoryDialog = ({
    CSV Export + Import
    ════════════════════════════════════════════════════════════════════════ */
 
+// PR #104 — Commander 2026-05-26: "fabric_usage_centi / production_time_minutes
+// / fabric_color 全删 不需要这个功能". These manufacturing-specific fields
+// were ported in from HOOKKA but don't apply to 2990's retail catalogue;
+// dropping them from the CSV export so commander's spreadsheet stays focused.
+// Schema columns + API field writers also stripped (apps/api/src/routes/
+// mfg-products.ts) so future imports don't resurrect the data.
 const CSV_COLUMNS = [
   'code', 'name', 'category', 'description', 'base_model', 'size_label',
   'base_price_sen', 'price1_sen', 'cost_price_sen',
-  'unit_m3_milli', 'fabric_usage_centi', 'production_time_minutes',
-  'status', 'branding', 'fabric_color',
+  'unit_m3_milli',
+  'status', 'branding',
 ] as const;
 
 function exportSkusCsv(rows: MfgProductRow[]): void {

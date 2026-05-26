@@ -72,11 +72,11 @@ export type MfgProductRow = {
   base_price_sen: number | null;
   price1_sen: number | null;
   unit_m3_milli: number;
-  fabric_usage_centi: number;
-  production_time_minutes: number;
   status: 'ACTIVE' | 'INACTIVE';
   sku_code: string | null;
-  fabric_color: string | null;
+  /* PR #104 — fabric_usage_centi / production_time_minutes / fabric_color
+     dropped from the API response (2990's retail catalogue doesn't track
+     them). Columns still exist on the DB; UI / CSV no longer expose. */
   /** Free-text brand label — mainly used for MATTRESS SKUs. */
   branding: string | null;
   sub_assemblies: unknown;
