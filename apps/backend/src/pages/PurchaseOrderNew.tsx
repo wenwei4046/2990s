@@ -15,7 +15,7 @@
 // dedicated `.itemsGrid` table column setup.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -23,10 +23,12 @@ import {
   useCreatePurchaseOrder,
   useSuppliers,
   useSupplierDetail,
+  useSuppliersForMaterial,
   type BindingRow,
   type NewPoItem,
   type MaterialKind,
 } from '../lib/suppliers-queries';
+import { useMfgProducts } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import styles from './SalesOrderDetail.module.css';
 
@@ -87,6 +89,68 @@ export const PurchaseOrderNew = () => {
   const supplier        = supplierDetail.data?.supplier ?? null;
   const bindings        = useMemo(() => supplierDetail.data?.bindings ?? [], [supplierDetail.data?.bindings]);
   const currency        = supplier?.currency ?? 'MYR';
+
+  // PR #114 — Commander 2026-05-26: "逻辑上应该可以让我选 Item，选好之后
+  // Supplier 的范围再缩小到目前供货这个 Item 的几个供应商". Item-first
+  // picking — item input is enabled even when supplier is unset; the
+  // datalist falls back to the full mfg_products list when no supplier is
+  // picked. Picking an item triggers a reverse lookup against the
+  // existing GET /suppliers/material/:kind/:code endpoint. Outcome:
+  //   1 binding   → auto-set supplier + pull the binding's price/SKU
+  //   N bindings  → show a hint banner so commander picks above
+  //   0 bindings  → one-off purchase, commander enters everything manually
+  const allSkus = useMfgProducts();
+  const [pendingItemPick, setPendingItemPick] = useState<{ rid: string; code: string } | null>(null);
+  const itemSuppliersQuery = useSuppliersForMaterial(
+    pendingItemPick ? 'mfg_product' : null,
+    pendingItemPick?.code ?? null,
+  );
+  useEffect(() => {
+    if (!pendingItemPick) return;
+    if (supplierId) { setPendingItemPick(null); return; }
+    if (itemSuppliersQuery.isLoading) return;
+    const matches = itemSuppliersQuery.data?.bindings ?? [];
+    const b = matches[0];
+    if (matches.length === 1 && b) {
+      // Exactly one supplier binds this — adopt it + autofill the line.
+      setSupplierId(b.supplier.id);
+      setLines((prev) => prev.map((l) => (l.rid === pendingItemPick.rid ? {
+        ...l,
+        bindingId:      b.id,
+        materialKind:   b.material_kind,
+        materialCode:   b.material_code,
+        materialName:   b.material_name,
+        supplierSku:    b.supplier_sku,
+        unitPriceCenti: b.unit_price_centi,
+      } : l)));
+      setPendingItemPick(null);
+    }
+    // N > 1 — leave pendingItemPick set so the hint banner renders.
+    // 0      — keep pendingItemPick so the "no bindings, free entry" hint renders.
+  }, [pendingItemPick, supplierId, itemSuppliersQuery.isLoading, itemSuppliersQuery.data]);
+
+  // Item-first companion effect — once supplier resolves (commander clicked a
+  // hint banner link, or picked manually after typing an item), backfill any
+  // line whose materialCode matches a binding but lacks a bindingId. Mirrors
+  // pickBinding without forcing commander to re-type the code.
+  useEffect(() => {
+    if (!supplierId || bindings.length === 0) return;
+    setLines((prev) => prev.map((l) => {
+      if (l.bindingId || !l.materialCode) return l;
+      const b = bindings.find((x) => x.material_code === l.materialCode);
+      if (!b) return l;
+      return {
+        ...l,
+        bindingId:      b.id,
+        materialKind:   b.material_kind,
+        materialName:   b.material_name,
+        supplierSku:    b.supplier_sku,
+        unitPriceCenti: l.unitPriceCenti || b.unit_price_centi,
+      };
+    }));
+    // Banner has done its job once a supplier is chosen.
+    setPendingItemPick(null);
+  }, [supplierId, bindings]);
 
   // ── Helpers ─────────────────────────────────────────────────────────
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
@@ -311,6 +375,69 @@ export const PurchaseOrderNew = () => {
         </div>
       </section>
 
+      {/* Item-first lookup hint — only renders when commander picked an item
+          before a supplier and the reverse lookup found >1 bound suppliers
+          (or 0). The 1-supplier case is handled silently by the useEffect
+          above. */}
+      {pendingItemPick && !supplierId && !itemSuppliersQuery.isLoading && (() => {
+        const matches = itemSuppliersQuery.data?.bindings ?? [];
+        if (matches.length === 0) {
+          return (
+            <div style={{
+              padding: 'var(--space-3) var(--space-4)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderLeft: '3px solid var(--fg-muted)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: 'var(--fs-13)',
+              color: 'var(--fg)',
+            }}>
+              <strong style={{ fontFamily: 'var(--font-mono)' }}>{pendingItemPick.code}</strong> isn't bound to any supplier yet. Pick any Creditor above for a one-off purchase, or add a binding from the supplier detail page first.
+            </div>
+          );
+        }
+        // N > 1
+        return (
+          <div style={{
+            padding: 'var(--space-3) var(--space-4)',
+            background: 'rgba(213, 90, 40, 0.06)',
+            border: '1px solid var(--c-orange)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: 'var(--fs-13)',
+            color: 'var(--fg)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}>
+            <div>
+              <strong style={{ fontFamily: 'var(--font-mono)' }}>{pendingItemPick.code}</strong> is bound to {matches.length} suppliers — pick one above to auto-fill price + supplier SKU.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              {matches.map((b) => (
+                <span key={b.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSupplierId(b.supplier.id)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      padding: 0,
+                      color: 'var(--c-orange)',
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    {b.supplier.code} · {b.supplier.name}
+                  </button>
+                  {' '}({fmtRm(b.unit_price_centi, b.currency)})
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Items card */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
@@ -318,7 +445,7 @@ export const PurchaseOrderNew = () => {
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
             {supplierId
               ? `${bindings.length} item(s) bound to this supplier — picker filters to these`
-              : 'Pick a Creditor first to enable the item-code picker'}
+              : `Pick any item from ${(allSkus.data ?? []).length} SKUs — supplier auto-narrows`}
           </span>
         </div>
         <div className={styles.cardBody}>
@@ -369,21 +496,45 @@ export const PurchaseOrderNew = () => {
                     value={l.materialCode}
                     onChange={(e) => {
                       const code = e.target.value;
-                      const match = bindings.find((b) => b.material_code === code);
-                      if (match) pickBinding(l.rid, match);
-                      else setLine(l.rid, { materialCode: code, bindingId: undefined });
+                      if (supplierId) {
+                        // Supplier-first flow — match against this supplier's
+                        // bindings (existing behaviour).
+                        const match = bindings.find((b) => b.material_code === code);
+                        if (match) pickBinding(l.rid, match);
+                        else setLine(l.rid, { materialCode: code, bindingId: undefined });
+                      } else {
+                        // Item-first flow — datalist offered all mfg_products.
+                        // Look the code up against a SKU; if found, copy its
+                        // name in. Always queue the reverse-supplier lookup so
+                        // the effect above can auto-set or surface the hint.
+                        const sku = (allSkus.data ?? []).find((p) => p.code === code);
+                        setLine(l.rid, {
+                          materialCode: code,
+                          materialName: sku?.name ?? l.materialName,
+                          bindingId: undefined,
+                        });
+                        setPendingItemPick(code ? { rid: l.rid, code } : null);
+                      }
                     }}
-                    placeholder={supplierId ? 'Type or pick…' : 'Pick a supplier first'}
-                    disabled={!supplierId}
+                    placeholder="Type or pick…"
                     className={styles.fieldInput}
                     style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}
                   />
                   <datalist id={`bindings-${l.rid}`}>
-                    {bindings.map((b) => (
-                      <option key={b.id} value={b.material_code}>
-                        {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
-                      </option>
-                    ))}
+                    {supplierId
+                      // Supplier picked → narrow to that supplier's bindings.
+                      ? bindings.map((b) => (
+                          <option key={b.id} value={b.material_code}>
+                            {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
+                          </option>
+                        ))
+                      // No supplier yet → offer every active mfg_product SKU.
+                      : (allSkus.data ?? []).map((p) => (
+                          <option key={p.id} value={p.code}>
+                            {p.name} · {p.category}
+                          </option>
+                        ))
+                    }
                   </datalist>
                 </div>
                 <div>
