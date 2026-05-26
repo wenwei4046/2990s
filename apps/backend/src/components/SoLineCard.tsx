@@ -70,12 +70,21 @@ export const SoLineCard = ({
   onChange,
   onRemove,
   canRemove,
+  inheritVariantsByCategory,
 }: {
   index:     number;
   draft:     SoLineDraft;
   onChange:  (patch: Partial<SoLineDraft>) => void;
   onRemove:  () => void;
   canRemove: boolean;
+  /* PR #141 — Commander 2026-05-26: "正常我的沙发是一整套… 根据第一个 item
+     带下来的 sofa seat、leg size、fabric 等，这些都会跟着第一个自动带下来".
+     Parent (SalesOrderNew) supplies a per-category variants bag captured
+     from the FIRST line of that category. When commander picks an SKU
+     and this line currently has no variants set, those defaults are
+     merged in. Categories shipped today: sofa, bedframe — mattress has
+     no variants now (PR #136). */
+  inheritVariantsByCategory?: Record<string, Record<string, unknown> | undefined>;
 }) => {
   const maintQ   = useMaintenanceConfig('master');
   const maint    = maintQ.data?.data ?? null;
@@ -101,12 +110,21 @@ export const SoLineCard = ({
   const pickProduct = (p: MfgProductRow) => {
     setPicked(p);
     setManualPrice(false);
+    const category = p.category.toLowerCase();
+    /* PR #141 — When commander picks an SKU, if there's already an earlier
+       line of the same category with variants filled in, inherit those.
+       Sofa as a SET: line 1 sets seat/leg/fabric → lines 2,3,…N carry the
+       same values forward automatically. Commander can still override on
+       each line if they really want a mismatched module. */
+    const inherited = inheritVariantsByCategory?.[category];
+    const seedVariants: Record<string, unknown> =
+      inherited && Object.keys(inherited).length > 0 ? { ...inherited } : {};
     onChange({
       itemCode:       p.code,
-      itemGroup:      p.category.toLowerCase(),
+      itemGroup:      category,
       description:    p.name,
       unitPriceCenti: p.base_price_sen ?? 0,
-      variants:       {},
+      variants:       seedVariants,
     });
     setSearch(p.name);
   };
