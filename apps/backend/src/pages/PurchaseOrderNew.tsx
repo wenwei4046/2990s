@@ -28,7 +28,8 @@ import {
   type NewPoItem,
   type MaterialKind,
 } from '../lib/suppliers-queries';
-import { useMfgProducts } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useFabricTrackings } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import styles from './SalesOrderDetail.module.css';
 
@@ -44,7 +45,12 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
 
 /** Per-line draft row. PR #97 — materialKind uses the schema's lowercase
     enum ('mfg_product' | 'fabric' | 'raw') so the POST body lines up with
-    apps/api/src/routes/mfg-purchase-orders.ts §VALID_KINDS. */
+    apps/api/src/routes/mfg-purchase-orders.ts §VALID_KINDS.
+    PR #126 — Commander 2026-05-26: "Item Code 需要显示两行（internal +
+    supplier code）+ description 也要显示两行 + 根据 category 带出变体属性".
+    `category` is set when an SKU is picked; drives which variant editor
+    unfolds beneath the line. `variants` JSON ships to API as part of
+    NewPoItem.variants — already supported by the API §POST handler. */
 type DraftLine = {
   rid: string;
   bindingId?: string;
@@ -57,6 +63,14 @@ type DraftLine = {
   discountCenti?: number;
   deliveryDate?: string;
   warehouseId?: string;
+  /* PR #126 — set when materialCode matches an mfg_product so the row knows
+     which variant editor to render (sofa / bedframe / mattress). Lowercase
+     to match SoLineCard's itemGroup convention. */
+  category?: string;
+  /** PR #126 — variant payload (fabric / color / design / total height /
+      seat / leg / size depending on category). Shipped to API as
+      NewPoItem.variants. */
+  variants: Record<string, unknown>;
 };
 
 const newLine = (): DraftLine => ({
@@ -66,6 +80,7 @@ const newLine = (): DraftLine => ({
   materialName: '',
   qty: 1,
   unitPriceCenti: 0,
+  variants: {},
 });
 
 export const PurchaseOrderNew = () => {
@@ -100,6 +115,19 @@ export const PurchaseOrderNew = () => {
   //   N bindings  → show a hint banner so commander picks above
   //   0 bindings  → one-off purchase, commander enters everything manually
   const allSkus = useMfgProducts();
+  /* PR #126 — Pull maintenance config + fabrics list so per-category variant
+     editors can render the same dropdowns SO uses (single source of truth). */
+  const maintQ  = useMaintenanceConfig('master');
+  const maint   = maintQ.data?.data ?? null;
+  const fabrics = useFabricTrackings().data ?? [];
+
+  /* PR #126 — Helper: look up an mfg_product by code → returns its category
+     (lowercased). Used by both supplier-first and item-first flows to tag
+     the line with which variant editor to show. */
+  const categoryForCode = (code: string): string | undefined => {
+    const sku = (allSkus.data ?? []).find((p) => p.code === code);
+    return sku?.category.toLowerCase();
+  };
   const [pendingItemPick, setPendingItemPick] = useState<{ rid: string; code: string } | null>(null);
   const itemSuppliersQuery = useSuppliersForMaterial(
     pendingItemPick ? 'mfg_product' : null,
@@ -122,6 +150,7 @@ export const PurchaseOrderNew = () => {
         materialName:   b.material_name,
         supplierSku:    b.supplier_sku,
         unitPriceCenti: b.unit_price_centi,
+        category:       categoryForCode(b.material_code) ?? l.category,
       } : l)));
       setPendingItemPick(null);
     }
@@ -146,6 +175,7 @@ export const PurchaseOrderNew = () => {
         materialName:   b.material_name,
         supplierSku:    b.supplier_sku,
         unitPriceCenti: l.unitPriceCenti || b.unit_price_centi,
+        category:       l.category ?? categoryForCode(b.material_code),
       };
     }));
     // Banner has done its job once a supplier is chosen.
@@ -183,8 +213,16 @@ export const PurchaseOrderNew = () => {
       materialName:   b.material_name,
       supplierSku:    b.supplier_sku,
       unitPriceCenti: b.unit_price_centi,
+      category:       categoryForCode(b.material_code),
     });
   };
+
+  /* PR #126 — Patch only the variants bag for a line. Used by per-category
+     editors so other line fields (qty, price, supplier SKU) stay untouched. */
+  const setVariant = (rid: string, k: string, v: unknown) =>
+    setLines((prev) => prev.map((l) =>
+      l.rid === rid ? { ...l, variants: { ...l.variants, [k]: v } } : l,
+    ));
 
   const subtotalCenti = useMemo(
     () => lines.reduce(
@@ -211,6 +249,11 @@ export const PurchaseOrderNew = () => {
       discountCenti:  l.discountCenti,
       deliveryDate:   l.deliveryDate || undefined,
       warehouseId:    l.warehouseId  || undefined,
+      /* PR #126 — Per-line variants + itemGroup. NewPoItem already supports
+         these (PR #41 schema). The API §POST handler persists them onto
+         purchase_order_items.variants JSONB / item_group. */
+      itemGroup:      l.category,
+      variants:       Object.keys(l.variants).length ? l.variants : undefined,
     }));
 
     create.mutate(
@@ -478,8 +521,8 @@ export const PurchaseOrderNew = () => {
             color: 'var(--fg-soft)',
             borderBottom: '1px solid var(--line)',
           }}>
-            <div>Item Code</div>
-            <div>Description</div>
+            <div>Item Code / Supplier SKU</div>
+            <div>Description / Variants</div>
             <div style={{ textAlign: 'right' }}>Qty</div>
             <div style={{ textAlign: 'right' }}>Unit Price</div>
             <div style={{ textAlign: 'right' }}>Discount</div>
@@ -489,147 +532,356 @@ export const PurchaseOrderNew = () => {
             <div></div>
           </div>
 
-          {/* Grid body */}
+          {/* Grid body — each line is a row group (main row + variant sub-row).
+              PR #126: Item Code cell shows internal+supplier code stacked;
+              Description cell shows description+variant pills stacked. */}
           {lines.map((l) => {
             const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - (l.discountCenti ?? 0));
+            const variantSummary = Object.entries(l.variants)
+              .filter(([_, v]) => v !== null && v !== undefined && v !== '')
+              .map(([k, v]) => `${k}=${v}`)
+              .join(' · ');
             return (
-              <div
-                key={l.rid}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: gridTemplate,
-                  gap: 'var(--space-2)',
-                  alignItems: 'center',
-                  padding: cellPad,
-                  borderBottom: '1px solid var(--line)',
-                }}
-              >
-                <div>
-                  <input
-                    type="text"
-                    list={`bindings-${l.rid}`}
-                    value={l.materialCode}
-                    onChange={(e) => {
-                      const code = e.target.value;
-                      if (supplierId) {
-                        // Supplier-first flow — match against this supplier's
-                        // bindings (existing behaviour).
-                        const match = bindings.find((b) => b.material_code === code);
-                        if (match) pickBinding(l.rid, match);
-                        else setLine(l.rid, { materialCode: code, bindingId: undefined });
-                      } else {
-                        // Item-first flow — datalist offered all mfg_products.
-                        // Look the code up against a SKU; if found, copy its
-                        // name in. Always queue the reverse-supplier lookup so
-                        // the effect above can auto-set or surface the hint.
-                        const sku = (allSkus.data ?? []).find((p) => p.code === code);
-                        setLine(l.rid, {
-                          materialCode: code,
-                          materialName: sku?.name ?? l.materialName,
-                          bindingId: undefined,
-                        });
-                        setPendingItemPick(code ? { rid: l.rid, code } : null);
+              <div key={l.rid} style={{ borderBottom: '1px solid var(--line)' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: gridTemplate,
+                    gap: 'var(--space-2)',
+                    alignItems: 'flex-start',
+                    padding: cellPad,
+                  }}
+                >
+                  {/* Item Code — 2 stacked inputs: our internal + supplier's */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <input
+                      type="text"
+                      list={`bindings-${l.rid}`}
+                      value={l.materialCode}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        if (supplierId) {
+                          // Supplier-first flow — match against this supplier's
+                          // bindings (existing behaviour).
+                          const match = bindings.find((b) => b.material_code === code);
+                          if (match) pickBinding(l.rid, match);
+                          else setLine(l.rid, { materialCode: code, bindingId: undefined, category: categoryForCode(code) });
+                        } else {
+                          // Item-first flow — datalist offered all mfg_products.
+                          // Look the code up against a SKU; if found, copy its
+                          // name in. Always queue the reverse-supplier lookup so
+                          // the effect above can auto-set or surface the hint.
+                          const sku = (allSkus.data ?? []).find((p) => p.code === code);
+                          setLine(l.rid, {
+                            materialCode: code,
+                            materialName: sku?.name ?? l.materialName,
+                            bindingId: undefined,
+                            category: sku?.category.toLowerCase(),
+                          });
+                          setPendingItemPick(code ? { rid: l.rid, code } : null);
+                        }
+                      }}
+                      placeholder="Internal code…"
+                      className={styles.fieldInput}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}
+                      aria-label="Our internal item code"
+                    />
+                    <input
+                      type="text"
+                      value={l.supplierSku ?? ''}
+                      onChange={(e) => setLine(l.rid, { supplierSku: e.target.value })}
+                      placeholder="Supplier's code…"
+                      className={styles.fieldInput}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 'var(--fs-12)',
+                        background: 'var(--c-cream)',
+                        color: 'var(--fg-muted)',
+                      }}
+                      aria-label="Supplier's own SKU"
+                    />
+                    <datalist id={`bindings-${l.rid}`}>
+                      {supplierId
+                        // Supplier picked → narrow to that supplier's bindings.
+                        ? bindings.map((b) => (
+                            <option key={b.id} value={b.material_code}>
+                              {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
+                            </option>
+                          ))
+                        // No supplier yet → offer every active mfg_product SKU.
+                        : (allSkus.data ?? []).map((p) => (
+                            <option key={p.id} value={p.code}>
+                              {p.name} · {p.category}
+                            </option>
+                          ))
                       }
-                    }}
-                    placeholder="Type or pick…"
-                    className={styles.fieldInput}
-                    style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}
-                  />
-                  <datalist id={`bindings-${l.rid}`}>
-                    {supplierId
-                      // Supplier picked → narrow to that supplier's bindings.
-                      ? bindings.map((b) => (
-                          <option key={b.id} value={b.material_code}>
-                            {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
-                          </option>
-                        ))
-                      // No supplier yet → offer every active mfg_product SKU.
-                      : (allSkus.data ?? []).map((p) => (
-                          <option key={p.id} value={p.code}>
-                            {p.name} · {p.category}
-                          </option>
-                        ))
-                    }
-                  </datalist>
+                    </datalist>
+                  </div>
+                  {/* Description — input on top, variant summary chip below */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <input
+                      type="text"
+                      value={l.materialName}
+                      onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
+                      placeholder="(auto-filled if bound)"
+                      className={styles.fieldInput}
+                      style={{ fontSize: 'var(--fs-13)' }}
+                    />
+                    {variantSummary ? (
+                      <div style={{
+                        fontSize: 'var(--fs-11)',
+                        color: 'var(--fg-muted)',
+                        fontFamily: 'var(--font-mono)',
+                        padding: '2px 6px',
+                        background: 'var(--c-cream)',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--line)',
+                      }}>
+                        {variantSummary}
+                      </div>
+                    ) : (
+                      l.category && ['sofa', 'bedframe', 'mattress'].includes(l.category) && (
+                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+                          Fill variants below ↓
+                        </div>
+                      )
+                    )}
+                  </div>
+                  <div>
+                    <input
+                      type="number" min={0} step={1}
+                      value={l.qty}
+                      onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) })}
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="number" min={0} step={0.01}
+                      value={(l.unitPriceCenti / 100).toFixed(2)}
+                      onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) })}
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="number" min={0} step={0.01}
+                      value={((l.discountCenti ?? 0) / 100).toFixed(2)}
+                      onChange={(e) => setLine(l.rid, { discountCenti: Math.round(Number(e.target.value) * 100) })}
+                      className={styles.fieldInput}
+                      style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="date"
+                      value={l.deliveryDate ?? ''}
+                      onChange={(e) => setLine(l.rid, { deliveryDate: e.target.value })}
+                      className={styles.fieldInput}
+                      style={{ fontSize: 'var(--fs-12)' }}
+                    />
+                  </div>
+                  <div>
+                    <select
+                      value={l.warehouseId ?? ''}
+                      onChange={(e) => setLine(l.rid, { warehouseId: e.target.value })}
+                      className={styles.fieldInput}
+                      style={{ fontSize: 'var(--fs-12)' }}
+                    >
+                      <option value="">— Inherit Purchase Location —</option>
+                      {(warehouses.data ?? []).map((w) => (
+                        <option key={w.id} value={w.id}>{w.code}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', paddingTop: 8 }}>
+                    {fmtRm(lineTotalCenti, currency)}
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => dropLine(l.rid)}
+                      title="Remove line"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--c-festive-b, #B8331F)',
+                        padding: 4,
+                      }}
+                    >
+                      <Trash2 {...SM_ICON} />
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <input
-                    type="text"
-                    value={l.materialName}
-                    onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
-                    placeholder="(auto-filled if bound)"
-                    className={styles.fieldInput}
-                    style={{ fontSize: 'var(--fs-13)' }}
-                  />
-                </div>
-                <div>
-                  <input
-                    type="number" min={0} step={1}
-                    value={l.qty}
-                    onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) })}
-                    className={styles.fieldInput}
-                    style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
-                  />
-                </div>
-                <div>
-                  <input
-                    type="number" min={0} step={0.01}
-                    value={(l.unitPriceCenti / 100).toFixed(2)}
-                    onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) })}
-                    className={styles.fieldInput}
-                    style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
-                  />
-                </div>
-                <div>
-                  <input
-                    type="number" min={0} step={0.01}
-                    value={((l.discountCenti ?? 0) / 100).toFixed(2)}
-                    onChange={(e) => setLine(l.rid, { discountCenti: Math.round(Number(e.target.value) * 100) })}
-                    className={styles.fieldInput}
-                    style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }}
-                  />
-                </div>
-                <div>
-                  <input
-                    type="date"
-                    value={l.deliveryDate ?? ''}
-                    onChange={(e) => setLine(l.rid, { deliveryDate: e.target.value })}
-                    className={styles.fieldInput}
-                    style={{ fontSize: 'var(--fs-12)' }}
-                  />
-                </div>
-                <div>
-                  <select
-                    value={l.warehouseId ?? ''}
-                    onChange={(e) => setLine(l.rid, { warehouseId: e.target.value })}
-                    className={styles.fieldInput}
-                    style={{ fontSize: 'var(--fs-12)' }}
-                  >
-                    <option value="">— Inherit Purchase Location —</option>
-                    {(warehouses.data ?? []).map((w) => (
-                      <option key={w.id} value={w.id}>{w.code}</option>
-                    ))}
-                  </select>
-                </div>
-                <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>
-                  {fmtRm(lineTotalCenti, currency)}
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => dropLine(l.rid)}
-                    title="Remove line"
+
+                {/* PR #126 — Per-category variant editor sub-row. Renders below
+                    the main line when the picked SKU is sofa / bedframe /
+                    mattress. Pulls the same maintenance dropdowns SO uses. */}
+                {l.category && ['sofa', 'bedframe', 'mattress'].includes(l.category) && maint && (
+                  <div
                     style={{
-                      background: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: 'var(--c-festive-b, #B8331F)',
-                      padding: 4,
+                      padding: 'var(--space-2) var(--space-3) var(--space-3)',
+                      background: 'var(--c-cream)',
+                      borderTop: '1px dashed var(--line)',
                     }}
                   >
-                    <Trash2 {...SM_ICON} />
-                  </button>
-                </div>
+                    <div style={{
+                      fontFamily: 'var(--font-button)',
+                      fontSize: 'var(--fs-11)',
+                      fontWeight: 600,
+                      letterSpacing: '0.10em',
+                      textTransform: 'uppercase',
+                      color: 'var(--fg-soft)',
+                      marginBottom: 6,
+                    }}>
+                      {l.category} Variants
+                    </div>
+
+                    {/* BEDFRAME — fabric, color, design, total height */}
+                    {l.category === 'bedframe' && (
+                      <div className={styles.formGrid4}>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Fabric</span>
+                          <select
+                            className={styles.fieldSelect}
+                            value={String(l.variants.fabricCode ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {fabrics.map((f) => (
+                              <option key={f.id} value={f.fabric_code}>
+                                {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Color</span>
+                          <input
+                            className={styles.fieldInput}
+                            placeholder="e.g. PC151-04"
+                            value={String(l.variants.colorCode ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'colorCode', e.target.value)}
+                          />
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Design</span>
+                          <input
+                            className={styles.fieldInput}
+                            placeholder="Free-text design / pattern"
+                            value={String(l.variants.design ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'design', e.target.value)}
+                          />
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Total Height</span>
+                          <select
+                            className={styles.fieldSelect}
+                            value={String(l.variants.totalHeight ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'totalHeight', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {maint.totalHeights.map((o) => (
+                              <option key={o.value} value={o.value}>{o.value}</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
+
+                    {/* SOFA — seat height, leg height */}
+                    {l.category === 'sofa' && (
+                      <div className={styles.formGrid4}>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Sofa Seat</span>
+                          <select
+                            className={styles.fieldSelect}
+                            value={String(l.variants.seatHeight ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {maint.sofaSizes.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Leg</span>
+                          <select
+                            className={styles.fieldSelect}
+                            value={String(l.variants.legHeight ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {maint.sofaLegHeights.map((o) => (
+                              <option key={o.value} value={o.value}>{o.value}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Fabric</span>
+                          <select
+                            className={styles.fieldSelect}
+                            value={String(l.variants.fabricCode ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {fabrics.map((f) => (
+                              <option key={f.id} value={f.fabric_code}>
+                                {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Color</span>
+                          <input
+                            className={styles.fieldInput}
+                            placeholder="e.g. PC151-04"
+                            value={String(l.variants.colorCode ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'colorCode', e.target.value)}
+                          />
+                        </label>
+                      </div>
+                    )}
+
+                    {/* MATTRESS — size + branding (mattress's main attribute) */}
+                    {l.category === 'mattress' && (
+                      <div className={styles.formGrid4}>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Size</span>
+                          <select
+                            className={styles.fieldSelect}
+                            value={String(l.variants.size ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'size', e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {(maint.mattressSizes ?? []).map((s) => {
+                              const lbl = maint.sizeLabels?.[s]?.label;
+                              return (
+                                <option key={s} value={s}>
+                                  {s}{lbl ? ` · ${lbl}` : ''}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </label>
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Branding</span>
+                          <input
+                            className={styles.fieldInput}
+                            placeholder="e.g. AKKA / FIRM / SOFT"
+                            value={String(l.variants.branding ?? '')}
+                            onChange={(e) => setVariant(l.rid, 'branding', e.target.value)}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
