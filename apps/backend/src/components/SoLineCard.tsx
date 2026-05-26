@@ -88,6 +88,9 @@ export const SoLineCard = ({
 
   const [picked, setPicked]           = useState<MfgProductRow | null>(null);
   const [manualPrice, setManualPrice] = useState(false);
+  // PR #129 — Product picker shows a click-to-open dropdown (not just
+  // type-ahead). Tracks whether the suggestion list is currently visible.
+  const [showPicker, setShowPicker]   = useState(false);
 
   // Keep local search box in sync if parent resets the card.
   useEffect(() => { setSearch(draft.itemCode ?? ''); }, [draft.itemCode]);
@@ -259,19 +262,27 @@ export const SoLineCard = ({
       </div>
 
       {/* ── Product picker ───────────────────────────────────────────── */}
+      {/* PR #129 — Commander: "为什么我点的时候会没反应". The picker only
+          rendered suggestions when commander typed text. Now it also opens
+          on focus, so clicking the input pops the full SKU list (top 50
+          when empty, top 10 matches when typing). Closes on blur unless
+          mousedown is over an item (the onMouseDown handler already pre-
+          empts blur). */}
       <div>
         <p className={styles.subHead}>Product</p>
         <div className={styles.pickerWrap}>
           <input
             className={styles.fieldInput}
-            placeholder="Search by code or name…"
+            placeholder="Click to pick or type to filter…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setShowPicker(true)}
+            onBlur={() => setTimeout(() => setShowPicker(false), 150)}
+            onChange={(e) => { setSearch(e.target.value); setShowPicker(true); }}
           />
-          {search.trim() && candidates.length > 0 && search !== draft.itemCode && (
+          {showPicker && candidates.length > 0 && search !== draft.itemCode && (
             <ul className={styles.suggestList}>
-              {candidates.slice(0, 10).map((p) => (
-                <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
+              {candidates.slice(0, 50).map((p) => (
+                <li key={p.id} className={styles.suggestItem} onMouseDown={() => { pickProduct(p); setShowPicker(false); }}>
                   <div>
                     <span className={styles.codeCell}>{p.code}</span> · {p.name}
                   </div>
@@ -280,6 +291,13 @@ export const SoLineCard = ({
                   </div>
                 </li>
               ))}
+            </ul>
+          )}
+          {showPicker && candidates.length === 0 && (
+            <ul className={styles.suggestList}>
+              <li className={styles.suggestItem} style={{ color: 'var(--fg-muted)', cursor: 'default' }}>
+                No products match{search.trim() ? ` "${search}"` : ''}.
+              </li>
             </ul>
           )}
         </div>
