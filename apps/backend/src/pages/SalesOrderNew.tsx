@@ -140,6 +140,22 @@ export const SalesOrderNew = () => {
     [lines],
   );
 
+  /* PR #141 — Per-category variants captured from the FIRST line of that
+     category that has any variants set. Passed to every SoLineCard so when
+     a subsequent line picks an SKU of the same category, it inherits the
+     variants (commander: "正常我的沙发是一整套… 根据第一个 item 带下来"). */
+  const inheritVariantsByCategory = useMemo(() => {
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const l of lines) {
+      const cat = l.itemGroup;
+      if (!cat || out[cat]) continue;
+      if (l.variants && Object.keys(l.variants).length > 0) {
+        out[cat] = l.variants;
+      }
+    }
+    return out;
+  }, [lines]);
+
   // ── Locality cascades ──────────────────────────────────────────────
   const locRows = loc.data ?? [];
   const states  = useMemo(() => distinctStates(locRows), [locRows]);
@@ -560,6 +576,7 @@ export const SalesOrderNew = () => {
               onChange={(patch) => updateLine(line.rid, patch)}
               onRemove={() => dropLine(line.rid)}
               canRemove={lines.length > 1}
+              inheritVariantsByCategory={inheritVariantsByCategory}
             />
           ))}
 
