@@ -229,6 +229,98 @@
   gap: var(--space-2);
 }
 
+/* ─── New Model bulk dialog — compact landscape layout ────────────────────
+   Commander 2026-05-26: "才两个就占满屏幕了。能不能做成长方形、大一点？
+   然后给整个 screen 的字体调小一点". The default `.field` styling is
+   designed for one-field-per-row dialogs; for the bulk Model creator
+   (3-6 rows on screen at once) we need ~50% denser typography + a single
+   horizontal field line per row. These classes scope the shrink to this
+   dialog so existing single-field forms keep their generous padding. */
+.modalCompact {
+  /* Override the .modal defaults — landscape, tighter padding/gap. */
+  width: min(1200px, 95vw) !important;
+  max-width: min(1200px, 95vw) !important;
+  padding: var(--space-4) var(--space-5);
+  gap: var(--space-3);
+}
+.modalCompact .modalTitle {
+  font-size: var(--fs-15);
+}
+.modalCompact .modalSub {
+  font-size: var(--fs-12);
+}
+.compactField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  min-width: 0;
+}
+.compactField > span {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  line-height: 1.2;
+}
+.compactField input,
+.compactField select {
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--c-paper);
+  color: var(--fg);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.compactField input:focus,
+.compactField select:focus {
+  outline: none;
+  border-color: var(--c-orange);
+}
+.compactRowCard {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: var(--c-paper);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.compactRowFields {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+.compactRowBadge {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-orange);
+  padding-bottom: 7px;
+}
+.compactRowClose {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--fs-14);
+  padding: 0 4px;
+  line-height: 1;
+  align-self: end;
+  padding-bottom: 8px;
+}
+.compactRowClose:hover {
+  color: var(--c-ink);
+}
+
 /* PR #65 — code-generation template preview inside the New Model dialog. */
 .tplBox {
   background: var(--bg);
