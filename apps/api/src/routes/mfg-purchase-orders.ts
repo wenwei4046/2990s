@@ -98,6 +98,15 @@ mfgPurchaseOrders.post('/', async (c) => {
   const supplierId = body.supplierId as string | undefined;
   if (!supplierId) return c.json({ error: 'supplier_id_required' }, 400);
 
+  // PR #157 — Commander 2026-05-26: Expected Delivery + Purchase Location are
+  // required on submit. Both fields fan out to per-line warehouse + delivery
+  // date and are required downstream for GRN. Defense-in-depth: frontend also
+  // blocks the submit button until both are filled.
+  const expectedAt = body.expectedAt as string | undefined;
+  if (!expectedAt) return c.json({ error: 'expected_at_required' }, 400);
+  const purchaseLocationId = body.purchaseLocationId as string | undefined;
+  if (!purchaseLocationId) return c.json({ error: 'purchase_location_id_required' }, 400);
+
   // PR #41 — allow blank-draft creation (no items). Commander 2026-05-26:
   // PO needs to be "raw" — start with just supplier + date, add items
   // line-by-line on the detail page (matches SO flow).
@@ -165,15 +174,15 @@ mfgPurchaseOrders.post('/', async (c) => {
     status: 'SUBMITTED',
     submitted_at: new Date().toISOString(),
     currency,
-    expected_at: (body.expectedAt as string | undefined) ?? null,
+    expected_at: expectedAt,
     notes: (body.notes as string | undefined) ?? null,
     subtotal_centi: subtotal,
     tax_centi: 0,
     total_centi: subtotal,
     created_by: user.id,
-    /* PR #97 — AutoCount Purchase Location at create time. Defaults to NULL
-       so a commander who skips it can still set it on the detail page. */
-    purchase_location_id: (body.purchaseLocationId as string | undefined) ?? null,
+    /* PR #97 — AutoCount Purchase Location at create time.
+       PR #157 — now required (see validation above). */
+    purchase_location_id: purchaseLocationId,
   };
   // Optional poDate — if absent, the column default (now()) wins.
   if (body.poDate) headerInsert.po_date = body.poDate;
@@ -226,8 +235,18 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   let body: {
     picks?:    Array<{ soItemId: string; qty: number }>;
     soItems?:  Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }>;
+    expectedAt?: string;
+    purchaseLocationId?: string;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  // PR #157 — Commander 2026-05-26: every PO must have Expected Delivery +
+  // Purchase Location. Bulk-convert applies the same defaults to every PO
+  // created from the batch.
+  const expectedAt = body.expectedAt;
+  if (!expectedAt) return c.json({ error: 'expected_at_required' }, 400);
+  const purchaseLocationId = body.purchaseLocationId;
+  if (!purchaseLocationId) return c.json({ error: 'purchase_location_id_required' }, 400);
 
   // ── Resolve picks → SO item rows ─────────────────────────────────
   type SoItem = { id: string; doc_no: string; item_code: string; description: string | null; qty: number; po_qty_picked: number; unit_price_centi: number };
@@ -355,6 +374,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
         total_centi: subtotal,
         notes: `From SOs: ${[...new Set(soItems.map((i) => i.soDocNo))].join(', ')}`,
         created_by: user.id,
+        /* PR #157 — required header fields applied to every PO in this batch. */
+        expected_at: expectedAt,
+        purchase_location_id: purchaseLocationId,
       })
       .select('id, po_number')
       .single();
@@ -370,6 +392,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       qty: l.qty,
       unit_price_centi: l.unitPriceCenti,
       line_total_centi: l.qty * l.unitPriceCenti,
+      /* PR #157 — per-line delivery + warehouse default to the PO header
+         values so GRN downstream knows where to receive. Commander can
+         override on the PO detail page if needed. */
+      delivery_date: expectedAt,
+      warehouse_id:  purchaseLocationId,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {

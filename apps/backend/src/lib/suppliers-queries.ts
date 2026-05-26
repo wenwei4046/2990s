@@ -431,14 +431,20 @@ export function useOutstandingSoItems() {
 }
 
 /** PR — Phase 1: create POs (one per supplier) from multi-selected SO
-    items with partial qty. Increments po_qty_picked on success. */
+    items with partial qty. Increments po_qty_picked on success.
+    PR #157 — expectedAt + purchaseLocationId now required (applied to every
+    PO created from the batch). */
 export function useCreatePosFromSoItems() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (picks: Array<{ soItemId: string; qty: number }>) =>
+    mutationFn: (body: {
+      picks: Array<{ soItemId: string; qty: number }>;
+      expectedAt: string;
+      purchaseLocationId: string;
+    }) =>
       authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
         `/mfg-purchase-orders/from-sos`,
-        { method: 'POST', body: JSON.stringify({ picks }) },
+        { method: 'POST', body: JSON.stringify(body) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });

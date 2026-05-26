@@ -237,6 +237,18 @@ export const PurchaseOrderNew = () => {
       window.alert('Pick a Creditor (supplier) first.');
       return;
     }
+    // PR #157 — Commander 2026-05-26: "这些没有 expected delivery date 和
+    // purchase location，为什么能生成 PO 呢？" Both fields are required on
+    // submit — they fan out to per-line warehouse + delivery date and are
+    // needed downstream for GRN. Defense-in-depth: API also rejects missing.
+    if (!expectedAt) {
+      window.alert('Expected Delivery date is required.');
+      return;
+    }
+    if (!purchaseLocationId) {
+      window.alert('Purchase Location is required.');
+      return;
+    }
     const validLines = lines.filter((l) => l.materialCode.trim() && l.qty > 0);
     const items: NewPoItem[] = validLines.map((l) => ({
       materialKind:   l.materialKind,
@@ -261,9 +273,9 @@ export const PurchaseOrderNew = () => {
         supplierId,
         currency,
         poDate,
-        expectedAt: expectedAt || undefined,
+        expectedAt,
         notes: notes || undefined,
-        purchaseLocationId: purchaseLocationId || undefined,
+        purchaseLocationId,
         items,
       },
       {
@@ -290,7 +302,7 @@ export const PurchaseOrderNew = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || !supplierId}
+            disabled={create.isPending || !supplierId || !expectedAt || !purchaseLocationId}
           >
             <Save {...ICON} />
             {/* PR #131 — Commander: PO 不需要进入 DRAFT. POST creates SUBMITTED. */}
@@ -367,23 +379,25 @@ export const PurchaseOrderNew = () => {
               />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Expected Delivery</span>
+              <span className={styles.fieldLabel}>Expected Delivery *</span>
               <input
                 type="date"
                 value={expectedAt}
                 onChange={(e) => setExpectedAt(e.target.value)}
                 className={styles.fieldInput}
+                required
               />
             </label>
 
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Purchase Location</span>
+              <span className={styles.fieldLabel}>Purchase Location *</span>
               <select
                 value={purchaseLocationId}
                 onChange={(e) => setPurchaseLocationId(e.target.value)}
                 className={styles.fieldInput}
+                required
               >
-                <option value="">— Set on detail page —</option>
+                <option value="">— Pick a warehouse —</option>
                 {(warehouses.data ?? []).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                 ))}
