@@ -5,6 +5,7 @@ import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useSaveQuote } from '../lib/quotes';
+import { ProductThumb } from './ProductThumb';
 import styles from './CartContents.module.css';
 
 export type CartContentsVariant = 'page' | 'rail';
@@ -183,6 +184,11 @@ const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
   onEdit?: () => void;
 }) => (
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
+    <ProductThumb
+      className={styles.linePhoto}
+      productId={line.config.productId}
+      name={line.config.productName}
+    />
     <div className={styles.lineMain}>
       <div className={styles.lineName}>{line.config.productName}</div>
       <div className={styles.lineSummary}>{cartSummary(line.config)}</div>

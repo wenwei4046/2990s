@@ -4,6 +4,7 @@ import type { CartLine } from '../../state/cart';
 import { cartSummary } from '../../state/cart';
 import type { HandoverForm } from '../../lib/handover-helpers';
 import { COMPANY_LEGAL, RECEIPT_TERMS } from '../../lib/legal';
+import { ProductThumb } from '../ProductThumb';
 import styles from './OrderSummaryPane.module.css';
 
 const PAYMENT_LABEL: Record<string, string> = {
@@ -67,7 +68,11 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
       <Section heading={`Items · ${lines.length}`}>
         {lines.map((l) => (
           <article key={l.key} className={styles.itemCard}>
-            <div className={styles.itemPhoto} />
+            <ProductThumb
+              className={styles.itemPhoto}
+              productId={l.config.productId}
+              name={l.config.productName}
+            />
             <div className={styles.itemBody}>
               <div className={styles.itemName}>{l.config.productName}</div>
               <div className={styles.itemDetail}>{cartSummary(l.config)} · qty {l.qty}</div>
@@ -159,7 +164,11 @@ const ReceiptPane = ({ orderId, placedAt, lines, customer, delivery, payment, pa
       <Section heading="Items">
         {lines.map((l) => (
           <article key={l.key} className={styles.itemCard}>
-            <div className={styles.itemPhoto} />
+            <ProductThumb
+              className={styles.itemPhoto}
+              productId={l.config.productId}
+              name={l.config.productName}
+            />
             <div className={styles.itemBody}>
               <div className={styles.itemName}>{l.config.productName}</div>
               <div className={styles.itemDetail}>qty {l.qty}</div>
