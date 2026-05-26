@@ -163,6 +163,25 @@ export function useCreateFabric() {
   });
 }
 
+/* Commander 2026-05-26 — Bulk upsert for CSV Import. One HTTP call to the
+   server's /bulk-upsert endpoint (which does a single Postgres upsert).
+   `rows` is the camelCase shape parsed from CSV — see fabric-csv.parseCsv. */
+export type BulkUpsertResult = {
+  upserted: number;
+  errors:   Array<{ index: number; reason: string }>;
+};
+export function useBulkUpsertFabrics() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rows: Array<Record<string, unknown>>) =>
+      authedFetch<BulkUpsertResult>(`/fabric-tracking/bulk-upsert`, {
+        method: 'POST',
+        body: JSON.stringify({ rows }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}
+
 export function useDeleteFabric() {
   const qc = useQueryClient();
   return useMutation({

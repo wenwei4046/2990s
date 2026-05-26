@@ -10,8 +10,15 @@
 //
 // Endpoints:
 //   GET   /fabric-tracking?category=B.M-FABR&search=avani
+//   POST  /fabric-tracking                — create one (PR #43)
+//   POST  /fabric-tracking/bulk-upsert    — Commander 2026-05-26 Export/Import:
+//         body: { rows: Array<{fabricCode, ... any column}> }
+//         Per-column partial upsert by id (derived from fabricCode if missing).
+//   DELETE /fabric-tracking/:id           — delete one (PR #43)
 //   PATCH /fabric-tracking/:id/tier
 //         body: { field: 'sofaPriceTier' | 'bedframePriceTier', tier: 'PRICE_1'|'PRICE_2'|'PRICE_3' }
+//   PATCH /fabric-tracking/:id/supplier-code
+//   PATCH /fabric-tracking/:id/description
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
@@ -68,6 +75,86 @@ fabricTracking.post('/', async (c) => {
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
   }
   return c.json({ fabric: data }, 201);
+});
+
+/* Commander 2026-05-26 — Bulk upsert from CSV import. One Postgres upsert
+   (INSERT ... ON CONFLICT (id) DO UPDATE) instead of N HTTP round-trips.
+
+   Per-column merge semantics: only columns explicitly present in each row
+   object are written. Missing columns keep their existing DB value on update,
+   or take the schema default on insert. This lets the CSV stay narrow when a
+   caller only wants to touch a few fields.
+
+   `id` is derived from `fabricCode` (uppercased, spaces → underscores) when
+   not provided — matches the single-row POST convention. */
+fabricTracking.post('/bulk-upsert', async (c) => {
+  let body: { rows?: unknown };
+  try { body = (await c.req.json()) as typeof body; }
+  catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!Array.isArray(body.rows)) return c.json({ error: 'rows_array_required' }, 400);
+  if (body.rows.length === 0) return c.json({ upserted: 0, errors: [] });
+  if (body.rows.length > 2000) return c.json({ error: 'too_many_rows', max: 2000 }, 413);
+
+  const STRING_COLS: Array<[string, string]> = [
+    ['fabricDescription',   'fabric_description'],
+    ['supplierCode',        'supplier_code'],
+    ['supplier',            'supplier'],
+    ['sofaPriceTier',       'sofa_price_tier'],
+    ['bedframePriceTier',   'bedframe_price_tier'],
+  ];
+  const INT_COLS: Array<[string, string]> = [
+    ['priceCenti',              'price_centi'],
+    ['sohCenti',                'soh_centi'],
+    ['poOutstandingCenti',      'po_outstanding_centi'],
+    ['lastMonthUsageCenti',     'last_month_usage_centi'],
+    ['oneWeekUsageCenti',       'one_week_usage_centi'],
+    ['twoWeeksUsageCenti',      'two_weeks_usage_centi'],
+    ['oneMonthUsageCenti',      'one_month_usage_centi'],
+    ['shortageCenti',           'shortage_centi'],
+    ['reorderPointCenti',       'reorder_point_centi'],
+    ['leadTimeDays',            'lead_time_days'],
+  ];
+
+  const errors: Array<{ index: number; reason: string }> = [];
+  const dbRows: Array<Record<string, unknown>> = [];
+
+  body.rows.forEach((raw, i) => {
+    if (!raw || typeof raw !== 'object') { errors.push({ index: i, reason: 'not_object' }); return; }
+    const r = raw as Record<string, unknown>;
+    const code = typeof r.fabricCode === 'string' ? r.fabricCode.trim() : '';
+    if (!code) { errors.push({ index: i, reason: 'missing_fabric_code' }); return; }
+    const id = typeof r.id === 'string' && r.id.trim() ? r.id.trim() : code.toUpperCase().replace(/\s+/g, '_');
+
+    const row: Record<string, unknown> = { id, fabric_code: code };
+
+    for (const [k, col] of STRING_COLS) {
+      if (k in r) {
+        const v = r[k];
+        row[col] = (v === '' || v == null) ? null : String(v);
+      }
+    }
+    let rowFailed = false;
+    for (const [k, col] of INT_COLS) {
+      if (k in r) {
+        const v = r[k];
+        if (v === '' || v == null) { row[col] = 0; continue; }
+        const n = typeof v === 'number' ? v : Number(v);
+        if (!Number.isFinite(n)) { errors.push({ index: i, reason: `invalid_${col}` }); rowFailed = true; break; }
+        row[col] = Math.trunc(n);
+      }
+    }
+    if (!rowFailed) dbRows.push(row);
+  });
+
+  if (dbRows.length === 0) return c.json({ upserted: 0, errors }, errors.length ? 400 : 200);
+
+  const sb = c.get('supabase');
+  const { error } = await sb.from('fabric_trackings').upsert(dbRows, { onConflict: 'id' });
+  if (error) {
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message, errors }, 403);
+    return c.json({ error: 'bulk_upsert_failed', reason: error.message, errors }, 500);
+  }
+  return c.json({ upserted: dbRows.length, errors });
 });
 
 /* PR #43 — Delete fabric. */
