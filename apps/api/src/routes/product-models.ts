@@ -373,12 +373,29 @@ productModels.post('/:id/generate-skus', async (c) => {
     return c.json({ error: 'unsupported_category', reason: `Auto-generate not supported for ${model.category}.` }, 400);
   }
 
+  // PR #85 — Commander 2026-05-26: "所有生成的 SKU code + name 全部大写
+  // (HILTON BEDFRAME 不是 Hilton BEDFRAME)". Normalise every row's code +
+  // name + size_label to UPPERCASE before they hit the duplicate-check or
+  // get INSERTed, so commander's input casing on branding / modelName
+  // doesn't leak into the SKU rows. Centralised here so every category
+  // branch above (sofa / bedframe / mattress / explicit) gets the same
+  // treatment without each having to remember .toUpperCase().
+  for (const w of wanted) {
+    w.code = w.code.toUpperCase();
+    w.name = w.name.toUpperCase();
+    if (w.size_label) w.size_label = w.size_label.toUpperCase();
+  }
+
   // If the caller filtered to specific codes, narrow `wanted` to just those.
   // Unknown codes (not in the allowed-option cartesian product) are silently
   // dropped — protects against the client sending stale codes after the
-  // allowed_options were edited.
-  const wantedFiltered = filterCodes
-    ? wanted.filter((w) => filterCodes.has(w.code))
+  // allowed_options were edited. filterCodes itself is uppercased on the
+  // way in so a client passing mixed-case still matches.
+  const filterCodesUpper = filterCodes
+    ? new Set(Array.from(filterCodes).map((c) => c.toUpperCase()))
+    : null;
+  const wantedFiltered = filterCodesUpper
+    ? wanted.filter((w) => filterCodesUpper.has(w.code))
     : wanted;
 
   // Find which codes already exist so we can report skip count.

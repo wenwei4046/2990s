@@ -411,7 +411,11 @@ const DEFAULT_FORMATS = {
 } as const;
 
 function applyFormat(tpl: string, vars: Record<string, string>): string {
-  return tpl.replace(/\{(\w+)\}/g, (_m, k) => vars[k] ?? '').trim();
+  // PR #85 — Commander 2026-05-26: all generated SKU code + name are
+  // uppercased (server mirrors this in routes/product-models.ts
+  // §generate-skus). Uppercasing here keeps the "+ Add Codes" picker
+  // preview honest — what you see is exactly what the server will write.
+  return tpl.replace(/\{(\w+)\}/g, (_m, k) => vars[k] ?? '').trim().toUpperCase();
 }
 
 function computeCandidates(
