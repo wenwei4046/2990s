@@ -11,10 +11,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Layers, Search, Plus } from 'lucide-react';
+import { Layers, Search, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
-  useProductModels, useCreateProductModel, useGenerateModelSkus,
+  useProductModels, useCreateProductModel, useGenerateModelSkus, useDeleteProductModel,
   type ProductModelRow,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, type MfgCategory } from '../lib/mfg-products-queries';
@@ -29,6 +29,13 @@ export const ProductModels = () => {
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
+  // PR #106 — Commander 2026-05-26: showed Modular list with rows he didn't
+  // recognize ("这些都没在我的 SKU 里面啊"). Multi-select + bulk delete so he
+  // can sweep orphan Models (test entries, migration-0062 backfill leftovers)
+  // without clicking into each one.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting]       = useState(false);
+  const deleteMut = useDeleteProductModel();
 
   const { data: models = [], isLoading, error } = useProductModels(
     filter === 'all' ? undefined : { category: filter },
@@ -94,8 +101,60 @@ export const ProductModels = () => {
       )}
       {isLoading && <div className={styles.loading}>Loading models…</div>}
 
+      {/* PR #106 — Bulk-select toolbar. Sticky-ish strip that surfaces only
+          when at least one Model is ticked; mirrors the SKU Master pattern
+          (PR #82). */}
+      {selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(232, 107, 58, 0.08)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-md)',
+          gap: 'var(--space-3)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--c-burnt)' }}>
+            {selectedIds.size} model{selectedIds.size === 1 ? '' : 's'} selected
+          </span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={deleting}
+              onClick={async () => {
+                // eslint-disable-next-line no-alert
+                if (!confirm(
+                  `Delete ${selectedIds.size} Model${selectedIds.size === 1 ? '' : 's'}? ` +
+                  `Any SKUs underneath stay in mfg_products but lose their model_id link.`,
+                )) return;
+                setDeleting(true);
+                const ids = Array.from(selectedIds);
+                const results = await Promise.all(ids.map((id) =>
+                  deleteMut.mutateAsync(id).then(() => ({ id, ok: true as const }))
+                    .catch((e) => ({ id, ok: false as const, err: e instanceof Error ? e.message : String(e) })),
+                ));
+                setDeleting(false);
+                setSelectedIds(new Set());
+                const failed = results.filter((r) => !r.ok);
+                if (failed.length > 0) {
+                  const sample = failed.slice(0, 3).map((f) => `· ${'err' in f ? f.err.slice(0, 160) : ''}`).join('\n');
+                  // eslint-disable-next-line no-alert
+                  alert(`Deleted ${results.length - failed.length} / ${results.length}. ${failed.length} failed:\n${sample}`);
+                }
+              }}
+            >
+              <Trash2 {...ICON} /> {deleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
+            </Button>
+          </span>
+        </div>
+      )}
+
       {/* Grouped tables */}
-      {Array.from(grouped.entries()).map(([cat, rows]) => (
+      {Array.from(grouped.entries()).map(([cat, rows]) => {
+        const allTicked = rows.every((m) => selectedIds.has(m.id));
+        const someTicked = rows.some((m) => selectedIds.has(m.id));
+        return (
         <section key={cat} className={styles.section}>
           <h2 className={styles.sectionTitle}>
             {cat} <span className={styles.sectionCount}>· {rows.length}</span>
@@ -103,6 +162,24 @@ export const ProductModels = () => {
           <table className={styles.table}>
             <thead>
               <tr>
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select all ${cat}`}
+                    checked={allTicked}
+                    ref={(el) => { if (el) el.indeterminate = !allTicked && someTicked; }}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setSelectedIds((prev) => {
+                        const n = new Set(prev);
+                        rows.forEach((m) => {
+                          if (checked) n.add(m.id); else n.delete(m.id);
+                        });
+                        return n;
+                      });
+                    }}
+                  />
+                </th>
                 <th>Code</th>
                 <th>Name</th>
                 <th>Active</th>
@@ -112,6 +189,19 @@ export const ProductModels = () => {
             <tbody>
               {rows.map((m) => (
                 <tr key={m.id}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${m.model_code}`}
+                      checked={selectedIds.has(m.id)}
+                      onChange={() => setSelectedIds((prev) => {
+                        const n = new Set(prev);
+                        if (n.has(m.id)) n.delete(m.id); else n.add(m.id);
+                        return n;
+                      })}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </td>
                   <td>
                     <Link to={`/product-models/${m.id}`} className={styles.codeLink}>
                       <code>{m.model_code}</code>
@@ -135,7 +225,8 @@ export const ProductModels = () => {
             </tbody>
           </table>
         </section>
-      ))}
+        );
+      })}
 
       {!isLoading && filtered.length === 0 && (
         <div className={styles.empty}>
