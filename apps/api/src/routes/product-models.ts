@@ -250,7 +250,11 @@ productModels.post('/:id/generate-skus', async (c) => {
   //               data sample. Empty branding → prefix + space dropped.
   //
   //   SOFA      code:  {model_code}-{compartment}                  5530-1A(LHF)
-  //             name:  {model.name} {compartment}                  SOFA 5530 1A(LHF)
+  //             name:  {branding?} SOFA {model.name} {compartment} SOFA 5530 1A(LHF)
+  //                                                                SOFA ADDA 1A(LHF)
+  //                                                                Houzs SOFA ADDA 1A(LHF)
+  //             — "SOFA" literal added in PR #81 to match commander's
+  //               legacy data sample. Empty branding → prefix dropped.
   //
   const modelName = (model.name ?? '').trim();
   const sizesArr  = Array.isArray(opts.sizes)        ? (opts.sizes as string[])        : [];
@@ -281,10 +285,19 @@ productModels.post('/:id/generate-skus', async (c) => {
     if (compsArr.length === 0) {
       return c.json({ error: 'no_compartments', reason: 'Allowed Options → Compartments is empty. Toggle at least one before generating.' }, 400);
     }
+    // PR #81 — Commander 2026-05-26: Sofa generated names were missing the
+    // "SOFA" word + branding prefix the legacy data carries
+    // ("SOFA 5530 1A(LHF)"). The old data buried both inside `model.name`
+    // (commander typed "SOFA 5530" as the name). Now the template adds
+    // them so commander can keep `model.name` short ("ADDA" → "SOFA ADDA
+    // 1A(LHF)"). Mattress branch below got the same treatment.
+    const branding = (model.branding ?? '').trim();
+    const prefix   = branding ? `${branding} ` : '';
     for (const comp of compsArr) {
       wanted.push({
         code:       `${model.model_code}-${comp}`,
-        name:       `${modelName} ${comp}`.trim(),
+        // "SOFA 5530 1A(LHF)" or "Houzs SOFA ADDA 1A(RHF)"
+        name:       `${prefix}SOFA ${modelName} ${comp}`.trim(),
         size_code:  null,
         size_label: null,
       });

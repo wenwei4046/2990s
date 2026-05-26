@@ -395,7 +395,12 @@ const DEFAULT_FORMATS = {
   bedframeCode: '{model_code}-({size})',
   bedframeName: '{branding} BEDFRAME ({size_label}) ({dimensions})',
   sofaCode:     '{model_code}-{compartment}',
-  sofaName:     '{model_name} {compartment}',
+  // PR #81 — Match commander's legacy sample "SOFA 5530 1A(LHF)". The old
+  // template ('{model_name} {compartment}') worked only when commander
+  // typed "SOFA 5530" into model.name; for new Models like "ADDA" it
+  // produced "ADDA 1A(LHF)" (no "SOFA" word). Now inserts "SOFA" literal
+  // + optional branding prefix. Mirrors API §SOFA branch.
+  sofaName:     '{branding} SOFA {model_name} {compartment}',
   mattressCode: '{model_code} MATT ({size})',
   // PR #81 — Match 2990 sample. Was '{model_name} ({width}x...)' which
   // produced "GridCool (183x190x25CM)"; now produces
