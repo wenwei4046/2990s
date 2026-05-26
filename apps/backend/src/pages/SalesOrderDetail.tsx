@@ -309,9 +309,12 @@ export const SalesOrderDetail = () => {
         ) : (
           <table className={styles.table}>
             <thead>
+              {/* PR #144 — Group column removed ("group是什么 删掉").
+                  Category is already visible as a colored badge inside
+                  the item's variant pills, so the raw "mfg_product"
+                  internal kind isn't useful in the table view. */}
               <tr>
                 <th>Item</th>
-                <th>Group</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
@@ -327,7 +330,6 @@ export const SalesOrderDetail = () => {
                     {it.description && <div className={styles.muted}>{it.description}</div>}
                     <VariantsPills variants={it.variants} />
                   </td>
-                  <td className={styles.muted}>{it.item_group}</td>
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
@@ -378,11 +380,65 @@ export const SalesOrderDetail = () => {
       />
 
       {/* ── Status flow ─────────────────────────────────────────── */}
-      <StatusBar
-        status={header.status}
-        onTransition={(s) => updateStatus.mutate({ docNo: header.doc_no, status: s })}
-        pending={updateStatus.isPending}
-      />
+      {/* PR #144 — Commander 2026-05-26 gating rule:
+            1. 没 Processing Date → bedframe variants 可以不填，自由 proceed
+            2. 有 Processing Date → bedframe 的 fabric / color / design / total
+               height / divan / leg / gap 必须都填齐才能 proceed
+          Rule encoded server-agnostic on the client: if processingDate is
+          set, scan bedframe items' variants. If any of the canonical
+          variant keys (divanHeight / legHeight / gap / fabricCode) is
+          missing on a bedframe line, block the next-stage transition. */}
+      {(() => {
+        const requireVariants = !!header.internal_expected_dd;
+        const REQUIRED_BEDFRAME_KEYS = ['divanHeight', 'legHeight', 'gap', 'fabricCode'] as const;
+        const incompleteBedframeLines = requireVariants
+          ? items
+              .filter((it) => (it.item_group ?? '').toLowerCase() === 'bedframe')
+              .filter((it) => {
+                const v = (it.variants ?? {}) as Record<string, unknown>;
+                return REQUIRED_BEDFRAME_KEYS.some((k) => {
+                  const val = v[k];
+                  return val === undefined || val === null || val === '';
+                });
+              })
+              .map((it) => it.item_code)
+          : [];
+        const gated = incompleteBedframeLines.length > 0;
+        return (
+          <>
+            {gated && (
+              <div style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: 'var(--space-3) var(--space-4)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 'var(--fs-13)',
+              }}>
+                <strong>Processing Date is set — bedframe variants must be filled before next stage.</strong>
+                <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+                  Incomplete: {incompleteBedframeLines.join(', ')}.<br />
+                  Required: Divan Height · Leg Height · Gap · Fabric.
+                </div>
+              </div>
+            )}
+            <StatusBar
+              status={header.status}
+              onTransition={(s) => {
+                if (gated) {
+                  window.alert(
+                    'Processing Date is set, so all bedframe variants (divan/leg/gap/fabric) must be filled before moving to the next stage.\n\n' +
+                    'Incomplete: ' + incompleteBedframeLines.join(', '),
+                  );
+                  return;
+                }
+                updateStatus.mutate({ docNo: header.doc_no, status: s });
+              }}
+              pending={updateStatus.isPending}
+            />
+          </>
+        );
+      })()}
 
       {/* ── Status timeline (audit) ─────────────────────────────── */}
       <StatusTimeline docNo={header.doc_no} currentStatus={header.status} />

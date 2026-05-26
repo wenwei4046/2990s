@@ -155,6 +155,12 @@ mfgSalesOrders.post('/', async (c) => {
     customer_id: (body.customerId as string) ?? null,
     customer_state: (body.customerState as string) ?? null,
     customer_delivery_date: (body.customerDeliveryDate as string) ?? null,
+    /* PR #144 — Commander: "当我已经 create 好了这个 sales order 的时候，
+       为什么我点进去 edit processing 的 delivery date 时，怎么没看到呢".
+       internal_expected_dd was wired on PATCH (update header) but missed
+       on the POST (create) — so the New SO form's Processing Date field
+       never persisted; reopening the SO showed an empty field. */
+    internal_expected_dd: (body.internalExpectedDd as string) ?? null,
     // PR #121 — POS-aligned Order Details fields
     customer_so_no: (body.customerSoNo as string) ?? null,
     customer_po: (body.customerPo as string) ?? null,
