@@ -232,6 +232,50 @@ export const ProductModelDetail = () => {
           />
         )}
 
+        {/* PR #66 — Mattress-only thickness input. Feeds the (HxWx{thickness}CM)
+            dimensions in the SKU name template. Stored on allowed_options. */}
+        {model.category === 'MATTRESS' && (
+          <div className={styles.optGroup}>
+            <div className={styles.optHead}>
+              <span className="t-eyebrow">Mattress thickness (cm)</span>
+              <span className={styles.optHint}>
+                Drives the {'{width}'}x{'{length}'}x<strong>{'{thickness}'}</strong>CM dimensions in the SKU name
+              </span>
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={99}
+              step={1}
+              value={
+                typeof (allowed as { mattress_thickness_cm?: number }).mattress_thickness_cm === 'number'
+                  ? (allowed as { mattress_thickness_cm: number }).mattress_thickness_cm
+                  : ''
+              }
+              onChange={(e) => {
+                const v = e.target.value === '' ? null : Number(e.target.value);
+                const next: AllowedOptions = { ...allowed };
+                if (v == null || Number.isNaN(v)) {
+                  delete (next as { mattress_thickness_cm?: number }).mattress_thickness_cm;
+                } else {
+                  (next as { mattress_thickness_cm: number }).mattress_thickness_cm = v;
+                }
+                setAllowed(next);
+              }}
+              placeholder="e.g. 31 (for AKKA-FIRM)"
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-14)',
+                padding: 'var(--space-2) var(--space-3)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--c-paper)',
+                width: '160px',
+              }}
+            />
+          </div>
+        )}
+
         {(model.category === 'ACCESSORY' || model.category === 'SERVICE') && (
           <p className={styles.cardSub}>
             No configurable options for {model.category.toLowerCase()} models —
@@ -301,6 +345,11 @@ export const ProductModelDetail = () => {
           modelName={model.name}
           category={model.category}
           allowed={allowed}
+          mattressThicknessCm={
+            typeof (allowed as { mattress_thickness_cm?: number }).mattress_thickness_cm === 'number'
+              ? (allowed as { mattress_thickness_cm: number }).mattress_thickness_cm
+              : null
+          }
           existingCodes={data.skus.map((s) => s.code)}
           onClose={() => setAddCodesOpen(false)}
         />
@@ -315,13 +364,15 @@ export const ProductModelDetail = () => {
    so commander can see what's there and can't double-insert.
    ────────────────────────────────────────────────────────────────────────── */
 
-const BED_SIZE_LABELS: Record<string, string> = {
-  K:  '6FT',
-  Q:  '5FT',
-  S:  '3FT',
-  SS: '3.5FT',
-  SK: '200X200CM',
-  SP: 'CUSTOM',
+// Mirrors apps/api/src/routes/product-models.ts SIZE_INFO map. Kept in sync
+// so the picker preview matches what the server actually writes.
+const SIZE_INFO: Record<string, { label: string; dim: string; w: number; l: number }> = {
+  K:  { label: '6FT',       dim: '183X190CM', w: 183, l: 190 },
+  Q:  { label: '5FT',       dim: '152X190CM', w: 152, l: 190 },
+  S:  { label: '3FT',       dim: '90X190CM',  w: 90,  l: 190 },
+  SS: { label: '3.5FT',     dim: '107X190CM', w: 107, l: 190 },
+  SK: { label: '200X200CM', dim: '',          w: 200, l: 200 },
+  SP: { label: '220X220CM', dim: '',          w: 220, l: 220 },
 };
 
 function computeCandidates(
@@ -329,38 +380,59 @@ function computeCandidates(
   modelCode: string,
   modelName: string,
   allowed: AOpts,
+  mattressThicknessCm: number | null,
 ): Array<{ code: string; name: string }> {
   if (category === 'SOFA') {
     return (allowed.compartments ?? []).map((comp) => ({
       code: `${modelCode}-${comp}`,
-      name: `SOFA ${modelCode} ${comp}`,
+      name: `${modelName} ${comp}`.trim(),
     }));
   }
-  if (category === 'BEDFRAME' || category === 'MATTRESS') {
-    return (allowed.sizes ?? []).map((sz) => ({
-      code: `${modelCode}-(${sz})`,
-      name: `${modelName} (${BED_SIZE_LABELS[sz] ?? sz})`,
-    }));
+  if (category === 'BEDFRAME') {
+    return (allowed.sizes ?? []).map((sz) => {
+      const info  = SIZE_INFO[sz];
+      const label = info?.label ?? sz;
+      const namePart = info?.dim ? `${modelName} (${label}) (${info.dim})` : `${modelName} (${label})`;
+      return { code: `${modelCode}-(${sz})`, name: namePart.trim() };
+    });
+  }
+  if (category === 'MATTRESS') {
+    return (allowed.sizes ?? []).map((sz) => {
+      const info  = SIZE_INFO[sz];
+      let dimPart: string;
+      if (info && mattressThicknessCm != null) {
+        dimPart = `${info.w}x${info.l}x${mattressThicknessCm}CM`;
+      } else if (info?.dim) {
+        dimPart = info.dim.toLowerCase();
+      } else {
+        dimPart = info?.label ?? sz;
+      }
+      return {
+        code: `${modelCode} MATT (${sz})`,
+        name: `${modelName} (${dimPart})`.trim(),
+      };
+    });
   }
   return [];
 }
 
 function AddCodesModal({
-  modelId, modelCode, modelName, category, allowed, existingCodes, onClose,
+  modelId, modelCode, modelName, category, allowed, mattressThicknessCm, existingCodes, onClose,
 }: {
   modelId: string;
   modelCode: string;
   modelName: string;
   category: string;
   allowed: AOpts;
+  mattressThicknessCm: number | null;
   existingCodes: string[];
   onClose: () => void;
 }) {
   const generateMut = useGenerateModelSkus();
   const existingSet = useMemo(() => new Set(existingCodes), [existingCodes]);
   const candidates = useMemo(
-    () => computeCandidates(category, modelCode, modelName, allowed),
-    [category, modelCode, modelName, allowed],
+    () => computeCandidates(category, modelCode, modelName, allowed, mattressThicknessCm),
+    [category, modelCode, modelName, allowed, mattressThicknessCm],
   );
   // Default: tick every NEW code (existing ones can't be ticked anyway).
   const [picked, setPicked] = useState<Set<string>>(

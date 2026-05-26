@@ -180,15 +180,22 @@ productModels.patch('/:id', async (c) => {
 //   MATTRESS: same as BEDFRAME.
 //   ACCESSORY / SERVICE: not supported (no variant axis).
 //
-// Bedframe / Mattress size_code → size_label map mirrors what's already on
-// mfg_products (1003-(K) = HILTON BEDFRAME (6FT) etc.).
-const BED_SIZE_LABELS: Record<string, string> = {
-  K:  '6FT',  // King — 183x190
-  Q:  '5FT',  // Queen — 152x190
-  S:  '3FT',  // Single — 90x190
-  SS: '3.5FT', // Super single — 107x190
-  SK: '200X200CM', // Super King
-  SP: 'CUSTOM',     // Special / custom
+// PR #66 — Standard size info per code. Mirrors commander's existing data:
+//   1003-(K) → "HILTON BEDFRAME (6FT) (183X190CM)"
+//   2990-NF AKKA-FIRM MATT (K) → "2990 AKKA-FIRM MATTRESS (183x190x31CM)"
+//
+// `dim` carries the dimensions string for BEDFRAME. MATTRESS adds a
+// per-Model thickness (Model.allowed_options.mattress_thickness_cm) — see
+// the MATTRESS branch in generate-skus for the assembly.
+// `label` is the friendly size like "6FT" / "5FT" / "3FT" / "3.5FT".
+// SK / SP fall back to label-only (their label IS already the dimensions).
+const SIZE_INFO: Record<string, { label: string; dim: string; w: number; l: number }> = {
+  K:  { label: '6FT',       dim: '183X190CM', w: 183, l: 190 },
+  Q:  { label: '5FT',       dim: '152X190CM', w: 152, l: 190 },
+  S:  { label: '3FT',       dim: '90X190CM',  w: 90,  l: 190 },
+  SS: { label: '3.5FT',     dim: '107X190CM', w: 107, l: 190 },
+  SK: { label: '200X200CM', dim: '',          w: 200, l: 200 },
+  SP: { label: '220X220CM', dim: '',          w: 220, l: 220 },
 };
 
 productModels.post('/:id/generate-skus', async (c) => {
@@ -214,63 +221,88 @@ productModels.post('/:id/generate-skus', async (c) => {
   if (mErr) return c.json({ error: 'load_failed', reason: mErr.message }, 500);
   if (!model) return c.json({ error: 'not_found' }, 404);
 
-  const opts = (model.allowed_options ?? {}) as Record<string, string[]>;
-  // PR #65 — Branding-driven SKU name template. Commander 2026-05-26:
-  // "HILTON BEDFRAME (6FT)" should come from branding=HILTON + category=BEDFRAME
-  // + size_label=6FT — not from the Model's internal name. Falls back to "" if
-  // branding is missing so the generator still works in edge cases.
-  const brand = (model.branding ?? '').trim();
+  const opts = (model.allowed_options ?? {}) as Record<string, unknown>;
+  // Commander 2026-05-26 spec (PR #66): the SKU name is driven by the Model
+  // NAME (commander types it during create), NOT by the branding column.
+  // Branding stays as a tracked metadata column on the Model + SKU rows.
+  //
+  // Per-category templates mirror the existing 2990's catalogue:
+  //
+  //   BEDFRAME  code:  {model_code}-({size_code})                  1003-(K)
+  //             name:  {model.name} ({size_label}) ({dim})         HILTON BEDFRAME (6FT) (183X190CM)
+  //             — if size is SK/SP the label already IS the dimensions,
+  //               so we skip the second parens and emit only ({label}).
+  //
+  //   MATTRESS  code:  {model_code} MATT ({size_code})             2990-NF AKKA-FIRM MATT (K)
+  //             name:  {model.name} ({w}x{l}x{thickness}CM)        2990 AKKA-FIRM MATTRESS (183x190x31CM)
+  //             — thickness lives on Model.allowed_options.mattress_thickness_cm
+  //               (commander sets it once per Model from the detail page).
+  //               Falls back to ({label}) when thickness is unset.
+  //
+  //   SOFA      code:  {model_code}-{compartment}                  5530-1A(LHF)
+  //             name:  {model.name} {compartment}                  SOFA 5530 1A(LHF)
+  //
+  const modelName = (model.name ?? '').trim();
+  const sizesArr  = Array.isArray(opts.sizes)        ? (opts.sizes as string[])        : [];
+  const compsArr  = Array.isArray(opts.compartments) ? (opts.compartments as string[]) : [];
+  const mattressThickness = typeof opts.mattress_thickness_cm === 'number'
+    ? opts.mattress_thickness_cm
+    : null;
 
   // Compute the SKU rows we'd like to materialize.
   type GenRow = { code: string; name: string; size_code: string | null; size_label: string | null };
   const wanted: GenRow[] = [];
 
   if (model.category === 'SOFA') {
-    const comps = opts.compartments ?? [];
-    if (comps.length === 0) {
+    if (compsArr.length === 0) {
       return c.json({ error: 'no_compartments', reason: 'Allowed Options → Compartments is empty. Toggle at least one before generating.' }, 400);
     }
-    for (const comp of comps) {
-      // SOFA template:
-      //   code = {model_code}-{compartment}        e.g. 5530-1A(LHF)
-      //   name = {branding} SOFA {compartment}     e.g. HOUZS SOFA 1A(LHF)
+    for (const comp of compsArr) {
       wanted.push({
         code:       `${model.model_code}-${comp}`,
-        name:       `${brand ? `${brand} ` : ''}SOFA ${comp}`,
+        name:       `${modelName} ${comp}`.trim(),
         size_code:  null,
         size_label: null,
       });
     }
   } else if (model.category === 'BEDFRAME') {
-    const sizes = opts.sizes ?? [];
-    if (sizes.length === 0) {
+    if (sizesArr.length === 0) {
       return c.json({ error: 'no_sizes', reason: 'Allowed Options → Sizes is empty. Toggle at least one before generating.' }, 400);
     }
-    for (const sz of sizes) {
-      const label = BED_SIZE_LABELS[sz] ?? sz;
-      // BEDFRAME template:
-      //   code = {model_code}-({size_code})        e.g. 1003-(K)
-      //   name = {branding} BEDFRAME ({size_label}) e.g. HILTON BEDFRAME (6FT)
+    for (const sz of sizesArr) {
+      const info  = SIZE_INFO[sz];
+      const label = info?.label ?? sz;
+      const dim   = info?.dim ?? '';
+      // "HILTON BEDFRAME (6FT) (183X190CM)" vs "HILTON(A) BEDFRAME (200X200CM)"
+      const namePart = dim ? `${modelName} (${label}) (${dim})` : `${modelName} (${label})`;
       wanted.push({
         code:       `${model.model_code}-(${sz})`,
-        name:       `${brand ? `${brand} ` : ''}BEDFRAME (${label})`,
+        name:       namePart.trim(),
         size_code:  sz,
         size_label: label,
       });
     }
   } else if (model.category === 'MATTRESS') {
-    const sizes = opts.sizes ?? [];
-    if (sizes.length === 0) {
+    if (sizesArr.length === 0) {
       return c.json({ error: 'no_sizes', reason: 'Allowed Options → Sizes is empty. Toggle at least one before generating.' }, 400);
     }
-    for (const sz of sizes) {
-      const label = BED_SIZE_LABELS[sz] ?? sz;
-      // MATTRESS template:
-      //   code = {model_code}-({size_code})        e.g. PURE-(K)
-      //   name = {branding} ({size_label})          e.g. SEALY (6FT)
+    for (const sz of sizesArr) {
+      const info  = SIZE_INFO[sz];
+      const label = info?.label ?? sz;
+      // Mattress dimensions include thickness so "(183x190x31CM)" is the goal.
+      // Note lowercase 'x' to match commander's existing data.
+      let dimPart: string;
+      if (info && mattressThickness != null) {
+        dimPart = `${info.w}x${info.l}x${mattressThickness}CM`;
+      } else if (info?.dim) {
+        dimPart = info.dim.toLowerCase(); // bedframe-style fallback if thickness not set
+      } else {
+        dimPart = label;
+      }
       wanted.push({
-        code:       `${model.model_code}-(${sz})`,
-        name:       `${brand ? `${brand} ` : ''}(${label})`.trim(),
+        // "2990-NF AKKA-FIRM MATT (K)"
+        code:       `${model.model_code} MATT (${sz})`,
+        name:       `${modelName} (${dimPart})`.trim(),
         size_code:  sz,
         size_label: label,
       });
