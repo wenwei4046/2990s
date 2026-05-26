@@ -140,3 +140,34 @@ export function useUpdateFabricDescription() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
   });
 }
+
+/* PR #43 — Create new fabric (Commander 2026-05-26) */
+export type NewFabric = {
+  id?: string;
+  fabricCode: string;
+  fabricDescription?: string;
+  fabricCategory?: FabricCategoryValue;
+  sofaPriceTier?: FabricTier;
+  bedframePriceTier?: FabricTier;
+  supplierCode?: string;
+  priceCenti?: number;
+};
+export function useCreateFabric() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NewFabric) =>
+      authedFetch<{ fabric: FabricTrackingRow }>(`/fabric-tracking`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}
+
+export function useDeleteFabric() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<void>(`/fabric-tracking/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),
+  });
+}

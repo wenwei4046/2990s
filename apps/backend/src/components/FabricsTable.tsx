@@ -10,11 +10,12 @@
 // ----------------------------------------------------------------------------
 
 import { useState } from 'react';
-import { Layers, Check, X } from 'lucide-react';
+import { Layers, Check, X, Trash2 } from 'lucide-react';
 import {
   useUpdateFabricTier,
   useUpdateFabricSupplierCode,
   useUpdateFabricDescription,
+  useDeleteFabric,
   type FabricTier,
   type FabricTierField,
   type FabricTrackingRow,
@@ -65,20 +66,21 @@ export const FabricsTable = ({
             <th>Supplier Code</th>
             <th>Sofa Tier</th>
             <th>Bedframe Tier</th>
+            <th />
           </tr>
         </thead>
         <tbody>
           {isLoading && (
             <tr>
-              <td colSpan={5} className={styles.emptyRow}>Loading fabrics…</td>
+              <td colSpan={6} className={styles.emptyRow}>Loading fabrics…</td>
             </tr>
           )}
           {!isLoading && rows.map((row) => <FabricRow key={row.id} row={row} />)}
           {!isLoading && !error && rows.length === 0 && (
             <tr>
-              <td colSpan={5} className={styles.emptyRow}>
+              <td colSpan={6} className={styles.emptyRow}>
                 <Layers size={32} strokeWidth={1.5} />
-                <div style={{ marginTop: 8 }}>No fabrics yet.</div>
+                <div style={{ marginTop: 8 }}>No fabrics yet — click "+ New Fabric" to add one.</div>
               </td>
             </tr>
           )}
@@ -90,10 +92,17 @@ export const FabricsTable = ({
 
 const FabricRow = ({ row }: { row: FabricTrackingRow }) => {
   const updateTier = useUpdateFabricTier();
+  const deleteFabric = useDeleteFabric();
 
   const cycleTier = (field: FabricTierField, current: FabricTier | null) => {
     const next = TIER_NEXT[current ?? 'PRICE_2'];
     updateTier.mutate({ id: row.id, field, tier: next });
+  };
+
+  const onDelete = () => {
+    if (confirm(`Delete fabric ${row.fabric_code}? This cannot be undone.`)) {
+      deleteFabric.mutate(row.id);
+    }
   };
 
   return (
@@ -119,6 +128,18 @@ const FabricRow = ({ row }: { row: FabricTrackingRow }) => {
           title="Click to cycle PRICE_1 → 2 → 3"
         >
           {tierShort(row.bedframe_price_tier ?? row.price_tier)}
+        </button>
+      </td>
+      <td style={{ textAlign: 'right' }}>
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={onDelete}
+          title="Delete fabric"
+          style={{ color: 'var(--c-festive-b, #B8331F)' }}
+          disabled={deleteFabric.isPending}
+        >
+          <Trash2 size={14} strokeWidth={1.75} />
         </button>
       </td>
     </tr>
