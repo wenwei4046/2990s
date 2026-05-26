@@ -269,6 +269,20 @@ export function useCreateMfgProduct() {
   });
 }
 
+/* PR #82 (Commander 2026-05-26) — DELETE /mfg-products/:id. SKU Master
+   multi-select delete fans out N parallel mutateAsync calls; per-row 404
+   / 409 surface as a failed-mutation rejection the caller handles. */
+export function useDeleteMfgProduct() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<void>(`/mfg-products/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
+  });
+}
+
 /* Maintenance config */
 
 export function useMaintenanceConfig(scope = 'master') {

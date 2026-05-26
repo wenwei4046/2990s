@@ -159,6 +159,22 @@ mfgProducts.post('/batch-import', async (c) => {
   return c.json({ upserted, failed: failures.length, failures: failures.slice(0, 50) });
 });
 
+// ── DELETE /:id ────────────────────────────────────────────────────────
+// PR #82 (Commander 2026-05-26) — SKU Master multi-select delete needs a
+// per-row DELETE endpoint. Bulk delete = N parallel DELETE calls from the
+// client (matches the pattern PR #62 used for fabric_trackings wipe).
+mfgProducts.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+  const { error } = await supabase.from('mfg_products').delete().eq('id', id);
+  if (error) {
+    if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
+    if (error.code === '23503') return c.json({ error: 'product_in_use', reason: 'Product is referenced by an order / PO / GRN line; remove those first.' }, 409);
+    return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  }
+  return c.body(null, 204);
+});
+
 // ── GET /:id ───────────────────────────────────────────────────────────
 mfgProducts.get('/:id', async (c) => {
   const id = c.req.param('id');
