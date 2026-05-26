@@ -215,6 +215,10 @@ mfgProducts.patch('/:id', async (c) => {
     pieces?: unknown;
     seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }>;
     branding?: string | null;
+    /** PR #87 — per-SKU active toggle. Commander uses this from the Model
+        detail "SKU variants" table to mark individual SKUs as no longer sold
+        without having to delete the row (preserves stock + history). */
+    status?: 'ACTIVE' | 'INACTIVE';
   };
   try {
     body = (await c.req.json()) as typeof body;
@@ -260,6 +264,11 @@ mfgProducts.patch('/:id', async (c) => {
   if (body.branding !== undefined) {
     const trimmed = typeof body.branding === 'string' ? body.branding.trim() : null;
     updates.branding = trimmed ? trimmed : null;
+  }
+  // PR #87 — per-SKU active toggle. Stored as 'ACTIVE' | 'INACTIVE' to match
+  // the rest of the schema (matches mfg_products.status default in inserts).
+  if (body.status === 'ACTIVE' || body.status === 'INACTIVE') {
+    updates.status = body.status;
   }
   // Sofa tier matrix — diff per (height × tier) slot so the audit trail
   // captures each change instead of a single opaque blob write.
