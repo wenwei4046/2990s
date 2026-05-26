@@ -78,7 +78,8 @@ export const SalesOrderNew = () => {
   // Customer PO No · Customer SO No · Reference · Company SO Date ·
   // Customer Delivery Date · Notes). soDate defaults to today.
   const [soDate,             setSoDate]             = useState(() => new Date().toISOString().slice(0, 10));
-  const [customerDelivery,   setCustomerDelivery]   = useState('');
+  // PR #121 owns `deliveryDate` state (below) — Order Details card binds to
+  // that same state so both UIs stay in sync.
   const [customerPo,         setCustomerPo]         = useState('');
   const [customerSoNo,       setCustomerSoNo]       = useState('');
   const [ref,                setRef]                = useState('');
@@ -181,9 +182,10 @@ export const SalesOrderNew = () => {
         email: email || undefined,
         salespersonId: salespersonId || undefined,
         customerType: customerType || undefined,
-        // PR #121 — POS-aligned Order Details fields
+        // PR #121 — POS-aligned Order Details fields. customerDeliveryDate
+        // is sent below from the existing PR #121 `deliveryDate` state, so
+        // it's intentionally omitted here.
         soDate: soDate || undefined,
-        customerDeliveryDate: customerDelivery || undefined,
         customerPo: customerPo || undefined,
         customerSoNo: customerSoNo || undefined,
         ref: ref || undefined,
@@ -330,7 +332,7 @@ export const SalesOrderNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Delivery Date</span>
-              <input type="date" value={customerDelivery} onChange={(e) => setCustomerDelivery(e.target.value)} className={styles.fieldInput} />
+              <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className={styles.fieldInput} />
             </label>
             <label className={`${styles.field} ${styles.fieldSpan2 ?? ''}`} style={{ gridColumn: '1 / -1' }}>
               <span className={styles.fieldLabel}>Notes</span>
