@@ -1116,7 +1116,10 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   paymentMethod:        text('payment_method'),       // cash | transfer | merchant
   installmentMonths:    integer('installment_months'), // 6 | 12 — NULL = normal swipe; only valid when method='merchant'
   merchantProvider:     text('merchant_provider'),    // GHL | HLB | MBB | PBB
-  approvalCode:         text('approval_code'),        // auth code from terminal receipt
+  approvalCode:         text('approval_code'),        // auth code (merchant) / slip ref (transfer) / receipt no (cash)
+  /* PR #157 — payment_date captures the day funds were actually received
+     (Commander: "需要一个日期填写收钱的日期"). Independent of so_date. */
+  paymentDate:          date('payment_date'),
   depositCenti:         integer('deposit_centi').notNull().default(0),
   paidCenti:            integer('paid_centi').notNull().default(0),
 

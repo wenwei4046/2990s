@@ -21,8 +21,8 @@ const HEADER =
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
-  /* PR #143 + #150 — Payment (migrations 0068 + 0069) */
-  'payment_method, installment_months, merchant_provider, approval_code, deposit_centi, paid_centi, ' +
+  /* PR #143 + #150 + #157 — Payment (migrations 0068 + 0069 + 0070) */
+  'payment_method, installment_months, merchant_provider, approval_code, payment_date, deposit_centi, paid_centi, ' +
   'created_at, created_by, updated_at';
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
@@ -173,6 +173,7 @@ mfgSalesOrders.post('/', async (c) => {
     installment_months: typeof body.installmentMonths === 'number' ? body.installmentMonths : null,
     merchant_provider:  (body.merchantProvider as string) ?? null,
     approval_code:      (body.approvalCode as string) ?? null,
+    payment_date:       (body.paymentDate as string) ?? null,
     deposit_centi:      typeof body.depositCenti === 'number' ? body.depositCenti : 0,
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
     /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
@@ -324,6 +325,7 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['installmentMonths', 'installment_months'],
     ['merchantProvider', 'merchant_provider'],
     ['approvalCode', 'approval_code'],
+    ['paymentDate', 'payment_date'],
     ['depositCenti', 'deposit_centi'],
     ['paidCenti', 'paid_centi'],
   ];
