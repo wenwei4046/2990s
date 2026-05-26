@@ -127,6 +127,7 @@ export const SalesOrderNew = () => {
   const [installmentMonths, setInstallmentMonths] = useState<number | null>(null);
   const [merchantProvider,  setMerchantProvider]  = useState<string>('');
   const [approvalCode,      setApprovalCode]      = useState<string>('');
+  const [paymentDate,       setPaymentDate]       = useState<string>('');
   const [depositCenti,      setDepositCenti]      = useState<number>(0);
   const [paidCenti,         setPaidCenti]         = useState<number>(0);
 
@@ -298,6 +299,7 @@ export const SalesOrderNew = () => {
         installmentMonths: installmentMonths ?? undefined,
         merchantProvider:  merchantProvider || undefined,
         approvalCode:      approvalCode || undefined,
+        paymentDate:       paymentDate || undefined,
         depositCenti:      depositCenti || undefined,
         paidCenti:         paidCenti || undefined,
         /* PR #121 — Processing Date → internal_expected_dd, Delivery Date →
@@ -734,7 +736,9 @@ export const SalesOrderNew = () => {
                     if (m !== 'merchant') {
                       setMerchantProvider('');
                       setInstallmentMonths(null);
-                      setApprovalCode('');
+                      // PR #157 — keep approvalCode + paymentDate across
+                      // method switches; both are general payment metadata
+                      // (not merchant-only) per commander 2026-05-27.
                     } else if (!merchantProvider) {
                       setMerchantProvider('GHL');
                     }
@@ -827,16 +831,40 @@ export const SalesOrderNew = () => {
                 ))}
               </div>
 
-              {/* Approval code */}
-              <label className={styles.field} style={{ maxWidth: 320 }}>
-                <span className={styles.fieldLabel}>Approval Code</span>
+            </div>
+          )}
+
+          {/* PR #157 — Approval Code + Payment Date for ALL methods.
+              Commander: "Bank Transfer、Cash 也是需要 Approval Code 的，
+              还需要一个日期填写收钱的日期". */}
+          {paymentMethod && (
+            <div style={{ marginTop: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-3)' }}>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>
+                  {paymentMethod === 'merchant' ? 'Approval Code' :
+                   paymentMethod === 'transfer' ? 'Slip / Reference No' :
+                                                  'Receipt / Reference'}
+                </span>
                 <input
                   type="text"
                   value={approvalCode}
                   onChange={(e) => setApprovalCode(e.target.value)}
-                  placeholder="Auth code from terminal receipt"
+                  placeholder={
+                    paymentMethod === 'merchant' ? 'Auth code from terminal receipt' :
+                    paymentMethod === 'transfer' ? 'Bank slip reference number' :
+                                                   'Optional cash receipt reference'
+                  }
                   className={styles.fieldInput}
                   style={{ fontFamily: 'var(--font-mono)' }}
+                />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Payment Date</span>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  className={styles.fieldInput}
                 />
               </label>
             </div>

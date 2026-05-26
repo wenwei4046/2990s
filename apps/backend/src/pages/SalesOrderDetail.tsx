@@ -140,6 +140,7 @@ type SoHeader = {
   installment_months: number | null;    // 6 | 12 — NULL = normal swipe; valid only when method=merchant
   merchant_provider: string | null;     // GHL | HLB | MBB | PBB
   approval_code: string | null;
+  payment_date: string | null;          // PR #157 — date funds received
   deposit_centi: number;
   paid_centi: number;
 };
@@ -1524,6 +1525,7 @@ const PaymentCard = ({
     installment:     header.installment_months ?? null,
     merchant:        header.merchant_provider ?? '',
     approvalCode:    header.approval_code ?? '',
+    paymentDate:     header.payment_date ?? '',
     depositCenti:    header.deposit_centi ?? 0,
     paidCenti:       header.paid_centi ?? 0,
   });
@@ -1534,18 +1536,22 @@ const PaymentCard = ({
       installment:     header.installment_months ?? null,
       merchant:        header.merchant_provider ?? '',
       approvalCode:    header.approval_code ?? '',
+      paymentDate:     header.payment_date ?? '',
       depositCenti:    header.deposit_centi ?? 0,
       paidCenti:       header.paid_centi ?? 0,
     });
   }, [header]);
 
+  /* PR #157 — Commander 2026-05-27: "Bank Transfer、Cash 也是需要 Approval
+     Code 的, 还需要一个日期填写收钱的日期". Approval code + payment date
+     now apply to ALL methods, not just merchant. Method-switch keeps both
+     across methods (they're general payment metadata, not merchant-only). */
   const pick = (m: PaymentMethod) =>
     setForm((s) => ({
       ...s,
       method: m,
       installment: m === 'merchant' ? s.installment : null,
       merchant:    m === 'merchant' ? (s.merchant || 'GHL') : '',
-      approvalCode: m === 'merchant' ? s.approvalCode : '',
     }));
 
   const balanceCenti = Math.max(0, grandTotal - form.paidCenti);
@@ -1558,6 +1564,7 @@ const PaymentCard = ({
       installmentMonths: form.installment,
       merchantProvider:  form.merchant || null,
       approvalCode:      form.approvalCode || null,
+      paymentDate:       form.paymentDate || null,
       depositCenti:      form.depositCenti,
       paidCenti:         form.paidCenti,
     });
@@ -1686,17 +1693,42 @@ const PaymentCard = ({
               ))}
             </div>
 
-            {/* Approval Code */}
-            <label className={styles.field} style={{ maxWidth: 320 }}>
-              <span className={styles.fieldLabel}>Approval Code</span>
+          </div>
+        )}
+
+        {/* PR #157 — Approval Code + Payment Date for ALL methods.
+            Commander: "Bank Transfer、Cash 也是需要 Approval Code 的，
+            还需要一个日期填写收钱的日期". Visible once any method is picked. */}
+        {form.method && (
+          <div style={{ marginTop: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-3)' }}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>
+                {form.method === 'merchant' ? 'Approval Code' :
+                 form.method === 'transfer' ? 'Slip / Reference No' :
+                                              'Receipt / Reference'}
+              </span>
               <input
                 type="text"
                 value={form.approvalCode}
                 disabled={locked}
                 onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
-                placeholder="Auth code from terminal receipt"
+                placeholder={
+                  form.method === 'merchant' ? 'Auth code from terminal receipt' :
+                  form.method === 'transfer' ? 'Bank slip reference number' :
+                                               'Optional cash receipt reference'
+                }
                 className={styles.fieldInput}
                 style={{ fontFamily: 'var(--font-mono)' }}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Payment Date</span>
+              <input
+                type="date"
+                value={form.paymentDate}
+                disabled={locked}
+                onChange={(e) => setForm((s) => ({ ...s, paymentDate: e.target.value }))}
+                className={styles.fieldInput}
               />
             </label>
           </div>
