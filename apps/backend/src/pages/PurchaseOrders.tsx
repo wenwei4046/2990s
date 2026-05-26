@@ -116,7 +116,10 @@ export const PurchaseOrders = () => {
           <h1 className={styles.title}>Purchase Orders</h1>
           <p className={styles.subtitle}>Manufacturer POs to suppliers</p>
         </div>
-        <Button variant="primary" size="md" onClick={() => setDrawer({ kind: 'create' })}>
+        {/* PR #97 — Commander 2026-05-26: "Create PO 也要像这样子啊"
+            Replaced the old side-drawer with a full-page AutoCount-style
+            form at /purchase-orders/new. */}
+        <Button variant="primary" size="md" onClick={() => navigate('/purchase-orders/new')}>
           <Plus {...ICON} />
           <span>New PO</span>
         </Button>
@@ -228,15 +231,7 @@ export const PurchaseOrders = () => {
         </table>
       </div>
 
-      {drawer.kind === 'create' && (
-        <CreatePoDrawer
-          onClose={() => setDrawer({ kind: 'closed' })}
-          onCreated={(id) => {
-            setDrawer({ kind: 'closed' });
-            navigate(`/purchase-orders/${id}`);
-          }}
-        />
-      )}
+      {/* PR #97 — Create-PO drawer removed; full-page form at /purchase-orders/new */}
       {drawer.kind === 'detail' && (
         <DetailPoDrawer poId={drawer.poId} onClose={() => setDrawer({ kind: 'closed' })} />
       )}

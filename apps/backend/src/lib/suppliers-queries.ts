@@ -426,6 +426,9 @@ export function useCreatePurchaseOrder() {
       expectedAt?: string;
       notes?: string;
       items?: NewPoItem[];                     // PR #41 — optional, allow blank-draft
+      /** PR #97 — AutoCount Purchase Location at create time. NULL → can be
+          set on the detail page after creation. */
+      purchaseLocationId?: string | null;
     }) =>
       authedFetch<{ id: string; poNumber: string }>(`/mfg-purchase-orders`, {
         method: 'POST',

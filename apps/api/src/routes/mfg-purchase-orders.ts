@@ -132,7 +132,10 @@ mfgPurchaseOrders.post('/', async (c) => {
     if (!it.materialCode || !it.materialName) throw new Error('material_code + material_name required per item');
     const qty = Math.max(0, Number(it.qty ?? 0));
     const unit = Math.max(0, Number(it.unitPriceCenti ?? 0));
-    const lineTotal = qty * unit;
+    const discountCenti = Math.max(0, Number(it.discountCenti ?? 0));
+    // PR #97 — line total honours per-line discount when computed up front
+    // (matches the AutoCount "Total" column in the new full-page form).
+    const lineTotal = Math.max(0, qty * unit - discountCenti);
     subtotal += lineTotal;
     return {
       binding_id: (it.bindingId as string | undefined) ?? null,
@@ -144,6 +147,11 @@ mfgPurchaseOrders.post('/', async (c) => {
       unit_price_centi: unit,
       line_total_centi: lineTotal,
       notes: (it.notes as string | undefined) ?? null,
+      /* PR #97 — pass-through per-line variant + AutoCount fields. NULL
+         when absent so the column default / nullable behaviour kicks in. */
+      discount_centi: discountCenti,
+      delivery_date: (it.deliveryDate as string | undefined) ?? null,
+      warehouse_id:  (it.warehouseId  as string | undefined) ?? null,
     };
   });
 
@@ -158,6 +166,9 @@ mfgPurchaseOrders.post('/', async (c) => {
     tax_centi: 0,
     total_centi: subtotal,
     created_by: user.id,
+    /* PR #97 — AutoCount Purchase Location at create time. Defaults to NULL
+       so a commander who skips it can still set it on the detail page. */
+    purchase_location_id: (body.purchaseLocationId as string | undefined) ?? null,
   };
   // Optional poDate — if absent, the column default (now()) wins.
   if (body.poDate) headerInsert.po_date = body.poDate;
