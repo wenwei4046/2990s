@@ -11,6 +11,11 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
+# PR #48 — invite + recovery magic links anchor here. Must match the
+# production Backend portal URL and be on the Supabase Redirect URLs
+# allow-list (Authentication → URL Configuration).
+BACKEND_PORTAL_URL = "https://2990s-backend.pages.dev"
+
 # Allowed CORS origins (dev + prod). Update when domain is set.
 ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:6273,http://localhost:6274,http://localhost:6275,http://localhost:6276,http://127.0.0.1:5174,http://127.0.0.1:6273,http://127.0.0.1:6274,http://127.0.0.1:6275,http://127.0.0.1:6276,https://2990s-pos.pages.dev,https://2990s-backend.pages.dev"
 

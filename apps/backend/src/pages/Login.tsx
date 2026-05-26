@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
+import { supabase } from '../lib/supabase';
 import styles from './Login.module.css';
 
 export const Login = () => {
@@ -11,6 +12,9 @@ export const Login = () => {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // PR #48 — inline "forgot password" affordance instead of a separate route.
+  // null = not yet asked, 'sending' = in-flight, 'sent' = email out the door.
+  const [resetState, setResetState] = useState<'idle' | 'sending' | 'sent'>('idle');
 
   if (loading) return <div className={styles.shell}>Loading…</div>;
 
@@ -28,13 +32,36 @@ export const Login = () => {
     if (result.error) setError(result.error);
   };
 
+  // Forgot-password: send a Supabase recovery email. The recovery link's
+  // `redirectTo` lands the user on /set-password where they pick a new
+  // password. The Site URL allow-list (Auth → URL Configuration) must
+  // include `${origin}/**` or Supabase will reject the redirect.
+  const onForgot = async () => {
+    const target = email.trim();
+    if (!target) {
+      setError('Enter your email above first, then click Forgot password.');
+      return;
+    }
+    setError(null);
+    setResetState('sending');
+    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(target, {
+      redirectTo: `${window.location.origin}/set-password`,
+    });
+    if (resetErr) {
+      setError(resetErr.message);
+      setResetState('idle');
+      return;
+    }
+    setResetState('sent');
+  };
+
   return (
     <main className={styles.shell}>
       <form className={styles.card} onSubmit={onSubmit}>
         <div className={styles.brand}>
           <span className="t-eyebrow">2990's · Backend</span>
           <h1 className="t-h2">Sign in</h1>
-          <p className="t-body fg-muted">Email + password. Magic-link flow comes Phase 5.</p>
+          <p className="t-body fg-muted">Email + password.</p>
         </div>
 
         <label className={styles.field}>
@@ -67,8 +94,29 @@ export const Login = () => {
           {submitting ? 'Signing in…' : 'Sign in'}
         </Button>
 
+        {resetState === 'sent' ? (
+          <p className={styles.helper}>
+            Recovery email sent. Check <strong>{email}</strong> (incl. spam) for the link.
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={onForgot}
+            disabled={resetState === 'sending'}
+            className={styles.helper}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+            }}
+          >
+            {resetState === 'sending' ? 'Sending recovery email…' : 'Forgot password?'}
+          </button>
+        )}
+
         <p className={styles.helper}>
-          First time? Have Loo create your staff record via Supabase Dashboard → Auth → Users.
+          First time? Check your inbox for the magic-link invite an admin emailed you.
         </p>
       </form>
     </main>
