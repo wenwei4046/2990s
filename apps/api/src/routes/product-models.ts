@@ -240,10 +240,14 @@ productModels.post('/:id/generate-skus', async (c) => {
   //               so we skip the second parens and emit only ({label}).
   //
   //   MATTRESS  code:  {model_code} MATT ({size_code})             2990-NF AKKA-FIRM MATT (K)
-  //             name:  {model.name} ({w}x{l}x{thickness}CM)        2990 AKKA-FIRM MATTRESS (183x190x31CM)
+  //             name:  {branding?} {model.name} MATTRESS ({w}x{l}x{thickness}CM)
+  //                                                                 2990 AKKA-FIRM MATTRESS (183x190x31CM)
+  //                                                                 Happi.S GridCool MATTRESS (183x190x25CM)
   //             — thickness lives on Model.allowed_options.mattress_thickness_cm
   //               (commander sets it once per Model from the detail page).
   //               Falls back to ({label}) when thickness is unset.
+  //             — branding prefix added in PR #81 to match commander's 2990
+  //               data sample. Empty branding → prefix + space dropped.
   //
   //   SOFA      code:  {model_code}-{compartment}                  5530-1A(LHF)
   //             name:  {model.name} {compartment}                  SOFA 5530 1A(LHF)
@@ -306,6 +310,14 @@ productModels.post('/:id/generate-skus', async (c) => {
     if (sizesArr.length === 0) {
       return c.json({ error: 'no_sizes', reason: 'Allowed Options → Sizes is empty. Toggle at least one before generating.' }, 400);
     }
+    // PR #81 — Commander 2026-05-26 wanted generated mattress names to look
+    // like the 2990 data sample: "2990 AKKA-FIRM MATTRESS (183x190x31CM)".
+    // The old template ("{model.name} ({dim})") produced just
+    // "GridCool (183x190x25CM)" — no branding prefix, no "MATTRESS" word.
+    // Now: prepend {branding} + space (only when branding is non-empty) and
+    // always insert the literal "MATTRESS" between model name and (dim).
+    const branding = (model.branding ?? '').trim();
+    const prefix   = branding ? `${branding} ` : '';
     for (const sz of sizesArr) {
       const info  = SIZE_INFO[sz];
       const label = info?.label ?? sz;
@@ -322,7 +334,9 @@ productModels.post('/:id/generate-skus', async (c) => {
       wanted.push({
         // "2990-NF AKKA-FIRM MATT (K)"
         code:       `${model.model_code} MATT (${sz})`,
-        name:       `${modelName} (${dimPart})`.trim(),
+        // "2990 AKKA-FIRM MATTRESS (183x190x31CM)" — branding prefix +
+        // MATTRESS word inserted to match 2990 sample (PR #81).
+        name:       `${prefix}${modelName} MATTRESS (${dimPart})`.trim(),
         size_code:  sz,
         size_label: label,
       });

@@ -397,7 +397,12 @@ const DEFAULT_FORMATS = {
   sofaCode:     '{model_code}-{compartment}',
   sofaName:     '{model_name} {compartment}',
   mattressCode: '{model_code} MATT ({size})',
-  mattressName: '{model_name} ({width}x{length}x{thickness}CM)',
+  // PR #81 — Match 2990 sample. Was '{model_name} ({width}x...)' which
+  // produced "GridCool (183x190x25CM)"; now produces
+  // "Happi.S GridCool MATTRESS (183x190x25CM)". applyFormat() handles the
+  // missing-branding case (empty string + trim() collapses the leading
+  // space). Mirrors apps/api/src/routes/product-models.ts §MATTRESS.
+  mattressName: '{branding} {model_name} MATTRESS ({width}x{length}x{thickness}CM)',
 } as const;
 
 function applyFormat(tpl: string, vars: Record<string, string>): string {
