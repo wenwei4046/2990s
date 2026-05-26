@@ -119,10 +119,19 @@ export const PurchaseOrders = () => {
         {/* PR #97 — Commander 2026-05-26: "Create PO 也要像这样子啊"
             Replaced the old side-drawer with a full-page AutoCount-style
             form at /purchase-orders/new. */}
-        <Button variant="primary" size="md" onClick={() => navigate('/purchase-orders/new')}>
-          <Plus {...ICON} />
-          <span>New PO</span>
-        </Button>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          {/* PR — Phase 1: multi-SO → PO picker. Lets commander select
+              outstanding SO lines (across customers + suppliers), input
+              partial qty per line, and emit one PO per supplier. */}
+          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
+            <Plus {...ICON} />
+            <span>From SO</span>
+          </Button>
+          <Button variant="primary" size="md" onClick={() => navigate('/purchase-orders/new')}>
+            <Plus {...ICON} />
+            <span>New PO</span>
+          </Button>
+        </div>
       </div>
 
       <div className={styles.statusChips}>

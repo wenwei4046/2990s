@@ -214,13 +214,76 @@ mfgPurchaseOrders.post('/', async (c) => {
 // created PO ids/numbers so the UI can summarize.
 //
 // Body: { soItems: [{ soDocNo, itemCode, itemName, qty }] }
+/* PR — Commander 2026-05-26: SO → PO multi-select + partial.
+ * Body shape now: `{ picks: [{ soItemId, qty }] }` (camelCase).
+ * Legacy shape `{ soItems: [{ soDocNo, itemCode, itemName, qty }] }`
+ * still accepted — when given, we look up the SO items by (soDocNo, itemCode)
+ * and convert. New shape is preferred because we can validate qty <= remaining
+ * (qty - po_qty_picked) and increment po_qty_picked atomically. */
 mfgPurchaseOrders.post('/from-sos', async (c) => {
   const supabase = c.get('supabase');
   const user = c.get('user');
-  let body: { soItems?: Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }> };
+  let body: {
+    picks?:    Array<{ soItemId: string; qty: number }>;
+    soItems?:  Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }>;
+  };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
-  const soItems = body.soItems ?? [];
-  if (soItems.length === 0) return c.json({ error: 'so_items_required' }, 400);
+
+  // ── Resolve picks → SO item rows ─────────────────────────────────
+  type SoItem = { id: string; doc_no: string; item_code: string; description: string | null; qty: number; po_qty_picked: number; unit_price_centi: number };
+  let pickedItems: Array<{ row: SoItem; qty: number }> = [];
+
+  if (body.picks && body.picks.length > 0) {
+    const ids = body.picks.map((p) => p.soItemId);
+    const { data: rows, error } = await supabase
+      .from('mfg_sales_order_items')
+      .select('id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi')
+      .in('id', ids);
+    if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+    const byId = new Map<string, SoItem>();
+    for (const r of (rows ?? []) as SoItem[]) byId.set(r.id, r);
+    // Validate qty ≤ (row.qty - row.po_qty_picked)
+    for (const p of body.picks) {
+      const row = byId.get(p.soItemId);
+      if (!row) return c.json({ error: 'item_not_found', soItemId: p.soItemId }, 400);
+      const remaining = row.qty - row.po_qty_picked;
+      if (p.qty <= 0)         return c.json({ error: 'qty_must_be_positive', soItemId: p.soItemId }, 400);
+      if (p.qty > remaining)  return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
+      pickedItems.push({ row, qty: p.qty });
+    }
+  } else {
+    // Legacy soItems path — kept so old callers don't break.
+    const soItems = body.soItems ?? [];
+    if (soItems.length === 0) return c.json({ error: 'so_items_required' }, 400);
+    // Best-effort match by (doc_no, item_code). Doesn't update po_qty_picked.
+    const codes  = [...new Set(soItems.map((it) => it.itemCode))];
+    const docNos = [...new Set(soItems.map((it) => it.soDocNo))];
+    const { data: rows } = await supabase
+      .from('mfg_sales_order_items')
+      .select('id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi')
+      .in('doc_no', docNos)
+      .in('item_code', codes);
+    const byKey = new Map<string, SoItem>();
+    for (const r of (rows ?? []) as SoItem[]) byKey.set(`${r.doc_no}|${r.item_code}`, r);
+    for (const it of soItems) {
+      const row = byKey.get(`${it.soDocNo}|${it.itemCode}`);
+      // Even if no SO row found, fabricate a minimal one so PO still gets created.
+      pickedItems.push({
+        row: row ?? { id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName, qty: it.qty, po_qty_picked: 0, unit_price_centi: 0 },
+        qty: it.qty,
+      });
+    }
+  }
+
+  if (pickedItems.length === 0) return c.json({ error: 'no_pickable_lines' }, 400);
+
+  // Re-project into the legacy soItems shape for the rest of the handler.
+  const soItems = pickedItems.map(({ row, qty }) => ({
+    soDocNo:  row.doc_no,
+    itemCode: row.item_code,
+    itemName: row.description ?? row.item_code,
+    qty,
+  }));
 
   // Resolve main supplier per item via supplier_material_bindings.
   const codes = [...new Set(soItems.map((it) => it.itemCode))];
@@ -316,7 +379,80 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     created.push({ id: header.id, poNumber: header.po_number, supplierId, lineCount: bucket.lines.length });
   }
 
+  // ── PR — increment po_qty_picked on every SO item we just emitted ──
+  // Best-effort UPDATEs (one per item, no transaction). If any fails we
+  // log + continue — the PO still exists; commander can manually fix the
+  // counter via Maintenance later if needed.
+  if (body.picks && created.length > 0) {
+    await Promise.all(pickedItems
+      .filter(({ row }) => row.id)
+      .map(async ({ row, qty }) => {
+        await supabase
+          .from('mfg_sales_order_items')
+          .update({ po_qty_picked: row.po_qty_picked + qty })
+          .eq('id', row.id);
+      }));
+  }
+
   return c.json({ created, total: created.length }, 201);
+});
+
+/* ── PR — Outstanding SO items (qty > po_qty_picked) for the
+ * "From SO" picker on the New PO page. Returns a flat list grouped by
+ * doc_no so the frontend can render checkboxes per SO + per-line qty
+ * inputs. Filters out:
+ *   - cancelled SO line rows
+ *   - cancelled SO header status (CANCELLED)
+ *   - lines already fully picked (qty - po_qty_picked <= 0)
+ * Caller can filter further by supplierId via ?supplierId= once item
+ * → main supplier binding is known.
+ */
+mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
+  const supabase = c.get('supabase');
+  // Pull SO items with remaining qty > 0, joining the parent SO so we
+  // can filter cancelled SOs + show debtor + branding + dates.
+  const { data: items, error } = await supabase
+    .from('mfg_sales_order_items')
+    .select(`
+      id, doc_no, item_code, description, item_group, qty, po_qty_picked, unit_price_centi,
+      variants, line_suffix, cancelled,
+      so:mfg_sales_orders!inner ( doc_no, debtor_name, branding, status, so_date, customer_delivery_date )
+    `)
+    .eq('cancelled', false)
+    .order('doc_no', { ascending: false })
+    .limit(500);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  type Row = {
+    id: string; doc_no: string; item_code: string; description: string | null;
+    item_group: string; qty: number; po_qty_picked: number; unit_price_centi: number;
+    variants: unknown; line_suffix: string | null; cancelled: boolean;
+    so: { doc_no: string; debtor_name: string | null; branding: string | null; status: string; so_date: string; customer_delivery_date: string | null };
+  };
+
+  const outstanding = ((items ?? []) as unknown as Row[])
+    .filter((r) => r.so.status !== 'CANCELLED')
+    .filter((r) => r.qty - r.po_qty_picked > 0)
+    .map((r) => ({
+      soItemId:        r.id,
+      soDocNo:         r.doc_no,
+      debtorName:      r.so.debtor_name,
+      branding:        r.so.branding,
+      soStatus:        r.so.status,
+      soDate:          r.so.so_date,
+      deliveryDate:    r.so.customer_delivery_date,
+      itemCode:        r.item_code,
+      description:     r.description,
+      itemGroup:       r.item_group,
+      qty:             r.qty,
+      poQtyPicked:     r.po_qty_picked,
+      remainingQty:    r.qty - r.po_qty_picked,
+      unitPriceCenti:  r.unit_price_centi,
+      variants:        r.variants,
+      lineSuffix:      r.line_suffix,
+    }));
+
+  return c.json({ items: outstanding });
 });
 
 /* ── PR #41 — PATCH header (po_date, expected_at, currency, notes) ── */

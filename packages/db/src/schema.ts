@@ -1169,6 +1169,11 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
   lineSuffix:        text('line_suffix'),                    // '-01', '-02' for sofa modules
   specialOrderPriceSen: integer('special_order_price_sen').notNull().default(0),
 
+  // PR — Commander 2026-05-26: SO → PO multi-select + partial proceed.
+  // Tracks how much of this line has already been emitted to one or
+  // more POs (cumulative). Remaining convertible = qty - po_qty_picked.
+  poQtyPicked:       integer('po_qty_picked').notNull().default(0),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),

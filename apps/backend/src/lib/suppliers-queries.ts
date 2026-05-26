@@ -399,6 +399,55 @@ export type NewPoItem = {
   warehouseId?: string | null;
 };
 
+/** PR — Phase 1: outstanding SO items for the "From SO" picker.
+    Returns SO lines where qty - po_qty_picked > 0 (i.e. still convertible). */
+export type OutstandingSoItem = {
+  soItemId:       string;
+  soDocNo:        string;
+  debtorName:     string | null;
+  branding:       string | null;
+  soStatus:       string;
+  soDate:         string;
+  deliveryDate:   string | null;
+  itemCode:       string;
+  description:    string | null;
+  itemGroup:      string;
+  qty:            number;
+  poQtyPicked:    number;
+  remainingQty:   number;
+  unitPriceCenti: number;
+  variants:       unknown;
+  lineSuffix:     string | null;
+};
+
+export function useOutstandingSoItems() {
+  return useQuery({
+    queryKey: ['mfg-purchase-orders', 'outstanding-so-items'],
+    queryFn: () => authedFetch<{ items: OutstandingSoItem[] }>(
+      `/mfg-purchase-orders/outstanding-so-items`,
+    ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** PR — Phase 1: create POs (one per supplier) from multi-selected SO
+    items with partial qty. Increments po_qty_picked on success. */
+export function useCreatePosFromSoItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (picks: Array<{ soItemId: string; qty: number }>) =>
+      authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
+        `/mfg-purchase-orders/from-sos`,
+        { method: 'POST', body: JSON.stringify({ picks }) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+    },
+  });
+}
+
 /** PR #78 — Convert a Sales Order's items into the current PO. Returns the
     server's { copied, skipped } counts so the UI can toast. */
 export function useConvertPoFromSo() {
