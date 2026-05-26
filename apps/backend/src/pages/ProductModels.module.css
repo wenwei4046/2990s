@@ -145,8 +145,11 @@
    dark), and clicking required hitting the code chip or name link.
    Whole row is now clickable; text uses one uniform tone, code chip
    keeps its pill styling but stops carrying a separate <a> color. */
+/* PR #110 — Commander 2026-05-26: row-level click was triggering
+   accidental jumps. Reverted to chip-only as the click target. .row class
+   is left only so per-row hover hint can still flag where the chip lives,
+   without making the whole row clickable. */
 .row {
-  cursor: pointer;
   transition: background 100ms ease-out;
 }
 .row:hover {
@@ -161,6 +164,15 @@
   border: 1px solid var(--line);
   color: var(--c-ink);
   display: inline-block;
+}
+.codeChipLink {
+  text-decoration: none;
+  display: inline-block;
+}
+.codeChipLink:hover .codeChip {
+  border-color: var(--c-orange);
+  color: var(--c-orange);
+  background: var(--c-paper);
 }
 .nameText {
   font-family: var(--font-sans);

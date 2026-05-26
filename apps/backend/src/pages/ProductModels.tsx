@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link } from 'react-router';
 import { Layers, Search, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -26,7 +26,6 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const CATEGORIES: MfgCategory[] = ['SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE'];
 
 export const ProductModels = () => {
-  const navigate = useNavigate();
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
@@ -189,14 +188,14 @@ export const ProductModels = () => {
             </thead>
             <tbody>
               {rows.map((m) => (
-                // PR #108 — whole row navigates. Checkbox cell uses
-                // stopPropagation so ticking doesn't drill in.
-                <tr
-                  key={m.id}
-                  className={styles.row}
-                  onClick={() => navigate(`/product-models/${m.id}`)}
-                >
-                  <td onClick={(e) => e.stopPropagation()}>
+                // PR #110 — Commander 2026-05-26: PR #108's whole-row click
+                // was triggering accidental jumps when commander scrolled
+                // past or hovered near a row. Reverted to "code chip is
+                // the only click target". Row stays non-interactive; the
+                // chip is a Link (gets proper cursor + middle-click /
+                // cmd-click open in new tab).
+                <tr key={m.id}>
+                  <td>
                     <input
                       type="checkbox"
                       aria-label={`Select ${m.model_code}`}
@@ -209,7 +208,9 @@ export const ProductModels = () => {
                     />
                   </td>
                   <td>
-                    <code className={styles.codeChip}>{m.model_code}</code>
+                    <Link to={`/product-models/${m.id}`} className={styles.codeChipLink}>
+                      <code className={styles.codeChip}>{m.model_code}</code>
+                    </Link>
                   </td>
                   <td className={styles.nameText}>
                     {m.name}
