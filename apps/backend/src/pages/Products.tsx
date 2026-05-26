@@ -91,7 +91,7 @@ export const Products = () => {
               className={styles.tabSwitchBtn}
               onClick={() => setTopTab('maintenance')}
             >
-              Model Maintenance
+              Maintenance
             </button>
           </div>
         </div>
@@ -703,52 +703,51 @@ const CategoryChip = ({
    ════════════════════════════════════════════════════════════════════════ */
 
 type MaintenanceListKey =
-  | 'bedframeFormat'   // PR #72 — Bedframe code + name template
   | 'bedframeSizes'    // PR #50 — Bedframe size pool (K/Q/S/SS/SK/SP)
   | 'divanHeights'
   | 'totalHeights'
   | 'gaps'
   | 'legHeights'
   | 'specials'
-  | 'sofaFormat'       // PR #72 — Sofa code + name template
-  | 'sofaCompartments' // PR #50 — Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, ...)
+  | 'sofaCompartments' // PR #50 — Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, ...)
   | 'sofaSizes'
   | 'sofaLegHeights'
   | 'sofaSpecials'
-  | 'mattressFormat'   // PR #72 — Mattress code + name template
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics';
+
+type MaintenanceSection = 'Bedframe' | 'Sofa' | 'Common' | 'Products Maintenance';
 
 const MAINTENANCE_TABS: {
   key: MaintenanceListKey;
   label: string;
   description: string;
   priced: boolean;
-  section: 'Bedframe' | 'Sofa' | 'Mattress' | 'Common';
+  section: MaintenanceSection;
 }[] = [
-  // PR #72 — Code Format sits at the top of each section so commander
-  // sees the SKU template before drilling into the pool sub-tabs.
-  { key: 'bedframeFormat', label: 'Code Format', description: 'Bedframe SKU code + name template. Uses placeholders like {model_code}, {size}, {size_label}, {dimensions}, {branding}.', priced: false, section: 'Bedframe' },
-  // PR #50 — Bedframe Sizes pool drives Model.allowed_options + "+ Add Code"
-  { key: 'bedframeSizes', label: 'Sizes', description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, etc.)', priced: false, section: 'Bedframe' },
+  // ── Bedframe (commander-edited variant pools) ───────────────────────────
   { key: 'divanHeights', label: 'Divan Heights', description: 'Bedframe divan height options with surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'totalHeights', label: 'Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
   { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'specials', label: 'Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe' },
-  // PR #72 — Sofa code/name template.
-  { key: 'sofaFormat', label: 'Code Format', description: 'Sofa SKU code + name template. Uses placeholders like {model_code}, {compartment}, {model_name}, {branding}.', priced: false, section: 'Sofa' },
-  // PR #50 — Sofa Compartments pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...) is the
-  // master list the Model.allowed_options ticks against.
-  { key: 'sofaCompartments', label: 'Compartments', description: 'Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...). Models tick which they offer.', priced: false, section: 'Sofa' },
+
+  // ── Sofa (commander-edited variant pools) ───────────────────────────────
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
   { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
-  // PR #72 — Mattress code/name template.
-  { key: 'mattressFormat', label: 'Code Format', description: 'Mattress SKU code + name template. Uses placeholders like {model_code}, {size}, {model_name}, {width}, {length}, {thickness}, {branding}.', priced: false, section: 'Mattress' },
-  // PR #50 — Mattress Sizes pool.
-  { key: 'mattressSizes', label: 'Sizes', description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Mattress' },
+
+  // ── Common (cross-category single pool) ─────────────────────────────────
   { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
+
+  // ── Products Maintenance (cross-category, drives Model "+ Add Codes") ──
+  // PR #74 (Commander 2026-05-26): bedframeSizes / mattressSizes / sofaCompartments
+  // live here because they're shared by multiple Models and back the bulk
+  // SKU generator — they're conceptually "Products Maintenance" rather than
+  // per-category variant config.
+  { key: 'bedframeSizes',    label: 'Bedframe Sizes',    description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, SK, SP).', priced: false, section: 'Products Maintenance' },
+  { key: 'mattressSizes',    label: 'Mattress Sizes',    description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Products Maintenance' },
+  { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
 ];
 
 const MaintenanceTab = () => {
@@ -769,9 +768,12 @@ const MaintenanceTab = () => {
   const config = draft ?? resolved.data?.data ?? null;
   const active = MAINTENANCE_TABS.find((t) => t.key === activeKey)!;
 
-  // PR #71 — Commander 2026-05-26 reordered to Bedframe → Mattress → Sofa,
-  // Common (Fabrics) at the bottom.
-  const sections = ['Bedframe', 'Mattress', 'Sofa', 'Common'] as const;
+  // PR #74 — Commander 2026-05-26: drop the Mattress section (no
+  // commander-edited pools live there anymore — Mattress Sizes moved into
+  // Products Maintenance below). Order: per-category variant pools first,
+  // Common (Fabrics), Products Maintenance (cross-category pools driving
+  // the bulk SKU generator) last.
+  const sections: MaintenanceSection[] = ['Bedframe', 'Sofa', 'Common', 'Products Maintenance'];
 
   const startEdit = () => {
     if (!resolved.data?.data) return;
@@ -913,18 +915,11 @@ const MaintenanceTab = () => {
 
 const countItems = (cfg: MaintenanceConfig, key: MaintenanceListKey): number => {
   if (key === 'fabrics') return 0; // populated from fabric_trackings, not the JSON blob
-  // PR #72 — Code Format sub-tabs are scalar text fields, not arrays. Show
-  // 1 when at least one of the (code, name) templates is non-empty so the
-  // nav-rail count badge reflects "configured" vs "default".
-  if (key === 'bedframeFormat') {
-    return ((cfg.bedframeCodeFormat?.trim() ? 1 : 0) + (cfg.bedframeNameFormat?.trim() ? 1 : 0));
-  }
-  if (key === 'sofaFormat') {
-    return ((cfg.sofaCodeFormat?.trim() ? 1 : 0) + (cfg.sofaNameFormat?.trim() ? 1 : 0));
-  }
-  if (key === 'mattressFormat') {
-    return ((cfg.mattressCodeFormat?.trim() ? 1 : 0) + (cfg.mattressNameFormat?.trim() ? 1 : 0));
-  }
+  // PR #74 — Code Format tabs removed (Commander 2026-05-26: preset only,
+  // not commander-editable). The cfg.{category}CodeFormat / NameFormat
+  // columns still exist on the JSONB blob but no longer surface in the UI;
+  // the API falls back to its hardcoded templates when those fields are
+  // empty (see apps/api/src/routes/product-models.ts §generate).
   const v = cfg[key as keyof MaintenanceConfig];
   return Array.isArray(v) ? v.length : 0;
 };
@@ -951,18 +946,10 @@ const MaintenanceList = ({
     return <FabricsMaintenancePanel />;
   }
 
-  // PR #72 — Code format sub-tab. Edits the per-category code + name
-  // templates that the SKU generator uses (with hardcoded fallback).
-  if (listKey === 'bedframeFormat' || listKey === 'sofaFormat' || listKey === 'mattressFormat') {
-    return (
-      <CodeFormatPanel
-        listKey={listKey}
-        config={config}
-        editMode={editMode}
-        onChange={onChange}
-      />
-    );
-  }
+  // PR #74 — Code Format tab removed (Commander 2026-05-26: preset only).
+  // The CodeFormatPanel component is kept in the file dead-code below in
+  // case we ever want to re-expose it; the API's hardcoded templates take
+  // over when the cfg.{category}CodeFormat / NameFormat fields are blank.
 
   // ── String[] tabs (gaps, sofaSizes, + PR #50 pool keys) ──────────────
   // Defaulting to [] avoids the "Cannot read properties of undefined
@@ -1269,11 +1256,13 @@ const MaintenanceList = ({
    ════════════════════════════════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════════════════════════════
-   PR #72 — Per-category code/name format editor.
-   Two text inputs (code template + name template). Live preview substitutes
-   sample values so commander sees what generate-skus will write. Read by
-   the API from maintenance_config; falls back to built-in defaults when
-   blank so existing Models keep working through the switch.
+   PR #72 — Per-category code/name format editor (DEAD CODE as of PR #74).
+   Commander 2026-05-26: revert to preset-only templates — the hardcoded
+   ones in apps/api/src/routes/product-models.ts §generate are the source
+   of truth. UI editor below kept as dead code in case we re-expose it;
+   sidebar no longer routes to it (see MaintenanceList). The
+   {category}CodeFormat / NameFormat columns on the JSONB blob are now
+   always read as blank → API template fallback kicks in.
    ════════════════════════════════════════════════════════════════════════ */
 
 type CodeFormatKey = 'bedframeFormat' | 'sofaFormat' | 'mattressFormat';
