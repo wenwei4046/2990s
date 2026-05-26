@@ -209,3 +209,121 @@
   padding: 1px 6px;
   border-radius: 4px;
 }
+
+/* ─── + Add codes modal ───────────────────────────────────────────────── */
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: var(--space-4);
+}
+.modal {
+  background: var(--c-cream);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-3);
+  width: min(640px, 100%);
+  max-height: 90vh;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.modalHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modalTitle {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-17);
+  font-weight: 600;
+}
+.modalSub {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  color: var(--fg-muted);
+}
+.modalClose {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-muted);
+  padding: 4px;
+}
+.modalClose:hover { color: var(--fg); }
+.modalEmpty {
+  padding: var(--space-5);
+  text-align: center;
+  background: var(--bg);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+}
+.modalList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 4px;
+}
+.modalRow {
+  display: grid;
+  grid-template-columns: 24px max-content 1fr auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+}
+.modalRow:hover { border-color: var(--c-orange); }
+.modalRowExisting {
+  opacity: 0.55;
+  background: var(--c-cream);
+  cursor: not-allowed;
+}
+.modalRowExisting:hover { border-color: var(--line); }
+.modalCode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  background: var(--c-paper);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.modalName {
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  color: var(--fg);
+}
+.modalExistsPill {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(150, 150, 150, 0.12);
+  color: var(--fg-muted);
+  letter-spacing: 0.04em;
+}
+.modalFoot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
+}
+.modalCount {
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+}

@@ -144,20 +144,21 @@ export function useUpdateProductModel() {
   });
 }
 
-/** PR #49 — "Open a code, don't open it 20 times" bulk-generate. Reads the
-    Model's allowed_options and inserts one mfg_products row per combination.
-    Returns counts so the UI can toast "Generated 4, skipped 1". */
+/** PR #49 / #51 — "Open a code, don't open it 20 times" generator. Reads the
+    Model's allowed_options and INSERTs one mfg_products row per combination.
+    When `codes` is omitted, generates ALL combos. When provided, generates only
+    the listed codes (the "+ Add Code" tick-picker workflow). */
 export function useGenerateModelSkus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async (args: { id: string; codes?: string[] }) => {
       return authedFetch<{ generated: number; skipped: number; codes: string[] }>(
-        `/product-models/${id}/generate-skus`,
-        { method: 'POST', body: JSON.stringify({}) },
+        `/product-models/${args.id}/generate-skus`,
+        { method: 'POST', body: JSON.stringify({ codes: args.codes ?? null }) },
       );
     },
-    onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['product-models', id] });
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['product-models', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
     },
   });

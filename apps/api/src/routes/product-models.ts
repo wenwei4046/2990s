@@ -184,6 +184,17 @@ productModels.post('/:id/generate-skus', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
 
+  // PR #51 — body: { codes?: string[] }. When present, only insert rows for
+  // these specific codes (lets the UI ship "tick the ones you want" without
+  // a new endpoint). When absent, materialize ALL allowed-option combos.
+  let body: { codes?: string[] } = {};
+  try {
+    body = (await c.req.json().catch(() => ({}))) as { codes?: string[] };
+  } catch { /* allow empty body */ }
+  const filterCodes = Array.isArray(body.codes) && body.codes.length > 0
+    ? new Set(body.codes)
+    : null;
+
   const { data: model, error: mErr } = await supabase
     .from('product_models')
     .select('id, model_code, name, category, allowed_options')
@@ -229,15 +240,22 @@ productModels.post('/:id/generate-skus', async (c) => {
     return c.json({ error: 'unsupported_category', reason: `Auto-generate not supported for ${model.category}.` }, 400);
   }
 
+  // If the caller filtered to specific codes, narrow `wanted` to just those.
+  // Unknown codes (not in the allowed-option cartesian product) are silently
+  // dropped — protects against the client sending stale codes after the
+  // allowed_options were edited.
+  const wantedFiltered = filterCodes
+    ? wanted.filter((w) => filterCodes.has(w.code))
+    : wanted;
+
   // Find which codes already exist so we can report skip count.
-  const codes = wanted.map((w) => w.code);
-  const { data: existing } = await supabase
-    .from('mfg_products')
-    .select('code')
-    .in('code', codes);
+  const codes = wantedFiltered.map((w) => w.code);
+  const { data: existing } = codes.length
+    ? await supabase.from('mfg_products').select('code').in('code', codes)
+    : { data: [] as Array<{ code: string }> };
   const existingSet = new Set((existing ?? []).map((r) => r.code as string));
 
-  const toInsert = wanted.filter((w) => !existingSet.has(w.code));
+  const toInsert = wantedFiltered.filter((w) => !existingSet.has(w.code));
   if (toInsert.length === 0) {
     return c.json({
       generated: 0,

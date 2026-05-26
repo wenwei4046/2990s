@@ -18,13 +18,13 @@
 // allowed_options to bulk-INSERT mfg_products rows.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Layers, Save, Trash2, Wand2 } from 'lucide-react';
+import { ArrowLeft, Layers, Save, Trash2, Wand2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useProductModel, useUpdateProductModel, useDeleteProductModel, useGenerateModelSkus,
-  type AllowedOptions,
+  type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig } from '../lib/mfg-products-queries';
 import styles from './ProductModelDetail.module.css';
@@ -56,6 +56,7 @@ export const ProductModelDetail = () => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [allowed, setAllowed] = useState<AllowedOptions>({});
+  const [addCodesOpen, setAddCodesOpen] = useState(false);
 
   // Sync local form when server row arrives or refetches.
   useEffect(() => {
@@ -225,27 +226,9 @@ export const ProductModelDetail = () => {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              if (!id) return;
-              if (!window.confirm(
-                'Bulk-generate SKU variants from the allowed options above? '
-                + 'Existing codes are skipped — no duplicates created.',
-              )) return;
-              generateMut.mutate(id, {
-                onSuccess: (res) => {
-                  window.alert(
-                    `Generated ${res.generated} new variant${res.generated === 1 ? '' : 's'}. `
-                    + `Skipped ${res.skipped} (already existed).`,
-                  );
-                },
-                onError: (err) => {
-                  window.alert(`Generate failed: ${err instanceof Error ? err.message : err}`);
-                },
-              });
-            }}
-            disabled={generateMut.isPending}
+            onClick={() => setAddCodesOpen(true)}
           >
-            <Wand2 {...ICON} /> {generateMut.isPending ? 'Generating…' : 'Generate variants'}
+            <Wand2 {...ICON} /> Add codes…
           </Button>
         </div>
         <p className={styles.cardSub}>
@@ -256,7 +239,7 @@ export const ProductModelDetail = () => {
         {data.skus.length === 0 ? (
           <p className={styles.cardSub}>
             No SKUs under this Model yet. Toggle some allowed options above, save,
-            then click "Generate variants".
+            then click "Add codes…" to materialise the variants you want.
           </p>
         ) : (
           <table className={styles.skuTable}>
@@ -289,9 +272,179 @@ export const ProductModelDetail = () => {
           </table>
         )}
       </section>
+      {/* + Add codes picker modal ------------------------------------- */}
+      {addCodesOpen && id && (
+        <AddCodesModal
+          modelId={id}
+          modelCode={model.model_code}
+          modelName={model.name}
+          category={model.category}
+          allowed={allowed}
+          existingCodes={data.skus.map((s) => s.code)}
+          onClose={() => setAddCodesOpen(false)}
+        />
+      )}
     </div>
   );
 };
+
+/* ────────────────────────── + Add codes picker modal ───────────────────────
+   Lists every combination that comes out of the Model's allowed_options as
+   a checkbox row. Codes that already exist on mfg_products are pre-disabled
+   so commander can see what's there and can't double-insert.
+   ────────────────────────────────────────────────────────────────────────── */
+
+const BED_SIZE_LABELS: Record<string, string> = {
+  K:  '6FT',
+  Q:  '5FT',
+  S:  '3FT',
+  SS: '3.5FT',
+  SK: '200X200CM',
+  SP: 'CUSTOM',
+};
+
+function computeCandidates(
+  category: string,
+  modelCode: string,
+  modelName: string,
+  allowed: AOpts,
+): Array<{ code: string; name: string }> {
+  if (category === 'SOFA') {
+    return (allowed.compartments ?? []).map((comp) => ({
+      code: `${modelCode}-${comp}`,
+      name: `SOFA ${modelCode} ${comp}`,
+    }));
+  }
+  if (category === 'BEDFRAME' || category === 'MATTRESS') {
+    return (allowed.sizes ?? []).map((sz) => ({
+      code: `${modelCode}-(${sz})`,
+      name: `${modelName} (${BED_SIZE_LABELS[sz] ?? sz})`,
+    }));
+  }
+  return [];
+}
+
+function AddCodesModal({
+  modelId, modelCode, modelName, category, allowed, existingCodes, onClose,
+}: {
+  modelId: string;
+  modelCode: string;
+  modelName: string;
+  category: string;
+  allowed: AOpts;
+  existingCodes: string[];
+  onClose: () => void;
+}) {
+  const generateMut = useGenerateModelSkus();
+  const existingSet = useMemo(() => new Set(existingCodes), [existingCodes]);
+  const candidates = useMemo(
+    () => computeCandidates(category, modelCode, modelName, allowed),
+    [category, modelCode, modelName, allowed],
+  );
+  // Default: tick every NEW code (existing ones can't be ticked anyway).
+  const [picked, setPicked] = useState<Set<string>>(
+    () => new Set(candidates.filter((c) => !existingSet.has(c.code)).map((c) => c.code)),
+  );
+
+  const togglePick = (code: string) => {
+    setPicked((prev) => {
+      const n = new Set(prev);
+      if (n.has(code)) n.delete(code);
+      else n.add(code);
+      return n;
+    });
+  };
+
+  const newCount = candidates.filter((c) => !existingSet.has(c.code)).length;
+  const existingCount = candidates.length - newCount;
+
+  const submit = () => {
+    if (picked.size === 0) {
+      window.alert('Pick at least one code to add.');
+      return;
+    }
+    generateMut.mutate(
+      { id: modelId, codes: Array.from(picked) },
+      {
+        onSuccess: (res) => {
+          window.alert(
+            `Added ${res.generated} code${res.generated === 1 ? '' : 's'}.`
+            + (res.skipped > 0 ? ` Skipped ${res.skipped} (already existed).` : ''),
+          );
+          onClose();
+        },
+        onError: (err) => {
+          window.alert(`Add failed: ${err instanceof Error ? err.message : err}`);
+        },
+      },
+    );
+  };
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <header className={styles.modalHead}>
+          <h2 className={styles.modalTitle}>Add codes to {modelCode}</h2>
+          <button type="button" className={styles.modalClose} onClick={onClose} aria-label="Close">
+            <X {...ICON} />
+          </button>
+        </header>
+        <p className={styles.modalSub}>
+          Tick which variants to materialise. Existing codes are greyed out — they
+          stay as-is. Each new code becomes a separate SKU row with its own stock,
+          cost, and pricing.
+        </p>
+
+        {candidates.length === 0 ? (
+          <div className={styles.modalEmpty}>
+            No allowed options set yet. Toggle some Compartments / Sizes above,
+            click Save changes, then come back here.
+          </div>
+        ) : (
+          <div className={styles.modalList}>
+            {candidates.map((cand) => {
+              const exists = existingSet.has(cand.code);
+              const ticked = picked.has(cand.code);
+              return (
+                <label
+                  key={cand.code}
+                  className={`${styles.modalRow} ${exists ? styles.modalRowExisting : ''}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={exists || ticked}
+                    disabled={exists}
+                    onChange={() => togglePick(cand.code)}
+                  />
+                  <code className={styles.modalCode}>{cand.code}</code>
+                  <span className={styles.modalName}>{cand.name}</span>
+                  {exists && <span className={styles.modalExistsPill}>EXISTS</span>}
+                </label>
+              );
+            })}
+          </div>
+        )}
+
+        <footer className={styles.modalFoot}>
+          <span className={styles.modalCount}>
+            {existingCount} existing · {newCount} new · {picked.size} ticked
+          </span>
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={submit}
+              disabled={generateMut.isPending || picked.size === 0}
+            >
+              {generateMut.isPending ? 'Adding…' : `Add ${picked.size} code${picked.size === 1 ? '' : 's'}`}
+            </Button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
 
 /* ────────────────────────── Per-category allowed-option panels ────── */
 
