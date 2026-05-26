@@ -71,3 +71,25 @@ export const BUILDING_TYPES = [
   'Other',
 ] as const;
 export type BuildingType = typeof BUILDING_TYPES[number];
+
+/* PR #47 — Country dropdown options. Only Malaysia today; add more when
+   we onboard a supplier from another country. State list cascades from
+   country: Malaysia → my_localities, others → free-text fallback. */
+export const COUNTRIES = ['Malaysia'] as const;
+export type CountryName = typeof COUNTRIES[number];
+
+/* PR #47 — Payment term presets. "Custom" lets user enter free text. */
+export const PAYMENT_TERMS_OPTIONS = [
+  'COD',
+  'NET 7',
+  'NET 14',
+  'NET 30',
+  'NET 45',
+  'NET 60',
+  'NET 90',
+  '50/50',
+  '30/70',
+  'Advance Payment',
+  'Custom',
+] as const;
+export type PaymentTermOption = typeof PAYMENT_TERMS_OPTIONS[number];
