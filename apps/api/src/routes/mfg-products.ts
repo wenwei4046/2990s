@@ -219,6 +219,10 @@ mfgProducts.patch('/:id', async (c) => {
         detail "SKU variants" table to mark individual SKUs as no longer sold
         without having to delete the row (preserves stock + history). */
     status?: 'ACTIVE' | 'INACTIVE';
+    /* PR #89 (Commander 2026-05-26) — inline edit of SKU code + name from
+       SKU Master. Unique-constraint on code → 23505 surfaces as 409. */
+    code?: string;
+    name?: string;
   };
   try {
     body = (await c.req.json()) as typeof body;
@@ -270,6 +274,19 @@ mfgProducts.patch('/:id', async (c) => {
   if (body.status === 'ACTIVE' || body.status === 'INACTIVE') {
     updates.status = body.status;
   }
+  /* PR #89 — code + name inline edit from SKU Master. code is unique;
+     duplicate triggers 23505 below. Both trimmed; empty rejected to keep
+     the NOT NULL invariants on the schema. */
+  if (body.code !== undefined) {
+    const trimmed = typeof body.code === 'string' ? body.code.trim() : '';
+    if (!trimmed) return c.json({ error: 'code_required' }, 400);
+    updates.code = trimmed;
+  }
+  if (body.name !== undefined) {
+    const trimmed = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!trimmed) return c.json({ error: 'name_required' }, 400);
+    updates.name = trimmed;
+  }
   // Sofa tier matrix — diff per (height × tier) slot so the audit trail
   // captures each change instead of a single opaque blob write.
   if (Array.isArray(body.seatHeightPrices)) {
@@ -302,6 +319,11 @@ mfgProducts.patch('/:id', async (c) => {
   if (updErr) {
     if (updErr.code === '42501' || /permission denied/i.test(updErr.message)) {
       return c.json({ error: 'forbidden', reason: updErr.message }, 403);
+    }
+    if (updErr.code === '23505') {
+      // PR #89 — only the `code` column has a UNIQUE constraint that the
+      // inline editor can collide with, so safe to label it that way.
+      return c.json({ error: 'duplicate_code', reason: 'Another SKU already uses that code.' }, 409);
     }
     return c.json({ error: 'update_failed', reason: updErr.message }, 500);
   }

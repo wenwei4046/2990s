@@ -242,9 +242,12 @@ productModels.post('/:id/generate-skus', async (c) => {
   //             — branding prefix added in PR #83 to match FE
   //               DEFAULT_FORMATS.bedframeName + commander's expectation.
   //
-  //   MATTRESS  code:  {branding?}-NF {model_code} MATT ({size_code})
-  //                                                                 2990-NF AKKA-FIRM MATT (K)
-  //                                                                 HAPPI.S-NF PUREZONE MATT (K)
+  //   MATTRESS  code:  {branding?} {model_code} MATT ({size_code})
+  //                                                                 2990 AKKA-FIRM MATT (K)
+  //                                                                 HAPPI.S PUREZONE MATT (K)
+  //             — "-NF" suffix dropped in PR #88 (Commander 2026-05-26:
+  //               "NF 不需要"). Was 2990-specific legacy naming; not a
+  //               default convention for new brands.
   //             name:  {branding?} {model.name} MATTRESS ({w}x{l}x{thickness}CM)
   //                                                                 2990 AKKA-FIRM MATTRESS (183x190x31CM)
   //                                                                 Happi.S GridCool MATTRESS (183x190x25CM)
@@ -362,12 +365,12 @@ productModels.post('/:id/generate-skus', async (c) => {
         dimPart = label;
       }
       wanted.push({
-        // PR #86 (Commander 2026-05-26) — code also picks up the
-        // {branding}-NF prefix so it matches the 2990 sample
-        // ("2990-NF KETTA-FIRM MATT (K)") instead of the bare
-        // "PUREZONE MATT (K)" that commander screenshotted. Empty
-        // branding → prefix dropped (no leading "-NF ").
-        code:       `${branding ? branding + '-NF ' : ''}${model.model_code} MATT (${sz})`,
+        // PR #88 (Commander 2026-05-26: "NF 不需要") — drop the "-NF"
+        // suffix. PR #86 added it to match 2990 legacy "2990-NF
+        // KETTA-FIRM MATT (K)", but commander now wants plain
+        // "{branding} {model_code} MATT (size)" so other brands don't
+        // inherit 2990's idiosyncratic suffix.
+        code:       `${branding ? branding + ' ' : ''}${model.model_code} MATT (${sz})`,
         // "2990 AKKA-FIRM MATTRESS (183x190x31CM)" — branding prefix +
         // MATTRESS word inserted to match 2990 sample (PR #81).
         name:       `${prefix}${modelName} MATTRESS (${dimPart})`.trim(),

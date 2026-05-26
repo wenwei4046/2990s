@@ -505,13 +505,13 @@ const DEFAULT_FORMATS = {
   // produced "ADDA 1A(LHF)" (no "SOFA" word). Now inserts "SOFA" literal
   // + optional branding prefix. Mirrors API §SOFA branch.
   sofaName:     '{branding} SOFA {model_name} {compartment}',
-  // PR #86 — Match 2990 sample. Was '{model_code} MATT ({size})' which
-  // produced bare "PUREZONE MATT (K)". Now prepends {branding_nf} — a
-  // derived var that's "{branding}-NF " when branding present, "" when
-  // empty — so a Mattress Model with branding="HAPPI.S" generates
-  // "HAPPI.S-NF PUREZONE MATT (K)" and one with branding="" still gets
-  // a clean "PUREZONE MATT (K)" (no orphan "-NF ").
-  mattressCode: '{branding_nf}{model_code} MATT ({size})',
+  // PR #88 — Drop the "-NF" suffix per Commander ("NF 不需要"). Was
+  // '{branding_nf}{model_code} MATT ({size})' producing "HAPPI.S-NF
+  // PUREZONE MATT (K)"; now just prepends "{branding} " for a plain
+  // "HAPPI.S PUREZONE MATT (K)". applyFormat trims the leading space
+  // when branding is blank so the empty-branding case still produces
+  // a clean "{model_code} MATT (size)".
+  mattressCode: '{branding} {model_code} MATT ({size})',
   // PR #81 — Match 2990 sample. Was '{model_name} ({width}x...)' which
   // produced "GridCool (183x190x25CM)"; now produces
   // "Happi.S GridCool MATTRESS (183x190x25CM)". applyFormat() handles the

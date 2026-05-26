@@ -586,9 +586,27 @@ const ProductRow = ({
           style={{ cursor: 'pointer' }}
         />
       </td>
-      <td><span className={styles.codeChip}>{row.code}</span></td>
-      <td>
-        <div className={styles.nameCompact}>{row.name}</div>
+      {/* PR #89 — click code chip to edit. Stops row double-click handler
+          from firing on the cell. */}
+      <td onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+        <EditableTextCell
+          value={row.code}
+          chipClassName={styles.codeChip}
+          ariaLabel="Edit product code"
+          onSave={(val) => update.mutate({ id: row.id, code: val })}
+        />
+      </td>
+      {/* PR #89 — click description to edit. Description stored in the
+          `name` column on mfg_products (commander calls it "description"
+          in the UI). */}
+      <td onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+        <EditableTextCell
+          value={row.name}
+          chipClassName={styles.nameCompact}
+          inline
+          ariaLabel="Edit description"
+          onSave={(val) => update.mutate({ id: row.id, name: val })}
+        />
         {row.description && <div className={styles.nameSubCompact}>{row.description}</div>}
       </td>
       {isSofaView ? (
@@ -2008,3 +2026,90 @@ const ImportSkusDialog = ({ onClose }: { onClose: () => void }) => (
     </div>
   </div>
 );
+
+/* ════════════════════════════════════════════════════════════════════════
+   PR #89 — Click-to-edit cell for SKU Master code + name columns.
+   Same UX as Fabric Converter DescriptionCell: chip → click → input,
+   Enter / blur saves, Esc cancels. inline=true uses regular text styling
+   (no chip pill); inline=false uses chipClassName for the resting state.
+   ════════════════════════════════════════════════════════════════════════ */
+const EditableTextCell = ({
+  value, chipClassName, ariaLabel, onSave, inline = false,
+}: {
+  value:          string;
+  /** CSS-module class — typed loose so `styles.foo` (which TS treats as
+      `string | undefined`) flows in without callers having to coalesce.
+      PR #87 merge fix: PR #89 landed with this typed `string` which broke
+      the build under `tsc -b --noEmit`. */
+  chipClassName:  string | undefined;
+  ariaLabel:      string;
+  onSave:         (val: string) => void;
+  inline?:        boolean;
+}) => {
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState(value);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === value.trim()) {
+      setEditing(false);
+      setDraft(value);
+      return;
+    }
+    onSave(trimmed);
+    setEditing(false);
+  };
+  const cancel = () => { setDraft(value); setEditing(false); };
+
+  if (!editing) {
+    return inline ? (
+      <div
+        role="button"
+        tabIndex={0}
+        className={chipClassName}
+        title="Click to edit"
+        onClick={() => { setDraft(value); setEditing(true); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDraft(value); setEditing(true); } }}
+        style={{ cursor: 'pointer' }}
+      >
+        {value}
+      </div>
+    ) : (
+      <button
+        type="button"
+        className={chipClassName}
+        title="Click to edit"
+        aria-label={ariaLabel}
+        onClick={() => { setDraft(value); setEditing(true); }}
+        style={{ cursor: 'pointer' }}
+      >
+        {value}
+      </button>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter')      { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      }}
+      style={{
+        fontFamily: inline ? 'var(--font-sans)' : 'var(--font-mono)',
+        fontSize:   'var(--fs-13)',
+        fontWeight: 600,
+        padding:    '4px 8px',
+        border:     '1px solid var(--c-orange)',
+        borderRadius: 'var(--radius-sm)',
+        background: 'var(--c-cream)',
+        outline:    'none',
+        width:      '100%',
+        maxWidth:   320,
+      }}
+    />
+  );
+};

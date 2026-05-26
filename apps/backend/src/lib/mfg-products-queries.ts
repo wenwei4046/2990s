@@ -175,6 +175,10 @@ export function useUpdateMfgProductPrices() {
       pieces?: { count: number; names: string[] } | null;
       defaultVariants?: Record<string, unknown>;
       notes?: string;
+      /* PR #89 — SKU Master inline edit. Shared with the price PATCH
+         endpoint since they all hit /mfg-products/:id. */
+      code?: string;
+      name?: string;
     }) => {
       const { id, ...body } = args;
       return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
