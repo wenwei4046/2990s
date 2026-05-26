@@ -904,13 +904,25 @@ const MaintenanceList = ({
     return <FabricsMaintenancePanel />;
   }
 
-  // ── String[] tabs (gaps, sofaSizes) ───────────────────────────────────
-  if (listKey === 'gaps' || listKey === 'sofaSizes') {
-    const items = config[listKey] as string[];
+  // ── String[] tabs (gaps, sofaSizes, + PR #50 pool keys) ──────────────
+  // Defaulting to [] avoids the "Cannot read properties of undefined
+  // (reading 'map')" crash when an older maintenance_config row doesn't
+  // carry the new pool keys yet. Editing then saving will materialise the
+  // key in the JSONB blob.
+  if (
+    listKey === 'gaps'
+    || listKey === 'sofaSizes'
+    || listKey === 'bedframeSizes'
+    || listKey === 'sofaCompartments'
+    || listKey === 'mattressSizes'
+  ) {
+    const items = (config[listKey] as string[] | undefined) ?? [];
 
     const removeAt = (idx: number) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      (next[listKey] as string[]).splice(idx, 1);
+      const arr = (next[listKey] as string[] | undefined) ?? [];
+      arr.splice(idx, 1);
+      (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
     };
 
@@ -918,7 +930,11 @@ const MaintenanceList = ({
       const v = draftValue.trim();
       if (!v) return;
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      (next[listKey] as string[]).push(v);
+      // Same defaulting story — the new pool keys (PR #50) may not exist on
+      // old maintenance_config rows yet.
+      const arr = (next[listKey] as string[] | undefined) ?? [];
+      arr.push(v);
+      (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
       setDraftValue('');
     };
@@ -928,7 +944,9 @@ const MaintenanceList = ({
        inline edit — added below. */
     const updateAt = (idx: number, newVal: string) => {
       const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-      (next[listKey] as string[])[idx] = newVal;
+      const arr = (next[listKey] as string[] | undefined) ?? [];
+      arr[idx] = newVal;
+      (next as Record<string, unknown>)[listKey] = arr;
       onChange(next);
     };
 
@@ -1017,11 +1035,15 @@ const MaintenanceList = ({
   }
 
   // ── PricedOption[] tabs (the rest) ────────────────────────────────────
-  const items = config[listKey] as PricedOption[];
+  // Same defaulting as the string[] branch — old maintenance_config rows
+  // may not yet carry every key the UI now lists.
+  const items = (config[listKey] as PricedOption[] | undefined) ?? [];
 
   const removeAt = (idx: number) => {
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-    (next[listKey] as PricedOption[]).splice(idx, 1);
+    const arr = (next[listKey] as PricedOption[] | undefined) ?? [];
+    arr.splice(idx, 1);
+    (next as Record<string, unknown>)[listKey] = arr;
     onChange(next);
   };
 
@@ -1030,7 +1052,9 @@ const MaintenanceList = ({
     if (!v) return;
     const priceSen = Math.round((Number(draftPrice) || 0) * 100);
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-    (next[listKey] as PricedOption[]).push({ value: v, priceSen });
+    const arr = (next[listKey] as PricedOption[] | undefined) ?? [];
+    arr.push({ value: v, priceSen });
+    (next as Record<string, unknown>)[listKey] = arr;
     onChange(next);
     setDraftValue('');
     setDraftPrice('0.00');
