@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useNavigate } from 'react-router';
 import { Layers, Search, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -26,6 +26,7 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const CATEGORIES: MfgCategory[] = ['SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE'];
 
 export const ProductModels = () => {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
@@ -188,8 +189,14 @@ export const ProductModels = () => {
             </thead>
             <tbody>
               {rows.map((m) => (
-                <tr key={m.id}>
-                  <td>
+                // PR #108 — whole row navigates. Checkbox cell uses
+                // stopPropagation so ticking doesn't drill in.
+                <tr
+                  key={m.id}
+                  className={styles.row}
+                  onClick={() => navigate(`/product-models/${m.id}`)}
+                >
+                  <td onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       aria-label={`Select ${m.model_code}`}
@@ -199,18 +206,13 @@ export const ProductModels = () => {
                         if (n.has(m.id)) n.delete(m.id); else n.add(m.id);
                         return n;
                       })}
-                      onClick={(e) => e.stopPropagation()}
                     />
                   </td>
                   <td>
-                    <Link to={`/product-models/${m.id}`} className={styles.codeLink}>
-                      <code>{m.model_code}</code>
-                    </Link>
+                    <code className={styles.codeChip}>{m.model_code}</code>
                   </td>
-                  <td>
-                    <Link to={`/product-models/${m.id}`} className={styles.nameLink}>
-                      {m.name}
-                    </Link>
+                  <td className={styles.nameText}>
+                    {m.name}
                   </td>
                   <td>
                     <span className={`${styles.statusPill} ${m.active ? styles.active : styles.inactive}`}>

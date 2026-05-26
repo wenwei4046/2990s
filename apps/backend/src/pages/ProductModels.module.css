@@ -140,18 +140,33 @@
   color: var(--fg-muted);
   font-weight: 500;
 }
-.codeLink, .nameLink {
-  color: var(--fg);
-  text-decoration: none;
+/* PR #108 — Commander 2026-05-26: row text colour was inconsistent
+   (some Name cells showed the orange link/hover state, others stayed
+   dark), and clicking required hitting the code chip or name link.
+   Whole row is now clickable; text uses one uniform tone, code chip
+   keeps its pill styling but stops carrying a separate <a> color. */
+.row {
+  cursor: pointer;
+  transition: background 100ms ease-out;
 }
-.codeLink:hover, .nameLink:hover { color: var(--c-orange); }
-.codeLink code {
+.row:hover {
+  background: var(--c-cream);
+}
+.codeChip {
   font-family: var(--font-mono);
   font-size: var(--fs-12);
   background: var(--c-cream);
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
+  color: var(--c-ink);
+  display: inline-block;
+}
+.nameText {
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  font-weight: 500;
 }
 
 .statusPill {
