@@ -370,12 +370,37 @@ export function NewModelDialog({
           />
         ))}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: -4 }}>
-          <Button variant="ghost" size="sm" type="button" onClick={addRow}>
-            <Plus {...ICON} />
-            <span>Add another Model</span>
-          </Button>
-        </div>
+        {/* PR #91 — Commander 2026-05-26: "为什么我不能添加 Line 2、Line 3
+            这样子的？" The Add-row button existed but was an unstyled ghost
+            tucked under the last card. Promoted to a dashed full-width tile
+            so it reads as "add another row" the way a spreadsheet does. */}
+        <button
+          type="button"
+          onClick={addRow}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            width: '100%',
+            padding: '10px 12px',
+            marginTop: 4,
+            border: '1px dashed var(--c-orange)',
+            borderRadius: 'var(--radius-md)',
+            background: 'transparent',
+            color: 'var(--c-orange)',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-13)',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'background 120ms ease',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(213,90,40,0.06)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+        >
+          <Plus {...ICON} />
+          <span>Add Model {rows.length + 1}</span>
+        </button>
 
         {/* Shared sizes / compartments — applied to every row in the batch. */}
         {(category === 'MATTRESS' || category === 'BEDFRAME') && (
@@ -558,14 +583,15 @@ function InlineAllowedOptions({
   }
   const allOn  = picked.size === options.length;
   const allOff = picked.size === 0;
+  // PR #91 — Commander 2026-05-26: "Size apply to all 那个地方可以做小一
+  // 点啊". Collapsed label + hint + All/None onto a single line so the
+  // "Sizes (apply to all 1 row)" header doesn't eat three rows of vertical
+  // space above the chip pills.
   return (
-    <div className={styles.field}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="t-eyebrow">{label}</span>
-        {/* PR #87 — All / None bulk-toggle. Sits inline with the label so
-            commander can flip every chip without reaching for each one
-            individually (e.g. "5 sizes, 15 compartments" in a fresh SOFA
-            Model). */}
+    <div className={styles.field} style={{ gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span className="t-eyebrow" style={{ marginRight: 4 }}>{label}</span>
+        <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>· {hint}</span>
         {onSetAll && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
             <button
@@ -577,7 +603,7 @@ function InlineAllowedOptions({
                 fontSize: 'var(--fs-11)',
                 letterSpacing: '0.04em',
                 textTransform: 'uppercase',
-                padding: '2px 8px',
+                padding: '1px 7px',
                 borderRadius: 999,
                 border: '1px solid var(--line)',
                 background: 'var(--c-paper)',
@@ -598,7 +624,7 @@ function InlineAllowedOptions({
                 fontSize: 'var(--fs-11)',
                 letterSpacing: '0.04em',
                 textTransform: 'uppercase',
-                padding: '2px 8px',
+                padding: '1px 7px',
                 borderRadius: 999,
                 border: '1px solid var(--line)',
                 background: 'var(--c-paper)',
@@ -613,15 +639,12 @@ function InlineAllowedOptions({
           </span>
         )}
       </div>
-      <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 6, display: 'block' }}>
-        {hint}
-      </span>
-      {/* PR #78 — Square-ish chip grid (Commander 2026-05-26: "做成正方形啊，
-          要不然你看这样子塞着了"). Each chip is a fixed-width tile so they line
-          up cleanly regardless of label length. formatChip returning
-          "K · 6FT" gets split into a two-line tile (code stacked over
-          label). Plain values render single-line and stay centred. */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      {/* PR #91 — Reverted to compact pills (Commander 2026-05-26: "为什么会
+          变成正方形？这是什么鬼"). 22 sofa compartments × 92px tiles wrapped
+          to 6 rows on a 720px modal; pills wrap to 2-3 rows with the same
+          info. formatChip splits "K · 6FT" onto an inline secondary span so
+          the label still rides alongside the code without forcing a tile. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {options.map((opt) => {
           const isOn = picked.has(opt);
           const display = formatChip ? formatChip(opt) : opt;
@@ -632,39 +655,26 @@ function InlineAllowedOptions({
               type="button"
               onClick={() => onToggle(opt)}
               style={{
-                width: 92,
-                minHeight: 64,
                 display: 'inline-flex',
-                flexDirection: 'column',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: 2,
-                padding: '8px 6px',
-                borderRadius: 'var(--radius-md)',
-                border: isOn ? '1px solid var(--c-orange)' : '1px solid var(--line)',
+                gap: 6,
+                padding: '4px 12px',
+                borderRadius: 999,
+                border: '1px solid ' + (isOn ? 'var(--c-orange)' : 'var(--line-strong)'),
                 background: isOn ? 'var(--c-orange)' : 'var(--c-paper)',
                 color: isOn ? 'var(--c-cream)' : 'var(--c-ink)',
                 cursor: 'pointer',
-                transition: 'all 150ms ease',
+                transition: 'all 120ms ease-out',
                 fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-12)',
+                lineHeight: 1.4,
               }}
               title={display}
             >
-              <span style={{ fontSize: 'var(--fs-14)', fontWeight: 700, lineHeight: 1 }}>
-                {parts[0]}
-              </span>
+              <span style={{ fontWeight: 700 }}>{parts[0]}</span>
               {parts[1] && (
-                <span
-                  style={{
-                    fontSize: 'var(--fs-11)',
-                    fontWeight: 500,
-                    lineHeight: 1.1,
-                    opacity: isOn ? 0.92 : 0.65,
-                    textAlign: 'center',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {parts.slice(1).join(' · ')}
+                <span style={{ opacity: isOn ? 0.85 : 0.55, fontWeight: 500 }}>
+                  · {parts.slice(1).join(' · ')}
                 </span>
               )}
             </button>
