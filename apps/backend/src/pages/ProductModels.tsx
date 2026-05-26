@@ -171,15 +171,13 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
   const [description, setDescription] = useState('');
   const createMut = useCreateProductModel();
 
-  // Branding is required for the 3 product categories that auto-generate SKU
-  // names from "{branding} {category} ({size})". Accessory/Service skip the
-  // brand because they don't use the generator.
-  const needsBranding = category === 'SOFA' || category === 'BEDFRAME' || category === 'MATTRESS';
-
+  // PR #69 — Branding is OPTIONAL across all categories. BEDFRAME / SOFA
+  // typically encode the brand inside the Model name (HILTON BEDFRAME,
+  // SOFA 5530). MATTRESS commander still uses it as separate metadata.
+  // We show the field but never block submit on it.
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!modelCode.trim() || !name.trim()) return;
-    if (needsBranding && !branding.trim()) return;
     createMut.mutate(
       {
         branding: branding.trim() || null,
@@ -202,23 +200,20 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
           in one click.
         </p>
 
-        {needsBranding && (
-          <label className={styles.field}>
-            <span className="t-eyebrow">Branding *</span>
-            <input
-              type="text"
-              value={branding}
-              onChange={(e) => setBranding(e.target.value)}
-              placeholder={
-                category === 'SOFA' ? 'e.g. HOUZS / 2990S'
-                : category === 'BEDFRAME' ? 'e.g. HILTON / FENRIR / CODY'
-                : 'e.g. SEALY / KING KOIL'
-              }
-              required={needsBranding}
-              autoFocus
-            />
-          </label>
-        )}
+        <label className={styles.field}>
+          <span className="t-eyebrow">Branding (optional)</span>
+          <input
+            type="text"
+            value={branding}
+            onChange={(e) => setBranding(e.target.value)}
+            placeholder={
+              category === 'SOFA' ? 'e.g. HOUZS / 2990S'
+              : category === 'BEDFRAME' ? 'usually encoded in Name (HILTON BEDFRAME) — leave blank'
+              : category === 'MATTRESS' ? 'e.g. 2990S / SEALY'
+              : ''
+            }
+          />
+        </label>
 
         <label className={styles.field}>
           <span className="t-eyebrow">Model code *</span>

@@ -27,10 +27,11 @@ productModels.use('*', supabaseAuth);
 const CATEGORIES = ['SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE'] as const;
 
 const CreateBody = z.object({
-  // PR #65 — Branding is required for SOFA/BEDFRAME/MATTRESS so the SKU-name
-  // template ("HILTON BEDFRAME (6FT)") has the brand to lead with.
-  // ACCESSORY/SERVICE skip the brand check because they aren't part of the
-  // per-Model code generator.
+  // PR #69 — Branding is OPTIONAL across all categories per commander
+  // 2026-05-26 ("bedframe dont need branding"). BEDFRAME / SOFA encode the
+  // brand inside the Model name (HILTON BEDFRAME, SOFA 5530). MATTRESS
+  // commander still treats branding as separate metadata. UI keeps the
+  // field but no longer enforces it.
   branding:       z.string().trim().max(80).optional().nullable(),
   modelCode:      z.string().trim().min(1).max(32),
   name:           z.string().trim().min(1).max(200),
@@ -39,10 +40,7 @@ const CreateBody = z.object({
   photoUrl:       z.string().trim().url().optional().nullable(),
   allowedOptions: z.record(z.unknown()).optional(),
   active:         z.boolean().optional(),
-}).refine(
-  (v) => v.category === 'ACCESSORY' || v.category === 'SERVICE' || (v.branding && v.branding.length > 0),
-  { message: 'branding_required_for_product_category', path: ['branding'] },
-);
+});
 
 const PatchBody = z.object({
   branding:       z.string().trim().max(80).nullable().optional(),
@@ -202,13 +200,21 @@ productModels.post('/:id/generate-skus', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
 
-  // PR #51 — body: { codes?: string[] }. When present, only insert rows for
-  // these specific codes (lets the UI ship "tick the ones you want" without
-  // a new endpoint). When absent, materialize ALL allowed-option combos.
-  let body: { codes?: string[] } = {};
+  // PR #51 + #69 — body shapes:
+  //   { rows: [{code, name, size_code?, size_label?}] }
+  //     → client already computed the candidate rows (using its current
+  //       in-memory allowed_options). Insert them directly. Decouples the
+  //       picker from "must save Allowed Options first" UX trap.
+  //   { codes: string[] }
+  //     → legacy filter: server materialises ALL allowed-option combos,
+  //       then only INSERTs the listed codes.
+  //   {} or null
+  //     → materialise ALL allowed-option combos.
+  let body: { rows?: Array<{ code: string; name: string; size_code?: string | null; size_label?: string | null }>; codes?: string[] } = {};
   try {
-    body = (await c.req.json().catch(() => ({}))) as { codes?: string[] };
+    body = (await c.req.json().catch(() => ({}))) as typeof body;
   } catch { /* allow empty body */ }
+  const explicitRows = Array.isArray(body.rows) && body.rows.length > 0 ? body.rows : null;
   const filterCodes = Array.isArray(body.codes) && body.codes.length > 0
     ? new Set(body.codes)
     : null;
@@ -253,7 +259,21 @@ productModels.post('/:id/generate-skus', async (c) => {
   type GenRow = { code: string; name: string; size_code: string | null; size_label: string | null };
   const wanted: GenRow[] = [];
 
-  if (model.category === 'SOFA') {
+  // Fast path: client computed the rows already (using its local
+  // allowed_options state) and just wants the server to INSERT them. This
+  // avoids the "I forgot to click Save first" trap where the picker had
+  // candidates but the DB allowed_options was still empty.
+  if (explicitRows) {
+    for (const r of explicitRows) {
+      if (!r?.code || !r?.name) continue;
+      wanted.push({
+        code:       String(r.code),
+        name:       String(r.name),
+        size_code:  r.size_code ?? null,
+        size_label: r.size_label ?? null,
+      });
+    }
+  } else if (model.category === 'SOFA') {
     if (compsArr.length === 0) {
       return c.json({ error: 'no_compartments', reason: 'Allowed Options → Compartments is empty. Toggle at least one before generating.' }, 400);
     }
