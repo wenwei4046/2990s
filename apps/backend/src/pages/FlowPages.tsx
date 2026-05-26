@@ -239,18 +239,15 @@ export const PurchaseInvoicesPage = () => {
 /* ════════════════════════════════════════════════════════════════════════
    Mfg Sales Orders (HOUZS pattern)
    ════════════════════════════════════════════════════════════════════════ */
-const MSO_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'DRAFT', label: 'Draft' }, { value: 'CONFIRMED', label: 'Confirmed' },
-  { value: 'IN_PRODUCTION', label: 'In production' }, { value: 'READY_TO_SHIP', label: 'Ready' },
-  { value: 'SHIPPED', label: 'Shipped' }, { value: 'DELIVERED', label: 'Delivered' },
-  { value: 'INVOICED', label: 'Invoiced' }, { value: 'CLOSED', label: 'Closed' }, { value: 'CANCELLED', label: 'Cancelled' },
-];
+// PR #103 — Commander 2026-05-26: "这些 status 不需要". Dropped the
+// All / Draft / Confirmed / In production / Ready / Shipped / Delivered /
+// Invoiced / Closed / Cancelled chip strip. Lifecycle filtering will
+// re-appear when the SO rebuild lands; the current chips were noise.
 
 export const MfgSalesOrdersPage = () => {
   const navigate = useNavigate();
-  const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
-  const { data, isLoading, error } = useMfgSalesOrders(status === 'all' ? undefined : status);
+  const { data, isLoading, error } = useMfgSalesOrders(undefined);
   const rows = useMemo(() => data?.salesOrders ?? [], [data]);
 
   return (
@@ -261,7 +258,6 @@ export const MfgSalesOrdersPage = () => {
         newLabel="New SO"
         onNew={() => setOpen(true)}
       />
-      <StatusChips chips={MSO_CHIPS} active={status} onPick={setStatus} />
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} sales orders`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
       <div className={styles.tableCard}>
