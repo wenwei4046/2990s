@@ -26,7 +26,7 @@
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreateMfgSalesOrder } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -34,11 +34,10 @@ import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   BUILDING_TYPES,
 } from '../lib/localities-queries';
+import { SoLineItemModal, type SoLineDraft } from '../components/SoLineItemModal';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-
-const SO_GROUPS = ['bedframe', 'sofa', 'mattress', 'accessory', 'others'] as const;
 
 /* PR #113 — Customer type matches the POS handover dropdown. The column is
    free-text on the schema, but we constrain to two values here so the SO
@@ -50,22 +49,9 @@ const RELATIONSHIP_OPTIONS = [
   'Spouse', 'Parent', 'Child', 'Sibling', 'Relative', 'Friend', 'Colleague', 'Other',
 ] as const;
 
-type DraftLine = {
-  rid: string;
-  itemGroup:      (typeof SO_GROUPS)[number];
-  itemCode:       string;
-  description:    string;
-  qty:            number;
-  unitPriceCenti: number;
-  discountCenti:  number;
-  unitCostCenti:  number;
-};
-
-const newLine = (group: (typeof SO_GROUPS)[number] = 'bedframe'): DraftLine => ({
-  rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-  itemGroup: group, itemCode: '', description: '',
-  qty: 1, unitPriceCenti: 0, discountCenti: 0, unitCostCenti: 0,
-});
+/* PR #114 — Draft line shape mirrors SoLineDraft from SoLineItemModal but
+   adds a stable React id so the local list can re-order / edit. */
+type DraftLine = SoLineDraft & { rid: string };
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', {
@@ -106,14 +92,33 @@ export const SalesOrderNew = () => {
   const [note, setNote] = useState('');
 
   // ── Items state ────────────────────────────────────────────────────
-  const [lines, setLines] = useState<DraftLine[]>([newLine()]);
+  // PR #114 — Lines start empty; commander opens the modal to add the first.
+  // Each line carries the full HOOKKA-pattern variant payload (divan / leg /
+  // gap / fabric code / etc.) so server-side conversions preserve everything.
+  const [lines, setLines] = useState<DraftLine[]>([]);
+  const [modalOpen, setModalOpen]     = useState(false);
+  const [editingRid, setEditingRid]   = useState<string | null>(null);
 
-  const setLine  = (rid: string, patch: Partial<DraftLine>) =>
-    setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
-  const addLine  = () => setLines((prev) => [...prev, newLine('others')]);
-  const dropLine = (rid: string) => setLines((prev) =>
-    prev.length === 1 ? [newLine()] : prev.filter((l) => l.rid !== rid),
-  );
+  const editingDraft = useMemo<SoLineDraft | null>(() => {
+    if (!editingRid) return null;
+    const found = lines.find((l) => l.rid === editingRid);
+    if (!found) return null;
+    const { rid: _rid, ...rest } = found;
+    return rest;
+  }, [editingRid, lines]);
+
+  const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
+
+  const onModalSubmit = (line: SoLineDraft) => {
+    if (editingRid) {
+      setLines((prev) => prev.map((l) => (l.rid === editingRid ? { ...line, rid: editingRid } : l)));
+    } else {
+      const rid = `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setLines((prev) => [...prev, { ...line, rid }]);
+    }
+    setModalOpen(false);
+    setEditingRid(null);
+  };
 
   const subtotalCenti = useMemo(
     () => lines.reduce(
@@ -141,7 +146,7 @@ export const SalesOrderNew = () => {
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item with code + qty.');
+      window.alert('Add at least one item via "+ Add line item".');
       return;
     }
 
@@ -166,14 +171,21 @@ export const SalesOrderNew = () => {
         emergencyContactPhone:        emergencyPhone || undefined,
         targetDate: targetDate || undefined,
         note: note || undefined,
+        /* PR #114 — full variant payload preserved end-to-end. The API
+           handler maps every key (divanHeight / legHeight / gap / fabric
+           code / color code / seat height / special / size) into the
+           variants JSONB column on mfg_sales_order_items. */
         items: validLines.map((l) => ({
           itemGroup:      l.itemGroup,
           itemCode:       l.itemCode,
           description:    l.description,
+          uom:            l.uom,
           qty:            l.qty,
           unitPriceCenti: l.unitPriceCenti,
           discountCenti:  l.discountCenti,
           unitCostCenti:  l.unitCostCenti,
+          variants:       l.variants,
+          remark:         l.remark,
         })),
       },
       {
@@ -182,9 +194,6 @@ export const SalesOrderNew = () => {
       },
     );
   };
-
-  const gridTemplate = '110px minmax(160px, 1.2fr) minmax(180px, 1.6fr) 70px 110px 120px 32px';
-  const cellPad = 'var(--space-2) var(--space-2)';
 
   return (
     <div className={styles.page}>
@@ -452,7 +461,7 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* ── Items / Lines ───────────────────────────────────────────── */}
+      {/* ── Items / Lines (PR #114: HOOKKA-pattern modal editor) ──── */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Lines</h2>
@@ -461,113 +470,81 @@ export const SalesOrderNew = () => {
           </span>
         </div>
         <div className={styles.cardBody}>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: gridTemplate,
-            gap: 'var(--space-2)',
-            padding: cellPad,
-            fontFamily: 'var(--font-button)',
-            fontSize: 'var(--fs-11)',
-            fontWeight: 600,
-            letterSpacing: '0.10em',
-            textTransform: 'uppercase',
-            color: 'var(--fg-soft)',
-            borderBottom: '1px solid var(--line)',
-          }}>
-            <div>Group</div>
-            <div>Item Code</div>
-            <div>Description</div>
-            <div style={{ textAlign: 'right' }}>Qty</div>
-            <div style={{ textAlign: 'right' }}>Unit Price</div>
-            <div style={{ textAlign: 'right' }}>Total</div>
-            <div></div>
-          </div>
-
-          {lines.map((l) => {
-            const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - l.discountCenti);
-            return (
-              <div
-                key={l.rid}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: gridTemplate,
-                  gap: 'var(--space-2)',
-                  padding: cellPad,
-                  alignItems: 'center',
-                  borderBottom: '1px solid var(--line)',
-                }}
-              >
-                <select
-                  value={l.itemGroup}
-                  onChange={(e) => setLine(l.rid, { itemGroup: e.target.value as DraftLine['itemGroup'] })}
-                  className={styles.fieldInput}
-                >
-                  {SO_GROUPS.map((g) => <option key={g} value={g}>{g}</option>)}
-                </select>
-                <input
-                  type="text"
-                  placeholder="Item code"
-                  value={l.itemCode}
-                  onChange={(e) => setLine(l.rid, { itemCode: e.target.value })}
-                  className={styles.fieldInput}
-                />
-                <input
-                  type="text"
-                  placeholder="Description"
-                  value={l.description}
-                  onChange={(e) => setLine(l.rid, { description: e.target.value })}
-                  className={styles.fieldInput}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  value={l.qty}
-                  onChange={(e) => setLine(l.rid, { qty: Number(e.target.value) || 1 })}
-                  className={styles.fieldInput}
-                  style={{ textAlign: 'right' }}
-                />
-                <input
-                  type="number"
-                  step="0.01"
-                  value={(l.unitPriceCenti / 100).toFixed(2)}
-                  onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 })}
-                  className={styles.fieldInput}
-                  style={{ textAlign: 'right' }}
-                />
-                <div style={{
-                  textAlign: 'right',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 'var(--fs-13)',
-                }}>
-                  {fmtRm(lineTotalCenti)}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => dropLine(l.rid)}
-                  title="Remove line"
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--fg-muted)',
-                    cursor: 'pointer',
-                    padding: 4,
-                  }}
-                >
-                  <Trash2 {...ICON} />
-                </button>
-              </div>
-            );
-          })}
+          {/* List of added lines — read-only summary; edit/delete via icons */}
+          {lines.length === 0 ? (
+            <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', margin: 0, padding: 'var(--space-4) 0', textAlign: 'center' }}>
+              No items yet. Click "Add line item" to pick a product + fill variants.
+            </p>
+          ) : (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '110px minmax(140px, 1fr) minmax(180px, 1.6fr) 60px 110px 100px 60px',
+              gap: 'var(--space-2)',
+              fontSize: 'var(--fs-13)',
+            }}>
+              <div className={styles.fieldLabel}>Group</div>
+              <div className={styles.fieldLabel}>Item Code</div>
+              <div className={styles.fieldLabel}>Description / Variants</div>
+              <div className={styles.fieldLabel} style={{ textAlign: 'right' }}>Qty</div>
+              <div className={styles.fieldLabel} style={{ textAlign: 'right' }}>Unit</div>
+              <div className={styles.fieldLabel} style={{ textAlign: 'right' }}>Total</div>
+              <div></div>
+              {lines.map((l) => {
+                const lineTotalCenti = Math.max(0, l.qty * l.unitPriceCenti - l.discountCenti);
+                const variantSummary = Object.entries(l.variants ?? {})
+                  .filter(([_, v]) => v !== null && v !== undefined && v !== '')
+                  .map(([k, v]) => `${k}=${v}`)
+                  .join(' · ');
+                return (
+                  <div key={l.rid} style={{ display: 'contents' }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>{l.itemGroup}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{l.itemCode}</div>
+                    <div>
+                      <div>{l.description}</div>
+                      {variantSummary && (
+                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 2 }}>
+                          {variantSummary}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{l.qty}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{fmtRm(l.unitPriceCenti)}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{fmtRm(lineTotalCenti)}</div>
+                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        title="Edit"
+                        onClick={() => { setEditingRid(l.rid); setModalOpen(true); }}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)' }}
+                      >
+                        <Pencil {...ICON} />
+                      </button>
+                      <button
+                        type="button"
+                        title="Remove"
+                        onClick={() => dropLine(l.rid)}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)' }}
+                      >
+                        <Trash2 {...ICON} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <button
             type="button"
-            onClick={addLine}
+            onClick={() => { setEditingRid(null); setModalOpen(true); }}
             style={{
               display: 'flex',
               alignItems: 'center',
+              justifyContent: 'center',
               gap: 6,
+              width: '100%',
+              padding: '10px 12px',
               marginTop: 'var(--space-3)',
-              padding: '8px 12px',
               background: 'transparent',
               border: '1px dashed var(--c-orange)',
               borderRadius: 'var(--radius-md)',
@@ -578,7 +555,7 @@ export const SalesOrderNew = () => {
               cursor: 'pointer',
             }}
           >
-            <Plus {...ICON} /> Add line
+            <Plus {...ICON} /> Add line item
           </button>
 
           <div style={{
@@ -596,6 +573,15 @@ export const SalesOrderNew = () => {
           </div>
         </div>
       </section>
+
+      {/* PR #114 — line item modal (search SKU → per-category variants) */}
+      {modalOpen && (
+        <SoLineItemModal
+          initial={editingDraft}
+          onClose={() => { setModalOpen(false); setEditingRid(null); }}
+          onSubmit={onModalSubmit}
+        />
+      )}
 
       {/* ── Note ────────────────────────────────────────────────────── */}
       <section className={styles.card}>
