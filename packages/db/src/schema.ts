@@ -1104,6 +1104,18 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   emergencyContactRelationship:   text('emergency_contact_relationship'),
   targetDate:                     date('target_date'),
 
+  /* PR #143 — Payment fields mirrored from POS handover (migration 0068).
+     Commander 2026-05-26: "你把 POS system 的 payment 那个地方也放进来 Sales
+     Order 里面". Tracks how the customer is paying + deposit / running paid
+     totals. Strict enum on POS side (`payment_method` pgEnum); free text
+     here so a B2B SO that doesn't go through POS can still carry the same
+     concept. */
+  paymentMethod:        text('payment_method'),       // cash | transfer | merchant | installment
+  installmentMonths:    integer('installment_months'), // 6 | 12, NULL otherwise
+  merchantProvider:     text('merchant_provider'),    // GHL | HLB | MBB | PBB
+  depositCenti:         integer('deposit_centi').notNull().default(0),
+  paidCenti:            integer('paid_centi').notNull().default(0),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
   updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
