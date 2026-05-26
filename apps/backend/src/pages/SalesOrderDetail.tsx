@@ -133,6 +133,12 @@ type SoHeader = {
   emergency_contact_phone: string | null;
   emergency_contact_relationship: string | null;
   target_date: string | null;
+  /* PR #143 — Payment (mirrors POS handover) */
+  payment_method: string | null;        // cash | transfer | merchant | installment
+  installment_months: number | null;    // 6 | 12
+  merchant_provider: string | null;     // GHL | HLB | MBB | PBB
+  deposit_centi: number;
+  paid_centi: number;
 };
 
 type SoItem = {
@@ -362,6 +368,14 @@ export const SalesOrderDetail = () => {
 
       {/* ── Totals ──────────────────────────────────────────────── */}
       <TotalsCard header={header} />
+
+      {/* ── Payment (PR #143) ───────────────────────────────────── */}
+      <PaymentCard
+        header={header}
+        onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
+        saving={updateHeader.isPending}
+        locked={isLocked}
+      />
 
       {/* ── Status flow ─────────────────────────────────────────── */}
       <StatusBar
@@ -1337,6 +1351,250 @@ const AddressCard = ({
             Linked DO: <Link to={`/mfg-delivery-orders/${header.linked_do_doc_no}`}>{header.linked_do_doc_no}</Link>
           </p>
         )}
+      </div>
+    </section>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   PaymentCard — PR #143. Commander: "POS system 的 payment 那个地方也放进来
+   Sales Order 里面". Mirrors apps/pos/src/components/handover/
+   AddonsPaymentStep — same 4 methods, same sub-options (merchant provider /
+   installment term), same 50% deposit convention. Persists to migration
+   0068 columns on mfg_sales_orders.
+   ════════════════════════════════════════════════════════════════════════ */
+
+type PaymentMethod = 'cash' | 'transfer' | 'merchant' | 'installment';
+
+const PaymentCard = ({
+  header,
+  onSave,
+  saving,
+  locked = false,
+}: {
+  header: SoHeader;
+  onSave: (patch: Record<string, unknown>) => void;
+  saving: boolean;
+  locked?: boolean;
+}) => {
+  const grandTotal = header.local_total_centi ?? 0;
+  const half = Math.round(grandTotal / 2);
+
+  const [form, setForm] = useState({
+    method:          (header.payment_method as PaymentMethod | null) ?? '',
+    installment:     header.installment_months ?? null,
+    merchant:        header.merchant_provider ?? '',
+    depositCenti:    header.deposit_centi ?? 0,
+    paidCenti:       header.paid_centi ?? 0,
+  });
+
+  useEffect(() => {
+    setForm({
+      method:          (header.payment_method as PaymentMethod | null) ?? '',
+      installment:     header.installment_months ?? null,
+      merchant:        header.merchant_provider ?? '',
+      depositCenti:    header.deposit_centi ?? 0,
+      paidCenti:       header.paid_centi ?? 0,
+    });
+  }, [header]);
+
+  const pick = (m: PaymentMethod) =>
+    setForm((s) => ({
+      ...s,
+      method: m,
+      installment: m === 'installment' ? (s.installment ?? 6) : null,
+      merchant:    m === 'merchant'    ? (s.merchant || 'GHL') : '',
+    }));
+
+  const balanceCenti = Math.max(0, grandTotal - form.paidCenti);
+  const isHalfPaid = form.paidCenti > 0 && form.paidCenti >= half && form.paidCenti < grandTotal;
+  const isFullPaid = grandTotal > 0 && form.paidCenti >= grandTotal;
+
+  const submit = () => {
+    onSave({
+      paymentMethod:     form.method || null,
+      installmentMonths: form.installment,
+      merchantProvider:  form.merchant || null,
+      depositCenti:      form.depositCenti,
+      paidCenti:         form.paidCenti,
+    });
+  };
+
+  const methodBtn = (m: PaymentMethod, label: string, hint: string) => {
+    const active = form.method === m;
+    return (
+      <button
+        type="button"
+        disabled={locked}
+        onClick={() => pick(m)}
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: 2,
+          padding: 'var(--space-3)',
+          background: active ? 'rgba(232, 107, 58, 0.10)' : 'var(--c-paper)',
+          border: '1px solid ' + (active ? 'var(--c-orange)' : 'var(--line)'),
+          borderRadius: 'var(--radius-md)',
+          color: active ? 'var(--c-burnt)' : 'var(--c-ink)',
+          cursor: locked ? 'not-allowed' : 'pointer',
+          fontFamily: 'var(--font-sans)',
+          textAlign: 'left',
+        }}
+      >
+        <strong style={{ fontSize: 'var(--fs-13)' }}>{label}</strong>
+        <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{hint}</span>
+      </button>
+    );
+  };
+
+  return (
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>Payment</h2>
+        <Button variant="primary" size="sm" onClick={submit} disabled={saving || locked}>
+          <Save {...ICON} />
+          <span>{saving ? 'Saving…' : 'Save'}</span>
+        </Button>
+      </header>
+      <div className={styles.cardBody}>
+        {/* Method picker — 4 buttons, 2x2 */}
+        <p className={styles.subHead}>Method</p>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+          {methodBtn('merchant',    'Merchant',           'Card via GHL / HLB / MBB / PBB')}
+          {methodBtn('transfer',    'Bank transfer / DuitNow', 'Slip required')}
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          {methodBtn('installment', 'Installment',        '0% — 6 or 12 months')}
+          {methodBtn('cash',        'Cash',               'Cash received at counter')}
+        </div>
+
+        {/* Sub-options */}
+        {form.method === 'merchant' && (
+          <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <span className={styles.fieldLabel}>Merchant</span>
+            {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                disabled={locked}
+                onClick={() => setForm((s) => ({ ...s, merchant: p }))}
+                style={{
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-12)',
+                  fontWeight: 600,
+                  padding: '4px 12px',
+                  borderRadius: 'var(--radius-pill)',
+                  border: '1px solid ' + (form.merchant === p ? 'var(--c-orange)' : 'var(--line)'),
+                  background: form.merchant === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                  color: form.merchant === p ? 'var(--c-burnt)' : 'var(--c-ink)',
+                  cursor: locked ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {form.method === 'installment' && (
+          <div style={{ marginTop: 'var(--space-3)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <span className={styles.fieldLabel}>Term</span>
+            {([6, 12] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={locked}
+                onClick={() => setForm((s) => ({ ...s, installment: m }))}
+                style={{
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-12)',
+                  fontWeight: 600,
+                  padding: '4px 12px',
+                  borderRadius: 'var(--radius-pill)',
+                  border: '1px solid ' + (form.installment === m ? 'var(--c-orange)' : 'var(--line)'),
+                  background: form.installment === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
+                  color: form.installment === m ? 'var(--c-burnt)' : 'var(--c-ink)',
+                  cursor: locked ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {m} months
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Deposit / Paid / Balance row */}
+        <p className={styles.subHead} style={{ marginTop: 'var(--space-4)' }}>Amounts</p>
+        <div className={styles.formGrid4}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Grand Total</span>
+            <span className={styles.fieldInput} style={{
+              display: 'inline-flex', alignItems: 'center', height: 32,
+              fontFamily: 'var(--font-mono)', color: 'var(--c-ink)', fontWeight: 600,
+            }}>
+              {fmtRm(grandTotal, header.currency)}
+            </span>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>
+              Deposit ({header.currency})
+              {form.depositCenti === half && grandTotal > 0 && (
+                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
+              )}
+            </span>
+            <input
+              type="number" step="0.01" min={0}
+              className={styles.fieldInput}
+              value={(form.depositCenti / 100).toFixed(2)}
+              disabled={locked}
+              onChange={(e) => setForm((s) => ({ ...s, depositCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
+            />
+            <button
+              type="button"
+              onClick={() => setForm((s) => ({ ...s, depositCenti: half }))}
+              disabled={locked || grandTotal === 0}
+              style={{
+                marginTop: 4,
+                background: 'transparent', border: 'none',
+                color: 'var(--c-orange)', cursor: locked ? 'not-allowed' : 'pointer',
+                fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0, textAlign: 'left',
+              }}
+            >
+              Set 50% deposit ({fmtRm(half, header.currency)})
+            </button>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Paid ({header.currency})</span>
+            <input
+              type="number" step="0.01" min={0}
+              className={styles.fieldInput}
+              value={(form.paidCenti / 100).toFixed(2)}
+              disabled={locked}
+              onChange={(e) => setForm((s) => ({ ...s, paidCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>
+              Balance
+              {isFullPaid && (
+                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-secondary-a, #2F5D4F)' }}>· PAID</span>
+              )}
+              {isHalfPaid && (
+                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· deposit only</span>
+              )}
+            </span>
+            <span className={styles.fieldInput} style={{
+              display: 'inline-flex', alignItems: 'center', height: 32,
+              fontFamily: 'var(--font-mono)',
+              color: isFullPaid ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--c-ink)',
+              fontWeight: 600,
+            }}>
+              {fmtRm(balanceCenti, header.currency)}
+            </span>
+          </label>
+        </div>
       </div>
     </section>
   );

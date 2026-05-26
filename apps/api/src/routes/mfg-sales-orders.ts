@@ -21,6 +21,8 @@ const HEADER =
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
   'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, target_date, ' +
+  /* PR #143 — Payment (migration 0068) */
+  'payment_method, installment_months, merchant_provider, deposit_centi, paid_centi, ' +
   'created_at, created_by, updated_at';
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
@@ -296,6 +298,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['emergencyContactPhone', 'emergency_contact_phone'],
     ['emergencyContactRelationship', 'emergency_contact_relationship'],
     ['targetDate', 'target_date'],
+    /* PR #143 — Payment fields */
+    ['paymentMethod', 'payment_method'],
+    ['installmentMonths', 'installment_months'],
+    ['merchantProvider', 'merchant_provider'],
+    ['depositCenti', 'deposit_centi'],
+    ['paidCenti', 'paid_centi'],
   ];
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const [from, to] of map) {
