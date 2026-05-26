@@ -399,21 +399,32 @@ export const SalesOrderDetail = () => {
           variant keys (divanHeight / legHeight / gap / fabricCode) is
           missing on a bedframe line, block the next-stage transition. */}
       {(() => {
+        /* PR #144 / #156 — Processing-Date gating.
+           Commander 2026-05-27 broadened: "variant 也没有补完" — sofa
+           lines ALSO need their seat/leg/fabric set when Processing Date is
+           on, not just bedframe. Each category has its own required keys: */
         const requireVariants = !!header.internal_expected_dd;
-        const REQUIRED_BEDFRAME_KEYS = ['divanHeight', 'legHeight', 'gap', 'fabricCode'] as const;
-        const incompleteBedframeLines = requireVariants
+        const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
+          bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
+          sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
+        };
+        const incompleteLines = requireVariants
           ? items
-              .filter((it) => (it.item_group ?? '').toLowerCase() === 'bedframe')
+              .filter((it) => REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()])
               .filter((it) => {
+                const keys = REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()] ?? [];
                 const v = (it.variants ?? {}) as Record<string, unknown>;
-                return REQUIRED_BEDFRAME_KEYS.some((k) => {
+                return keys.some((k) => {
                   const val = v[k];
                   return val === undefined || val === null || val === '';
                 });
               })
-              .map((it) => it.item_code)
+              .map((it) => ({ code: it.item_code, group: (it.item_group ?? '').toLowerCase() }))
           : [];
-        const gated = incompleteBedframeLines.length > 0;
+        const gated = incompleteLines.length > 0;
+        const formatGroupRequirements = (g: string) =>
+          g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
+          g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
         return (
           <>
             {gated && (
@@ -425,10 +436,13 @@ export const SalesOrderDetail = () => {
                 borderRadius: 'var(--radius-md)',
                 fontSize: 'var(--fs-13)',
               }}>
-                <strong>Processing Date is set — bedframe variants must be filled before next stage.</strong>
+                <strong>Processing Date is set — line variants must be filled before next stage.</strong>
                 <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                  Incomplete: {incompleteBedframeLines.join(', ')}.<br />
-                  Required: Divan Height · Leg Height · Gap · Fabric.
+                  {incompleteLines.map((l, i) => (
+                    <div key={i}>
+                      • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -437,8 +451,8 @@ export const SalesOrderDetail = () => {
               onTransition={(s) => {
                 if (gated) {
                   window.alert(
-                    'Processing Date is set, so all bedframe variants (divan/leg/gap/fabric) must be filled before moving to the next stage.\n\n' +
-                    'Incomplete: ' + incompleteBedframeLines.join(', '),
+                    'Processing Date is set, so all line variants must be filled before moving to the next stage.\n\n' +
+                    'Incomplete:\n' + incompleteLines.map((l) => `  ${l.code} (${l.group})`).join('\n'),
                   );
                   return;
                 }
@@ -536,7 +550,10 @@ const CustomerCard = ({
     email: header.email ?? '',
     customerType: header.customer_type ?? '',
     salespersonId: header.salesperson_id ?? '',
-    buildingType: header.building_type ?? header.venue ?? '',
+    buildingType: header.building_type ?? '',
+    /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Reinstate
+       venue as a free-text field separate from Building Type. */
+    venue: header.venue ?? '',
     phone: header.phone ?? '',
     address1: header.address1 ?? '',
     address2: header.address2 ?? '',
@@ -563,7 +580,8 @@ const CustomerCard = ({
       email: header.email ?? '',
       customerType: header.customer_type ?? '',
       salespersonId: header.salesperson_id ?? '',
-      buildingType: header.building_type ?? header.venue ?? '',
+      buildingType: header.building_type ?? '',
+      venue: header.venue ?? '',
       phone: header.phone ?? '',
       address1: header.address1 ?? '',
       address2: header.address2 ?? '',
@@ -618,6 +636,7 @@ const CustomerCard = ({
     customerType: form.customerType,
     salespersonId: form.salespersonId || null,
     buildingType: form.buildingType,
+    venue: form.venue,
     phone: form.phone,
     address1: form.address1,
     address2: form.address2,
@@ -635,11 +654,29 @@ const CustomerCard = ({
     note: form.note,
   });
 
+  /* PR #156 — Commander 2026-05-27: "为什么能 save processing date 呢
+     没有 delivery date 而且 variant 也没有补完". Mirror the New SO form's
+     XOR rule on Detail Save: block when only one of Processing/Delivery
+     Date is set. */
+  const datesXor =
+    (form.processingDate.trim() !== '') !== (form.customerDeliveryDate.trim() !== '');
+
+  const trySave = () => {
+    if (datesXor) {
+      window.alert(
+        'Processing Date and Delivery Date must be set together.\n\n' +
+        'Either fill in BOTH dates, or leave BOTH empty.',
+      );
+      return;
+    }
+    onSave(buildPayload());
+  };
+
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Customer · Addresses</h2>
-        <Button variant="primary" size="sm" onClick={() => onSave(buildPayload())} disabled={saving}>
+        <Button variant="primary" size="sm" onClick={trySave} disabled={saving || datesXor}>
           <Save {...ICON} />
           <span>{saving ? 'Saving…' : 'Save'}</span>
         </Button>
@@ -720,17 +757,26 @@ const CustomerCard = ({
               {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </label>
-          {/* PR #140 — Processing + Delivery Date replace Target Date.
-              Same fields the New SO form has; keeps create + edit in sync. */}
+          {/* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". */}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Venue</span>
+            <input className={styles.fieldInput} value={form.venue}
+              placeholder="e.g. KL Showroom, Penang Branch"
+              onChange={(e) => set('venue', e.target.value)} />
+          </label>
+          {/* PR #140 / #156 — Processing + Delivery Date; XOR enforced on Save.
+              Red border on the empty side + banner below shows the rule. */}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Processing Date</span>
             <input type="date" className={styles.fieldInput} value={form.processingDate}
-              onChange={(e) => set('processingDate', e.target.value)} />
+              onChange={(e) => set('processingDate', e.target.value)}
+              style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Delivery Date</span>
             <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
-              onChange={(e) => set('customerDeliveryDate', e.target.value)} />
+              onChange={(e) => set('customerDeliveryDate', e.target.value)}
+              style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
           </label>
           <label className={`${styles.field}`} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Note</span>
@@ -738,6 +784,22 @@ const CustomerCard = ({
               onChange={(e) => set('note', e.target.value)} />
           </label>
         </div>
+        {datesXor && (
+          <div
+            style={{
+              background: 'rgba(184, 51, 31, 0.08)',
+              border: '1px solid var(--c-festive-b, #B8331F)',
+              color: 'var(--c-festive-b, #B8331F)',
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              fontSize: 'var(--fs-12)',
+              fontWeight: 600,
+              marginTop: 'var(--space-2)',
+            }}
+          >
+            ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
+          </div>
+        )}
 
         {/* ── Emergency contact (PR #46) ───────────────────────────── */}
         <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>
