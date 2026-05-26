@@ -363,40 +363,30 @@ export const SalesOrderNew = () => {
           common-case flow. Notes lives in its own card at the bottom
           again (restored). */}
 
-      {/* ── Customer · Addresses (PR #154 — single combined card to match
-           the SO Detail page layout. Commander 2026-05-27: "Why is my UI
-           different when I am creating an SO compared to after the SO is
-           created? They should look exactly the same.") ─────────────── */}
+      {/* ── Customer ────────────────────────────────────────────────── */}
+      {/* PR #155 — Commander 2026-05-27: "这整个排版很乱 旧的ok一点 分开".
+          Reverted PR #154's single combined card back to 4 separate cards
+          (Customer / Delivery Address / Emergency Contact / Dates) — the
+          density of putting everything in one card felt cluttered. */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Customer · Addresses</h2>
+          <h2 className={styles.cardTitle}>Customer</h2>
         </div>
         <div className={styles.cardBody}>
-          {/* Customer row */}
-          <p className={styles.subHead}>Customer</p>
-          <div className={styles.formGrid4}>
+          <div className={styles.formGrid2}>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer Code</span>
-              <input
-                type="text"
-                value={debtorCode}
-                onChange={(e) => setDebtorCode(e.target.value)}
-                className={styles.fieldInput}
-              />
-            </label>
-            <label className={styles.field} style={{ gridColumn: 'span 3' }}>
-              <span className={styles.fieldLabel}>Customer Name *</span>
+              <span className={styles.fieldLabel}>Full Name *</span>
               <input
                 type="text"
                 value={debtorName}
                 onChange={(e) => setDebtorName(e.target.value)}
-                placeholder="e.g. Lim Mei Hua"
                 className={styles.fieldInput}
+                placeholder="e.g. Lim Mei Hua"
                 required
               />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Phone *</span>
+              <span className={styles.fieldLabel}>Phone</span>
               <input
                 type="tel"
                 value={phone}
@@ -405,140 +395,50 @@ export const SalesOrderNew = () => {
                 className={styles.fieldInput}
               />
             </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Email *</span>
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Email</span>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="customer@example.com"
+                placeholder="customer@example.com — for receipt & order updates"
                 className={styles.fieldInput}
               />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer Type</span>
-              <select
-                value={customerType}
-                onChange={(e) => setCustomerType(e.target.value as typeof customerType)}
-                className={styles.fieldSelect}
-              >
-                <option value="">—</option>
-                {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t === 'NEW' ? 'New' : 'Existing'}</option>)}
-              </select>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Salesperson</span>
               <select
                 value={salespersonId}
                 onChange={(e) => setSalespersonId(e.target.value)}
-                className={styles.fieldSelect}
+                className={styles.fieldInput}
               >
-                <option value="">— Pick staff —</option>
+                <option value="">—</option>
                 {(staff.data ?? []).filter((s) => s.active).map((s) => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
+                  <option key={s.id} value={s.id}>{s.staffCode} · {s.name}</option>
                 ))}
               </select>
             </label>
-
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Building Type</span>
+              <span className={styles.fieldLabel}>Customer Type</span>
               <select
-                value={buildingType}
-                onChange={(e) => setBuildingType(e.target.value as typeof buildingType)}
-                className={styles.fieldSelect}
+                value={customerType}
+                onChange={(e) => setCustomerType(e.target.value as typeof customerType)}
+                className={styles.fieldInput}
               >
                 <option value="">—</option>
-                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+                {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t === 'NEW' ? 'New' : 'Existing'}</option>)}
               </select>
             </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Processing Date</span>
-              <input
-                type="date"
-                value={processingDate}
-                onChange={(e) => setProcessingDate(e.target.value)}
-                className={styles.fieldInput}
-                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Delivery Date</span>
-              <input
-                type="date"
-                value={deliveryDate}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                className={styles.fieldInput}
-                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
-              />
-            </label>
-            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-              <span className={styles.fieldLabel}>Note</span>
-              <input
-                className={styles.fieldInput}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </label>
           </div>
-          {datesXor && (
-            <div
-              style={{
-                background: 'rgba(184, 51, 31, 0.08)',
-                border: '1px solid var(--c-festive-b, #B8331F)',
-                color: 'var(--c-festive-b, #B8331F)',
-                padding: 'var(--space-2) var(--space-3)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--fs-12)',
-                fontWeight: 600,
-                marginTop: 'var(--space-2)',
-              }}
-            >
-              ⚠ Fill in BOTH Processing Date and Delivery Date, or leave BOTH empty.
-            </div>
-          )}
+        </div>
+      </section>
 
-          {/* Emergency contact */}
-          <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>
-            Emergency Contact <span className={styles.muted} style={{ fontWeight: 400 }}>
-              — used only if we can't reach the customer on delivery day
-            </span>
-          </p>
-          <div className={styles.formGrid4}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Contact Name</span>
-              <input
-                type="text"
-                value={emergencyName}
-                onChange={(e) => setEmergencyName(e.target.value)}
-                placeholder="e.g. Lim Mei Hua"
-                className={styles.fieldInput}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Relationship</span>
-              <select
-                value={emergencyRel}
-                onChange={(e) => setEmergencyRel(e.target.value as typeof emergencyRel)}
-                className={styles.fieldSelect}
-              >
-                <option value="">—</option>
-                {RELATIONSHIP_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </label>
-            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-              <span className={styles.fieldLabel}>Phone</span>
-              <input
-                type="tel"
-                value={emergencyPhone}
-                onChange={(e) => setEmergencyPhone(e.target.value)}
-                placeholder="+60 12 345 6789"
-                className={styles.fieldInput}
-              />
-            </label>
-          </div>
-
-          {/* Delivery address */}
-          <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Delivery Address</p>
+      {/* ── Delivery Address ────────────────────────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Delivery Address</h2>
+        </div>
+        <div className={styles.cardBody}>
           <label
             style={{
               display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)',
@@ -563,10 +463,12 @@ export const SalesOrderNew = () => {
               </div>
             </div>
           </label>
-          <div className={styles.formGrid4}>
+
+          {/* PR #148 — Only Address 1/2 dim out when fill-later is on. */}
+          <div className={styles.formGrid2}>
             <label
-              className={`${styles.field}`}
-              style={{ gridColumn: 'span 4', opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
+              className={`${styles.field} ${styles.fieldFull}`}
+              style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
             >
               <span className={styles.fieldLabel}>Address Line 1</span>
               <input
@@ -578,8 +480,8 @@ export const SalesOrderNew = () => {
               />
             </label>
             <label
-              className={`${styles.field}`}
-              style={{ gridColumn: 'span 4', opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
+              className={`${styles.field} ${styles.fieldFull}`}
+              style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
             >
               <span className={styles.fieldLabel}>Address Line 2</span>
               <input
@@ -590,14 +492,15 @@ export const SalesOrderNew = () => {
                 className={styles.fieldInput}
               />
             </label>
+
             <label className={styles.field}>
               <span className={styles.fieldLabel}>State</span>
               <select
                 value={state}
                 onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
-                className={styles.fieldSelect}
+                className={styles.fieldInput}
               >
-                <option value="">Pick state</option>
+                <option value="">—</option>
                 {states.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
@@ -606,34 +509,132 @@ export const SalesOrderNew = () => {
               <select
                 value={city}
                 onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
-                className={styles.fieldSelect}
+                className={styles.fieldInput}
                 disabled={!state}
               >
-                <option value="">{state ? 'Pick city' : '— pick state first'}</option>
+                <option value="">{state ? '—' : '(Pick state first)'}</option>
                 {cities.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
+
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Postcode</span>
               <select
                 value={postcode}
                 onChange={(e) => setPostcode(e.target.value)}
-                className={styles.fieldSelect}
-                disabled={!city}
+                className={styles.fieldInput}
+                disabled={!state || !city}
               >
-                <option value="">{city ? 'Pick postcode' : '— pick city first'}</option>
+                <option value="">{(state && city) ? '—' : '(Pick city first)'}</option>
                 {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </label>
-            <div className={styles.field}>
-              <span className={styles.fieldLabel}>Sales Location</span>
-              <span className={styles.fieldInput} style={{
-                display: 'inline-flex', alignItems: 'center', height: 32,
-                color: 'var(--fg-muted)',
-              }}>
-                —
-              </span>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Building Type</span>
+              <select
+                value={buildingType}
+                onChange={(e) => setBuildingType(e.target.value as typeof buildingType)}
+                className={styles.fieldInput}
+              >
+                <option value="">—</option>
+                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Emergency Contact ───────────────────────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Emergency Contact</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Used only if we cannot reach the customer on delivery day
+          </span>
+        </div>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Contact Name</span>
+              <input
+                type="text"
+                value={emergencyName}
+                onChange={(e) => setEmergencyName(e.target.value)}
+                placeholder="e.g. Lim Mei Hua"
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Relationship</span>
+              <select
+                value={emergencyRel}
+                onChange={(e) => setEmergencyRel(e.target.value as typeof emergencyRel)}
+                className={styles.fieldInput}
+              >
+                <option value="">—</option>
+                {RELATIONSHIP_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </label>
+            <label className={`${styles.field} ${styles.fieldFull}`}>
+              <span className={styles.fieldLabel}>Phone</span>
+              <input
+                type="tel"
+                value={emergencyPhone}
+                onChange={(e) => setEmergencyPhone(e.target.value)}
+                placeholder="+60 12 345 6789"
+                className={styles.fieldInput}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Processing + Delivery Dates ────────────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Dates</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Processing Date = when we start production · Delivery Date = customer's expected delivery
+          </span>
+        </div>
+        <div className={styles.cardBody}>
+          {datesXor && (
+            <div
+              style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: 'var(--space-2) var(--space-3)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 'var(--fs-12)',
+                fontWeight: 600,
+                marginBottom: 'var(--space-3)',
+              }}
+            >
+              ⚠ Fill in BOTH dates or leave BOTH empty — partial dates aren't allowed.
             </div>
+          )}
+          <div className={styles.formGrid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Processing Date</span>
+              <input
+                type="date"
+                value={processingDate}
+                onChange={(e) => setProcessingDate(e.target.value)}
+                className={styles.fieldInput}
+                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Date</span>
+              <input
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                className={styles.fieldInput}
+                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+              />
+            </label>
           </div>
         </div>
       </section>
@@ -907,8 +908,23 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* PR #154 — Standalone Notes card removed (Note now lives in the
-          unified Customer · Addresses card to mirror the SO Detail page). */}
+      {/* PR #155 — Notes restored as its own bottom card (revert of PR #154
+          consolidation; commander prefers the separated layout). */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Notes</h2>
+        </div>
+        <div className={styles.cardBody}>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Internal notes — visible on the SO detail page only"
+            className={styles.fieldInput}
+            rows={3}
+            style={{ minHeight: 80, resize: 'vertical', width: '100%' }}
+          />
+        </div>
+      </section>
 
     </div>
   );
