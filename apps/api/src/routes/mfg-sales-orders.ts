@@ -166,6 +166,14 @@ mfgSalesOrders.post('/', async (c) => {
     customer_po: (body.customerPo as string) ?? null,
     hub_id: (body.hubId as string) ?? null,
     hub_name: (body.hubName as string) ?? null,
+    /* PR #148 — Payment fields on create (mirror PATCH handler). Lets
+       commander set payment_method + deposit_centi straight from the New
+       SO form, without needing to open the detail page after creation. */
+    payment_method:     (body.paymentMethod as string) ?? null,
+    installment_months: typeof body.installmentMonths === 'number' ? body.installmentMonths : null,
+    merchant_provider:  (body.merchantProvider as string) ?? null,
+    deposit_centi:      typeof body.depositCenti === 'number' ? body.depositCenti : 0,
+    paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
     created_by: user.id,
   });
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
