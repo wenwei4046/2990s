@@ -15,7 +15,7 @@ const HEADER =
   'total_cost_centi, total_revenue_centi, total_margin_centi, margin_pct_basis, line_count, ' +
   'currency, status, remark2, remark3, remark4, note, processing_date, sales_exemption_expiry, ' +
   /* PR #35 + #46 — extended PO + POS handover fields */
-  'customer_id, customer_po, customer_po_id, customer_po_date, customer_po_image_b64, hub_id, hub_name, ' +
+  'customer_id, customer_po, customer_po_id, customer_po_date, customer_po_image_b64, customer_so_no, hub_id, hub_name, ' +
   'customer_state, customer_delivery_date, internal_expected_dd, linked_do_doc_no, ' +
   'ship_to_address, bill_to_address, install_to_address, subtotal_sen, overdue, ' +
   /* PR #46 — POS handover */
@@ -153,6 +153,11 @@ mfgSalesOrders.post('/', async (c) => {
     customer_id: (body.customerId as string) ?? null,
     customer_state: (body.customerState as string) ?? null,
     customer_delivery_date: (body.customerDeliveryDate as string) ?? null,
+    // PR #121 — POS-aligned Order Details fields
+    customer_so_no: (body.customerSoNo as string) ?? null,
+    customer_po: (body.customerPo as string) ?? null,
+    hub_id: (body.hubId as string) ?? null,
+    hub_name: (body.hubName as string) ?? null,
     created_by: user.id,
   });
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -275,6 +280,8 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['customerId', 'customer_id'], ['customerState', 'customer_state'],
     ['customerPo', 'customer_po'], ['customerPoId', 'customer_po_id'],
     ['customerPoDate', 'customer_po_date'], ['customerPoImageB64', 'customer_po_image_b64'],
+    // PR #121 — customer's own SO number (their ERP ref)
+    ['customerSoNo', 'customer_so_no'],
     ['hubId', 'hub_id'], ['hubName', 'hub_name'],
     ['customerDeliveryDate', 'customer_delivery_date'],
     ['internalExpectedDd', 'internal_expected_dd'],
