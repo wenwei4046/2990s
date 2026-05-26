@@ -342,7 +342,7 @@ export function NewModelDialog({
         className={styles.modal}
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
-        style={{ maxWidth: 760, maxHeight: '90vh', overflowY: 'auto' }}
+        style={{ maxWidth: 'min(960px, 95vw)', maxHeight: '90vh', overflowY: 'auto' }}
       >
         <h2 className={styles.modalTitle}>New Models (bulk)</h2>
         <p className={styles.modalSub}>
@@ -502,23 +502,29 @@ function ModelRowCard({
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: category === 'MATTRESS' ? '1fr 2fr 2fr 1fr' : '1fr 2fr 2fr', gap: 8, marginBottom: 8 }}>
-        <label className={styles.field} style={{ margin: 0 }}>
+      {/* PR — Commander 2026-05-26: "UI 要整理一下". Old rigid grid
+          (1fr 2fr 2fr 1fr) overflowed at 760px modal because inputs can't
+          shrink below their placeholder width. Switched to auto-fit minmax
+          so fields wrap to a second row instead of clipping labels like
+          "AKKA-FIRM MAT[T]" on the left. minWidth: 0 on the label lets the
+          input actually shrink inside the grid track. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginBottom: 8 }}>
+        <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
           <span className="t-eyebrow">Branding</span>
           <input type="text" value={row.branding} onChange={(e) => onChange({ branding: e.target.value })}
             placeholder={category === 'MATTRESS' ? '2990S' : ''} />
         </label>
-        <label className={styles.field} style={{ margin: 0 }}>
+        <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
           <span className="t-eyebrow">Model code *</span>
           <input type="text" value={row.modelCode} onChange={(e) => onChange({ modelCode: e.target.value })}
             placeholder={
               category === 'SOFA'     ? '5530' :
               category === 'BEDFRAME' ? '1003' :
-              '2990-NF AKKA-FIRM MATT'
+              'AKKA-FIRM MATT'
             }
             required />
         </label>
-        <label className={styles.field} style={{ margin: 0 }}>
+        <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
           <span className="t-eyebrow">Name *</span>
           <input type="text" value={row.name} onChange={(e) => onChange({ name: e.target.value })}
             placeholder={
@@ -529,7 +535,7 @@ function ModelRowCard({
             required />
         </label>
         {category === 'MATTRESS' && (
-          <label className={styles.field} style={{ margin: 0 }}>
+          <label className={styles.field} style={{ margin: 0, minWidth: 0 }}>
             <span className="t-eyebrow">Thickness (cm) *</span>
             <input type="number" inputMode="numeric" min={1} step={1}
               value={row.thicknessCm} onChange={(e) => onChange({ thicknessCm: e.target.value })}
