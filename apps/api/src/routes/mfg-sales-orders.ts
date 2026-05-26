@@ -175,6 +175,12 @@ mfgSalesOrders.post('/', async (c) => {
     approval_code:      (body.approvalCode as string) ?? null,
     deposit_centi:      typeof body.depositCenti === 'number' ? body.depositCenti : 0,
     paid_centi:         typeof body.paidCenti === 'number' ? body.paidCenti : 0,
+    /* PR #154 — Commander 2026-05-27: "我们的整个系统是没有 Draft 功能的，
+       把 Draft 的功能去除掉, 我们 create 的全部都是 confirm 的". 2990 is a
+       trading company; we don't need a DRAFT staging step. Every new SO is
+       CONFIRMED on insert. The DRAFT enum value still exists for legacy
+       row compatibility, but new rows skip it entirely. */
+    status: 'CONFIRMED',
     created_by: user.id,
   });
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
