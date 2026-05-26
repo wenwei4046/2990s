@@ -24,6 +24,7 @@ export type CsvColumn = {
 
 export const CSV_COLUMNS: CsvColumn[] = [
   { csv: 'fabric_code',             field: 'fabric_code',             apiKey: 'fabricCode',           kind: 'text' },
+  { csv: 'series',                  field: 'series',                  apiKey: 'series',               kind: 'text' },
   { csv: 'fabric_description',      field: 'fabric_description',      apiKey: 'fabricDescription',    kind: 'text' },
   { csv: 'supplier_code',           field: 'supplier_code',           apiKey: 'supplierCode',         kind: 'text' },
   { csv: 'supplier',                field: 'supplier',                apiKey: 'supplier',             kind: 'text' },

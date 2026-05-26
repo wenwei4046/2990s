@@ -15,6 +15,7 @@ import {
   useUpdateFabricTier,
   useUpdateFabricSupplierCode,
   useUpdateFabricDescription,
+  useUpdateFabricSeries,
   useDeleteFabric,
   type FabricTier,
   type FabricTierField,
@@ -62,6 +63,7 @@ export const FabricsTable = ({
         <thead>
           <tr>
             <th>Fabric Code</th>
+            <th>Series</th>
             <th>Description</th>
             <th>Supplier Code</th>
             <th>Sofa Tier</th>
@@ -72,13 +74,13 @@ export const FabricsTable = ({
         <tbody>
           {isLoading && (
             <tr>
-              <td colSpan={6} className={styles.emptyRow}>Loading fabrics…</td>
+              <td colSpan={7} className={styles.emptyRow}>Loading fabrics…</td>
             </tr>
           )}
           {!isLoading && rows.map((row) => <FabricRow key={row.id} row={row} />)}
           {!isLoading && !error && rows.length === 0 && (
             <tr>
-              <td colSpan={6} className={styles.emptyRow}>
+              <td colSpan={7} className={styles.emptyRow}>
                 <Layers size={32} strokeWidth={1.5} />
                 <div style={{ marginTop: 8 }}>No fabrics yet — click "+ New Fabric" to add one.</div>
               </td>
@@ -108,6 +110,7 @@ const FabricRow = ({ row }: { row: FabricTrackingRow }) => {
   return (
     <tr>
       <td><span className={styles.codeChip}>{row.fabric_code}</span></td>
+      <td><SeriesCell id={row.id} value={row.series ?? ''} /></td>
       <td><DescriptionCell id={row.id} value={row.fabric_description ?? ''} /></td>
       <td><SupplierCodeCell id={row.id} value={row.supplier_code ?? ''} /></td>
       <td>
@@ -251,6 +254,62 @@ const DescriptionCell = ({ id, value }: { id: string; value: string }) => {
         }}
         onBlur={commit}
         style={{ minWidth: 220 }}
+      />
+      <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
+        <Check size={14} strokeWidth={1.75} />
+      </button>
+      <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={cancel} title="Cancel">
+        <X size={14} strokeWidth={1.75} />
+      </button>
+    </span>
+  );
+};
+
+/* Migration 0063 — Click-to-edit Series cell. Same UX as Description /
+   Supplier Code. Click chip → input → Enter saves, Esc cancels, blur saves. */
+const SeriesCell = ({ id, value }: { id: string; value: string }) => {
+  const update = useUpdateFabricSeries();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === value.trim()) { setEditing(false); return; }
+    update.mutate(
+      { id, series: trimmed.length ? trimmed : null },
+      { onSettled: () => setEditing(false) },
+    );
+  };
+
+  const cancel = () => { setDraft(value); setEditing(false); };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className={value ? styles.supplierCodeChip : styles.supplierCodeEmpty}
+        onClick={() => { setDraft(value); setEditing(true); }}
+        title="Click to edit series"
+        style={{ width: '100%', textAlign: 'left' }}
+      >
+        {value || '+ Add series'}
+      </button>
+    );
+  }
+
+  return (
+    <span className={styles.supplierCodeEditor}>
+      <input
+        autoFocus
+        className={styles.supplierCodeInput}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          else if (e.key === 'Escape') cancel();
+        }}
+        onBlur={commit}
+        style={{ minWidth: 180 }}
       />
       <button type="button" className={styles.iconBtn} onMouseDown={(e) => e.preventDefault()} onClick={commit} title="Save">
         <Check size={14} strokeWidth={1.75} />

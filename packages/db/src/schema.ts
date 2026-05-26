@@ -1677,9 +1677,12 @@ export const fabricTrackings = pgTable('fabric_trackings', {
   // fabric; multi-supplier needs supplier_material_bindings.
   supplierCode:         text('supplier_code'),
   leadTimeDays:         integer('lead_time_days').notNull().default(0),
+  // Migration 0063 — collection name (free text, e.g. "KOONA VELVET H2O").
+  series:               text('series'),
 }, (t) => ({
-  idxCode: index('idx_fabric_trackings_code').on(t.fabricCode),
-  idxTier: index('idx_fabric_trackings_tier').on(t.priceTier),
+  idxCode:   index('idx_fabric_trackings_code').on(t.fabricCode),
+  idxTier:   index('idx_fabric_trackings_tier').on(t.priceTier),
+  idxSeries: index('idx_fabric_trackings_series').on(t.series).where(sql`${t.series} IS NOT NULL`),
 }));
 
 /* ─────────────────────────── maintenance_config_history ────────────────
