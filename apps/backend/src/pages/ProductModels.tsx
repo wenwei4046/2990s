@@ -268,8 +268,8 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
 
         <TemplatePreview
           category={category}
-          branding={branding}
           modelCode={modelCode}
+          modelName={name}
         />
 
         {createMut.isError && (
@@ -293,27 +293,27 @@ function NewModelDialog({ onClose }: { onClose: () => void }) {
    Shows commander a worked example of how SKU codes + names get built from
    his current inputs. Updates live as he types. */
 function TemplatePreview({
-  category, branding, modelCode,
-}: { category: MfgCategory; branding: string; modelCode: string }) {
-  const br = branding.trim() || '{branding}';
-  const mc = modelCode.trim() || '{code}';
+  category, modelCode, modelName,
+}: { category: MfgCategory; modelCode: string; modelName: string }) {
+  const mc = modelCode.trim() || '{model_code}';
+  const mn = modelName.trim() || '{model_name}';
   let codeFmt = '', nameFmt = '', exampleCode = '', exampleName = '';
 
   if (category === 'SOFA') {
     codeFmt = '{model_code}-{compartment}';
-    nameFmt = '{branding} SOFA {compartment}';
+    nameFmt = '{model_name} {compartment}';
     exampleCode = `${mc}-1A(LHF)`;
-    exampleName = `${br} SOFA 1A(LHF)`;
+    exampleName = `${mn} 1A(LHF)`;
   } else if (category === 'BEDFRAME') {
     codeFmt = '{model_code}-({size})';
-    nameFmt = '{branding} BEDFRAME ({size_label})';
+    nameFmt = '{model_name} ({size_label}) ({dimensions})';
     exampleCode = `${mc}-(K)`;
-    exampleName = `${br} BEDFRAME (6FT)`;
+    exampleName = `${mn} (6FT) (183X190CM)`;
   } else if (category === 'MATTRESS') {
-    codeFmt = '{model_code}-({size})';
-    nameFmt = '{branding} ({size_label})';
-    exampleCode = `${mc}-(K)`;
-    exampleName = `${br} (6FT)`;
+    codeFmt = '{model_code} MATT ({size})';
+    nameFmt = '{model_name} (WxLxTCM)';
+    exampleCode = `${mc} MATT (K)`;
+    exampleName = `${mn} (183x190x31CM)`;
   } else {
     return null;
   }
