@@ -181,9 +181,10 @@ export const SalesOrderDetail = () => {
 
   // Lock mechanism — once SO leaves DRAFT, edits require explicit override.
   // CANCELLED + CLOSED + INVOICED are also locked (terminal-ish states).
-  // PR #145 — IN_PRODUCTION removed from the locked list (trading flow
-  // doesn't use it). READY_TO_SHIP is the new earliest locked state.
-  const lockedStatuses: SoStatus[] = ['READY_TO_SHIP', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'];
+  // PR #145 + #146 — IN_PRODUCTION + READY_TO_SHIP removed from forward
+  // flow (trading company). SHIPPED is now the earliest locked state —
+  // once goods leave our hands, the SO header is no longer editable.
+  const lockedStatuses: SoStatus[] = ['SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'];
 
   if (detail.isLoading) {
     return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
@@ -893,18 +894,21 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
    Status transition bar
    ════════════════════════════════════════════════════════════════════════ */
 
-/* PR #145 — Commander 2026-05-26: "这个 2990 整套系统是 trading 公司来的，
-   它不是 manufacturing，不需要 in production". The IN_PRODUCTION stage is
-   a HOOKKA manufacturing concept — trading shops skip straight from
-   CONFIRMED to READY_TO_SHIP (goods already on hand at the warehouse, just
-   waiting for dispatch).
-   The DB enum still carries 'IN_PRODUCTION' (existing rows might use it),
-   but the UI no longer offers it as a forward transition. */
+/* PR #145 + #146 — Commander 2026-05-26: trading company flow.
+   - "2990 整套系统是 trading 公司来的，不需要 in production" → drop IN_PRODUCTION
+   - "ready to ship 和 in production 整个删掉" → drop READY_TO_SHIP too.
+     Goods sit in our warehouse, no "ready to ship" intermediate stage;
+     SHIPPED captures the moment they leave.
+   Final flow:
+     DRAFT → CONFIRMED → SHIPPED → DELIVERED → INVOICED → CLOSED
+   The DB enum still carries IN_PRODUCTION / READY_TO_SHIP rows from
+   pre-#146 records; the fallback rows below let the UI forward those
+   directly to SHIPPED instead of crashing. */
 const NEXT: Record<SoStatus, SoStatus[]> = {
   DRAFT:          ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED:      ['READY_TO_SHIP', 'CANCELLED'],
-  IN_PRODUCTION:  ['READY_TO_SHIP', 'CANCELLED'], // legacy rows still resolve
-  READY_TO_SHIP:  ['SHIPPED'],
+  CONFIRMED:      ['SHIPPED', 'CANCELLED'],
+  IN_PRODUCTION:  ['SHIPPED', 'CANCELLED'], // legacy
+  READY_TO_SHIP:  ['SHIPPED'],              // legacy
   SHIPPED:        ['DELIVERED'],
   DELIVERED:      ['INVOICED'],
   INVOICED:       ['CLOSED'],
