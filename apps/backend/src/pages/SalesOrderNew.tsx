@@ -155,42 +155,50 @@ export const SalesOrderNew = () => {
     });
   };
 
-  /* PR #142 + #145 — Post-add cascade with KEY-LEVEL MERGE.
-     PR #142 originally skipped any line that already had ANY variants set,
-     so when LINE 1 was filled progressively (Seat first, then Leg later)
-     LINE 2 only inherited the Seat — Leg + Fabric never cascaded because
-     it had a non-empty variants bag after Seat was copied. Commander on
-     live: "为什么只有 Seat Size 带下来了呢". Fixed by merging key-by-key
-     instead: any same-category line gets MISSING keys filled from the
-     first line that has them. Existing non-empty keys on a line are left
-     untouched (so commander can deliberately override one module).
-     Inherited empty strings are not propagated (don't overwrite with ''). */
+  /* PR #142 / #145 / #147 — Master-follower cascade.
+     Commander 2026-05-26:
+       "line1 改下面跟着改"
+       "可是下面如果改动就会跟着最新改动"
+     Behavior:
+       - LINE 1 of each category is the MASTER. Its variants drive
+         everything else in that category.
+       - When master's variant key changes, every follower's same key
+         tracks the new value — UNLESS the follower has manually
+         overridden that key (tracked by `overriddenKeys`).
+       - Once a follower clicks/types into a variant, that key is added
+         to its overriddenKeys and never gets cascaded again.
+       - Picking a fresh SKU on a line wipes overriddenKeys (clean slate). */
   useEffect(() => {
-    const firstByCategory: Record<string, Record<string, unknown>> = {};
-    for (const l of lines) {
-      if (!l.itemGroup || firstByCategory[l.itemGroup]) continue;
-      if (l.variants && Object.keys(l.variants).length > 0) {
-        firstByCategory[l.itemGroup] = l.variants;
-      }
-    }
+    // Find master line (and its variants) per category.
+    const masterByCategory: Record<string, Record<string, unknown>> = {};
+    const masterIdx: Record<string, number> = {};
+    lines.forEach((l, idx) => {
+      if (!l.itemGroup) return;
+      if (masterIdx[l.itemGroup] !== undefined) return;
+      masterIdx[l.itemGroup] = idx;
+      if (l.variants) masterByCategory[l.itemGroup] = l.variants;
+    });
+
     let didUpdate = false;
-    const next = lines.map((l) => {
+    const next = lines.map((l, idx) => {
       if (!l.itemGroup) return l;
-      const inherited = firstByCategory[l.itemGroup];
-      if (!inherited) return l;
+      if (masterIdx[l.itemGroup] === idx) return l; // skip the master line itself
+      const masterVariants = masterByCategory[l.itemGroup];
+      if (!masterVariants) return l;
       const cur = (l.variants ?? {}) as Record<string, unknown>;
+      const overridden = new Set(l.overriddenKeys ?? []);
       const patch: Record<string, unknown> = {};
-      let hasMissing = false;
-      for (const k of Object.keys(inherited)) {
-        const inhVal = inherited[k];
-        if (inhVal === undefined || inhVal === null || inhVal === '') continue;
-        const curVal = cur[k];
-        if (curVal === undefined || curVal === null || curVal === '') {
-          patch[k] = inhVal;
-          hasMissing = true;
+      let hasChange = false;
+      for (const k of Object.keys(masterVariants)) {
+        if (overridden.has(k)) continue; // follower owns this key
+        const masterVal = masterVariants[k];
+        if (masterVal === undefined || masterVal === null || masterVal === '') continue;
+        if (cur[k] !== masterVal) {
+          patch[k] = masterVal;
+          hasChange = true;
         }
       }
-      if (!hasMissing) return l;
+      if (!hasChange) return l;
       didUpdate = true;
       return { ...l, variants: { ...cur, ...patch } };
     });
