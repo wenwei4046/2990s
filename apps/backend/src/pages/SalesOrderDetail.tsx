@@ -374,8 +374,12 @@ export const SalesOrderDetail = () => {
         )}
       </section>
 
-      {/* ── Totals ──────────────────────────────────────────────── */}
-      <TotalsCard header={header} />
+      {/* PR #154 — Commander 2026-05-27: "这个东西先hide起来" → Totals ·
+          Margin card hidden for now. Margin tracking still happens
+          server-side (total_cost_centi / total_margin_centi columns
+          persist), but the public-facing UI doesn't surface cost to
+          everyone. To restore: uncomment <TotalsCard /> below. */}
+      {/* <TotalsCard header={header} /> */}
 
       {/* ── Payment (PR #143) ───────────────────────────────────── */}
       <PaymentCard
