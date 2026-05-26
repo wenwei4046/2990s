@@ -93,7 +93,7 @@ export const Products = () => {
               className={styles.tabSwitchBtn}
               onClick={() => setTopTab('maintenance')}
             >
-              Maintenance
+              Model Maintenance
             </button>
           </div>
         </div>
@@ -736,7 +736,9 @@ const MaintenanceTab = () => {
   const config = draft ?? resolved.data?.data ?? null;
   const active = MAINTENANCE_TABS.find((t) => t.key === activeKey)!;
 
-  const sections = ['Bedframe', 'Sofa', 'Mattress', 'Common'] as const;
+  // PR #71 — Commander 2026-05-26 reordered to Bedframe → Mattress → Sofa,
+  // Common (Fabrics) at the bottom.
+  const sections = ['Bedframe', 'Mattress', 'Sofa', 'Common'] as const;
 
   const startEdit = () => {
     if (!resolved.data?.data) return;
