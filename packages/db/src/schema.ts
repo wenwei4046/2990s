@@ -14,7 +14,7 @@
 
 import {
   pgTable, pgEnum, uuid, text, integer, boolean, timestamp, date, jsonb,
-  primaryKey, index, check,
+  primaryKey, index, check, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -1598,12 +1598,42 @@ export const mfgProducts = pgTable('mfg_products', {
   seatHeightPrices:       jsonb('seat_height_prices'),            // [{height,priceSen}]
   defaultVariants:        jsonb('default_variants'),              // {fabricCode,divanHeight,legHeight,gap,specials}
   retailProductId:        uuid('retail_product_id').references(() => products.id, { onDelete: 'set null' }),
+  // PR #49 — FK to product_models (the "template" second layer that owns
+  // allowed-options per Model). `base_model` text stays as a denormalized
+  // mirror so existing Model-filter chips keep working without joining.
+  modelId:                uuid('model_id').references(() => productModels.id, { onDelete: 'set null' }),
   createdAt:              timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:              timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxCode:     index('idx_mfg_products_code').on(t.code),
   idxCategory: index('idx_mfg_products_category').on(t.category),
   idxBase:     index('idx_mfg_products_base_model').on(t.baseModel),
+  idxModelId:  index('idx_mfg_products_model_id').on(t.modelId),
+}));
+
+/* ─────────────────────────── product_models ─────────────────────────────
+   PR #49 — Template / second-layer entity that owns the allowed-options
+   pool per Model. Each SKU on mfg_products keeps its own row (separate
+   code, stock, cost, pricing) — Model only carries the shared template.
+
+   allowed_options JSONB shape is category-specific (see migration 0062
+   header for the per-category schema). Empty `{}` = no restriction yet
+   (UI falls back to global maintenance_config pool).
+   ────────────────────────────────────────────────────────────────────────── */
+export const productModels = pgTable('product_models', {
+  id:             uuid('id').primaryKey().defaultRandom(),
+  modelCode:      text('model_code').notNull(),
+  name:           text('name').notNull(),
+  category:       mfgProductCategory('category').notNull(),
+  description:    text('description'),
+  photoUrl:       text('photo_url'),
+  allowedOptions: jsonb('allowed_options').notNull().default({}),
+  active:         boolean('active').notNull().default(true),
+  createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:      timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqCodeCategory: uniqueIndex('product_models_code_category_unique').on(t.modelCode, t.category),
+  idxCategory:      index('idx_product_models_category').on(t.category),
 }));
 
 /* ─────────────────────────── product_dept_configs ──────────────────────

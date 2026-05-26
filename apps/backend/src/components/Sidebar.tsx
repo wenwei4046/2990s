@@ -85,6 +85,7 @@ export const Sidebar = () => {
     { kind: 'group', label: 'Catalog' },
     { kind: 'link', to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
     { kind: 'link', to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
+    { kind: 'link', to: '/product-models', icon: <Layers {...ICON_PROPS} />, label: 'Models' },
     { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Converter' },
     { kind: 'link', to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
     // Warehouses sidebar entry removed (PR #38) — it's now a sub-tab inside

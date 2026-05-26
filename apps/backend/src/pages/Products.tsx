@@ -668,14 +668,17 @@ const CategoryChip = ({
    ════════════════════════════════════════════════════════════════════════ */
 
 type MaintenanceListKey =
+  | 'bedframeSizes'    // PR #50 — Bedframe size pool (K/Q/S/SS/SK/SP)
   | 'divanHeights'
   | 'totalHeights'
   | 'gaps'
   | 'legHeights'
   | 'specials'
+  | 'sofaCompartments' // PR #50 — Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, ...)
   | 'sofaSizes'
   | 'sofaLegHeights'
   | 'sofaSpecials'
+  | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics';
 
 const MAINTENANCE_TABS: {
@@ -683,16 +686,23 @@ const MAINTENANCE_TABS: {
   label: string;
   description: string;
   priced: boolean;
-  section: 'Bedframe' | 'Sofa' | 'Common';
+  section: 'Bedframe' | 'Sofa' | 'Mattress' | 'Common';
 }[] = [
+  // PR #50 — Bedframe Sizes pool drives Model.allowed_options + "+ Add Code"
+  { key: 'bedframeSizes', label: 'Sizes', description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, etc.)', priced: false, section: 'Bedframe' },
   { key: 'divanHeights', label: 'Divan Heights', description: 'Bedframe divan height options with surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'totalHeights', label: 'Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
   { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
   { key: 'specials', label: 'Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe' },
+  // PR #50 — Sofa Compartments pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...) is the
+  // master list the Model.allowed_options ticks against.
+  { key: 'sofaCompartments', label: 'Compartments', description: 'Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...). Models tick which they offer.', priced: false, section: 'Sofa' },
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
   { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
+  // PR #50 — Mattress Sizes pool.
+  { key: 'mattressSizes', label: 'Sizes', description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Mattress' },
   { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
 ];
 
@@ -714,7 +724,7 @@ const MaintenanceTab = () => {
   const config = draft ?? resolved.data?.data ?? null;
   const active = MAINTENANCE_TABS.find((t) => t.key === activeKey)!;
 
-  const sections = ['Bedframe', 'Sofa', 'Common'] as const;
+  const sections = ['Bedframe', 'Sofa', 'Mattress', 'Common'] as const;
 
   const startEdit = () => {
     if (!resolved.data?.data) return;
