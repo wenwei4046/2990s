@@ -32,12 +32,16 @@ mfgProducts.get('/', async (c) => {
   const search = c.req.query('search');
   const supabase = c.get('supabase');
 
+  // PR #104 — Commander 2026-05-26: dropped fabric_usage_centi /
+  // production_time_minutes / fabric_color from the public shape. The
+  // columns still exist in the DB (historical data preserved) but
+  // 2990's retail catalogue doesn't surface or write them anymore.
   let q = supabase
     .from('mfg_products')
     .select(
       'id, code, name, category, description, base_model, size_label, base_price_sen, price1_sen, ' +
-        'unit_m3_milli, fabric_usage_centi, production_time_minutes, status, sku_code, ' +
-        'fabric_color, branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
+        'unit_m3_milli, status, sku_code, ' +
+        'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
     )
     .eq('status', 'ACTIVE')
     .order('code', { ascending: true });
@@ -89,10 +93,9 @@ mfgProducts.post('/', async (c) => {
     price1_sen: body.price1Sen == null ? null : Number(body.price1Sen),
     cost_price_sen: body.costPriceSen == null ? 0 : Number(body.costPriceSen),
     unit_m3_milli: body.unitM3Milli == null ? 0 : Number(body.unitM3Milli),
-    fabric_usage_centi: body.fabricUsageCenti == null ? 0 : Number(body.fabricUsageCenti),
-    production_time_minutes: body.productionTimeMinutes == null ? 0 : Number(body.productionTimeMinutes),
     branding: (body.branding as string) ?? null,
-    fabric_color: (body.fabricColor as string) ?? null,
+    /* PR #104 — fabric_usage_centi / production_time_minutes /
+       fabric_color removed (not used by 2990's retail catalogue). */
   };
 
   const { data, error } = await supabase.from('mfg_products').insert(row).select('id, code').single();
@@ -143,10 +146,8 @@ mfgProducts.post('/batch-import', async (c) => {
       price1_sen: r.price1_sen == null || r.price1_sen === '' ? null : Number(r.price1_sen),
       cost_price_sen: r.cost_price_sen == null || r.cost_price_sen === '' ? 0 : Number(r.cost_price_sen),
       unit_m3_milli: r.unit_m3_milli == null || r.unit_m3_milli === '' ? 0 : Number(r.unit_m3_milli),
-      fabric_usage_centi: r.fabric_usage_centi == null || r.fabric_usage_centi === '' ? 0 : Number(r.fabric_usage_centi),
-      production_time_minutes: r.production_time_minutes == null || r.production_time_minutes === '' ? 0 : Number(r.production_time_minutes),
       branding: (r.branding as string) ?? null,
-      fabric_color: (r.fabric_color as string) ?? null,
+      /* PR #104 — see POST / above. */
     };
     const { error } = await supabase.from('mfg_products').upsert(row, { onConflict: 'code' });
     if (error) {
