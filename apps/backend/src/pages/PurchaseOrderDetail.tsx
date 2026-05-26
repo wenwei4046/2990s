@@ -14,7 +14,7 @@
 //   5. Status flow: Draft → Submitted → Partially Received → Received | Cancelled
 // ----------------------------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Send, Ban,
@@ -29,8 +29,11 @@ import {
   useSubmitPurchaseOrder,
   useCancelPurchaseOrder,
   useSuppliers,
+  useSupplierDetail,
   type PoItemRow,
   type NewPoItem,
+  type BindingRow,
+  type SupplierRow,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import styles from './SalesOrderDetail.module.css';
@@ -247,6 +250,7 @@ export const PurchaseOrderDetail = () => {
           editing={editing}
           maint={maint.data?.data ?? null}
           currency={po.currency}
+          supplierId={po.supplier_id ?? null}
           onClose={() => { setAdding(false); setEditing(null); }}
           onSave={(payload) => {
             if (editing) {
@@ -289,6 +293,11 @@ const SupplierCard = ({
     currency: po.currency ?? 'MYR',
     notes: po.notes ?? '',
   });
+  // PR #75 — auto-fill supplier info card from /suppliers/:id when chosen.
+  // The hook keys on form.supplierId so it refetches on each pick; null
+  // when no supplier yet (renders nothing).
+  const supplierDetail = useSupplierDetail(form.supplierId || null);
+  const supplier: SupplierRow | null = supplierDetail.data?.supplier ?? null;
 
   useEffect(() => {
     setForm({
@@ -352,6 +361,41 @@ const SupplierCard = ({
               onChange={(e) => set('notes', e.target.value)} />
           </label>
         </div>
+
+        {/* PR #75 — supplier-info auto-fill card. Read-only display sourced
+            from /suppliers/:id, mirrors what AutoCount shows after picking a
+            creditor (address, contact, payment terms). */}
+        {supplier && (
+          <div
+            style={{
+              marginTop: 'var(--space-3)',
+              padding: 'var(--space-3) var(--space-4)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: 'var(--space-3) var(--space-4)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+            }}
+          >
+            <InfoCell label="Supplier code" value={supplier.code} />
+            <InfoCell label="Contact"       value={supplier.contact_person ?? supplier.attention} />
+            <InfoCell label="Phone"         value={supplier.phone ?? supplier.mobile} />
+            <InfoCell label="Payment terms" value={supplier.payment_terms} />
+            <InfoCell label="Email"         value={supplier.email} />
+            <InfoCell label="TIN"           value={supplier.tin_number} />
+            <InfoCell label="Country / state" value={[supplier.country, supplier.state].filter(Boolean).join(' / ') || null} />
+            <InfoCell label="Bindings count" value={String(supplierDetail.data?.bindings?.length ?? 0)} />
+            <div style={{ gridColumn: '1 / -1', color: 'var(--fg-muted)' }}>
+              <span style={{ fontSize: 'var(--fs-11)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Address ·
+              </span>{' '}
+              {[supplier.address, supplier.area, supplier.postcode].filter(Boolean).join(', ') || '—'}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -383,18 +427,34 @@ type LinePayload = Omit<NewPoItem, 'qty' | 'unitPriceCenti'> & {
 };
 
 const PoLineItemModal = ({
-  editing, maint, currency, onClose, onSave, saving,
+  editing, maint, currency, supplierId, onClose, onSave, saving,
 }: {
   editing: PoItemRow | null;
   maint: import('../lib/mfg-products-queries').MaintenanceConfig | null;
   currency: string;
+  /** PR #75 — when set, the picker shows this supplier's bound items first
+      and auto-fills supplier_sku + unit price from the binding row. */
+  supplierId: string | null;
   onClose: () => void;
   onSave: (p: LinePayload) => void;
   saving: boolean;
 }) => {
   const [search, setSearch] = useState(editing?.material_code ?? '');
+  const [showAll, setShowAll] = useState(false);
   const productsQuery = useMfgProducts({ search: search.trim() || undefined });
   const candidates = productsQuery.data ?? [];
+
+  // PR #75 — supplier bindings drive the default-state picker. When the PO
+  // already has a supplier, show only their bound products until commander
+  // hits "Show all" or types a search query.
+  const supplierDetail = useSupplierDetail(supplierId);
+  const bindings = supplierDetail.data?.bindings ?? [];
+  // Index bindings by material_code for fast pickProduct lookup.
+  const bindingByCode = useMemo(() => {
+    const m = new Map<string, BindingRow>();
+    for (const b of bindings) m.set(b.material_code, b);
+    return m;
+  }, [bindings]);
 
   const [picked, setPicked] = useState<import('../lib/mfg-products-queries').MfgProductRow | null>(null);
   const [manualPrice, setManualPrice] = useState(false);
@@ -418,17 +478,42 @@ const PoLineItemModal = ({
   const pickProduct = (p: import('../lib/mfg-products-queries').MfgProductRow) => {
     setPicked(p);
     setManualPrice(false);
+    // PR #75 — if this product is bound to the PO's current supplier, prefer
+    // the binding's supplier_sku + unit price (commander's "Internal Code →
+    // 自动出来绑定的 Code" ask). Otherwise fall back to the product's own
+    // base price and empty supplier_sku.
+    const bound = bindingByCode.get(p.code);
     setDraft((s) => ({
       ...s,
-      materialKind: 'mfg_product',
-      materialCode: p.code,
-      materialName: p.name,
-      itemGroup: p.category.toLowerCase(),
-      description: p.name,
-      unitPriceCenti: p.base_price_sen ?? 0,
-      variants: {},
+      materialKind:   'mfg_product',
+      materialCode:   p.code,
+      materialName:   p.name,
+      itemGroup:      p.category.toLowerCase(),
+      description:    p.name,
+      unitPriceCenti: bound?.unit_price_centi ?? (p.base_price_sen ?? 0),
+      supplierSku:    bound?.supplier_sku ?? '',
+      variants:       {},
     }));
     setSearch(p.code);
+  };
+
+  // PR #75 — pick a binding row directly (when the picker is in bindings
+  // mode). Binding rows carry their own material name + price + supplier_sku.
+  const pickBinding = (b: BindingRow) => {
+    setPicked(null);
+    setManualPrice(false);
+    setDraft((s) => ({
+      ...s,
+      materialKind:   b.material_kind,
+      materialCode:   b.material_code,
+      materialName:   b.material_name,
+      itemGroup:      s.itemGroup,
+      description:    b.material_name,
+      unitPriceCenti: b.unit_price_centi,
+      supplierSku:    b.supplier_sku,
+      variants:       {},
+    }));
+    setSearch(b.material_code);
   };
 
   const setVariant = (k: string, v: string | number) =>
@@ -484,24 +569,124 @@ const PoLineItemModal = ({
         <div className={styles.modalBody}>
           {/* Product picker */}
           <div>
-            <p className={styles.subHead}>Product</p>
+            <p className={styles.subHead}>
+              Product
+              {supplierId && bindings.length > 0 && !showAll && (
+                <span style={{
+                  marginLeft: 8,
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-12)',
+                  color: 'var(--fg-muted)',
+                }}>
+                  · showing {bindings.length} bound item{bindings.length === 1 ? '' : 's'}
+                  <button
+                    type="button"
+                    onClick={() => setShowAll(true)}
+                    style={{
+                      marginLeft: 6,
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--c-orange)',
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-12)',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Show all
+                  </button>
+                </span>
+              )}
+              {supplierId && showAll && (
+                <button
+                  type="button"
+                  onClick={() => setShowAll(false)}
+                  style={{
+                    marginLeft: 8,
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--c-orange)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-sans)',
+                    fontSize: 'var(--fs-12)',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  ← back to bound only
+                </button>
+              )}
+            </p>
             <div className={styles.pickerWrap}>
               <input
                 className={styles.fieldInput}
-                placeholder="Search by code or name…"
+                placeholder={
+                  supplierId && bindings.length > 0
+                    ? 'Search bindings by code / supplier SKU / name…'
+                    : 'Search by code or name…'
+                }
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              {search.trim() && candidates.length > 0 && search !== draft.materialCode && (
-                <ul className={styles.suggestList}>
-                  {candidates.slice(0, 8).map((p) => (
-                    <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
-                      <div><span className={styles.codeCell}>{p.code}</span> · {p.name}</div>
+              {/* PR #75 — bindings list shown when supplier picked + no
+                  search active. Each row shows: internal code · supplier
+                  SKU · material name · unit price. */}
+              {supplierId && !showAll && !search.trim() && bindings.length > 0 && (
+                <ul className={styles.suggestList} style={{ position: 'relative', maxHeight: 280, overflow: 'auto' }}>
+                  {bindings.map((b) => (
+                    <li key={b.id} className={styles.suggestItem} onMouseDown={() => pickBinding(b)}>
+                      <div>
+                        <span className={styles.codeCell}>{b.material_code}</span>
+                        {b.supplier_sku && b.supplier_sku !== b.material_code && (
+                          <span style={{ marginLeft: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                            ↔ {b.supplier_sku}
+                          </span>
+                        )}
+                        <span style={{ marginLeft: 6 }}>· {b.material_name}</span>
+                      </div>
                       <div className={styles.suggestCode}>
-                        {p.category} · {fmtRm(p.base_price_sen ?? 0, currency)}
+                        {b.material_kind} · {fmtRm(b.unit_price_centi, currency)}
+                        {b.is_main_supplier && <span style={{ marginLeft: 6, color: 'var(--c-orange)' }}>★ main</span>}
                       </div>
                     </li>
                   ))}
+                </ul>
+              )}
+              {supplierId && !showAll && !search.trim() && bindings.length === 0 && supplierDetail.data && (
+                <p style={{
+                  margin: '8px 0 0',
+                  fontSize: 'var(--fs-13)',
+                  color: 'var(--fg-muted)',
+                  fontFamily: 'var(--font-sans)',
+                }}>
+                  No bindings configured for this supplier. Type to search the full SKU master,
+                  or open the supplier detail page to add bindings.
+                </p>
+              )}
+              {/* PR #75 — full SKU master search results. Filtered when
+                  `showAll` is off + bindings cover the supplier. Always
+                  shown when commander types a search query. */}
+              {search.trim() && candidates.length > 0 && search !== draft.materialCode && (
+                <ul className={styles.suggestList}>
+                  {candidates.slice(0, 12).map((p) => {
+                    const bound = bindingByCode.get(p.code);
+                    return (
+                      <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
+                        <div>
+                          <span className={styles.codeCell}>{p.code}</span>
+                          {bound?.supplier_sku && bound.supplier_sku !== p.code && (
+                            <span style={{ marginLeft: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                              ↔ {bound.supplier_sku}
+                            </span>
+                          )}
+                          <span style={{ marginLeft: 6 }}>· {p.name}</span>
+                        </div>
+                        <div className={styles.suggestCode}>
+                          {p.category} · {fmtRm(bound?.unit_price_centi ?? (p.base_price_sen ?? 0), currency)}
+                          {bound && <span style={{ marginLeft: 6, color: 'var(--c-orange)' }}>· bound</span>}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -645,3 +830,19 @@ const VariantSelect = ({
   </label>
 );
 
+
+/* PR #75 — Read-only label/value cell for the supplier auto-fill card. */
+function InfoCell({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div>
+      <div style={{
+        fontSize: "var(--fs-11)",
+        textTransform: "uppercase",
+        letterSpacing: "0.06em",
+        color: "var(--fg-muted)",
+        marginBottom: 2,
+      }}>{label}</div>
+      <div style={{ color: value ? "var(--fg)" : "var(--fg-muted)" }}>{value || "—"}</div>
+    </div>
+  );
+}
