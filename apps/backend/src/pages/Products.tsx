@@ -696,36 +696,64 @@ type MaintenanceListKey =
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics';
 
+type MaintenanceAttribute =
+  | 'codeFormat'
+  | 'sizes'
+  | 'compartments'
+  | 'divanHeights'
+  | 'totalHeights'
+  | 'gaps'
+  | 'legHeights'
+  | 'specials'
+  | 'fabrics';
+
+// PR #73 (Commander 2026-05-26) — sidebar regrouped attribute-first
+// ("SIZES → Bedframe / Mattress / Sofa") instead of category-first
+// ("BEDFRAME → Sizes / Divan Heights / …"). One attribute label spans
+// every category that owns it; sub-item label is the category.
+const MAINTENANCE_ATTRIBUTES: { key: MaintenanceAttribute; label: string }[] = [
+  { key: 'codeFormat',    label: 'Code Format' },
+  { key: 'sizes',         label: 'Sizes' },
+  { key: 'compartments',  label: 'Compartments' },
+  { key: 'divanHeights',  label: 'Divan Heights' },
+  { key: 'totalHeights',  label: 'Total Heights' },
+  { key: 'gaps',          label: 'Gaps' },
+  { key: 'legHeights',    label: 'Leg Heights' },
+  { key: 'specials',      label: 'Specials' },
+  { key: 'fabrics',       label: 'Fabrics' },
+];
+
 const MAINTENANCE_TABS: {
   key: MaintenanceListKey;
-  label: string;
+  label: string;        // shown in the panel header (full descriptive title)
   description: string;
   priced: boolean;
   section: 'Bedframe' | 'Sofa' | 'Mattress' | 'Common';
+  attribute: MaintenanceAttribute;
 }[] = [
   // PR #72 — Code Format sits at the top of each section so commander
   // sees the SKU template before drilling into the pool sub-tabs.
-  { key: 'bedframeFormat', label: 'Code Format', description: 'Bedframe SKU code + name template. Uses placeholders like {model_code}, {size}, {size_label}, {dimensions}, {branding}.', priced: false, section: 'Bedframe' },
+  { key: 'bedframeFormat', label: 'Bedframe · Code Format', description: 'Bedframe SKU code + name template. Uses placeholders like {model_code}, {size}, {size_label}, {dimensions}, {branding}.', priced: false, section: 'Bedframe', attribute: 'codeFormat' },
   // PR #50 — Bedframe Sizes pool drives Model.allowed_options + "+ Add Code"
-  { key: 'bedframeSizes', label: 'Sizes', description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, etc.)', priced: false, section: 'Bedframe' },
-  { key: 'divanHeights', label: 'Divan Heights', description: 'Bedframe divan height options with surcharge pricing', priced: true, section: 'Bedframe' },
-  { key: 'totalHeights', label: 'Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe' },
-  { key: 'gaps', label: 'Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe' },
-  { key: 'legHeights', label: 'Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe' },
-  { key: 'specials', label: 'Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe' },
+  { key: 'bedframeSizes', label: 'Bedframe · Sizes', description: 'Bedframe size code pool (K · 6FT, Q · 5FT, S · 3FT, SS · 3.5FT, etc.)', priced: false, section: 'Bedframe', attribute: 'sizes' },
+  { key: 'divanHeights', label: 'Bedframe · Divan Heights', description: 'Bedframe divan height options with surcharge pricing', priced: true, section: 'Bedframe', attribute: 'divanHeights' },
+  { key: 'totalHeights', label: 'Bedframe · Total Heights', description: 'Total height (Divan + Gap + Leg) surcharge pricing', priced: true, section: 'Bedframe', attribute: 'totalHeights' },
+  { key: 'gaps', label: 'Bedframe · Gaps', description: 'Bedframe gap height options (inches)', priced: false, section: 'Bedframe', attribute: 'gaps' },
+  { key: 'legHeights', label: 'Bedframe · Leg Heights', description: 'Bedframe leg height options with surcharge pricing', priced: true, section: 'Bedframe', attribute: 'legHeights' },
+  { key: 'specials', label: 'Bedframe · Specials', description: 'Bedframe special order options with surcharge pricing', priced: true, section: 'Bedframe', attribute: 'specials' },
   // PR #72 — Sofa code/name template.
-  { key: 'sofaFormat', label: 'Code Format', description: 'Sofa SKU code + name template. Uses placeholders like {model_code}, {compartment}, {model_name}, {branding}.', priced: false, section: 'Sofa' },
+  { key: 'sofaFormat', label: 'Sofa · Code Format', description: 'Sofa SKU code + name template. Uses placeholders like {model_code}, {compartment}, {model_name}, {branding}.', priced: false, section: 'Sofa', attribute: 'codeFormat' },
   // PR #50 — Sofa Compartments pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...) is the
   // master list the Model.allowed_options ticks against.
-  { key: 'sofaCompartments', label: 'Compartments', description: 'Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...). Models tick which they offer.', priced: false, section: 'Sofa' },
-  { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
-  { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
-  { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
+  { key: 'sofaCompartments', label: 'Sofa · Compartments', description: 'Sofa compartment pool (1A-LHF, 1A-RHF, 1NA, 2A-LHF, ...). Models tick which they offer.', priced: false, section: 'Sofa', attribute: 'compartments' },
+  { key: 'sofaSizes', label: 'Sofa · Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa', attribute: 'sizes' },
+  { key: 'sofaLegHeights', label: 'Sofa · Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa', attribute: 'legHeights' },
+  { key: 'sofaSpecials', label: 'Sofa · Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa', attribute: 'specials' },
   // PR #72 — Mattress code/name template.
-  { key: 'mattressFormat', label: 'Code Format', description: 'Mattress SKU code + name template. Uses placeholders like {model_code}, {size}, {model_name}, {width}, {length}, {thickness}, {branding}.', priced: false, section: 'Mattress' },
+  { key: 'mattressFormat', label: 'Mattress · Code Format', description: 'Mattress SKU code + name template. Uses placeholders like {model_code}, {size}, {model_name}, {width}, {length}, {thickness}, {branding}.', priced: false, section: 'Mattress', attribute: 'codeFormat' },
   // PR #50 — Mattress Sizes pool.
-  { key: 'mattressSizes', label: 'Sizes', description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Mattress' },
-  { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
+  { key: 'mattressSizes', label: 'Mattress · Sizes', description: 'Mattress size code pool (K, Q, S, SS).', priced: false, section: 'Mattress', attribute: 'sizes' },
+  { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common', attribute: 'fabrics' },
 ];
 
 const MaintenanceTab = () => {
@@ -746,9 +774,15 @@ const MaintenanceTab = () => {
   const config = draft ?? resolved.data?.data ?? null;
   const active = MAINTENANCE_TABS.find((t) => t.key === activeKey)!;
 
-  // PR #71 — Commander 2026-05-26 reordered to Bedframe → Mattress → Sofa,
-  // Common (Fabrics) at the bottom.
-  const sections = ['Bedframe', 'Mattress', 'Sofa', 'Common'] as const;
+  // PR #73 — Commander 2026-05-26 wants attribute-first grouping
+  // ("SIZES → Bedframe / Mattress / Sofa") rather than the previous
+  // category-first ("BEDFRAME → Sizes / Divan Heights / …"). The category
+  // grouping made the same attribute appear in three different places —
+  // hard to spot which models offer K/Q/S/SS without hopping between
+  // sections. Group order below matches the prior "PR #71 Bedframe → Mattress
+  // → Sofa, Common last" intent: structural (code format, sizes,
+  // compartments) → bedframe-only height/gap pools → cross-category leg /
+  // specials → fabrics last.
 
   const startEdit = () => {
     if (!resolved.data?.data) return;
@@ -806,26 +840,30 @@ const MaintenanceTab = () => {
   return (
     <div className={styles.maintLayout}>
       <aside className={styles.maintNav}>
-        {sections.map((section) => (
-          <div key={section}>
-            <div className={styles.maintSection}>{section}</div>
-            {MAINTENANCE_TABS.filter((t) => t.section === section).map((t) => {
-              const count = t.key === 'fabrics' ? fabricsCount : countItems(config, t.key);
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  data-active={activeKey === t.key}
-                  className={styles.maintNavItem}
-                  onClick={() => setActiveKey(t.key)}
-                >
-                  <span>{t.label}</span>
-                  <span className={styles.maintCount}>({count})</span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
+        {MAINTENANCE_ATTRIBUTES.map((attr) => {
+          const items = MAINTENANCE_TABS.filter((t) => t.attribute === attr.key);
+          if (items.length === 0) return null;
+          return (
+            <div key={attr.key}>
+              <div className={styles.maintSection}>{attr.label}</div>
+              {items.map((t) => {
+                const count = t.key === 'fabrics' ? fabricsCount : countItems(config, t.key);
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    data-active={activeKey === t.key}
+                    className={styles.maintNavItem}
+                    onClick={() => setActiveKey(t.key)}
+                  >
+                    <span>{t.section}</span>
+                    <span className={styles.maintCount}>({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
       </aside>
 
       <section className={styles.maintPanel}>
