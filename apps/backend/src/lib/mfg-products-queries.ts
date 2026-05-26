@@ -96,6 +96,14 @@ export type MaintenanceConfig = {
   bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
   sofaCompartments?: string[];   // ['1A-LHF','1A-RHF','1NA',...] — sofa compartment codes
   mattressSizes?:    string[];   // ['K','Q','S','SS']
+  // PR #92 — Commander 2026-05-26: "King, 6FT, 183 那些，如果我要改的话，怎
+  // 么样去改呢？" The size code alone (K/Q/S/...) used to be the only thing
+  // editable in Maintenance; label ("6FT") + dimensions ("183X190CM") were
+  // hardcoded in lib/size-info.ts. Override map lets commander edit them
+  // per-code from the same Bedframe Sizes / Mattress Sizes tab. Empty/
+  // missing entry falls back to the static SIZE_INFO map for backwards
+  // compat with deployments that haven't customised yet.
+  sizeLabels?: Record<string, { label?: string; dimensions?: string }>;
   // PR #72 — Per-category SKU code + name templates. Commander 2026-05-26:
   // wants to customise the format himself instead of relying on hardcoded
   // generators. Optional; the server falls back to its built-in defaults
