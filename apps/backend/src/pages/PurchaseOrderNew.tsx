@@ -152,10 +152,25 @@ export const PurchaseOrderNew = () => {
     setPendingItemPick(null);
   }, [supplierId, bindings]);
 
+  // PR #115 — Commander 2026-05-26: "Purchase Location 已经换了，可是下面的
+  // Warehouse 还没换". Header values fan out to all lines whenever they
+  // change — commander can still override any single line afterwards, but
+  // a fresh header change will overwrite again (matches AutoCount: header
+  // is the source of truth, lines inherit until explicitly diverged).
+  // Same pattern for Expected Delivery → per-line Delivery Date.
+  useEffect(() => {
+    if (!purchaseLocationId) return;
+    setLines((prev) => prev.map((l) => ({ ...l, warehouseId: purchaseLocationId })));
+  }, [purchaseLocationId]);
+  useEffect(() => {
+    if (!expectedAt) return;
+    setLines((prev) => prev.map((l) => ({ ...l, deliveryDate: expectedAt })));
+  }, [expectedAt]);
+
   // ── Helpers ─────────────────────────────────────────────────────────
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
-  const addLine  = () => setLines((prev) => [...prev, newLine()]);
+  const addLine  = () => setLines((prev) => [...prev, { ...newLine(), warehouseId: purchaseLocationId || undefined, deliveryDate: expectedAt || undefined }]);
   const dropLine = (rid: string) => setLines((prev) =>
     prev.length === 1 ? [newLine()] : prev.filter((l) => l.rid !== rid),
   );
@@ -468,8 +483,8 @@ export const PurchaseOrderNew = () => {
             <div style={{ textAlign: 'right' }}>Qty</div>
             <div style={{ textAlign: 'right' }}>Unit Price</div>
             <div style={{ textAlign: 'right' }}>Discount</div>
-            <div>Delivery</div>
-            <div>Warehouse</div>
+            <div>Delivery Date</div>
+            <div>Ship-to Location</div>
             <div style={{ textAlign: 'right' }}>Total</div>
             <div></div>
           </div>
@@ -590,7 +605,7 @@ export const PurchaseOrderNew = () => {
                     className={styles.fieldInput}
                     style={{ fontSize: 'var(--fs-12)' }}
                   >
-                    <option value="">— Header default —</option>
+                    <option value="">— Inherit Purchase Location —</option>
                     {(warehouses.data ?? []).map((w) => (
                       <option key={w.id} value={w.id}>{w.code}</option>
                     ))}
