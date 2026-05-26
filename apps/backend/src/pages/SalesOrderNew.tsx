@@ -85,8 +85,15 @@ export const SalesOrderNew = () => {
   const [emergencyRel,   setEmergencyRel]    = useState<typeof RELATIONSHIP_OPTIONS[number] | ''>('');
   const [emergencyPhone, setEmergencyPhone]  = useState('');
 
-  // ── Target date ────────────────────────────────────────────────────
-  const [targetDate, setTargetDate] = useState('');
+  // ── Dates ──────────────────────────────────────────────────────────
+  // PR #121 — Commander 2026-05-26: "应该是 processing date 和 delivery
+  // date，而不是 target date". HOOKKA pattern (SO create page L703-707):
+  //   Processing Date → when manufacturing starts (maps to internal_expected_dd)
+  //   Delivery Date   → when customer expects delivery (maps to customer_delivery_date)
+  // The target_date column stays on the schema for POS handover compatibility
+  // but isn't surfaced here anymore.
+  const [processingDate, setProcessingDate] = useState('');
+  const [deliveryDate,   setDeliveryDate]   = useState('');
 
   // ── Notes ──────────────────────────────────────────────────────────
   const [note, setNote] = useState('');
@@ -169,7 +176,11 @@ export const SalesOrderNew = () => {
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
         emergencyContactPhone:        emergencyPhone || undefined,
-        targetDate: targetDate || undefined,
+        /* PR #121 — Processing Date → internal_expected_dd, Delivery Date →
+           customer_delivery_date. The API maps these snake-case columns
+           directly. */
+        internalExpectedDd:   processingDate || undefined,
+        customerDeliveryDate: deliveryDate   || undefined,
         note: note || undefined,
         /* PR #114 — full variant payload preserved end-to-end. The API
            handler maps every key (divanHeight / legHeight / gap / fabric
@@ -438,22 +449,31 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* ── Target Date ─────────────────────────────────────────────── */}
+      {/* ── Processing + Delivery Dates ────────────────────────────── */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Target Date</h2>
+          <h2 className={styles.cardTitle}>Dates</h2>
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            Customer's preferred install / use date — drives schedule planning
+            Processing Date = when we start production · Delivery Date = customer's expected delivery
           </span>
         </div>
         <div className={styles.cardBody}>
           <div className={styles.formGrid2}>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Target Date</span>
+              <span className={styles.fieldLabel}>Processing Date</span>
               <input
                 type="date"
-                value={targetDate}
-                onChange={(e) => setTargetDate(e.target.value)}
+                value={processingDate}
+                onChange={(e) => setProcessingDate(e.target.value)}
+                className={styles.fieldInput}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Date</span>
+              <input
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
                 className={styles.fieldInput}
               />
             </label>
