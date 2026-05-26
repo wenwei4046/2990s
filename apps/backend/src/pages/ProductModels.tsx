@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { ProductModelDetail } from './ProductModelDetail';
 import { Layers, Search, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -29,6 +29,12 @@ export const ProductModels = () => {
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
+  // PR #119 — Commander 2026-05-26: clicking a Model in Modular tab opens
+  // a right-side drawer with the detail content (photo / allowed options /
+  // SKU variants) instead of navigating away to /product-models/{id}. The
+  // dedicated route still exists for deep-links; this is just the Modular
+  // entrypoint.
+  const [openModelId, setOpenModelId] = useState<string | null>(null);
   // PR #106 — Commander 2026-05-26: showed Modular list with rows he didn't
   // recognize ("这些都没在我的 SKU 里面啊"). Multi-select + bulk delete so he
   // can sweep orphan Models (test entries, migration-0062 backfill leftovers)
@@ -208,9 +214,14 @@ export const ProductModels = () => {
                     />
                   </td>
                   <td>
-                    <Link to={`/product-models/${m.id}`} className={styles.codeChipLink}>
+                    <button
+                      type="button"
+                      className={styles.codeChipLink}
+                      onClick={() => setOpenModelId(m.id)}
+                      style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}
+                    >
                       <code className={styles.codeChip}>{m.model_code}</code>
-                    </Link>
+                    </button>
                   </td>
                   <td className={styles.nameText}>
                     {m.name}
@@ -238,6 +249,35 @@ export const ProductModels = () => {
       )}
 
       {creating && <NewModelDialog onClose={() => setCreating(false)} />}
+
+      {/* PR #119 — embedded Model detail drawer */}
+      {openModelId && (
+        <div
+          onClick={() => setOpenModelId(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.35)',
+            zIndex: 90,
+            display: 'flex',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(1100px, 92vw)',
+              height: '100%',
+              background: 'var(--bg)',
+              boxShadow: 'var(--shadow-3)',
+              overflowY: 'auto',
+              animation: 'none',
+            }}
+          >
+            <ProductModelDetail modelId={openModelId} onClose={() => setOpenModelId(null)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
