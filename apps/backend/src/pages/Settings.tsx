@@ -103,7 +103,12 @@ import {
   useDeleteStateWarehouseMapping,
 } from '../lib/state-warehouse-queries';
 import { useWarehouses } from '../lib/inventory-queries';
-import { useLocalities, distinctStates } from '../lib/localities-queries';
+import {
+  useLocalities, distinctStates,
+  useCreateLocality, useUpdateLocality, useDeleteLocality,
+  type LocalityRow,
+} from '../lib/localities-queries';
+import { Trash2 } from 'lucide-react';
 
 const LocalitiesTab = ({ canEdit }: { canEdit: boolean }) => {
   const mappings = useStateWarehouseMappings();
@@ -111,6 +116,8 @@ const LocalitiesTab = ({ canEdit }: { canEdit: boolean }) => {
   const localities = useLocalities();
   const upsert = useUpsertStateWarehouseMapping();
   const remove = useDeleteStateWarehouseMapping();
+  const createLoc = useCreateLocality();
+  const deleteLoc = useDeleteLocality();
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
   const mappedByState = useMemo(() => {
@@ -121,14 +128,41 @@ const LocalitiesTab = ({ canEdit }: { canEdit: boolean }) => {
     return m;
   }, [mappings.data]);
 
+  // Localities table state — filter + add-row form
+  const [filterState, setFilterState] = useState<string>('');
+  const [newState, setNewState] = useState('');
+  const [newStateCode, setNewStateCode] = useState('');
+  const [newCity, setNewCity] = useState('');
+  const [newPostcode, setNewPostcode] = useState('');
+  const filteredLocalities: LocalityRow[] = (localities.data ?? []).filter(
+    (r) => !filterState || r.state === filterState,
+  );
+
+  const addLocality = () => {
+    const payload = {
+      state:     newState.trim(),
+      stateCode: newStateCode.trim().toUpperCase(),
+      city:      newCity.trim(),
+      postcode:  newPostcode.trim(),
+    };
+    if (!payload.state || !payload.stateCode || !payload.city || !payload.postcode) {
+      window.alert('All four fields are required.');
+      return;
+    }
+    createLoc.mutate(payload, {
+      onSuccess: () => {
+        setNewState(''); setNewStateCode(''); setNewCity(''); setNewPostcode('');
+      },
+      onError: (err) => window.alert(String((err as Error).message ?? err)),
+    });
+  };
+
   return (
     <>
       <div className={styles.readOnlyBanner}>
         <strong>State → Warehouse mapping.</strong> Pick the dispatch warehouse
         for each state. When a customer's delivery address is in that state, the
         SO Detail page suggests this warehouse as the Sales Location automatically.
-        States, cities, and postcodes themselves are read-only references from
-        my_localities — edit those via Supabase Studio for now.
       </div>
 
       <div className={styles.tableCard}>
@@ -201,6 +235,125 @@ const LocalitiesTab = ({ canEdit }: { canEdit: boolean }) => {
               })}
             </tbody>
           </table>
+        )}
+      </div>
+
+      {/* ── States / Cities / Postcodes CRUD (PR #160) ──────────────── */}
+      <div className={styles.readOnlyBanner} style={{ marginTop: 'var(--space-4)' }}>
+        <strong>States / Cities / Postcodes.</strong> Editable list of rows in
+        my_localities — every (state, city, postcode) the SO + POS dropdowns
+        offer comes from here. Add new rows below; delete the whole-row trash
+        icon to drop one.
+      </div>
+
+      {canEdit && (
+        <div className={styles.tableCard} style={{ padding: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+          <div className="t-eyebrow" style={{ marginBottom: 'var(--space-2)' }}>Add a row</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 1fr 110px auto', gap: 'var(--space-2)' }}>
+            <input
+              className={styles.input}
+              placeholder="State (e.g. Selangor)"
+              value={newState}
+              onChange={(e) => setNewState(e.target.value)}
+            />
+            <input
+              className={styles.input}
+              placeholder="Code (SGR)"
+              value={newStateCode}
+              onChange={(e) => setNewStateCode(e.target.value)}
+              maxLength={5}
+            />
+            <input
+              className={styles.input}
+              placeholder="City (Petaling Jaya)"
+              value={newCity}
+              onChange={(e) => setNewCity(e.target.value)}
+            />
+            <input
+              className={styles.input}
+              placeholder="Postcode (47301)"
+              value={newPostcode}
+              onChange={(e) => setNewPostcode(e.target.value)}
+              maxLength={10}
+            />
+            <Button
+              variant="primary"
+              size="md"
+              onClick={addLocality}
+              disabled={createLoc.isPending}
+            >
+              <Plus size={14} strokeWidth={1.75} />
+              Add
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className={styles.tableCard}>
+        <div style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--line)' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--fs-13)' }}>
+            <span className={styles.muted}>Filter by state:</span>
+            <select
+              className={styles.input}
+              value={filterState}
+              onChange={(e) => setFilterState(e.target.value)}
+              style={{ width: 240 }}
+            >
+              <option value="">All states ({(localities.data ?? []).length} rows)</option>
+              {states.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+        </div>
+        {localities.isLoading ? (
+          <div className={styles.empty}>Loading…</div>
+        ) : filteredLocalities.length === 0 ? (
+          <div className={styles.empty}>No rows.</div>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Code</th>
+                <th>City</th>
+                <th>Postcode</th>
+                {canEdit && <th aria-label="actions" />}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredLocalities.slice(0, 500).map((r) => (
+                <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
+                  <td>{r.state}</td>
+                  <td><code className={styles.code}>{r.stateCode}</code></td>
+                  <td>{r.city}</td>
+                  <td><code className={styles.code}>{r.postcode}</code></td>
+                  {canEdit && (
+                    <td>
+                      {r.id && (
+                        <button
+                          type="button"
+                          className={styles.editBtn}
+                          disabled={deleteLoc.isPending}
+                          onClick={() => {
+                            if (confirm(`Delete ${r.state} / ${r.city} / ${r.postcode}?`)) {
+                              deleteLoc.mutate(r.id!);
+                            }
+                          }}
+                          aria-label="Delete locality row"
+                        >
+                          <Trash2 size={14} strokeWidth={1.75} />
+                        </button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {filteredLocalities.length > 500 && (
+          <div className={styles.empty} style={{ fontSize: 'var(--fs-12)' }}>
+            Showing first 500 of {filteredLocalities.length} — use the filter above to narrow down.
+          </div>
         )}
       </div>
     </>
