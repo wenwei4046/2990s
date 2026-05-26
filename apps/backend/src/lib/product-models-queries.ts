@@ -50,13 +50,17 @@ export type ProductModelRow = {
 
 /** Per-category allowed-options pool. Empty `{}` = no restriction. */
 export type AllowedOptions = {
-  sizes?:         string[];   // SOFA seat sizes OR BEDFRAME/MATTRESS sizes
-  compartments?:  string[];   // SOFA only
-  divan_heights?: string[];   // BEDFRAME
-  total_heights?: string[];   // BEDFRAME
-  gaps?:          string[];   // BEDFRAME
-  leg_heights?:   string[];
-  specials?:      string[];
+  sizes?:                 string[];   // SOFA seat sizes OR BEDFRAME/MATTRESS sizes
+  compartments?:          string[];   // SOFA only
+  divan_heights?:         string[];   // BEDFRAME
+  total_heights?:         string[];   // BEDFRAME
+  gaps?:                  string[];   // BEDFRAME
+  leg_heights?:           string[];
+  specials?:              string[];
+  /** MATTRESS only — drives the (WxLx{thickness}CM) substitution in the
+      auto-generated SKU name. Set at New Model time or edited later via
+      the Model detail page. */
+  mattress_thickness_cm?: number;
 };
 
 export type ModelSkuRow = {

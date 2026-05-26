@@ -180,6 +180,11 @@ export function NewModelDialog({
   const [name, setName] = useState('');
   const [category, setCategory] = useState<MfgCategory>(initialCategory ?? 'SOFA');
   const [description, setDescription] = useState('');
+  // PR #77 — Mattress-only thickness collected at New Model time so the
+  // (WxLx{thickness}CM) substitution works on first "+ Add Codes" without
+  // a detour to the Model detail page. Stored as allowed_options.
+  // mattress_thickness_cm; later edits still happen on the detail page.
+  const [mattressThicknessCm, setMattressThicknessCm] = useState('');
   const createMut = useCreateProductModel();
 
   // PR #69 — Branding is OPTIONAL across all categories. BEDFRAME / SOFA
@@ -189,6 +194,13 @@ export function NewModelDialog({
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!modelCode.trim() || !name.trim()) return;
+    // Build allowedOptions only for fields the user explicitly set. Empty
+    // {} = no restriction yet (matches existing convention).
+    const allowedOptions: Record<string, unknown> = {};
+    if (category === 'MATTRESS') {
+      const t = parseInt(mattressThicknessCm.trim(), 10);
+      if (Number.isFinite(t) && t > 0) allowedOptions.mattress_thickness_cm = t;
+    }
     createMut.mutate(
       {
         branding: branding.trim() || null,
@@ -196,6 +208,7 @@ export function NewModelDialog({
         name: name.trim(),
         category,
         description: description.trim() || null,
+        ...(Object.keys(allowedOptions).length > 0 ? { allowedOptions } : {}),
       },
       {
         onSuccess: (res) => {
@@ -268,6 +281,26 @@ export function NewModelDialog({
           </select>
         </label>
 
+        {/* PR #77 — Mattress-only thickness input. Drives the
+            (WxLx{thickness}CM) substitution in the auto-generated SKU name
+            on first "+ Add Codes". Stored as allowed_options.
+            mattress_thickness_cm — same field the detail-page input writes,
+            so future edits still work there. */}
+        {category === 'MATTRESS' && (
+          <label className={styles.field}>
+            <span className="t-eyebrow">Mattress thickness (cm) *</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={mattressThicknessCm}
+              onChange={(e) => setMattressThicknessCm(e.target.value)}
+              placeholder="e.g. 31 / 30 / 20"
+            />
+          </label>
+        )}
+
         <label className={styles.field}>
           <span className="t-eyebrow">Description (optional)</span>
           <input
@@ -281,6 +314,7 @@ export function NewModelDialog({
           category={category}
           modelCode={modelCode}
           modelName={name}
+          mattressThicknessCm={mattressThicknessCm}
         />
 
         {createMut.isError && (
@@ -304,8 +338,15 @@ export function NewModelDialog({
    Shows commander a worked example of how SKU codes + names get built from
    his current inputs. Updates live as he types. */
 function TemplatePreview({
-  category, modelCode, modelName,
-}: { category: MfgCategory; modelCode: string; modelName: string }) {
+  category, modelCode, modelName, mattressThicknessCm,
+}: {
+  category: MfgCategory;
+  modelCode: string;
+  modelName: string;
+  /** PR #77 — Mattress only; live preview uses the typed value so commander
+      sees the real (183x190x{thickness}CM) before clicking Create. */
+  mattressThicknessCm?: string;
+}) {
   const mc = modelCode.trim() || '{model_code}';
   const mn = modelName.trim() || '{model_name}';
   let codeFmt = '', nameFmt = '', exampleCode = '', exampleName = '';
@@ -324,7 +365,9 @@ function TemplatePreview({
     codeFmt = '{model_code} MATT ({size})';
     nameFmt = '{model_name} (WxLxTCM)';
     exampleCode = `${mc} MATT (K)`;
-    exampleName = `${mn} (183x190x31CM)`;
+    const tn = mattressThicknessCm ? parseInt(mattressThicknessCm.trim(), 10) : NaN;
+    const tDisplay = Number.isFinite(tn) && tn > 0 ? String(tn) : '{thickness}';
+    exampleName = `${mn} (183x190x${tDisplay}CM)`;
   } else {
     return null;
   }
