@@ -401,7 +401,13 @@ const DEFAULT_FORMATS = {
   // produced "ADDA 1A(LHF)" (no "SOFA" word). Now inserts "SOFA" literal
   // + optional branding prefix. Mirrors API §SOFA branch.
   sofaName:     '{branding} SOFA {model_name} {compartment}',
-  mattressCode: '{model_code} MATT ({size})',
+  // PR #86 — Match 2990 sample. Was '{model_code} MATT ({size})' which
+  // produced bare "PUREZONE MATT (K)". Now prepends {branding_nf} — a
+  // derived var that's "{branding}-NF " when branding present, "" when
+  // empty — so a Mattress Model with branding="HAPPI.S" generates
+  // "HAPPI.S-NF PUREZONE MATT (K)" and one with branding="" still gets
+  // a clean "PUREZONE MATT (K)" (no orphan "-NF ").
+  mattressCode: '{branding_nf}{model_code} MATT ({size})',
   // PR #81 — Match 2990 sample. Was '{model_name} ({width}x...)' which
   // produced "GridCool (183x190x25CM)"; now produces
   // "Happi.S GridCool MATTRESS (183x190x25CM)". applyFormat() handles the
@@ -462,11 +468,17 @@ function computeCandidates(
   if (category === 'MATTRESS') {
     const codeFmt = fmt.mattressCode?.trim() || DEFAULT_FORMATS.mattressCode;
     const nameFmt = fmt.mattressName?.trim() || DEFAULT_FORMATS.mattressName;
+    // PR #86 — `branding_nf` is the derived "{branding}-NF " (or "") used by
+    // the mattress code template. Built here so the template stays a plain
+    // string substitution and the empty-branding case doesn't leave a
+    // dangling "-NF " in the output.
+    const brandingNf = branding.trim() ? `${branding.trim()}-NF ` : '';
     return (allowed.sizes ?? []).map((sz) => {
       const info  = SIZE_INFO[sz];
       const label = info?.label ?? sz;
       const vars: Record<string, string> = {
         branding, model_code: modelCode, model_name: modelName,
+        branding_nf: brandingNf,
         size: sz, size_label: label,
         width:     info ? String(info.w) : '',
         length:    info ? String(info.l) : '',
