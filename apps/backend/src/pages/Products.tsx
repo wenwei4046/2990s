@@ -34,6 +34,7 @@ import {
   Star,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { SOFA_MODULES } from '@2990s/shared';
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
@@ -1187,6 +1188,357 @@ const countItems = (cfg: MaintenanceConfig, key: MaintenanceListKey): number => 
   return Array.isArray(v) ? v.length : 0;
 };
 
+/* ─── Sofa Compartments — POS module catalogue port (PR #220) ─────────
+   Commander 2026-05-27: "把我在 POS System 设计好的模块放进 Maintenance Sofa
+   Compartments." Each compartment row gets an image + description +
+   default price. The compartment-code list (config.sofaCompartments)
+   stays a `string[]` so existing readers (ProductModelDetail allowed
+   options, SKU generator) keep working untouched. Per-compartment meta
+   lives in a parallel `sofaCompartmentMeta` map keyed by code.
+
+   Code-format note: SOFA_MODULES uses dash (`1A-LHF`); commander's pool
+   may use parens (`1A(LHF)`). normalizeCompartmentCode collapses both
+   to the dash form so the lookup hits regardless. */
+
+type CompartmentMeta = {
+  imageKey?: string;
+  description?: string;
+  defaultPriceCenti?: number;
+};
+
+const normalizeCompartmentCode = (raw: string): string =>
+  raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+
+const SOFA_MODULE_BY_NORM_ID = new Map(
+  SOFA_MODULES.map((m) => [normalizeCompartmentCode(m.id), m]),
+);
+
+// Commander 2026-05-27 wording overrides — POS labels are technical
+// ("1B · Left hand facing (wide arm)"); commander asked for shorter,
+// human-readable copy that emphasises the bench / no-arm rule. Only
+// listed codes get the override; others fall back to SOFA_MODULES.label.
+const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
+  '1B-LHF': '1-Sitter with Bench (LHF, no arm where bench)',
+  '1B-RHF': '1-Sitter with Bench (RHF, no arm where bench)',
+  '2B-LHF': '2-Bench (LHF, two seats, one arm)',
+  '2B-RHF': '2-Bench (RHF, two seats, one arm)',
+};
+
+// Resolve the seeded default for one compartment code. UI surfaces this
+// when the stored meta has no value of its own — commander overrides
+// land in sofaCompartmentMeta on Save.
+const seedCompartmentMeta = (code: string): CompartmentMeta => {
+  const norm = normalizeCompartmentCode(code);
+  const mod  = SOFA_MODULE_BY_NORM_ID.get(norm);
+  if (!mod) return {};
+  return {
+    imageKey:    `sofa-modules/${mod.id}.png`,
+    description: COMPARTMENT_DESCRIPTION_OVERRIDE[mod.id] ?? mod.label,
+    // SOFA_MODULES carries no base price — POS reads pricing from
+    // product_compartments per Model. Default to 0 here; commander can
+    // type the back-office default into the input.
+    defaultPriceCenti: 0,
+  };
+};
+
+// Merge stored override on top of the seed. Empty/undefined fields on
+// the override fall back to the seed value.
+const resolveCompartmentMeta = (
+  code: string,
+  stored: CompartmentMeta | undefined,
+): CompartmentMeta => {
+  const seed = seedCompartmentMeta(code);
+  return {
+    imageKey:          stored?.imageKey          ?? seed.imageKey,
+    description:       stored?.description       ?? seed.description,
+    defaultPriceCenti: stored?.defaultPriceCenti ?? seed.defaultPriceCenti,
+  };
+};
+
+const formatRmFromCenti = (centi: number | undefined): string => {
+  const n = centi ?? 0;
+  return (n / 100).toFixed(2);
+};
+
+const parseRmToCenti = (rm: string): number => {
+  const n = Number(rm);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 100);
+};
+
+const SofaCompartmentsList = ({
+  config,
+  editMode,
+  onChange,
+  dragRowProps,
+  draftValue,
+  setDraftValue,
+}: {
+  config: MaintenanceConfig;
+  editMode: boolean;
+  onChange: (next: MaintenanceConfig) => void;
+  dragRowProps: (i: number) => HTMLAttributes<HTMLDivElement>;
+  draftValue: string;
+  setDraftValue: (v: string) => void;
+}) => {
+  const items = config.sofaCompartments ?? [];
+  const meta  = config.sofaCompartmentMeta ?? {};
+
+  const writeMeta = (code: string, patch: Partial<CompartmentMeta>) => {
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    const m    = next.sofaCompartmentMeta ?? {};
+    const cur  = m[code] ?? {};
+    m[code] = { ...cur, ...patch };
+    next.sofaCompartmentMeta = m;
+    onChange(next);
+  };
+
+  const removeAt = (idx: number) => {
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    const arr  = next.sofaCompartments ?? [];
+    arr.splice(idx, 1);
+    next.sofaCompartments = arr;
+    onChange(next);
+  };
+
+  const addItem = () => {
+    const v = draftValue.trim();
+    if (!v) return;
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    const arr  = next.sofaCompartments ?? [];
+    arr.push(v);
+    next.sofaCompartments = arr;
+    onChange(next);
+    setDraftValue('');
+  };
+
+  const updateCode = (idx: number, newVal: string) => {
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    const arr  = next.sofaCompartments ?? [];
+    const old  = arr[idx];
+    arr[idx]   = newVal;
+    next.sofaCompartments = arr;
+    // Migrate the meta key alongside the code rename so the override
+    // doesn't get orphaned. If the new code already has meta, leave it.
+    if (old && old !== newVal) {
+      const m = next.sofaCompartmentMeta ?? {};
+      if (m[old] && !m[newVal]) {
+        m[newVal] = m[old]!;
+        delete m[old];
+        next.sofaCompartmentMeta = m;
+      }
+    }
+    onChange(next);
+  };
+
+  return (
+    <div className={styles.maintList}>
+      {items.map((code, i) => {
+        const resolved = resolveCompartmentMeta(code, meta[code]);
+        const stored   = meta[code];
+        const hasImage = Boolean(resolved.imageKey);
+        return (
+          <div
+            key={`${code}-${i}`}
+            className={styles.maintRow}
+            {...dragRowProps(i)}
+            style={{
+              ...(dragRowProps(i).style ?? {}),
+              gridTemplateColumns: '32px 32px 56px 1fr auto auto',
+              gap: 'var(--space-3)',
+              alignItems: 'center',
+            }}
+          >
+            <button type="button" className={styles.maintRowIcon} title="History">
+              <History {...ICON_PROPS} />
+            </button>
+            <span className={styles.maintRowIdx} style={editMode ? { cursor: 'grab' } : undefined}>
+              {i + 1}
+            </span>
+            {/* 48px thumbnail or empty placeholder */}
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                background: hasImage ? 'var(--c-paper)' : 'var(--c-cream-2, #EFEAE0)',
+                border: '1px solid var(--line)',
+                borderRadius: 'var(--radius-sm)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+              }}
+              title={hasImage ? resolved.imageKey : 'No design'}
+            >
+              {hasImage ? (
+                <img
+                  src={`/${resolved.imageKey}`}
+                  alt={code}
+                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                />
+              ) : (
+                <span style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)' }}>—</span>
+              )}
+            </div>
+            {/* Code + description column */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+              {editMode ? (
+                <>
+                  <input
+                    type="text"
+                    value={code}
+                    onChange={(e) => updateCode(i, e.target.value)}
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--fs-14)',
+                      fontWeight: 600,
+                      background: 'var(--c-cream)',
+                      border: '1px solid var(--c-orange)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '4px 8px',
+                      outline: 'none',
+                      width: 110,
+                    }}
+                    title="Compartment code (e.g. 1A-LHF)"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Description (e.g. 1-Sitter Left-hand facing)"
+                    value={stored?.description ?? resolved.description ?? ''}
+                    onChange={(e) => writeMeta(code, { description: e.target.value })}
+                    style={{
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-13)',
+                      background: 'var(--c-cream)',
+                      border: '1px solid var(--line-strong)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '4px 8px',
+                      outline: 'none',
+                      width: '100%',
+                      maxWidth: 360,
+                    }}
+                  />
+                </>
+              ) : (
+                <>
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--fs-14)',
+                      fontWeight: 600,
+                      color: 'var(--c-ink)',
+                    }}
+                  >
+                    {code}
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-13)',
+                      color: resolved.description ? 'var(--fg-soft)' : 'var(--fg-muted)',
+                    }}
+                  >
+                    {resolved.description ?? '(no design — leave blank)'}
+                  </span>
+                </>
+              )}
+            </div>
+            {/* Default price column (RM, edits in centi) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                minWidth: 120,
+                justifyContent: 'flex-end',
+              }}
+            >
+              <span className={styles.maintRowRmPrefix}>RM</span>
+              {editMode ? (
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formatRmFromCenti(stored?.defaultPriceCenti ?? resolved.defaultPriceCenti)}
+                  onChange={(e) => writeMeta(code, { defaultPriceCenti: parseRmToCenti(e.target.value) })}
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--fs-14)',
+                    background: 'var(--c-cream)',
+                    border: '1px solid var(--line-strong)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '4px 8px',
+                    outline: 'none',
+                    width: 90,
+                    textAlign: 'right',
+                  }}
+                />
+              ) : (
+                <span
+                  className={`${styles.maintRowPrice} ${
+                    (resolved.defaultPriceCenti ?? 0) === 0 ? styles.maintRowPriceMuted : ''
+                  }`}
+                  style={{ minWidth: 0 }}
+                >
+                  {formatRmFromCenti(resolved.defaultPriceCenti)}
+                </span>
+              )}
+            </div>
+            {editMode ? (
+              <button
+                type="button"
+                className={styles.maintRowIcon}
+                title="Remove"
+                onClick={() => removeAt(i)}
+                style={{ color: 'var(--c-festive-b, #B8331F)' }}
+              >
+                <Trash2 {...ICON_PROPS} />
+              </button>
+            ) : (
+              <span />
+            )}
+          </div>
+        );
+      })}
+
+      {editMode && (
+        <div
+          className={styles.maintRow}
+          style={{
+            background: 'var(--c-paper)',
+            borderColor: 'var(--c-orange)',
+            gridTemplateColumns: '32px 32px 1fr auto',
+          }}
+        >
+          <span className={styles.maintRowIcon}><Plus {...ICON_PROPS} /></span>
+          <span className={styles.maintRowIdx}>+</span>
+          <input
+            type="text"
+            placeholder="New compartment code (e.g. 1A-LHF)"
+            value={draftValue}
+            onChange={(e) => setDraftValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-14)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '6px 10px',
+              outline: 'none',
+            }}
+          />
+          <Button variant="primary" size="sm" onClick={addItem}>
+            <Plus {...ICON_PROPS} />
+            <span>Add</span>
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MaintenanceList = ({
   listKey,
   config,
@@ -1264,11 +1616,27 @@ const MaintenanceList = ({
   // (reading 'map')" crash when an older maintenance_config row doesn't
   // carry the new pool keys yet. Editing then saving will materialise the
   // key in the JSONB blob.
+  // PR #220 (Commander 2026-05-27) — Sofa Compartments gets its own renderer
+  // with image preview + description + default price, ported from the POS
+  // module catalogue (SOFA_MODULES). Falls through to the generic string[]
+  // branch below for every other pool key.
+  if (listKey === 'sofaCompartments') {
+    return (
+      <SofaCompartmentsList
+        config={config}
+        editMode={editMode}
+        onChange={onChange}
+        dragRowProps={dragRowProps}
+        draftValue={draftValue}
+        setDraftValue={setDraftValue}
+      />
+    );
+  }
+
   if (
     listKey === 'gaps'
     || listKey === 'sofaSizes'
     || listKey === 'bedframeSizes'
-    || listKey === 'sofaCompartments'
     || listKey === 'mattressSizes'
   ) {
     const items = (config[listKey] as string[] | undefined) ?? [];

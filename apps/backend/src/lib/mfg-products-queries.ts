@@ -119,6 +119,18 @@ export type MaintenanceConfig = {
   bedframeSizes?:    string[];   // ['K','Q','S','SS','SK','SP'] — bedframe size codes
   sofaCompartments?: string[];   // ['1A-LHF','1A-RHF','1NA',...] — sofa compartment codes
   mattressSizes?:    string[];   // ['K','Q','S','SS']
+  // PR #220 (Commander 2026-05-27): per-compartment design metadata — POS
+  // module designs (image + description + default price) brought into the
+  // Maintenance UI for back-office reference. Keyed by compartment code,
+  // so the parallel `sofaCompartments: string[]` order/membership stays
+  // the source of truth for existing readers (ProductModelDetail, generator).
+  // All fields optional; the UI auto-seeds defaults from SOFA_MODULES when
+  // absent — commander overrides land here only on Save.
+  sofaCompartmentMeta?: Record<string, {
+    imageKey?: string;          // 'sofa-modules/1A-LHF.png' — relative to /public
+    description?: string;       // free-text label commander may override
+    defaultPriceCenti?: number; // cents (1 RM = 100). 0/absent = no default.
+  }>;
   // PR #92 — Commander 2026-05-26: "King, 6FT, 183 那些，如果我要改的话，怎
   // 么样去改呢？" The size code alone (K/Q/S/...) used to be the only thing
   // editable in Maintenance; label ("6FT") + dimensions ("183X190CM") were
