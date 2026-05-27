@@ -442,6 +442,55 @@ export function useSaveMaintenanceConfig() {
   });
 }
 
+/* ─── Sofa Compartment photo upload / delete (PR — Commander 2026-05-28) ──
+ *
+ * Each compartment code (1A(LHF) / 1A(RHF) / 1NA / 2A(LHF) / …) gets its
+ * own hero photo. The Worker stores the file in R2 under
+ * `sofa-compartments/{code}/{uuid}.{ext}` and patches the master-scope
+ * maintenance_config row's `sofaCompartmentMeta[code].imageKey`.
+ *
+ * Multipart POST — same posture as useUploadProductModelPhoto:
+ *   - never set content-type by hand (fetch picks the boundary from FormData)
+ *   - authedFetch only stamps content-type for string bodies, so FormData
+ *     slips past it correctly.
+ *
+ * On success we invalidate the master maintenance-config caches so the
+ * Backend Sofa Compartments list re-renders with the new imageKey, and the
+ * POS catalog (which subscribes via Realtime to maintenance_config_history)
+ * picks the new key up within ~300ms. */
+
+export function useUploadSofaCompartmentPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ code, file }: { code: string; file: File }) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return authedFetch<{ photoUrl: string; photoKey: string }>(
+        `/maintenance-config/sofa-compartments/${encodeURIComponent(code)}/photo`,
+        { method: 'POST', body: fd },
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['maintenance-config'] });
+    },
+  });
+}
+
+export function useDeleteSofaCompartmentPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (code: string) => {
+      return authedFetch<{ ok: true }>(
+        `/maintenance-config/sofa-compartments/${encodeURIComponent(code)}/photo`,
+        { method: 'DELETE' },
+      );
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['maintenance-config'] });
+    },
+  });
+}
+
 export function useDeleteMaintenanceConfigRow() {
   const qc = useQueryClient();
   return useMutation({

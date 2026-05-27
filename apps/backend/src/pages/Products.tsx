@@ -45,6 +45,8 @@ import {
   useMaintenanceConfigHistory,
   useSaveMaintenanceConfig,
   useMfgProductSuppliers,
+  useUploadSofaCompartmentPhoto,
+  useDeleteSofaCompartmentPhoto,
   type MfgCategory,
   type MfgProductRow,
   type MaintenanceConfig,
@@ -1616,6 +1618,29 @@ const parseRmToCenti = (rm: string): number => {
   return Math.round(n * 100);
 };
 
+/* PR — Commander 2026-05-28: resolve the per-compartment image source.
+ * Three cases:
+ *   1) imageKey starts with `sofa-compartments/` — uploaded via the API.
+ *      Render via the Worker proxy (`{API}/maintenance-config/sofa-compartments/{code}/photo/{key}`)
+ *      so the auth-free public route streams the R2 object.
+ *   2) imageKey starts with `sofa-modules/` — legacy bundled SVG, render
+ *      from /public.
+ *   3) imageKey is an http(s) URL — render directly. */
+const SOFA_COMPARTMENT_API_PREFIX = 'sofa-compartments/';
+const resolveCompartmentImageSrc = (
+  code: string,
+  imageKey: string | undefined,
+): string | null => {
+  if (!imageKey) return null;
+  if (/^https?:\/\//i.test(imageKey)) return imageKey;
+  if (imageKey.startsWith(SOFA_COMPARTMENT_API_PREFIX)) {
+    const API = (import.meta.env.VITE_API_URL ?? '') as string;
+    return `${API}/maintenance-config/sofa-compartments/${encodeURIComponent(code)}/photo/${encodeURIComponent(imageKey)}`;
+  }
+  // Legacy bundled SVG / PNG from /public.
+  return `/${imageKey}`;
+};
+
 const SofaCompartmentsList = ({
   config,
   editMode,
@@ -1633,6 +1658,14 @@ const SofaCompartmentsList = ({
 }) => {
   const items = config.sofaCompartments ?? [];
   const meta  = config.sofaCompartmentMeta ?? {};
+  /* PR — Commander 2026-05-28: per-row photo upload + delete. Always
+   * available (not gated by edit mode) because the API writes the imageKey
+   * directly to maintenance_config_history without going through the draft
+   * → save cycle. uploadingCode tracks which row is mid-upload so we can
+   * show a "saving…" hint on the right thumbnail. */
+  const uploadPhoto = useUploadSofaCompartmentPhoto();
+  const deletePhoto = useDeleteSofaCompartmentPhoto();
+  const [uploadingCode, setUploadingCode] = useState<string | null>(null);
 
   const writeMeta = (code: string, patch: Partial<CompartmentMeta>) => {
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
@@ -1705,32 +1738,126 @@ const SofaCompartmentsList = ({
             <span className={styles.maintRowIdx} style={editMode ? { cursor: 'grab' } : undefined}>
               {i + 1}
             </span>
-            {/* 48px thumbnail or empty placeholder */}
-            <div
-              style={{
-                width: 48,
-                height: 48,
-                background: hasImage ? 'var(--c-paper)' : 'var(--c-cream-2, #EFEAE0)',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius-sm)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                overflow: 'hidden',
-              }}
-              title={hasImage ? resolved.imageKey : 'No design'}
-            >
-              {hasImage ? (
-                <img
-                  src={`/${resolved.imageKey}`}
-                  alt={code}
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                />
-              ) : (
-                <span style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)' }}>—</span>
-              )}
-            </div>
+            {/* 48px thumbnail — click to upload, × to delete (when uploaded).
+                Uploads land in maintenance_config_history.config.sofaCompartmentMeta
+                via the Worker (no draft/save cycle — direct mutation). The
+                legacy bundled SVGs (imageKey starts with `sofa-modules/`) are
+                not deletable since they're shipped in /public; commander
+                replaces them by uploading a new R2 photo, which the resolver
+                prefers automatically. */}
+            {(() => {
+              const isUploaded = (resolved.imageKey ?? '').startsWith(SOFA_COMPARTMENT_API_PREFIX);
+              const isUploading = uploadingCode === code;
+              const src = resolveCompartmentImageSrc(code, resolved.imageKey);
+              return (
+                <div
+                  style={{
+                    width: 48,
+                    height: 48,
+                    background: hasImage ? 'var(--c-paper)' : 'var(--c-cream-2, #EFEAE0)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                    position: 'relative',
+                    opacity: isUploading ? 0.5 : 1,
+                  }}
+                  title={
+                    isUploading
+                      ? 'Uploading…'
+                      : hasImage
+                        ? `${resolved.imageKey} — click to replace${isUploaded ? ' · right-click / × to remove' : ''}`
+                        : 'Click to upload a photo'
+                  }
+                  onContextMenu={(e) => {
+                    // Right-click on an uploaded photo = delete (matches
+                    // commander's "Right-click or × → delete" spec).
+                    if (!isUploaded || isUploading) return;
+                    e.preventDefault();
+                    // eslint-disable-next-line no-alert
+                    if (!confirm(`Remove uploaded photo for ${code}?`)) return;
+                    deletePhoto.mutate(code);
+                  }}
+                >
+                  <label
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: isUploading ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {hasImage && src ? (
+                      <img
+                        src={src}
+                        alt={code}
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    ) : (
+                      <span style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)' }}>+ photo</span>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                      style={{ display: 'none' }}
+                      disabled={isUploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        // Reset the input so re-selecting the same file fires onChange.
+                        e.target.value = '';
+                        if (!file) return;
+                        setUploadingCode(code);
+                        uploadPhoto.mutate({ code, file }, {
+                          onSettled: () => setUploadingCode(null),
+                          onError: (err) => {
+                            // eslint-disable-next-line no-alert
+                            alert(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
+                          },
+                        });
+                      }}
+                    />
+                  </label>
+                  {isUploaded && !isUploading && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // eslint-disable-next-line no-alert
+                        if (!confirm(`Remove uploaded photo for ${code}?`)) return;
+                        deletePhoto.mutate(code);
+                      }}
+                      title="Remove uploaded photo"
+                      aria-label={`Remove photo for ${code}`}
+                      style={{
+                        position: 'absolute',
+                        top: -6,
+                        right: -6,
+                        width: 16,
+                        height: 16,
+                        borderRadius: '50%',
+                        background: 'var(--c-festive-b, #B8331F)',
+                        color: 'white',
+                        border: '1px solid var(--c-paper)',
+                        fontSize: 10,
+                        lineHeight: '14px',
+                        padding: 0,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <X size={10} strokeWidth={2.5} />
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
             {/* Code + description column */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
               {editMode ? (

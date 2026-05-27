@@ -22,7 +22,7 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics } from '../lib/queries';
+import { useProductFabrics, type SofaCustomizerData } from '../lib/queries';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import styles from './CustomBuilder.module.css';
 
@@ -195,6 +195,14 @@ interface CustomBuilderProps {
   editingKey?: string;
   /** Fabric to pre-select when editing (re-derived from the line snapshot). */
   initialFabric?: FabricSelection | null;
+  /** PR — Commander 2026-05-28: when present, the palette filters to ONLY the
+   *  compartments commander ticked on this Model (Backend → Products →
+   *  Modular → [Model] → Allowed Options), and per-row images resolve from
+   *  the master maintenance config's sofaCompartmentMeta (uploaded photos
+   *  via Backend → Maintenance → Sofa Compartments). Absent the prop the
+   *  builder falls back to its legacy pricing.compartments filter + bundled
+   *  /sofa-modules/*.png assets. */
+  modelCustomizer?: SofaCustomizerData | null;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -217,7 +225,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -243,16 +251,38 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     moved: boolean;
     group: { id: string; x: number; y: number }[];
   } | null>(null);
+  /* PR — Commander 2026-05-28: per-module art resolver. When the parent
+   * Configurator passes a modelCustomizer (Model's allowed-options +
+   * resolved compartment meta), individual module imageUrls override the
+   * legacy /sofa-modules/<id>.png path. Falls back to the bundled asset so
+   * unconfigured Models and unmapped module ids still render.
+   *
+   * Looks up by NORMALIZED code (1A-LHF) AND by the raw code (1A(LHF)) so
+   * commander's pool form doesn't have to match the POS shared lib form.
+   *
+   * Hoisted above the bbox-measuring effect so JS's TDZ doesn't blow up
+   * the dependency array. */
+  const resolveModuleArtSrc = useCallback((moduleId: string): string => {
+    if (modelCustomizer) {
+      const norm = moduleId.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+      const hit = modelCustomizer.compartments.find(
+        (cc) => cc.code === moduleId || cc.normalizedCode === norm,
+      );
+      if (hit?.imageUrl) return hit.imageUrl;
+    }
+    return `${ASSET_BASE}/${moduleId}.png`;
+  }, [modelCustomizer]);
+
   // Force a re-render once a PNG's silhouette bbox finishes measuring so the
   // img can switch from the placeholder fit to the cropped-to-silhouette sizing.
   const [, setBboxVer] = useState(0);
   useEffect(() => {
-    const srcs = new Set<string>(cells.map((c) => `${ASSET_BASE}/${c.moduleId}.png`));
+    const srcs = new Set<string>(cells.map((c) => resolveModuleArtSrc(c.moduleId)));
     srcs.forEach((src) => {
       if (bboxCache.has(src)) return;
       measureArtBbox(src).then(() => setBboxVer((v) => v + 1));
     });
-  }, [cells]);
+  }, [cells, resolveModuleArtSrc]);
 
   // Room scale — multiplier on the base 600×480cm room. 1× = single sofa
   // layout (default), 2.5× = multi-sofa layout (visually ~40% per module).
@@ -287,6 +317,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [roomW, roomH]);
 
   const addConfigured = useCart((s) => s.addConfigured);
+
 
   /* ─── Module-add (palette → canvas) ─────────────────────────────── */
 
@@ -747,38 +778,70 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           <span className={styles.hint}>Tap to add</span>
         </div>
         <div className={styles.paletteList}>
-          {PALETTE_GROUPS.map((g) => {
-            const items = SOFA_MODULES.filter((m) => m.group === g)
-              .filter((m) => pricing.compartments.find((cc) => cc.compartmentId === m.id)?.active);
-            if (items.length === 0) return null;
-            return (
-              <div key={g} className={styles.paletteGroup}>
-                <div className={styles.paletteGroupHead}>{g}</div>
-                {items.map((m) => {
-                  const row = pricing.compartments.find((cc) => cc.compartmentId === m.id);
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={styles.paletteItem}
-                      onClick={() => addCell(m.id)}
-                      title={m.label}
-                    >
-                      <div className={styles.paletteArt}>
-                        <img src={`${ASSET_BASE}/${m.id}.png`} alt={m.label} draggable={false} />
-                      </div>
-                      <div className={styles.paletteInfo}>
-                        <div className={styles.paletteCode}>{m.id}</div>
-                        <div className={styles.paletteSub}>{m.label.replace(`${m.id} · `, '')}</div>
-                        <div className={styles.palettePrice}>{row ? fmtRM(row.price) : 'TBC'}</div>
-                      </div>
-                      <span className={styles.paletteAdd} aria-hidden>+</span>
-                    </button>
-                  );
-                })}
-              </div>
+          {(() => {
+            /* PR — Commander 2026-05-28: when the parent passed a
+             * modelCustomizer, use its compartment list (Backend allowed
+             * options ∩ master sofaCompartments pool) as the source of
+             * truth for palette membership AND per-row price. Falls back
+             * to the legacy pricing.compartments tick map when the
+             * customizer isn't available (orphan SKUs / unmigrated Models).
+             *
+             * Membership rule: a SOFA_MODULES row is shown when its id (or
+             * its normalized code) matches a ticked compartment. Price
+             * resolves from the customizer's per-row defaultPriceCenti
+             * (cents → ringgit). Legacy pricing.compartments still
+             * supplies the price when no customizer hit exists, so partial
+             * migrations (commander mid-edit) don't blank every cell. */
+            const customizerByNormId = new Map(
+              (modelCustomizer?.compartments ?? []).map((cc) => [cc.normalizedCode, cc] as const),
             );
-          })}
+            return PALETTE_GROUPS.map((g) => {
+              const items = SOFA_MODULES.filter((m) => m.group === g).filter((m) => {
+                if (modelCustomizer) {
+                  return customizerByNormId.has(m.id);
+                }
+                return pricing.compartments.find((cc) => cc.compartmentId === m.id)?.active;
+              });
+              if (items.length === 0) return null;
+              return (
+                <div key={g} className={styles.paletteGroup}>
+                  <div className={styles.paletteGroupHead}>{g}</div>
+                  {items.map((m) => {
+                    const legacyRow = pricing.compartments.find((cc) => cc.compartmentId === m.id);
+                    const customRow = customizerByNormId.get(m.id);
+                    // Prefer the customizer's defaultPriceCenti (cents → RM).
+                    // Legacy row.price is whole RM. Fall back through both.
+                    const priceRm = customRow?.priceSen != null && customRow.priceSen > 0
+                      ? Math.round(customRow.priceSen / 100)
+                      : legacyRow?.price ?? null;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={styles.paletteItem}
+                        onClick={() => addCell(m.id)}
+                        title={m.label}
+                      >
+                        <div className={styles.paletteArt}>
+                          <img src={resolveModuleArtSrc(m.id)} alt={m.label} draggable={false} />
+                        </div>
+                        <div className={styles.paletteInfo}>
+                          <div className={styles.paletteCode}>{m.id}</div>
+                          <div className={styles.paletteSub}>
+                            {customRow?.label && customRow.label !== m.id
+                              ? customRow.label
+                              : m.label.replace(`${m.id} · `, '')}
+                          </div>
+                          <div className={styles.palettePrice}>{priceRm != null ? fmtRM(priceRm) : 'TBC'}</div>
+                        </div>
+                        <span className={styles.paletteAdd} aria-hidden>+</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            });
+          })()}
         </div>
         <FabricColourPicker
           productFabrics={productFabrics.data ?? []}
@@ -1032,7 +1095,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                   }}
                 >
                   {(() => {
-                    const artSrc = `${ASSET_BASE}/${c.moduleId}.png`;
+                    const artSrc = resolveModuleArtSrc(c.moduleId);
                     const bbox = bboxCache.get(artSrc);
                     let imgStyle: CSSProperties;
                     if (bbox) {

@@ -14,6 +14,8 @@ import {
   useAddons,
   useBedframeColours,
   useBedframeOptions,
+  useSofaCustomizerData,
+  useSofaCustomizerRealtime,
   type AddonRow,
 } from '../lib/queries';
 import {
@@ -124,6 +126,13 @@ export const Configurator = () => {
   const compartments = useProductCompartments(productId);
   const productFabrics = useProductFabrics(productId);
   useProductPricingRealtime(productId);
+  /* PR — Commander 2026-05-28: Sofa Customize wires to Model.allowed_options.
+   * The query resolves to null for non-sofa SKUs / orphan SKUs (no model_id),
+   * in which case CustomBuilder falls back to the legacy
+   * product_compartments tick map. Realtime keeps it in sync with commander's
+   * Backend edits without a refresh. */
+  const sofaCustomizer = useSofaCustomizerData(productId);
+  useSofaCustomizerRealtime(productId);
 
   const [picked, setPicked] = useState<string | null>(null);
   const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
@@ -263,11 +272,19 @@ export const Configurator = () => {
 
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
   // toggle always has a value (only rendered for sofas, which always seed it).
+  //
+  // PR — Commander 2026-05-28: when the Model's allowed_options.sizes is set
+  // (Backend → Products → Modular → [Model] → Allowed Options → Seat sizes),
+  // it takes precedence over the legacy product.depth_options CSV. Falls
+  // through to depth_options when the customizer isn't available (orphan
+  // SKUs / unmigrated Models) so existing Models keep their toggles.
   const depthOptions = useMemo<Depth[]>(() => {
+    const fromAllowed = (sofaCustomizer.data?.sizes ?? []).filter(Boolean);
+    if (fromAllowed.length > 0) return fromAllowed as Depth[];
     const raw: string = product.data?.depth_options ?? '';
     const parsed = raw.split(',').map((s) => s.trim()).filter(Boolean);
     return parsed.length > 0 ? parsed : ['24'];
-  }, [product.data?.depth_options]);
+  }, [product.data?.depth_options, sofaCustomizer.data?.sizes]);
 
   // Keep activeDepth within the Model's offered depths (default to the first).
   useEffect(() => {
@@ -747,6 +764,7 @@ export const Configurator = () => {
             setCells={setSofaCells}
             editingKey={isEditing && editKey ? editKey : undefined}
             initialFabric={isEditing ? fabricSel : null}
+            modelCustomizer={sofaCustomizer.data ?? null}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />
         )
