@@ -24,7 +24,7 @@
 // this in without touching the parent.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
@@ -93,7 +93,14 @@ const CATEGORY_BADGE: Record<string, { bg: string; fg: string; label: string }> 
    SoLineCard
    ────────────────────────────────────────────────────────────────────── */
 
-export const SoLineCard = ({
+/* Task #103 — Wrap in React.memo at module bottom. The parent (SO Detail)
+   now passes stable per-row callbacks via a useMemo'd Map keyed off
+   editingLineIds, so the memo comparator can rely on shallow-equal props.
+   `inheritVariantsByCategory` from SalesOrderNew is a fresh object on every
+   render but the only state it captures is LINE 1's variants, which change
+   exactly when the user is interacting with LINE 1 anyway — i.e. exactly
+   when we DO want the follower rows to re-render. */
+const SoLineCardInner = ({
   index,
   draft,
   onChange,
@@ -631,6 +638,15 @@ export const SoLineCard = ({
     </div>
   );
 };
+SoLineCardInner.displayName = 'SoLineCard';
+
+/* Task #103 — Wrapped in React.memo with the default shallow comparator.
+   With the SO Detail page now passing stable per-row callbacks
+   (rowCallbacks Map + patchAddingDraft useCallback), the memo skips
+   re-renders when an unrelated row's draft state, an unrelated parent
+   state (History drawer toggle, Edit-mode flip, payment table activity),
+   or the routinely-stable header useQuery cache result changes. */
+export const SoLineCard = memo(SoLineCardInner);
 
 /* ──────────────────────────────────────────────────────────────────────
    VariantSelect — uniform <select> with label + optional "+RM x.xx" suffix

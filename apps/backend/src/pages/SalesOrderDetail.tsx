@@ -283,7 +283,14 @@ export const SalesOrderDetail = () => {
 
   /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
      except startAdd which seeds a brand-new SoLineDraft. The mutation payload
-     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side). */
+     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side).
+
+     Task #103 — startEditLine doesn't need to be stable (it only fires from
+     the table-row Pencil button, never as a child prop), but stopEditLine +
+     patchEditingDraft DO — they're closed over by the per-row callbacks the
+     memoized SoLineCard receives. useCallback with no deps keeps them
+     reference-stable across renders; both rely entirely on setState callbacks
+     so there's no stale-closure risk. */
   const startEditLine = (it: SoItem) => {
     setEditingLineIds((prev) => {
       const next = new Set(prev);
@@ -309,7 +316,7 @@ export const SalesOrderDetail = () => {
     }));
   };
 
-  const stopEditLine = (id: string) => {
+  const stopEditLine = useCallback((id: string) => {
     setEditingLineIds((prev) => {
       if (!prev.has(id)) return prev;
       const next = new Set(prev);
@@ -321,15 +328,39 @@ export const SalesOrderDetail = () => {
       const { [id]: _drop, ...rest } = prev;
       return rest;
     });
-  };
+  }, []);
 
-  const patchEditingDraft = (id: string, patch: Partial<SoLineDraft>) => {
+  const patchEditingDraft = useCallback((id: string, patch: Partial<SoLineDraft>) => {
     setEditingDrafts((prev) => {
       const cur = prev[id];
       if (!cur) return prev;
       return { ...prev, [id]: { ...cur, ...patch } };
     });
-  };
+  }, []);
+
+  /* Task #103 — Per-row callback map. SoLineCard is now React.memo'd, but a
+     fresh `(patch) => patchEditingDraft(it.id, patch)` arrow on every parent
+     render still busts shallow-equality on the props and forces a re-render
+     of the heaviest child component on the page (which carries its own
+     useMfgProducts + useMaintenanceConfig + useFabricTrackings sub-trees).
+     The map is keyed on the editing-row id; the Map identity changes only
+     when the set of editing rows changes — which is exactly when a row's
+     callbacks need to rebind anyway. patchEditingDraft + stopEditLine are
+     themselves stable via useCallback above, so the bound arrows here are
+     the only churn. */
+  const rowCallbacks = useMemo(() => {
+    const map = new Map<string, {
+      onChange: (patch: Partial<SoLineDraft>) => void;
+      onRemove: () => void;
+    }>();
+    for (const id of editingLineIds) {
+      map.set(id, {
+        onChange: (patch) => patchEditingDraft(id, patch),
+        onRemove: () => stopEditLine(id),
+      });
+    }
+    return map;
+  }, [editingLineIds, patchEditingDraft, stopEditLine]);
 
   const submitEditingDraft = (id: string) => {
     const d = editingDrafts[id];
@@ -370,7 +401,16 @@ export const SalesOrderDetail = () => {
     });
   };
 
-  const cancelAddLine = () => setAddingDraft(null);
+  const cancelAddLine = useCallback(() => setAddingDraft(null), []);
+
+  /* Task #103 — Stable onChange for the lone "+ Add Line Item" SoLineCard at
+     the bottom of the table. Mirrors rowCallbacks above but kept as a
+     standalone useCallback because there is at most one add-draft at a time. */
+  const patchAddingDraft = useCallback(
+    (patch: Partial<SoLineDraft>) =>
+      setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev),
+    [],
+  );
 
   const submitAddLine = () => {
     if (!addingDraft) return;
@@ -604,7 +644,7 @@ export const SalesOrderDetail = () => {
             <SoLineCard
               index={0}
               draft={addingDraft}
-              onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+              onChange={patchAddingDraft}
               onRemove={cancelAddLine}
               canRemove={true}
             />
@@ -665,14 +705,18 @@ export const SalesOrderDetail = () => {
                 const inlineEditing = editingLineIds.has(it.id);
                 const editDraft = editingDrafts[it.id];
                 if (inlineEditing && editDraft) {
+                  /* Task #103 — Pull the stable per-row callbacks built once
+                     above. The Map entry exists for every id in
+                     editingLineIds, so the !cb branch is theoretical. */
+                  const cb = rowCallbacks.get(it.id);
                   return (
                     <tr key={it.id}>
                       <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
                         <SoLineCard
                           index={items.indexOf(it)}
                           draft={editDraft}
-                          onChange={(patch) => patchEditingDraft(it.id, patch)}
-                          onRemove={() => stopEditLine(it.id)}
+                          onChange={cb?.onChange ?? ((patch) => patchEditingDraft(it.id, patch))}
+                          onRemove={cb?.onRemove ?? (() => stopEditLine(it.id))}
                           canRemove={true}
                           /* PR-F (#79) wiring — enable photo upload on
                              already-saved lines. New lines (addingDraft)
@@ -772,7 +816,7 @@ export const SalesOrderDetail = () => {
                     <SoLineCard
                       index={items.length}
                       draft={addingDraft}
-                      onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+                      onChange={patchAddingDraft}
                       onRemove={cancelAddLine}
                       canRemove={true}
                     />
