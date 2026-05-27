@@ -9,12 +9,13 @@
 // Model layer. The plain SKU list lives on /products (SkuMasterTab).
 // ----------------------------------------------------------------------------
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ProductModelDetail } from './ProductModelDetail';
-import { Layers, Search, Plus, Trash2, Truck, X } from 'lucide-react';
+import { Layers, Search, Plus, Trash2, Truck, X, ImageOff, Upload } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useProductModels, useCreateProductModel, useGenerateModelSkus, useDeleteProductModel,
+  useUploadProductModelPhoto, useDeleteProductModelPhoto,
   type ProductModelRow,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
@@ -210,6 +211,7 @@ export const ProductModels = () => {
                     }}
                   />
                 </th>
+                <th style={{ width: 64 }}>Photo</th>
                 <th>Code</th>
                 <th>Name</th>
                 <th>Active</th>
@@ -240,6 +242,12 @@ export const ProductModels = () => {
                         return n;
                       })}
                     />
+                  </td>
+                  <td>
+                    {/* PR — Commander 2026-05-27: 48x48 thumb. Click empty
+                        slot → file picker; right-click filled thumb → remove
+                        photo. Hover state shows action affordance. */}
+                    <ModelPhotoCell model={m} />
                   </td>
                   <td>
                     <button
@@ -333,6 +341,146 @@ function FilterChip({
     >
       {children}
     </button>
+  );
+}
+
+/* ────────────────────────── Model Photo cell ───────────────────────────── */
+/* PR — Commander 2026-05-27: 48×48 thumb on each Product Model row in
+   Modular tab. Click the empty slot or filled thumb to pick a new file
+   (jpg/png/webp, ≤2MB enforced server-side). Hover the filled thumb to
+   reveal an × button that removes the photo (R2 delete + nulls
+   photo_url). Errors surface as a small red caption under the thumb so
+   we don't block the table layout. */
+
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+const PHOTO_MAX_BYTES_CLIENT = 2 * 1024 * 1024;
+
+/** Mirror of the POS catalog's resolvePhotoUrl(): photo_url is stored as
+ *  a relative proxy path (`/product-models/.../photo/...`) — prefix with
+ *  the API host so an <img src> works from the Backend portal origin. */
+function resolveBackendPhotoUrl(raw: string | null): string | null {
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!API_URL) return raw;
+  return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
+}
+
+function ModelPhotoCell({ model }: { model: ProductModelRow }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const upload = useUploadProductModelPhoto();
+  const remove = useDeleteProductModelPhoto();
+
+  const busy = upload.isPending || remove.isPending;
+  const src = resolveBackendPhotoUrl(model.photo_url);
+
+  const pick = () => {
+    if (busy) return;
+    setErr(null);
+    inputRef.current?.click();
+  };
+
+  const onPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (file.size > PHOTO_MAX_BYTES_CLIENT) {
+      setErr(`Too large (${(file.size / 1024 / 1024).toFixed(1)} MB · max 2 MB)`);
+      return;
+    }
+    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type)) {
+      setErr('Use JPG / PNG / WEBP');
+      return;
+    }
+    try {
+      await upload.mutateAsync({ id: model.id, file });
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message.slice(0, 120) : 'Upload failed');
+    }
+  };
+
+  const onRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (busy) return;
+    // eslint-disable-next-line no-alert
+    if (!confirm(`Remove photo for ${model.model_code}?`)) return;
+    setErr(null);
+    try {
+      await remove.mutateAsync(model.id);
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message.slice(0, 120) : 'Remove failed');
+    }
+  };
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    if (!src) return;
+    e.preventDefault();
+    void onRemove(e);
+  };
+
+  return (
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+      <button
+        type="button"
+        onClick={pick}
+        onContextMenu={onContextMenu}
+        disabled={busy}
+        title={src ? 'Click to replace · right-click to remove' : 'Click to upload photo (JPG/PNG/WEBP, ≤2MB)'}
+        style={{
+          position: 'relative',
+          width: 48,
+          height: 48,
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--line)',
+          background: src ? `var(--bg-alt) center/cover no-repeat url(${src})` : 'var(--bg-alt)',
+          padding: 0,
+          cursor: busy ? 'wait' : 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--fg-muted)',
+          overflow: 'hidden',
+        }}
+      >
+        {!src && (busy
+          ? <Upload size={14} strokeWidth={1.75} />
+          : <ImageOff size={14} strokeWidth={1.75} />)}
+        {src && !busy && (
+          <span
+            aria-label="Remove photo"
+            onClick={onRemove}
+            style={{
+              position: 'absolute',
+              top: -6, right: -6,
+              width: 16, height: 16,
+              borderRadius: '50%',
+              background: 'var(--c-ink)',
+              color: 'var(--c-cream)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 10,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+            }}
+          >
+            <X size={10} strokeWidth={2} />
+          </span>
+        )}
+      </button>
+      {err && (
+        <span style={{ fontSize: 10, color: 'var(--c-danger, #c0392b)', maxWidth: 96, lineHeight: 1.2 }}>
+          {err}
+        </span>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        style={{ display: 'none' }}
+        onChange={onPicked}
+      />
+    </div>
   );
 }
 

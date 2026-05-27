@@ -17,10 +17,54 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { createClient } from '@supabase/supabase-js';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
 export const productModels = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// ── Public photo proxy (PR — Commander 2026-05-27) ─────────────────────────
+// Registered BEFORE the global supabaseAuth middleware so the POS catalog
+// can render Model photos via plain <img src> tags (no Bearer header on
+// image requests). Security: this handler validates the requested key
+// against the Model's stored photo_url before streaming, so a guessed
+// key can't leak a blob from another Model's prefix or an unrelated R2
+// object. Uses the service-role Supabase client to read the row since
+// no JWT is provided.
+productModels.get('/:id/photo/:key', async (c) => {
+  const id = c.req.param('id');
+  const key = decodeURIComponent(c.req.param('key'));
+
+  if (!c.env.SO_ITEM_PHOTOS) {
+    return c.json({ error: 'photo_bucket_not_configured' }, 500);
+  }
+
+  const sb = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: model } = await sb
+    .from('product_models')
+    .select('photo_url')
+    .eq('id', id)
+    .maybeSingle();
+  if (!model) return c.json({ error: 'not_found' }, 404);
+  const m = model as { photo_url: string | null };
+  if (!m.photo_url || extractPhotoKey(m.photo_url, id) !== key) {
+    return c.json({ error: 'photo_not_in_model' }, 404);
+  }
+
+  const obj = await c.env.SO_ITEM_PHOTOS.get(key);
+  if (!obj) return c.json({ error: 'photo_not_found_in_r2' }, 404);
+
+  return new Response(obj.body, {
+    headers: {
+      'content-type': obj.httpMetadata?.contentType ?? 'application/octet-stream',
+      // 1-hour browser cache — photos are immutable per key (new uploads
+      // get a fresh UUID), so this is safe.
+      'cache-control': 'public, max-age=3600',
+    },
+  });
+});
 
 productModels.use('*', supabaseAuth);
 
@@ -524,3 +568,154 @@ productModels.delete('/:id', async (c) => {
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   return c.json({ ok: true });
 });
+
+// ── Photo upload (PR — Commander 2026-05-27) ───────────────────────────────
+//
+// Stores Model hero photo in the SO_ITEM_PHOTOS R2 bucket (already
+// provisioned + bound for PR-F per-line SO photos). Reuses the bucket
+// instead of provisioning a second one because:
+//   - same access pattern (private bucket, auth-gated proxy reads),
+//   - same auth model (any signed-in staff can upload from Backend),
+//   - bucket layout uses a distinct prefix (`product-models/{id}/...`)
+//     so the two purposes stay tidy without a second binding.
+//
+// The Model row's `photo_url` column stores the public proxy path
+// (e.g. `/product-models/{id}/photo/{key}`) — relative URLs that the POS
+// catalog hot-loads via the same Worker. Storing the proxy path (not a
+// signed S3 URL) means commander's uploaded photo doesn't expire and the
+// POS card cache stays stable. The proxy endpoint itself enforces auth +
+// validates the key against `product_models.photo_url` before streaming
+// the R2 object.
+
+const PHOTO_MAX_BYTES = 2 * 1024 * 1024; // 2 MB per task spec
+
+const photoExtFromMime = (mime: string): string | null => {
+  const m = mime.toLowerCase();
+  if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg';
+  if (m === 'image/png')                       return 'png';
+  if (m === 'image/webp')                      return 'webp';
+  return null;
+};
+
+productModels.post('/:id/photo', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  if (!c.env.SO_ITEM_PHOTOS) {
+    return c.json({ error: 'photo_bucket_not_configured' }, 500);
+  }
+
+  // Cheap existence check before consuming the upload body.
+  const { data: model, error: mErr } = await supabase
+    .from('product_models')
+    .select('id, photo_url')
+    .eq('id', id)
+    .maybeSingle();
+  if (mErr) return c.json({ error: 'load_failed', reason: mErr.message }, 500);
+  if (!model) return c.json({ error: 'not_found' }, 404);
+
+  let form: Record<string, unknown>;
+  try {
+    form = await c.req.parseBody();
+  } catch (e) {
+    return c.json({ error: 'invalid_multipart', reason: e instanceof Error ? e.message : String(e) }, 400);
+  }
+  const file = form.file as File | undefined;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: 'file_field_required' }, 400);
+  }
+
+  const ext = file.type ? photoExtFromMime(file.type) : null;
+  if (!ext) {
+    return c.json({ error: 'unsupported_type', expected: 'image/jpeg | image/png | image/webp', got: file.type }, 400);
+  }
+  if (file.size > PHOTO_MAX_BYTES) {
+    return c.json({ error: 'file_too_large', maxBytes: PHOTO_MAX_BYTES, got: file.size }, 400);
+  }
+
+  const photoId = crypto.randomUUID();
+  const photoKey = `product-models/${id}/${photoId}.${ext}`;
+
+  try {
+    await c.env.SO_ITEM_PHOTOS.put(photoKey, file.stream(), {
+      httpMetadata: { contentType: file.type },
+      customMetadata: { modelId: id, uploadedBy: c.get('user').id },
+    });
+  } catch (e) {
+    return c.json({ error: 'r2_put_failed', reason: e instanceof Error ? e.message : String(e) }, 500);
+  }
+
+  // Proxy URL the POS catalog + Backend thumbnail render via <img src>.
+  // Relative path keeps it portable across api.{env} domains.
+  const photoUrl = `/product-models/${id}/photo/${encodeURIComponent(photoKey)}`;
+
+  // Best-effort cleanup of the previous photo so we don't leak R2 storage
+  // when commander overwrites a photo. Only deletes if the previous URL
+  // points to a key under this Model's prefix (defensive — a manual URL
+  // edit should never trigger a delete of an unrelated object).
+  const prev = (model as { photo_url: string | null }).photo_url;
+  if (prev) {
+    const prevKey = extractPhotoKey(prev, id);
+    if (prevKey && prevKey !== photoKey) {
+      await c.env.SO_ITEM_PHOTOS.delete(prevKey).catch(() => {});
+    }
+  }
+
+  const { error: updErr } = await supabase
+    .from('product_models')
+    .update({ photo_url: photoUrl })
+    .eq('id', id);
+  if (updErr) {
+    // Rollback the just-uploaded blob so we don't leak.
+    await c.env.SO_ITEM_PHOTOS.delete(photoKey).catch(() => {});
+    return c.json({ error: 'db_update_failed', reason: updErr.message }, 500);
+  }
+
+  return c.json({ photoUrl, photoKey }, 201);
+});
+
+productModels.delete('/:id/photo', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  if (!c.env.SO_ITEM_PHOTOS) {
+    return c.json({ error: 'photo_bucket_not_configured' }, 500);
+  }
+
+  const { data: model, error: mErr } = await supabase
+    .from('product_models')
+    .select('id, photo_url')
+    .eq('id', id)
+    .maybeSingle();
+  if (mErr) return c.json({ error: 'load_failed', reason: mErr.message }, 500);
+  if (!model) return c.json({ error: 'not_found' }, 404);
+
+  const m = model as { id: string; photo_url: string | null };
+  if (m.photo_url) {
+    const key = extractPhotoKey(m.photo_url, id);
+    if (key) await c.env.SO_ITEM_PHOTOS.delete(key).catch(() => {});
+  }
+
+  const { error: updErr } = await supabase
+    .from('product_models')
+    .update({ photo_url: null })
+    .eq('id', id);
+  if (updErr) return c.json({ error: 'db_update_failed', reason: updErr.message }, 500);
+
+  return c.json({ ok: true });
+});
+
+/** Extract the raw R2 key from a stored photo_url. Only returns a key if
+ *  it lives under this Model's prefix — guards the DELETE/upload-replace
+ *  paths against an attacker-supplied photo_url pointing at an unrelated
+ *  object. */
+function extractPhotoKey(photoUrl: string, modelId: string): string | null {
+  const prefix = `/product-models/${modelId}/photo/`;
+  const idx = photoUrl.indexOf(prefix);
+  if (idx === -1) return null;
+  const encoded = photoUrl.slice(idx + prefix.length);
+  let decoded: string;
+  try { decoded = decodeURIComponent(encoded); } catch { return null; }
+  if (!decoded.startsWith(`product-models/${modelId}/`)) return null;
+  return decoded;
+}

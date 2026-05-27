@@ -406,6 +406,171 @@ export const useCategoriesAll = () =>
     },
   });
 
+/* ─── Backend SKU Master catalog (mfg_products × product_models) ───────────
+ *
+ * PR — Commander 2026-05-27: "你的这个第一张照片，应该要接上我的这个 Product
+ * Module 这一边。然后我的 Product Module 这一边也是会 upload 照片，所以就会
+ * 变成第三张照片". POS Catalog needs to surface the SKU rows commander seeds
+ * via the Backend (Products & Maintenance) AND show the Model-level photos
+ * he uploaded via PR #97. The legacy `/products` table is the retail layer
+ * that hasn't been wired through for Phase 1.5 yet — `mfg_products` is the
+ * source of truth for what's in stock.
+ *
+ * The query joins:
+ *   - mfg_products (status = ACTIVE) → one row per SKU
+ *   - product_models (active = true) → for the photo_url + Model name
+ * Categories sidebar counts roll up from this list (mattress / sofa /
+ * bedframe). Cards render `model.photo_url` when present; fall back to the
+ * monogram placeholder.
+ *
+ * Why direct Supabase (not the API): mfg_products / product_models have no
+ * RLS configured (admin-managed catalogue, all authed staff can read). The
+ * Worker /mfg-products route is auth'd via supabaseAuth which forwards the
+ * same JWT; using the JS client here saves the extra hop and avoids a new
+ * POS-specific endpoint. If RLS gets added later, swap to a Worker route.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+export type MfgCatalogCategory = 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE';
+
+export interface MfgCatalogRow {
+  id:            string;
+  code:          string;
+  name:          string;
+  category:      MfgCatalogCategory;
+  /** Lowercase categories table id ('sofa' / 'bedframe' / 'mattress' / …).
+      Derived from `category` so the sidebar filter can match against the
+      `categories` table without UI doing two enum mappings. */
+  categoryId:    string;
+  description:   string | null;
+  /** From mfg_products.branding (denormalized from the Model in PR #65). */
+  branding:      string | null;
+  sizeLabel:     string | null;
+  basePriceSen:  number | null;
+  modelId:       string | null;
+  /** product_models.name — used for the card subtitle when present. */
+  modelName:     string | null;
+  /** product_models.photo_url — hero image flowed from the Model. */
+  photoUrl:      string | null;
+}
+
+/** Resolve a Model photo_url (stored as relative proxy path
+ *  `/product-models/{id}/photo/{key}`) against VITE_API_URL so the
+ *  rendered <img> works from the POS origin. Absolute URLs (legacy /
+ *  externally-hosted photos) pass through untouched. Returns null when
+ *  there's no photo. */
+function resolvePhotoUrl(raw: string | null): string | null {
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!API_URL) return raw; // best effort during local dev — let it break visibly
+  return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
+}
+
+/** Map mfg category enum → /categories table id used by the sidebar. */
+const MFG_CATEGORY_ID: Record<MfgCatalogCategory, string> = {
+  SOFA:      'sofa',
+  BEDFRAME:  'bedframe',
+  MATTRESS:  'mattress',
+  ACCESSORY: 'accessory',
+  SERVICE:   'accessory', // services aren't a catalog category — bucket under accessory tab
+};
+
+export const useMfgCatalog = () =>
+  useQuery({
+    queryKey: ['mfg-catalog'],
+    staleTime: 30_000,
+    queryFn: async (): Promise<MfgCatalogRow[]> => {
+      // Two-step fetch: (1) ACTIVE SKUs, (2) active Models referenced by them.
+      // Supabase JS supports embedded select via the FK (mfg_products.model_id
+      // → product_models.id) — the cheap path. If the embed fails (no FK
+      // metadata cached) the rows still come back with a NULL model field
+      // and the card falls back to the monogram placeholder.
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select(
+          'id, code, name, category, description, branding, size_label, base_price_sen, model_id, ' +
+          'product_models:model_id ( id, name, photo_url, active )',
+        )
+        .eq('status', 'ACTIVE')
+        .order('code', { ascending: true });
+      if (error) throw error;
+
+      // PR — Use `as unknown as` two-step cast because the supabase-js return
+      // type for `select(...)` with an embedded FK is sometimes inferred as
+      // `GenericStringError[]` when the schema cache hasn't materialised the
+      // relationship yet (same fix pattern as task #94 hotfix).
+      const rows = (data ?? []) as unknown as Array<{
+        id:              string;
+        code:            string;
+        name:            string;
+        category:        MfgCatalogCategory;
+        description:     string | null;
+        branding:        string | null;
+        size_label:      string | null;
+        base_price_sen:  number | null;
+        model_id:        string | null;
+        // Supabase embeds come back as an object OR an array depending on the
+        // join cardinality the schema cache infers. mfg_products → product_models
+        // is a single-record FK so we expect an object, but the type defaults
+        // to an array in PostgREST. Coerce defensively.
+        product_models:  { id: string; name: string; photo_url: string | null; active: boolean } |
+                         Array<{ id: string; name: string; photo_url: string | null; active: boolean }> |
+                         null;
+      }>;
+
+      return rows
+        .map((r) => {
+          const m = Array.isArray(r.product_models) ? r.product_models[0] : r.product_models;
+          // Hide SKUs whose Model is currently deactivated — commander's
+          // "All off" toggle on the Model Detail page should pull the whole
+          // Model's variants from the POS catalog. SKUs without a model link
+          // still show (orphan SKUs predate the Model layer).
+          if (m && m.active === false) return null;
+          return {
+            id:           r.id,
+            code:         r.code,
+            name:         r.name,
+            category:     r.category,
+            categoryId:   MFG_CATEGORY_ID[r.category] ?? 'accessory',
+            description:  r.description,
+            branding:     r.branding,
+            sizeLabel:    r.size_label,
+            basePriceSen: r.base_price_sen,
+            modelId:      r.model_id,
+            modelName:    m?.name ?? null,
+            // photo_url is stored as a relative proxy path from the API
+            // (e.g. "/product-models/{id}/photo/{key}") — resolve against
+            // VITE_API_URL so the <img> works from the POS origin. Absolute
+            // URLs (legacy / migrated rows) pass through unchanged.
+            photoUrl:     resolvePhotoUrl(m?.photo_url ?? null),
+          } satisfies MfgCatalogRow;
+        })
+        .filter((r): r is MfgCatalogRow => r !== null);
+    },
+  });
+
+/** Realtime invalidate on mfg_products + product_models edits so commander's
+ *  Backend changes land on the POS catalog within ~300ms. Mirrors the
+ *  prototype's localStorage push but via Supabase Realtime. */
+export const useMfgCatalogRealtime = () => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const channel = supabase
+      .channel('mfg-catalog')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mfg_products' },
+        () => { void qc.invalidateQueries({ queryKey: ['mfg-catalog'] }); },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_models' },
+        () => { void qc.invalidateQueries({ queryKey: ['mfg-catalog'] }); },
+      )
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [qc]);
+};
+
 // my_localities is a static Malaysia postcode dataset (~3000 rows). Fetched
 // once and cached forever — the seed file regenerates only when the upstream
 // dataset is refreshed (see packages/db/scripts/build-my-localities-seed.mjs).

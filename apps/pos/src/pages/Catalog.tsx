@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
-  Hourglass,
   Package,
   Sofa,
   Bed,
@@ -12,13 +11,19 @@ import {
   Search,
   RotateCcw,
   Sparkles,
+  ImageOff,
   type LucideIcon,
 } from 'lucide-react';
-import { Button, PriceTag } from '@2990s/design-system';
-import { useCatalog, useCatalogRealtime, useCategoriesAll, type CatalogProduct } from '../lib/queries';
+import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import styles from './Catalog.module.css';
+
+// PR — Commander 2026-05-27: Catalog now reads `mfg_products` (Backend SKU
+// Master output) JOINed with `product_models` (photo + Model-level metadata).
+// Replaces the prototype's hardcoded `/products` read which never got seeded.
+// Sidebar counts roll up from the live mfg_products list; cards render the
+// Model photo commander uploaded via Backend → Products → Modular tab.
 
 const CAT_ICON: Record<string, LucideIcon> = {
   sofa: Sofa,
@@ -33,74 +38,124 @@ const CAT_ICON: Record<string, LucideIcon> = {
 const productInitial = (name: string): string =>
   name?.trim()?.charAt(0)?.toUpperCase() ?? '?';
 
-interface SeriesLite {
-  id: string;
-  label: string;
+/** Group SKUs by Model so the grid renders one card per Model, not one per
+ *  SKU. A Model with 6 sizes would otherwise spam the grid with 6 identical
+ *  photos. Cards then show "By size" / "6 variants" as the price hint. */
+interface CatalogCard {
+  modelKey:    string;       // model_id when present, else SKU id (orphan)
+  categoryId:  string;
+  name:        string;
+  description: string | null;
+  branding:    string | null;
+  photoUrl:    string | null;
+  /** Lead SKU's code — shown on the card chip + used in the configure link. */
+  leadSku:     string;
+  leadSkuId:   string;
+  variantCount: number;
+  /** Lowest base price among variants (sen). null when no SKU has a price. */
+  minPriceSen: number | null;
+  /** All matching mfg_product ids — used for filter scoring. */
+  skuCodes:    string[];
+}
+
+function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
+  const groups = new Map<string, CatalogCard>();
+  for (const r of rows) {
+    const key = r.modelId ?? r.id; // orphan SKUs (no model) get their own card
+    const existing = groups.get(key);
+    if (existing) {
+      existing.variantCount += 1;
+      existing.skuCodes.push(r.code);
+      if (r.basePriceSen != null && (existing.minPriceSen == null || r.basePriceSen < existing.minPriceSen)) {
+        existing.minPriceSen = r.basePriceSen;
+      }
+      continue;
+    }
+    groups.set(key, {
+      modelKey:     key,
+      categoryId:   r.categoryId,
+      // Prefer the Model's name (clean — "ADDA") over the SKU's name
+      // ("SOFA ADDA 1A(LHF)") so cards read like a product, not a line item.
+      name:         r.modelName ?? r.name,
+      description:  r.description,
+      branding:     r.branding,
+      photoUrl:     r.photoUrl,
+      leadSku:      r.code,
+      leadSkuId:    r.id,
+      variantCount: 1,
+      minPriceSen:  r.basePriceSen,
+      skuCodes:     [r.code],
+    });
+  }
+  // Stable sort: by name within each category, but the grid layer doesn't
+  // know about categories so we just sort by name globally.
+  return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export const Catalog = () => {
-  const catalog = useCatalog();
-  useCatalogRealtime();
+  const catalog = useMfgCatalog();
+  useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
   const [activeCat, setActiveCat] = useState<string>('all');
-  const [activeSeries, setActiveSeries] = useState<string>('all');
+  const [activeBranding, setActiveBranding] = useState<string>('all');
   const [query, setQuery] = useState('');
 
-  const products = catalog.data ?? [];
+  const rows = catalog.data ?? [];
+  const cards = useMemo(() => buildCards(rows), [rows]);
 
   // Categories come from the categories table directly (not derived from
-  // products) so TBC ones still render even with zero products. Series still
-  // come from products since only series with at least one product are useful
-  // as a filter.
+  // products) so TBC ones still render even with zero products. Brandings
+  // come from the live data since only seeded brands are useful as a filter.
   const cats = allCategories.data ?? [];
 
-  const seriesList = useMemo<SeriesLite[]>(() => {
-    const m = new Map<string, SeriesLite>();
-    for (const p of products) {
-      if (p.series) m.set(p.series.id, p.series);
-    }
-    return Array.from(m.values());
-  }, [products]);
+  const brandingList = useMemo<string[]>(() => {
+    const set = new Set<string>();
+    for (const r of rows) if (r.branding) set.add(r.branding);
+    return Array.from(set).sort();
+  }, [rows]);
 
   const liveCats = cats.filter((c) => !c.tbc);
   const tbcCats = cats.filter((c) => c.tbc);
 
+  // Counts roll up at the card layer (one per Model) so the sidebar reads
+  // "Sofas · 12" instead of "Sofas · 180" when each Model has 15 SKUs.
   const counts = useMemo(() => {
     const open = new Set(liveCats.map((c) => c.id));
     const c: Record<string, number> = {
-      all: products.filter((p) => p.category && open.has(p.category.id)).length,
+      all: cards.filter((p) => open.has(p.categoryId)).length,
     };
     for (const cat of cats) {
-      c[cat.id] = products.filter((p) => p.category?.id === cat.id).length;
+      c[cat.id] = cards.filter((p) => p.categoryId === cat.id).length;
     }
     return c;
-  }, [products, cats, liveCats]);
+  }, [cards, cats, liveCats]);
 
   const filtered = useMemo(() => {
     const open = new Set(liveCats.map((c) => c.id));
     const q = query.trim().toLowerCase();
-    return products.filter((p) => {
+    return cards.filter((p) => {
       if (activeCat === 'all') {
-        if (!p.category || !open.has(p.category.id)) return false;
-      } else if (p.category?.id !== activeCat) {
+        if (!open.has(p.categoryId)) return false;
+      } else if (p.categoryId !== activeCat) {
         return false;
       }
-      if (activeSeries !== 'all' && p.series?.id !== activeSeries) return false;
+      if (activeBranding !== 'all' && p.branding !== activeBranding) return false;
       if (q) {
         const hit =
           p.name.toLowerCase().includes(q) ||
-          p.sku.toLowerCase().includes(q) ||
-          (p.detail?.toLowerCase().includes(q) ?? false);
+          p.skuCodes.some((s) => s.toLowerCase().includes(q)) ||
+          (p.description?.toLowerCase().includes(q) ?? false) ||
+          (p.branding?.toLowerCase().includes(q) ?? false);
         if (!hit) return false;
       }
       return true;
     });
-  }, [products, activeCat, activeSeries, query, liveCats]);
+  }, [cards, activeCat, activeBranding, query, liveCats]);
 
   const resetFilters = () => {
     setActiveCat('all');
-    setActiveSeries('all');
+    setActiveBranding('all');
     setQuery('');
   };
 
@@ -115,9 +170,9 @@ export const Catalog = () => {
         <p className={styles.empty}>Loading catalog…</p>
       ) : catalog.error ? (
         <p className={styles.empty}>Failed to load: {String(catalog.error)}</p>
-      ) : products.length === 0 ? (
+      ) : cards.length === 0 ? (
         <p className={styles.empty}>
-          No products yet. Ask your admin to seed the catalogue via the Backend SKU Master.
+          No products yet — ask admin to add via Backend → Products & Maintenance → Modular.
         </p>
       ) : (
         <div className={styles.layout}>
@@ -204,19 +259,19 @@ export const Catalog = () => {
                 <Search size={14} strokeWidth={1.75} />
                 <input
                   type="search"
-                  placeholder="Name, SKU, detail…"
+                  placeholder="Name, SKU, brand…"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
               <select
                 className={styles.select}
-                value={activeSeries}
-                onChange={(e) => setActiveSeries(e.target.value)}
+                value={activeBranding}
+                onChange={(e) => setActiveBranding(e.target.value)}
               >
                 <option value="all">All series</option>
-                {seriesList.map((s) => (
-                  <option key={s.id} value={s.id}>{s.label}</option>
+                {brandingList.map((b) => (
+                  <option key={b} value={b}>{b}</option>
                 ))}
               </select>
               <span className={styles.toolbarCount}>
@@ -234,7 +289,7 @@ export const Catalog = () => {
               </div>
             ) : (
               <div className={styles.grid}>
-                {filtered.map((p) => <ProductCard key={p.id} p={p} />)}
+                {filtered.map((p) => <ProductCard key={p.modelKey} p={p} />)}
               </div>
             )}
           </section>
@@ -244,8 +299,8 @@ export const Catalog = () => {
 
       <footer className={styles.footer}>
         <span className="t-caption">
-          Phase 1 acceptance gate · Realtime subscription on <code>products</code> table.
-          Edits in Backend SKU Master appear here within ~300ms.
+          Reads <code>mfg_products</code> × <code>product_models</code> via Supabase Realtime.
+          Edits in Backend → Products & Maintenance land here within ~300ms.
         </span>
       </footer>
     </main>
@@ -254,45 +309,42 @@ export const Catalog = () => {
   );
 };
 
-const ProductCard = ({ p }: { p: CatalogProduct }) => {
-  const headlinePrice =
-    p.pricing_kind === 'flat' && p.flat_price != null ? p.flat_price : null;
-  const tbc = p.pricing_kind === 'tbc';
-
+const ProductCard = ({ p }: { p: CatalogCard }) => {
+  // PR — Commander wanted a "Configure" affordance even when SKUs are not
+  // wired into the production configurator yet. For now the card links to
+  // the Configurator route using the lead SKU's id; the Configurator will
+  // fall back to placeholder for unknown ids.
   return (
     <Link
-      to={tbc ? '#' : `/configure/${p.id}`}
-      className={`${styles.card} ${tbc ? styles.cardDisabled : ''}`}
-      onClick={(e) => { if (tbc) e.preventDefault(); }}
+      to={`/configure/${p.leadSkuId}`}
+      className={styles.card}
     >
       <div
         className={styles.photo}
-        style={p.img_key ? { backgroundImage: `url(${p.img_key})` } : undefined}
+        style={p.photoUrl ? { backgroundImage: `url(${p.photoUrl})` } : undefined}
       >
-        {!p.img_key && (
+        {!p.photoUrl && (
           <span className={styles.photoFallback}>{productInitial(p.name)}</span>
         )}
-        {p.series && (
-          <span className={styles.photoBadge} data-brand={p.series.id}>{p.series.label}</span>
+        {p.branding && (
+          <span className={styles.photoBadge} data-brand={p.branding.toLowerCase()}>{p.branding}</span>
+        )}
+        {!p.photoUrl && (
+          // PR — show a small "no photo" hint on the placeholder so commander
+          // can tell at-a-glance which Models still need their hero uploaded.
+          <span className={styles.photoEmptyHint} title="No photo uploaded yet">
+            <ImageOff size={12} strokeWidth={1.75} /> No photo
+          </span>
         )}
       </div>
       <div className={styles.body}>
-        {p.size_display && <div className={styles.eyebrow}>{p.size_display}</div>}
         <div className={styles.name}>{p.name}</div>
-        {p.detail && <div className={styles.detail}>{p.detail}</div>}
+        {p.description && <div className={styles.detail}>{p.description}</div>}
         <div className={styles.priceRow}>
-          <code className={styles.sku}>{p.sku}</code>
-          {tbc ? (
-            <span className={styles.tbc}>
-              <Hourglass size={12} strokeWidth={1.75} /> TBC
-            </span>
-          ) : headlinePrice != null ? (
-            <PriceTag amount={headlinePrice} size="sm" />
-          ) : (
-            <span className={styles.fromLabel}>
-              {p.pricing_kind === 'sofa_build' || p.pricing_kind === 'bedframe_build' ? 'Configure' : 'By size'}
-            </span>
-          )}
+          <code className={styles.sku}>{p.leadSku}</code>
+          <span className={styles.fromLabel}>
+            {p.variantCount > 1 ? `${p.variantCount} variants` : 'By size'}
+          </span>
         </div>
       </div>
     </Link>
