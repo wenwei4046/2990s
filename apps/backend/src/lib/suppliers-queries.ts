@@ -121,6 +121,18 @@ export type PoHeaderRow = {
     email?: string | null;
     address?: string | null;
   } | null;
+  /** PR — Commander 2026-05-27: list endpoint embeds a tiny items summary
+      (material_code + qty per line) so the buyer can scan what's inside each
+      PO row without drilling in. Detail endpoint returns full items[]
+      separately, not on the header. Optional because not every consumer
+      wants the join. */
+  items?: PoItemSummary[];
+};
+
+export type PoItemSummary = {
+  material_code: string;
+  material_name: string;
+  qty: number;
 };
 
 export type PoItemRow = {

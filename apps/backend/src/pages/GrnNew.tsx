@@ -22,7 +22,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
-import { usePurchaseOrderDetail } from '../lib/suppliers-queries';
+import { usePurchaseOrderDetail, usePurchaseOrders } from '../lib/suppliers-queries';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -136,26 +136,7 @@ export const GrnNew = () => {
   };
 
   if (!poId) {
-    return (
-      <div className={styles.page}>
-        <div className={styles.headerRow}>
-          <div className={styles.titleBlock}>
-            <Link to="/purchase-orders" className={styles.backBtn}>
-              <ArrowLeft {...ICON} /> <span>Purchase Orders</span>
-            </Link>
-            <h1 className={styles.title}>New Goods Receipt</h1>
-          </div>
-        </div>
-        <section className={styles.card}>
-          <div className={styles.cardBody}>
-            <p>Open a Purchase Order first, then click <strong>Receive Goods</strong> from there.</p>
-            <Button variant="primary" size="md" onClick={() => navigate('/purchase-orders')}>
-              Go to Purchase Orders
-            </Button>
-          </div>
-        </section>
-      </div>
-    );
+    return <GrnPickPo />;
   }
 
   const gridTemplate = 'minmax(180px, 1.4fr) minmax(200px, 1.8fr) 80px 80px 80px 110px 110px 32px';
@@ -287,6 +268,90 @@ export const GrnNew = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
             Subtotal: {fmtRm(subtotalCenti, currency)}
           </div>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+/* ─────────────────── GRN — pick-PO picker ────────────────────────────
+   PR — Commander 2026-05-27: "New GRN" on the list page now lands here
+   directly. When no ?poId= is supplied we render a picker card so the
+   buyer can choose a PO without bouncing back to the PO list. Only
+   SUBMITTED + PARTIALLY_RECEIVED POs (Outstanding) are pickable — the
+   only states with anything left to receive.
+   ──────────────────────────────────────────────────────────────────── */
+const GrnPickPo = () => {
+  const navigate = useNavigate();
+  // No multi-status filter on the API — fetch all once and filter client-side
+  // (small dataset; matches the PO list page strategy).
+  const { data, isLoading } = usePurchaseOrders();
+  const outstanding = useMemo(() => {
+    return (data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED');
+  }, [data]);
+  const [pickedId, setPickedId] = useState<string>('');
+
+  const proceed = () => {
+    if (!pickedId) return;
+    navigate(`/grns/new?poId=${pickedId}`);
+  };
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.headerRow}>
+        <div className={styles.titleBlock}>
+          <Link to="/grns" className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
+          </Link>
+          <h1 className={styles.title}>New Goods Receipt</h1>
+        </div>
+        <div className={styles.actions}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
+            <X {...ICON} /> Cancel
+          </Button>
+          <Button variant="primary" size="md" onClick={proceed} disabled={!pickedId}>
+            <Save {...ICON} /> Open Receive Form
+          </Button>
+        </div>
+      </div>
+
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Pick a Purchase Order to receive against</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            {isLoading
+              ? 'Loading…'
+              : `${outstanding.length} outstanding PO${outstanding.length === 1 ? '' : 's'}`}
+          </span>
+        </div>
+        <div className={styles.cardBody}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Purchase Order *</span>
+            <select
+              value={pickedId}
+              onChange={(e) => setPickedId(e.target.value)}
+              className={styles.fieldInput}
+              disabled={isLoading || outstanding.length === 0}
+            >
+              <option value="">— Pick an outstanding PO —</option>
+              {outstanding.map((po) => (
+                <option key={po.id} value={po.id}>
+                  {po.po_number} · {po.supplier?.name ?? po.supplier?.code ?? '—'} · {po.po_date}
+                  {po.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
+                </option>
+              ))}
+            </select>
+            <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+              Only Submitted and Partially Received POs are listed — the ones with stock still due.
+            </span>
+          </label>
+
+          {!isLoading && outstanding.length === 0 && (
+            <p style={{ marginTop: 'var(--space-3)', color: 'var(--fg-muted)' }}>
+              No outstanding POs right now. Create one from the{' '}
+              <Link to="/purchase-orders" style={{ color: 'var(--c-orange)' }}>Purchase Orders</Link> page.
+            </p>
+          )}
         </div>
       </section>
     </div>

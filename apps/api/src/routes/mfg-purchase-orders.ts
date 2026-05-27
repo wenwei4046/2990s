@@ -52,7 +52,14 @@ mfgPurchaseOrders.get('/', async (c) => {
 
   let q = supabase
     .from('purchase_orders')
-    .select(`${HEADER_COLS}, supplier:suppliers(id, code, name)`)
+    .select(
+      // PR — Commander 2026-05-27: PO list rows now surface a per-row items
+      // summary (AutoCount-style) so the buyer can see at a glance what's
+      // inside each PO without drilling in. Nested select keeps it to one
+      // query — Postgres / Supabase joins purchase_order_items on
+      // purchase_order_id for every row.
+      `${HEADER_COLS}, supplier:suppliers(id, code, name), items:purchase_order_items(material_code, material_name, qty)`,
+    )
     .order('po_date', { ascending: false })
     .order('created_at', { ascending: false });
 
