@@ -19,7 +19,7 @@
 //   DELETE /suppliers/:id/bindings/:bindingId
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
@@ -905,6 +905,11 @@ type ModelDraft = {
   skuCodes: string[];          // ACTIVE SKU codes under this Model
   alreadyBoundCodes: string[]; // subset of skuCodes already bound for this supplier
   supplierCode: string;
+  // PR — Commander follow-up to PR #206: free-text description the supplier
+  // uses for that model line (e.g. "Foam B grade, 6-week lead"). Persisted
+  // into supplier_material_bindings.notes for every SKU fanned out from
+  // this Model. Same value applied across the batch.
+  description: string;
   unitPriceCenti: number;
   leadTimeDays: number;
   moq: number;
@@ -987,6 +992,18 @@ const ModelSkuPickerDialog = ({
 
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const [drafts, setDrafts] = useState<Record<string, ModelDraft>>({});
+  // PR — Commander 2026-05-27 follow-up: per-Model SKU-preview expander so
+  // commander can see exactly which internal SKU codes are about to be
+  // bulk-mapped under one supplier code before pressing Save. Collapsed by
+  // default to keep step 2 scannable for a 5+ Model batch.
+  const [expandedSkuPreview, setExpandedSkuPreview] = useState<Set<string>>(new Set());
+  const toggleSkuPreview = (modelId: string) => {
+    setExpandedSkuPreview((s) => {
+      const next = new Set(s);
+      if (next.has(modelId)) next.delete(modelId); else next.add(modelId);
+      return next;
+    });
+  };
 
   const togglePick = (m: ProductModelRow, skus: MfgProductRow[]) => {
     setPickedIds((s) => {
@@ -1023,6 +1040,7 @@ const ModelSkuPickerDialog = ({
           .filter((s) => boundCodes.has(`mfg_product|${s.code}`))
           .map((s) => s.code),
         supplierCode: '',
+        description: '',
         unitPriceCenti: avgPrice,
         leadTimeDays: 7,
         moq: 1,
@@ -1062,6 +1080,10 @@ const ModelSkuPickerDialog = ({
           leadTimeDays: d.leadTimeDays,
           moq: d.moq,
           isMainSupplier: d.isMainSupplier,
+          // PR — description fans out across every SKU under this Model.
+          // Empty string → undefined so we don't overwrite an existing null
+          // with "".
+          notes: d.description.trim() || undefined,
         });
       }
     }
@@ -1266,6 +1288,7 @@ const ModelSkuPickerDialog = ({
                     <tr>
                       <th>Model · #SKUs</th>
                       <th>Supplier Code</th>
+                      <th>Description</th>
                       <th className={styles.tableRight}>Unit Price (RM)</th>
                       <th className={styles.tableRight}>Lead (d)</th>
                       <th className={styles.tableRight}>MOQ</th>
@@ -1275,59 +1298,102 @@ const ModelSkuPickerDialog = ({
                   <tbody>
                     {Object.values(drafts).map((d) => {
                       const remaining = d.skuCodes.length - d.alreadyBoundCodes.length;
+                      const expanded = expandedSkuPreview.has(d.modelId);
+                      const toMap = d.skuCodes.filter((c) => !d.alreadyBoundCodes.includes(c));
                       return (
-                        <tr key={d.modelId}>
-                          <td>
-                            <div className={styles.codeCell}>{d.modelCode}</div>
-                            <div className={styles.muted}>{d.modelName}</div>
-                            <div className={styles.muted} style={{ fontSize: 'var(--fs-12)' }}>
-                              {remaining} of {d.skuCodes.length} SKUs to map
-                              {d.alreadyBoundCodes.length > 0 ? ` (${d.alreadyBoundCodes.length} already)` : ''}
-                            </div>
-                          </td>
-                          <td>
-                            <input
-                              value={d.supplierCode}
-                              onChange={(e) => setDraft(d.modelId, { supplierCode: e.target.value })}
-                              placeholder="Their code for the whole Model"
-                              style={smallInputStyle}
-                            />
-                          </td>
-                          <td className={styles.tableRight}>
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={(d.unitPriceCenti / 100).toFixed(2)}
-                              onChange={(e) => setDraft(d.modelId, {
-                                unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
-                              })}
-                              style={{ ...smallInputStyle, width: 100, textAlign: 'right' }}
-                            />
-                          </td>
-                          <td className={styles.tableRight}>
-                            <input
-                              type="number"
-                              value={d.leadTimeDays}
-                              onChange={(e) => setDraft(d.modelId, { leadTimeDays: Number(e.target.value) || 0 })}
-                              style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
-                            />
-                          </td>
-                          <td className={styles.tableRight}>
-                            <input
-                              type="number"
-                              value={d.moq}
-                              onChange={(e) => setDraft(d.modelId, { moq: Number(e.target.value) || 0 })}
-                              style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={d.isMainSupplier}
-                              onChange={(e) => setDraft(d.modelId, { isMainSupplier: e.target.checked })}
-                            />
-                          </td>
-                        </tr>
+                        <Fragment key={d.modelId}>
+                          <tr>
+                            <td>
+                              <div className={styles.codeCell}>{d.modelCode}</div>
+                              <div className={styles.muted}>{d.modelName}</div>
+                              {/* PR — SKU preview expander. Click "N SKUs" to
+                                  see exactly which internal codes get fanned
+                                  out under this supplier mapping. Collapsed
+                                  by default so step 2 stays scannable. */}
+                              <button
+                                type="button"
+                                onClick={() => toggleSkuPreview(d.modelId)}
+                                className={styles.muted}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  padding: 0,
+                                  marginTop: 2,
+                                  fontSize: 'var(--fs-12)',
+                                  cursor: d.skuCodes.length === 0 ? 'default' : 'pointer',
+                                  color: expanded ? 'var(--c-burnt)' : 'var(--fg-muted)',
+                                  textDecoration: 'underline',
+                                  textUnderlineOffset: 2,
+                                }}
+                                title={expanded ? 'Hide SKU list' : 'Show SKU list'}
+                              >
+                                {expanded ? '▾' : '▸'} {remaining} of {d.skuCodes.length} SKUs to map
+                                {d.alreadyBoundCodes.length > 0 ? ` (${d.alreadyBoundCodes.length} already)` : ''}
+                              </button>
+                            </td>
+                            <td>
+                              <input
+                                value={d.supplierCode}
+                                onChange={(e) => setDraft(d.modelId, { supplierCode: e.target.value })}
+                                placeholder="Their code for the whole Model"
+                                style={smallInputStyle}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                value={d.description}
+                                onChange={(e) => setDraft(d.modelId, { description: e.target.value })}
+                                placeholder='e.g. "Foam B grade, 6-week lead"'
+                                style={{ ...smallInputStyle, width: '100%', minWidth: 180 }}
+                              />
+                            </td>
+                            <td className={styles.tableRight}>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={(d.unitPriceCenti / 100).toFixed(2)}
+                                onChange={(e) => setDraft(d.modelId, {
+                                  unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
+                                })}
+                                style={{ ...smallInputStyle, width: 100, textAlign: 'right' }}
+                              />
+                            </td>
+                            <td className={styles.tableRight}>
+                              <input
+                                type="number"
+                                value={d.leadTimeDays}
+                                onChange={(e) => setDraft(d.modelId, { leadTimeDays: Number(e.target.value) || 0 })}
+                                style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
+                              />
+                            </td>
+                            <td className={styles.tableRight}>
+                              <input
+                                type="number"
+                                value={d.moq}
+                                onChange={(e) => setDraft(d.modelId, { moq: Number(e.target.value) || 0 })}
+                                style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={d.isMainSupplier}
+                                onChange={(e) => setDraft(d.modelId, { isMainSupplier: e.target.checked })}
+                              />
+                            </td>
+                          </tr>
+                          {expanded && d.skuCodes.length > 0 && (
+                            <tr>
+                              <td colSpan={7} style={{
+                                background: 'var(--c-cream)',
+                                padding: 'var(--space-2) var(--space-3)',
+                                borderTop: '1px dashed var(--line)',
+                              }}>
+                                <SkuPreviewStrip toMap={toMap} alreadyBound={d.alreadyBoundCodes} />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -1659,6 +1725,85 @@ const MultiSkuPickerDialog = ({
     </div>
   );
 };
+
+/* SKU-preview chip strip shared by ModelSkuPickerDialog (SupplierDetail) and
+   ModularAssignSupplierDialog (ProductModels). Renders the SKUs about to be
+   bulk-mapped as monospaced pills + the ones being skipped as struck-through
+   pills. Pure presentational — no state. */
+export function SkuPreviewStrip({
+  toMap, alreadyBound,
+}: {
+  toMap:         string[];
+  alreadyBound:  string[];
+}) {
+  return (
+    <div style={{
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 6,
+      alignItems: 'center',
+    }}>
+      <span style={{
+        fontSize: 'var(--fs-11)',
+        color: 'var(--fg-muted)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+        marginRight: 8,
+      }}>
+        Will bulk-map →
+      </span>
+      {toMap.length === 0 ? (
+        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
+          All SKUs already mapped.
+        </span>
+      ) : toMap.map((c) => (
+        <code
+          key={c}
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-12)',
+            background: 'var(--c-paper)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '2px 8px',
+          }}
+        >
+          {c}
+        </code>
+      ))}
+      {alreadyBound.length > 0 && (
+        <>
+          <span style={{
+            fontSize: 'var(--fs-11)',
+            color: 'var(--fg-muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+            margin: '0 8px',
+          }}>
+            · skip (already bound):
+          </span>
+          {alreadyBound.map((c) => (
+            <code
+              key={c}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-12)',
+                background: 'var(--c-cream)',
+                border: '1px dashed var(--line)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '2px 8px',
+                color: 'var(--fg-muted)',
+                textDecoration: 'line-through',
+              }}
+            >
+              {c}
+            </code>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
 
 const smallInputStyle: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',

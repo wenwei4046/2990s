@@ -9,16 +9,21 @@
 // Model layer. The plain SKU list lives on /products (SkuMasterTab).
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { ProductModelDetail } from './ProductModelDetail';
-import { Layers, Search, Plus, Trash2 } from 'lucide-react';
+import { Layers, Search, Plus, Trash2, Truck, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useProductModels, useCreateProductModel, useGenerateModelSkus, useDeleteProductModel,
   type ProductModelRow,
 } from '../lib/product-models-queries';
-import { useMaintenanceConfig, type MfgCategory } from '../lib/mfg-products-queries';
+import { useMaintenanceConfig, useMfgProducts, type MfgCategory } from '../lib/mfg-products-queries';
+import {
+  useSuppliers, useCreateBindingsBatch,
+  type Currency, type MaterialKind, type NewBinding,
+} from '../lib/suppliers-queries';
 import { resolveSizeInfo } from '../lib/size-info';
+import { SkuPreviewStrip } from './SupplierDetail';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -41,6 +46,12 @@ export const ProductModels = () => {
   // without clicking into each one.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deleting, setDeleting]       = useState(false);
+  // PR — Commander 2026-05-27: tick N Models → "Assign to supplier · N
+  // selected" CTA opens a Modular-tab parallel of SupplierDetail's
+  // ModelSkuPickerDialog. Picks a supplier, types ONE supplier code +
+  // description per Model, fans the binding out across every active SKU
+  // under each Model in a single /bindings/batch POST.
+  const [assigningSupplier, setAssigningSupplier] = useState(false);
   const deleteMut = useDeleteProductModel();
 
   const { data: models = [], isLoading, error } = useProductModels(
@@ -124,8 +135,19 @@ export const ProductModels = () => {
           </span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
             <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+            {/* PR — Commander 2026-05-27: primary CTA pivots the bulk-select
+                toolbar from "manage Models" into the supplier-mapping flow.
+                Promotes the "Assign to supplier" action over the destructive
+                Delete (Delete is demoted to a ghost button on its right). */}
             <Button
               variant="primary"
+              size="sm"
+              onClick={() => setAssigningSupplier(true)}
+            >
+              <Truck {...ICON} /> Assign to supplier · {selectedIds.size} selected
+            </Button>
+            <Button
+              variant="ghost"
               size="sm"
               disabled={deleting}
               onClick={async () => {
@@ -253,6 +275,18 @@ export const ProductModels = () => {
       )}
 
       {creating && <NewModelDialog onClose={() => setCreating(false)} />}
+
+      {/* PR — Commander 2026-05-27: bulk Assign-to-Supplier dialog. */}
+      {assigningSupplier && (
+        <ModularAssignSupplierDialog
+          modelIds={Array.from(selectedIds)}
+          onClose={() => setAssigningSupplier(false)}
+          onSaved={() => {
+            setAssigningSupplier(false);
+            setSelectedIds(new Set());
+          }}
+        />
+      )}
 
       {/* PR #119 — embedded Model detail drawer */}
       {openModelId && (
@@ -824,3 +858,387 @@ function InlineAllowedOptions({
     </div>
   );
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ModularAssignSupplierDialog — Modular-tab parallel of SupplierDetail's
+   ModelSkuPickerDialog (PR #206). Reached from the multi-select toolbar:
+   tick N Models → "Assign to supplier · N selected" CTA → this dialog.
+
+   Flow:
+     1. Pick a supplier (dropdown of ACTIVE suppliers).
+     2. One row per Model — supplier_code · description · unit price · lead
+        · MOQ · main toggle. Description fans out into the bindings.notes
+        column shared with the rest of the supplier-mapping flow.
+     3. Each Model row has a "▸ N SKUs" expander so commander can preview
+        the OUR-SKU codes about to be bulk-mapped before pressing Save.
+     4. Save → expand each Model into its ACTIVE SKUs and POST one binding
+        per SKU into /bindings/batch. Uses the same useCreateBindingsBatch
+        mutation as SupplierDetail (server de-dupes against existing rows).
+
+   Reuses SkuPreviewStrip from SupplierDetail so the chip-strip stays in
+   sync across both entry points.
+   ════════════════════════════════════════════════════════════════════════ */
+
+type AssignDraft = {
+  modelId:        string;
+  modelCode:      string;
+  modelName:      string;
+  skuCodes:       string[];
+  // Per-supplier already-bound subset (computed in supplier-select effect).
+  alreadyBound:   string[];
+  supplierCode:   string;
+  description:    string;
+  unitPriceCenti: number;
+  leadTimeDays:   number;
+  moq:            number;
+  isMainSupplier: boolean;
+};
+
+function ModularAssignSupplierDialog({
+  modelIds, onClose, onSaved,
+}: {
+  modelIds: string[];
+  onClose:  () => void;
+  onSaved:  () => void;
+}) {
+  const suppliersQ = useSuppliers({ status: 'ACTIVE' });
+  const modelsQ    = useProductModels();
+  // PR — pull every active SKU once and group by model_id client-side; same
+  // pattern as ModelSkuPickerDialog. 2990s' catalogue is small enough that
+  // the alternative (one query per Model) is wasteful.
+  const productsQ  = useMfgProducts();
+  const batchMut   = useCreateBindingsBatch();
+
+  const [supplierId,  setSupplierId]  = useState<string>('');
+  const [drafts,      setDrafts]      = useState<Record<string, AssignDraft>>({});
+  const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
+  const [error,       setError]       = useState<string | null>(null);
+
+  const toggleExpanded = (id: string) => setExpanded((s) => {
+    const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n;
+  });
+
+  // Seed one draft per picked Model. SKU list is the ACTIVE SKUs under that
+  // model_id; price defaults to the average base_price of those SKUs.
+  useEffect(() => {
+    if (!modelsQ.data || !productsQ.data) return;
+    const skusByModel = new Map<string, { code: string; price: number }[]>();
+    for (const p of productsQ.data) {
+      if (!p.model_id) continue;
+      const arr = skusByModel.get(p.model_id) ?? [];
+      arr.push({ code: p.code, price: p.base_price_sen ?? 0 });
+      skusByModel.set(p.model_id, arr);
+    }
+    const seeded: Record<string, AssignDraft> = {};
+    for (const id of modelIds) {
+      const model = modelsQ.data.find((m) => m.id === id);
+      if (!model) continue;
+      const skus = skusByModel.get(id) ?? [];
+      const prices = skus.map((s) => s.price).filter((v) => v > 0);
+      const avg = prices.length
+        ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length)
+        : 0;
+      seeded[id] = {
+        modelId:        model.id,
+        modelCode:      model.model_code,
+        modelName:      model.name,
+        skuCodes:       skus.map((s) => s.code),
+        alreadyBound:   [],
+        supplierCode:   '',
+        description:    '',
+        unitPriceCenti: avg,
+        leadTimeDays:   7,
+        moq:            1,
+        isMainSupplier: false,
+      };
+    }
+    setDrafts(seeded);
+  // Re-seed only when the input Model set changes or upstream data first
+  // arrives — supplier choice does NOT reset the user's typed code/desc.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelIds.join('|'), modelsQ.data?.length, productsQ.data?.length]);
+
+  const setDraft = (id: string, patch: Partial<AssignDraft>) => {
+    setDrafts((s) => ({ ...s, [id]: { ...s[id]!, ...patch } }));
+  };
+
+  const loading = suppliersQ.isLoading || modelsQ.isLoading || productsQ.isLoading;
+
+  const submit = () => {
+    setError(null);
+    if (!supplierId) { setError('Pick a supplier first.'); return; }
+    const list: NewBinding[] = [];
+    const productsByCode = new Map((productsQ.data ?? []).map((p) => [p.code, p]));
+    for (const d of Object.values(drafts)) {
+      const code = d.supplierCode.trim();
+      // Skip Models with no supplier code typed — commander left this Model
+      // empty on purpose. Same convention as ModelSkuPickerDialog so the
+      // toast counts match expectations.
+      if (!code) continue;
+      for (const skuCode of d.skuCodes) {
+        const sku = productsByCode.get(skuCode);
+        list.push({
+          materialKind:   'mfg_product' as MaterialKind,
+          materialCode:   skuCode,
+          materialName:   sku?.name ?? skuCode,
+          supplierSku:    code,
+          unitPriceCenti: d.unitPriceCenti,
+          currency:       'MYR' as Currency,
+          leadTimeDays:   d.leadTimeDays,
+          moq:            d.moq,
+          isMainSupplier: d.isMainSupplier,
+          notes:          d.description.trim() || undefined,
+        });
+      }
+    }
+    if (list.length === 0) {
+      setError('Type at least one supplier code so we know which Model to map.');
+      return;
+    }
+    batchMut.mutate({ supplierId, bindings: list }, {
+      onSuccess: (res) => {
+        if (res.skipped > 0) {
+          // eslint-disable-next-line no-alert
+          alert(
+            `Inserted ${res.inserted} SKU mapping${res.inserted === 1 ? '' : 's'}; ` +
+            `skipped ${res.skipped} already bound for this supplier.`,
+          );
+        }
+        onSaved();
+      },
+      onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+    });
+  };
+
+  const supplierOptions = suppliersQ.data ?? [];
+  const draftRows       = Object.values(drafts);
+  const totalSkus       = draftRows.reduce(
+    (sum, d) => sum + (d.supplierCode.trim() ? d.skuCodes.length : 0), 0,
+  );
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <form
+        className={`${styles.modal} ${styles.modalCompact}`}
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => { e.preventDefault(); submit(); }}
+        style={{ maxHeight: '90vh', overflowY: 'auto' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-4)', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <h2 className={styles.modalTitle}>
+              Assign {draftRows.length} Model{draftRows.length === 1 ? '' : 's'} to supplier
+            </h2>
+            <p className={styles.modalSub} style={{ margin: 0 }}>
+              One supplier code + description per Model. Save fans the binding
+              out across every active SKU under each Model.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--fg-muted)',
+              cursor: 'pointer',
+              padding: 4,
+              lineHeight: 0,
+            }}
+          >
+            <X size={18} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        <label className={styles.compactField} style={{ maxWidth: 360 }}>
+          <span>Supplier *</span>
+          <select
+            value={supplierId}
+            onChange={(e) => setSupplierId(e.target.value)}
+            disabled={loading}
+            required
+          >
+            <option value="">{loading ? 'Loading suppliers…' : '— Pick supplier —'}</option>
+            {supplierOptions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.code} · {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div style={{
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--c-paper)',
+          overflow: 'hidden',
+        }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-sans)' }}>
+            <thead>
+              <tr style={{ background: 'var(--c-cream)', borderBottom: '1px solid var(--line)' }}>
+                <th style={thStyle}>Model · #SKUs</th>
+                <th style={thStyle}>Supplier Code</th>
+                <th style={thStyle}>Description</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Unit Price (RM)</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Lead (d)</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>MOQ</th>
+                <th style={thStyle}>Main</th>
+              </tr>
+            </thead>
+            <tbody>
+              {draftRows.length === 0 && (
+                <tr><td colSpan={7} style={{ ...tdStyle, color: 'var(--fg-muted)', textAlign: 'center' }}>
+                  {loading ? 'Loading…' : 'No Models in the selection have any SKUs to map.'}
+                </td></tr>
+              )}
+              {draftRows.map((d) => {
+                const isOpen = expanded.has(d.modelId);
+                return (
+                  <Fragment key={d.modelId}>
+                    <tr style={{ borderBottom: '1px solid var(--line)' }}>
+                      <td style={tdStyle}>
+                        <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{d.modelCode}</div>
+                        <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>{d.modelName}</div>
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(d.modelId)}
+                          disabled={d.skuCodes.length === 0}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            padding: 0,
+                            marginTop: 2,
+                            fontSize: 'var(--fs-12)',
+                            cursor: d.skuCodes.length === 0 ? 'default' : 'pointer',
+                            color: isOpen ? 'var(--c-burnt)' : 'var(--fg-muted)',
+                            textDecoration: 'underline',
+                            textUnderlineOffset: 2,
+                          }}
+                          title={isOpen ? 'Hide SKU list' : 'Show SKU list'}
+                        >
+                          {isOpen ? '▾' : '▸'} {d.skuCodes.length} SKU{d.skuCodes.length === 1 ? '' : 's'} will be mapped
+                        </button>
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          value={d.supplierCode}
+                          onChange={(e) => setDraft(d.modelId, { supplierCode: e.target.value })}
+                          placeholder="Their code for the whole Model"
+                          style={inputStyle}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          value={d.description}
+                          onChange={(e) => setDraft(d.modelId, { description: e.target.value })}
+                          placeholder='e.g. "Foam B grade, 6-week lead"'
+                          style={{ ...inputStyle, minWidth: 180 }}
+                        />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={(d.unitPriceCenti / 100).toFixed(2)}
+                          onChange={(e) => setDraft(d.modelId, {
+                            unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
+                          })}
+                          style={{ ...inputStyle, width: 100, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          value={d.leadTimeDays}
+                          onChange={(e) => setDraft(d.modelId, { leadTimeDays: Number(e.target.value) || 0 })}
+                          style={{ ...inputStyle, width: 60, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          value={d.moq}
+                          onChange={(e) => setDraft(d.modelId, { moq: Number(e.target.value) || 0 })}
+                          style={{ ...inputStyle, width: 60, textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          type="checkbox"
+                          checked={d.isMainSupplier}
+                          onChange={(e) => setDraft(d.modelId, { isMainSupplier: e.target.checked })}
+                        />
+                      </td>
+                    </tr>
+                    {isOpen && d.skuCodes.length > 0 && (
+                      <tr style={{ background: 'var(--c-cream)' }}>
+                        <td colSpan={7} style={{
+                          padding: 'var(--space-2) var(--space-3)',
+                          borderBottom: '1px solid var(--line)',
+                          borderTop: '1px dashed var(--line)',
+                        }}>
+                          <SkuPreviewStrip toMap={d.skuCodes} alreadyBound={[]} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {error && (
+          <div className={styles.errorBanner}>{error}</div>
+        )}
+
+        <footer className={styles.modalFooter} style={{ justifyContent: 'space-between' }}>
+          <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
+            {totalSkus > 0
+              ? `Will POST ${totalSkus} binding${totalSkus === 1 ? '' : 's'} (server skips ones already bound).`
+              : 'Type a supplier code on at least one Model to enable Save.'}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="md" type="button" onClick={onClose}>Cancel</Button>
+            <Button
+              variant="primary"
+              size="md"
+              type="submit"
+              disabled={batchMut.isPending || totalSkus === 0 || !supplierId}
+            >
+              {batchMut.isPending ? 'Saving…' : `Save ${totalSkus} binding${totalSkus === 1 ? '' : 's'}`}
+            </Button>
+          </span>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+const thStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-12)',
+  fontWeight: 600,
+  textAlign: 'left',
+  padding: '8px 12px',
+  color: 'var(--fg-muted)',
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+};
+const tdStyle: React.CSSProperties = {
+  padding: '8px 12px',
+  fontSize: 'var(--fs-13)',
+  verticalAlign: 'top',
+};
+const inputStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 'var(--fs-13)',
+  background: 'var(--c-cream)',
+  border: '1px solid var(--line)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '4px 8px',
+  outline: 'none',
+  width: '100%',
+  boxSizing: 'border-box',
+};
