@@ -69,7 +69,29 @@ export type SupplierRow = {
   credit_limit_sen: number;
   created_at: string;
   updated_at: string;
+  /* PR — Commander 2026-05-27: auto-derived from the supplier's assigned
+     SKUs (distinct mfg_products.category across supplier_material_bindings).
+     Populated ONLY on the list endpoint (suppliers_with_derived_category
+     view in migration 0088); detail/create/patch responses omit it.
+     Values: 'SOFA' / 'BEDFRAME' / 'MATTRESS' / 'ACCESSORY' / 'SERVICE'
+     / 'MIXED' (≥2 distinct) / null (no SKUs assigned yet). */
+  derived_category?: string | null;
 };
+
+/** PR — Commander 2026-05-27 ("跟着 Product Maintenance 的排版"):
+ *  Per-category supplier cost matrix on supplier_material_bindings
+ *  (migration 0089). Two concrete shapes the UI cares about; everything
+ *  else (or null) → fall back to unit_price_centi.
+ *
+ *  SOFA:     { [seatHeight]: { P1?: centi, P2?: centi, P3?: centi } }
+ *  BEDFRAME: { P1?: centi, P2?: centi }
+ *
+ *  Stored cell type is `number` (centi); we widen to `unknown` on the wire
+ *  because the column is JSONB and the server is the source of truth.
+ */
+export type SofaPriceMatrix     = Record<string, { P1?: number; P2?: number; P3?: number }>;
+export type BedframePriceMatrix = { P1?: number; P2?: number };
+export type PriceMatrix         = SofaPriceMatrix | BedframePriceMatrix | Record<string, unknown>;
 
 export type BindingRow = {
   id: string;
@@ -87,6 +109,10 @@ export type BindingRow = {
   price_valid_to: string | null;
   is_main_supplier: boolean;
   notes: string | null;
+  /** PR — Commander 2026-05-27: per-category cost matrix mirroring the
+   *  Products Maintenance page shape. NULL on existing rows + on categories
+   *  that use the single unit_price_centi (mattress / accessory / service). */
+  price_matrix: PriceMatrix | null;
   created_at: string;
   updated_at: string;
 };
@@ -277,6 +303,10 @@ export type NewBinding = {
   priceValidFrom?: string;
   priceValidTo?: string;
   notes?: string;
+  /** PR — Commander 2026-05-27: optional per-category cost matrix.
+   *  Validated server-side against the SKU's category (see
+   *  apps/api/src/routes/suppliers.ts validatePriceMatrix). */
+  priceMatrix?: PriceMatrix | null;
 };
 
 export function useCreateBinding() {

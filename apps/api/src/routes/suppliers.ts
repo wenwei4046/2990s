@@ -21,6 +21,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
@@ -47,13 +48,122 @@ const SUPPLIER_COLS =
   'business_reg_no, postcode, area, mobile, fax, website, attention, business_nature, ' +
   'currency, statement_type, aging_basis, credit_limit_sen, country, created_at, updated_at';
 
+/* PR — Commander 2026-05-27 ("当 Assign SKU 之后，你就会知道它是什么 Category 了呀"):
+   List endpoint queries the `suppliers_with_derived_category` view (migration
+   0088) which adds a `derived_category` column auto-computed from the
+   distinct mfg_products.category of each supplier's assigned SKUs. Used by
+   the Suppliers list page's visible Category column. Detail/create/patch
+   keep reading from the base `suppliers` table because they don't need
+   the derived field (and to avoid touching the rest of the file). */
+const SUPPLIER_LIST_COLS = `${SUPPLIER_COLS}, derived_category`;
+
 const STATEMENT_TYPES = new Set(['OPEN_ITEM', 'BALANCE_FORWARD', 'NO_STATEMENT']);
 const AGING_BASES = new Set(['INVOICE_DATE', 'DUE_DATE']);
 
 const BINDING_COLS =
   'id, supplier_id, material_kind, material_code, material_name, supplier_sku, ' +
   'unit_price_centi, currency, lead_time_days, payment_terms_override, moq, ' +
-  'price_valid_from, price_valid_to, is_main_supplier, notes, created_at, updated_at';
+  'price_valid_from, price_valid_to, is_main_supplier, notes, price_matrix, ' +
+  'created_at, updated_at';
+
+/* PR — Commander 2026-05-27 ("跟着 Product Maintenance 的排版"): per-category
+   supplier cost matrix. Validates the JSONB shape against the SKU's
+   mfg_products.category. Returns the cleaned matrix (numeric cells), or
+   undefined to drop the field, or throws a string error code for the route
+   to translate to a 400.
+
+   Shapes (centi int, ≥0):
+     SOFA      → { "<height>": { "P1"?: n, "P2"?: n, "P3"?: n }, ... }
+     BEDFRAME  → { "P1"?: n, "P2"?: n }
+     MATTRESS / ACCESSORY / SERVICE → must be null/undefined (single price
+                                       flows via unit_price_centi).
+   Unknown / null / empty → undefined (caller should write NULL). */
+const TIER_KEYS = new Set(['P1', 'P2', 'P3']);
+function validatePriceMatrix(
+  raw: unknown,
+  category: string | null,
+): Record<string, unknown> | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('invalid_price_matrix:not_object');
+  }
+  const cat = (category ?? '').toUpperCase();
+
+  // Categories with no matrix — accept empty object as "clear" (→ null),
+  // reject any populated shape so callers don't accidentally hide prices in
+  // an unread column.
+  if (cat === 'MATTRESS' || cat === 'ACCESSORY' || cat === 'SERVICE') {
+    if (Object.keys(raw as Record<string, unknown>).length === 0) return null;
+    throw new Error(`invalid_price_matrix:not_supported_for_${cat || 'UNKNOWN'}`);
+  }
+
+  if (cat === 'BEDFRAME') {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (!TIER_KEYS.has(k)) throw new Error(`invalid_price_matrix:bedframe_key:${k}`);
+      if (v === null || v === undefined || v === '') continue;
+      const n = typeof v === 'number' ? v : Number(v);
+      if (!Number.isFinite(n) || n < 0) {
+        throw new Error(`invalid_price_matrix:bedframe_value:${k}`);
+      }
+      out[k] = Math.round(n);
+    }
+    return Object.keys(out).length === 0 ? null : out;
+  }
+
+  if (cat === 'SOFA') {
+    const out: Record<string, Record<string, number>> = {};
+    for (const [height, inner] of Object.entries(raw as Record<string, unknown>)) {
+      // Heights are free-form numeric strings (24/26/28/30/32/35 by default
+      // but commander can edit the maintenance config). Allow anything that
+      // parses to a number.
+      if (!Number.isFinite(Number(height))) {
+        throw new Error(`invalid_price_matrix:sofa_height:${height}`);
+      }
+      if (inner === null || inner === undefined) continue;
+      if (typeof inner !== 'object' || Array.isArray(inner)) {
+        throw new Error(`invalid_price_matrix:sofa_inner_not_object:${height}`);
+      }
+      const tiers: Record<string, number> = {};
+      for (const [tier, val] of Object.entries(inner as Record<string, unknown>)) {
+        if (!TIER_KEYS.has(tier)) {
+          throw new Error(`invalid_price_matrix:sofa_tier:${height}.${tier}`);
+        }
+        if (val === null || val === undefined || val === '') continue;
+        const n = typeof val === 'number' ? val : Number(val);
+        if (!Number.isFinite(n) || n < 0) {
+          throw new Error(`invalid_price_matrix:sofa_value:${height}.${tier}`);
+        }
+        tiers[tier] = Math.round(n);
+      }
+      if (Object.keys(tiers).length > 0) out[height] = tiers;
+    }
+    return Object.keys(out).length === 0 ? null : out;
+  }
+
+  // Unknown category (e.g. fabric / raw bindings) — accept empty only.
+  if (Object.keys(raw as Record<string, unknown>).length === 0) return null;
+  throw new Error(`invalid_price_matrix:unsupported_category:${cat || 'UNKNOWN'}`);
+}
+
+/* Look up the mfg_products.category for a material_code so the matrix can
+   be shape-validated. Returns null for non-mfg_product kinds (fabric/raw)
+   or codes that aren't in the catalogue — those bindings should not carry
+   a price_matrix. */
+async function categoryForMaterial(
+  supabase: SupabaseClient,
+  kind: string,
+  code: string,
+): Promise<string | null> {
+  if (kind !== 'mfg_product') return null;
+  const { data } = await supabase
+    .from('mfg_products')
+    .select('category')
+    .eq('code', code)
+    .maybeSingle();
+  return (data?.category as string | undefined) ?? null;
+}
 
 // ── List suppliers ────────────────────────────────────────────────────
 suppliers.get('/', async (c) => {
@@ -61,7 +171,12 @@ suppliers.get('/', async (c) => {
   const search = c.req.query('search');
   const supabase = c.get('supabase');
 
-  let q = supabase.from('suppliers').select(SUPPLIER_COLS).order('name', { ascending: true });
+  /* Query the derived-category view so the list page can show an
+     auto-derived Category column (see migration 0088). */
+  let q = supabase
+    .from('suppliers_with_derived_category')
+    .select(SUPPLIER_LIST_COLS)
+    .order('name', { ascending: true });
   if (status && SUPPLIER_STATUSES.has(status)) q = q.eq('status', status);
   if (search) q = q.or(`code.ilike.%${search}%,name.ilike.%${search}%,contact_person.ilike.%${search}%`);
 
@@ -225,7 +340,22 @@ suppliers.post('/:id/bindings', async (c) => {
   const currency = (body.currency as string) ?? 'MYR';
   if (!CURRENCIES.has(currency)) return c.json({ error: 'invalid_currency' }, 400);
 
-  const row = {
+  const supabase = c.get('supabase');
+
+  // PR — Commander 2026-05-27: validate per-category price_matrix shape
+  // against the SKU's mfg_products.category.
+  let priceMatrix: Record<string, unknown> | null | undefined;
+  if (body.priceMatrix !== undefined) {
+    const cat = await categoryForMaterial(supabase, kind, String(body.materialCode));
+    try {
+      priceMatrix = validatePriceMatrix(body.priceMatrix, cat);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : 'invalid_price_matrix';
+      return c.json({ error: 'invalid_price_matrix', reason }, 400);
+    }
+  }
+
+  const row: Record<string, unknown> = {
     supplier_id: supplierId,
     material_kind: kind,
     material_code: body.materialCode,
@@ -241,8 +371,7 @@ suppliers.post('/:id/bindings', async (c) => {
     is_main_supplier: Boolean(body.isMainSupplier),
     notes: (body.notes as string) ?? null,
   };
-
-  const supabase = c.get('supabase');
+  if (priceMatrix !== undefined) row.price_matrix = priceMatrix;
 
   // If marking as main supplier, demote any other main for the same material.
   if (row.is_main_supplier) {
@@ -296,7 +425,7 @@ suppliers.post('/:id/bindings/batch', async (c) => {
     if (seen.has(key)) { skipped += 1; continue; }
     const currency = String(b.currency ?? 'MYR');
     if (!CURRENCIES.has(currency)) continue;
-    rows.push({
+    const row: Record<string, unknown> = {
       supplier_id: supplierId,
       material_kind: kind,
       material_code: b.materialCode,
@@ -308,7 +437,23 @@ suppliers.post('/:id/bindings/batch', async (c) => {
       moq: typeof b.moq === 'number' ? b.moq : 0,
       is_main_supplier: Boolean(b.isMainSupplier),
       notes: (b.notes as string | undefined) ?? null,
-    });
+    };
+    // PR — Commander 2026-05-27: optional per-category cost matrix on batch
+    // create. Shape validated against the SKU's category; on error we skip
+    // the row rather than 400ing the whole batch (caller can read the
+    // inserted/skipped counts to know something dropped).
+    if (b.priceMatrix !== undefined) {
+      const cat = await categoryForMaterial(supabase, kind, String(b.materialCode));
+      try {
+        const pm = validatePriceMatrix(b.priceMatrix, cat);
+        if (pm !== undefined) row.price_matrix = pm;
+      } catch {
+        // Invalid matrix for this row — drop the row from the batch.
+        skipped += 1;
+        continue;
+      }
+    }
+    rows.push(row);
     seen.add(key);
   }
 
@@ -346,6 +491,28 @@ suppliers.patch('/:id/bindings/:bindingId', async (c) => {
   if (body.isMainSupplier !== undefined) updates.is_main_supplier = Boolean(body.isMainSupplier);
 
   const supabase = c.get('supabase');
+
+  // PR — Commander 2026-05-27: validate price_matrix shape against the
+  // binding's current category. We fetch the existing row's material_kind +
+  // material_code (since the PATCH body may omit them), then look up the
+  // SKU's category.
+  if (body.priceMatrix !== undefined) {
+    const { data: existing } = await supabase
+      .from('supplier_material_bindings')
+      .select('material_kind, material_code')
+      .eq('id', bindingId)
+      .maybeSingle();
+    if (!existing) return c.json({ error: 'not_found' }, 404);
+    const kind = (updates.material_kind as string | undefined) ?? existing.material_kind;
+    const code = (updates.material_code as string | undefined) ?? existing.material_code;
+    const cat = await categoryForMaterial(supabase, kind, code);
+    try {
+      updates.price_matrix = validatePriceMatrix(body.priceMatrix, cat);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : 'invalid_price_matrix';
+      return c.json({ error: 'invalid_price_matrix', reason }, 400);
+    }
+  }
 
   // If promoting to main, demote others first (need to fetch the binding's material info).
   if (updates.is_main_supplier === true) {
