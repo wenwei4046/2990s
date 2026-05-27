@@ -1127,7 +1127,7 @@ const MaintenanceList = ({
   const moveAt = (from: number, to: number) => {
     if (from === to) return;
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-    const arr = (next[listKey] as unknown[] | undefined) ?? [];
+    const arr = ((next as unknown as Record<string, unknown>)[listKey] as unknown[] | undefined) ?? [];
     if (from < 0 || from >= arr.length || to < 0 || to >= arr.length) return;
     const [moved] = arr.splice(from, 1);
     arr.splice(to, 0, moved);
