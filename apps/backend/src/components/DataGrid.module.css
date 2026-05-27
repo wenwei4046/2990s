@@ -45,6 +45,131 @@
 }
 .searchInput::placeholder { color: var(--fg-muted); }
 
+/* HOUZS-parity Columns popover button + dropdown
+   ────────────────────────────────────────────────
+   Commander 2026-05-27: "为什么不是跟houzs的一样" — the right-click header
+   menu was undiscoverable. This adds a visible pill in the toolbar matching
+   the houzs-erp pattern (Columns3 icon + label + N/M badge + popover with a
+   checkbox per column + Reset link). */
+.columnsAnchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.toolbarPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-ink);
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  height: 28px;
+}
+.toolbarPill:hover { background: var(--c-cream); }
+.toolbarPillOn {
+  background: var(--c-ink);
+  color: var(--c-paper);
+  border-color: var(--c-ink);
+}
+.toolbarPillOn:hover { background: var(--c-ink); }
+.toolbarPillBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-cream);
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.toolbarPillOn .toolbarPillBadge {
+  background: rgba(255, 255, 255, 0.25);
+  color: var(--c-paper);
+}
+.columnsMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  width: 240px;
+  max-height: 360px;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3, 0 8px 24px rgba(0, 0, 0, 0.16));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.columnsMenuHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--c-cream);
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-ink);
+}
+.columnsMenuReset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+.columnsMenuReset:hover { text-decoration: underline; }
+.columnsMenuBody {
+  overflow-y: auto;
+  max-height: 320px;
+  padding: 4px 0;
+}
+.columnsMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.columnsMenuItem:hover { background: var(--c-cream); }
+.columnsMenuItem input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--c-burnt);
+  cursor: pointer;
+}
+
 .tbarBtn {
   display: inline-flex;
   align-items: center;
