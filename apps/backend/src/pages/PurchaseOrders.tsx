@@ -36,13 +36,15 @@ import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-const STATUS_CHIPS: { value: 'all' | PoStatus; label: string }[] = [
+// PR — Commander 2026-05-27: filter pills collapsed from 6 → 2. The buyer's
+// 95% view is "what still has stuff coming in" (Outstanding), so default to
+// that. "All" stays as the escape hatch when chasing closed/cancelled history.
+// Outstanding = SUBMITTED ∪ PARTIALLY_RECEIVED. Filtered client-side since the
+// API supports only one status at a time.
+type StatusFilter = 'all' | 'outstanding';
+const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
+  { value: 'outstanding', label: 'Outstanding' },
   { value: 'all', label: 'All' },
-  { value: 'DRAFT', label: 'Draft' },
-  { value: 'SUBMITTED', label: 'Submitted' },
-  { value: 'PARTIALLY_RECEIVED', label: 'Partial' },
-  { value: 'RECEIVED', label: 'Received' },
-  { value: 'CANCELLED', label: 'Cancelled' },
 ];
 
 const STATUS_COLOR: Record<PoStatus, string> = {
@@ -56,23 +58,42 @@ const STATUS_COLOR: Record<PoStatus, string> = {
 const fmtMoney = (centi: number, currency: Currency): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** PR — Commander 2026-05-27: per-row items preview, AutoCount style. Shows
+    first 3 items as `CODE×qty · CODE×qty · +N more`. Returns null when the
+    PO has no items so caller can render the muted "—". */
+const summarizeItems = (items: PoHeaderRow['items']): string | null => {
+  if (!items || items.length === 0) return null;
+  const HEAD = 3;
+  const shown = items.slice(0, HEAD)
+    .map((it) => `${it.material_code}×${it.qty}`)
+    .join(' · ');
+  const extra = items.length - HEAD;
+  return extra > 0 ? `${shown} · +${extra} more` : shown;
+};
+
 type Drawer =
   | { kind: 'closed' }
   | { kind: 'create' }
   | { kind: 'detail'; poId: string };
 
 export const PurchaseOrders = () => {
-  const [status, setStatus] = useState<'all' | PoStatus>('all');
+  // PR — default to Outstanding (the 95% view).
+  const [status, setStatus] = useState<StatusFilter>('outstanding');
   const [drawer, setDrawer] = useState<Drawer>({ kind: 'closed' });
   const navigate = useNavigate();
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const grnFromPos = useGrnFromPos();
 
-  const { data, isLoading, error } = usePurchaseOrders({
-    status: status === 'all' ? undefined : status,
-  });
-  const rows = useMemo(() => data ?? [], [data]);
+  // Always fetch all rows — filtering Outstanding (SUBMITTED ∪
+  // PARTIALLY_RECEIVED) client-side is one trip vs. two and the dataset is
+  // small (4-staff org).
+  const { data, isLoading, error } = usePurchaseOrders();
+  const rows = useMemo(() => {
+    const all = data ?? [];
+    if (status === 'all') return all;
+    return all.filter((r) => r.status === 'SUBMITTED' || r.status === 'PARTIALLY_RECEIVED');
+  }, [data, status]);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((s) => {
@@ -199,6 +220,9 @@ export const PurchaseOrders = () => {
               <th style={{ width: 36 }}></th>
               <th>PO #</th>
               <th>Supplier</th>
+              {/* PR — Commander 2026-05-27: items preview between Supplier
+                  and Date so the buyer can read each PO without drilling in. */}
+              <th>Items</th>
               <th>Date</th>
               <th>Expected</th>
               <th>Currency</th>
@@ -207,34 +231,53 @@ export const PurchaseOrders = () => {
             </tr>
           </thead>
           <tbody>
-            {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((po) => (
-              <tr key={po.id} onClick={() => navigate(`/purchase-orders/${po.id}`)}>
-                <td onClick={(e) => { e.stopPropagation(); toggleSelect(po.id); }}>
-                  <input type="checkbox" checked={selectedIds.has(po.id)}
-                    onChange={() => toggleSelect(po.id)}
-                    onClick={(e) => e.stopPropagation()} />
-                </td>
-                <td><span className={styles.codeChip}>{po.po_number}</span></td>
-                <td>{po.supplier?.name ?? po.supplier?.code ?? '—'}</td>
-                <td>{po.po_date}</td>
-                <td>{po.expected_at ?? '—'}</td>
-                <td>{po.currency}</td>
-                <td style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', color: 'var(--c-burnt)', fontWeight: 800 }}>
-                  {fmtMoney(po.total_centi, po.currency)}
-                </td>
-                <td>
-                  <span
-                    className={styles.statusPill}
-                    style={{ background: STATUS_COLOR[po.status] }}
+            {isLoading && <tr><td colSpan={9} className={styles.emptyRow}>Loading…</td></tr>}
+            {!isLoading && rows.map((po) => {
+              const summary = summarizeItems(po.items);
+              return (
+                /* minHeight bump so the items text gets breathing room without
+                   touching the shared CSS module. */
+                <tr key={po.id} onClick={() => navigate(`/purchase-orders/${po.id}`)} style={{ height: 48 }}>
+                  <td onClick={(e) => { e.stopPropagation(); toggleSelect(po.id); }}>
+                    <input type="checkbox" checked={selectedIds.has(po.id)}
+                      onChange={() => toggleSelect(po.id)}
+                      onClick={(e) => e.stopPropagation()} />
+                  </td>
+                  <td><span className={styles.codeChip}>{po.po_number}</span></td>
+                  <td>{po.supplier?.name ?? po.supplier?.code ?? '—'}</td>
+                  <td
+                    title={(po.items ?? []).map((it) => `${it.material_code} × ${it.qty}`).join('\n')}
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--fs-12)',
+                      color: summary ? 'var(--c-ink)' : 'var(--fg-muted)',
+                      maxWidth: 360,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
                   >
-                    {po.status.replace('_', ' ')}
-                  </span>
-                </td>
-              </tr>
-            ))}
+                    {summary ?? '—'}
+                  </td>
+                  <td>{po.po_date}</td>
+                  <td>{po.expected_at ?? '—'}</td>
+                  <td>{po.currency}</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', color: 'var(--c-burnt)', fontWeight: 800 }}>
+                    {fmtMoney(po.total_centi, po.currency)}
+                  </td>
+                  <td>
+                    <span
+                      className={styles.statusPill}
+                      style={{ background: STATUS_COLOR[po.status] }}
+                    >
+                      {po.status.replace('_', ' ')}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
             {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={8} className={styles.emptyRow}>No POs yet — click "New PO" to start.</td></tr>
+              <tr><td colSpan={9} className={styles.emptyRow}>No POs yet — click "New PO" to start.</td></tr>
             )}
           </tbody>
         </table>

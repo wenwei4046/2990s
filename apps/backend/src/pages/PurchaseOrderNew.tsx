@@ -296,6 +296,11 @@ export const PurchaseOrderNew = () => {
           <h1 className={styles.title}>New Purchase Order</h1>
         </div>
         <div className={styles.actions}>
+          {/* PR — Commander 2026-05-27: parity with PO list — quick swap into
+              the SO-driven flow without bouncing back to the list page. */}
+          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
+            <Plus {...ICON} /> From SO
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
             <X {...ICON} /> Cancel
           </Button>

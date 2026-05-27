@@ -160,11 +160,10 @@ export const Grns = () => {
         title="Goods Receipt Notes"
         subtitle="GRN — receive stock against PO"
         newLabel="New GRN"
-        // PR — Phase 2: New GRN flow starts from a PO Detail "Receive
-        // Goods" button (so the GRN is bound to a PO + items pre-fill).
-        // Clicking "New GRN" on the list bounces to the PO list so
-        // commander picks the PO first.
-        onNew={() => navigate('/purchase-orders')}
+        // PR — Commander 2026-05-27: open GrnNew directly. When poId is
+        // missing the page now renders a "Pick a PO" card instead of
+        // bouncing back to the PO list (one-click flow, was two before).
+        onNew={() => navigate('/grns/new')}
       />
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
       {poIdFilter && (
