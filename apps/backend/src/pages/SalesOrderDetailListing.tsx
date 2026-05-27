@@ -1,56 +1,44 @@
 // ----------------------------------------------------------------------------
-// SalesOrderDetailListing — AutoCount-style "Print Sales Order Detail Listing"
-// report page at /reports/sales-order-detail-listing.
+// SalesOrderDetailListing — Houzs-style "Sales Order Details" line-item view
+// at /reports/sales-order-detail-listing.
 //
-// One row per Sales Order LINE ITEM (with SO header info repeated). Mirrors
-// the AutoCount column set the commander uses as canonical for ERP listing
-// reports: 36 columns total covering doc header + line + payment + remarks
-// (plus a "Check" selection column at the left).
+// One row per Sales Order LINE ITEM (with SO header info repeated on every
+// line). 2026-05-27 — ported from the AutoCount two-card filter layout to
+// match the Houzs reference exactly:
 //
-// Layout:
-//   1. Header: back + title
-//   2. Two filter cards (side-by-side):
-//      - Basic Filter (Document Date range, Doc No, Debtor Code, Item Code, Delivery Date range)
-//      - Report Options (Group By, Sort By, Show Criteria, More Options, Advanced Filter)
-//   3. Action bar: Inquiry · Preview · Print · Hide Options · Criteria · Close
-//   4. Optional criteria summary
-//   5. Search Result panel — wraps <DataGrid> (PR-G primitive) for:
-//      column reorder/hide/pin via right-click, drag-to-group-by, sort,
-//      resize, global search, and localStorage layout persistence
-//      (storageKey: `so-detail-listing-grid`).
+//   1. Header — "Sales Order Details · Line-item view · N items · drag to
+//      reorder columns" (single-line)
+//   2. 6 KPI tiles — Total Lines · Unique Orders · Revenue · Cost ·
+//      Margin (RM + %) · Outstanding (deduped per docNo)
+//   3. Compact horizontal filter row — funnel icon · global search ·
+//      All Brands ▼ · All Groups ▼ · All Agents ▼ · All Venues ▼ ·
+//      All Payment ▼ · Date from – to
+//   4. <DataGrid> (PR-G primitive) with 34 default columns + 10 hidden by
+//      default (defaultHidden:true). User reveals via right-click "Show".
+//      Storage key: `so-detail-listing-grid.v2.houzs` (bump from v1 so the
+//      column reorder + hide layout starts fresh on the new layout).
 //
-// The page-level "Group By" dropdown in the Report Options card writes
-// directly into the DataGrid's layout state for parity with AutoCount, while
-// drag-to-group-by from any column header still works via DataGrid's banner.
+// Auto-inquiry on mount — Houzs shows data immediately. We still let the
+// user narrow via filters; the query refetches on filter change. PDF
+// Preview + Print + criteria-summary code retained from the previous
+// AutoCount layout.
 //
-// ── Temporary placeholders (Task #86 follow-up) ────────────────────────────
-// Malaysia is currently in a no-SST regime, so `tax_centi` is always 0 across
-// every SO row. Until SST returns (and the codebase wires a real tax-code
-// source) the following columns render constants:
-//   - Inclusive?       → "Yes"  (a zero-tax doc is, by AutoCount convention,
-//                                 "tax-inclusive at 0%")
-//   - Tax (header/line) → "0.00"
-//   - Detail Tax Code  → "SR"   (AutoCount's Standard-Rated 0% code)
-//
-// Likewise, cross-doc linking from SO line → supplier PO isn't tracked in our
-// schema yet, so the following columns render "—":
-//   - Creditor Code
-//   - Post to PO
-// Future work: add a `linked_po_doc_no` (or similar) FK on
-// mfg_sales_order_items if the commander wants these populated. The PAYEMENT
-// column (note: AutoCount preserved the typo) reads `paid_total_centi`,
-// derived server-side from mfg_sales_order_payments (PR-C dropped the legacy
-// header column).
+// ── Temporary placeholders ────────────────────────────────────────────────
+// Malaysia is in a no-SST regime, so `tax_centi` is always 0; the Inclusive?
+// / Tax (header/line) / Detail Tax Code columns render constants ("Yes" /
+// "0.00" / "SR" in AutoCount convention) but live in the default-hidden
+// long tail. SO→PO linking isn't tracked yet so Creditor Code / Post to PO
+// are also default-hidden.
 // ----------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, ClipboardList, Printer, Eye, Filter, X,
-  SlidersHorizontal, FileSearch,
+  ArrowLeft, ClipboardList, Printer, Eye, Filter, X, Search,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { ItemGroupPill, BrandingPill, badgeFor } from '../lib/category-badges';
 import {
   useSalesOrderDetailListing,
   type SoDetailListingFilters,
@@ -61,346 +49,393 @@ import styles from './SalesOrderDetailListing.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-const STORAGE_KEY = 'so-detail-listing-grid';
+/* Bump the storage key when migrating to the Houzs layout — the previous
+   key (`so-detail-listing-grid`) held the AutoCount column order, which
+   doesn't match the new Houzs columns. v2 starts fresh. */
+const STORAGE_KEY = 'so-detail-listing-grid.v2.houzs';
 
-type DateMode = 'range' | 'none';
-type GroupBy = NonNullable<SoDetailListingFilters['groupBy']>;
-type SortBy  = NonNullable<SoDetailListingFilters['sortBy']>;
-
-const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
+const fmtRm = (centi: number | null | undefined, currency = ''): string => {
   const c = Number(centi ?? 0);
-  return `${currency} ${(c / 100).toLocaleString('en-MY', {
+  const prefix = currency ? `${currency} ` : '';
+  return `${prefix}${(c / 100).toLocaleString('en-MY', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 };
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Column factory — accepts the selection map + a toggle callback so the
-   "Check" column can render an interactive checkbox per row. The remaining
-   36 columns map AutoCount field-for-field. Keys are stable identifiers
-   referenced by DataGrid's localStorage layout (order, hidden, widths).
-   ───────────────────────────────────────────────────────────────────────── */
-const buildColumns = (
-  checked: Record<string, boolean>,
-  onToggle: (id: string) => void,
-): DataGridColumn<SoDetailListingRow>[] => [
-  {
-    key: 'check', label: 'Check', width: 50, align: 'left',
-    sortable: false, groupable: false,
-    accessor: (r) => (
-      <input
-        type="checkbox"
-        aria-label={`Toggle ${r.doc_no} / ${r.item_code}`}
-        checked={!!checked[r.id]}
-        onChange={() => onToggle(r.id)}
-        onClick={(e) => e.stopPropagation()}
-      />
-    ),
-    searchValue: () => '',
-  },
-  {
-    key: 'doc_no', label: 'Doc. No.', width: 110, sortable: true, groupable: false,
-    accessor: (r) => <span className={styles.codeCell}>{r.doc_no}</span>,
-    searchValue: (r) => r.doc_no,
-  },
-  {
-    key: 'so_date', label: 'Date', width: 100, sortable: true,
-    accessor: (r) => (r.so_date ?? r.line_date ?? '—') as string,
-    searchValue: (r) => String(r.so_date ?? r.line_date ?? ''),
-  },
-  {
-    key: 'debtor_code', label: 'Debtor Code', width: 110, sortable: true, groupable: true,
-    accessor: (r) => r.debtor_code ?? '—',
-    searchValue: (r) => r.debtor_code ?? '',
-  },
-  {
-    key: 'debtor_name', label: 'Debtor Name', width: 200, sortable: true, groupable: true,
-    accessor: (r) => r.debtor_name ?? '—',
-    searchValue: (r) => r.debtor_name ?? '',
-  },
-  {
-    key: 'agent', label: 'Agent', width: 110, sortable: true, groupable: true,
-    accessor: (r) => r.agent ?? '—',
-    searchValue: (r) => r.agent ?? '',
-  },
-  /* Task #121 — country snapshot from SO header (auto-derived from
-     customer_state via my_localities on POST/PATCH). Groupable so the
-     listing can pivot by country once SG/TH SOs start flowing. */
-  {
-    key: 'customer_country', label: 'Country', width: 110, sortable: true, groupable: true,
-    accessor: (r) => (r.customer_country as string | null) ?? '—',
-    searchValue: (r) => (r.customer_country as string | null) ?? '',
-  },
-  {
-    key: 'currency', label: 'Curr. Code', width: 80, sortable: true, groupable: true,
-    accessor: (r) => r.currency ?? 'MYR',
-    searchValue: (r) => r.currency ?? 'MYR',
-  },
-  // Inclusive? — constant "Yes" while Malaysia is in the no-SST regime.
-  {
-    key: 'inclusive', label: 'Inclusive?', width: 80, align: 'left',
-    sortable: false, groupable: false,
-    accessor: () => 'Yes',
-    searchValue: () => 'Yes',
-  },
-  {
-    key: 'subtotal_ex', label: 'SubTotal (Ex)', width: 120, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
-    searchValue: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
-    sortFn: (a, b) =>
-      ((a.total_centi ?? 0) - (a.tax_centi ?? 0)) -
-      ((b.total_centi ?? 0) - (b.tax_centi ?? 0)),
-  },
-  // Tax (header) — constant 0.00 while no-SST regime is in effect.
-  {
-    key: 'tax_header', label: 'Tax', width: 90, align: 'right', sortable: false, groupable: false,
-    accessor: (r) => fmtRm(0, r.currency),
-    searchValue: (r) => fmtRm(0, r.currency),
-  },
-  {
-    key: 'header_total', label: 'Total', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
-    searchValue: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.local_total_centi ?? 0) - (b.local_total_centi ?? 0),
-  },
-  {
-    key: 'local_total', label: 'Local Total', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
-    searchValue: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.local_total_centi ?? 0) - (b.local_total_centi ?? 0),
-  },
-  {
-    key: 'cancelled', label: 'Cancelled', width: 80, align: 'left', sortable: true, groupable: true,
-    accessor: (r) => (r.cancelled ? 'Y' : 'N'),
-    searchValue: (r) => (r.cancelled ? 'Y' : 'N'),
-  },
-  {
-    key: 'remark4', label: 'Remark 4', width: 140, sortable: true,
-    accessor: (r) => (r.remark4 ?? '—') as string,
-    searchValue: (r) => r.remark4 ?? '',
-  },
-  {
-    key: 'sales_exemption_expiry', label: 'Sales Exemption Expiry', width: 160, sortable: true,
-    accessor: (r) => (r.sales_exemption_expiry ?? '—') as string,
-    searchValue: (r) => r.sales_exemption_expiry ?? '',
-  },
-  {
-    key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
-    accessor: (r) => (r.processing_date ?? '—') as string,
-    searchValue: (r) => r.processing_date ?? '',
-  },
-  {
-    key: 'item_group', label: 'Item Group', width: 120, sortable: true, groupable: true,
-    accessor: (r) => r.item_group ?? '—',
-    searchValue: (r) => r.item_group ?? '',
-  },
-  {
-    key: 'item_code', label: 'Item Code', width: 120, sortable: true, groupable: false,
-    accessor: (r) => <span className={styles.codeCell}>{r.item_code}</span>,
-    searchValue: (r) => r.item_code,
-  },
-  {
-    key: 'description', label: 'Detail Description', width: 220, sortable: true,
-    accessor: (r) => (r.description ?? '—') as string,
-    searchValue: (r) => r.description ?? '',
-  },
-  {
-    key: 'uom', label: 'UOM', width: 70, sortable: true, groupable: true,
-    accessor: (r) => r.uom ?? '—',
-    searchValue: (r) => r.uom ?? '',
-  },
-  {
-    key: 'location', label: 'Location', width: 110, sortable: true, groupable: true,
-    accessor: (r) => (r.location ?? '—') as string,
-    searchValue: (r) => r.location ?? '',
-  },
-  {
-    key: 'description2', label: 'Detail Description 2', width: 200, sortable: true,
-    accessor: (r) => (r.description2 ?? '—') as string,
-    searchValue: (r) => r.description2 ?? '',
-  },
-  {
-    key: 'qty', label: 'Qty', width: 70, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => String(r.qty ?? 0),
-    searchValue: (r) => String(r.qty ?? 0),
-    sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
-  },
-  {
-    key: 'unit_price', label: 'Unit Price', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.unit_price_centi, r.currency),
-    searchValue: (r) => fmtRm(r.unit_price_centi, r.currency),
-    sortFn: (a, b) => (a.unit_price_centi ?? 0) - (b.unit_price_centi ?? 0),
-  },
-  {
-    key: 'discount', label: 'Discount', width: 100, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.discount_centi, r.currency),
-    searchValue: (r) => fmtRm(r.discount_centi, r.currency),
-    sortFn: (a, b) => (a.discount_centi ?? 0) - (b.discount_centi ?? 0),
-  },
-  // Detail Tax Code — constant "SR" while no-SST regime is in effect.
-  {
-    key: 'detail_tax_code', label: 'Detail Tax Code', width: 120, sortable: false, groupable: false,
-    accessor: () => 'SR',
-    searchValue: () => 'SR',
-  },
-  {
-    key: 'line_total', label: 'Total', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.total_centi, r.currency),
-    searchValue: (r) => fmtRm(r.total_centi, r.currency),
-    sortFn: (a, b) => (a.total_centi ?? 0) - (b.total_centi ?? 0),
-  },
-  /* Task #114 — Cost / Margin trio. Server snapshots cost from
-     mfg_products on insert; the report joins line_cost_centi + line_margin
-     so the listing matches the Houzs SO Details report. Margin %
-     pill color matches the Houzs ladder (≥50% emerald, ≥30% amber,
-     >0 orange, ≤0 red). */
-  {
-    key: 'unit_cost', label: 'Unit Cost', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => (r.unit_cost_centi ?? 0) > 0 ? fmtRm(r.unit_cost_centi, r.currency) : '—',
-    searchValue: (r) => fmtRm(r.unit_cost_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.unit_cost_centi ?? 0) - (b.unit_cost_centi ?? 0),
-  },
-  {
-    key: 'line_cost', label: 'Line Cost', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => (r.line_cost_centi ?? 0) > 0 ? fmtRm(r.line_cost_centi, r.currency) : '—',
-    searchValue: (r) => fmtRm(r.line_cost_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.line_cost_centi ?? 0) - (b.line_cost_centi ?? 0),
-  },
-  {
-    key: 'line_margin', label: 'Margin', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => {
-      const m = r.line_margin_centi ?? 0;
-      if ((r.total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-      const color = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
-      return <span style={{ color, fontWeight: 600 }}>{fmtRm(m, r.currency)}</span>;
-    },
-    searchValue: (r) => fmtRm(r.line_margin_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.line_margin_centi ?? 0) - (b.line_margin_centi ?? 0),
-  },
-  {
-    key: 'margin_pct', label: 'Margin %', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => {
-      const rev = r.total_centi ?? 0;
-      if (rev <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-      const pct = ((r.line_margin_centi ?? 0) / rev) * 100;
-      const color = pct >= 50 ? 'var(--c-secondary-a, #2F5D4F)'
-        : pct >= 30 ? 'var(--c-festive-a, #C77F3E)'
-        : pct > 0   ? 'var(--c-burnt)'
-        : 'var(--c-festive-b, #B8331F)';
-      return <span style={{
-        color,
-        fontWeight: 700,
-        fontVariantNumeric: 'tabular-nums',
-      }}>{pct.toFixed(1)}%</span>;
-    },
-    searchValue: (r) => {
-      const rev = r.total_centi ?? 0;
-      if (rev <= 0) return '';
-      return `${(((r.line_margin_centi ?? 0) / rev) * 100).toFixed(1)}%`;
-    },
-    sortFn: (a, b) => {
-      const aPct = (a.total_centi ?? 0) > 0 ? (a.line_margin_centi ?? 0) / a.total_centi! : 0;
-      const bPct = (b.total_centi ?? 0) > 0 ? (b.line_margin_centi ?? 0) / b.total_centi! : 0;
-      return aPct - bPct;
-    },
-  },
-  // Tax (line) — constant 0.00 while no-SST regime is in effect.
-  {
-    key: 'line_tax', label: 'Tax', width: 90, align: 'right', sortable: false, groupable: false,
-    accessor: (r) => fmtRm(0, r.currency),
-    searchValue: (r) => fmtRm(0, r.currency),
-  },
-  {
-    key: 'total_ex', label: 'Total (Ex)', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
-    searchValue: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
-    sortFn: (a, b) =>
-      ((a.total_centi ?? 0) - (a.tax_centi ?? 0)) -
-      ((b.total_centi ?? 0) - (b.tax_centi ?? 0)),
-  },
-  {
-    key: 'total_inc', label: 'Total (Inc)', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.total_inc_centi ?? r.total_centi ?? 0, r.currency),
-    searchValue: (r) => fmtRm(r.total_inc_centi ?? r.total_centi ?? 0, r.currency),
-    sortFn: (a, b) =>
-      (a.total_inc_centi ?? a.total_centi ?? 0) -
-      (b.total_inc_centi ?? b.total_centi ?? 0),
-  },
-  // Creditor Code / Post to PO — SO→PO linking not tracked yet.
-  {
-    key: 'creditor_code', label: 'Creditor Code', width: 110, sortable: false, groupable: false,
-    accessor: () => '—',
-    searchValue: () => '',
-  },
-  {
-    key: 'post_to_po', label: 'Post to PO', width: 90, align: 'left', sortable: false, groupable: false,
-    accessor: () => '—',
-    searchValue: () => '',
-  },
-  {
-    key: 'balance', label: 'BALANCE', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.balance_centi ?? 0, r.currency),
-    searchValue: (r) => fmtRm(r.balance_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.balance_centi ?? 0) - (b.balance_centi ?? 0),
-  },
-  // PAYEMENT — AutoCount preserves the typo. Server-derived from
-  // mfg_sales_order_payments (paid_total_centi).
-  {
-    key: 'payment', label: 'PAYEMENT', width: 110, align: 'right', sortable: true, groupable: false,
-    accessor: (r) => fmtRm(r.paid_total_centi ?? 0, r.currency),
-    searchValue: (r) => fmtRm(r.paid_total_centi ?? 0, r.currency),
-    sortFn: (a, b) => (a.paid_total_centi ?? 0) - (b.paid_total_centi ?? 0),
-  },
-  {
-    key: 'remark5', label: 'Remark5', width: 140, sortable: true,
-    accessor: (r) => (r.remark2 ?? '—') as string,
-    searchValue: (r) => r.remark2 ?? '',
-  },
-  {
-    key: 'remark6', label: 'Remark6', width: 140, sortable: true,
-    accessor: (r) => (r.remark3 ?? '—') as string,
-    searchValue: (r) => r.remark3 ?? '',
-  },
-];
-
-/* ─────────────────────────────────────────────────────────────────────────
-   The page-level "Group By" select writes into the DataGrid's localStorage
-   layout under STORAGE_KEY. Maps the SO-listing-flavoured enum to the
-   underlying column key.
-   ───────────────────────────────────────────────────────────────────────── */
-const GROUP_TO_COL_KEY: Record<Exclude<GroupBy, 'none'>, string> = {
-  branding:    'agent',       // SoDetailListingRow has no `branding` line field;
-                              // fall back to agent (closest equivalent).
-  agent:       'agent',
-  debtor:      'debtor_code',
-  item_group:  'item_group',
+/* Compact date — "04 May 2026" matching the Houzs reference shot. */
+const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const compactDate = (iso: string | null | undefined): string => {
+  if (!iso) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return iso;
+  return `${String(Number(m[3])).padStart(2, '0')} ${MONTH_3[Number(m[2]) - 1] ?? m[2]} ${m[1]}`;
 };
 
-type GridLayout = {
-  order: string[];
-  hidden: string[];
-  widths: Record<string, number>;
-  groupBy: string[];
-  pinned: string[];
-  sort: { key: string; dir: 'asc' | 'desc' } | null;
+/* Payment status pill — same warm/green/grey palette as item-group pill,
+   tied to a coarse three-state derived from `payment_status` enum. */
+type PayState = 'Checked' | 'Unchecked' | 'Pending';
+const PAY_BADGE: Record<PayState, { bg: string; fg: string }> = {
+  Checked:   { bg: 'rgba(47, 93, 79, 0.12)',  fg: 'var(--c-secondary-a, #2F5D4F)' },
+  Pending:   { bg: 'rgba(199, 127, 62, 0.16)', fg: 'var(--c-festive-a, #C77F3E)' },
+  Unchecked: { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)' },
 };
-const setGridGroupBy = (colKey: string | null) => {
-  if (typeof window === 'undefined') return;
-  let layout: Partial<GridLayout> = {};
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) layout = JSON.parse(raw) as Partial<GridLayout>;
-  } catch { /* corrupt — overwrite */ }
-  const next: GridLayout = {
-    order:   layout.order   ?? [],
-    hidden:  layout.hidden  ?? [],
-    widths:  layout.widths  ?? {},
-    pinned:  layout.pinned  ?? [],
-    sort:    layout.sort    ?? null,
-    groupBy: colKey ? [colKey] : [],
+const payStateFor = (raw: string | null | undefined): PayState => {
+  if (!raw) return 'Unchecked';
+  const v = String(raw).toLowerCase();
+  if (v === 'checked' || v === 'paid' || v === 'cleared') return 'Checked';
+  if (v === 'pending' || v === 'partial') return 'Pending';
+  return 'Unchecked';
+};
+const PaymentPill = ({ raw }: { raw: string | null | undefined }) => {
+  const state = payStateFor(raw);
+  const spec = PAY_BADGE[state];
+  return (
+    <span style={{
+      display: 'inline-flex', padding: '1px 8px',
+      borderRadius: 'var(--radius-pill, 999px)',
+      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', fontWeight: 700,
+      letterSpacing: '0.06em', textTransform: 'uppercase',
+      background: spec.bg, color: spec.fg,
+    }}>{state}</span>
+  );
+};
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Column factory — 44 columns total (34 visible by default + 10 hidden).
+   Order mirrors the Houzs reference shot column-for-column:
+     1. Doc.No (orange) 2. Date 3. Debtor Name 4. Agent 5. Item Group (pill)
+     6. Item Code (bold) 7. Description 8. Location 9. Qty 10. Unit Price
+     11. Total 12. Line Cost 13. Margin RM 14. Margin % 15. Balance
+     16. Payment (pill) 17. Venue 18. Branding (pill) 19. Fabric
+     20. Divan Height 21. Leg Height 22. Specials 23. Actions
+     24. Order Remarks 25. Status (pill) 26. Status 2 27. Processing Date
+     28. Tax Exemption Expiry 29. Note 30. Paid 31. Last Payment
+     32. Account Sheet 33. Approval Code 34. Collected By
+   The 10 hidden long-tail columns (uom · currency · inclusive? · tax/header
+   tax/line tax · detail tax code · creditor code · post to PO · subtotal ex
+   · total ex / total inc) sit in the right-click "Hidden" menu.
+   ───────────────────────────────────────────────────────────────────────── */
+const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
+  /* Read-out helper for the "may exist on the row but not on the type"
+     fields — the API flattens the SO header onto every line, so anything
+     in mfg_sales_orders is reachable via (r as Record<string, unknown>)[k]. */
+  const opt = (r: SoDetailListingRow, k: string): string => {
+    const v = (r as Record<string, unknown>)[k];
+    if (v == null || v === '') return '';
+    return String(v);
   };
-  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* quota */ }
+
+  return [
+    /* 1 */ {
+      key: 'doc_no', label: 'Doc. No.', width: 120, sortable: true, groupable: false,
+      accessor: (r) => <span className={styles.codeCell}>{r.doc_no}</span>,
+      searchValue: (r) => r.doc_no,
+    },
+    /* 2 */ {
+      key: 'so_date', label: 'Date', width: 110, sortable: true,
+      accessor: (r) => compactDate((r.so_date ?? r.line_date) as string | null),
+      searchValue: (r) => String(r.so_date ?? r.line_date ?? ''),
+      sortFn: (a, b) => String(a.so_date ?? a.line_date ?? '').localeCompare(String(b.so_date ?? b.line_date ?? '')),
+    },
+    /* 3 */ {
+      key: 'debtor_name', label: 'Debtor Name', width: 200, sortable: true, groupable: true,
+      accessor: (r) => r.debtor_name ?? '—',
+      searchValue: (r) => r.debtor_name ?? '',
+    },
+    /* 4 */ {
+      key: 'agent', label: 'Agent', width: 110, sortable: true, groupable: true,
+      accessor: (r) => r.agent ?? '—',
+      searchValue: (r) => r.agent ?? '',
+      groupValue: (r) => r.agent ?? '(none)',
+    },
+    /* 5 */ {
+      key: 'item_group', label: 'Item Group', width: 110, sortable: true, groupable: true,
+      accessor: (r) => <ItemGroupPill group={r.item_group} />,
+      searchValue: (r) => r.item_group ?? '',
+      groupValue: (r) => r.item_group ?? '(none)',
+    },
+    /* 6 */ {
+      key: 'item_code', label: 'Item Code', width: 120, sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 600 }}>{r.item_code}</span>,
+      searchValue: (r) => r.item_code ?? '',
+    },
+    /* 7 */ {
+      key: 'description', label: 'Description', width: 220, sortable: true,
+      accessor: (r) => (r.description ?? '—'),
+      searchValue: (r) => r.description ?? '',
+    },
+    /* 8 */ {
+      key: 'location', label: 'Location', width: 80, sortable: true, groupable: true,
+      accessor: (r) => r.location ?? '—',
+      searchValue: (r) => r.location ?? '',
+    },
+    /* 9 */ {
+      key: 'qty', label: 'Qty', width: 60, align: 'right', sortable: true,
+      accessor: (r) => String(r.qty ?? 0),
+      searchValue: (r) => String(r.qty ?? 0),
+      sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+    },
+    /* 10 */ {
+      key: 'unit_price', label: 'Unit Price', width: 110, align: 'right', sortable: true,
+      accessor: (r) => fmtRm(r.unit_price_centi),
+      searchValue: (r) => fmtRm(r.unit_price_centi),
+      sortFn: (a, b) => (a.unit_price_centi ?? 0) - (b.unit_price_centi ?? 0),
+    },
+    /* 11 */ {
+      key: 'total', label: 'Total', width: 120, align: 'right', sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 600 }}>{fmtRm(r.total_centi)}</span>,
+      searchValue: (r) => fmtRm(r.total_centi),
+      sortFn: (a, b) => (a.total_centi ?? 0) - (b.total_centi ?? 0),
+    },
+    /* 12 */ {
+      key: 'line_cost', label: 'Line Cost', width: 110, align: 'right', sortable: true,
+      accessor: (r) => (r.line_cost_centi ?? 0) > 0 ? fmtRm(r.line_cost_centi) : <span style={{ color: 'var(--fg-muted)' }}>—</span>,
+      searchValue: (r) => fmtRm(r.line_cost_centi ?? 0),
+      sortFn: (a, b) => (a.line_cost_centi ?? 0) - (b.line_cost_centi ?? 0),
+    },
+    /* 13 */ {
+      key: 'line_margin', label: 'Margin RM', width: 110, align: 'right', sortable: true,
+      accessor: (r) => {
+        const m = r.line_margin_centi ?? 0;
+        if ((r.total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+        const color = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+        return <span style={{ color, fontWeight: 600 }}>{fmtRm(m)}</span>;
+      },
+      searchValue: (r) => fmtRm(r.line_margin_centi ?? 0),
+      sortFn: (a, b) => (a.line_margin_centi ?? 0) - (b.line_margin_centi ?? 0),
+    },
+    /* 14 */ {
+      key: 'margin_pct', label: 'Margin %', width: 90, align: 'right', sortable: true,
+      accessor: (r) => {
+        const rev = r.total_centi ?? 0;
+        if (rev <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+        const pct = ((r.line_margin_centi ?? 0) / rev) * 100;
+        const color = pct >= 50 ? 'var(--c-secondary-a, #2F5D4F)'
+          : pct >= 30 ? 'var(--c-festive-a, #C77F3E)'
+          : pct > 0   ? 'var(--c-burnt)'
+          : 'var(--c-festive-b, #B8331F)';
+        return <span style={{ color, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{pct.toFixed(1)}%</span>;
+      },
+      searchValue: (r) => {
+        const rev = r.total_centi ?? 0;
+        if (rev <= 0) return '';
+        return `${(((r.line_margin_centi ?? 0) / rev) * 100).toFixed(1)}%`;
+      },
+      sortFn: (a, b) => {
+        const aPct = (a.total_centi ?? 0) > 0 ? (a.line_margin_centi ?? 0) / a.total_centi! : 0;
+        const bPct = (b.total_centi ?? 0) > 0 ? (b.line_margin_centi ?? 0) / b.total_centi! : 0;
+        return aPct - bPct;
+      },
+    },
+    /* 15 */ {
+      key: 'balance', label: 'Balance', width: 110, align: 'right', sortable: true,
+      accessor: (r) => fmtRm(r.balance_centi ?? 0),
+      searchValue: (r) => fmtRm(r.balance_centi ?? 0),
+      sortFn: (a, b) => (a.balance_centi ?? 0) - (b.balance_centi ?? 0),
+    },
+    /* 16 */ {
+      key: 'payment', label: 'Payment', width: 100, sortable: true, groupable: true,
+      accessor: (r) => <PaymentPill raw={opt(r, 'payment_status')} />,
+      searchValue: (r) => payStateFor(opt(r, 'payment_status')),
+      groupValue: (r) => payStateFor(opt(r, 'payment_status')),
+    },
+    /* 17 */ {
+      key: 'venue', label: 'Venue', width: 160, sortable: true, groupable: true,
+      accessor: (r) => opt(r, 'venue') || '—',
+      searchValue: (r) => opt(r, 'venue'),
+      groupValue: (r) => opt(r, 'venue') || '(none)',
+    },
+    /* 18 */ {
+      key: 'branding', label: 'Branding', width: 110, sortable: true, groupable: true,
+      accessor: (r) => <BrandingPill branding={r.branding} />,
+      searchValue: (r) => r.branding ?? '',
+      groupValue: (r) => r.branding ?? '(none)',
+    },
+    /* 19 */ {
+      key: 'fabric', label: 'Fabric', width: 120, sortable: true,
+      accessor: (r) => opt(r, 'fabric_code') || opt(r, 'fabric') || '—',
+      searchValue: (r) => opt(r, 'fabric_code') || opt(r, 'fabric'),
+    },
+    /* 20 */ {
+      key: 'divan_height', label: 'Divan Height', width: 110, sortable: true,
+      accessor: (r) => opt(r, 'divan_height') || '—',
+      searchValue: (r) => opt(r, 'divan_height'),
+    },
+    /* 21 */ {
+      key: 'leg_height', label: 'Leg Height', width: 100, sortable: true,
+      accessor: (r) => opt(r, 'leg_height') || '—',
+      searchValue: (r) => opt(r, 'leg_height'),
+    },
+    /* 22 */ {
+      key: 'specials', label: 'Specials', width: 140, sortable: true,
+      accessor: (r) => opt(r, 'specials') || opt(r, 'special') || '—',
+      searchValue: (r) => opt(r, 'specials') || opt(r, 'special'),
+    },
+    /* 23 — Actions: per-row link to the SO Detail page. The reference column
+       label in Houzs holds free-text action notes; we keep that semantic
+       but also surface a tiny "Open" affordance since users land here from
+       the Sales menu more often than the Detail page itself. */
+    {
+      key: 'actions', label: 'Actions', width: 100, sortable: false, groupable: false,
+      accessor: (r) => opt(r, 'action_notes') || opt(r, 'actions') || '—',
+      searchValue: (r) => opt(r, 'action_notes') || opt(r, 'actions'),
+    },
+    /* 24 */ {
+      key: 'order_remarks', label: 'Order Remarks', width: 160, sortable: true,
+      accessor: (r) => opt(r, 'remark') || opt(r, 'note') || '—',
+      searchValue: (r) => opt(r, 'remark') || opt(r, 'note'),
+    },
+    /* 25 */ {
+      key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
+      accessor: (r) => {
+        const s = r.status ?? '';
+        if (!s) return '—';
+        const color = s === 'CANCELLED' ? 'var(--c-festive-b, #B8331F)'
+          : s === 'DELIVERED' || s === 'CLOSED' ? 'var(--c-secondary-a, #2F5D4F)'
+          : 'var(--c-burnt)';
+        return <span style={{
+          display: 'inline-flex', padding: '1px 8px',
+          borderRadius: 'var(--radius-pill, 999px)',
+          background: 'rgba(232, 107, 58, 0.10)', color,
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          fontWeight: 700, letterSpacing: '0.06em',
+        }}>{s.replace(/_/g, ' ')}</span>;
+      },
+      searchValue: (r) => r.status ?? '',
+      groupValue: (r) => r.status ?? '(none)',
+    },
+    /* 26 — Status 2: secondary lifecycle state (Houzs uses for sub-status
+       like "Photo Sent", "Awaiting Driver" etc.). We don't track this
+       server-side yet, so empty most rows; surface from `remark2` when set. */
+    {
+      key: 'status_2', label: 'Status 2', width: 110, sortable: true, groupable: true,
+      accessor: (r) => opt(r, 'remark2') || '—',
+      searchValue: (r) => opt(r, 'remark2'),
+    },
+    /* 27 */ {
+      key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
+      accessor: (r) => r.processing_date ? compactDate(r.processing_date) : '—',
+      searchValue: (r) => r.processing_date ?? '',
+    },
+    /* 28 */ {
+      key: 'tax_expiry', label: 'Tax Exemption Expiry', width: 150, sortable: true,
+      accessor: (r) => r.sales_exemption_expiry ? compactDate(r.sales_exemption_expiry) : '—',
+      searchValue: (r) => r.sales_exemption_expiry ?? '',
+    },
+    /* 29 */ {
+      key: 'note', label: 'Note', width: 160, sortable: true,
+      accessor: (r) => opt(r, 'note') || opt(r, 'remark3') || '—',
+      searchValue: (r) => opt(r, 'note') || opt(r, 'remark3'),
+    },
+    /* 30 */ {
+      key: 'paid', label: 'Paid', width: 110, align: 'right', sortable: true,
+      accessor: (r) => fmtRm(r.paid_total_centi ?? 0),
+      searchValue: (r) => fmtRm(r.paid_total_centi ?? 0),
+      sortFn: (a, b) => (a.paid_total_centi ?? 0) - (b.paid_total_centi ?? 0),
+    },
+    /* 31 */ {
+      key: 'last_payment', label: 'Last Payment', width: 120, sortable: true,
+      accessor: (r) => {
+        const d = opt(r, 'last_payment_date') || opt(r, 'payment_date');
+        return d ? compactDate(d) : '—';
+      },
+      searchValue: (r) => opt(r, 'last_payment_date') || opt(r, 'payment_date'),
+    },
+    /* 32 — Account Sheet: finance ledger slot. Not tracked in our schema
+       yet — render the customer's PO doc number as a useful proxy (Houzs
+       typically files SOs by the matching account-sheet line ref). */
+    {
+      key: 'account_sheet', label: 'Account Sheet', width: 130, sortable: true,
+      accessor: (r) => opt(r, 'account_sheet') || opt(r, 'po_doc_no') || '—',
+      searchValue: (r) => opt(r, 'account_sheet') || opt(r, 'po_doc_no'),
+    },
+    /* 33 */ {
+      key: 'approval_code', label: 'Approval Code', width: 130, sortable: true,
+      accessor: (r) => opt(r, 'approval_code') || '—',
+      searchValue: (r) => opt(r, 'approval_code'),
+    },
+    /* 34 */ {
+      key: 'collected_by', label: 'Collected By', width: 130, sortable: true,
+      accessor: (r) => opt(r, 'collected_by') || '—',
+      searchValue: (r) => opt(r, 'collected_by'),
+    },
+    /* ── Default-hidden long tail (10 columns) ────────────────────────── */
+    {
+      key: 'debtor_code', label: 'Debtor Code', width: 110, sortable: true,
+      defaultHidden: true,
+      accessor: (r) => r.debtor_code ?? '',
+      searchValue: (r) => r.debtor_code ?? '',
+    },
+    {
+      key: 'uom', label: 'UOM', width: 70, sortable: true,
+      defaultHidden: true,
+      accessor: (r) => r.uom ?? '',
+      searchValue: (r) => r.uom ?? '',
+    },
+    {
+      key: 'currency', label: 'Curr.', width: 70, sortable: true,
+      defaultHidden: true,
+      accessor: (r) => r.currency ?? 'MYR',
+      searchValue: (r) => r.currency ?? 'MYR',
+    },
+    {
+      /* No-SST regime — constant "Yes" until SST returns. */
+      key: 'inclusive', label: 'Inclusive?', width: 80, sortable: false,
+      defaultHidden: true,
+      accessor: () => 'Yes',
+      searchValue: () => 'Yes',
+    },
+    {
+      key: 'tax_header', label: 'Tax (Header)', width: 100, align: 'right', sortable: false,
+      defaultHidden: true,
+      accessor: () => fmtRm(0),
+      searchValue: () => fmtRm(0),
+    },
+    {
+      key: 'tax_line', label: 'Tax (Line)', width: 100, align: 'right', sortable: false,
+      defaultHidden: true,
+      accessor: () => fmtRm(0),
+      searchValue: () => fmtRm(0),
+    },
+    {
+      /* No-SST regime — constant "SR" (Standard Rated 0%). */
+      key: 'detail_tax_code', label: 'Detail Tax Code', width: 120, sortable: false,
+      defaultHidden: true,
+      accessor: () => 'SR',
+      searchValue: () => 'SR',
+    },
+    {
+      /* SO→PO linking not tracked yet — render dash. */
+      key: 'creditor_code', label: 'Creditor Code', width: 110, sortable: false,
+      defaultHidden: true,
+      accessor: () => '—',
+      searchValue: () => '',
+    },
+    {
+      key: 'post_to_po', label: 'Post to PO', width: 100, sortable: false,
+      defaultHidden: true,
+      accessor: () => '—',
+      searchValue: () => '',
+    },
+    {
+      key: 'total_ex', label: 'Total (Ex)', width: 110, align: 'right', sortable: true,
+      defaultHidden: true,
+      accessor: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0)),
+      searchValue: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0)),
+      sortFn: (a, b) =>
+        ((a.total_centi ?? 0) - (a.tax_centi ?? 0)) -
+        ((b.total_centi ?? 0) - (b.tax_centi ?? 0)),
+    },
+  ];
 };
+
+/* Page-level Group By is now hosted entirely inside DataGrid (drag-to-group
+   banner). The previous AutoCount dropdown is dropped — Houzs has no
+   equivalent on this screen.
+
+   Static columns at module scope so DataGrid's React.memo can hit
+   (Task #99). The columns hold no per-page state. */
+const COLUMNS: DataGridColumn<SoDetailListingRow>[] = buildColumns();
 
 export const SalesOrderDetailListing = () => {
   const navigate = useNavigate();
@@ -416,67 +451,99 @@ export const SalesOrderDetailListing = () => {
     setSearchParams(next, { replace: true });
   };
 
-  // ── Filter state ─────────────────────────────────────────────────
+  /* ── Filter state ─────────────────────────────────────────────────
+     Houzs filter row (left-to-right): funnel · search · brand · group ·
+     agent · venue · payment · date from – to. Each one narrows the
+     visible row-set client-side off the same one-shot query. Date range
+     is the only filter sent to the server (so the page can scale beyond
+     ~2k lines once the SO table grows). */
   const today = new Date().toISOString().slice(0, 10);
   const yearAgo = new Date(Date.now() - 365 * 86400 * 1000).toISOString().slice(0, 10);
-  const [docDateMode, setDocDateMode] = useState<DateMode>('range');
   const [dateFrom, setDateFrom] = useState(yearAgo);
   const [dateTo,   setDateTo]   = useState(today);
-  const [docNo,       setDocNo]       = useState('');
-  const [debtorCode,  setDebtorCode]  = useState('');
-  const [itemCode,    setItemCode]    = useState('');
-  const [deliveryDateMode, setDeliveryDateMode] = useState<DateMode>('none');
-  const [deliveryFrom, setDeliveryFrom] = useState('');
-  const [deliveryTo,   setDeliveryTo]   = useState('');
-  const [groupBy, setGroupBy] = useState<GroupBy>('none');
-  const [sortBy,  setSortBy]  = useState<SortBy>('date');
-  const [showCriteria, setShowCriteria] = useState(false);
+  const [search,   setSearch]   = useState('');
+  const [brand,    setBrand]    = useState<string>('');
+  const [group,    setGroup]    = useState<string>('');
+  const [agent,    setAgent]    = useState<string>('');
+  const [venue,    setVenue]    = useState<string>('');
+  const [payment,  setPayment]  = useState<string>('');
 
-  // ── UI state ────────────────────────────────────────────────────
-  const [optionsVisible, setOptionsVisible] = useState(true);
-  const [hasRunQuery,    setHasRunQuery]    = useState(false);
-  const [criteriaPanel,  setCriteriaPanel]  = useState(false);
-  const [checked,        setChecked]        = useState<Record<string, boolean>>({});
-  const [hideUnchecked,  setHideUnchecked]  = useState(false);
-  const [findNonce,      setFindNonce]      = useState(0);
+  /* ── Server-side query — auto-runs (Houzs shows data immediately).
+        Date range is the only filter passed server-side. */
+  const committed: SoDetailListingFilters = useMemo(() => ({
+    dateFrom, dateTo, sortBy: 'date',
+  }), [dateFrom, dateTo]);
+  const query = useSalesOrderDetailListing(committed);
+  const rawRows = useMemo<SoDetailListingRow[]>(() => query.data?.rows ?? [], [query.data]);
 
-  // ── Inquiry query — only fires after the user clicks "Inquiry". ──
-  const [committed, setCommitted] = useState<SoDetailListingFilters>({});
-  const query = useSalesOrderDetailListing(hasRunQuery ? committed : {});
-  const rawRows = useMemo<SoDetailListingRow[]>(
-    () => (hasRunQuery ? (query.data?.rows ?? []) : []),
-    [hasRunQuery, query.data],
-  );
+  /* Build distinct-value lists for the dropdown options off the raw row
+     set. Cheap O(n) pass — runs once per query refetch. */
+  const opt = useCallback((r: SoDetailListingRow, k: string): string => {
+    const v = (r as Record<string, unknown>)[k];
+    if (v == null || v === '') return '';
+    return String(v);
+  }, []);
 
-  // Hide-unchecked filter — DataGrid handles search/sort/group, we just
-  // shrink the input set when "Clear Unchecked" is toggled on. Task #120:
-  // additionally shrink to outstanding-only lines when ?outstanding=1.
-  const rows = useMemo(() => {
-    let r = rawRows;
-    if (outstandingOnly) {
-      r = r.filter((row) => {
-        const lt = (row.local_total_centi ?? 0);
-        const pt = (row.paid_total_centi ?? 0);
-        return lt - pt > 0;
-      });
+  const filterOptions = useMemo(() => {
+    const brands = new Set<string>();
+    const groups = new Set<string>();
+    const agents = new Set<string>();
+    const venues = new Set<string>();
+    for (const r of rawRows) {
+      if (r.branding) brands.add(r.branding);
+      if (r.item_group) groups.add(r.item_group);
+      if (r.agent) agents.add(r.agent);
+      const v = opt(r, 'venue');
+      if (v) venues.add(v);
     }
-    if (hideUnchecked) r = r.filter((row) => checked[row.id]);
-    return r;
-  }, [rawRows, checked, hideUnchecked, outstandingOnly]);
+    return {
+      brands: [...brands].sort(),
+      groups: [...groups].sort(),
+      agents: [...agents].sort(),
+      venues: [...venues].sort(),
+    };
+  }, [rawRows, opt]);
 
-  /* Task #114 — Page-level KPI bar mirroring the Houzs SO Details
-     report header. 6 tiles computed from the same filtered row set the
-     grid renders: Total Lines, Unique Orders, Revenue, Cost, Margin
-     (with %), Outstanding (deduped per docNo). */
+  /* Apply client-side filters (brand/group/agent/venue/payment + global
+     search + outstanding-only). The DataGrid still owns its own global
+     search box internally, but the Houzs reference puts the search input
+     in the top filter row — we pass the value down via searchValue
+     column matches in the row filter below. */
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rawRows.filter((r) => {
+      if (brand && r.branding !== brand) return false;
+      if (group && r.item_group !== group) return false;
+      if (agent && r.agent !== agent) return false;
+      if (venue && opt(r, 'venue') !== venue) return false;
+      if (payment && payStateFor(opt(r, 'payment_status')) !== (payment as PayState)) return false;
+      if (outstandingOnly) {
+        const lt = r.local_total_centi ?? 0;
+        const pt = r.paid_total_centi ?? 0;
+        if (lt - pt <= 0) return false;
+      }
+      if (q) {
+        const blob = [
+          r.doc_no, r.debtor_name, r.item_code, r.description,
+          r.agent, opt(r, 'venue'), r.item_group, r.branding,
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [rawRows, brand, group, agent, venue, payment, search, outstandingOnly, opt]);
+
+  /* ── 6 KPI tiles — computed off the filtered row set, NOT rawRows, so
+        narrowing the filters re-scopes the headline numbers (matches
+        Houzs's interactive feel). Outstanding is deduped per docNo since
+        the line-flat row format repeats it per line. */
   const kpis = useMemo(() => {
-    const totalLines = rows.length;
+    const totalLines = filteredRows.length;
     const uniqueDocs = new Set<string>();
     let revenue = 0;
     let cost = 0;
-    /* Outstanding is a per-doc value (local_total − paid). The line-flat
-       report repeats it per line, so dedupe by docNo before summing. */
     const outstandingByDoc = new Map<string, number>();
-    for (const r of rows) {
+    for (const r of filteredRows) {
       uniqueDocs.add(r.doc_no);
       revenue += r.total_centi ?? 0;
       cost    += r.line_cost_centi ?? 0;
@@ -490,59 +557,11 @@ export const SalesOrderDetailListing = () => {
     const margin = revenue - cost;
     const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0;
     return { totalLines, uniqueOrders: uniqueDocs.size, revenue, cost, margin, marginPct, outstanding };
-  }, [rows]);
+  }, [filteredRows]);
 
-  // ── Sync page-level Group By dropdown → DataGrid layout ─────────
-  // The DataGrid reads its layout from localStorage on mount; once the user
-  // changes the dropdown we patch the saved layout and bump a remount nonce
-  // so the new groupBy takes effect immediately. Skip the initial mount so
-  // we don't overwrite a persisted layout with the default 'none'.
-  const [gridNonce, setGridNonce] = useState(0);
-  const isInitialMount = useRef(true);
-  useEffect(() => {
-    if (isInitialMount.current) { isInitialMount.current = false; return; }
-    setGridGroupBy(groupBy === 'none' ? null : GROUP_TO_COL_KEY[groupBy]);
-    setGridNonce((n) => n + 1);
-  }, [groupBy]);
+  /* ── PDF preview (retained from the AutoCount layout) ──────────────── */
+  const [findNonce, setFindNonce] = useState(0);
 
-  // ── Columns ─────────────────────────────────────────────────────
-  /* Task #99 (UI perf) — `toggleRow` was recreated on every parent render,
-     which silently invalidated the `columns` useMemo below (dep array
-     captured the unstable function via closure even though it wasn't a
-     dep) and rebuilt all 37 column definitions per render. Wrap in
-     useCallback with the functional setState so it's stable for the
-     page's lifetime. */
-  const toggleRow = useCallback(
-    (id: string) => setChecked((p) => ({ ...p, [id]: !p[id] })),
-    [],
-  );
-  const columns = useMemo<DataGridColumn<SoDetailListingRow>[]>(
-    () => buildColumns(checked, toggleRow),
-    [checked, toggleRow],
-  );
-
-  // ── Action handlers ─────────────────────────────────────────────
-  const runInquiry = () => {
-    setCommitted({
-      dateFrom:         docDateMode === 'range' ? dateFrom : undefined,
-      dateTo:           docDateMode === 'range' ? dateTo   : undefined,
-      docNo:            docNo.trim()      || undefined,
-      debtorCode:       debtorCode.trim() || undefined,
-      itemCode:         itemCode.trim()   || undefined,
-      deliveryDateFrom: deliveryDateMode === 'range' ? deliveryFrom : undefined,
-      deliveryDateTo:   deliveryDateMode === 'range' ? deliveryTo   : undefined,
-      groupBy,
-      sortBy,
-    });
-    setHasRunQuery(true);
-  };
-
-  const runPrint = () => {
-    if (!hasRunQuery) runInquiry();
-    setTimeout(() => window.print(), 60);
-  };
-
-  // Same dynamic-import jspdf pattern as sales-order-pdf.ts.
   const generatePreviewPdf = async (data: SoDetailListingRow[]) => {
     try {
       const { jsPDF } = await import('jspdf');
@@ -552,7 +571,7 @@ export const SalesOrderDetailListing = () => {
       let y = margin;
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(13);
-      doc.text("Sales Order Detail Listing", margin, y);
+      doc.text("Sales Order Details", margin, y);
       y += 5;
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
@@ -561,13 +580,13 @@ export const SalesOrderDetailListing = () => {
         margin, y,
       );
       y += 4;
-      // Representative subset of cols — A4 landscape can't show all 36.
+      // A4 landscape — surface the 10 most important columns.
       const previewKeys = [
         'doc_no', 'so_date', 'debtor_name', 'agent', 'item_code',
-        'description', 'qty', 'unit_price', 'discount', 'line_total',
+        'description', 'qty', 'unit_price', 'total', 'line_margin',
       ];
       const previewCols = previewKeys
-        .map((k) => columns.find((c) => c.key === k))
+        .map((k) => COLUMNS.find((c) => c.key === k))
         .filter((c): c is DataGridColumn<SoDetailListingRow> => Boolean(c));
       autoTable(doc, {
         startY: y + 2,
@@ -576,10 +595,7 @@ export const SalesOrderDetailListing = () => {
           previewCols.map((c) => {
             if (c.searchValue) return c.searchValue(r);
             const v = c.accessor(r);
-            return typeof v === 'string' || typeof v === 'number' ? String(v)
-                 : (r as Record<string, unknown>)[c.key] != null
-                   ? String((r as Record<string, unknown>)[c.key])
-                   : '';
+            return typeof v === 'string' || typeof v === 'number' ? String(v) : '';
           })
         ),
         theme: 'striped',
@@ -587,7 +603,7 @@ export const SalesOrderDetailListing = () => {
         headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
         margin: { left: margin, right: margin },
       });
-      doc.save(`sales-order-detail-listing-${new Date().toISOString().slice(0, 10)}.pdf`);
+      doc.save(`sales-order-details-${new Date().toISOString().slice(0, 10)}.pdf`);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('PDF preview failed', e);
@@ -595,32 +611,25 @@ export const SalesOrderDetailListing = () => {
     }
   };
 
-  const runPreview = async () => {
-    if (!hasRunQuery) {
-      runInquiry();
-      setTimeout(() => { void generatePreviewPdf(rows); }, 250);
-      return;
-    }
-    await generatePreviewPdf(rows);
+  const runPreview = () => { void generatePreviewPdf(filteredRows); };
+  const runPrint   = () => window.print();
+
+  /* Reset filters back to defaults. Houzs's "Reset Data" affordance. */
+  const resetFilters = () => {
+    setSearch(''); setBrand(''); setGroup(''); setAgent(''); setVenue(''); setPayment('');
+    setDateFrom(yearAgo); setDateTo(today);
   };
 
-  // ── Selection helpers ──────────────────────────────────────────
-  const checkAll = () => {
-    const next: Record<string, boolean> = {};
-    for (const r of rows) next[r.id] = true;
-    setChecked(next);
-  };
-  const uncheckAll = () => setChecked({});
-  const uncheckInSelection = () => {
-    const next = { ...checked };
-    for (const r of rows) if (next[r.id]) next[r.id] = false;
-    setChecked(next);
-  };
-  const clearUnchecked = () => setHideUnchecked((p) => !p);
+  /* Match the headline format Houzs uses on the title bar — drives the
+       "N items · drag to reorder columns" subtitle below. */
+  useEffect(() => {
+    document.title = `Sales Order Details · ${kpis.totalLines} items`;
+    return () => { document.title = '2990s'; };
+  }, [kpis.totalLines]);
 
-  // ── Render ─────────────────────────────────────────────────────
   return (
-    <div className={`${styles.page} ${optionsVisible ? '' : styles.optionsHidden}`}>
+    <div className={styles.page}>
+      {/* ── Header ───────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
           <button type="button" className={styles.backBtn} onClick={() => navigate(-1)}>
@@ -630,11 +639,11 @@ export const SalesOrderDetailListing = () => {
           <div>
             <h1 className={styles.title}>
               <ClipboardList size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
-              Sales Order Detail Listing
+              Sales Order Details
               {outstandingOnly && <span style={{ color: 'var(--c-burnt)', marginLeft: 8 }}>· Outstanding only</span>}
             </h1>
             <p className={styles.subtitle}>
-              AutoCount-style report · one row per Sales Order line item
+              Line-item view · {kpis.totalLines} items · drag to reorder columns
               {outstandingOnly && (
                 <>
                   {' · '}
@@ -648,320 +657,135 @@ export const SalesOrderDetailListing = () => {
             </p>
           </div>
         </div>
+        <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" size="sm" onClick={resetFilters}>
+            <X {...SM_ICON} />
+            <span>Reset Data</span>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={runPreview}>
+            <Eye {...SM_ICON} />
+            <span>Preview</span>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={runPrint}>
+            <Printer {...SM_ICON} />
+            <span>Print</span>
+          </Button>
+        </div>
       </div>
 
-      {/* Task #114 — 6 KPI tiles at the top mirroring the Houzs SO Details
-          report header. Always rendered (zeros before Inquiry runs).
-          Values recompute from the same filtered row set the grid sees. */}
-      {hasRunQuery && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(6, 1fr)',
-          gap: 'var(--space-2)',
-        }}>
-          {([
-            { label: 'Total Lines',    value: kpis.totalLines.toString() },
-            { label: 'Unique Orders',  value: kpis.uniqueOrders.toString() },
-            { label: 'Revenue',        value: fmtRm(kpis.revenue) },
-            { label: 'Cost',           value: fmtRm(kpis.cost) },
-            { label: 'Margin',         value: `${fmtRm(kpis.margin)}${kpis.revenue > 0 ? ` (${kpis.marginPct.toFixed(1)}%)` : ''}`,
-              accent: kpis.margin > 0 ? 'good' as const : kpis.margin < 0 ? 'bad' as const : null },
-            { label: 'Outstanding',    value: fmtRm(kpis.outstanding),
-              accent: kpis.outstanding > 0 ? 'bad' as const : null },
-          ]).map(({ label, value, accent }) => (
-            <div key={label} className={styles.card} style={{
-              padding: 'var(--space-2) var(--space-3)',
+      {/* ── 6 KPI tiles (always rendered, scoped to current filters) ─ */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(6, 1fr)',
+        gap: 'var(--space-2)',
+      }}>
+        {([
+          { label: 'Total Lines',    value: kpis.totalLines.toString() },
+          { label: 'Unique Orders',  value: kpis.uniqueOrders.toString() },
+          { label: 'Revenue (RM)',   value: fmtRm(kpis.revenue) },
+          { label: 'Cost (RM)',      value: fmtRm(kpis.cost) },
+          { label: 'Margin (RM + %)', value: `${fmtRm(kpis.margin)}${kpis.revenue > 0 ? ` (${kpis.marginPct.toFixed(1)}%)` : ''}`,
+            accent: kpis.margin > 0 ? 'good' as const : kpis.margin < 0 ? 'bad' as const : null },
+          { label: 'Outstanding (RM)', value: fmtRm(kpis.outstanding),
+            accent: kpis.outstanding > 0 ? 'bad' as const : null },
+        ]).map(({ label, value, accent }) => (
+          <div key={label} className={styles.card} style={{
+            padding: 'var(--space-2) var(--space-3)',
+          }}>
+            <div className={styles.cardTitle} style={{ borderBottom: 'none', padding: 0, fontSize: 'var(--fs-10)' }}>
+              {label}
+            </div>
+            <div style={{
+              fontFamily: 'var(--font-sans)',
+              fontWeight: 700,
+              fontSize: 'var(--fs-14)',
+              fontVariantNumeric: 'tabular-nums',
+              color: accent === 'good' ? 'var(--c-secondary-a, #2F5D4F)'
+                : accent === 'bad' ? 'var(--c-festive-b, #B8331F)'
+                : 'var(--c-ink)',
             }}>
-              <div className={styles.cardTitle} style={{ borderBottom: 'none', padding: 0, fontSize: 'var(--fs-10)' }}>
-                {label}
-              </div>
-              <div style={{
-                fontFamily: 'var(--font-sans)',
-                fontWeight: 700,
-                fontSize: 'var(--fs-14)',
-                fontVariantNumeric: 'tabular-nums',
-                color: accent === 'good' ? 'var(--c-secondary-a, #2F5D4F)'
-                  : accent === 'bad' ? 'var(--c-festive-b, #B8331F)'
-                  : 'var(--c-ink)',
-              }}>
-                {value}
-              </div>
+              {value}
             </div>
-          ))}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Compact horizontal filter row (Houzs layout) ─────────────── */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        padding: 'var(--space-2) var(--space-3)',
+        background: 'var(--c-paper)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-md)',
+      }}>
+        <Filter size={16} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} aria-label="Filters" />
+        <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200 }}>
+          <Search size={14} strokeWidth={1.75}
+            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Doc No, debtor, SKU, agent, venue…"
+            className={styles.fieldInput}
+            style={{ paddingLeft: 28 }}
+          />
         </div>
-      )}
-
-      {/* ── Filter cards (top) ──────────────────────────────────── */}
-      {optionsVisible && (
-        <div className={styles.filterRow}>
-          {/* Basic Filter */}
-          <section className={styles.card}>
-            <header className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Basic Filter</h2>
-            </header>
-            <div className={styles.cardBody}>
-              <div className={styles.filterGrid}>
-                {/* Document Date */}
-                <div className={`${styles.field} ${styles.filterGridSpan2}`}>
-                  <label className={styles.fieldLabel}>Document Date</label>
-                  <div className={styles.dateRangeRow}>
-                    <select
-                      className={styles.fieldSelect}
-                      value={docDateMode}
-                      onChange={(e) => setDocDateMode(e.target.value as DateMode)}
-                    >
-                      <option value="range">Filter by range</option>
-                      <option value="none">No filter</option>
-                    </select>
-                    <input
-                      type="date"
-                      className={styles.fieldInput}
-                      value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)}
-                      disabled={docDateMode !== 'range'}
-                    />
-                    <input
-                      type="date"
-                      className={styles.fieldInput}
-                      value={dateTo}
-                      onChange={(e) => setDateTo(e.target.value)}
-                      disabled={docDateMode !== 'range'}
-                    />
-                  </div>
-                </div>
-
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Document No</label>
-                  <input
-                    type="text"
-                    className={styles.fieldInput}
-                    value={docNo}
-                    onChange={(e) => setDocNo(e.target.value)}
-                    placeholder="SO-009001"
-                  />
-                </div>
-
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Debtor Code</label>
-                  <input
-                    type="text"
-                    className={styles.fieldInput}
-                    value={debtorCode}
-                    onChange={(e) => setDebtorCode(e.target.value)}
-                  />
-                </div>
-
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel}>Item Code</label>
-                  <input
-                    type="text"
-                    className={styles.fieldInput}
-                    value={itemCode}
-                    onChange={(e) => setItemCode(e.target.value)}
-                  />
-                </div>
-
-                {/* Delivery Date */}
-                <div className={`${styles.field} ${styles.filterGridSpan2}`}>
-                  <label className={styles.fieldLabel}>Delivery Date</label>
-                  <div className={styles.dateRangeRow}>
-                    <select
-                      className={styles.fieldSelect}
-                      value={deliveryDateMode}
-                      onChange={(e) => setDeliveryDateMode(e.target.value as DateMode)}
-                    >
-                      <option value="none">No filter</option>
-                      <option value="range">Filter by range</option>
-                    </select>
-                    <input
-                      type="date"
-                      className={styles.fieldInput}
-                      value={deliveryFrom}
-                      onChange={(e) => setDeliveryFrom(e.target.value)}
-                      disabled={deliveryDateMode !== 'range'}
-                    />
-                    <input
-                      type="date"
-                      className={styles.fieldInput}
-                      value={deliveryTo}
-                      onChange={(e) => setDeliveryTo(e.target.value)}
-                      disabled={deliveryDateMode !== 'range'}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Report Options */}
-          <section className={styles.card}>
-            <header className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>Report Options</h2>
-            </header>
-            <div className={`${styles.cardBody} ${styles.optionsBody}`}>
-              <div className={styles.field}>
-                <label className={styles.fieldLabel}>Group By</label>
-                <select
-                  className={styles.fieldSelect}
-                  value={groupBy}
-                  onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-                >
-                  <option value="none">None</option>
-                  <option value="branding">Branding</option>
-                  <option value="agent">Agent</option>
-                  <option value="debtor">Debtor</option>
-                  <option value="item_group">Item Group</option>
-                </select>
-              </div>
-              <div className={styles.field}>
-                <label className={styles.fieldLabel}>Sort By</label>
-                <select
-                  className={styles.fieldSelect}
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as SortBy)}
-                >
-                  <option value="date">Date</option>
-                  <option value="doc_no">Doc No</option>
-                  <option value="item_code">Item Code</option>
-                </select>
-              </div>
-              <label className={styles.checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={showCriteria}
-                  onChange={(e) => setShowCriteria(e.target.checked)}
-                />
-                <span>Show Criteria In Report</span>
-              </label>
-              <div className={styles.optionsButtonRow}>
-                <Button variant="ghost" size="sm" onClick={() => alert('More Options — coming soon')}>
-                  <SlidersHorizontal {...SM_ICON} />
-                  <span>More Options</span>
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => alert('Advanced Filter — coming soon')}>
-                  <Filter {...SM_ICON} />
-                  <span>Advanced Filter</span>
-                </Button>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* ── Action bar ─────────────────────────────────────────── */}
-      <div className={styles.actionBar}>
-        <Button variant="primary" size="sm" onClick={runInquiry}>
-          <FileSearch {...SM_ICON} />
-          <span>Inquiry</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={runPreview}>
-          <Eye {...SM_ICON} />
-          <span>Preview</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={runPrint}>
-          <Printer {...SM_ICON} />
-          <span>Print</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setOptionsVisible((v) => !v)}
-        >
-          <span>{optionsVisible ? 'Hide Options' : 'Show Options'}</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setCriteriaPanel((p) => !p)}>
-          <span>Criteria</span>
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
-          <X {...SM_ICON} />
-          <span>Close</span>
-        </Button>
+        <select className={styles.fieldSelect} value={brand} onChange={(e) => setBrand(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
+          <option value="">All Brands</option>
+          {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <select className={styles.fieldSelect} value={group} onChange={(e) => setGroup(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
+          <option value="">All Groups</option>
+          {filterOptions.groups.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select className={styles.fieldSelect} value={agent} onChange={(e) => setAgent(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
+          <option value="">All Agents</option>
+          {filterOptions.agents.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select className={styles.fieldSelect} value={venue} onChange={(e) => setVenue(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
+          <option value="">All Venues</option>
+          {filterOptions.venues.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <select className={styles.fieldSelect} value={payment} onChange={(e) => setPayment(e.target.value)} style={{ width: 'auto', minWidth: 130 }}>
+          <option value="">All Payment</option>
+          <option value="Checked">Checked</option>
+          <option value="Unchecked">Unchecked</option>
+          <option value="Pending">Pending</option>
+        </select>
+        <input type="date" className={styles.fieldInput} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 'auto' }} />
+        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>→</span>
+        <input type="date" className={styles.fieldInput} value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 'auto' }} />
         <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          {query.isFetching ? 'Loading…' : hasRunQuery ? `${rawRows.length} line items` : 'Set filters and press Inquiry'}
+          {query.isFetching ? 'Loading…' : `${filteredRows.length} of ${rawRows.length} lines`}
         </span>
       </div>
 
-      {/* ── Criteria summary (toggleable + always shown if Show Criteria) */}
-      {(criteriaPanel || showCriteria) && (
-        <div className={styles.criteriaBox}>
-          <div>
-            <div className={styles.criteriaKey}>Document Date</div>
-            <div>{docDateMode === 'range' ? `${dateFrom} → ${dateTo}` : 'No filter'}</div>
-          </div>
-          <div>
-            <div className={styles.criteriaKey}>Doc No</div>
-            <div>{docNo || '—'}</div>
-          </div>
-          <div>
-            <div className={styles.criteriaKey}>Debtor Code</div>
-            <div>{debtorCode || '—'}</div>
-          </div>
-          <div>
-            <div className={styles.criteriaKey}>Item Code</div>
-            <div>{itemCode || '—'}</div>
-          </div>
-          <div>
-            <div className={styles.criteriaKey}>Delivery Date</div>
-            <div>{deliveryDateMode === 'range' ? `${deliveryFrom || '—'} → ${deliveryTo || '—'}` : 'No filter'}</div>
-          </div>
-          <div>
-            <div className={styles.criteriaKey}>Group / Sort</div>
-            <div>{groupBy} · {sortBy}</div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Search Result — DataGrid primitive ──────────────────── */}
+      {/* ── DataGrid — 34 visible columns + 10 hidden by default ─── */}
       <section className={styles.resultCard}>
-        <header className={styles.resultHeader}>
-          <h2 className={styles.resultTitle}>
-            <ClipboardList size={14} strokeWidth={1.75} />
-            Search Result
-          </h2>
-          <div className={styles.checkboxButtonRow}>
-            <Button variant="ghost" size="sm" onClick={checkAll}>Check All</Button>
-            <Button variant="ghost" size="sm" onClick={uncheckAll}>Uncheck All</Button>
-            <Button variant="ghost" size="sm" onClick={uncheckInSelection}>Uncheck In Selection</Button>
-            <Button variant="ghost" size="sm" onClick={clearUnchecked}>
-              {hideUnchecked ? 'Show All' : 'Clear Unchecked'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setFindNonce((n) => n + 1)}>
-              Find
-            </Button>
-          </div>
-        </header>
-
         <DataGrid<SoDetailListingRow>
-          key={gridNonce /* remount on Group By dropdown change so layout reload picks up new groupBy */}
-          rows={rows}
-          columns={columns}
+          rows={filteredRows}
+          columns={COLUMNS}
           storageKey={STORAGE_KEY}
           rowKey={(r) => r.id}
           searchPlaceholder="Search rows…"
           focusSearchNonce={findNonce}
-          isLoading={hasRunQuery && query.isFetching && rawRows.length === 0}
-          emptyMessage={
-            !hasRunQuery
-              ? 'Press Inquiry to run the report.'
-              : 'No rows match the current filters.'
-          }
+          isLoading={query.isFetching && rawRows.length === 0}
+          emptyMessage={query.isFetching ? 'Loading…' : 'No rows match the current filters.'}
+          onRowDoubleClick={(r) => navigate(`/mfg-sales-orders/${r.doc_no}`)}
+          contextMenu={(row) => [
+            { label: 'Open Sales Order', onClick: () => navigate(`/mfg-sales-orders/${row.doc_no}`) },
+            { divider: true as const },
+            { label: 'Focus search box', onClick: () => setFindNonce((n) => n + 1) },
+          ]}
         />
       </section>
     </div>
   );
 };
 
-// Re-export the column key list (for tests / debug)
-export const COL_KEYS: string[] = [
-  'check',
-  'doc_no', 'so_date', 'debtor_code', 'debtor_name', 'agent', 'currency',
-  'inclusive', 'subtotal_ex', 'tax_header', 'header_total', 'local_total',
-  'cancelled', 'remark4', 'sales_exemption_expiry', 'processing_date',
-  'item_group', 'item_code', 'description', 'uom', 'location', 'description2',
-  'qty', 'unit_price', 'discount', 'detail_tax_code', 'line_total',
-  /* Task #114 — cost trio inserted right after line_total. */
-  'unit_cost', 'line_cost', 'line_margin', 'margin_pct',
-  'line_tax',
-  'total_ex', 'total_inc', 'creditor_code', 'post_to_po', 'balance', 'payment',
-  'remark5', 'remark6',
-];
+// Re-export the visible column-key list (for tests / debug).
+export const COL_KEYS: string[] = COLUMNS.map((c) => c.key);

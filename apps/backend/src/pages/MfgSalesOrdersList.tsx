@@ -4,6 +4,14 @@
 // MfgSalesOrdersPage in FlowPages.tsx. The page owns its toolbar buttons
 // (New / Edit / View / Find / Preview / Print / Print Listing / Delete /
 // Refresh) and the DataGrid owns the search + column UX.
+//
+// 2026-05-27 HOUZS port (so-list-houzs-port): re-ordered columns to match
+// HOUZS SO Listing — Doc.No (bold burnt + status pill inline) · Date · Debtor
+// Name · Agent · Location · Reference · Branding pill · Venue · Local Total ·
+// Mattress/Sofa subtotal (orange) · Bedframe subtotal (green). Added inline
+// expand chevron showing per-line breakdown (DataGrid expandable API).
+// Action buttons (Issue DO / Issue SI / Cancel / Delete) appear in the
+// per-row context menu gated by current status.
 
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -14,10 +22,14 @@ import {
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ListingPickerDialog, ListingPickerTrigger, type ListingChoice } from '../components/ListingPickerDialog';
 import { formatPhone } from '@2990s/shared/phone';
-import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo } from '../lib/flow-queries';
+import {
+  useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo,
+  useMfgSalesOrderDetail,
+} from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
+import { BrandingPill, ItemGroupPill, badgeFor } from '../lib/category-badges';
 import styles from './MfgSalesOrdersList.module.css';
 import soDetailStyles from './SalesOrderDetail.module.css';
 
@@ -36,8 +48,19 @@ type SoRow = {
   branding: string | null;
   debtor_code: string | null;
   debtor_name: string;
+  /* HOUZS port — `agent` (text on header) + `sales_location` (warehouse
+     short code: KL / PG / etc) are populated for HOUZS-style B2B SOs.
+     For 2990's POS-origin SOs they may be null; the column accessors
+     fall back to a dash so the grid still reads cleanly. */
+  agent: string | null;
+  sales_location: string | null;
+  ref: string | null;
   salesperson_id: string | null;
   customer_so_no: string | null;
+  /* HOUZS Reference column wants the customer's PO doc number too. The
+     SO header carries it as `po_doc_no` (mfg_sales_orders column added
+     in PR-G; populated by SO New form's "Customer PO #" field). */
+  po_doc_no: string | null;
   phone: string | null;
   email: string | null;
   customer_type: string | null;
@@ -82,6 +105,18 @@ type SoRow = {
 const fmtRm = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/* HOUZS-style compact date — "21 Apr 2026". Falls back to the raw ISO
+   string when the source isn't a parseable date so legacy data still shows. */
+const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const compactDate = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  // Accept either YYYY-MM-DD or a full ISO timestamp.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return iso;
+  const y = m[1], mo = MONTH_3[Number(m[2]) - 1] ?? m[2], d = String(Number(m[3]));
+  return `${d} ${mo} ${y}`;
+};
+
 /* Follow-up #83 — Balance column source-of-truth chain:
    1. view's balance_centi_live (local_total − sum(payments))
    2. header.balance_centi (legacy stored value)
@@ -109,6 +144,83 @@ const StatusPill = ({ status }: { status: string }) => (
     {status.replace(/_/g, ' ')}
   </span>
 );
+
+/* HOUZS expand-chevron drill-down. Renders the per-line breakdown for a
+   single SO inline under its parent row. Lazy-fetches the SO detail (header
+   + items) via useMfgSalesOrderDetail — TanStack caches it so re-expanding
+   the same row is instant. Designed to render INSIDE a single <td colSpan>
+   provided by DataGrid.expandable. */
+type SoItem = {
+  id: string;
+  itemCode: string | null;
+  itemGroup: string | null;
+  description: string | null;
+  qty: number | null;
+  unitPriceCenti: number | null;
+  totalCenti: number | null;
+  location: string | null;
+};
+const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
+  const q = useMfgSalesOrderDetail(docNo);
+  if (q.isLoading) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+        Loading lines for {docNo}…
+      </div>
+    );
+  }
+  if (q.error) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)' }}>
+        Failed to load lines: {q.error instanceof Error ? q.error.message : String(q.error)}
+      </div>
+    );
+  }
+  const items = (q.data?.items ?? []) as SoItem[];
+  if (items.length === 0) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+        No line items.
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: '6px 12px 8px 40px', background: 'var(--c-cream)' }}>
+      <table style={{
+        width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-11)',
+        fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)',
+      }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', fontFamily: 'var(--font-button)',
+            fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            <th style={{ padding: '2px 8px 2px 0', width: 110 }}>Item Code</th>
+            <th style={{ padding: '2px 8px' }}>Description</th>
+            <th style={{ padding: '2px 8px', width: 100 }}>Group</th>
+            <th style={{ padding: '2px 8px', width: 70 }}>Location</th>
+            <th style={{ padding: '2px 8px', width: 50, textAlign: 'right' }}>Qty</th>
+            <th style={{ padding: '2px 8px', width: 100, textAlign: 'right' }}>Unit Price</th>
+            <th style={{ padding: '2px 8px 2px 8px', width: 110, textAlign: 'right' }}>Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it) => (
+            <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
+              <td style={{ padding: '3px 8px 3px 0', fontWeight: 600 }}>{it.itemCode ?? '—'}</td>
+              <td style={{ padding: '3px 8px' }}>{it.description ?? '—'}</td>
+              <td style={{ padding: '3px 8px' }}><ItemGroupPill group={it.itemGroup} /></td>
+              <td style={{ padding: '3px 8px' }}>{it.location ?? '—'}</td>
+              <td style={{ padding: '3px 8px', textAlign: 'right' }}>{it.qty ?? 0}</td>
+              <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmtRm(it.unitPriceCenti ?? 0)}</td>
+              <td style={{ padding: '3px 8px', textAlign: 'right', fontWeight: 600, color: 'var(--c-burnt)' }}>
+                {fmtRm(it.totalCenti ?? 0)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 export const MfgSalesOrdersList = () => {
   const navigate = useNavigate();
@@ -362,8 +474,8 @@ export const MfgSalesOrdersList = () => {
         <div>
           <h1 className={styles.title}>Sales Orders {outstandingOnly && <span style={{ color: 'var(--c-burnt)' }}>· Outstanding only</span>}</h1>
           <p className={styles.subtitle}>
-            Sales orders — AutoCount-style ledger view.
-            {' '}{isLoading ? 'Loading…' : `${rows.length}${outstandingOnly ? ` of ${allRows.length}` : ''} total`}
+            AutoCount-style ledger view · drag to reorder columns
+            {' · '}{isLoading ? 'Loading…' : `${rows.length}${outstandingOnly ? ` of ${allRows.length}` : ''} total`}
           </p>
         </div>
       </div>
@@ -416,17 +528,56 @@ export const MfgSalesOrdersList = () => {
         onSelectionChange={setSelected}
         isLoading={isLoading}
         emptyMessage='No sales orders yet — click "New" to start.'
-        contextMenu={(row) => [
-          { label: 'Edit',                       onClick: () => openDetail(row, true) },
-          { label: 'View',                       onClick: () => openDetail(row) },
-          { label: 'Preview',                    onClick: () => void renderPdf(row, 'preview') },
-          { label: 'Print',                      onClick: () => void renderPdf(row, 'print') },
-          { divider: true },
-          { label: 'Convert to Delivery Order',  onClick: () => void convertToDo(row) },
-          { label: 'Copy to new Sales Order',    onClick: () => copyToNewSo(row) },
-          { divider: true },
-          { label: 'Delete', danger: true,       onClick: () => doDelete(row) },
-        ]}
+        expandable={{
+          renderExpansion: (row) => <ExpandedSoLines docNo={row.doc_no} />,
+          rowExpansionKey: (row) => row.doc_no,
+        }}
+        contextMenu={(row) => {
+          /* HOUZS status-flow actions — Issue DO appears when the SO is
+             confirmed/ready (commander's 开单 button), Issue SI appears
+             post-delivery. Delete is only allowed once the SO is
+             CANCELLED (matches the PO Cancel/Delete pattern from PR #169). */
+          const status = row.status;
+          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
+            { label: 'Edit',    onClick: () => openDetail(row, true) },
+            { label: 'View',    onClick: () => openDetail(row) },
+            { label: 'Preview', onClick: () => void renderPdf(row, 'preview') },
+            { label: 'Print',   onClick: () => void renderPdf(row, 'print') },
+            { divider: true as const },
+          ];
+          // Issue DO (开单) — available before goods ship.
+          if (['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'].includes(status)) {
+            items.push({ label: 'Issue Delivery Order', onClick: () => void convertToDo(row) });
+          }
+          // Issue SI — available once the customer has accepted delivery.
+          if (['DELIVERED', 'SHIPPED'].includes(status)) {
+            items.push({
+              label: 'Issue Sales Invoice',
+              onClick: () => navigate(`/mfg-sales-invoices/new?soDocNo=${row.doc_no}`),
+            });
+          }
+          items.push({ label: 'Copy to new Sales Order', onClick: () => copyToNewSo(row) });
+          items.push({ divider: true as const });
+          // Cancel — soft-delete (status → CANCELLED). Hidden once already
+          // cancelled / closed so the menu doesn't offer a no-op.
+          if (!['CANCELLED', 'CLOSED'].includes(status)) {
+            items.push({ label: 'Cancel SO', danger: true, onClick: () => doDelete(row) });
+          }
+          // Hard delete — only after a SO has been CANCELLED, matching the
+          // PO Cancel/Delete pattern. Today the DELETE endpoint is gated
+          // server-side so this is just the UI affordance.
+          if (status === 'CANCELLED') {
+            items.push({
+              label: 'Delete permanently',
+              danger: true,
+              onClick: () => {
+                if (!window.confirm(`Permanently delete ${row.doc_no}? This cannot be undone.`)) return;
+                alert('Hard delete is not implemented yet — the SO will stay CANCELLED.');
+              },
+            });
+          }
+          return items;
+        }}
       />
     </div>
   );
@@ -436,48 +587,158 @@ const STORAGE_KEY = 'pr-g.so-list.layout.v1';
 
 /* buildColumns — declared as a function so the component can pass a fresh
    `staffById` map every render (memoized inside the component to avoid
-   invalidating DataGrid's column memo on every keystroke). Column set is
-   driven by the actual `mfg_sales_orders` schema, not AutoCount. */
+   invalidating DataGrid's column memo on every keystroke).
+
+   2026-05-27 HOUZS port v2 — reordered to match the Houzs SO Listing
+   reference exactly. The 18 default-visible columns mirror Houzs's
+   header-level listing (cherry-picking the 18 of 19 that 2990's schema
+   actually populates — `Account Sheet` is finance-side and not on the
+   SO header today). Long-tail columns retained but hidden by default
+   via `defaultHidden: true` — user reveals them via right-click
+   "Show column".
+
+   Houzs default 19 columns:
+     1. Doc.No  2. Date  3. Debtor Name  4. Agent  5. Location
+     6. Reference (= customer_so_no or ref)  7. Branding  8. Venue
+     9. Local Total  10. Mattress/Sofa subtotal  11. Bedframe subtotal
+     12. Accessories subtotal  13. Mattress/Sofa Cost  14. Bedframe Cost
+     15. Accessories Cost  16. Phone  17. Address 1  18. PO Doc No.
+     19. (Account Sheet — not in our schema; omitted) */
 const buildColumns = (
   staffById: Map<string, string>,
 ): DataGridColumn<SoRow>[] => [
+  /* ── HOUZS default-visible 18 ─────────────────────────────────────── */
   {
-    key: 'doc_no', label: 'Doc. No.', width: 110, sortable: true, groupable: false,
-    accessor: (r) => <span className={styles.docNo}>{r.doc_no}</span>,
-    searchValue: (r) => r.doc_no,
+    key: 'doc_no', label: 'Doc. No.', width: 160, sortable: true, groupable: false,
+    /* HOUZS-style — burnt-bold doc number followed by a status pill so the
+       user sees state without scrolling 20 columns right. */
+    accessor: (r) => (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{
+          fontWeight: 700, color: 'var(--c-burnt)',
+          fontVariantNumeric: 'tabular-nums',
+        }}>{r.doc_no}</span>
+        {r.status && r.status !== 'CONFIRMED' && <StatusPill status={r.status} />}
+      </span>
+    ),
+    searchValue: (r) => `${r.doc_no} ${r.status ?? ''}`,
   },
   {
-    key: 'so_date', label: 'Date', width: 100, sortable: true,
-    accessor: (r) => r.so_date,
-    searchValue: (r) => r.so_date,
+    key: 'so_date', label: 'Date', width: 110, sortable: true,
+    accessor: (r) => compactDate(r.so_date),
+    searchValue: (r) => `${r.so_date ?? ''} ${compactDate(r.so_date)}`,
+    sortFn: (a, b) => (a.so_date ?? '').localeCompare(b.so_date ?? ''),
   },
   {
-    key: 'branding', label: 'Branding', width: 120, sortable: true, groupable: true,
-    accessor: (r) => r.branding ?? '',
-    searchValue: (r) => r.branding ?? '',
-  },
-  {
-    key: 'debtor_code', label: 'Customer Code', width: 120, sortable: true,
-    accessor: (r) => r.debtor_code ?? '',
-    searchValue: (r) => r.debtor_code ?? '',
-  },
-  {
-    key: 'debtor_name', label: 'Customer Name', width: 220, sortable: true, groupable: true,
+    key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,
     accessor: (r) => r.debtor_name,
     searchValue: (r) => r.debtor_name,
   },
   {
-    /* Salesperson display = staff.name lookup. We carry salesperson_id on
-       the row; the staff list is fetched once via useStaff and cached. */
-    key: 'salesperson_id', label: 'Salesperson', width: 140, sortable: true, groupable: true,
-    accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
-    searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
-    groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
+    /* HOUZS Agent — header-level free text. For 2990's POS-origin SOs the
+       text is often empty; fall back to a dash so the cell isn't blank. */
+    key: 'agent', label: 'Agent', width: 110, sortable: true, groupable: true,
+    accessor: (r) => r.agent ?? '—',
+    searchValue: (r) => r.agent ?? '',
+    groupValue: (r) => r.agent ?? '(none)',
   },
   {
-    key: 'customer_so_no', label: 'Customer SO Ref', width: 140, sortable: true,
-    accessor: (r) => r.customer_so_no ?? '',
-    searchValue: (r) => r.customer_so_no ?? '',
+    /* HOUZS Location — warehouse short code (KL / PG / etc). */
+    key: 'sales_location', label: 'Location', width: 80, sortable: true, groupable: true,
+    accessor: (r) => r.sales_location ?? '—',
+    searchValue: (r) => r.sales_location ?? '',
+    groupValue: (r) => r.sales_location ?? '(none)',
+  },
+  {
+    /* HOUZS Reference — customer-side SO number (HC10867 etc.). Prefer
+       the structured customer_so_no; fall back to the free-text ref. */
+    key: 'customer_so_no', label: 'Reference', width: 130, sortable: true,
+    accessor: (r) => r.customer_so_no ?? r.ref ?? '—',
+    searchValue: (r) => `${r.customer_so_no ?? ''} ${r.ref ?? ''}`,
+  },
+  {
+    /* HOUZS branding pill — purple for AKEMI/ZANOTTI, muted otherwise. */
+    key: 'branding', label: 'Branding', width: 120, sortable: true, groupable: true,
+    accessor: (r) => <BrandingPill branding={r.branding} />,
+    searchValue: (r) => r.branding ?? '',
+    groupValue: (r) => r.branding ?? '(none)',
+  },
+  {
+    key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
+    accessor: (r) => r.venue ?? '—',
+    searchValue: (r) => r.venue ?? '',
+    groupValue: (r) => r.venue ?? '(none)',
+  },
+  {
+    /* HOUZS Local Total — bold ink. */
+    key: 'local_total_centi', label: 'Local Total', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => (
+      <span style={{
+        fontWeight: 700, color: 'var(--c-ink)',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{fmtRm(r.local_total_centi)}</span>
+    ),
+    searchValue: (r) => fmtRm(r.local_total_centi),
+    sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+  },
+  /* HOUZS category subtotals — Mattress/Sofa burnt, Bedframe green, Acc neutral.
+     '—' when zero so commander's eye skims to filled cells. */
+  {
+    key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => {
+      const v = r.mattress_sofa_centi ?? 0;
+      if (v === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return <span style={{
+        fontWeight: 600, color: badgeFor('sofa').fg,
+        fontVariantNumeric: 'tabular-nums',
+      }}>{fmtRm(v)}</span>;
+    },
+    searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
+    sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
+  },
+  {
+    key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => {
+      const v = r.bedframe_centi ?? 0;
+      if (v === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return <span style={{
+        fontWeight: 600, color: badgeFor('bedframe').fg,
+        fontVariantNumeric: 'tabular-nums',
+      }}>{fmtRm(v)}</span>;
+    },
+    searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
+    sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
+  },
+  {
+    key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => {
+      const v = r.accessories_centi ?? 0;
+      if (v === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return <span style={{
+        fontWeight: 600, color: badgeFor('accessory').fg,
+        fontVariantNumeric: 'tabular-nums',
+      }}>{fmtRm(v)}</span>;
+    },
+    searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
+    sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
+  },
+  {
+    key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
+    sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+  },
+  {
+    key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
+    sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
+  },
+  {
+    key: 'accessories_cost_centi', label: 'Accessories Cost', width: 140, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.accessories_cost_centi ?? 0),
+    sortFn: (a, b) => (a.accessories_cost_centi ?? 0) - (b.accessories_cost_centi ?? 0),
   },
   {
     /* Task #91 — display the pretty Malaysian format. searchValue keeps the
@@ -487,135 +748,117 @@ const buildColumns = (
     searchValue: (r) => `${r.phone ?? ''} ${formatPhone(r.phone) ?? ''}`,
   },
   {
-    key: 'email', label: 'Email', width: 180, sortable: true,
-    accessor: (r) => r.email ?? '',
-    searchValue: (r) => r.email ?? '',
-  },
-  {
-    key: 'customer_type', label: 'Customer Type', width: 120, sortable: true, groupable: true,
-    accessor: (r) => r.customer_type ?? '',
-    searchValue: (r) => r.customer_type ?? '',
-  },
-  {
-    key: 'building_type', label: 'Building Type', width: 120, sortable: true, groupable: true,
-    accessor: (r) => r.building_type ?? '',
-    searchValue: (r) => r.building_type ?? '',
-  },
-  {
-    key: 'venue', label: 'Venue', width: 130, sortable: true, groupable: true,
-    accessor: (r) => r.venue ?? '',
-    searchValue: (r) => r.venue ?? '',
-  },
-  {
     key: 'address1', label: 'Address 1', width: 180, sortable: true,
     accessor: (r) => r.address1 ?? '',
     searchValue: (r) => r.address1 ?? '',
   },
   {
+    /* HOUZS PO Doc No — the customer's purchase-order number we received
+       against this SO. Stored on the SO header as po_doc_no. */
+    key: 'po_doc_no', label: 'PO Doc No.', width: 130, sortable: true,
+    accessor: (r) => r.po_doc_no ?? '',
+    searchValue: (r) => r.po_doc_no ?? '',
+  },
+  /* ── Default-hidden long-tail (7 columns user reveals via right-click) ── */
+  {
+    key: 'debtor_code', label: 'Customer Code', width: 120, sortable: true,
+    defaultHidden: true,
+    accessor: (r) => r.debtor_code ?? '',
+    searchValue: (r) => r.debtor_code ?? '',
+  },
+  {
+    /* Salesperson display = staff.name lookup. */
+    key: 'salesperson_id', label: 'Salesperson', width: 140, sortable: true, groupable: true,
+    defaultHidden: true,
+    accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
+    searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
+    groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
+  },
+  {
+    key: 'email', label: 'Email', width: 180, sortable: true,
+    defaultHidden: true,
+    accessor: (r) => r.email ?? '',
+    searchValue: (r) => r.email ?? '',
+  },
+  {
+    key: 'customer_type', label: 'Customer Type', width: 120, sortable: true, groupable: true,
+    defaultHidden: true,
+    accessor: (r) => r.customer_type ?? '',
+    searchValue: (r) => r.customer_type ?? '',
+  },
+  {
+    key: 'building_type', label: 'Building Type', width: 120, sortable: true, groupable: true,
+    defaultHidden: true,
+    accessor: (r) => r.building_type ?? '',
+    searchValue: (r) => r.building_type ?? '',
+  },
+  {
     key: 'address2', label: 'Address 2', width: 180, sortable: true,
+    defaultHidden: true,
     accessor: (r) => r.address2 ?? '',
     searchValue: (r) => r.address2 ?? '',
   },
   {
     key: 'customer_state', label: 'State', width: 130, sortable: true, groupable: true,
+    defaultHidden: true,
     accessor: (r) => r.customer_state ?? '',
     searchValue: (r) => r.customer_state ?? '',
   },
   {
     key: 'city', label: 'City', width: 130, sortable: true, groupable: true,
+    defaultHidden: true,
     accessor: (r) => r.city ?? '',
     searchValue: (r) => r.city ?? '',
   },
   {
     key: 'postcode', label: 'Postcode', width: 100, sortable: true,
+    defaultHidden: true,
     accessor: (r) => r.postcode ?? '',
     searchValue: (r) => r.postcode ?? '',
   },
   {
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
+    defaultHidden: true,
     accessor: (r) => r.processing_date ?? '',
     searchValue: (r) => r.processing_date ?? '',
   },
   {
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true,
+    defaultHidden: true,
     accessor: (r) => r.customer_delivery_date ?? '',
     searchValue: (r) => r.customer_delivery_date ?? '',
   },
   {
     key: 'note', label: 'Note', width: 200, sortable: true,
+    defaultHidden: true,
     accessor: (r) => r.note ?? '',
     searchValue: (r) => r.note ?? '',
   },
   {
-    key: 'local_total_centi', label: 'Local Total', width: 120, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.local_total_centi)}</span>,
-    searchValue: (r) => fmtRm(r.local_total_centi),
-    sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
-  },
-  /* Task #114 — Category revenue + cost pairs. The grid is wide enough
-     that not every user will want these visible, but they exist on the
-     header (migration 0079) so the right-click "Show column" affordance
-     can surface them. Listed in revenue/cost pairs so they sort naturally
-     in the column menu. */
-  {
-    key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_centi ?? 0)}</span>,
-    searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
-    sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
-  },
-  {
-    key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
-    searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
-    sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
-  },
-  {
-    key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_centi ?? 0)}</span>,
-    searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
-    sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
-  },
-  {
-    key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
-    searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
-    sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
-  },
-  {
-    key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_centi ?? 0)}</span>,
-    searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
-    sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
-  },
-  {
-    key: 'accessories_cost_centi', label: 'Accessories Cost', width: 140, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_cost_centi ?? 0)}</span>,
-    searchValue: (r) => fmtRm(r.accessories_cost_centi ?? 0),
-    sortFn: (a, b) => (a.accessories_cost_centi ?? 0) - (b.accessories_cost_centi ?? 0),
-  },
-  {
     key: 'others_centi', label: 'Others', width: 110, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_centi ?? 0),
     sortFn: (a, b) => (a.others_centi ?? 0) - (b.others_centi ?? 0),
   },
   {
     key: 'others_cost_centi', label: 'Others Cost', width: 120, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.others_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.others_cost_centi ?? 0),
     sortFn: (a, b) => (a.others_cost_centi ?? 0) - (b.others_cost_centi ?? 0),
   },
-  /* Task #114 — Overall cost / margin / margin% on the SO header. Wired
-     through recomputeTotals on every line mutation. Margin column color
-     follows the same Houzs ladder used on the detail page. */
+  /* Task #114 — Overall cost / margin / margin% on the SO header. */
   {
     key: 'total_cost_centi', label: 'Cost Total', width: 120, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
     sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
   },
   {
     key: 'total_margin_centi', label: 'Margin', width: 120, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => {
       const m = r.total_margin_centi ?? 0;
       if ((r.local_total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
@@ -627,6 +870,7 @@ const buildColumns = (
   },
   {
     key: 'margin_pct_basis', label: 'Margin %', width: 100, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => {
       if ((r.local_total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
       const pct = (r.margin_pct_basis ?? 0) / 100;
@@ -643,28 +887,29 @@ const buildColumns = (
   },
   {
     key: 'deposit_centi', label: 'Deposit', width: 110, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.deposit_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.deposit_centi ?? 0),
     sortFn: (a, b) => (a.deposit_centi ?? 0) - (b.deposit_centi ?? 0),
   },
   {
     key: 'paid_total_centi', label: 'Paid', width: 110, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0)}</span>,
     searchValue: (r) => fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0),
     sortFn: (a, b) => (a.paid_total_centi ?? a.paid_centi ?? 0) - (b.paid_total_centi ?? b.paid_centi ?? 0),
   },
   {
-    /* Follow-up #83 — prefer the view's live balance (local_total −
-       sum(payments)). Falls back to the stored header balance_centi if the
-       view column is missing (older API), then to a client-side derivation
-       from paid_centi as the last resort. */
+    /* Follow-up #83 — prefer the view's live balance. */
     key: 'balance_centi', label: 'Balance', width: 110, sortable: true, align: 'right', groupable: false,
+    defaultHidden: true,
     accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
     searchValue: (r) => fmtRm(liveBalance(r)),
     sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
+    defaultHidden: true,
     accessor: (r) => <StatusPill status={r.status} />,
     searchValue: (r) => r.status,
     groupValue: (r) => r.status,
