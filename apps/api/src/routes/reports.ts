@@ -88,6 +88,24 @@ reports.get('/sales-order-detail-listing', async (c) => {
   };
   const itemsRaw = (data ?? []) as ItemRow[];
 
+  // PR-C deprecated the `paid_centi` column on mfg_sales_orders — paid totals
+  // are now derived live from the mfg_sales_order_payments ledger. Aggregate
+  // once for all docs in this result and attach as `paid_total_centi`.
+  const docNos = Array.from(new Set(itemsRaw.map((i) => i.doc_no))).filter(Boolean);
+  const paidByDoc = new Map<string, number>();
+  if (docNos.length > 0) {
+    const { data: paymentTotals, error: payErr } = await sb
+      .from('mfg_sales_order_payments')
+      .select('so_doc_no, amount_centi')
+      .in('so_doc_no', docNos);
+    if (payErr) return c.json({ error: 'load_failed', reason: payErr.message }, 500);
+    for (const p of paymentTotals ?? []) {
+      const key = (p as { so_doc_no: string }).so_doc_no;
+      const amt = Number((p as { amount_centi: number }).amount_centi ?? 0);
+      paidByDoc.set(key, (paidByDoc.get(key) ?? 0) + amt);
+    }
+  }
+
   // Flatten the join + apply the header-level date range filters in JS
   // (supabase-js can't .gte() across a joined table without rpc).
   const rows = itemsRaw
@@ -107,6 +125,8 @@ reports.get('/sales-order-detail-listing', async (c) => {
       flat.currency = h.currency ?? 'MYR';
       flat.status   = h.status   ?? null;
       flat.customer_delivery_date = h.customer_delivery_date ?? null;
+      // Per-doc paid total from the payments ledger (replaces legacy paid_centi).
+      flat.paid_total_centi = paidByDoc.get(r.doc_no) ?? 0;
       return flat;
     })
     .filter((r) => {
