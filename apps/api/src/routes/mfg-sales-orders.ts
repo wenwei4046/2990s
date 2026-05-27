@@ -7,6 +7,14 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
+import {
+  loadMaintenanceConfig,
+  recomputeFromSnapshot,
+  loadProductByCode,
+  loadFabricByCode,
+  type MfgItemForRecompute,
+  type RecomputedLine,
+} from '../lib/mfg-pricing-recompute';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -150,12 +158,53 @@ mfgSalesOrders.post('/', async (c) => {
      supplies a per-line lineDeliveryDate. Override flag mirrors the
      client's choice (defaults false → cascade-tracked). */
   const headerDeliveryDate = (body.customerDeliveryDate as string | null | undefined) ?? null;
+  /* MFG-PRICING-ENGINE — Server-side recompute (Commander 2026-05-27
+     non-negotiable, mirrors `POST /orders` for POS). Load the master
+     maintenance config once, then for each line item recompute the
+     unit price from (product, fabric, variants). Drift > 0.5% rejects
+     the request with HTTP 400. Manual override path (mfgSoPriceOverrides)
+     stays intact at PATCH /:docNo/items/:itemId/override. */
+  const cachedConfig = await loadMaintenanceConfig(sb);
+  const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
+    const itemCode = String(it.itemCode ?? '');
+    if (!itemCode) return null;
+    const [product, fabric] = await Promise.all([
+      loadProductByCode(sb, itemCode),
+      loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
+    ]);
+    const draft: MfgItemForRecompute = {
+      itemCode,
+      itemGroup:      String(it.itemGroup ?? 'others'),
+      qty:            Number(it.qty ?? 1),
+      unitPriceCenti: Number(it.unitPriceCenti ?? 0),
+      variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
+    };
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig);
+  }));
+  // Reject the whole request on first drift — keeps the SO atomic.
+  for (let i = 0; i < recomputes.length; i++) {
+    const r = recomputes[i];
+    if (r && r.drift) {
+      return c.json({
+        error:    'pricing_drift',
+        reason:   'Client unitPriceCenti differs >0.5% from server compute.',
+        lineIdx:  i,
+        itemCode: r.itemCode,
+        client:   Number(items[i]?.unitPriceCenti ?? 0),
+        server:   r.unit_price_sen,
+        breakdown: r.breakdown,
+      }, 400);
+    }
+  }
   /* Task #114 — snapshot unit cost from mfg_products when client didn't.
      Build itemRows sequentially with Promise.all so the cost lookup runs
      in parallel across lines but each row still has its own awaited cost. */
-  const itemRows = await Promise.all(items.map(async (it) => {
+  const itemRows = await Promise.all(items.map(async (it, idx) => {
     const qty = Number(it.qty ?? 1);
-    const unit = Number(it.unitPriceCenti ?? 0);
+    const recomputed = recomputes[idx] ?? null;
+    // Server-computed unit price wins. Client value is informational
+    // (already drift-checked above).
+    const unit = recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0);
     const discount = Number(it.discountCenti ?? 0);
     const lineTotal = (qty * unit) - discount;
     // Task #114 — fall back to mfg_products.cost_price_sen when the client
@@ -209,6 +258,13 @@ mfgSalesOrders.post('/', async (c) => {
       unit_cost_centi: unitCost,
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
+      // MFG-PRICING-ENGINE — Persist the line-level breakdown columns from
+      // the server recompute so the SO detail page + cost reports show the
+      // canonical surcharge mix without re-deriving from the variants blob.
+      divan_price_sen:         recomputed?.divan_price_sen ?? 0,
+      leg_price_sen:           recomputed?.leg_price_sen ?? 0,
+      special_order_price_sen: recomputed?.special_order_sen ?? 0,
+      custom_specials:         recomputed?.custom_specials ?? null,
       line_delivery_date: lineDeliveryDate,
       line_delivery_date_overridden: lineDeliveryDateOverridden,
     };
@@ -832,14 +888,46 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   if (!header) return c.json({ error: 'not_found' }, 404);
 
   const qty = Number(it.qty ?? 1);
-  const unit = Number(it.unitPriceCenti ?? 0);
   const discount = Number(it.discountCenti ?? 0);
+  // MFG-PRICING-ENGINE — Recompute unit price server-side. Same path as
+  // POST /. Drift > 0.5% returns HTTP 400 with the breakdown so the UI can
+  // show what went wrong.
+  const itemCodeStr = String(it.itemCode ?? '');
+  const variantsObj = (it.variants as MfgItemForRecompute['variants']) ?? null;
+  const [cachedConfig, productLite, fabricLite] = await Promise.all([
+    loadMaintenanceConfig(sb),
+    loadProductByCode(sb, itemCodeStr),
+    loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
+  ]);
+  const recomputed = recomputeFromSnapshot(
+    {
+      itemCode:       itemCodeStr,
+      itemGroup:      String(it.itemGroup ?? 'others'),
+      qty,
+      unitPriceCenti: Number(it.unitPriceCenti ?? 0),
+      variants:       variantsObj,
+    },
+    productLite,
+    fabricLite,
+    cachedConfig,
+  );
+  if (recomputed.drift) {
+    return c.json({
+      error:    'pricing_drift',
+      reason:   'Client unitPriceCenti differs >0.5% from server compute.',
+      itemCode: itemCodeStr,
+      client:   Number(it.unitPriceCenti ?? 0),
+      server:   recomputed.unit_price_sen,
+      breakdown: recomputed.breakdown,
+    }, 400);
+  }
+  const unit = recomputed.unit_price_sen;
   const lineTotal = (qty * unit) - discount;
   // Task #114 — snapshot unit cost from mfg_products when client didn't
   // pass one. Same fallback chain as POST / and PATCH /:itemId.
   const unitCost = await snapshotUnitCostSen(
     sb,
-    String(it.itemCode ?? ''),
+    itemCodeStr,
     Number(it.unitCostCenti ?? 0),
   );
   const lineCost = unitCost * qty;
@@ -877,6 +965,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
+    // MFG-PRICING-ENGINE — Persist breakdown columns (same as POST /).
+    divan_price_sen:         recomputed.divan_price_sen,
+    leg_price_sen:           recomputed.leg_price_sen,
+    special_order_price_sen: recomputed.special_order_sen,
+    custom_specials:         recomputed.custom_specials ?? null,
     line_delivery_date: lineDeliveryDate,
     line_delivery_date_overridden: lineDeliveryDateOverridden,
   };
@@ -915,8 +1008,52 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
-  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
+  const clientUnit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
+
+  /* MFG-PRICING-ENGINE — Server-side recompute on PATCH. Triggered when
+     the caller touches variants OR unitPriceCenti (qty alone doesn't move
+     the unit price). For variant-driven edits we use the merged item shape
+     (prev + patch) so omitted variants stay sticky. The manual-override
+     audit path (POST /:docNo/items/:itemId/override → mfg_so_price_overrides)
+     is unaffected — it routes around this PATCH entirely. */
+  let recomputedPatch: RecomputedLine | null = null;
+  const variantsAfter = it.variants !== undefined
+    ? (it.variants as MfgItemForRecompute['variants'])
+    : ((prev as { variants?: MfgItemForRecompute['variants'] }).variants ?? null);
+  const itemCodeAfter = it.itemCode !== undefined ? String(it.itemCode) : prev.item_code;
+  const itemGroupAfter = it.itemGroup !== undefined ? String(it.itemGroup) : prev.item_group;
+  const shouldRecompute = it.variants !== undefined || it.unitPriceCenti !== undefined || it.itemCode !== undefined;
+  if (shouldRecompute && itemCodeAfter) {
+    const [cfg, prodLite, fabLite] = await Promise.all([
+      loadMaintenanceConfig(sb),
+      loadProductByCode(sb, itemCodeAfter),
+      loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
+    ]);
+    recomputedPatch = recomputeFromSnapshot(
+      {
+        itemCode:       itemCodeAfter,
+        itemGroup:      itemGroupAfter,
+        qty,
+        unitPriceCenti: clientUnit,
+        variants:       variantsAfter,
+      },
+      prodLite,
+      fabLite,
+      cfg,
+    );
+    if (recomputedPatch.drift) {
+      return c.json({
+        error:    'pricing_drift',
+        reason:   'Client unitPriceCenti differs >0.5% from server compute.',
+        itemCode: itemCodeAfter,
+        client:   clientUnit,
+        server:   recomputedPatch.unit_price_sen,
+        breakdown: recomputedPatch.breakdown,
+      }, 400);
+    }
+  }
+  const unit = recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit;
   /* Task #114 — cost snapshot fallback on PATCH. Three cases:
        1. Client sent unitCostCenti > 0 → use it.
        2. Client changed itemCode (no cost in body) → re-snapshot from
@@ -941,6 +1078,14 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     total_centi: lineTotal, total_inc_centi: lineTotal, balance_centi: lineTotal,
     line_cost_centi: lineCost, line_margin_centi: lineTotal - lineCost,
   };
+  // MFG-PRICING-ENGINE — Refresh the persisted breakdown columns when we
+  // ran a recompute. Without this they'd drift from `variants` over time.
+  if (recomputedPatch) {
+    updates.divan_price_sen         = recomputedPatch.divan_price_sen;
+    updates.leg_price_sen           = recomputedPatch.leg_price_sen;
+    updates.special_order_price_sen = recomputedPatch.special_order_sen;
+    updates.custom_specials         = recomputedPatch.custom_specials ?? null;
+  }
   for (const [from, to] of [
     ['itemCode', 'item_code'], ['itemGroup', 'item_group'], ['description', 'description'],
     ['description2', 'description2'], ['uom', 'uom'], ['variants', 'variants'],

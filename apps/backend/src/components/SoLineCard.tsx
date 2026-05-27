@@ -26,8 +26,13 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  computeMfgLinePrice,
+  type MfgPricingProduct,
+  type MfgFabricTier,
+} from '@2990s/shared/mfg-pricing';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
-import { useFabricTrackings } from '../lib/fabric-queries';
+import { useFabricTrackings, type FabricTrackingRow } from '../lib/fabric-queries';
 import {
   useUploadSoItemPhoto,
   useDeleteSoItemPhoto,
@@ -252,70 +257,73 @@ const SoLineCardInner = ({
     return [];
   };
 
-  /* Auto-recompute unit price from base + Σ(variant surcharges). */
+  /* MFG-PRICING-ENGINE — Build pricing inputs from the picked product +
+     the fabric tracking row whose code matches the line's fabricCode
+     variant. Pull the per-context tier (sofa_price_tier vs
+     bedframe_price_tier) so the shared compute function can switch
+     basePriceSen ↔ price1Sen exactly the same way the server does. */
+  const pickedFabric: FabricTrackingRow | null = useMemo(() => {
+    const code = String(draft.variants.fabricCode ?? '');
+    if (!code) return null;
+    return fabrics.find((f) => f.fabric_code === code) ?? null;
+  }, [fabrics, draft.variants.fabricCode]);
+
+  const pricingBreakdown = useMemo(() => {
+    if (!picked) return null;
+    const category = draft.itemGroup.toUpperCase() as MfgPricingProduct['category'];
+    const tier: MfgFabricTier | null = pickedFabric
+      ? (category === 'SOFA'
+          ? pickedFabric.sofa_price_tier ?? pickedFabric.price_tier ?? null
+          : category === 'BEDFRAME'
+            ? pickedFabric.bedframe_price_tier ?? pickedFabric.price_tier ?? null
+            : null)
+      : null;
+    const product: MfgPricingProduct = {
+      category:         (picked.category as MfgPricingProduct['category']) ?? 'ACCESSORY',
+      basePriceSen:     picked.base_price_sen ?? null,
+      price1Sen:        picked.price1_sen ?? null,
+      seatHeightPrices: picked.seat_height_prices ?? null,
+    };
+    const specs = specialsList(draft.variants.specials ?? draft.variants.special);
+    return computeMfgLinePrice(
+      {
+        product,
+        fabric:        pickedFabric ? { tier, surchargeSen: 0 } : null,
+        qty:           draft.qty,
+        divanHeight:   (draft.variants.divanHeight as string | undefined) ?? null,
+        legHeight:     (draft.variants.legHeight as string | undefined) ?? null,
+        totalHeight:   (draft.variants.totalHeight as string | undefined) ?? null,
+        specials:      specs,
+        seatSize:      (draft.variants.seatHeight as string | undefined) ?? null,
+        sofaLegHeight: (draft.variants.sofaLegHeight as string | undefined) ?? null,
+      },
+      maint,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picked, pickedFabric, draft.variants, draft.itemGroup, draft.qty, maint]);
+
+  /* Auto-recompute unit price when variant edits change the computed
+     breakdown. Skipped on manual override (user typed into the price
+     input) — that flips manualPrice=true until a new SKU is picked. */
   useEffect(() => {
-    if (manualPrice || !maint || !picked) return;
-    const category = draft.itemGroup.toLowerCase();
-    let basePriceSen = picked.base_price_sen ?? 0;
-    let extraSen = 0;
-
-    if (category === 'sofa') {
-      const sh = String(draft.variants.seatHeight ?? '');
-      if (sh && Array.isArray(picked.seat_height_prices)) {
-        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-          .find((p) => p.height === sh && p.tier === 'PRICE_2');
-        if (match) basePriceSen = match.priceSen;
-      }
-      const legV  = String(draft.variants.legHeight ?? '');
-      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      for (const s of specs) extraSen += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
-    } else if (category === 'bedframe') {
-      const divanV = String(draft.variants.divanHeight ?? '');
-      const totalV = String(draft.variants.totalHeight ?? '');
-      const legV   = String(draft.variants.legHeight ?? '');
-      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
-      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
-      extraSen += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
-      extraSen += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
-      for (const s of specs) extraSen += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
+    if (manualPrice || !pricingBreakdown) return;
+    if (draft.unitPriceCenti !== pricingBreakdown.unitPriceSen) {
+      onChange({ unitPriceCenti: pricingBreakdown.unitPriceSen });
     }
-
-    const newPrice = basePriceSen + extraSen;
-    if (draft.unitPriceCenti !== newPrice) onChange({ unitPriceCenti: newPrice });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
+  }, [pricingBreakdown, manualPrice]);
 
-  /* Pricing breakdown summary (mirrors recompute formula). */
-  const { basePriceSen, extraSen } = useMemo(() => {
-    if (!maint || !picked) return { basePriceSen: draft.unitPriceCenti, extraSen: 0 };
-    const category = draft.itemGroup.toLowerCase();
-    let base = picked.base_price_sen ?? 0;
-    let extra = 0;
-    if (category === 'sofa') {
-      const sh = String(draft.variants.seatHeight ?? '');
-      if (sh && Array.isArray(picked.seat_height_prices)) {
-        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-          .find((p) => p.height === sh && p.tier === 'PRICE_2');
-        if (match) base = match.priceSen;
-      }
-      const legV  = String(draft.variants.legHeight ?? '');
-      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
-      extra += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      for (const s of specs) extra += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
-    } else if (category === 'bedframe') {
-      const divanV = String(draft.variants.divanHeight ?? '');
-      const totalV = String(draft.variants.totalHeight ?? '');
-      const legV   = String(draft.variants.legHeight ?? '');
-      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
-      extra += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
-      extra += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
-      extra += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
-      for (const s of specs) extra += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
-    }
-    return { basePriceSen: base, extraSen: extra };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, draft.variants, draft.itemGroup, maint]);
+  /* Display-side breakdown values mirror the live compute. extraSen
+     collapses all four surcharge components + fabric add-on for the "+
+     Variants" row in the right rail. */
+  const basePriceSen = pricingBreakdown?.basePriceSen ?? (picked?.base_price_sen ?? draft.unitPriceCenti);
+  const extraSen = pricingBreakdown
+    ? pricingBreakdown.divanSurchargeSen
+    + pricingBreakdown.legSurchargeSen
+    + pricingBreakdown.totalHeightSurchargeSen
+    + pricingBreakdown.specialsSurchargeSen
+    + pricingBreakdown.fabricSurchargeSen
+    : 0;
 
   const lineTotal = useMemo(
     () => Math.max(0, draft.qty * draft.unitPriceCenti - draft.discountCenti),
