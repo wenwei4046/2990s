@@ -106,10 +106,49 @@ const methodLabel = (p: SoPayment): string => {
   return 'Cash';
 };
 
+/* Follow-up #83 — action selects how the rendered PDF is delivered:
+   - 'save'    → traditional doc.save() download (default, back-compat)
+   - 'print'   → render into a hidden iframe and trigger print dialog,
+                 skipping the Downloads folder round-trip
+   - 'preview' → open as a blob URL in a new tab (no print, no download) */
+export type PdfAction = 'save' | 'print' | 'preview';
+
+/* Mount a blob URL in a hidden iframe and (optionally) trigger print.
+   Cleanup is deferred 60 s so the OS print dialog can hold the iframe
+   document until the user closes it. */
+const renderViaIframe = (blobUrl: string, andPrint: boolean): void => {
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.src = blobUrl;
+  document.body.appendChild(iframe);
+  if (andPrint) {
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch {
+        /* Some browsers throw if the PDF viewer hasn't fully hydrated.
+           Worst case the user sees the iframe content briefly; we still
+           clean up below. */
+      }
+    };
+  }
+  window.setTimeout(() => {
+    try { document.body.removeChild(iframe); } catch { /* already detached */ }
+    URL.revokeObjectURL(blobUrl);
+  }, 60_000);
+};
+
 export async function generateSalesOrderPdf(
   header: SoHeader,
   items: SoItem[],
   payments: SoPayment[] = [],
+  action: PdfAction = 'save',
 ): Promise<void> {
   // Dynamic import — code-split into a vendor chunk.
   const { jsPDF } = await import('jspdf');
@@ -357,5 +396,25 @@ export async function generateSalesOrderPdf(
 
   // Filename: SO-009001-DebtorName.pdf
   const safeName = (header.debtor_name || 'customer').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
-  doc.save(`${header.doc_no}-${safeName}.pdf`);
+  const filename = `${header.doc_no}-${safeName}.pdf`;
+
+  /* Follow-up #83 — Dispatch on action.
+     - save:    write a real file (download)
+     - print:   blob URL → hidden iframe → window.print()
+     - preview: blob URL → new tab (browser PDF viewer) */
+  if (action === 'save') {
+    doc.save(filename);
+    return;
+  }
+  const blob = doc.output('blob');
+  const blobUrl = URL.createObjectURL(blob);
+  if (action === 'preview') {
+    /* New-tab preview. The blob URL stays valid until revoked; we leave
+       it to the 60 s timer so the new tab has time to fetch the PDF. */
+    window.open(blobUrl, '_blank');
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    return;
+  }
+  // action === 'print'
+  renderViaIframe(blobUrl, true);
 }
