@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { Login } from './pages/Login';
+import { SetPassword } from './pages/SetPassword';
 import { Catalog } from './pages/Catalog';
 import { Configurator } from './pages/Configurator';
 import { Cart } from './pages/Cart';
@@ -13,6 +14,12 @@ import { AuthGate } from './components/AuthGate';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
+  /* Invited POS-side staff land here from the magic-link email. Must stay
+     OUTSIDE the AuthGate wrapper — the user is authed via Supabase session
+     from the magic link, not via PIN, so the LockScreen fallback would
+     otherwise block them. After they submit, AuthGate's password_set check
+     will see the flipped flag and let them through to LockScreen / app. */
+  { path: '/set-password', element: <SetPassword /> },
   { path: '/catalog', element: <AuthGate><Catalog /></AuthGate> },
   { path: '/configure/:productId', element: <AuthGate><Configurator /></AuthGate> },
   { path: '/cart', element: <AuthGate><Cart /></AuthGate> },
