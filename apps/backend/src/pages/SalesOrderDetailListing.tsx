@@ -44,7 +44,7 @@
 // ----------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, ClipboardList, Printer, Eye, Filter, X,
   SlidersHorizontal, FileSearch,
@@ -396,6 +396,17 @@ const setGridGroupBy = (colKey: string | null) => {
 
 export const SalesOrderDetailListing = () => {
   const navigate = useNavigate();
+  /* Task #120 — `?outstanding=1` URL param applied to the row set. The
+     line-flat report repeats outstanding per line, so we filter lines from
+     docs whose (local_total − paid) > 0. Same param used on the L1 list
+     and across all SO-family modules. */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const outstandingOnly = searchParams.get('outstanding') === '1';
+  const clearOutstanding = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('outstanding');
+    setSearchParams(next, { replace: true });
+  };
 
   // ── Filter state ─────────────────────────────────────────────────
   const today = new Date().toISOString().slice(0, 10);
@@ -430,11 +441,20 @@ export const SalesOrderDetailListing = () => {
   );
 
   // Hide-unchecked filter — DataGrid handles search/sort/group, we just
-  // shrink the input set when "Clear Unchecked" is toggled on.
+  // shrink the input set when "Clear Unchecked" is toggled on. Task #120:
+  // additionally shrink to outstanding-only lines when ?outstanding=1.
   const rows = useMemo(() => {
-    if (!hideUnchecked) return rawRows;
-    return rawRows.filter((r) => checked[r.id]);
-  }, [rawRows, checked, hideUnchecked]);
+    let r = rawRows;
+    if (outstandingOnly) {
+      r = r.filter((row) => {
+        const lt = (row.local_total_centi ?? 0);
+        const pt = (row.paid_total_centi ?? 0);
+        return lt - pt > 0;
+      });
+    }
+    if (hideUnchecked) r = r.filter((row) => checked[row.id]);
+    return r;
+  }, [rawRows, checked, hideUnchecked, outstandingOnly]);
 
   /* Task #114 — Page-level KPI bar mirroring the Houzs SO Details
      report header. 6 tiles computed from the same filtered row set the
@@ -603,9 +623,20 @@ export const SalesOrderDetailListing = () => {
             <h1 className={styles.title}>
               <ClipboardList size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
               Sales Order Detail Listing
+              {outstandingOnly && <span style={{ color: 'var(--c-burnt)', marginLeft: 8 }}>· Outstanding only</span>}
             </h1>
             <p className={styles.subtitle}>
               AutoCount-style report · one row per Sales Order line item
+              {outstandingOnly && (
+                <>
+                  {' · '}
+                  <button type="button" onClick={clearOutstanding}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--c-burnt)',
+                      cursor: 'pointer', textDecoration: 'underline', font: 'inherit', padding: 0 }}>
+                    Clear outstanding filter
+                  </button>
+                </>
+              )}
             </p>
           </div>
         </div>
