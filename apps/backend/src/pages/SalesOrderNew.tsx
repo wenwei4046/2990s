@@ -627,7 +627,7 @@ export const SalesOrderNew = () => {
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Dates</h2>
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            Processing Date = when we start production · Delivery Date = customer's expected delivery
+            Processing Date = when we begin processing the order · Delivery Date = customer's expected delivery
           </span>
         </div>
         <div className={styles.cardBody}>
