@@ -155,6 +155,13 @@ type SoRow = {
   total_cost_centi?: number;
   total_margin_centi?: number;
   margin_pct_basis?: number;
+  /* PR — Commander 2026-05-28: Stock Status chip.
+     Computed server-side from mfg_sales_order_items.stock_status grouped
+     by item_group. ready_categories = list of categories where ALL items
+     are READY (e.g. ['MATTRESS','BEDFRAME']). is_fully_ready = every line
+     is READY (column shows "READY" pill). */
+  ready_categories?: string[];
+  is_fully_ready?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -1118,6 +1125,64 @@ const buildColumns = (
     ),
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+  },
+  {
+    /* PR — Commander 2026-05-28: Stock Status chip column.
+       · empty            — no category fully ready
+       · ["MATTRESS"]…    — chip per fully-ready category
+       · isFullyReady     — green "READY" pill (status itself advances) */
+    key: 'stock_status', label: 'Stock Status', width: 200, sortable: true, groupable: false,
+    accessor: (r) => {
+      if (r.is_fully_ready) {
+        return (
+          <span style={{
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-11)',
+            fontWeight: 700,
+            background: 'var(--c-mint, #d4edda)',
+            color: 'var(--c-green, #1a7a3a)',
+            padding: '2px 10px',
+            borderRadius: 'var(--radius-pill, 999px)',
+            letterSpacing: 0.5,
+          }}>
+            READY
+          </span>
+        );
+      }
+      const cats = r.ready_categories ?? [];
+      if (cats.length === 0) {
+        return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      }
+      return (
+        <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
+          {cats.map((c) => (
+            <span key={c} style={{
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-11)',
+              fontWeight: 600,
+              background: 'var(--c-cream)',
+              color: 'var(--c-ink)',
+              padding: '2px 6px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--line)',
+              letterSpacing: 0.3,
+            }}>
+              {c}
+            </span>
+          ))}
+        </span>
+      );
+    },
+    searchValue: (r) => {
+      if (r.is_fully_ready) return 'ready';
+      return (r.ready_categories ?? []).join(' ').toLowerCase();
+    },
+    sortFn: (a, b) => {
+      // Sort: fully ready first, then by count of ready categories desc, then empty
+      const aScore = a.is_fully_ready ? 1000 : (a.ready_categories?.length ?? 0);
+      const bScore = b.is_fully_ready ? 1000 : (b.ready_categories?.length ?? 0);
+      return bScore - aScore;
+    },
   },
   /* HOUZS category subtotals — Mattress/Sofa burnt, Bedframe green, Acc neutral.
      '—' when zero so commander's eye skims to filled cells. */

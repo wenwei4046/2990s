@@ -58,6 +58,8 @@ const ITEM =
   'line_delivery_date, line_delivery_date_overridden, ' +
   /* PR-F — per-line photo keys (migration 0076) */
   'photo_urls, ' +
+  /* PR — Commander 2026-05-28: per-line stock fulfillment flag (migration 0091) */
+  'stock_status, ' +
   'created_at';
 
 /* ─────────────────────────── Country auto-derive (Task #121) ──────────
@@ -126,7 +128,51 @@ mfgSalesOrders.get('/', async (c) => {
   const debtor = c.req.query('debtor'); if (debtor) q = q.ilike('debtor_name', `%${debtor}%`);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ salesOrders: data ?? [] });
+
+  /* PR — Commander 2026-05-28: Stock Status chip column.
+     Per-SO aggregate computed from mfg_sales_order_items.stock_status grouped
+     by item_group. UI renders:
+       · empty            — no category fully ready
+       · ["MATTRESS"]     — all mattress lines READY, but other categories pending
+       · isFullyReady     — every non-cancelled line READY (chip column shows "READY")
+     We hand the per-row arrays back so the UI doesn't need a second round-trip. */
+  const rows = (data ?? []) as Array<{ doc_no?: string } & Record<string, unknown>>;
+  const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
+  if (docNos.length > 0) {
+    const { data: itemRows } = await sb
+      .from('mfg_sales_order_items')
+      .select('doc_no, item_group, stock_status, cancelled')
+      .in('doc_no', docNos)
+      .eq('cancelled', false);
+    const agg = new Map<string, Map<string, { total: number; ready: number }>>();
+    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean }>) {
+      let perGroup = agg.get(it.doc_no);
+      if (!perGroup) { perGroup = new Map(); agg.set(it.doc_no, perGroup); }
+      const g = (it.item_group ?? '').trim().toUpperCase() || 'OTHERS';
+      let cell = perGroup.get(g);
+      if (!cell) { cell = { total: 0, ready: 0 }; perGroup.set(g, cell); }
+      cell.total += 1;
+      if (it.stock_status === 'READY') cell.ready += 1;
+    }
+    for (const r of rows) {
+      const perGroup = agg.get(r.doc_no ?? '');
+      if (!perGroup) {
+        (r as Record<string, unknown>).ready_categories = [];
+        (r as Record<string, unknown>).is_fully_ready = false;
+        continue;
+      }
+      const ready: string[] = [];
+      let allReady = true;
+      for (const [grp, cell] of perGroup) {
+        if (cell.total > 0 && cell.ready === cell.total) ready.push(grp);
+        else allReady = false;
+      }
+      (r as Record<string, unknown>).ready_categories = ready;
+      (r as Record<string, unknown>).is_fully_ready = allReady && perGroup.size > 0;
+    }
+  }
+
+  return c.json({ salesOrders: rows });
 });
 
 mfgSalesOrders.get('/:docNo', async (c) => {
@@ -1725,4 +1771,105 @@ mfgSalesOrders.get('/debtors/search', async (c) => {
     if (out.length >= 25) break;
   }
   return c.json({ debtors: out });
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   PATCH /:docNo/items/:itemId/stock-status
+   ────────────────────────────────────────────────────────────────────────
+   Commander 2026-05-28: per-line stock fulfillment flag. body { status:
+   'PENDING' | 'READY' }. After the flip, recompute the SO-level aggregate
+   and auto-advance the SO's status to READY_TO_SHIP when EVERY non-cancelled
+   line is READY (and the order is currently in a pre-ready state). An
+   audit log entry is written for both the line flip and the status
+   transition.
+   ════════════════════════════════════════════════════════════════════════ */
+mfgSalesOrders.patch('/:docNo/items/:itemId/stock-status', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const itemId = c.req.param('itemId');
+  const user = c.get('user');
+
+  let body: { status?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const nextStatus = (body.status ?? '').trim().toUpperCase();
+  if (nextStatus !== 'PENDING' && nextStatus !== 'READY') {
+    return c.json({ error: 'status_invalid', message: 'PENDING or READY' }, 400);
+  }
+
+  // Look up the current row so the audit log can capture from→to.
+  const { data: prev, error: findErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('doc_no, stock_status, item_code, item_group, cancelled')
+    .eq('id', itemId)
+    .eq('doc_no', docNo)
+    .maybeSingle();
+  if (findErr) return c.json({ error: 'load_failed', reason: findErr.message }, 500);
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  const prevTyped = prev as { stock_status: string; item_code: string; item_group: string; cancelled: boolean };
+  if (prevTyped.cancelled) {
+    return c.json({ error: 'item_cancelled', message: 'Cannot change stock_status on a cancelled line.' }, 400);
+  }
+  if (prevTyped.stock_status === nextStatus) {
+    return c.json({ ok: true, unchanged: true });
+  }
+
+  // Flip the line.
+  const { error: updErr } = await sb
+    .from('mfg_sales_order_items')
+    .update({ stock_status: nextStatus })
+    .eq('id', itemId);
+  if (updErr) return c.json({ error: 'update_failed', reason: updErr.message }, 500);
+
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'stockStatus', from: prevTyped.stock_status, to: nextStatus },
+      { field: 'itemCode',    from: prevTyped.item_code,    to: prevTyped.item_code },
+    ],
+    note: nextStatus === 'READY' ? 'Stock marked ready' : 'Stock marked pending',
+  });
+
+  // Re-aggregate at the SO level. If every non-cancelled line is now READY
+  // AND the order is currently CONFIRMED or IN_PRODUCTION, auto-advance
+  // status to READY_TO_SHIP.
+  const { data: allLines } = await sb
+    .from('mfg_sales_order_items')
+    .select('stock_status, cancelled')
+    .eq('doc_no', docNo);
+  const live = ((allLines ?? []) as Array<{ stock_status: string; cancelled: boolean }>).filter((l) => !l.cancelled);
+  const allReady = live.length > 0 && live.every((l) => l.stock_status === 'READY');
+
+  let advancedTo: string | null = null;
+  if (allReady) {
+    const { data: header } = await sb
+      .from('mfg_sales_orders')
+      .select('status')
+      .eq('doc_no', docNo)
+      .maybeSingle();
+    const cur = (header as { status?: string } | null)?.status ?? null;
+    if (cur === 'CONFIRMED' || cur === 'IN_PRODUCTION') {
+      const { error: stUpdErr } = await sb
+        .from('mfg_sales_orders')
+        .update({ status: 'READY_TO_SHIP' })
+        .eq('doc_no', docNo);
+      if (!stUpdErr) {
+        advancedTo = 'READY_TO_SHIP';
+        await recordSoAudit(sb, {
+          docNo,
+          action: 'UPDATE_STATUS',
+          actorId: user.id,
+          actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+          statusSnapshot: 'READY_TO_SHIP',
+          fieldChanges: [{ field: 'status', from: cur, to: 'READY_TO_SHIP' }],
+          note: 'Auto-advanced: all lines READY',
+        });
+      }
+    }
+  }
+
+  return c.json({ ok: true, advancedTo });
 });

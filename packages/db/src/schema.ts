@@ -1261,6 +1261,14 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
      itself does not need public access. */
   photoUrls:         text('photo_urls').array().notNull().default([]),
 
+  /* PR — Commander 2026-05-28 — Per-line fulfillment flag. Default PENDING;
+     flipped to READY when stock for this line arrives (manual for MVP,
+     auto-from-inventory in a follow-up). Drives the Stock Status chip
+     column on the SO list + auto-advances mfg_sales_orders.status to
+     READY_TO_SHIP when every non-cancelled line is READY. See migration
+     0091_so_item_stock_status.sql for the CHECK constraint + index. */
+  stockStatus:       text('stock_status').notNull().default('PENDING'),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),

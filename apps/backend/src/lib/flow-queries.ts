@@ -249,6 +249,26 @@ export const useUpdateMfgSalesOrderItem = () => {
   });
 };
 
+/* PR — Commander 2026-05-28: per-line stock-fulfillment toggle.
+   Hits PATCH /:docNo/items/:itemId/stock-status. Server response includes
+   `advancedTo` when the SO header status auto-advanced (e.g. to
+   READY_TO_SHIP when every line is now READY). */
+export const useUpdateSoItemStockStatus = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, itemId, status }: { docNo: string; itemId: string; status: 'PENDING' | 'READY' }) =>
+      authedFetch<{ ok: boolean; advancedTo?: string | null; unchanged?: boolean }>(
+        `/mfg-sales-orders/${docNo}/items/${itemId}/stock-status`,
+        { method: 'PATCH', body: JSON.stringify({ status }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
+    },
+  });
+};
+
 export const useDeleteMfgSalesOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({

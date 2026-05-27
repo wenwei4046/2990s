@@ -110,6 +110,12 @@ export type SoItem = {
   cancelled: boolean;
   line_delivery_date: string | null;
   line_delivery_date_overridden: boolean;
+  /* PR — Commander 2026-05-28: Stock fulfillment flag.
+     Default 'PENDING'. Flipped to 'READY' when stock arrives (manual for
+     MVP, auto-from-inventory in a follow-up). Drives the Stock Status
+     chip column on the SO list + auto-advances the SO status to
+     READY_TO_SHIP when every non-cancelled line is READY. */
+  stock_status?: string;
 };
 
 /* PR-A — Imperative handle exposed by every editable sub-card so the page
