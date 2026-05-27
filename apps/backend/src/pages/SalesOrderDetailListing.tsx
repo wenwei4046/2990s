@@ -4,7 +4,8 @@
 //
 // One row per Sales Order LINE ITEM (with SO header info repeated). Mirrors
 // the AutoCount column set the commander uses as canonical for ERP listing
-// reports: 36 columns total covering doc header + line + payment + remarks.
+// reports: 36 columns total covering doc header + line + payment + remarks
+// (plus a "Check" selection column at the left).
 //
 // Layout:
 //   1. Header: back + title
@@ -13,12 +14,14 @@
 //      - Report Options (Group By, Sort By, Show Criteria, More Options, Advanced Filter)
 //   3. Action bar: Inquiry · Preview · Print · Hide Options · Criteria · Close
 //   4. Optional criteria summary
-//   5. Search Result panel: Check All / Uncheck All / Uncheck In Selection /
-//      Clear Unchecked / global search · drag-zone for grouping · wide table.
+//   5. Search Result panel — wraps <DataGrid> (PR-G primitive) for:
+//      column reorder/hide/pin via right-click, drag-to-group-by, sort,
+//      resize, global search, and localStorage layout persistence
+//      (storageKey: `so-detail-listing-grid`).
 //
-// The "Group By" zone follows AutoCount: drag a column header onto the zone
-// to group rows; click the chip to remove it. The header can also be set via
-// the Group By dropdown in the Report Options card.
+// The page-level "Group By" dropdown in the Report Options card writes
+// directly into the DataGrid's layout state for parity with AutoCount, while
+// drag-to-group-by from any column header still works via DataGrid's banner.
 //
 // ── Temporary placeholders (Task #86 follow-up) ────────────────────────────
 // Malaysia is currently in a no-SST regime, so `tax_centi` is always 0 across
@@ -40,13 +43,14 @@
 // header column).
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
-  ArrowLeft, ClipboardList, Printer, Eye, Filter, X, ChevronRight,
+  ArrowLeft, ClipboardList, Printer, Eye, Filter, X,
   SlidersHorizontal, FileSearch,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import {
   useSalesOrderDetailListing,
   type SoDetailListingFilters,
@@ -56,6 +60,8 @@ import styles from './SalesOrderDetailListing.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
+
+const STORAGE_KEY = 'so-detail-listing-grid';
 
 type DateMode = 'range' | 'none';
 type GroupBy = NonNullable<SoDetailListingFilters['groupBy']>;
@@ -68,84 +74,270 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   })}`;
 };
 
-// 36-column AutoCount layout. Each entry: { key, label, render }. `key` doubles
-// as the column-id used for grouping + DnD payload.
-type ColDef = {
-  key: string;
-  label: string;
-  align?: 'left' | 'right' | 'center';
-  render: (r: SoDetailListingRow) => ReactNode;
-};
-
-const COLS: ColDef[] = [
-  { key: 'doc_no',          label: 'Doc. No.',      render: (r) => <span className={styles.codeCell}>{r.doc_no}</span> },
-  { key: 'so_date',         label: 'Date',          render: (r) => (r.so_date ?? r.line_date ?? '—') as string },
-  { key: 'debtor_code',     label: 'Debtor Code',   render: (r) => r.debtor_code ?? '—' },
-  { key: 'debtor_name',     label: 'Debtor Name',   render: (r) => r.debtor_name ?? '—' },
-  { key: 'agent',           label: 'Agent',         render: (r) => r.agent ?? '—' },
-  { key: 'currency',        label: 'Curr. Code',    render: (r) => r.currency ?? 'MYR' },
-  // Inclusive? — see top-of-file note: constant "Yes" while Malaysia is in
-  // the no-SST regime (every doc is effectively tax-inclusive at 0%).
-  { key: 'inclusive',       label: 'Inclusive?',    align: 'center',
-    render: () => 'Yes' },
-  { key: 'subtotal_ex',     label: 'SubTotal (Ex)', align: 'right',
-    render: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency) },
-  // Tax (header) — constant 0.00 placeholder while no-SST regime is in effect.
-  { key: 'tax_header',      label: 'Tax',           align: 'right',
-    render: (r) => fmtRm(0, r.currency) },
-  { key: 'header_total',    label: 'Total',         align: 'right',
-    render: (r) => fmtRm(r.local_total_centi ?? 0, r.currency) },
-  { key: 'local_total',     label: 'Local Total',   align: 'right',
-    render: (r) => fmtRm(r.local_total_centi ?? 0, r.currency) },
-  { key: 'cancelled',       label: 'Cancelled',     align: 'center',
-    render: (r) => (r.cancelled ? 'Y' : 'N') },
-  { key: 'remark4',         label: 'Remark 4',      render: (r) => (r.remark4 ?? '—') as string },
-  { key: 'sales_exemption_expiry', label: 'Sales Exemption Expiry',
-    render: (r) => (r.sales_exemption_expiry ?? '—') as string },
-  { key: 'processing_date', label: 'Processing Date',
-    render: (r) => (r.processing_date ?? '—') as string },
-  { key: 'item_group',      label: 'Item Group',    render: (r) => r.item_group ?? '—' },
-  { key: 'item_code',       label: 'Item Code',     render: (r) => <span className={styles.codeCell}>{r.item_code}</span> },
-  { key: 'description',     label: 'Detail Description',
-    render: (r) => (r.description ?? '—') as string },
-  { key: 'uom',             label: 'UOM',           render: (r) => r.uom ?? '—' },
-  { key: 'location',        label: 'Location',      render: (r) => (r.location ?? '—') as string },
-  { key: 'description2',    label: 'Detail Description 2',
-    render: (r) => (r.description2 ?? '—') as string },
-  { key: 'qty',             label: 'Qty',           align: 'right', render: (r) => String(r.qty ?? 0) },
-  { key: 'unit_price',      label: 'Unit Price',    align: 'right',
-    render: (r) => fmtRm(r.unit_price_centi, r.currency) },
-  { key: 'discount',        label: 'Discount',      align: 'right',
-    render: (r) => fmtRm(r.discount_centi, r.currency) },
-  // Detail Tax Code — constant "SR" (Standard-Rated 0%) placeholder while
-  // the no-SST regime is in effect. See top-of-file note.
-  { key: 'detail_tax_code', label: 'Detail Tax Code',
-    render: () => 'SR' },
-  { key: 'line_total',      label: 'Total',         align: 'right',
-    render: (r) => fmtRm(r.total_centi, r.currency) },
-  // Tax (line) — constant 0.00 placeholder while no-SST regime is in effect.
-  { key: 'line_tax',        label: 'Tax',           align: 'right',
-    render: (r) => fmtRm(0, r.currency) },
-  { key: 'total_ex',        label: 'Total (Ex)',    align: 'right',
-    render: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency) },
-  { key: 'total_inc',       label: 'Total (Inc)',   align: 'right',
-    render: (r) => fmtRm(r.total_inc_centi ?? r.total_centi ?? 0, r.currency) },
-  // Creditor Code / Post to PO — cross-doc linking from SO line to supplier
-  // PO isn't tracked in our schema yet. See top-of-file note.
-  { key: 'creditor_code',   label: 'Creditor Code', render: () => '—' },
-  { key: 'post_to_po',      label: 'Post to PO',    align: 'center', render: () => '—' },
-  { key: 'balance',         label: 'BALANCE',       align: 'right',
-    render: (r) => fmtRm(r.balance_centi ?? 0, r.currency) },
-  // PAYEMENT — AutoCount preserves the typo. Sums mfg_sales_order_payments
-  // server-side (paid_total_centi); the legacy header column paid_centi was
-  // dropped by PR-C.
-  { key: 'payment',         label: 'PAYEMENT',      align: 'right',
-    render: (r) => fmtRm(r.paid_total_centi ?? 0, r.currency) },
-  { key: 'remark5',         label: 'Remark5',       render: (r) => (r.remark2 ?? '—') as string },
-  { key: 'remark6',         label: 'Remark6',       render: (r) => (r.remark3 ?? '—') as string },
+/* ─────────────────────────────────────────────────────────────────────────
+   Column factory — accepts the selection map + a toggle callback so the
+   "Check" column can render an interactive checkbox per row. The remaining
+   36 columns map AutoCount field-for-field. Keys are stable identifiers
+   referenced by DataGrid's localStorage layout (order, hidden, widths).
+   ───────────────────────────────────────────────────────────────────────── */
+const buildColumns = (
+  checked: Record<string, boolean>,
+  onToggle: (id: string) => void,
+): DataGridColumn<SoDetailListingRow>[] => [
+  {
+    key: 'check', label: 'Check', width: 50, align: 'left',
+    sortable: false, groupable: false,
+    accessor: (r) => (
+      <input
+        type="checkbox"
+        aria-label={`Toggle ${r.doc_no} / ${r.item_code}`}
+        checked={!!checked[r.id]}
+        onChange={() => onToggle(r.id)}
+        onClick={(e) => e.stopPropagation()}
+      />
+    ),
+    searchValue: () => '',
+  },
+  {
+    key: 'doc_no', label: 'Doc. No.', width: 110, sortable: true, groupable: false,
+    accessor: (r) => <span className={styles.codeCell}>{r.doc_no}</span>,
+    searchValue: (r) => r.doc_no,
+  },
+  {
+    key: 'so_date', label: 'Date', width: 100, sortable: true,
+    accessor: (r) => (r.so_date ?? r.line_date ?? '—') as string,
+    searchValue: (r) => String(r.so_date ?? r.line_date ?? ''),
+  },
+  {
+    key: 'debtor_code', label: 'Debtor Code', width: 110, sortable: true, groupable: true,
+    accessor: (r) => r.debtor_code ?? '—',
+    searchValue: (r) => r.debtor_code ?? '',
+  },
+  {
+    key: 'debtor_name', label: 'Debtor Name', width: 200, sortable: true, groupable: true,
+    accessor: (r) => r.debtor_name ?? '—',
+    searchValue: (r) => r.debtor_name ?? '',
+  },
+  {
+    key: 'agent', label: 'Agent', width: 110, sortable: true, groupable: true,
+    accessor: (r) => r.agent ?? '—',
+    searchValue: (r) => r.agent ?? '',
+  },
+  {
+    key: 'currency', label: 'Curr. Code', width: 80, sortable: true, groupable: true,
+    accessor: (r) => r.currency ?? 'MYR',
+    searchValue: (r) => r.currency ?? 'MYR',
+  },
+  // Inclusive? — constant "Yes" while Malaysia is in the no-SST regime.
+  {
+    key: 'inclusive', label: 'Inclusive?', width: 80, align: 'left',
+    sortable: false, groupable: false,
+    accessor: () => 'Yes',
+    searchValue: () => 'Yes',
+  },
+  {
+    key: 'subtotal_ex', label: 'SubTotal (Ex)', width: 120, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
+    searchValue: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
+    sortFn: (a, b) =>
+      ((a.total_centi ?? 0) - (a.tax_centi ?? 0)) -
+      ((b.total_centi ?? 0) - (b.tax_centi ?? 0)),
+  },
+  // Tax (header) — constant 0.00 while no-SST regime is in effect.
+  {
+    key: 'tax_header', label: 'Tax', width: 90, align: 'right', sortable: false, groupable: false,
+    accessor: (r) => fmtRm(0, r.currency),
+    searchValue: (r) => fmtRm(0, r.currency),
+  },
+  {
+    key: 'header_total', label: 'Total', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
+    searchValue: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.local_total_centi ?? 0) - (b.local_total_centi ?? 0),
+  },
+  {
+    key: 'local_total', label: 'Local Total', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
+    searchValue: (r) => fmtRm(r.local_total_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.local_total_centi ?? 0) - (b.local_total_centi ?? 0),
+  },
+  {
+    key: 'cancelled', label: 'Cancelled', width: 80, align: 'left', sortable: true, groupable: true,
+    accessor: (r) => (r.cancelled ? 'Y' : 'N'),
+    searchValue: (r) => (r.cancelled ? 'Y' : 'N'),
+  },
+  {
+    key: 'remark4', label: 'Remark 4', width: 140, sortable: true,
+    accessor: (r) => (r.remark4 ?? '—') as string,
+    searchValue: (r) => r.remark4 ?? '',
+  },
+  {
+    key: 'sales_exemption_expiry', label: 'Sales Exemption Expiry', width: 160, sortable: true,
+    accessor: (r) => (r.sales_exemption_expiry ?? '—') as string,
+    searchValue: (r) => r.sales_exemption_expiry ?? '',
+  },
+  {
+    key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
+    accessor: (r) => (r.processing_date ?? '—') as string,
+    searchValue: (r) => r.processing_date ?? '',
+  },
+  {
+    key: 'item_group', label: 'Item Group', width: 120, sortable: true, groupable: true,
+    accessor: (r) => r.item_group ?? '—',
+    searchValue: (r) => r.item_group ?? '',
+  },
+  {
+    key: 'item_code', label: 'Item Code', width: 120, sortable: true, groupable: false,
+    accessor: (r) => <span className={styles.codeCell}>{r.item_code}</span>,
+    searchValue: (r) => r.item_code,
+  },
+  {
+    key: 'description', label: 'Detail Description', width: 220, sortable: true,
+    accessor: (r) => (r.description ?? '—') as string,
+    searchValue: (r) => r.description ?? '',
+  },
+  {
+    key: 'uom', label: 'UOM', width: 70, sortable: true, groupable: true,
+    accessor: (r) => r.uom ?? '—',
+    searchValue: (r) => r.uom ?? '',
+  },
+  {
+    key: 'location', label: 'Location', width: 110, sortable: true, groupable: true,
+    accessor: (r) => (r.location ?? '—') as string,
+    searchValue: (r) => r.location ?? '',
+  },
+  {
+    key: 'description2', label: 'Detail Description 2', width: 200, sortable: true,
+    accessor: (r) => (r.description2 ?? '—') as string,
+    searchValue: (r) => r.description2 ?? '',
+  },
+  {
+    key: 'qty', label: 'Qty', width: 70, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => String(r.qty ?? 0),
+    searchValue: (r) => String(r.qty ?? 0),
+    sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    key: 'unit_price', label: 'Unit Price', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.unit_price_centi, r.currency),
+    searchValue: (r) => fmtRm(r.unit_price_centi, r.currency),
+    sortFn: (a, b) => (a.unit_price_centi ?? 0) - (b.unit_price_centi ?? 0),
+  },
+  {
+    key: 'discount', label: 'Discount', width: 100, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.discount_centi, r.currency),
+    searchValue: (r) => fmtRm(r.discount_centi, r.currency),
+    sortFn: (a, b) => (a.discount_centi ?? 0) - (b.discount_centi ?? 0),
+  },
+  // Detail Tax Code — constant "SR" while no-SST regime is in effect.
+  {
+    key: 'detail_tax_code', label: 'Detail Tax Code', width: 120, sortable: false, groupable: false,
+    accessor: () => 'SR',
+    searchValue: () => 'SR',
+  },
+  {
+    key: 'line_total', label: 'Total', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.total_centi, r.currency),
+    searchValue: (r) => fmtRm(r.total_centi, r.currency),
+    sortFn: (a, b) => (a.total_centi ?? 0) - (b.total_centi ?? 0),
+  },
+  // Tax (line) — constant 0.00 while no-SST regime is in effect.
+  {
+    key: 'line_tax', label: 'Tax', width: 90, align: 'right', sortable: false, groupable: false,
+    accessor: (r) => fmtRm(0, r.currency),
+    searchValue: (r) => fmtRm(0, r.currency),
+  },
+  {
+    key: 'total_ex', label: 'Total (Ex)', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
+    searchValue: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency),
+    sortFn: (a, b) =>
+      ((a.total_centi ?? 0) - (a.tax_centi ?? 0)) -
+      ((b.total_centi ?? 0) - (b.tax_centi ?? 0)),
+  },
+  {
+    key: 'total_inc', label: 'Total (Inc)', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.total_inc_centi ?? r.total_centi ?? 0, r.currency),
+    searchValue: (r) => fmtRm(r.total_inc_centi ?? r.total_centi ?? 0, r.currency),
+    sortFn: (a, b) =>
+      (a.total_inc_centi ?? a.total_centi ?? 0) -
+      (b.total_inc_centi ?? b.total_centi ?? 0),
+  },
+  // Creditor Code / Post to PO — SO→PO linking not tracked yet.
+  {
+    key: 'creditor_code', label: 'Creditor Code', width: 110, sortable: false, groupable: false,
+    accessor: () => '—',
+    searchValue: () => '',
+  },
+  {
+    key: 'post_to_po', label: 'Post to PO', width: 90, align: 'left', sortable: false, groupable: false,
+    accessor: () => '—',
+    searchValue: () => '',
+  },
+  {
+    key: 'balance', label: 'BALANCE', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.balance_centi ?? 0, r.currency),
+    searchValue: (r) => fmtRm(r.balance_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.balance_centi ?? 0) - (b.balance_centi ?? 0),
+  },
+  // PAYEMENT — AutoCount preserves the typo. Server-derived from
+  // mfg_sales_order_payments (paid_total_centi).
+  {
+    key: 'payment', label: 'PAYEMENT', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => fmtRm(r.paid_total_centi ?? 0, r.currency),
+    searchValue: (r) => fmtRm(r.paid_total_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.paid_total_centi ?? 0) - (b.paid_total_centi ?? 0),
+  },
+  {
+    key: 'remark5', label: 'Remark5', width: 140, sortable: true,
+    accessor: (r) => (r.remark2 ?? '—') as string,
+    searchValue: (r) => r.remark2 ?? '',
+  },
+  {
+    key: 'remark6', label: 'Remark6', width: 140, sortable: true,
+    accessor: (r) => (r.remark3 ?? '—') as string,
+    searchValue: (r) => r.remark3 ?? '',
+  },
 ];
 
-const COL_LOOKUP: Record<string, ColDef> = Object.fromEntries(COLS.map((c) => [c.key, c]));
+/* ─────────────────────────────────────────────────────────────────────────
+   The page-level "Group By" select writes into the DataGrid's localStorage
+   layout under STORAGE_KEY. Maps the SO-listing-flavoured enum to the
+   underlying column key.
+   ───────────────────────────────────────────────────────────────────────── */
+const GROUP_TO_COL_KEY: Record<Exclude<GroupBy, 'none'>, string> = {
+  branding:    'agent',       // SoDetailListingRow has no `branding` line field;
+                              // fall back to agent (closest equivalent).
+  agent:       'agent',
+  debtor:      'debtor_code',
+  item_group:  'item_group',
+};
+
+type GridLayout = {
+  order: string[];
+  hidden: string[];
+  widths: Record<string, number>;
+  groupBy: string[];
+  pinned: string[];
+  sort: { key: string; dir: 'asc' | 'desc' } | null;
+};
+const setGridGroupBy = (colKey: string | null) => {
+  if (typeof window === 'undefined') return;
+  let layout: Partial<GridLayout> = {};
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw) layout = JSON.parse(raw) as Partial<GridLayout>;
+  } catch { /* corrupt — overwrite */ }
+  const next: GridLayout = {
+    order:   layout.order   ?? [],
+    hidden:  layout.hidden  ?? [],
+    widths:  layout.widths  ?? {},
+    pinned:  layout.pinned  ?? [],
+    sort:    layout.sort    ?? null,
+    groupBy: colKey ? [colKey] : [],
+  };
+  try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* quota */ }
+};
 
 export const SalesOrderDetailListing = () => {
   const navigate = useNavigate();
@@ -170,49 +362,45 @@ export const SalesOrderDetailListing = () => {
   const [optionsVisible, setOptionsVisible] = useState(true);
   const [hasRunQuery,    setHasRunQuery]    = useState(false);
   const [criteriaPanel,  setCriteriaPanel]  = useState(false);
-  const [search,         setSearch]         = useState('');
   const [checked,        setChecked]        = useState<Record<string, boolean>>({});
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [hideUnchecked,  setHideUnchecked]  = useState(false);
+  const [findNonce,      setFindNonce]      = useState(0);
 
   // ── Inquiry query — only fires after the user clicks "Inquiry". ──
-  // We compute filters lazily so the URL stays clean and the user can edit
-  // values without triggering re-fetches every keystroke.
   const [committed, setCommitted] = useState<SoDetailListingFilters>({});
   const query = useSalesOrderDetailListing(hasRunQuery ? committed : {});
-  const rawRows = useMemo(
+  const rawRows = useMemo<SoDetailListingRow[]>(
     () => (hasRunQuery ? (query.data?.rows ?? []) : []),
     [hasRunQuery, query.data],
   );
 
-  // Apply global search client-side (across a handful of meaningful fields)
+  // Hide-unchecked filter — DataGrid handles search/sort/group, we just
+  // shrink the input set when "Clear Unchecked" is toggled on.
   const rows = useMemo(() => {
-    if (!search.trim()) return rawRows;
-    const needle = search.trim().toLowerCase();
-    return rawRows.filter((r) => {
-      const blob = [
-        r.doc_no, r.debtor_code, r.debtor_name, r.agent, r.branding,
-        r.item_code, r.item_group, r.description, r.description2,
-        r.uom, r.location,
-      ].map((v) => String(v ?? '').toLowerCase()).join(' | ');
-      return blob.includes(needle);
-    });
-  }, [rawRows, search]);
+    if (!hideUnchecked) return rawRows;
+    return rawRows.filter((r) => checked[r.id]);
+  }, [rawRows, checked, hideUnchecked]);
 
-  // ── Grouping ────────────────────────────────────────────────────
-  const groupKey: string | null = groupBy === 'none' ? null
-    : groupBy === 'item_group' ? 'item_group'
-    : groupBy === 'debtor'     ? 'debtor_code'
-    : groupBy;
-  const grouped = useMemo(() => {
-    if (!groupKey) return null;
-    const map = new Map<string, SoDetailListingRow[]>();
-    for (const r of rows) {
-      const k = String((r as Record<string, unknown>)[groupKey] ?? '—');
-      if (!map.has(k)) map.set(k, []);
-      map.get(k)!.push(r);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [rows, groupKey]);
+  // ── Sync page-level Group By dropdown → DataGrid layout ─────────
+  // The DataGrid reads its layout from localStorage on mount; once the user
+  // changes the dropdown we patch the saved layout and bump a remount nonce
+  // so the new groupBy takes effect immediately. Skip the initial mount so
+  // we don't overwrite a persisted layout with the default 'none'.
+  const [gridNonce, setGridNonce] = useState(0);
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) { isInitialMount.current = false; return; }
+    setGridGroupBy(groupBy === 'none' ? null : GROUP_TO_COL_KEY[groupBy]);
+    setGridNonce((n) => n + 1);
+  }, [groupBy]);
+
+  // ── Columns ─────────────────────────────────────────────────────
+  const toggleRow = (id: string) =>
+    setChecked((p) => ({ ...p, [id]: !p[id] }));
+  const columns = useMemo<DataGridColumn<SoDetailListingRow>[]>(
+    () => buildColumns(checked, toggleRow),
+    [checked],
+  );
 
   // ── Action handlers ─────────────────────────────────────────────
   const runInquiry = () => {
@@ -232,11 +420,10 @@ export const SalesOrderDetailListing = () => {
 
   const runPrint = () => {
     if (!hasRunQuery) runInquiry();
-    // Defer so the dataset is in the DOM before the dialog opens.
     setTimeout(() => window.print(), 60);
   };
 
-  // Use the same dynamic-import jspdf pattern as sales-order-pdf.ts.
+  // Same dynamic-import jspdf pattern as sales-order-pdf.ts.
   const generatePreviewPdf = async (data: SoDetailListingRow[]) => {
     try {
       const { jsPDF } = await import('jspdf');
@@ -255,17 +442,21 @@ export const SalesOrderDetailListing = () => {
         margin, y,
       );
       y += 4;
-      // A representative subset of cols — A4 landscape can't show all 36.
-      const previewCols: ColDef[] = COLS.filter((c) =>
-        ['doc_no', 'so_date', 'debtor_name', 'agent', 'item_code',
-         'description', 'qty', 'unit_price', 'discount', 'line_total'].includes(c.key),
-      );
+      // Representative subset of cols — A4 landscape can't show all 36.
+      const previewKeys = [
+        'doc_no', 'so_date', 'debtor_name', 'agent', 'item_code',
+        'description', 'qty', 'unit_price', 'discount', 'line_total',
+      ];
+      const previewCols = previewKeys
+        .map((k) => columns.find((c) => c.key === k))
+        .filter((c): c is DataGridColumn<SoDetailListingRow> => Boolean(c));
       autoTable(doc, {
         startY: y + 2,
         head: [previewCols.map((c) => c.label)],
         body: data.map((r) =>
           previewCols.map((c) => {
-            const v = c.render(r);
+            if (c.searchValue) return c.searchValue(r);
+            const v = c.accessor(r);
             return typeof v === 'string' || typeof v === 'number' ? String(v)
                  : (r as Record<string, unknown>)[c.key] != null
                    ? String((r as Record<string, unknown>)[c.key])
@@ -288,7 +479,6 @@ export const SalesOrderDetailListing = () => {
   const runPreview = async () => {
     if (!hasRunQuery) {
       runInquiry();
-      // Fetch will run in next tick — generate after.
       setTimeout(() => { void generatePreviewPdf(rows); }, 250);
       return;
     }
@@ -296,7 +486,6 @@ export const SalesOrderDetailListing = () => {
   };
 
   // ── Selection helpers ──────────────────────────────────────────
-  const [hideUnchecked, setHideUnchecked] = useState(false);
   const checkAll = () => {
     const next: Record<string, boolean> = {};
     for (const r of rows) next[r.id] = true;
@@ -308,36 +497,7 @@ export const SalesOrderDetailListing = () => {
     for (const r of rows) if (next[r.id]) next[r.id] = false;
     setChecked(next);
   };
-  const clearUnchecked = () => {
-    // "Clear Unchecked" hides rows that aren't checked from the visible result.
-    // We implement it by toggling the hideUnchecked flag (re-click restores).
-    setHideUnchecked((p) => !p);
-  };
-
-  const visibleRows = useMemo(() => {
-    if (!hideUnchecked) return rows;
-    return rows.filter((r) => checked[r.id]);
-  }, [rows, checked, hideUnchecked]);
-
-  // ── Group-by drag-zone ─────────────────────────────────────────
-  const onDropGroupZone = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const key = e.dataTransfer.getData('text/col-key');
-    if (!key) return;
-    // Map the dropped column key to one of the supported groupBy values.
-    const map: Record<string, GroupBy> = {
-      item_group: 'item_group', debtor_code: 'debtor', debtor_name: 'debtor',
-      branding: 'branding', agent: 'agent',
-    };
-    if (map[key]) setGroupBy(map[key]);
-  };
-  const onDragOverGroupZone = (e: React.DragEvent<HTMLDivElement>) => {
-    if (e.dataTransfer.types.includes('text/col-key')) e.preventDefault();
-  };
-  const onDragStartColumn = (e: React.DragEvent<HTMLTableCellElement>, key: string) => {
-    e.dataTransfer.setData('text/col-key', key);
-    e.dataTransfer.effectAllowed = 'copy';
-  };
+  const clearUnchecked = () => setHideUnchecked((p) => !p);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -580,7 +740,7 @@ export const SalesOrderDetailListing = () => {
         </div>
       )}
 
-      {/* ── Search Result ──────────────────────────────────────── */}
+      {/* ── Search Result — DataGrid primitive ──────────────────── */}
       <section className={styles.resultCard}>
         <header className={styles.resultHeader}>
           <h2 className={styles.resultTitle}>
@@ -594,158 +754,40 @@ export const SalesOrderDetailListing = () => {
             <Button variant="ghost" size="sm" onClick={clearUnchecked}>
               {hideUnchecked ? 'Show All' : 'Clear Unchecked'}
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setFindNonce((n) => n + 1)}>
+              Find
+            </Button>
           </div>
-          <input
-            type="search"
-            className={styles.searchInput}
-            placeholder="Search rows…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
         </header>
 
-        {/* Group-by drag zone */}
-        <div
-          className={styles.groupZone}
-          onDrop={onDropGroupZone}
-          onDragOver={onDragOverGroupZone}
-        >
-          {groupBy === 'none' ? (
-            <span>Drag a column header here to group by that column</span>
-          ) : (
-            <span className={styles.groupChip}>
-              <span>{groupBy.replace('_', ' ')}</span>
-              <button type="button" onClick={() => setGroupBy('none')} aria-label="Remove grouping">
-                <X size={11} strokeWidth={1.75} />
-              </button>
-            </span>
-          )}
-        </div>
-
-        <div className={styles.tableScroll}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th style={{ width: 28 }}>
-                  <input
-                    type="checkbox"
-                    aria-label="Toggle all"
-                    checked={rows.length > 0 && rows.every((r) => checked[r.id])}
-                    onChange={(e) => (e.target.checked ? checkAll() : uncheckAll())}
-                  />
-                </th>
-                {COLS.map((c) => (
-                  <th
-                    key={c.key}
-                    draggable
-                    onDragStart={(e) => onDragStartColumn(e, c.key)}
-                    className={c.align === 'right' ? styles.tableRight : c.align === 'center' ? styles.tableCenter : undefined}
-                    title="Drag onto the group zone above to group by this column"
-                  >
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {!hasRunQuery && (
-                <tr><td colSpan={COLS.length + 1} className={styles.emptyRow}>
-                  Press <strong>Inquiry</strong> to run the report.
-                </td></tr>
-              )}
-              {hasRunQuery && query.isFetching && rawRows.length === 0 && (
-                <tr><td colSpan={COLS.length + 1} className={styles.emptyRow}>Loading…</td></tr>
-              )}
-              {hasRunQuery && !query.isFetching && visibleRows.length === 0 && (
-                <tr><td colSpan={COLS.length + 1} className={styles.emptyRow}>No rows match the current filters.</td></tr>
-              )}
-              {hasRunQuery && !grouped && visibleRows.map((r) => (
-                <DataRow key={r.id} row={r} checked={!!checked[r.id]} onToggle={() => setChecked((p) => ({ ...p, [r.id]: !p[r.id] }))} />
-              ))}
-              {hasRunQuery && grouped && grouped.map(([key, groupRows]) => {
-                const visible = hideUnchecked ? groupRows.filter((r) => checked[r.id]) : groupRows;
-                if (visible.length === 0) return null;
-                const isOpen = !collapsedGroups[key];
-                return (
-                  <GroupBlock
-                    key={key}
-                    label={key}
-                    rows={visible}
-                    open={isOpen}
-                    onToggle={() => setCollapsedGroups((p) => ({ ...p, [key]: !p[key] }))}
-                    checked={checked}
-                    setChecked={setChecked}
-                  />
-                );
-              })}
-            </tbody>
-            {hasRunQuery && visibleRows.length > 0 && (
-              <tfoot>
-                <tr className={styles.footerRow}>
-                  <td colSpan={COLS.length + 1} style={{ textAlign: 'right' }}>
-                    {visibleRows.length} rows · {COLS.length} columns ·
-                    Total {fmtRm(
-                      visibleRows.reduce((s, r) => s + (Number(r.total_centi ?? 0)), 0),
-                      visibleRows[0]?.currency ?? 'MYR',
-                    )}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
+        <DataGrid<SoDetailListingRow>
+          key={gridNonce /* remount on Group By dropdown change so layout reload picks up new groupBy */}
+          rows={rows}
+          columns={columns}
+          storageKey={STORAGE_KEY}
+          rowKey={(r) => r.id}
+          searchPlaceholder="Search rows…"
+          focusSearchNonce={findNonce}
+          isLoading={hasRunQuery && query.isFetching && rawRows.length === 0}
+          emptyMessage={
+            !hasRunQuery
+              ? 'Press Inquiry to run the report.'
+              : 'No rows match the current filters.'
+          }
+        />
       </section>
     </div>
   );
 };
 
-// ── Row primitives ──────────────────────────────────────────────
-
-const DataRow = ({ row, checked, onToggle }: {
-  row: SoDetailListingRow; checked: boolean; onToggle: () => void;
-}) => (
-  <tr>
-    <td>
-      <input type="checkbox" checked={checked} onChange={onToggle} aria-label={`Toggle ${row.doc_no} / ${row.item_code}`} />
-    </td>
-    {COLS.map((c) => (
-      <td
-        key={c.key}
-        className={c.align === 'right' ? styles.tableRight : c.align === 'center' ? styles.tableCenter : undefined}
-      >
-        {c.render(row)}
-      </td>
-    ))}
-  </tr>
-);
-
-const GroupBlock = ({ label, rows, open, onToggle, checked, setChecked }: {
-  label: string;
-  rows: SoDetailListingRow[];
-  open: boolean;
-  onToggle: () => void;
-  checked: Record<string, boolean>;
-  setChecked: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-}) => (
-  <>
-    <tr className={styles.groupRow} onClick={onToggle}>
-      <td colSpan={COLS.length + 1}>
-        <span className={`${styles.caret} ${open ? styles.caretOpen : ''}`}>
-          <ChevronRight size={12} strokeWidth={1.75} />
-        </span>
-        {label || '—'} · {rows.length}
-      </td>
-    </tr>
-    {open && rows.map((r) => (
-      <DataRow
-        key={r.id}
-        row={r}
-        checked={!!checked[r.id]}
-        onToggle={() => setChecked((p) => ({ ...p, [r.id]: !p[r.id] }))}
-      />
-    ))}
-  </>
-);
-
-// Re-export the column lookup (for tests / debug)
-export { COL_LOOKUP };
+// Re-export the column key list (for tests / debug)
+export const COL_KEYS: string[] = [
+  'check',
+  'doc_no', 'so_date', 'debtor_code', 'debtor_name', 'agent', 'currency',
+  'inclusive', 'subtotal_ex', 'tax_header', 'header_total', 'local_total',
+  'cancelled', 'remark4', 'sales_exemption_expiry', 'processing_date',
+  'item_group', 'item_code', 'description', 'uom', 'location', 'description2',
+  'qty', 'unit_price', 'discount', 'detail_tax_code', 'line_total', 'line_tax',
+  'total_ex', 'total_inc', 'creditor_code', 'post_to_po', 'balance', 'payment',
+  'remark5', 'remark6',
+];
