@@ -246,7 +246,27 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
   const persistedPayments: SoPayment[] = isSaved ? (paymentsQ.data ?? []) : [];
   const drafts: PaymentDraft[] = isSaved ? savedDrafts : (props as DraftModeProps).payments;
 
-  const defaultStaffId = auth.staff?.id ?? '';
+  /* Default Collected By → current logged-in staff (2026-05-27 audit pass).
+     Commander's screenshot showed new payment rows defaulting to '—' / first
+     dropdown entry instead of the staff who's actually entering the
+     payment. Resolves auth.staff?.id and validates that the id exists in
+     the active staff dropdown before applying — guards against the race
+     where the user clicks Add Payment before useStaff() resolves, and the
+     edge case where the auth'd user's staff row is inactive (rare; happens
+     when an admin disables themselves). Falls back to '' (= '—' option)
+     so the dropdown doesn't lie about who collected the cash. Existing
+     persisted payments retain their saved `collected_by` value — this
+     default only seeds NEW draft rows. */
+  const defaultStaffId = (() => {
+    const id = auth.staff?.id ?? '';
+    if (!id) return '';
+    // Validate the staff id is in the active list. If staff hasn't loaded
+    // yet (staffQ.isLoading) the filter is empty — still return the id
+    // so the dropdown gets the right initial value once the option lands.
+    if (staff.length === 0) return id;
+    const hit = staff.find((s) => s.id === id && s.active);
+    return hit ? id : '';
+  })();
 
   const addDraft = () => {
     const d = newPaymentDraft(defaultStaffId);

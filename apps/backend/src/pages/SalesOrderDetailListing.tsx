@@ -13,8 +13,11 @@
 //   3. Compact horizontal filter row — funnel icon · global search ·
 //      All Brands ▼ · All Groups ▼ · All Agents ▼ · All Venues ▼ ·
 //      All Payment ▼ · Date from – to
-//   4. <DataGrid> (PR-G primitive) with 34 default columns + 10 hidden by
+//   4. <DataGrid> (PR-G primitive) with 33 default columns + 10 hidden by
 //      default (defaultHidden:true). User reveals via right-click "Show".
+//      (Was 34 before the 2026-05-27 col audit; dropped "Actions" since
+//      mfg_sales_orders has no action_notes / actions field — the column
+//      always rendered '—'. Restore when the schema gains an equivalent.)
 //      Storage key: `so-detail-listing-grid.v2.houzs` (bump from v1 so the
 //      column reorder + hide layout starts fresh on the new layout).
 //
@@ -121,19 +124,21 @@ const formatSpecials = (raw: unknown): string => {
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Column factory — 44 columns total (34 visible by default + 10 hidden).
-   Order mirrors the Houzs reference shot column-for-column:
+   Column factory — 47 columns total (33 visible by default + 14 hidden).
+   Order mirrors the Houzs reference shot column-for-column. Houzs col 23
+   "Actions" dropped in the 2026-05-27 audit (no schema field; always '—').
      1. Doc.No (orange) 2. Date 3. Debtor Name 4. Agent 5. Item Group (pill)
      6. Item Code (bold) 7. Description 8. Location 9. Qty 10. Unit Price
      11. Total 12. Line Cost 13. Margin RM 14. Margin % 15. Balance
      16. Payment (pill) 17. Venue 18. Branding (pill) 19. Fabric
-     20. Divan Height 21. Leg Height 22. Specials 23. Actions
-     24. Order Remarks 25. Status (pill) 26. Status 2 27. Processing Date
-     28. Tax Exemption Expiry 29. Note 30. Paid 31. Last Payment
-     32. Account Sheet 33. Approval Code 34. Collected By
-   The 10 hidden long-tail columns (uom · currency · inclusive? · tax/header
-   tax/line tax · detail tax code · creditor code · post to PO · subtotal ex
-   · total ex / total inc) sit in the right-click "Hidden" menu.
+     20. Divan Height 21. Leg Height 22. Specials
+     23. Order Remarks 24. Status (pill) 25. Status 2 26. Processing Date
+     27. Tax Exemption Expiry 28. Note 29. Paid 30. Last Payment
+     31. Account Sheet 32. Approval Code 33. Collected By
+   Hidden long tail (14 cols): debtor_code · uom · currency · inclusive? ·
+   tax (header/line) · detail tax code · creditor code · post to PO ·
+   total ex · plus 2990-extras (customer_delivery_date · internal_expected_dd ·
+   customer_state · payment_method).
    ───────────────────────────────────────────────────────────────────────── */
 const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
   /* Read-out helper for the "may exist on the row but not on the type"
@@ -301,15 +306,11 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       accessor: (r) => formatSpecials(r.custom_specials) || '—',
       searchValue: (r) => formatSpecials(r.custom_specials),
     },
-    /* 23 — Actions: per-row link to the SO Detail page. The reference column
-       label in Houzs holds free-text action notes; we keep that semantic
-       but also surface a tiny "Open" affordance since users land here from
-       the Sales menu more often than the Detail page itself. */
-    {
-      key: 'actions', label: 'Actions', width: 100, sortable: false, groupable: false,
-      accessor: (r) => opt(r, 'action_notes') || opt(r, 'actions') || '—',
-      searchValue: (r) => opt(r, 'action_notes') || opt(r, 'actions'),
-    },
+    /* 23 — Actions col DROPPED in audit pass (2026-05-27). Houzs uses this
+       for free-text delivery action notes; 2990's schema has no equivalent
+       field on mfg_sales_orders / mfg_sales_order_items, so the column
+       always rendered '—'. Dead UI surface → removed rather than padded
+       with a placeholder. Re-add when an `action_notes` column lands. */
     /* 24 */ {
       key: 'order_remarks', label: 'Order Remarks', width: 160, sortable: true,
       accessor: (r) => opt(r, 'remark') || opt(r, 'note') || '—',
@@ -462,6 +463,36 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       sortFn: (a, b) =>
         ((a.total_centi ?? 0) - (a.tax_centi ?? 0)) -
         ((b.total_centi ?? 0) - (b.tax_centi ?? 0)),
+    },
+    /* ── 2990-extra (default-hidden) ─ surfaced fields the report can show
+       but Houzs doesn't have. Right-click "Show column" to enable. ─── */
+    {
+      /* Header field on mfg_sales_orders, flattened onto every line in the
+         API (apps/api/src/routes/reports.ts L73). */
+      key: 'customer_delivery_date_extra', label: 'Delivery Date', width: 130, sortable: true,
+      defaultHidden: true,
+      accessor: (r) => r.customer_delivery_date ? compactDate(r.customer_delivery_date) : '—',
+      searchValue: (r) => r.customer_delivery_date ?? '',
+    },
+    {
+      /* Internal-only ETA — distinct from customer_delivery_date. Surfaced
+         by the API as a header passthrough (L73 in reports.ts). */
+      key: 'internal_expected_dd', label: 'Internal DD', width: 130, sortable: true,
+      defaultHidden: true,
+      accessor: (r) => {
+        const v = opt(r, 'internal_expected_dd');
+        return v ? compactDate(v) : '—';
+      },
+      searchValue: (r) => opt(r, 'internal_expected_dd'),
+    },
+    {
+      /* Customer state — populated whenever the customer record has an
+         address with a known MY state (the SO snapshots it on create). */
+      key: 'customer_state', label: 'State', width: 120, sortable: true, groupable: true,
+      defaultHidden: true,
+      accessor: (r) => opt(r, 'customer_state') || '—',
+      searchValue: (r) => opt(r, 'customer_state'),
+      groupValue: (r) => opt(r, 'customer_state') || '(none)',
     },
   ];
 };
