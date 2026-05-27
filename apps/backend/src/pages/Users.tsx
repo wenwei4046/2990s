@@ -10,6 +10,13 @@
 //   - coordinator                  → read-only list
 //   - everyone else                → 403 banner
 // Layout already blocks POS-only roles at the route guard level.
+//
+// 2026-05-27 — Unified invite flow: every role gets a magic-link email and
+// sets their own password on first sign-in. The legacy 6-digit-PIN path for
+// sales / sales_executive / outlet_manager was dropped per commander
+// ("不需要给 6digit pin 让他们自己 set"). When the POS app ships (Phase 2)
+// it'll use Supabase Auth like the Backend — email + password per person,
+// not a shared device PIN.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
@@ -256,32 +263,27 @@ const InviteUserDrawer = ({
   const [form, setForm] = useState<{
     staffCode: string; name: string; email: string;
     role: StaffRole; venueId: string; initials: string;
-    color: string; pin: string;
+    color: string;
   }>({
     staffCode: '', name: '', email: '',
     role: 'sales_executive', venueId: '', initials: '',
-    color: '#2F5D4F', pin: '',
+    color: '#2F5D4F',
   });
   const set = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
 
   const needsVenue = VENUE_SCOPED_ROLES.has(form.role);
-  const needsPin   = form.role === 'sales' || form.role === 'sales_executive' || form.role === 'outlet_manager';
 
   const submit = () => {
     if (!form.staffCode.trim()) { toast.error('Staff code required.'); return; }
     if (!form.name.trim())      { toast.error('Name required.'); return; }
     if (!form.initials.trim())  { toast.error('Initials required.'); return; }
-    if (!needsPin && !form.email.trim()) {
-      toast.error('Email required for Backend-side roles (they get a magic link).');
+    if (!form.email.trim()) {
+      toast.error('Email required — the user receives a magic-link invite.');
       return;
     }
     if (needsVenue && !form.venueId) {
       toast.error('Pick a venue for this role.');
-      return;
-    }
-    if (needsPin && !/^\d{6}$/.test(form.pin)) {
-      toast.error('6-digit PIN required for POS-side roles.');
       return;
     }
 
@@ -289,18 +291,15 @@ const InviteUserDrawer = ({
       staffCode: form.staffCode.trim(),
       name:      form.name.trim(),
       role:      form.role,
+      email:     form.email.trim().toLowerCase(),
       initials:  form.initials.trim().toUpperCase().slice(0, 4),
       color:     form.color,
-      ...(form.email.trim() ? { email: form.email.trim().toLowerCase() } : {}),
       ...(needsVenue ? { venueId: form.venueId } : {}),
-      ...(needsPin   ? { pin:     form.pin     } : {}),
     };
 
     invite.mutate(body, {
       onSuccess: (r) => {
-        toast.success(needsPin
-          ? `${r.staff.name} created (POS user, signs in with PIN).`
-          : `Magic-link invite sent to ${r.staff.email}.`);
+        toast.success(`Magic-link invite sent to ${r.staff.email}.`);
         onClose();
       },
       onError: (e) => toast.error(`Invite failed: ${(e as Error).message}`),
@@ -323,7 +322,7 @@ const InviteUserDrawer = ({
               onChange={(v) => set('staffCode', v.toUpperCase())} placeholder="e.g. SE-04" />
             <Field label="Full name *" value={form.name}
               onChange={(v) => set('name', v)} placeholder="e.g. Lim Wei Siang" />
-            <Field label="Email" value={form.email}
+            <Field label="Email *" value={form.email}
               onChange={(v) => set('email', v)} placeholder="invite@example.com" />
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Role *</span>
@@ -354,26 +353,19 @@ const InviteUserDrawer = ({
                 onChange={(e) => set('color', e.target.value)}
                 style={{ height: 38, padding: 2 }} />
             </label>
-            {needsPin && (
-              <Field label="6-digit PIN *" value={form.pin}
-                onChange={(v) => set('pin', v.replace(/\D/g, '').slice(0, 6))}
-                placeholder="POS sign-in PIN" />
-            )}
           </div>
           <p style={{
             fontSize: 'var(--fs-12)', color: 'var(--fg-muted)',
             background: 'var(--c-paper)', padding: 'var(--space-3)',
             borderRadius: 'var(--radius-md)', border: '1px solid var(--line)',
           }}>
-            {needsPin
-              ? 'POS-side roles sign in to the POS device with their staff code + PIN. No email magic link is sent.'
-              : 'Backend-side roles receive a magic-link invite at the email above. They set their own password on first sign-in.'}
+            User receives a magic-link invite at the email above. They set their own password on first sign-in.
           </p>
         </div>
         <footer className={styles.drawerFooter}>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={invite.isPending}>
-            {invite.isPending ? 'Sending…' : (needsPin ? 'Create user' : 'Send invite')}
+            {invite.isPending ? 'Sending…' : 'Send invite'}
           </Button>
         </footer>
       </aside>
