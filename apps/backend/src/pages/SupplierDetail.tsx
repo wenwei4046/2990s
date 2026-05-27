@@ -239,7 +239,9 @@ export const SupplierDetail = () => {
           </Link>
           <div>
             <h1 className={styles.title}>
-              <Building2 {...LG_ICON} style={{ color: 'var(--c-burnt)' }} />
+              {/* PR — Commander 2026-05-27: shrink from LG_ICON (20px) → 14px
+                  to balance the fs-15 title. */}
+              <Building2 size={14} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
               {supplier.code} — {supplier.name}
             </h1>
             <p className={styles.subtitle}>
@@ -642,42 +644,23 @@ const CategorySection = ({
   children: React.ReactNode;
 }) => {
   const [open, setOpen] = useState(true);
+  /* PR — Commander 2026-05-27: switched from inline-style fs-12/700 eyebrow
+     to the .subGroupHead class (fs-9/700 letter-spacing 0.12em). Matches the
+     other card eyebrows on this page. */
   return (
     <div style={{ borderTop: '1px solid var(--line)' }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-2)',
-          width: '100%',
-          padding: 'var(--space-2) var(--space-4)',
-          background: 'var(--c-cream)',
-          border: 'none',
-          borderBottom: open ? '1px solid var(--line)' : 'none',
-          cursor: 'pointer',
-          fontFamily: 'var(--font-button)',
-          fontSize: 'var(--fs-12)',
-          fontWeight: 700,
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          color: 'var(--c-ink)',
-        }}
+        className={styles.subGroupHead}
+        style={{ borderBottom: open ? '1px solid var(--line)' : 'none' }}
       >
         {open
-          ? <ChevronDown {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />
-          : <ChevronRight {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />}
+          ? <ChevronDown size={10} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} />
+          : <ChevronRight size={10} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} />}
         <span>{label}</span>
-        <span style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 'var(--fs-12)',
-          fontWeight: 400,
-          letterSpacing: 0,
-          textTransform: 'none',
-          color: 'var(--fg-soft)',
-        }}>
+        <span className={styles.subGroupHeadCount}>
           {count} {count === 1 ? 'code' : 'codes'}
         </span>
       </button>
@@ -868,18 +851,21 @@ const SofaSkuMappingsTable = ({
 
   return (
     <div>
-      {/* Tier toggle row — same look as the Products SOFA tab. */}
+      {/* Tier toggle row — same look as the Products SOFA tab.
+          PR — Commander 2026-05-27: shrink the eyebrow + the help text + the
+          chip cluster so the tier toggle doesn't dominate the SKU mappings
+          table for sofa suppliers. */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 'var(--space-2)',
-          padding: 'var(--space-2) var(--space-4)',
+          padding: '4px var(--space-3)',
           borderBottom: '1px solid var(--line)',
           background: 'var(--c-paper)',
         }}
       >
-        <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        <span style={{ fontSize: 'var(--fs-9)', fontWeight: 700, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
           Fabric tier
         </span>
         {SOFA_TIER_CHIPS.map((c) => (
@@ -889,9 +875,9 @@ const SofaSkuMappingsTable = ({
             onClick={() => setSelectedTier(c.value)}
             style={{
               fontFamily: 'var(--font-button)',
-              fontSize: 'var(--fs-12)',
+              fontSize: 'var(--fs-11)',
               fontWeight: 600,
-              padding: '2px var(--space-3)',
+              padding: '1px 10px',
               borderRadius: 'var(--radius-pill)',
               border: selectedTier === c.value ? '1px solid var(--c-ink)' : '1px solid var(--line)',
               background: selectedTier === c.value ? 'var(--c-ink)' : 'var(--c-paper)',
@@ -902,7 +888,7 @@ const SofaSkuMappingsTable = ({
             {c.label}
           </button>
         ))}
-        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-10)', color: 'var(--fg-soft)' }}>
           Cost per (seat-height × tier). Empty cell = "no price set".
         </span>
       </div>
@@ -1164,23 +1150,13 @@ const InlineSupplierSku = ({
   };
   return (
     <input
+      className={styles.inlineSku}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
         if (e.key === 'Escape') { setDraft(binding.supplier_sku); (e.target as HTMLInputElement).blur(); }
-      }}
-      style={{
-        fontFamily: 'var(--font-mono)',
-        fontSize: 'var(--fs-13)',
-        background: 'var(--c-cream)',
-        border: '1px solid var(--line)',
-        borderRadius: 'var(--radius-sm)',
-        padding: '4px 8px',
-        outline: 'none',
-        width: '100%',
-        minWidth: 120,
       }}
       title="Click to edit · Enter to save · Esc to cancel"
     />
@@ -1210,30 +1186,20 @@ const InlineUnitPrice = ({
     update.mutate({ supplierId, bindingId: binding.id, unitPriceCenti: next });
   };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-      <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
+    <span className={styles.matrixCell}>
+      <span className={styles.matrixCurrency}>
         {binding.currency === 'MYR' ? 'RM' : binding.currency}
       </span>
       <input
         type="number"
         step="0.01"
+        className={styles.inlinePrice}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
           if (e.key === 'Escape') { setDraft(initial); (e.target as HTMLInputElement).blur(); }
-        }}
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 'var(--fs-13)',
-          background: 'var(--c-cream)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          outline: 'none',
-          width: 100,
-          textAlign: 'right',
         }}
         title="Click to edit · Enter to save · Esc to cancel"
       />
@@ -1352,13 +1318,14 @@ const MatrixPriceInput = ({
     onCommit(next);
   };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-      <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
+    <span className={styles.matrixCell}>
+      <span className={styles.matrixCurrency}>
         {currency === 'MYR' ? 'RM' : currency}
       </span>
       <input
         type="number"
         step="0.01"
+        className={styles.matrixInput}
         value={draft}
         placeholder={placeholder ?? '—'}
         onChange={(e) => setDraft(e.target.value)}
@@ -1366,17 +1333,6 @@ const MatrixPriceInput = ({
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
           if (e.key === 'Escape') { setDraft(initial); (e.target as HTMLInputElement).blur(); }
-        }}
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 'var(--fs-13)',
-          background: 'var(--c-cream)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          outline: 'none',
-          width: 84,
-          textAlign: 'right',
         }}
         title="Click to edit · Enter to save · Esc to cancel · blank to clear"
       />
@@ -1712,29 +1668,35 @@ const SkuFormDialog = ({
           <div className={styles.formGrid}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Material Kind</span>
-              <select
-                className={styles.fieldSelect}
-                value={draft.materialKind}
-                onChange={(e) => set('materialKind', e.target.value as MaterialKind)}
-              >
-                <option value="mfg_product">Manufacturing SKU</option>
-                <option value="fabric">Fabric</option>
-                <option value="raw">Raw material</option>
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={draft.materialKind}
+                  onChange={(e) => set('materialKind', e.target.value as MaterialKind)}
+                >
+                  <option value="mfg_product">Manufacturing SKU</option>
+                  <option value="fabric">Fabric</option>
+                  <option value="raw">Raw material</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Currency</span>
-              <select
-                className={styles.fieldSelect}
-                value={draft.currency}
-                onChange={(e) => set('currency', e.target.value as Currency)}
-              >
-                <option>MYR</option>
-                <option>RMB</option>
-                <option>USD</option>
-                <option>SGD</option>
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={draft.currency}
+                  onChange={(e) => set('currency', e.target.value as Currency)}
+                >
+                  <option>MYR</option>
+                  <option>RMB</option>
+                  <option>USD</option>
+                  <option>SGD</option>
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
 
             <label className={styles.field}>
@@ -3033,17 +2995,22 @@ const SupplierCategorySelect = ({
 }: { value: string; onChange: (v: string) => void }) => (
   <label className={styles.field}>
     <span className={styles.fieldLabel}>Category</span>
-    <select className={styles.fieldInput} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">— Pick category —</option>
-      {SUPPLIER_CATEGORIES.map((c) => (
-        <option key={c} value={c}>{SUPPLIER_CATEGORY_LABEL[c]}</option>
-      ))}
-    </select>
+    {/* PR — Commander 2026-05-27: wrap with selectWrap + custom Lucide
+        chevron so the dropdown matches SO Detail. */}
+    <span className={styles.selectWrap}>
+      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">— Pick category —</option>
+        {SUPPLIER_CATEGORIES.map((c) => (
+          <option key={c} value={c}>{SUPPLIER_CATEGORY_LABEL[c]}</option>
+        ))}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
     {/* PR — Commander 2026-05-27: this field is used by the Pricing tab to
         decide which maintenance sub-sections to surface. The visible
         Category column on the Suppliers list auto-derives from the
         supplier's assigned SKUs (suppliers_with_derived_category view). */}
-    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
+    <span style={{ fontSize: 'var(--fs-10)', color: 'var(--fg-muted)', marginTop: 2 }}>
       Used for surcharge filter only — Category column auto-derives from assigned SKUs.
     </span>
   </label>
@@ -3052,9 +3019,12 @@ const SupplierCategorySelect = ({
 const CountrySelect = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
   <label className={styles.field}>
     <span className={styles.fieldLabel}>Country</span>
-    <select className={styles.fieldInput} value={value || 'Malaysia'} onChange={(e) => onChange(e.target.value)}>
-      {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
-    </select>
+    <span className={styles.selectWrap}>
+      <select className={styles.fieldSelect} value={value || 'Malaysia'} onChange={(e) => onChange(e.target.value)}>
+        {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
   </label>
 );
 
@@ -3072,11 +3042,14 @@ const StateSelect = ({
     return (
       <label className={styles.field}>
         <span className={styles.fieldLabel}>State</span>
-        <select className={styles.fieldInput} value={value} onChange={(e) => onChange(e.target.value)}
-          disabled={localities.isLoading}>
-          <option value="">{localities.isLoading ? 'Loading…' : '— Pick state —'}</option>
-          {malaysiaStates.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <span className={styles.selectWrap}>
+          <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}
+            disabled={localities.isLoading}>
+            <option value="">{localities.isLoading ? 'Loading…' : '— Pick state —'}</option>
+            {malaysiaStates.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+        </span>
       </label>
     );
   }
@@ -3100,16 +3073,19 @@ const PaymentTermsSelect = ({ value, onChange }: { value: string; onChange: (v: 
     <label className={styles.field}>
       <span className={styles.fieldLabel}>Payment Terms</span>
       <div style={{ display: 'flex', gap: 6 }}>
-        <select className={styles.fieldInput} style={{ flex: customMode ? 0.5 : 1 }}
-          value={customMode ? 'Custom' : (isPreset ? value : '')}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === 'Custom') { setCustomMode(true); onChange(''); }
-            else { setCustomMode(false); onChange(v); }
-          }}>
-          <option value="">— Pick term —</option>
-          {PAYMENT_TERMS_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
+        <span className={styles.selectWrap} style={{ flex: customMode ? 0.5 : 1 }}>
+          <select className={styles.fieldSelect}
+            value={customMode ? 'Custom' : (isPreset ? value : '')}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === 'Custom') { setCustomMode(true); onChange(''); }
+              else { setCustomMode(false); onChange(v); }
+            }}>
+            <option value="">— Pick term —</option>
+            {PAYMENT_TERMS_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+        </span>
         {customMode && (
           <input className={styles.fieldInput} style={{ flex: 1 }}
             placeholder="Type custom term"

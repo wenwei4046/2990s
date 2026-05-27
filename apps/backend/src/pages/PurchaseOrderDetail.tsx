@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Ban, ArrowRightLeft,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -169,7 +170,9 @@ export const PurchaseOrderDetail = () => {
           </Link>
           <div>
             <h1 className={styles.title}>
-              <FileText size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+              {/* PR — Commander 2026-05-27: icon shrinks from 20 → 14 to
+                  balance the fs-15 title. */}
+              <FileText size={14} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
               {po.po_number} — {po.supplier?.name ?? po.supplier?.code ?? '—'}
             </h1>
             <p className={styles.subtitle}>
@@ -179,6 +182,13 @@ export const PurchaseOrderDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
+          {/* PR — Commander 2026-05-27: align with SO Detail PR #231 — total
+              moves into a right-rail KPI tile next to the action group so the
+              page title stays compact. */}
+          <div className={styles.totalRail}>
+            <span className={styles.totalRailLabel}>Total</span>
+            <span className={styles.totalRailValue}>{fmtRm(po.total_centi, po.currency)}</span>
+          </div>
           <span className={`${styles.statusPill} ${STATUS_CLASS[po.status as PoStatus]}`}>
             {po.status.replace(/_/g, ' ')}
           </span>
@@ -342,24 +352,28 @@ export const PurchaseOrderDetail = () => {
         )}
       </section>
 
-      {/* ── Totals ──────────────────────────────────────────────── */}
+      {/* ── Totals ──────────────────────────────────────────────────
+          PR — Commander 2026-05-27: classnames had a stale `totalsRow /
+          totalsLabel / totalsValue` triple that no longer exists in
+          SalesOrderDetail.module.css — re-bind to the live singular names
+          (totalRow / totalLabel / totalValue / grandTotalRow / grandTotal). */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Totals</h2>
         </header>
         <div className={styles.cardBody}>
           <div className={styles.totalsGrid}>
-            <div className={styles.totalsRow}>
-              <span className={styles.totalsLabel}>Subtotal</span>
-              <span className={styles.totalsValue}>{fmtRm(po.subtotal_centi, po.currency)}</span>
+            <div className={styles.totalRow}>
+              <span className={styles.totalLabel}>Subtotal</span>
+              <span className={styles.totalValue}>{fmtRm(po.subtotal_centi, po.currency)}</span>
             </div>
-            <div className={styles.totalsRow}>
-              <span className={styles.totalsLabel}>Tax</span>
-              <span className={styles.totalsValue}>{fmtRm(po.tax_centi, po.currency)}</span>
+            <div className={styles.totalRow}>
+              <span className={styles.totalLabel}>Tax</span>
+              <span className={styles.totalValue}>{fmtRm(po.tax_centi, po.currency)}</span>
             </div>
-            <div className={`${styles.totalsRow} ${styles.totalsRowGrand}`}>
-              <span className={styles.totalsLabel}>Total</span>
-              <span className={styles.totalsValue}>{fmtRm(po.total_centi, po.currency)}</span>
+            <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
+              <span className={styles.totalLabel}>Total</span>
+              <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(po.total_centi, po.currency)}</span>
             </div>
           </div>
         </div>
@@ -452,23 +466,31 @@ const SupplierCard = ({
         <div className={styles.formGrid4}>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Supplier *</span>
-            <select className={styles.fieldSelect} value={form.supplierId} disabled={locked}
-              onChange={(e) => set('supplierId', e.target.value)}>
-              <option value="">— Pick supplier —</option>
-              {suppliers.map((s) => (
-                <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
-              ))}
-            </select>
+            {/* PR — Commander 2026-05-27: custom chevron via selectWrap so
+                native UA arrows don't leak into the polished select look. */}
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={form.supplierId} disabled={locked}
+                onChange={(e) => set('supplierId', e.target.value)}>
+                <option value="">— Pick supplier —</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                ))}
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Currency</span>
-            <select className={styles.fieldSelect} value={form.currency} disabled={locked}
-              onChange={(e) => set('currency', e.target.value)}>
-              <option value="MYR">MYR</option>
-              <option value="RMB">RMB</option>
-              <option value="USD">USD</option>
-              <option value="SGD">SGD</option>
-            </select>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={form.currency} disabled={locked}
+                onChange={(e) => set('currency', e.target.value)}>
+                <option value="MYR">MYR</option>
+                <option value="RMB">RMB</option>
+                <option value="USD">USD</option>
+                <option value="SGD">SGD</option>
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
           </label>
           <div />
           <label className={styles.field}>
@@ -485,13 +507,16 @@ const SupplierCard = ({
               every line on this PO. Each line item can override. */}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Purchase Location</span>
-            <select className={styles.fieldSelect} value={form.purchaseLocationId} disabled={locked}
-              onChange={(e) => set('purchaseLocationId', e.target.value)}>
-              <option value="">— No default —</option>
-              {warehouses.filter((w) => w.is_active).map((w) => (
-                <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-              ))}
-            </select>
+            <span className={styles.selectWrap}>
+              <select className={styles.fieldSelect} value={form.purchaseLocationId} disabled={locked}
+                onChange={(e) => set('purchaseLocationId', e.target.value)}>
+                <option value="">— No default —</option>
+                {warehouses.filter((w) => w.is_active).map((w) => (
+                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                ))}
+              </select>
+              <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+            </span>
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>
@@ -950,16 +975,19 @@ const PoLineItemModal = ({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Ship-to Warehouse (line override)</span>
-              <select
-                className={styles.fieldSelect}
-                value={draft.warehouseId ?? ''}
-                onChange={(e) => setDraft((s) => ({ ...s, warehouseId: e.target.value || null }))}
-              >
-                <option value="">— Use PO default —</option>
-                {warehouses.filter((w) => w.is_active).map((w) => (
-                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                ))}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={draft.warehouseId ?? ''}
+                  onChange={(e) => setDraft((s) => ({ ...s, warehouseId: e.target.value || null }))}
+                >
+                  <option value="">— Use PO default —</option>
+                  {warehouses.filter((w) => w.is_active).map((w) => (
+                    <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
           </div>
 
@@ -991,14 +1019,17 @@ const VariantSelect = ({
 }) => (
   <label className={styles.field}>
     <span className={styles.fieldLabel}>{label}</span>
-    <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">—</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
-        </option>
-      ))}
-    </select>
+    <span className={styles.selectWrap}>
+      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
   </label>
 );
 

@@ -1,12 +1,15 @@
 /* Sales Orders list page wrapper.
    Mirrors FlowPages.module.css .page pattern for header + banners,
-   but the table is replaced by <DataGrid>. */
+   but the table is replaced by <DataGrid>.
+   PR — Commander 2026-05-27 ("polish 整个 suppliers module 也是 PO 和 SO 都要
+   polish"): align title typography + page padding with the SO Detail polish
+   from PR #230/#231. */
 
 .page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5) var(--space-6) var(--space-7);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
   background: var(--c-cream);
   min-height: 100%;
 }
@@ -16,22 +19,24 @@
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .title {
+  /* PR — Commander 2026-05-27: was fs-32/900 — drop to fs-15/600 so the
+     list page reads like an admin tool (matches SO Detail title). */
   font-family: var(--font-title);
-  font-size: var(--fs-32);
-  font-weight: 900;
+  font-size: var(--fs-15, 15px);
+  font-weight: 600;
   color: var(--c-ink);
   margin: 0;
 }
 
 .subtitle {
   font-family: var(--font-sans);
-  font-size: var(--fs-13);
+  font-size: var(--fs-11);
   color: var(--fg-muted);
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .bannerWarn {
