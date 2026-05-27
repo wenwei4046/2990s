@@ -309,6 +309,11 @@ const GrnPickPo = () => {
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <X {...ICON} /> Cancel
           </Button>
+          {/* PR — task #52: shortcut into the line-level multi-PO picker for
+              the partial-receive / split-supplier flow. */}
+          <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
+            From PO (multi)
+          </Button>
           <Button variant="primary" size="md" onClick={proceed} disabled={!pickedId}>
             <Save {...ICON} /> Open Receive Form
           </Button>

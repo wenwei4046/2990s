@@ -136,6 +136,12 @@ export const PurchaseInvoiceNew = () => {
             </Link>
             <h1 className={styles.title}>New Purchase Invoice</h1>
           </div>
+          <div className={styles.actions}>
+            {/* PR — task #52: shortcut into the line-level multi-GRN picker. */}
+            <Button variant="ghost" size="md" onClick={() => navigate('/purchase-invoices/from-grn')}>
+              From GRN (multi)
+            </Button>
+          </div>
         </div>
         <section className={styles.card}>
           <div className={styles.cardBody}>

@@ -29,21 +29,40 @@ const fmtMoney = (centi: number, currency = 'MYR'): string =>
 type Chip = { value: string | 'all'; label: string };
 
 const Header = ({
-  title, subtitle, onNew, newLabel,
-}: { title: string; subtitle: string; onNew?: () => void; newLabel: string }) => (
-  <div className={styles.headerRow}>
-    <div>
-      <h1 className={styles.title}>{title}</h1>
-      <p className={styles.subtitle}>{subtitle}</p>
+  title, subtitle, onNew, newLabel, secondary,
+}: {
+  title: string; subtitle: string; onNew?: () => void; newLabel: string;
+  /** Optional secondary action(s) rendered as a ghost button to the left of
+      the primary "New X" button. Used by GRN/PI lists to surface the
+      "From PO" / "From GRN" multi-pick pages (task #52). */
+  secondary?: { label: string; onClick: () => void } | Array<{ label: string; onClick: () => void }>;
+}) => {
+  const secondaryArr = secondary
+    ? (Array.isArray(secondary) ? secondary : [secondary])
+    : [];
+  return (
+    <div className={styles.headerRow}>
+      <div>
+        <h1 className={styles.title}>{title}</h1>
+        <p className={styles.subtitle}>{subtitle}</p>
+      </div>
+      <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+        {secondaryArr.map((s) => (
+          <Button key={s.label} variant="ghost" size="md" onClick={s.onClick}>
+            <Plus {...ICON} />
+            <span>{s.label}</span>
+          </Button>
+        ))}
+        {onNew && (
+          <Button variant="primary" size="md" onClick={onNew}>
+            <Plus {...ICON} />
+            <span>{newLabel}</span>
+          </Button>
+        )}
+      </div>
     </div>
-    {onNew && (
-      <Button variant="primary" size="md" onClick={onNew}>
-        <Plus {...ICON} />
-        <span>{newLabel}</span>
-      </Button>
-    )}
-  </div>
-);
+  );
+};
 
 const StatusChips = ({
   chips, active, onPick,
@@ -164,6 +183,8 @@ export const Grns = () => {
         // missing the page now renders a "Pick a PO" card instead of
         // bouncing back to the PO list (one-click flow, was two before).
         onNew={() => navigate('/grns/new')}
+        // PR — task #52: multi-PO-line picker → one GRN per PO, auto-posted.
+        secondary={{ label: 'From PO', onClick: () => navigate('/grns/from-po') }}
       />
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
       {poIdFilter && (
@@ -269,6 +290,8 @@ export const PurchaseInvoicesPage = () => {
         // PR — Phase 3: PI is created from a GRN (auto-pulls accepted lines).
         // Bouncing to GRN list forces commander to pick the right GRN first.
         onNew={() => navigate('/grns')}
+        // PR — task #52: multi-GRN-line picker → one PI per GRN, auto-posted.
+        secondary={{ label: 'From GRN', onClick: () => navigate('/purchase-invoices/from-grn') }}
       />
       <StatusChips chips={PI_CHIPS} active={status} onPick={setStatus} />
       {poIdFilter  && <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`}    onClear={() => clearFilter('poId')} />}

@@ -442,6 +442,118 @@ export function useOutstandingSoItems() {
   });
 }
 
+/** PR — Multi-select GRN-from-PO picker (task #52, Commander 2026-05-27).
+    Lists PO LINES with remaining qty (qty - received_qty > 0) on outstanding
+    POs (SUBMITTED ∪ PARTIALLY_RECEIVED). Used by /grns/from-po. */
+export type OutstandingPoItem = {
+  poItemId:       string;
+  poId:           string;
+  poDocNo:        string;
+  itemCode:       string;
+  description:    string | null;
+  itemGroup:      string;
+  qty:            number;
+  receivedQty:    number;
+  remainingQty:   number;
+  unitPriceCenti: number;
+  warehouseId:    string | null;
+  variants:       unknown;
+  supplierId:     string;
+  supplierCode:   string;
+  supplierName:   string;
+  poDate:         string;
+  expectedAt:     string | null;
+};
+
+export function useOutstandingPoItems() {
+  return useQuery({
+    queryKey: ['grns', 'outstanding-po-items'],
+    queryFn: () => authedFetch<{ items: OutstandingPoItem[] }>(
+      `/grns/outstanding-po-items`,
+    ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** PR — Multi-select GRN-from-PO creator (task #52). One GRN per PO
+    (grns.purchase_order_id is a single FK), auto-posted (writes inventory
+    IN + rolls received_qty onto PO items + flips PO status). */
+export function useCreateGrnsFromPoItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      picks: Array<{ poItemId: string; qty: number }>;
+      receivedDate?: string;
+      notes?: string;
+    }) =>
+      authedFetch<{
+        created: Array<{ id: string; grnNumber: string; purchaseOrderId: string; poNumber: string; lineCount: number }>;
+        total: number;
+      }>(`/grns/from-po-items`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+}
+
+/** PR — Multi-select PI-from-GRN picker (task #52). Lists GRN LINES from
+    POSTED GRNs that have NOT yet been invoiced (header-level dedupe per MVP
+    — see /outstanding-grn-items handler for the trade-off note). */
+export type OutstandingGrnItem = {
+  grnItemId:       string;
+  grnId:           string;
+  grnDocNo:        string;
+  receivedAt:      string;
+  supplierId:      string;
+  supplierCode:    string;
+  supplierName:    string;
+  purchaseOrderId: string | null;
+  poDocNo:         string | null;
+  itemCode:        string;
+  description:     string | null;
+  itemGroup:       string;
+  qtyAccepted:     number;
+  unitPriceCenti:  number;
+  variants:        unknown;
+};
+
+export function useOutstandingGrnItems() {
+  return useQuery({
+    queryKey: ['purchase-invoices', 'outstanding-grn-items'],
+    queryFn: () => authedFetch<{ items: OutstandingGrnItem[] }>(
+      `/purchase-invoices/outstanding-grn-items`,
+    ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** PR — Multi-select PI-from-GRN creator (task #52). One PI per GRN (since
+    purchase_invoices.grn_id is a single FK). Auto-posted (matches Commander
+    preference: documents land in POSTED, not DRAFT). PI does NOT touch
+    inventory (PI is AP-only — inventory landed at GRN time). */
+export function useCreatePisFromGrnItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      picks: Array<{ grnItemId: string; qty: number }>;
+      supplierInvoiceNumber?: string;
+      invoiceDate?: string;
+      dueDate?: string;
+      notes?: string;
+    }) =>
+      authedFetch<{
+        created: Array<{ id: string; invoiceNumber: string; supplierId: string; grnCount: number; lineCount: number }>;
+        total: number;
+      }>(`/purchase-invoices/from-grn-items`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+    },
+  });
+}
+
 /** PR — Phase 1: create POs (one per supplier) from multi-selected SO
     items with partial qty. Increments po_qty_picked on success.
     PR #157 — expectedAt + purchaseLocationId now required (applied to every
