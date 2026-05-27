@@ -49,8 +49,10 @@ import {
   distinctStates,
   citiesInState,
   postcodesInCity,
-  BUILDING_TYPES,
 } from '../lib/localities-queries';
+import {
+  useSoDropdownOptions, optionsOrFallback,
+} from '../lib/so-dropdown-options-queries';
 import { useStaff } from '../lib/admin-queries';
 import { useDebouncedValue } from '../lib/hooks';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
@@ -1046,6 +1048,16 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
 
+  /* Task #118 — DB-backed dropdowns (was hardcoded). Falls back to the
+     migration 0081 seed list when loading or when the DB has zero rows
+     so commander never sees an empty select on this page. */
+  const customerTypeOptsQ = useSoDropdownOptions('customer_type');
+  const buildingTypeOptsQ = useSoDropdownOptions('building_type');
+  const relationshipOptsQ = useSoDropdownOptions('relationship');
+  const customerTypeOpts = optionsOrFallback('customer_type', customerTypeOptsQ.data);
+  const buildingTypeOpts = optionsOrFallback('building_type', buildingTypeOptsQ.data);
+  const relationshipOpts = optionsOrFallback('relationship',  relationshipOptsQ.data);
+
   /* PR #46 — Form shape now matches POS handover schema. Renamed
      debtor → customer; building_type promoted to proper column;
      branding + ref + venue dropped per commander 2026-05-26. */
@@ -1284,8 +1296,15 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 disabled={inputsDisabled}
                 onChange={(e) => set('customerType', e.target.value)}>
                 <option value="">—</option>
-                <option value="NEW">New</option>
-                <option value="EXISTING">Existing</option>
+                {customerTypeOpts.map((t) => (
+                  <option key={t.id} value={t.value}>{t.label}</option>
+                ))}
+                {/* If the persisted value isn't in the active options list
+                    (commander deactivated it but this SO already references
+                    it), render it explicitly so the select still shows it. */}
+                {form.customerType && !customerTypeOpts.some((t) => t.value === form.customerType) && (
+                  <option value={form.customerType}>{form.customerType}</option>
+                )}
               </select>
             </label>
             <label className={styles.field}>
@@ -1316,7 +1335,12 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 disabled={inputsDisabled}
                 onChange={(e) => set('buildingType', e.target.value)}>
                 <option value="">—</option>
-                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+                {buildingTypeOpts.map((b) => (
+                  <option key={b.id} value={b.value}>{b.label}</option>
+                ))}
+                {form.buildingType && !buildingTypeOpts.some((b) => b.value === form.buildingType) && (
+                  <option value={form.buildingType}>{form.buildingType}</option>
+                )}
               </select>
             </label>
             <label className={styles.field}>
@@ -1385,10 +1409,26 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Relationship</span>
-              <input className={styles.fieldInput} value={form.emergencyContactRelationship}
-                placeholder="Spouse / Parent / Sibling …"
+              {/* Task #118 — DB-backed dropdown (was a free-text input).
+                  Detail and New SO now share the same option list from
+                  so_dropdown_options('relationship'). Historical free-text
+                  values that aren't in the options list still render via
+                  the trailing fallback <option> so we don't silently drop
+                  them on first paint. */}
+              <select className={styles.fieldSelect} value={form.emergencyContactRelationship}
                 disabled={inputsDisabled}
-                onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
+                onChange={(e) => set('emergencyContactRelationship', e.target.value)}>
+                <option value="">—</option>
+                {relationshipOpts.map((r) => (
+                  <option key={r.id} value={r.value}>{r.label}</option>
+                ))}
+                {form.emergencyContactRelationship &&
+                  !relationshipOpts.some((r) => r.value === form.emergencyContactRelationship) && (
+                  <option value={form.emergencyContactRelationship}>
+                    {form.emergencyContactRelationship}
+                  </option>
+                )}
+              </select>
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Phone</span>
