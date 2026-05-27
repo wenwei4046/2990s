@@ -108,6 +108,14 @@ type SoHeader = {
   bedframe_centi: number;
   accessories_centi: number;
   others_centi: number;
+  /* Task #114 — per-category cost rollup (migration 0078). Used by the
+     Totals card category breakdown so each row can show Revenue / Cost /
+     Margin without summing items. May be undefined on rows older than
+     0078 — fall back to 0 in the consumer. */
+  mattress_sofa_cost_centi?: number;
+  bedframe_cost_centi?:      number;
+  accessories_cost_centi?:   number;
+  others_cost_centi?:        number;
   local_total_centi: number;
   total_cost_centi: number;
   total_margin_centi: number;
@@ -676,6 +684,13 @@ export const SalesOrderDetail = () => {
                     header date when the line hasn't been overridden. */}
                 <th className={styles.tableRight}>Delivery</th>
                 <th className={styles.tableRight}>Total</th>
+                {/* Task #114 — Per-line cost + margin columns. Cost is
+                    snapshotted server-side from mfg_products on insert;
+                    margin = line_total − line_cost. Mirrors the Houzs
+                    Sales Order line-item layout commander pointed at. */}
+                <th className={styles.tableRight}>Unit Cost</th>
+                <th className={styles.tableRight}>Line Cost</th>
+                <th className={styles.tableRight}>Margin</th>
                 <th className={styles.tableRight}>Actions</th>
               </tr>
             </thead>
@@ -705,7 +720,7 @@ export const SalesOrderDetail = () => {
                   const cb = rowCallbacks.get(it.id);
                   return (
                     <tr key={it.id}>
-                      <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
+                      <td colSpan={10} style={{ padding: 'var(--space-3)' }}>
                         <SoLineCard
                           index={items.indexOf(it)}
                           draft={editDraft}
@@ -763,6 +778,31 @@ export const SalesOrderDetail = () => {
                     ) : '—'}
                   </td>
                   <td className={styles.priceCell}>{fmtRm(it.total_centi, header.currency)}</td>
+                  {/* Task #114 — cost + margin columns. unit_cost_centi is
+                      snapshotted server-side from mfg_products on insert.
+                      Margin coloring rule matches Houzs: green > 0, red < 0,
+                      grey when zero (typically a not-yet-priced item). */}
+                  <td className={styles.tableRight}>
+                    <span className={styles.muted}>
+                      {it.unit_cost_centi > 0 ? fmtRm(it.unit_cost_centi, header.currency) : '—'}
+                    </span>
+                  </td>
+                  <td className={styles.tableRight}>
+                    <span className={styles.muted}>
+                      {it.line_cost_centi > 0 ? fmtRm(it.line_cost_centi, header.currency) : '—'}
+                    </span>
+                  </td>
+                  <td className={styles.tableRight}>
+                    {it.total_centi > 0 ? (
+                      <span className={
+                        it.line_margin_centi > 0 ? styles.marginGood
+                        : it.line_margin_centi < 0 ? styles.marginBad
+                        : styles.muted
+                      } style={{ fontWeight: 600 }}>
+                        {fmtRm(it.line_margin_centi, header.currency)}
+                      </span>
+                    ) : <span className={styles.muted}>—</span>}
+                  </td>
                   <td>
                     {/* PR-A — Line-item Edit / Override / Delete actions are
                         only rendered in edit mode. Read-only view shows an
@@ -806,7 +846,7 @@ export const SalesOrderDetail = () => {
                   the bottom of the table when the user clicks the button. */}
               {addingDraft && (
                 <tr>
-                  <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
+                  <td colSpan={10} style={{ padding: 'var(--space-3)' }}>
                     <SoLineCard
                       index={items.length}
                       draft={addingDraft}
@@ -840,12 +880,13 @@ export const SalesOrderDetail = () => {
         )}
       </section>
 
-      {/* PR #154 — Commander 2026-05-27: "这个东西先hide起来" → Totals ·
-          Margin card hidden for now. Margin tracking still happens
-          server-side (total_cost_centi / total_margin_centi columns
-          persist), but the public-facing UI doesn't surface cost to
-          everyone. To restore: uncomment <TotalsCard /> below. */}
-      {/* <TotalsCard header={header} /> */}
+      {/* Task #114 — Totals card restored (commander 2026-05-27: "Houzs
+          ERP 会计算全部 sku 的 costing 和自动总结一个 category 的 costing").
+          The PR #154 hide was about pre-cost-wiring noise; with cost now
+          snapshotted server-side and rolled up per category, the card is
+          finally useful. Shows Revenue / Cost / Margin / Margin % at the
+          top plus a per-category breakdown below. */}
+      <TotalsCard header={header} />
 
       {/* ── Payment — Houzs-pattern transactions table ────────────── */}
       {/* Commander 2026-05-27: "Payment 也 follow Hookka 那个排版". Verbatim
@@ -1486,11 +1527,33 @@ VariantsPills.displayName = 'VariantsPills';
    ════════════════════════════════════════════════════════════════════════ */
 
 const TotalsCard = ({ header }: { header: SoHeader }) => {
+  // margin_pct_basis is margin/revenue × 10000 (i.e. percent × 100). Divide
+  // by 100 to get the displayed percentage. Coloring rule matches the Houzs
+  // detail page: ≥30% emerald, ≥15% amber, < 15% red, 0/negative red.
   const marginPct = header.margin_pct_basis / 100;
   const marginCls =
-    marginPct >= 30 ? styles.marginGood
+    header.total_margin_centi <= 0 ? styles.marginBad
+    : marginPct >= 30 ? styles.marginGood
     : marginPct >= 15 ? styles.marginWarn
     : styles.marginBad;
+
+  /* Task #114 — Per-category rows. Each category surfaces revenue, cost,
+     and margin (revenue − cost) so commander can see where the SO's
+     margin is coming from at a glance. Cost columns fall back to 0 when
+     the row pre-dates migration 0078 (it'll backfill on next item write). */
+  const categories: Array<{ label: string; rev: number; cost: number }> = [
+    { label: 'Mattress / Sofa', rev: header.mattress_sofa_centi, cost: header.mattress_sofa_cost_centi ?? 0 },
+    { label: 'Bedframe',        rev: header.bedframe_centi,      cost: header.bedframe_cost_centi      ?? 0 },
+    { label: 'Accessories',     rev: header.accessories_centi,   cost: header.accessories_cost_centi   ?? 0 },
+    { label: 'Others',          rev: header.others_centi,        cost: header.others_cost_centi        ?? 0 },
+  ];
+
+  const fmtMarginClass = (rev: number, marginCenti: number) => {
+    if (rev <= 0) return styles.muted;
+    if (marginCenti > 0) return styles.marginGood;
+    if (marginCenti < 0) return styles.marginBad;
+    return styles.muted;
+  };
 
   return (
     <section className={styles.card}>
@@ -1498,37 +1561,70 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
         <h2 className={styles.cardTitle}>Totals · Margin</h2>
       </header>
       <div className={styles.cardBody}>
-        <div className={styles.totalsGrid}>
-          <div className={styles.totalRow}>
-            <span className={styles.totalLabel}>Mattress / Sofa</span>
-            <span className={styles.totalValue}>{fmtRm(header.mattress_sofa_centi, header.currency)}</span>
+        {/* Top row — Revenue / Cost / Margin / Margin % as 4 KPI tiles */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 'var(--space-3)',
+          marginBottom: 'var(--space-3)',
+          paddingBottom: 'var(--space-3)',
+          borderBottom: '1px solid var(--line)',
+        }}>
+          <div>
+            <div className={styles.totalLabel}>Revenue</div>
+            <div className={styles.grandTotal} style={{ fontSize: 'var(--fs-18)' }}>
+              {fmtRm(header.local_total_centi, header.currency)}
+            </div>
           </div>
-          <div className={styles.totalRow}>
-            <span className={styles.totalLabel}>Bedframe</span>
-            <span className={styles.totalValue}>{fmtRm(header.bedframe_centi, header.currency)}</span>
+          <div>
+            <div className={styles.totalLabel}>Cost</div>
+            <div className={styles.totalValue} style={{ fontSize: 'var(--fs-18)' }}>
+              {fmtRm(header.total_cost_centi, header.currency)}
+            </div>
           </div>
-          <div className={styles.totalRow}>
-            <span className={styles.totalLabel}>Accessories</span>
-            <span className={styles.totalValue}>{fmtRm(header.accessories_centi, header.currency)}</span>
-          </div>
-          <div className={styles.totalRow}>
-            <span className={styles.totalLabel}>Others</span>
-            <span className={styles.totalValue}>{fmtRm(header.others_centi, header.currency)}</span>
-          </div>
-          <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
-            <span className={styles.totalLabel}>Grand Total</span>
-            <span className={styles.grandTotal}>{fmtRm(header.local_total_centi, header.currency)}</span>
-          </div>
-          <div className={styles.totalRow}>
-            <span className={styles.totalLabel}>Total Cost</span>
-            <span className={styles.totalValue}>{fmtRm(header.total_cost_centi, header.currency)}</span>
-          </div>
-          <div className={styles.totalRow}>
-            <span className={styles.totalLabel}>Margin · {marginPct.toFixed(1)}%</span>
-            <span className={`${styles.totalValue} ${marginCls}`}>
+          <div>
+            <div className={styles.totalLabel}>Margin</div>
+            <div className={`${styles.totalValue} ${marginCls}`} style={{ fontSize: 'var(--fs-18)' }}>
               {fmtRm(header.total_margin_centi, header.currency)}
-            </span>
+            </div>
           </div>
+          <div>
+            <div className={styles.totalLabel}>Margin %</div>
+            <div className={`${styles.totalValue} ${marginCls}`} style={{ fontSize: 'var(--fs-18)' }}>
+              {header.local_total_centi > 0 ? `${marginPct.toFixed(1)}%` : '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* By-category breakdown */}
+        <div className={styles.totalLabel} style={{ marginBottom: 'var(--space-2)' }}>
+          By Category
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {categories.map(({ label, rev, cost }) => {
+            const margin = rev - cost;
+            return (
+              <div key={label} style={{
+                display: 'grid',
+                gridTemplateColumns: '1.4fr 1fr 1fr 1fr',
+                gap: 'var(--space-3)',
+                alignItems: 'baseline',
+              }}>
+                <div className={styles.totalLabel} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 'var(--fs-13)' }}>
+                  {label}
+                </div>
+                <div className={styles.totalValue}>
+                  Revenue {fmtRm(rev, header.currency)}
+                </div>
+                <div className={styles.totalValue} style={{ color: 'var(--fg-muted)' }}>
+                  Cost {fmtRm(cost, header.currency)}
+                </div>
+                <div className={`${styles.totalValue} ${fmtMarginClass(rev, margin)}`}>
+                  Margin {fmtRm(margin, header.currency)}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
