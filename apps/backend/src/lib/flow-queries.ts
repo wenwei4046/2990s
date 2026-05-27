@@ -322,6 +322,60 @@ export const useOverrideMfgSoLinePrice = () => {
   });
 };
 
+/* PR #163 — SO payments ledger (transactions per migration 0073).
+   Replaces the legacy single-row payment fields on mfg_sales_orders. */
+export type SoPayment = {
+  id: string;
+  so_doc_no: string;
+  paid_at: string;                       // YYYY-MM-DD
+  method: 'merchant' | 'transfer' | 'cash';
+  merchant_provider: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
+  installment_months: 6 | 12 | null;
+  approval_code: string | null;
+  amount_centi: number;
+  account_sheet: string | null;
+  collected_by: string | null;            // staff.id (uuid)
+  collected_by_name: string | null;       // joined staff.name
+  note: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export const useSalesOrderPayments = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-orders', docNo, 'payments'],
+  queryFn: () => authedFetch<{ payments: SoPayment[] }>(`/mfg-sales-orders/${docNo}/payments`).then((r) => r.payments),
+  enabled: Boolean(docNo),
+  staleTime: 30_000,
+  retry: 1,
+  retryDelay: 800,
+});
+
+export const useAddSalesOrderPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, ...body }: { docNo: string } & Record<string, unknown>) =>
+      authedFetch<{ payment: SoPayment }>(`/mfg-sales-orders/${docNo}/payments`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
+    },
+  });
+};
+
+export const useDeleteSalesOrderPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, id }: { docNo: string; id: string }) =>
+      authedFetch<{ ok: boolean }>(`/mfg-sales-orders/${docNo}/payments/${id}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
+    },
+  });
+};
+
 export type DebtorSuggestion = {
   debtor_code: string | null;
   debtor_name: string | null;
