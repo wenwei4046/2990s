@@ -23,9 +23,14 @@ import {
 } from '../lib/fabric-queries';
 import styles from '../pages/FabricTracking.module.css';
 
+/* Commander 2026-05-27 (Fix 6): only Price 1 and Price 2 in use today.
+   Cycle collapses to a 2-state toggle; PRICE_3 in the schema stays so
+   historical rows still render, but new clicks never produce a PRICE_3.
+   When a legacy PRICE_3 row IS encountered we cycle it forward to PRICE_1
+   on the next click so commander can clean those up by tapping through. */
 const TIER_NEXT: Record<FabricTier, FabricTier> = {
   PRICE_1: 'PRICE_2',
-  PRICE_2: 'PRICE_3',
+  PRICE_2: 'PRICE_1',
   PRICE_3: 'PRICE_1',
 };
 

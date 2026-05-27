@@ -19,7 +19,7 @@
 //   DELETE /suppliers/:id/bindings/:bindingId
 // ----------------------------------------------------------------------------
 
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
@@ -1067,6 +1067,13 @@ const SkuFormDialog = ({
 }) => {
   const create = useCreateBinding();
   const update = useUpdateBinding();
+  /* PR — Commander 2026-05-27 ("为什么不能 auto-bind"): when commander types
+     an internal SKU code and the supplier_sku field is still empty, look up
+     the SKU row in the mfg_products cache and auto-derive the supplier_sku
+     using composeSupplierSku() — same per-SKU suffix rule the Model-first
+     picker uses. The user can still overwrite the autofill manually. We
+     don't stomp an existing supplier_sku and don't run in edit mode. */
+  const products = useMfgProducts();
 
   const [draft, setDraft] = useState<SkuDraft>(() =>
     editing
@@ -1093,6 +1100,41 @@ const SkuFormDialog = ({
           isMainSupplier: false,
         },
   );
+
+  /* Lazy lookup by code. The mfg_products cache is module-shared across the
+     page (the SKU mappings table + the Model picker already use it), so
+     reading from it here is free. Returns null when the typed code isn't a
+     known internal SKU — keeps the autofill no-op for free-text material
+     codes (raw / fabric / one-off accessory). */
+  const findProductByCode = (code: string): MfgProductRow | null => {
+    if (!code.trim()) return null;
+    const wanted = code.trim().toUpperCase();
+    return (products.data ?? []).find((p) => (p.code ?? '').toUpperCase() === wanted) ?? null;
+  };
+
+  /* Auto-bind supplier_sku once the typed internal code resolves to a known
+     mfg_products row AND the user hasn't already typed something into the
+     Supplier SKU field. Only fires for the create flow (editing === null);
+     editing an existing binding leaves the supplier_sku alone. */
+  const supplierSkuRef = useRef(draft.supplierSku);
+  supplierSkuRef.current = draft.supplierSku;
+  useEffect(() => {
+    if (editing) return;
+    if (draft.materialKind !== 'mfg_product') return;
+    if (supplierSkuRef.current.trim()) return;
+    const p = findProductByCode(draft.materialCode);
+    if (!p) return;
+    const next = composeSupplierSku(draft.materialCode, p);
+    if (!next || next === supplierSkuRef.current) return;
+    setDraft((s) => ({
+      ...s,
+      // Also seed materialName from the resolved product if it was blank,
+      // so the user doesn't have to retype the internal description.
+      materialName: s.materialName.trim() || (p.name ?? s.materialName),
+      supplierSku: next,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.materialCode, draft.materialKind, products.data, editing]);
 
   const submit = () => {
     if (!draft.materialCode.trim() || !draft.materialName.trim() || !draft.supplierSku.trim()) {
