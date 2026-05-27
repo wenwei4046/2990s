@@ -259,6 +259,44 @@
   margin: 4px 0;
 }
 
+/* ── Row context menu (right-click) ─────────────────────────────────
+   AutoCount-style: New / Edit / View / Convert to DO / Delete.
+   z-index sits above sticky <thead> and the header ctx menu so the
+   floating menu always clears chrome. */
+.contextMenu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3, 0 8px 24px rgba(0, 0, 0, 0.16));
+  padding: 4px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  min-width: 200px;
+}
+.contextMenuItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--c-ink);
+  border-radius: var(--radius-sm, 4px);
+  font-family: inherit;
+  font-size: inherit;
+}
+.contextMenuItem:hover { background: var(--c-cream); }
+.contextMenuDivider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 6px;
+}
+.contextMenuDanger { color: var(--c-festive-b, #B8331F); }
+.contextMenuDanger:hover { background: rgba(184, 51, 31, 0.06); }
+
 /* ── Footer / status line ────────────────────────────────────────── */
 .statusLine {
   display: flex;

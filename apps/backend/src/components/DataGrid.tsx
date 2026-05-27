@@ -25,6 +25,7 @@ import {
   type DragEvent,
   type ReactNode,
   type MouseEvent,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -53,6 +54,17 @@ export type DataGridColumn<T> = {
   searchValue?: (row: T) => string;
 };
 
+/** A single entry in a row's right-click context menu. `divider: true`
+    renders a horizontal rule (the other fields are then ignored). */
+export type DataGridContextMenuItem = {
+  label?: string;
+  onClick?: () => void;
+  /** Renders with `var(--c-festive-b)` color and a danger hover state. */
+  danger?: boolean;
+  /** When true, this entry renders as a `<hr>` divider between groups. */
+  divider?: boolean;
+};
+
 export type DataGridProps<T> = {
   rows: T[];
   columns: DataGridColumn<T>[];
@@ -70,6 +82,12 @@ export type DataGridProps<T> = {
   groupBanner?: boolean;
   emptyMessage?: string;
   isLoading?: boolean;
+  /**
+   * Right-click row menu. Receives the row and returns the items to show.
+   * Opening selects the row (single-row select). `null`/empty array
+   * suppresses the menu (browser default also suppressed).
+   */
+  contextMenu?: (row: T) => DataGridContextMenuItem[];
 };
 
 type Layout = {
@@ -111,7 +129,12 @@ const coerceSearchString = (v: ReactNode): string => {
   return '';
 };
 
-export function DataGrid<T>({
+/* Task #99 (UI perf) — Inner implementation, kept generic. Exported
+   `DataGrid` below is the same function wrapped in React.memo so a parent
+   re-render with unchanged props (rows, columns, etc.) skips the whole
+   sort/filter/group recompute pipeline. Each list page now memoizes its
+   `columns` array + handlers so the memo actually hits. */
+function DataGridInner<T>({
   rows,
   columns,
   storageKey,
@@ -124,6 +147,7 @@ export function DataGrid<T>({
   groupBanner = true,
   emptyMessage = 'No data.',
   isLoading = false,
+  contextMenu,
 }: DataGridProps<T>) {
   const [layout, setLayoutRaw] = useState<Layout>(() => readLayout(storageKey));
   const setLayout = useCallback((updater: (l: Layout) => Layout) => {
@@ -138,6 +162,8 @@ export function DataGrid<T>({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [ctx, setCtx] = useState<{ x: number; y: number; colKey: string } | null>(null);
+  /** Right-click row menu — anchor point + the menu items resolved at open time. */
+  const [rowCtx, setRowCtx] = useState<{ x: number; y: number; items: DataGridContextMenuItem[] } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [groupZoneActive, setGroupZoneActive] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -158,6 +184,23 @@ export function DataGrid<T>({
       window.removeEventListener('scroll', close, true);
     };
   }, [ctx]);
+
+  /* Close the row context menu on outside click, scroll, or Escape — same
+     UX as the header context menu but rendered at a higher z-index so it
+     clears the sticky <thead>. */
+  useEffect(() => {
+    if (!rowCtx) return;
+    const close = () => setRowCtx(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [rowCtx]);
 
   // ── Resolve visible/ordered columns ───────────────────────────────
   const visibleColumns = useMemo(() => {
@@ -485,6 +528,16 @@ export function DataGrid<T>({
                   className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
                   onClick={() => setSelectedKey(key)}
                   onDoubleClick={() => onRowDoubleClick?.(row)}
+                  onContextMenu={(e) => {
+                    if (!contextMenu) return;
+                    const items = contextMenu(row);
+                    if (!items || items.length === 0) return;
+                    e.preventDefault();
+                    // Single-row select on right-click so toolbar state + the
+                    // menu's onClick handlers agree on which row is in play.
+                    setSelectedKey(key);
+                    setRowCtx({ x: e.clientX, y: e.clientY, items });
+                  }}
                 >
                   {visibleColumns.map((col) => {
                     const w = layout.widths[col.key] ?? col.width ?? 140;
@@ -551,6 +604,44 @@ export function DataGrid<T>({
           </div>
         );
       })()}
+
+      {/* Row context menu — opened on right-click via the row's onContextMenu.
+          Rendered after the header ctx menu so its z-index naturally wins
+          if both ever opened simultaneously. */}
+      {rowCtx && (
+        <div
+          className={styles.contextMenu}
+          style={{ top: rowCtx.y, left: rowCtx.x }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {rowCtx.items.map((it, i) => {
+            if (it.divider) return <div key={`d-${i}`} className={styles.contextMenuDivider} />;
+            return (
+              <button
+                key={`i-${i}-${it.label}`}
+                className={`${styles.contextMenuItem} ${it.danger ? styles.contextMenuDanger : ''}`}
+                onClick={() => {
+                  // Close before firing — handlers may navigate or open
+                  // dialogs, and we don't want a stale menu lingering.
+                  setRowCtx(null);
+                  it.onClick?.();
+                }}
+              >
+                {it.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
+
+/* Task #99 (UI perf) — `memo` strips the generic parameter from the function
+   type, so we cast back to the original signature. Behaviour identical;
+   the only difference is the default shallow-prop bail out. Pages calling
+   <DataGrid> MUST pass a stable `columns` reference (define at module
+   scope or wrap in useMemo) for the memo to actually hit — see the
+   listing pages where columns are already memoized. */
+export const DataGrid = memo(DataGridInner) as typeof DataGridInner;

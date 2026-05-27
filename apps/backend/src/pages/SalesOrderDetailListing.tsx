@@ -43,7 +43,7 @@
 // header column).
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   ArrowLeft, ClipboardList, Printer, Eye, Filter, X,
@@ -395,11 +395,19 @@ export const SalesOrderDetailListing = () => {
   }, [groupBy]);
 
   // ── Columns ─────────────────────────────────────────────────────
-  const toggleRow = (id: string) =>
-    setChecked((p) => ({ ...p, [id]: !p[id] }));
+  /* Task #99 (UI perf) — `toggleRow` was recreated on every parent render,
+     which silently invalidated the `columns` useMemo below (dep array
+     captured the unstable function via closure even though it wasn't a
+     dep) and rebuilt all 37 column definitions per render. Wrap in
+     useCallback with the functional setState so it's stable for the
+     page's lifetime. */
+  const toggleRow = useCallback(
+    (id: string) => setChecked((p) => ({ ...p, [id]: !p[id] })),
+    [],
+  );
   const columns = useMemo<DataGridColumn<SoDetailListingRow>[]>(
     () => buildColumns(checked, toggleRow),
-    [checked],
+    [checked, toggleRow],
   );
 
   // ── Action handlers ─────────────────────────────────────────────

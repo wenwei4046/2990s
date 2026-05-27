@@ -42,10 +42,20 @@ export interface LocalityRow {
 
 const LOCALITY_PAGE = 1000;
 
+/* Task #99 (UI perf) — Localities is a static reference dataset (~7000 MY
+   postcodes paged 1000 at a time = 4 round trips). 30 s staleTime caused a
+   full refetch on every window-focus during normal use, freezing the SO
+   Detail page each time. Made effectively-static: 24 h staleTime + 24 h gc
+   keeps it warm for the whole working session. CRUD mutations explicitly
+   invalidate the key so the Settings tab still sees fresh data after add/
+   edit/delete. */
 export const useLocalities = () =>
   useQuery({
     queryKey: ['my_localities'],
-    staleTime: 30_000,
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime:    24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect:   false,
     queryFn: async (): Promise<LocalityRow[]> => {
       const all: LocalityRow[] = [];
       for (let from = 0; ; from += LOCALITY_PAGE) {

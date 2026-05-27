@@ -17,17 +17,19 @@
 // ----------------------------------------------------------------------------
 
 import {
-  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
   DollarSign, Lock, History, ChevronDown, ChevronRight,
+  Calendar as CalIcon, User as UserIcon, Tag,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
+import { useAuth } from '../lib/auth';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
@@ -57,6 +59,7 @@ import {
 import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
+import paymentsStyles from './Payments.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -83,6 +86,17 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
+
+/* Task #99 (UI perf) — Tiny local debounce hook for inputs that drive a
+   server query (debtor autocomplete). Not worth a separate file. */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = window.setTimeout(() => setV(value), delayMs);
+    return () => window.clearTimeout(t);
+  }, [value, delayMs]);
+  return v;
+}
 
 type SoHeader = {
   doc_no: string;
@@ -245,6 +259,33 @@ export const SalesOrderDetail = () => {
       onError:   (msg) => setSaveError(msg),
     });
   };
+
+  /* Task #99 (UI perf) — Stable callbacks for the memo'd child cards. Without
+     these, every parent render produces a new `onSave`/`onClose`, defeating
+     React.memo on PaymentCard / CustomerCard / HistoryPanel. The mutations
+     they call are stable across renders (TanStack Query returns the same
+     mutate fn) so the only moving piece is `docNo` from URL params, which
+     never changes inside one mounted page. */
+  const stableDocNo = docNo ?? '';
+  const handleHeaderSave = useCallback(
+    (patch: Record<string, unknown>, cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
+      updateHeader.mutate(
+        { docNo: stableDocNo, ...patch },
+        {
+          onSuccess: () => cb?.onSuccess?.(),
+          onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),
+        },
+      );
+    },
+    [stableDocNo, updateHeader],
+  );
+  const handlePaymentSave = useCallback(
+    (patch: Record<string, unknown>) => {
+      updateHeader.mutate({ docNo: stableDocNo, ...patch });
+    },
+    [stableDocNo, updateHeader],
+  );
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
 
   /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
      except startAdd which seeds a brand-new SoLineDraft. The mutation payload
@@ -530,13 +571,7 @@ export const SalesOrderDetail = () => {
       <CustomerCard
         ref={customerCardRef}
         header={header}
-        onSave={(patch, cb) => updateHeader.mutate(
-          { docNo: header.doc_no, ...patch },
-          {
-            onSuccess: () => cb?.onSuccess?.(),
-            onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),
-          },
-        )}
+        onSave={handleHeaderSave}
         saving={updateHeader.isPending}
         locked={isLocked}
         isEditing={isEditing}
@@ -780,32 +815,26 @@ export const SalesOrderDetail = () => {
           everyone. To restore: uncomment <TotalsCard /> below. */}
       {/* <TotalsCard header={header} /> */}
 
-      {/* ── Payment (PR #143 → rebuilt as transactions ledger in PR-C) ── */}
-      {/* Post-merge stitch — collapse PR-A's isEditing into PR-C's existing
-          `locked` gate so the + Add Payment button + trash icons disappear
-          when the page is in read-only mode. Status-lock OR not-editing
-          both make PaymentCard immutable from the user's perspective. */}
+      {/* ── Payment — Houzs-pattern transactions table ────────────── */}
+      {/* Commander 2026-05-27: "Payment 也 follow Hookka 那个排版". Verbatim
+          port of houzs-erp/src/components/NewSalesOrderForm.tsx Payments
+          block (lines 1047-1126). Subtotal / Expected Deposit dropped —
+          Houzs doesn't have them, and commander wants the ledger view
+          (transactions + Deposit Paid + Balance) only. */}
       <PaymentCard
         header={header}
-        onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
-        saving={updateHeader.isPending}
         locked={isLocked || !isEditing}
       />
 
-      {/* ── Status flow ─────────────────────────────────────────── */}
-      {/* PR #144 — Commander 2026-05-26 gating rule:
-            1. 没 Processing Date → bedframe variants 可以不填，自由 proceed
-            2. 有 Processing Date → bedframe 的 fabric / color / design / total
-               height / divan / leg / gap 必须都填齐才能 proceed
-          Rule encoded server-agnostic on the client: if processingDate is
-          set, scan bedframe items' variants. If any of the canonical
-          variant keys (divanHeight / legHeight / gap / fabricCode) is
-          missing on a bedframe line, block the next-stage transition. */}
+      {/* ── Variant-completeness banner ─────────────────────────────
+          PR #144 + #156 gating rule kept as a read-only warning. The
+          "Move to next stage" pill strip below it (commander 2026-05-27:
+          "这个不需要") was removed — status transitions now flow through
+          the Edit/Save path or the API directly, while this banner stays
+          so the Order Coordinator still sees which lines are incomplete
+          when a Processing Date is set. updateStatus is still wired for
+          the lock-override flow above. */}
       {(() => {
-        /* PR #144 / #156 — Processing-Date gating.
-           Commander 2026-05-27 broadened: "variant 也没有补完" — sofa
-           lines ALSO need their seat/leg/fabric set when Processing Date is
-           on, not just bedframe. Each category has its own required keys: */
         const requireVariants = !!header.internal_expected_dd;
         const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
           bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
@@ -824,46 +853,28 @@ export const SalesOrderDetail = () => {
               })
               .map((it) => ({ code: it.item_code, group: (it.item_group ?? '').toLowerCase() }))
           : [];
-        const gated = incompleteLines.length > 0;
+        if (incompleteLines.length === 0) return null;
         const formatGroupRequirements = (g: string) =>
           g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
           g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
         return (
-          <>
-            {gated && (
-              <div style={{
-                background: 'rgba(184, 51, 31, 0.08)',
-                border: '1px solid var(--c-festive-b, #B8331F)',
-                color: 'var(--c-festive-b, #B8331F)',
-                padding: 'var(--space-3) var(--space-4)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--fs-13)',
-              }}>
-                <strong>Processing Date is set — line variants must be filled before next stage.</strong>
-                <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                  {incompleteLines.map((l, i) => (
-                    <div key={i}>
-                      • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
-                    </div>
-                  ))}
+          <div style={{
+            background: 'rgba(184, 51, 31, 0.08)',
+            border: '1px solid var(--c-festive-b, #B8331F)',
+            color: 'var(--c-festive-b, #B8331F)',
+            padding: 'var(--space-3) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: 'var(--fs-13)',
+          }}>
+            <strong>Processing Date is set — line variants must be filled before next stage.</strong>
+            <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+              {incompleteLines.map((l, i) => (
+                <div key={i}>
+                  • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
                 </div>
-              </div>
-            )}
-            <StatusBar
-              status={header.status}
-              onTransition={(s) => {
-                if (gated) {
-                  window.alert(
-                    'Processing Date is set, so all line variants must be filled before moving to the next stage.\n\n' +
-                    'Incomplete:\n' + incompleteLines.map((l) => `  ${l.code} (${l.group})`).join('\n'),
-                  );
-                  return;
-                }
-                updateStatus.mutate({ docNo: header.doc_no, status: s });
-              }}
-              pending={updateStatus.isPending}
-            />
-          </>
+              ))}
+            </div>
+          </div>
         );
       })()}
 
@@ -890,7 +901,7 @@ export const SalesOrderDetail = () => {
 
       {/* PR-D — History drawer ─────────────────────────────────── */}
       {historyOpen && (
-        <HistoryPanel docNo={header.doc_no} onClose={() => setHistoryOpen(false)} />
+        <HistoryPanel docNo={header.doc_no} onClose={closeHistory} />
       )}
     </div>
   );
@@ -929,7 +940,12 @@ type CustomerCardProps = {
   isEditing?: boolean;
 };
 
-const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
+/* Task #99 (UI perf) — Wrap the CustomerCard in memo so parent page state
+   churn (Edit-mode toggle, History drawer, line-item edits) doesn't
+   re-render the full address-cascade tree. Combined with the `onSave`
+   useCallback in the page below + the debtor-search debounce, this is the
+   biggest single saving on the Detail page. */
+const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   header,
   onSave,
   /* PR-A — `saving` prop kept on the type for compatibility but the
@@ -998,7 +1014,16 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 
   const [form, setForm] = useState(() => initialFormFor(header));
   const [showSuggest, setShowSuggest] = useState(false);
-  const debtorQuery = useDebtorSearch(form.customerName);
+  /* Task #99 (UI perf) — 200 ms debounce on the debtor autocomplete. Until
+     this commit each keystroke in the Customer Name field issued a
+     /debtors/search request. The hook itself now guards length>=2 (see
+     flow-queries.ts) but a fast typist still produced one request per
+     character on top of that, which was the dominant freeze when entering
+     a new customer. Debouncing here keeps `form.customerName` reactive for
+     the rest of the card (state cascade, save payload) while the autocomplete
+     hook sees a settled value. */
+  const debouncedDebtorQ = useDebouncedValue(form.customerName, 200);
+  const debtorQuery = useDebtorSearch(debouncedDebtorQ);
   const suggestions = (debtorQuery.data?.debtors ?? []).filter(
     (d) => (d.debtor_name ?? '').toLowerCase() !== form.customerName.trim().toLowerCase(),
   );
@@ -1101,22 +1126,22 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      semantics intact. */
   const inputsDisabled = !isEditing || locked;
 
+  /* PR #168 — Commander 2026-05-27 screenshot diff vs. Create SO: Detail
+     was using one big "Customer · Addresses" card with 4 hairline-divided
+     sub-blocks; Create SO uses 4 visually distinct top-level cards. Mirror
+     the New SO layout here — same module classes (.card / .cardHeader /
+     .cardTitle / .formGrid4 / .field / .fieldLabel) — so the two pages
+     read identically. The component still exposes its imperative save() /
+     reset() handle to the page-level Edit/Save flow; the 4 cards just
+     replace the single wrapper. */
   return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Customer · Addresses</h2>
-        {/* PR-A — Per-card Save removed. The page-level Save in the page
-            header is now the single commit point for header edits. */}
-      </header>
-      <div className={styles.cardBody}>
-        {/* ── 1. Customer ───────────────────────────────────────────── */}
-        {/* PR #163 — Commander 2026-05-27: "这些全部资料挤在一起 也是要
-            整理一下". Split into 4 visually-divided sub-sections with
-            top-border separators (.subSection). Each sub-section has its
-            own subhead. Fields regrouped so identification stays separate
-            from order scheduling. */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Customer</p>
+    <>
+      {/* ── CUSTOMER ──────────────────────────────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Customer</h2>
+        </header>
+        <div className={styles.cardBody}>
           {/* PR-A — Customer Code input removed (commander 2026-05-27:
               "customer code 不需要"). Field still flows through state +
               payload so the server-side mapping is untouched.
@@ -1198,10 +1223,14 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
           </div>
         </div>
+      </section>
 
-        {/* ── 2. Order Info (venue / dates / note) ──────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Order Info</p>
+      {/* ── ORDER INFO (venue / dates / note) ─────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Order Info</h2>
+        </header>
+        <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
@@ -1257,15 +1286,17 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </div>
           )}
         </div>
+      </section>
 
-        {/* ── 3. Emergency Contact ──────────────────────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>
-            Emergency Contact
-            <span className={styles.muted} style={{ fontWeight: 400, marginLeft: 6, textTransform: 'none', letterSpacing: 0 }}>
-              — used only if we can't reach the customer on delivery day
-            </span>
-          </p>
+      {/* ── EMERGENCY CONTACT ─────────────────────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Emergency Contact</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Used only if we cannot reach the customer on delivery day
+          </span>
+        </header>
+        <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Contact Name</span>
@@ -1292,10 +1323,14 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
           </div>
         </div>
+      </section>
 
-        {/* ── 4. Delivery Address ───────────────────────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Delivery Address</p>
+      {/* ── DELIVERY ADDRESS ──────────────────────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Delivery Address</h2>
+        </header>
+        <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Address Line 1</span>
@@ -1349,30 +1384,66 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </>
   );
 });
-CustomerCard.displayName = 'CustomerCard';
+CustomerCardInner.displayName = 'CustomerCardInner';
+const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
 
 /* ════════════════════════════════════════════════════════════════════════
    Variants summary pills (for line items table)
    ════════════════════════════════════════════════════════════════════════ */
 
-const VariantsPills = ({ variants }: { variants: Record<string, unknown> | null }) => {
+/* PR #168 — Commander 2026-05-27: "字体统一". Pill keys were rendering as
+   camelCase variable names (gap / legHeight / fabricCode) which read like
+   debug output. Map known keys to human Title Case labels, fall back to
+   camelCase → "Camel Case" splitter for anything unmapped. Array values
+   (e.g. specials: ['Extra cushion', 'Pet-proof']) join with ", ". */
+const VARIANT_KEY_LABELS: Record<string, string> = {
+  gap:          'Gap',
+  legHeight:    'Leg Height',
+  fabricCode:   'Fabric Code',
+  divanHeight:  'Divan Height',
+  totalHeight:  'Total Height',
+  seatHeight:   'Seat Height',
+  specials:     'Specials',
+};
+
+const camelCaseToTitle = (s: string): string => {
+  if (!s) return s;
+  const spaced = s.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+};
+
+const formatVariantValue = (v: unknown): string => {
+  if (Array.isArray(v)) return v.map((x) => String(x)).join(', ');
+  return String(v);
+};
+
+/* Task #99 (UI perf) — VariantsPills renders once per line item in the
+   table. With ~20 lines on a typical SO + 36-col DataGrid in the same
+   page, the cumulative re-render cost was non-trivial. Pure prop-driven
+   so React.memo is a free win. */
+const VariantsPills = memo(({ variants }: { variants: Record<string, unknown> | null }) => {
   if (!variants || typeof variants !== 'object') return null;
-  const entries = Object.entries(variants).filter(([, v]) => v != null && v !== '');
+  const entries = Object.entries(variants).filter(([, v]) => {
+    if (v == null || v === '') return false;
+    if (Array.isArray(v) && v.length === 0) return false;
+    return true;
+  });
   if (entries.length === 0) return null;
   return (
     <div className={styles.variantBlock}>
       {entries.map(([k, v]) => (
         <span key={k} className={styles.variantPill}>
-          {k}: {String(v)}
+          {VARIANT_KEY_LABELS[k] ?? camelCaseToTitle(k)}: {formatVariantValue(v)}
         </span>
       ))}
     </div>
   );
-};
+});
+VariantsPills.displayName = 'VariantsPills';
 
 /* ════════════════════════════════════════════════════════════════════════
    Totals card
@@ -1642,32 +1713,79 @@ const AddressCard = ({
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   PaymentCard — PR #163. HOOKKA-style transactions ledger.
+   PaymentCard — Houzs-pattern transactions ledger.
 
-   Each payment is one row in mfg_sales_order_payments (migration 0073) —
-   no more single-row "current payment" overwrite. Sum of amount_centi =
-   "Deposit Paid"; balance = local_total_centi − paid.
+   Commander 2026-05-27: "Payment 也 follow Hookka 那个排版". Verbatim port
+   of houzs-erp/src/components/NewSalesOrderForm.tsx Payments block (lines
+   1047-1126). The previous Subtotal / Expected Deposit (50% rule) section
+   is dropped — Houzs doesn't have it, and commander wants only the
+   transactions table + Deposit Paid + Balance summary.
 
-   Legacy header columns (payment_method, merchant_provider, installment_
-   months, approval_code, payment_date, paid_centi) still exist in the
-   schema but the UI no longer reads or writes them — they'll be dropped
-   in a follow-up migration once live data is migrated.
+   Each row in the table = one row in mfg_sales_order_payments (migration
+   0073). Sum of amount_centi = "Deposit Paid"; balance = local_total_centi
+   − paid. Legacy header columns (payment_method, merchant_provider,
+   installment_months, approval_code, payment_date, paid_centi) still exist
+   in the schema but the UI no longer reads or writes them.
 
-   `depositCenti` stays on the header as the EXPECTED deposit target
-   (e.g. 50% rule), distinct from the paid total.
+   Houzs has a flat list of "method" strings (CASH/MBB/VISA/EPP/...). The
+   2990 API uses a typed enum: 'merchant' | 'transfer' | 'cash' + optional
+   merchantProvider/installmentMonths. We map Houzs string → API enum at
+   submit time:
+     - CASH                            → method=cash
+     - MBB / ONLINE / TNG / DUITNOW    → method=transfer, merchant_provider=null
+     - VISA / MASTER / CREDIT / EPP    → method=merchant, merchant_provider derived
+   Reverse mapping for display: rebuild the friendly label from method +
+   merchant_provider + installment_months so legacy ledger rows still show
+   sensibly.
    ════════════════════════════════════════════════════════════════════════ */
 
 type PaymentMethod = 'merchant' | 'transfer' | 'cash';
 type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
 
-const METHOD_LABEL: Record<PaymentMethod, string> = {
-  merchant: 'Merchant',
-  transfer: 'Transfer',
-  cash:     'Cash',
+/** Friendly Houzs-style method labels. Top of the list = sensible default. */
+const PAYMENT_METHOD_OPTIONS = [
+  'CASH', 'MBB', 'VISA', 'MASTER', 'CREDIT CARD', 'EPP',
+  'ONLINE', 'TNG', 'DUITNOW', 'OTHER',
+] as const;
+type PaymentMethodLabel = typeof PAYMENT_METHOD_OPTIONS[number];
+
+/** Houzs string → API enum (method, optional merchant provider). */
+const labelToApi = (label: PaymentMethodLabel): {
+  method: PaymentMethod;
+  merchantProvider: MerchantProvider | null;
+} => {
+  switch (label) {
+    case 'CASH':
+      return { method: 'cash', merchantProvider: null };
+    case 'MBB':
+    case 'ONLINE':
+    case 'TNG':
+    case 'DUITNOW':
+      // Bank transfer family — provider field stays null on the API.
+      return { method: 'transfer', merchantProvider: null };
+    case 'VISA':
+    case 'MASTER':
+    case 'CREDIT CARD':
+    case 'EPP':
+    case 'OTHER':
+      // Merchant rails. Provider isn't intrinsic to the user's label here
+      // (cardholder doesn't know which acquirer settles); leave null so
+      // commander can pick it in a follow-up edit if needed.
+      return { method: 'merchant', merchantProvider: null };
+  }
 };
 
+/** API row → friendly label (best-effort, falls back to METHOD). */
+const apiToLabel = (p: SoPayment): string => {
+  if (p.method === 'cash') return 'CASH';
+  if (p.method === 'transfer') return p.merchant_provider ?? 'MBB';
+  // merchant
+  if (p.merchant_provider) return p.merchant_provider;
+  return 'CREDIT CARD';
+};
+
+/** Per-method pill swatch (Houzs uses category-coloured chip tags). */
 const methodPillStyle = (m: PaymentMethod): CSSProperties => {
-  // Burnt for merchant, green for transfer, neutral muted for cash.
   const bg =
     m === 'merchant' ? 'rgba(232, 107, 58, 0.12)' :
     m === 'transfer' ? 'rgba(47, 93, 79, 0.12)'   :
@@ -1689,387 +1807,336 @@ const methodPillStyle = (m: PaymentMethod): CSSProperties => {
   };
 };
 
-const PaymentCard = ({
+/* Task #99 (UI perf) — Wrap in React.memo so the inline-add / +Payment /
+   delete state inside PaymentCard doesn't cascade re-renders from the
+   parent page's unrelated state changes (e.g. opening the History
+   drawer, toggling Edit mode, typing in the search box). `header` is
+   the only object prop and it comes from useQuery cache so its
+   reference is stable across renders. `onSave` is recreated on each
+   parent render — see SalesOrderDetail for the useCallback wrapping. */
+const PaymentCard = memo(({
   header,
-  onSave,
-  saving,
   locked = false,
 }: {
   header: SoHeader;
-  onSave: (patch: Record<string, unknown>) => void;
-  saving: boolean;
   locked?: boolean;
 }) => {
   const grandTotal = header.local_total_centi ?? 0;
-  const half = Math.round(grandTotal / 2);
 
-  const paymentsQ = useSalesOrderPayments(header.doc_no);
-  const payments = paymentsQ.data ?? [];
-  const addPayment = useAddSalesOrderPayment();
+  const paymentsQ    = useSalesOrderPayments(header.doc_no);
+  const payments     = paymentsQ.data ?? [];
+  const addPayment   = useAddSalesOrderPayment();
   const deletePayment = useDeleteSalesOrderPayment();
-  const staff = useStaff();
+  const staffQ       = useStaff();
+  const staff        = staffQ.data ?? [];
+  const auth         = useAuth();
 
-  /* ── Deposit (expected target on the header) ───────────────────────── */
-  const [depositCenti, setDepositCenti] = useState<number>(header.deposit_centi ?? 0);
-  useEffect(() => { setDepositCenti(header.deposit_centi ?? 0); }, [header.deposit_centi]);
-  const saveDeposit = () => onSave({ depositCenti });
+  /* In-flight "draft" rows. Houzs lets commander Add Payment which appends
+     a blank row inline; the same model is used here so a row is fully
+     editable as soon as it appears. We store local drafts keyed by a uid
+     and POST them when commander tabs/blurs out (after at least one
+     non-trivial change). */
+  type DraftRow = {
+    uid:          string;
+    paidAt:       string;
+    methodLabel:  PaymentMethodLabel;
+    amountCenti:  number;
+    accountSheet: string;
+    approvalCode: string;
+    collectedBy:  string;        // staff.id (uuid) | ''
+  };
 
-  /* ── Inline add-payment row ─────────────────────────────────────────── */
-  const today = new Date().toISOString().slice(0, 10);
-  const blankForm = {
-    paidAt: today,
-    method: 'merchant' as PaymentMethod,
-    merchantProvider: 'GHL' as MerchantProvider | '',
-    installmentMonths: '' as '' | '6' | '12',
-    approvalCode: '',
+  const newDraft = (): DraftRow => ({
+    uid: Math.random().toString(36).slice(2, 10),
+    paidAt: new Date().toISOString().slice(0, 10),
+    methodLabel: 'CASH',
     amountCenti: 0,
     accountSheet: '',
-    collectedBy: '',
-    note: '',
-  };
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState(blankForm);
+    approvalCode: '',
+    // Default Collected By = current logged-in staff (commander screenshot).
+    collectedBy: auth.staff?.id ?? '',
+  });
 
-  const resetForm = () => setForm({ ...blankForm, paidAt: new Date().toISOString().slice(0, 10) });
+  const [drafts, setDrafts] = useState<DraftRow[]>([]);
 
-  const submitNew = () => {
-    if (!form.method) return;
-    if (!form.amountCenti || form.amountCenti <= 0) return;
+  const addDraft = () => setDrafts((prev) => [...prev, newDraft()]);
+  const patchDraft = (uid: string, patch: Partial<DraftRow>) =>
+    setDrafts((prev) => prev.map((d) => d.uid === uid ? { ...d, ...patch } : d));
+  const removeDraft = (uid: string) =>
+    setDrafts((prev) => prev.filter((d) => d.uid !== uid));
+
+  /* Commit a draft to the API. Trips on:
+     - amountCenti > 0
+     - method present (always true since CASH is the default) */
+  const commitDraft = (d: DraftRow) => {
+    if (d.amountCenti <= 0) return;
+    const { method, merchantProvider } = labelToApi(d.methodLabel);
     const body: Record<string, unknown> = {
       docNo:        header.doc_no,
-      paidAt:       form.paidAt,
-      method:       form.method,
-      amountCenti:  form.amountCenti,
-      approvalCode: form.approvalCode || null,
-      accountSheet: form.accountSheet || null,
-      collectedBy:  form.collectedBy  || null,
-      note:         form.note         || null,
+      paidAt:       d.paidAt,
+      method,
+      amountCenti:  d.amountCenti,
+      accountSheet: d.accountSheet || null,
+      approvalCode: d.approvalCode || null,
+      collectedBy:  d.collectedBy  || null,
     };
-    if (form.method === 'merchant') {
-      body.merchantProvider  = form.merchantProvider || null;
-      body.installmentMonths = form.installmentMonths ? Number(form.installmentMonths) : null;
+    if (method === 'merchant') {
+      body.merchantProvider = merchantProvider;
     }
     addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
-      onSuccess: () => { setAdding(false); resetForm(); },
+      onSuccess: () => removeDraft(d.uid),
+      onError: (e) => {
+        // eslint-disable-next-line no-console
+        console.error('[payment] add failed:', e);
+        window.alert(`Failed to save payment: ${e instanceof Error ? e.message : String(e)}`);
+      },
     });
   };
 
-  /* ── Summary ───────────────────────────────────────────────────────── */
-  const paidCenti = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
+  /* Summary maths — same as Houzs (paid = Σ amount_centi; balance =
+     grandTotal − paid, clamped at 0). */
+  const paidCenti    = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
   const balanceCenti = Math.max(0, grandTotal - paidCenti);
-  const isFullPaid = grandTotal > 0 && paidCenti >= grandTotal;
-  const isHalfPaid = paidCenti > 0 && paidCenti >= half && paidCenti < grandTotal;
 
   const staffNameById = (id: string | null): string | null => {
     if (!id) return null;
-    return staff.data?.find((s) => s.id === id)?.name ?? null;
+    return staff.find((s) => s.id === id)?.name ?? null;
   };
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Payment</h2>
+        <h2 className={styles.cardTitle}>
+          <DollarSign size={14} strokeWidth={1.75} /> Payments
+        </h2>
       </header>
       <div className={styles.cardBody}>
-        {/* ── Transactions table ─────────────────────────────────────── */}
-        <p className={styles.subHead}>Transactions</p>
-        {paymentsQ.isLoading ? (
-          <p className={styles.fieldLabel}>Loading…</p>
-        ) : payments.length === 0 && !adding ? (
-          <p className={styles.muted} style={{ fontSize: 'var(--fs-12)' }}>
-            No payments recorded yet.
-          </p>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Method</th>
-                <th className={styles.tableRight}>Amount</th>
-                <th>Account Sheet</th>
-                <th>Approval Code</th>
-                <th>Collected By</th>
-                <th style={{ width: 36 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((p: SoPayment) => (
-                <tr key={p.id}>
-                  <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                    {p.paid_at}
-                  </td>
-                  <td>
-                    <span style={methodPillStyle(p.method)}>{METHOD_LABEL[p.method]}</span>
-                    {p.method === 'merchant' && p.merchant_provider && (
-                      <span className={styles.muted} style={{ marginLeft: 6, fontSize: 'var(--fs-11)' }}>
-                        · {p.merchant_provider}
-                        {p.installment_months ? ` · ${p.installment_months}m` : ''}
-                      </span>
-                    )}
-                  </td>
-                  <td className={styles.tableRight} style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-                    {fmtRm(p.amount_centi, header.currency)}
-                  </td>
-                  <td>{p.account_sheet ?? <span className={styles.muted}>—</span>}</td>
-                  <td style={{ fontVariantNumeric: 'tabular-nums' }}>
-                    {p.approval_code ?? <span className={styles.muted}>—</span>}
-                  </td>
-                  <td>{p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={styles.muted}>—</span>}</td>
-                  <td>
+        <div className={paymentsStyles.section}>
+          {/* Top bar with + Add Payment trigger ─────────────────────── */}
+          <div className={paymentsStyles.head}>
+            <span className={paymentsStyles.headLabel}>
+              {payments.length + drafts.length} transaction{payments.length + drafts.length === 1 ? '' : 's'}
+            </span>
+            {!locked && (
+              <button
+                type="button"
+                className={paymentsStyles.addBtn}
+                onClick={addDraft}
+                disabled={addPayment.isPending}
+              >
+                <Plus size={14} strokeWidth={1.75} />
+                Add Payment
+              </button>
+            )}
+          </div>
+
+          {/* Transactions table ──────────────────────────────────────── */}
+          <div className={paymentsStyles.grid}>
+            {/* Header row */}
+            <span className={paymentsStyles.headerCell}>
+              Date <CalIcon size={12} strokeWidth={1.75} />
+            </span>
+            <span className={paymentsStyles.headerCell}>
+              Payment Method <Tag size={12} strokeWidth={1.75} />
+            </span>
+            <span className={paymentsStyles.headerCellRight}>
+              Amount <DollarSign size={12} strokeWidth={1.75} />
+            </span>
+            <span className={paymentsStyles.headerCell}>
+              Account Sheet <FileText size={12} strokeWidth={1.75} />
+            </span>
+            <span className={paymentsStyles.headerCell}>
+              Approval Code <FileText size={12} strokeWidth={1.75} />
+            </span>
+            <span className={paymentsStyles.headerCell}>
+              Collected By <UserIcon size={12} strokeWidth={1.75} />
+            </span>
+            <span className={paymentsStyles.headerCell} />
+
+            {/* Empty state */}
+            {paymentsQ.isLoading && (
+              <span className={paymentsStyles.emptyRow} style={{ gridColumn: '1 / -1' }}>
+                Loading…
+              </span>
+            )}
+            {!paymentsQ.isLoading && payments.length === 0 && drafts.length === 0 && (
+              <span className={paymentsStyles.emptyRow} style={{ gridColumn: '1 / -1' }}>
+                No payments recorded yet · click "Add Payment" to log a deposit
+              </span>
+            )}
+
+            {/* Persisted payment rows */}
+            {payments.map((p: SoPayment) => (
+              <div className={paymentsStyles.row} key={p.id}>
+                <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {p.paid_at}
+                </span>
+                <span className={paymentsStyles.cell}>
+                  <span className={paymentsStyles.methodPill} style={methodPillStyle(p.method)}>
+                    {apiToLabel(p)}
+                  </span>
+                  {p.installment_months ? (
+                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                      · {p.installment_months}m
+                    </span>
+                  ) : null}
+                </span>
+                <span className={paymentsStyles.cellRight}
+                      style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                  {fmtRm(p.amount_centi, header.currency)}
+                </span>
+                <span className={paymentsStyles.cell}>
+                  {p.account_sheet ?? <span className={styles.muted}>—</span>}
+                </span>
+                <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {p.approval_code ?? <span className={styles.muted}>—</span>}
+                </span>
+                <span className={paymentsStyles.cell}>
+                  {p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={styles.muted}>—</span>}
+                </span>
+                <span className={paymentsStyles.cell}>
+                  {!locked && (
                     <button
                       type="button"
-                      disabled={locked || deletePayment.isPending}
+                      className={paymentsStyles.trashBtn}
+                      disabled={deletePayment.isPending}
                       onClick={() => {
-                        if (confirm(`Delete this ${METHOD_LABEL[p.method]} payment of ${fmtRm(p.amount_centi, header.currency)}?`)) {
+                        if (confirm(`Delete this ${apiToLabel(p)} payment of ${fmtRm(p.amount_centi, header.currency)}?`)) {
                           deletePayment.mutate({ docNo: header.doc_no, id: p.id });
                         }
                       }}
-                      title="Delete payment"
-                      style={{
-                        background: 'transparent', border: 'none', padding: 4,
-                        cursor: locked ? 'not-allowed' : 'pointer',
-                        color: 'var(--c-festive-b)',
-                      }}
+                      title="Remove payment"
                     >
                       <Trash2 size={14} strokeWidth={1.75} />
                     </button>
-                  </td>
-                </tr>
-              ))}
+                  )}
+                </span>
+              </div>
+            ))}
 
-              {/* Inline add-payment row */}
-              {adding && (
-                <tr style={{ background: 'var(--c-cream)' }}>
-                  <td>
-                    <input
-                      type="date"
-                      value={form.paidAt}
-                      onChange={(e) => setForm((s) => ({ ...s, paidAt: e.target.value }))}
-                      className={styles.fieldInput}
-                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={form.method}
-                      onChange={(e) => setForm((s) => ({ ...s, method: e.target.value as PaymentMethod }))}
-                      className={styles.fieldInput}
-                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+            {/* In-flight draft rows (commander typing) */}
+            {drafts.map((d) => (
+              <div className={paymentsStyles.row} key={d.uid}>
+                <span className={paymentsStyles.cell}>
+                  <input
+                    type="date"
+                    className={paymentsStyles.inlineInput}
+                    value={d.paidAt}
+                    disabled={locked}
+                    onChange={(e) => patchDraft(d.uid, { paidAt: e.target.value })}
+                  />
+                </span>
+                <span className={paymentsStyles.cell}>
+                  <select
+                    className={paymentsStyles.inlineSelect}
+                    value={d.methodLabel}
+                    disabled={locked}
+                    onChange={(e) => patchDraft(d.uid, { methodLabel: e.target.value as PaymentMethodLabel })}
+                  >
+                    {PAYMENT_METHOD_OPTIONS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </span>
+                <span className={paymentsStyles.cellRight}>
+                  <input
+                    type="number" min={0} step="0.01"
+                    className={paymentsStyles.inlineInputRight}
+                    value={d.amountCenti === 0 ? '' : (d.amountCenti / 100).toFixed(2)}
+                    placeholder="0"
+                    disabled={locked}
+                    onChange={(e) => patchDraft(d.uid, {
+                      amountCenti: Math.round(Number(e.target.value) * 100) || 0,
+                    })}
+                  />
+                </span>
+                <span className={paymentsStyles.cell}>
+                  <input
+                    type="text"
+                    className={`${paymentsStyles.inlineInput} ${paymentsStyles.placeholderHint}`}
+                    placeholder="e.g. AKHC 3809"
+                    value={d.accountSheet}
+                    disabled={locked}
+                    onChange={(e) => patchDraft(d.uid, { accountSheet: e.target.value })}
+                  />
+                </span>
+                <span className={paymentsStyles.cell}>
+                  <input
+                    type="text"
+                    className={paymentsStyles.inlineInput}
+                    value={d.approvalCode}
+                    disabled={locked}
+                    onChange={(e) => patchDraft(d.uid, { approvalCode: e.target.value })}
+                  />
+                </span>
+                <span className={paymentsStyles.cell}>
+                  <select
+                    className={paymentsStyles.inlineInputUser}
+                    value={d.collectedBy}
+                    disabled={locked}
+                    onChange={(e) => patchDraft(d.uid, { collectedBy: e.target.value })}
+                  >
+                    <option value="">—</option>
+                    {staff.filter((s) => s.active).map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </span>
+                <span className={paymentsStyles.cell}>
+                  <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={() => commitDraft(d)}
+                      disabled={locked || addPayment.isPending || d.amountCenti <= 0}
+                      title={d.amountCenti <= 0 ? 'Enter an amount > 0 first' : 'Save payment'}
+                      style={{
+                        background: 'transparent', border: 'none', padding: 4,
+                        cursor: d.amountCenti <= 0 ? 'not-allowed' : 'pointer',
+                        color: d.amountCenti <= 0 ? 'var(--fg-muted)' : 'var(--c-secondary-a, #2F5D4F)',
+                      }}
                     >
-                      <option value="merchant">Merchant</option>
-                      <option value="transfer">Transfer</option>
-                      <option value="cash">Cash</option>
-                    </select>
-                    {form.method === 'merchant' && (
-                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                        <select
-                          value={form.merchantProvider}
-                          onChange={(e) => setForm((s) => ({ ...s, merchantProvider: e.target.value as MerchantProvider | '' }))}
-                          className={styles.fieldInput}
-                          style={{ height: 26, fontSize: 'var(--fs-11)', flex: 1 }}
-                        >
-                          <option value="">Provider…</option>
-                          <option value="GHL">GHL</option>
-                          <option value="HLB">HLB</option>
-                          <option value="MBB">MBB</option>
-                          <option value="PBB">PBB</option>
-                        </select>
-                        <select
-                          value={form.installmentMonths}
-                          onChange={(e) => setForm((s) => ({ ...s, installmentMonths: e.target.value as '' | '6' | '12' }))}
-                          className={styles.fieldInput}
-                          style={{ height: 26, fontSize: 'var(--fs-11)', flex: 1 }}
-                        >
-                          <option value="">Normal</option>
-                          <option value="6">6 mo</option>
-                          <option value="12">12 mo</option>
-                        </select>
-                      </div>
-                    )}
-                  </td>
-                  <td className={styles.tableRight}>
-                    <input
-                      type="number" step="0.01" min={0}
-                      value={(form.amountCenti / 100).toFixed(2)}
-                      onChange={(e) => setForm((s) => ({ ...s, amountCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
-                      className={styles.fieldInput}
-                      style={{ height: 28, fontSize: 'var(--fs-12)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="text"
-                      value={form.accountSheet}
-                      onChange={(e) => setForm((s) => ({ ...s, accountSheet: e.target.value }))}
-                      placeholder="Bank / cashbook"
-                      className={styles.fieldInput}
-                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="text"
-                      value={form.approvalCode}
-                      onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
-                      placeholder={
-                        form.method === 'merchant' ? 'Auth code' :
-                        form.method === 'transfer' ? 'Slip ref' :
-                                                     'Receipt'
-                      }
-                      className={styles.fieldInput}
-                      style={{ height: 28, fontSize: 'var(--fs-12)', fontVariantNumeric: 'tabular-nums' }}
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={form.collectedBy}
-                      onChange={(e) => setForm((s) => ({ ...s, collectedBy: e.target.value }))}
-                      className={styles.fieldInput}
-                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                      <Save size={14} strokeWidth={1.75} />
+                    </button>
+                    <button
+                      type="button"
+                      className={paymentsStyles.trashBtn}
+                      onClick={() => removeDraft(d.uid)}
+                      title="Discard"
+                      disabled={locked}
                     >
-                      <option value="">—</option>
-                      {(staff.data ?? []).filter((s) => s.active).map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
-                      <button
-                        type="button"
-                        onClick={submitNew}
-                        disabled={addPayment.isPending || !form.amountCenti}
-                        title="Save payment"
-                        style={{
-                          background: 'transparent', border: 'none', padding: 4,
-                          cursor: 'pointer', color: 'var(--c-secondary-a, #2F5D4F)',
-                        }}
-                      >
-                        <Save size={14} strokeWidth={1.75} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setAdding(false); resetForm(); }}
-                        title="Cancel"
-                        style={{
-                          background: 'transparent', border: 'none', padding: 4,
-                          cursor: 'pointer', color: 'var(--fg-muted)',
-                        }}
-                      >
-                        <X size={14} strokeWidth={1.75} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
+                      <Trash2 size={14} strokeWidth={1.75} />
+                    </button>
+                  </div>
+                </span>
+              </div>
+            ))}
+          </div>
 
-        {/* + Add Payment trigger */}
-        {!adding && !locked && (
-          <button
-            type="button"
-            onClick={() => { resetForm(); setAdding(true); }}
-            style={{
-              marginTop: 'var(--space-2)',
-              background: 'transparent', border: 'none', padding: 0,
-              color: 'var(--c-orange)', cursor: 'pointer',
-              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-            }}
-          >
-            + Add Payment
-          </button>
-        )}
-
-        {/* ── Summary ────────────────────────────────────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Summary</p>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'auto 1fr',
-            gap: '4px 16px',
-            fontFamily: 'var(--font-sans)',
-            fontSize: 'var(--fs-13)',
-            maxWidth: 360,
-          }}>
-            <span className={styles.muted}>Subtotal</span>
-            <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-              {fmtRm(grandTotal, header.currency)}
+          {/* ── Summary (Deposit Paid + Balance) ────────────────────── */}
+          <div className={paymentsStyles.summary}>
+            <span className={paymentsStyles.summaryLabel}>
+              Deposit Paid <DollarSign size={12} strokeWidth={1.75} />
             </span>
-            <span className={styles.muted}>Deposit Paid</span>
-            <span style={{
-              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
-              color: 'var(--c-burnt)', fontWeight: 600,
-            }}>
+            <span className={paymentsStyles.summaryValueAccent}>
               {fmtRm(paidCenti, header.currency)}
             </span>
-            <span style={{ fontWeight: 600 }}>
-              Balance
-              {isFullPaid && (
-                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-secondary-a, #2F5D4F)' }}>· PAID</span>
-              )}
-              {isHalfPaid && (
-                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· deposit only</span>
-              )}
+            <span className={paymentsStyles.summaryLabel}>
+              Balance <DollarSign size={12} strokeWidth={1.75} />
             </span>
-            <span style={{
-              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
-              fontWeight: 600,
-              color: isFullPaid ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--c-ink)',
-            }}>
+            <span className={balanceCenti > 0 ? paymentsStyles.balanceOutstanding : paymentsStyles.balanceClear}>
               {fmtRm(balanceCenti, header.currency)}
+              {grandTotal > 0 && paidCenti >= grandTotal && (
+                <span style={{ marginLeft: 8, fontSize: 'var(--fs-11)' }}>· PAID</span>
+              )}
             </span>
-          </div>
-        </div>
-
-        {/* ── Deposit target (expected, not paid) ─────────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Expected Deposit</p>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-            <label className={styles.field} style={{ maxWidth: 200 }}>
-              <span className={styles.fieldLabel}>
-                Deposit ({header.currency})
-                {depositCenti === half && grandTotal > 0 && (
-                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
-                )}
-              </span>
-              <input
-                type="number" step="0.01" min={0}
-                className={styles.fieldInput}
-                value={(depositCenti / 100).toFixed(2)}
-                disabled={locked}
-                onChange={(e) => setDepositCenti(Math.round(Number(e.target.value) * 100) || 0)}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => setDepositCenti(half)}
-              disabled={locked || grandTotal === 0}
-              style={{
-                background: 'transparent', border: 'none',
-                color: 'var(--c-orange)', cursor: locked ? 'not-allowed' : 'pointer',
-                fontFamily: 'var(--font-sans)',
-                fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0,
-                marginBottom: 8,
-              }}
-            >
-              Set 50% deposit ({fmtRm(half, header.currency)})
-            </button>
-            <Button
-              variant="primary" size="sm"
-              onClick={saveDeposit}
-              disabled={saving || locked || depositCenti === (header.deposit_centi ?? 0)}
-              style={{ marginBottom: 4 }}
-            >
-              <Save {...ICON} />
-              <span>{saving ? 'Saving…' : 'Save deposit'}</span>
-            </Button>
           </div>
         </div>
       </div>
     </section>
   );
-};
+});
+PaymentCard.displayName = 'PaymentCard';
+
 
 /* ════════════════════════════════════════════════════════════════════════
    StatusTimeline + PriceOverridePanel — removed in followup #85
@@ -2261,7 +2328,14 @@ const relTime = (iso: string): string => {
   return new Date(iso).toLocaleDateString('en-MY', { year: 'numeric', month: 'short', day: '2-digit' });
 };
 
-const HistoryPanel = ({
+/* Task #99 (UI perf) — Memoize the History drawer. It only mounts when
+   `historyOpen` is true (so the audit-log query is correctly lazy by
+   construction) but once opened, scrolling / expanding individual entries
+   triggers internal state changes that would otherwise re-render the entire
+   parent page. With docNo + onClose stable from the parent (the parent's
+   onClose is wrapped in useCallback below), shallow-compare prevents the
+   parent-driven re-renders. */
+const HistoryPanel = memo(({
   docNo,
   onClose,
 }: {
@@ -2382,4 +2456,5 @@ const HistoryPanel = ({
       </aside>
     </>
   );
-};
+});
+HistoryPanel.displayName = 'HistoryPanel';

@@ -182,6 +182,27 @@ export const useUpdateMfgSalesOrderHeader = () => {
   });
 };
 
+/* Convert an SO → new DO. Server inserts the DO header + items, links
+   the SO back to the new DO, and emits a UPDATE_DETAILS audit row.
+   Invalidates both lists so the new DO shows up and the SO row reflects
+   the linked_do_doc_no change. */
+export const useConvertSoToDo = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, deliveryDate }: { docNo: string; deliveryDate?: string }) =>
+      authedFetch<{ doDocNo: string; deliveryOrderId: string; lineCount: number }>(
+        `/mfg-sales-orders/${docNo}/convert-to-do`,
+        { method: 'POST', body: JSON.stringify({ deliveryDate: deliveryDate ?? null }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+    },
+  });
+};
+
 export const useUpdateMfgSalesOrderStatus = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -437,11 +458,16 @@ export type DebtorSuggestion = {
   address3: string | null;
   address4: string | null;
 };
+/* Task #99 (UI perf) — Customer Name autocomplete on the SO Detail page
+   used to fire every keystroke regardless of length. With 2000+ debtors in
+   prod this was the worst offender on the page when typing in the customer
+   field. Guard on length>=2 + leave the debounce to the caller. */
 export const useDebtorSearch = (q: string) => useQuery({
   queryKey: ['mfg-sales-orders', 'debtors', q],
   queryFn: () => authedFetch<{ debtors: DebtorSuggestion[] }>(
     `/mfg-sales-orders/debtors/search${q ? `?q=${encodeURIComponent(q)}` : ''}`,
   ),
+  enabled: q.trim().length >= 2,
   staleTime: 30_000,
   retry: 1,
 });
