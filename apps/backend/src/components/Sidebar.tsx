@@ -22,6 +22,7 @@ import {
   Undo2,
   Settings,
   LogOut,
+  FileBarChart,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useNotificationStore } from '../lib/notifications';
@@ -111,6 +112,15 @@ export const Sidebar = () => {
     { kind: 'group', label: 'Finance' },
     { kind: 'link', to: '/accounting', icon: <BookOpen {...ICON_PROPS} />, label: 'Accounting' },
     { kind: 'link', to: '/outstanding', icon: <AlertCircle {...ICON_PROPS} />, label: 'Outstanding' },
+    { kind: 'group', label: 'Reports' },
+    /* PR-H — Sales Order Detail Listing report. AutoCount-style line-item
+       view of every SO. "Sales Order Listing" + "Outstanding Listing" are
+       placeholders for follow-up reports — route the latter to the unified
+       /outstanding dashboard so it isn't a dead link until the dedicated
+       report page lands. */
+    { kind: 'link', to: '/reports/sales-order-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'Sales Order Listing' },
+    { kind: 'link', to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'Sales Order Detail Listing' },
+    { kind: 'link', to: '/outstanding', icon: <FileBarChart {...ICON_PROPS} />, label: 'Outstanding Listing' },
     { kind: 'group', label: 'Reference' },
     { kind: 'link', to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
     { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
