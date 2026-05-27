@@ -72,17 +72,10 @@ const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
    keeps stable referential identity on host elements between renders).
    ────────────────────────────────────────────────────────────────────────── */
 const TITLE_ICON_STYLE: CSSProperties = { color: 'var(--c-burnt)' };
-/* PR — commander 2026-05-27 typography polish. Title total badge was
-   fs-18/800 which made it dominate the page header. Step down to fs-14/700
-   so it reads as a meta value next to the doc no rather than another title. */
-const TITLE_TOTAL_STYLE: CSSProperties = {
-  marginLeft: 'var(--space-2)',
-  fontFamily: 'var(--font-mark)',
-  fontSize: 'var(--fs-14)',
-  fontWeight: 700,
-  fontStretch: '80%',
-  color: 'var(--c-burnt)',
-};
+/* PR — commander 2026-05-27 followup #2. Total was previously inline in
+   the <h1> title; relocated into a right-rail meta block (.totalRail) sit-
+   ting beside the action group so the title stays compact. Style now lives
+   in SalesOrderDetail.module.css → .totalRailLabel / .totalRailValue. */
 const LOCK_BANNER_INNER_STYLE: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 8,
 };
@@ -628,12 +621,9 @@ export const SalesOrderDetail = () => {
             <h1 className={styles.title}>
               <FileText size={16} strokeWidth={1.75} style={TITLE_ICON_STYLE} />
               {header.doc_no} — {header.debtor_name}
-              {/* PR #163 — Total badge in title row so commander sees the SO
-                  value the moment the page loads (was previously buried
-                  inside the Payment card). */}
-              <span style={TITLE_TOTAL_STYLE}>
-                {fmtRm(header.local_total_centi, header.currency)}
-              </span>
+              {/* PR — commander 2026-05-27 followup: total badge moved out
+                  of the title into a right-rail .totalRail meta block down
+                  in the .actions group so this <h1> reads compact again. */}
             </h1>
             <p className={styles.subtitle}>
               SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
@@ -643,6 +633,16 @@ export const SalesOrderDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
+          {/* PR — commander 2026-05-27 followup: Total relocated from the
+              <h1> into this right-rail meta tile. Renders as a small eyebrow
+              label + KPI-sized value alongside the status pill / actions.
+              Brand burnt-orange retained; size = fs-15/600 (KPI-ish). */}
+          <div className={styles.totalRail}>
+            <span className={styles.totalRailLabel}>Total</span>
+            <span className={styles.totalRailValue}>
+              {fmtRm(header.local_total_centi, header.currency)}
+            </span>
+          </div>
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status]}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
@@ -1459,45 +1459,51 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Type</span>
-              <select className={styles.fieldSelect} value={form.customerType}
-                disabled={inputsDisabled}
-                onChange={(e) => set('customerType', e.target.value)}>
-                <option value="">—</option>
-                {customerTypeOpts.map((t) => (
-                  <option key={t.id} value={t.value}>{t.label}</option>
-                ))}
-                {/* If the persisted value isn't in the active options list
-                    (commander deactivated it but this SO already references
-                    it), render it explicitly so the select still shows it. */}
-                {form.customerType && !customerTypeOpts.some((t) => t.value === form.customerType) && (
-                  <option value={form.customerType}>{form.customerType}</option>
-                )}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.customerType}
+                  disabled={inputsDisabled}
+                  onChange={(e) => set('customerType', e.target.value)}>
+                  <option value="">—</option>
+                  {customerTypeOpts.map((t) => (
+                    <option key={t.id} value={t.value}>{t.label}</option>
+                  ))}
+                  {/* If the persisted value isn't in the active options list
+                      (commander deactivated it but this SO already references
+                      it), render it explicitly so the select still shows it. */}
+                  {form.customerType && !customerTypeOpts.some((t) => t.value === form.customerType) && (
+                    <option value={form.customerType}>{form.customerType}</option>
+                  )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Salesperson</span>
               {/* Commander 2026-05-27: only admin / sales_director can swap
                   the salesperson on an existing SO. Non-admin sales roles
                   see a disabled select pinned to whoever owns the SO. */}
-              <select className={styles.fieldSelect} value={form.salespersonId}
-                disabled={inputsDisabled || !canChangeSalesperson}
-                onChange={(e) => set('salespersonId', e.target.value)}>
-                <option value="">— Pick staff —</option>
-                {staffList.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
-                ))}
-                {/* Persisted salesperson may not be in the active list
-                    (deactivated since the SO was created) — render
-                    explicitly so the select still shows the original
-                    name instead of blanking out. */}
-                {form.salespersonId
-                  && !staffList.some((s) => s.id === form.salespersonId)
-                  && (
-                    <option value={form.salespersonId}>
-                      (former staff)
-                    </option>
-                  )}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.salespersonId}
+                  disabled={inputsDisabled || !canChangeSalesperson}
+                  onChange={(e) => set('salespersonId', e.target.value)}>
+                  <option value="">— Pick staff —</option>
+                  {staffList.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
+                  ))}
+                  {/* Persisted salesperson may not be in the active list
+                      (deactivated since the SO was created) — render
+                      explicitly so the select still shows the original
+                      name instead of blanking out. */}
+                  {form.salespersonId
+                    && !staffList.some((s) => s.id === form.salespersonId)
+                    && (
+                      <option value={form.salespersonId}>
+                        (former staff)
+                      </option>
+                    )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
           </div>
         </div>
@@ -1512,17 +1518,20 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
-              <select className={styles.fieldSelect} value={form.buildingType}
-                disabled={inputsDisabled}
-                onChange={(e) => set('buildingType', e.target.value)}>
-                <option value="">—</option>
-                {buildingTypeOpts.map((b) => (
-                  <option key={b.id} value={b.value}>{b.label}</option>
-                ))}
-                {form.buildingType && !buildingTypeOpts.some((b) => b.value === form.buildingType) && (
-                  <option value={form.buildingType}>{form.buildingType}</option>
-                )}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.buildingType}
+                  disabled={inputsDisabled}
+                  onChange={(e) => set('buildingType', e.target.value)}>
+                  <option value="">—</option>
+                  {buildingTypeOpts.map((b) => (
+                    <option key={b.id} value={b.value}>{b.label}</option>
+                  ))}
+                  {form.buildingType && !buildingTypeOpts.some((b) => b.value === form.buildingType) && (
+                    <option value={form.buildingType}>{form.buildingType}</option>
+                  )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Venue</span>
@@ -1595,20 +1604,23 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   values that aren't in the options list still render via
                   the trailing fallback <option> so we don't silently drop
                   them on first paint. */}
-              <select className={styles.fieldSelect} value={form.emergencyContactRelationship}
-                disabled={inputsDisabled}
-                onChange={(e) => set('emergencyContactRelationship', e.target.value)}>
-                <option value="">—</option>
-                {relationshipOpts.map((r) => (
-                  <option key={r.id} value={r.value}>{r.label}</option>
-                ))}
-                {form.emergencyContactRelationship &&
-                  !relationshipOpts.some((r) => r.value === form.emergencyContactRelationship) && (
-                  <option value={form.emergencyContactRelationship}>
-                    {form.emergencyContactRelationship}
-                  </option>
-                )}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.emergencyContactRelationship}
+                  disabled={inputsDisabled}
+                  onChange={(e) => set('emergencyContactRelationship', e.target.value)}>
+                  <option value="">—</option>
+                  {relationshipOpts.map((r) => (
+                    <option key={r.id} value={r.value}>{r.label}</option>
+                  ))}
+                  {form.emergencyContactRelationship &&
+                    !relationshipOpts.some((r) => r.value === form.emergencyContactRelationship) && (
+                    <option value={form.emergencyContactRelationship}>
+                      {form.emergencyContactRelationship}
+                    </option>
+                  )}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Phone</span>
@@ -1646,30 +1658,39 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>State</span>
-              <select className={styles.fieldSelect} value={form.state}
-                onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
-                disabled={inputsDisabled || localities.isLoading}>
-                <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
-                {states.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.state}
+                  onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
+                  disabled={inputsDisabled || localities.isLoading}>
+                  <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
+                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>City</span>
-              <select className={styles.fieldSelect} value={form.city}
-                onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
-                disabled={inputsDisabled || !form.state}>
-                <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
-                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.city}
+                  onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
+                  disabled={inputsDisabled || !form.state}>
+                  <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
+                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Postcode</span>
-              <select className={styles.fieldSelect} value={form.postcode}
-                onChange={(e) => set('postcode', e.target.value)}
-                disabled={inputsDisabled || !form.city}>
-                <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
-                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <span className={styles.selectWrap}>
+                <select className={styles.fieldSelect} value={form.postcode}
+                  onChange={(e) => set('postcode', e.target.value)}
+                  disabled={inputsDisabled || !form.city}>
+                  <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
+                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             {/* Task #121 — Country is auto-derived from the picked state via
                 my_localities. Read-only; the API re-derives + snapshots it

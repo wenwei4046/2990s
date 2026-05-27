@@ -75,6 +75,35 @@
   gap: var(--space-2);
 }
 
+/* PR — commander 2026-05-27 followup. Total badge moved out of the page
+   title <h1> into its own right-rail meta block sitting next to the action
+   group. Renders as a small "eyebrow" label above the amount so it reads
+   like a KPI tile, not another headline. */
+.totalRail {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  line-height: 1.1;
+  margin-right: var(--space-2);
+}
+.totalRailLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-10);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.totalRailValue {
+  font-family: var(--font-mark);
+  font-size: var(--fs-15);
+  font-weight: 600;
+  font-stretch: 80%;
+  color: var(--c-burnt);
+  font-variant-numeric: tabular-nums;
+}
+
 .statusPill {
   display: inline-flex;
   align-items: center;
@@ -120,16 +149,27 @@
 }
 
 .cardTitle {
+  /* PR — commander 2026-05-27 followup: shrink section eyebrows further.
+     Was fs-10 / weight 700; commander wants them quieter — drop to fs-9 +
+     keep uppercase + tighten letter-spacing slightly. Applies to every
+     section header (CUSTOMER / ORDER INFO / EMERGENCY CONTACT / DELIVERY
+     ADDRESS / LINE ITEMS / TOTALS · MARGIN). Don't pick favorites. */
   font-family: var(--font-button);
-  font-size: var(--fs-10);
+  font-size: var(--fs-9, 9px);
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--fg-muted);
   margin: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
+}
+/* PR — commander 2026-05-27 followup: scale section eyebrow icons down
+   from 16px to 12px so they balance the smaller fs-9 cardTitle text. */
+.cardTitle svg {
+  width: 12px;
+  height: 12px;
 }
 
 .cardBody {
@@ -211,13 +251,37 @@
   color: var(--fg-muted);
   cursor: not-allowed;
 }
-/* Native select still needs a visible chevron when editable — keep the
-   default UA chevron and just align the right padding so text doesn't
-   overlap it. */
+/* PR — commander 2026-05-27 followup: native UA chevron varies wildly
+   across browsers and looks crude next to the rest of the rounded brand
+   icons. Hide it on .fieldSelect and lean on the wrapper-based custom
+   ChevronDown (see .selectWrap / .selectChevron below). Right padding
+   reserves room for the 14px Lucide icon plus its 10px gutter. */
 .fieldSelect {
-  padding-right: 24px;
-  appearance: auto;
-  background-position: right 8px center;
+  padding-right: 32px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: none;
+}
+.fieldSelect::-ms-expand { display: none; }
+
+/* .selectWrap — opt-in wrapper that places a custom Lucide ChevronDown
+   absolutely on the right edge of the select. Wrap the <select> + the
+   <ChevronDown> in a parent that uses this class. Keeps the chevron 10px
+   from the right edge, vertically centered, and ignores pointer events so
+   clicks pass through to the native select. */
+.selectWrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.selectChevron {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--c-ink-60, var(--fg-muted));
+  pointer-events: none;
 }
 
 /* ── Debtor autocomplete dropdown ───────────────────────────────────── */
