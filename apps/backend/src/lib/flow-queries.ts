@@ -401,7 +401,12 @@ export const useSalesOrderAuditLog = (docNo: string | null) => useQuery({
   queryKey: ['mfg-sales-order-audit-log', docNo],
   queryFn: () => authedFetch<{ entries: SoAuditEntry[] }>(`/mfg-sales-orders/${docNo}/audit-log`).then((r) => r.entries),
   enabled: Boolean(docNo),
-  staleTime: 15_000,
+  // Audit log is append-only — once fetched, the data is stable for the
+  // lifetime of the SO Detail view. Only invalidations from mutations
+  // (status change, header update, add/edit/delete line) should trigger
+  // a refetch. 5 min cap keeps things sane if the user leaves the tab open
+  // for an extended session.
+  staleTime: 5 * 60_000,
   retry: 1,
 });
 
