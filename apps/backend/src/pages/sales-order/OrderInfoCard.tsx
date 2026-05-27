@@ -39,6 +39,8 @@ const OrderInfoCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, l
 
   const buildingTypeOptsQ = useSoDropdownOptions('building_type');
   const buildingTypeOpts = optionsOrFallback('building_type', buildingTypeOptsQ.data);
+  const venueOptsQ = useSoDropdownOptions('venue');
+  const venueOpts = optionsOrFallback('venue', venueOptsQ.data);
 
   const set = <K extends keyof typeof form>(k: K, v: string) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -98,13 +100,24 @@ const OrderInfoCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, l
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Venue</span>
-            <input
-              className={styles.fieldInput}
+            {/* Commander 2026-05-27: Venue moved from free-text → picklist
+                managed in SO Maintenance > Venue. Falls back to text input
+                when the SO has a venue that's no longer in the active list
+                (preserves data integrity for legacy SOs). */}
+            <select
+              className={styles.fieldSelect}
               value={form.venue}
-              placeholder="e.g. KL Showroom, Penang Branch"
               disabled={inputsDisabled}
               onChange={(e) => set('venue', e.target.value)}
-            />
+            >
+              <option value="">—</option>
+              {venueOpts.map((v) => (
+                <option key={v.id} value={v.value}>{v.label}</option>
+              ))}
+              {form.venue && !venueOpts.some((v) => v.value === form.venue) && (
+                <option value={form.venue}>{form.venue} (legacy)</option>
+              )}
+            </select>
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Processing Date</span>
