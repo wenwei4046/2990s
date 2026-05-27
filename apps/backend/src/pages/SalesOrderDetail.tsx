@@ -49,6 +49,7 @@ import {
   distinctStates,
   citiesInState,
   postcodesInCity,
+  countryForState,
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -127,6 +128,10 @@ type SoHeader = {
   // ── PR #35 additions ────────────────────────────────────────────────
   customer_id: string | null;
   customer_state: string | null;
+  /* Task #121 — country snapshot auto-derived from customer_state via
+     my_localities on POST/PATCH (migration 0082). Nullable for SOs whose
+     state isn't in the locality dataset yet. */
+  customer_country: string | null;
   customer_po: string | null;
   customer_po_id: string | null;
   customer_po_date: string | null;
@@ -1124,6 +1129,17 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     () => (form.state && form.city ? postcodesInCity(localityRows, form.state, form.city) : []),
     [localityRows, form.state, form.city],
   );
+  /* Task #121 — Country auto-derives from the picked state. Read-only on
+     the form; the API re-derives + snapshots it on PATCH. Prefer the
+     header's stored customer_country (so historic SOs whose locality
+     country later changed still display the captured country); fall back
+     to the live derive, then Malaysia. */
+  const country = useMemo<string>(() => {
+    const headerCountry = (header.customer_country as string | null | undefined) ?? null;
+    if (headerCountry) return headerCountry;
+    const derived = form.state ? countryForState(localityRows, form.state) : null;
+    return derived ?? 'Malaysia';
+  }, [header, form.state, localityRows]);
 
   const applySuggestion = (d: DebtorSuggestion) => {
     setForm((s) => ({
@@ -1451,6 +1467,18 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </label>
+            {/* Task #121 — Country is auto-derived from the picked state via
+                my_localities. Read-only; the API re-derives + snapshots it
+                onto the SO header on PATCH whenever customerState changes. */}
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Country</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 26,
+                color: 'var(--fg-muted)',
+              }}>
+                {country}
+              </span>
+            </div>
             <div className={styles.field}>
               <span className={styles.fieldLabel}>Sales Location</span>
               <span className={styles.fieldInput} style={{
