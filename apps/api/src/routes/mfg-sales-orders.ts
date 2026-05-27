@@ -24,7 +24,9 @@ const HEADER =
   'currency, status, remark2, remark3, remark4, note, processing_date, sales_exemption_expiry, ' +
   /* PR #35 + #46 — extended PO + POS handover fields */
   'customer_id, customer_po, customer_po_id, customer_po_date, customer_po_image_b64, customer_so_no, hub_id, hub_name, ' +
-  'customer_state, customer_delivery_date, internal_expected_dd, linked_do_doc_no, ' +
+  /* Task #121 — customer_country snapshot auto-derived from customer_state
+     via my_localities lookup on POST/PATCH (migration 0082). */
+  'customer_state, customer_country, customer_delivery_date, internal_expected_dd, linked_do_doc_no, ' +
   'ship_to_address, bill_to_address, install_to_address, subtotal_sen, overdue, ' +
   /* PR #46 — POS handover */
   'email, customer_type, salesperson_id, city, postcode, building_type, ' +
@@ -41,6 +43,28 @@ const ITEM =
   /* PR-F — per-line photo keys (migration 0076) */
   'photo_urls, ' +
   'created_at';
+
+/* ─────────────────────────── Country auto-derive (Task #121) ──────────
+   Given a customer_state, look up any my_localities row carrying that
+   state and read its `country` column. Returns null when the state is
+   unknown / not yet seeded — caller decides whether to fall back to a
+   default. Cheap single-row lookup; the read is on the indexed `state`
+   column so it stays under a millisecond even with the full ~7k MY
+   postcode set. ─────────────────────────────────────────────────────── */
+const deriveCountryFromState = async (
+  sb: any,
+  state: string | null | undefined,
+): Promise<string | null> => {
+  if (!state) return null;
+  const { data } = await sb
+    .from('my_localities')
+    .select('country')
+    .eq('state', state)
+    .limit(1)
+    .maybeSingle();
+  const country = (data as { country?: string } | null)?.country;
+  return country ?? null;
+};
 
 const nextDocNo = async (sb: any): Promise<string> => {
   // HOUZS pattern: SO-NNNNNN (6-digit zero-padded counter across all time)
@@ -193,6 +217,14 @@ mfgSalesOrders.post('/', async (c) => {
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;
 
+  /* Task #121 — derive country from the picked customer_state via the
+     localities lookup. Stays null when the state is unknown so we don't
+     forge a country the locality table never declared. */
+  const customerCountrySnapshot = await deriveCountryFromState(
+    sb,
+    (body.customerState as string | null | undefined) ?? null,
+  );
+
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
     transfer_to: (body.transferTo as string) ?? null,
@@ -249,6 +281,8 @@ mfgSalesOrders.post('/', async (c) => {
     target_date: (body.targetDate as string) ?? null,
     customer_id: (body.customerId as string) ?? null,
     customer_state: (body.customerState as string) ?? null,
+    /* Task #121 — country snapshot auto-derived above. */
+    customer_country: customerCountrySnapshot,
     customer_delivery_date: (body.customerDeliveryDate as string) ?? null,
     /* PR #144 — Commander: "当我已经 create 好了这个 sales order 的时候，
        为什么我点进去 edit processing 的 delivery date 时，怎么没看到呢".
@@ -670,6 +704,17 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
       updates[to] = body[from];
     }
   }
+  /* Task #121 — when customerState changes, re-derive customer_country
+     from my_localities so the SO snapshot follows the new state's country.
+     A null state explicitly clears the snapshot (so an SO whose state is
+     wiped doesn't keep a stale country). */
+  if (body['customerState'] !== undefined) {
+    updates['customer_country'] = await deriveCountryFromState(
+      sb,
+      body['customerState'] as string | null,
+    );
+  }
+
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
   // PR-D — snapshot the row before update so we can emit a field-level diff

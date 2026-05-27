@@ -22,6 +22,9 @@ const createSchema = z.object({
   stateCode: z.string().trim().min(1),
   city:      z.string().trim().min(1),
   postcode:  z.string().trim().min(1),
+  /* Task #121 — optional, defaults to Malaysia. Future SG / TH states
+     declare their own country so the SO snapshot is correct. */
+  country:   z.string().trim().min(1).optional(),
 });
 
 const updateSchema = z.object({
@@ -29,6 +32,7 @@ const updateSchema = z.object({
   stateCode: z.string().trim().min(1).optional(),
   city:      z.string().trim().min(1).optional(),
   postcode:  z.string().trim().min(1).optional(),
+  country:   z.string().trim().min(1).optional(),
 });
 
 // POST / — create a new row.
@@ -46,8 +50,11 @@ localities.post('/', async (c) => {
       state_code: parsed.data.stateCode.toUpperCase(),
       city:       parsed.data.city,
       postcode:   parsed.data.postcode,
+      /* Task #121 — Malaysia is the implicit default; only override when
+         the body carries an explicit country. */
+      country:    parsed.data.country ?? 'Malaysia',
     })
-    .select('id, state, state_code, city, postcode')
+    .select('id, state, state_code, city, postcode, country')
     .single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   return c.json({ locality: data });
@@ -66,6 +73,7 @@ localities.patch('/:id', async (c) => {
   if (parsed.data.stateCode) patch.state_code = parsed.data.stateCode.toUpperCase();
   if (parsed.data.city)      patch.city       = parsed.data.city;
   if (parsed.data.postcode)  patch.postcode   = parsed.data.postcode;
+  if (parsed.data.country)   patch.country    = parsed.data.country;
   if (Object.keys(patch).length === 0) return c.json({ ok: true, changed: 0 });
 
   const sb = c.get('supabase');
@@ -73,7 +81,7 @@ localities.patch('/:id', async (c) => {
     .from('my_localities')
     .update(patch)
     .eq('id', id)
-    .select('id, state, state_code, city, postcode')
+    .select('id, state, state_code, city, postcode, country')
     .maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);

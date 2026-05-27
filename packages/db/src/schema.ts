@@ -414,9 +414,13 @@ export const myLocalities = pgTable('my_localities', {
   city:      text('city').notNull(),
   state:     text('state').notNull(),       // 'Selangor','Kuala Lumpur',...
   stateCode: text('state_code').notNull(),  // 'SGR','KUL','PNG',...
+  /* Task #121 — country auto-derived to the SO snapshot when a state is
+     picked. Defaults to Malaysia; SG/TH/etc states declare their own. */
+  country:   text('country').notNull().default('Malaysia'),
 }, (t) => ({
   postcodeIdx: index('idx_my_localities_postcode').on(t.postcode),
   stateIdx:    index('idx_my_localities_state').on(t.state),
+  countryIdx:  index('idx_my_localities_country').on(t.country),
 }));
 
 /* ─────────────────────────── Orders ─────────────────────────────────── */
@@ -1072,6 +1076,10 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   // as a denormalised snapshot for display speed)
   customerId:        uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }),
   customerState:     text('customer_state'),
+  /* Task #121 — country snapshot auto-derived from customer_state via
+     my_localities lookup on POST/PATCH. Defense-in-depth so a historic
+     SO survives a locality country re-mapping. */
+  customerCountry:   text('customer_country'),
   // Customer PO — 3 structured fields + optional scanned image base64
   customerPo:        text('customer_po'),
   customerPoId:      text('customer_po_id'),
