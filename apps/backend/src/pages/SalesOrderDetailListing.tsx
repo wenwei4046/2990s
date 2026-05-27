@@ -818,6 +818,9 @@ export const SalesOrderDetailListing = () => {
           rowKey={(r) => r.id}
           searchPlaceholder="Search rows…"
           focusSearchNonce={findNonce}
+          /* Houzs design — no "drag header here to group" banner above
+             the grid; the page already owns the horizontal filter row. */
+          groupBanner={false}
           isLoading={query.isFetching && rawRows.length === 0}
           emptyMessage={query.isFetching ? 'Loading…' : 'No rows match the current filters.'}
           onRowDoubleClick={(r) => navigate(`/mfg-sales-orders/${r.doc_no}`)}
