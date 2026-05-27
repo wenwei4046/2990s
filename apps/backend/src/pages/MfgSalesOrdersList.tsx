@@ -14,6 +14,7 @@ import {
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
 import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo } from '../lib/flow-queries';
+import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
 import styles from './MfgSalesOrdersList.module.css';
@@ -21,33 +22,43 @@ import soDetailStyles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
+/* Commander 2026-05-27: "SO 的那些 column 是根据我们的 column 去添加的
+   没有的你不要跟 autocount". Align columns to ACTUAL 2990 schema (no
+   HOOKKA-legacy columns like `agent` / `sales_location` / `ref` that
+   2990 doesn't populate). Address line 3/4 dropped — `city` + `postcode`
+   are now proper columns (PR #46 POS handover). Salesperson, customer
+   code, email, customer type, building type, state added — all are
+   populated for trading SOs. */
 type SoRow = {
   doc_no: string;
   so_date: string;
   branding: string | null;
+  debtor_code: string | null;
   debtor_name: string;
-  agent: string | null;
-  sales_location: string | null;
-  ref: string | null;
+  salesperson_id: string | null;
   customer_so_no: string | null;
-  local_total_centi: number;
-  balance_centi: number;
-  /* Follow-up #83 — live balance derived from payments ledger. Comes from
-     the mfg_sales_orders_with_payment_totals view. May be null/absent on
-     older clients / failed view migration; column falls back to
-     balance_centi → (local_total − paid_centi). */
-  balance_centi_live?: number | null;
-  paid_total_centi?: number | null;
-  paid_centi: number;
+  phone: string | null;
+  email: string | null;
+  customer_type: string | null;
+  building_type: string | null;
+  venue: string | null;
+  address1: string | null;
+  address2: string | null;
+  customer_state: string | null;
+  city: string | null;
+  postcode: string | null;
   processing_date: string | null;
   customer_delivery_date: string | null;
   note: string | null;
-  address1: string | null;
-  address2: string | null;
-  address3: string | null;
-  address4: string | null;
-  phone: string | null;
-  venue: string | null;
+  local_total_centi: number;
+  /* Live balance + paid total come from mfg_sales_orders_with_payment_totals
+     view (migration 0076). Fall back to legacy balance_centi → (local_total
+     − paid_centi) when the view isn't surfaced. */
+  balance_centi: number;
+  balance_centi_live?: number | null;
+  paid_total_centi?: number | null;
+  paid_centi: number;
+  deposit_centi: number | null;
   status: string;
   currency: string;
 };
@@ -88,6 +99,19 @@ export const MfgSalesOrdersList = () => {
   const qc = useQueryClient();
   const { data, isLoading, error, refetch } = useMfgSalesOrders(undefined);
   const rows = useMemo<SoRow[]>(() => (data?.salesOrders ?? []) as SoRow[], [data]);
+
+  /* Salesperson column → look up staff name from salesperson_id. Stable
+     map memoized off the staff list so DataGrid's column memo only
+     invalidates when staff actually changes. */
+  const staffQ = useStaff();
+  const staffById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of (staffQ.data ?? [])) {
+      if (s.id) m.set(s.id, s.name ?? s.staffCode ?? s.id);
+    }
+    return m;
+  }, [staffQ.data]);
+  const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
   const [selected, setSelected] = useState<SoRow[]>([]);
   const [findNonce, setFindNonce] = useState(0);
@@ -336,7 +360,13 @@ export const MfgSalesOrdersList = () => {
 
 const STORAGE_KEY = 'pr-g.so-list.layout.v1';
 
-const COLUMNS: DataGridColumn<SoRow>[] = [
+/* buildColumns — declared as a function so the component can pass a fresh
+   `staffById` map every render (memoized inside the component to avoid
+   invalidating DataGrid's column memo on every keystroke). Column set is
+   driven by the actual `mfg_sales_orders` schema, not AutoCount. */
+const buildColumns = (
+  staffById: Map<string, string>,
+): DataGridColumn<SoRow>[] => [
   {
     key: 'doc_no', label: 'Doc. No.', width: 110, sortable: true, groupable: false,
     accessor: (r) => <span className={styles.docNo}>{r.doc_no}</span>,
@@ -353,24 +383,22 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.branding ?? '',
   },
   {
+    key: 'debtor_code', label: 'Customer Code', width: 120, sortable: true,
+    accessor: (r) => r.debtor_code ?? '',
+    searchValue: (r) => r.debtor_code ?? '',
+  },
+  {
     key: 'debtor_name', label: 'Customer Name', width: 220, sortable: true, groupable: true,
     accessor: (r) => r.debtor_name,
     searchValue: (r) => r.debtor_name,
   },
   {
-    key: 'agent', label: 'Agent', width: 120, sortable: true, groupable: true,
-    accessor: (r) => r.agent ?? '',
-    searchValue: (r) => r.agent ?? '',
-  },
-  {
-    key: 'sales_location', label: 'Sales Location', width: 140, sortable: true, groupable: true,
-    accessor: (r) => r.sales_location ?? '',
-    searchValue: (r) => r.sales_location ?? '',
-  },
-  {
-    key: 'ref', label: 'Ref.', width: 100, sortable: true,
-    accessor: (r) => r.ref ?? '',
-    searchValue: (r) => r.ref ?? '',
+    /* Salesperson display = staff.name lookup. We carry salesperson_id on
+       the row; the staff list is fetched once via useStaff and cached. */
+    key: 'salesperson_id', label: 'Salesperson', width: 140, sortable: true, groupable: true,
+    accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
+    searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
+    groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
   },
   {
     key: 'customer_so_no', label: 'Customer SO Ref', width: 140, sortable: true,
@@ -378,20 +406,56 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.customer_so_no ?? '',
   },
   {
-    key: 'local_total_centi', label: 'Local Total', width: 120, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(r.local_total_centi)}</span>,
-    searchValue: (r) => fmtRm(r.local_total_centi),
-    sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+    /* Task #91 — display the pretty Malaysian format. searchValue keeps the
+       raw stored value so a user can paste either form into Find and match. */
+    key: 'phone', label: 'Phone', width: 130, sortable: true,
+    accessor: (r) => formatPhone(r.phone) || '',
+    searchValue: (r) => `${r.phone ?? ''} ${formatPhone(r.phone) ?? ''}`,
   },
   {
-    /* Follow-up #83 — prefer the view's live balance (local_total −
-       sum(payments)). Falls back to the stored header balance_centi if the
-       view column is missing (older API), then to a client-side derivation
-       from paid_centi as the last resort. */
-    key: 'balance_centi', label: 'Balance', width: 110, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
-    searchValue: (r) => fmtRm(liveBalance(r)),
-    sortFn: (a, b) => liveBalance(a) - liveBalance(b),
+    key: 'email', label: 'Email', width: 180, sortable: true,
+    accessor: (r) => r.email ?? '',
+    searchValue: (r) => r.email ?? '',
+  },
+  {
+    key: 'customer_type', label: 'Customer Type', width: 120, sortable: true, groupable: true,
+    accessor: (r) => r.customer_type ?? '',
+    searchValue: (r) => r.customer_type ?? '',
+  },
+  {
+    key: 'building_type', label: 'Building Type', width: 120, sortable: true, groupable: true,
+    accessor: (r) => r.building_type ?? '',
+    searchValue: (r) => r.building_type ?? '',
+  },
+  {
+    key: 'venue', label: 'Venue', width: 130, sortable: true, groupable: true,
+    accessor: (r) => r.venue ?? '',
+    searchValue: (r) => r.venue ?? '',
+  },
+  {
+    key: 'address1', label: 'Address 1', width: 180, sortable: true,
+    accessor: (r) => r.address1 ?? '',
+    searchValue: (r) => r.address1 ?? '',
+  },
+  {
+    key: 'address2', label: 'Address 2', width: 180, sortable: true,
+    accessor: (r) => r.address2 ?? '',
+    searchValue: (r) => r.address2 ?? '',
+  },
+  {
+    key: 'customer_state', label: 'State', width: 130, sortable: true, groupable: true,
+    accessor: (r) => r.customer_state ?? '',
+    searchValue: (r) => r.customer_state ?? '',
+  },
+  {
+    key: 'city', label: 'City', width: 130, sortable: true, groupable: true,
+    accessor: (r) => r.city ?? '',
+    searchValue: (r) => r.city ?? '',
+  },
+  {
+    key: 'postcode', label: 'Postcode', width: 100, sortable: true,
+    accessor: (r) => r.postcode ?? '',
+    searchValue: (r) => r.postcode ?? '',
   },
   {
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
@@ -409,36 +473,32 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.note ?? '',
   },
   {
-    key: 'address1', label: 'Address 1', width: 180, sortable: true,
-    accessor: (r) => r.address1 ?? '',
-    searchValue: (r) => r.address1 ?? '',
+    key: 'local_total_centi', label: 'Local Total', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.local_total_centi)}</span>,
+    searchValue: (r) => fmtRm(r.local_total_centi),
+    sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
   },
   {
-    key: 'address2', label: 'Address 2', width: 180, sortable: true,
-    accessor: (r) => r.address2 ?? '',
-    searchValue: (r) => r.address2 ?? '',
+    key: 'deposit_centi', label: 'Deposit', width: 110, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.deposit_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.deposit_centi ?? 0),
+    sortFn: (a, b) => (a.deposit_centi ?? 0) - (b.deposit_centi ?? 0),
   },
   {
-    key: 'address3', label: 'Address 3', width: 180, sortable: true,
-    accessor: (r) => r.address3 ?? '',
-    searchValue: (r) => r.address3 ?? '',
+    key: 'paid_total_centi', label: 'Paid', width: 110, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.paid_total_centi ?? r.paid_centi ?? 0),
+    sortFn: (a, b) => (a.paid_total_centi ?? a.paid_centi ?? 0) - (b.paid_total_centi ?? b.paid_centi ?? 0),
   },
   {
-    key: 'address4', label: 'Address 4', width: 180, sortable: true,
-    accessor: (r) => r.address4 ?? '',
-    searchValue: (r) => r.address4 ?? '',
-  },
-  {
-    /* Task #91 — display the pretty Malaysian format. searchValue keeps the
-       raw stored value so a user can paste either form into Find and match. */
-    key: 'phone', label: 'Phone', width: 130, sortable: true,
-    accessor: (r) => formatPhone(r.phone) || '',
-    searchValue: (r) => `${r.phone ?? ''} ${formatPhone(r.phone) ?? ''}`,
-  },
-  {
-    key: 'venue', label: 'Venue', width: 130, sortable: true, groupable: true,
-    accessor: (r) => r.venue ?? '',
-    searchValue: (r) => r.venue ?? '',
+    /* Follow-up #83 — prefer the view's live balance (local_total −
+       sum(payments)). Falls back to the stored header balance_centi if the
+       view column is missing (older API), then to a client-side derivation
+       from paid_centi as the last resort. */
+    key: 'balance_centi', label: 'Balance', width: 110, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
+    searchValue: (r) => fmtRm(liveBalance(r)),
+    sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
