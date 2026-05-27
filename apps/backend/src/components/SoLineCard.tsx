@@ -20,11 +20,15 @@
 //   Manual override on unit price stops the auto-recompute for that line.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Trash2, ImagePlus, X } from 'lucide-react';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
+import { useUploadSoItemPhoto, useDeleteSoItemPhoto } from '../lib/flow-queries';
+import { supabase } from '../lib/supabase';
 import styles from '../pages/SalesOrderDetail.module.css';
+
+const API_URL = import.meta.env.VITE_API_URL;
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -63,6 +67,11 @@ export type SoLineDraft = {
        the header date changes. Same master-follower contract as variants. */
   lineDeliveryDate?:           string | null;
   lineDeliveryDateOverridden?: boolean;
+  /* PR-F (Task #79) — Per-line photo R2 object keys. Only meaningful
+     once the line is persisted (an itemId exists) since the upload
+     endpoint addresses photos by item id. Defaults to empty so fresh
+     drafts in the New SO flow render the card without crashing. */
+  photoUrls?:                  string[];
 };
 
 /** Factory for a fresh empty SO line draft. Used by the parent page to
@@ -76,6 +85,7 @@ export const emptySoLine = (): SoLineDraft => ({
   variants: {}, remark: '',
   lineDeliveryDate: null,
   lineDeliveryDateOverridden: false,
+  photoUrls: [],
 });
 
 const CATEGORY_BADGES: Record<string, { bg: string; fg: string; label: string }> = {
@@ -93,6 +103,9 @@ export const SoLineCard = ({
   onRemove,
   canRemove,
   inheritVariantsByCategory,
+  docNo,
+  itemId,
+  isEditing = true,
 }: {
   index:     number;
   draft:     SoLineDraft;
@@ -107,6 +120,17 @@ export const SoLineCard = ({
      merged in. Categories shipped today: sofa, bedframe — mattress has
      no variants now (PR #136). */
   inheritVariantsByCategory?: Record<string, Record<string, unknown> | undefined>;
+  /* PR-F (Task #79) — Photo upload wiring. The photo endpoints
+     address a persisted line by docNo + itemId, so the field can only
+     render in contexts where both are known (i.e. an existing SO's
+     line, not a fresh draft in the New SO flow). The card silently
+     hides the upload affordance when either is missing.
+     `isEditing` mirrors the parent's edit-mode gate — when false, the
+     thumbnails stay visible but the + Add and × Delete buttons are
+     hidden (read-only view). */
+  docNo?:    string;
+  itemId?:   string;
+  isEditing?: boolean;
 }) => {
   const maintQ   = useMaintenanceConfig('master');
   const maint    = maintQ.data?.data ?? null;
@@ -122,6 +146,16 @@ export const SoLineCard = ({
   // PR #129 — Product picker shows a click-to-open dropdown (not just
   // type-ahead). Tracks whether the suggestion list is currently visible.
   const [showPicker, setShowPicker]   = useState(false);
+
+  /* PR-F (Task #79) — Per-line photo state. Mutations are no-ops until
+     docNo + itemId are both supplied, so the New-SO flow (where lines
+     don't yet have an itemId) silently hides the photo controls. */
+  const uploadPhoto = useUploadSoItemPhoto();
+  const deletePhoto = useDeleteSoItemPhoto();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const photoUrls = draft.photoUrls ?? [];
+  const canShowPhotos = Boolean(draft.itemCode);
+  const canMutatePhotos = canShowPhotos && Boolean(docNo) && Boolean(itemId) && isEditing;
 
   // PR #136 — Commander: "Product 那边，收一个 Row 就可以了… 就 show Description
   // 就行了". After picking we sync the search box to the product NAME (not the
@@ -545,6 +579,115 @@ export const SoLineCard = ({
         </label>
       </div>
 
+      {/* ── Row 4: Photos ───────────────────────────────────────────
+          PR-F (Task #79) — Per-line photos for customisation orders.
+          Sits below Line Notes; only shows when a product has been
+          picked. Thumbnails always render so the read-only view still
+          surfaces what's attached. Upload + delete controls are hidden
+          when the line isn't yet persisted (no itemId) or the card
+          is in read-only mode.
+          When `canShowPhotos` is true but `canMutatePhotos` is false
+          we still draw the strip — that's the SalesOrderNew case where
+          the line hasn't been POSTed yet, and we want to hint to the
+          user that photos can be added after Save. */}
+      {canShowPhotos && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{
+            fontFamily: 'var(--font-button)',
+            fontSize: 'var(--fs-11)',
+            fontWeight: 700,
+            letterSpacing: '0.10em',
+            color: 'var(--fg-muted)',
+          }}>
+            PHOTOS{photoUrls.length > 0 && <span style={{ marginLeft: 6, color: 'var(--fg)' }}>· {photoUrls.length}</span>}
+          </div>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            alignItems: 'center',
+          }}>
+            {photoUrls.map((key) => (
+              <PhotoThumb
+                key={key}
+                photoKey={key}
+                docNo={docNo}
+                itemId={itemId}
+                canDelete={canMutatePhotos && !deletePhoto.isPending}
+                onDelete={() => {
+                  if (!docNo || !itemId) return;
+                  deletePhoto.mutate({ docNo, itemId, photoKey: key }, {
+                    onSuccess: () => {
+                      onChange({ photoUrls: photoUrls.filter((k) => k !== key) });
+                    },
+                  });
+                }}
+              />
+            ))}
+            {canMutatePhotos && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    if (files.length === 0 || !docNo || !itemId) return;
+                    const newKeys: string[] = [];
+                    for (const f of files) {
+                      try {
+                        const res = await uploadPhoto.mutateAsync({ docNo, itemId, file: f });
+                        newKeys.push(res.photoKey);
+                      } catch (err) {
+                        // eslint-disable-next-line no-console
+                        console.error('[so-line-photo] upload failed:', err);
+                        window.alert(`Photo upload failed for ${f.name}: ${err instanceof Error ? err.message : String(err)}`);
+                      }
+                    }
+                    if (newKeys.length > 0) {
+                      onChange({ photoUrls: [...photoUrls, ...newKeys] });
+                    }
+                    // Reset the input so picking the same file twice in a
+                    // row still fires onChange.
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadPhoto.isPending}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px dashed var(--c-orange)',
+                    background: 'transparent',
+                    color: 'var(--c-orange)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: uploadPhoto.isPending ? 'wait' : 'pointer',
+                    padding: 0,
+                  }}
+                  title={uploadPhoto.isPending ? 'Uploading…' : 'Add photo'}
+                >
+                  <ImagePlus {...ICON} />
+                </button>
+              </>
+            )}
+            {!canMutatePhotos && photoUrls.length === 0 && (
+              <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                {!docNo || !itemId
+                  ? 'Save the line first to attach photos.'
+                  : 'Read-only — photos can be edited in edit mode.'}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* PR #162 — Single-line price summary. Replaces the 4-row box that
           ate vertical space. Only shows when a product is picked. */}
       {picked && (
@@ -561,6 +704,114 @@ export const SoLineCard = ({
           <span>· Unit {fmtRm(draft.unitPriceCenti)} × {draft.qty}</span>
           {draft.discountCenti > 0 && <span>− Disc {fmtRm(draft.discountCenti)}</span>}
         </div>
+      )}
+    </div>
+  );
+};
+
+/* PR-F (Task #79) — Thumbnail tile for one per-line photo.
+   The GET proxy endpoint requires the Supabase Bearer token, so we
+   can't just point an <img src> at it (the browser won't attach the
+   Authorization header). Instead we fetch the bytes, blob-URL them,
+   and revoke on unmount. Falls back to a plain-text placeholder if
+   the fetch fails (e.g. the object hasn't replicated yet). */
+const PhotoThumb = ({
+  photoKey, docNo, itemId, canDelete, onDelete,
+}: {
+  photoKey:  string;
+  docNo?:    string;
+  itemId?:   string;
+  canDelete: boolean;
+  onDelete:  () => void;
+}) => {
+  const [src, setSrc]       = useState<string | null>(null);
+  const [error, setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!docNo || !itemId) return;
+    let revoke: string | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) throw new Error('not_authenticated');
+        const res = await fetch(
+          `${API_URL}/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const blob = await res.blob();
+        if (cancelled) return;
+        revoke = URL.createObjectURL(blob);
+        setSrc(revoke);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [docNo, itemId, photoKey]);
+
+  return (
+    <div style={{
+      position: 'relative',
+      width: 40,
+      height: 40,
+      borderRadius: 'var(--radius-md)',
+      border: '1px solid var(--line)',
+      background: 'var(--c-cream)',
+      overflow: 'hidden',
+      flexShrink: 0,
+    }}>
+      {src ? (
+        <img
+          src={src}
+          alt="Line photo"
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+        />
+      ) : error ? (
+        <span style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: '100%', height: '100%',
+          fontSize: 9, color: 'var(--c-festive-b, #B8331F)', padding: 2, textAlign: 'center',
+        }} title={error}>
+          err
+        </span>
+      ) : (
+        <span style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: '100%', height: '100%',
+          fontSize: 10, color: 'var(--fg-muted)',
+        }}>…</span>
+      )}
+      {canDelete && (
+        <button
+          type="button"
+          onClick={onDelete}
+          title="Remove photo"
+          style={{
+            position: 'absolute',
+            top: -6,
+            right: -6,
+            width: 18,
+            height: 18,
+            borderRadius: 999,
+            background: 'var(--c-festive-b, #B8331F)',
+            color: 'var(--bg, #fff)',
+            border: '1px solid var(--bg, #fff)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            lineHeight: 1,
+          }}
+        >
+          <X size={12} strokeWidth={2.5} />
+        </button>
       )}
     </div>
   );
