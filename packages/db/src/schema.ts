@@ -1964,6 +1964,33 @@ export const stateWarehouseMappings = pgTable('state_warehouse_mappings', {
   updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* Task #118 — Generic SO dropdown options (migration 0081). Commander
+   2026-05-27: "customer type, building type, relationship 和 payment
+   dropdown where can do maintenance?" The four dropdowns used to be
+   hardcoded in TS; this single table backs all of them so the SO
+   Maintenance page can CRUD them at runtime.
+
+   `category` is one of:
+     - 'customer_type'   (NEW / EXISTING …)
+     - 'building_type'   (Condo / Landed / Apartment …)
+     - 'relationship'    (Spouse / Parent …)
+     - 'payment_method'  (CASH / MBB / VISA …) — value still maps to the
+                         payment_method enum via labelToApi() in the UI. */
+export const soDropdownOptions = pgTable('so_dropdown_options', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  category:   text('category').notNull(),
+  value:      text('value').notNull(),
+  label:      text('label').notNull(),
+  sortOrder:  integer('sort_order').notNull().default(0),
+  active:     boolean('active').notNull().default(true),
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  catCheck: check('so_dropdown_options_category_check',
+    sql`${t.category} IN ('customer_type', 'building_type', 'relationship', 'payment_method')`),
+  uniqCatVal: uniqueIndex('so_dropdown_options_category_value_key').on(t.category, t.value),
+  idxCat:     index('idx_sdo_category').on(t.category, t.sortOrder),
+}));
+
 export const inventoryMovements = pgTable('inventory_movements', {
   id:             uuid('id').primaryKey().defaultRandom(),
   movementType:   inventoryMovementType('movement_type').notNull(),
