@@ -383,8 +383,8 @@ const SupplierOverviewPanel = ({
   id: string;
   bindings: BindingRow[];
   score: ReturnType<typeof useSupplierScorecard>['data'];
-  otrTone: string;
-  defectTone: string;
+  otrTone: string | undefined;
+  defectTone: string | undefined;
   setSkuDialog: (s: { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }) => void;
 }) => (
   <>
