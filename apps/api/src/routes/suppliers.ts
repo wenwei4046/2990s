@@ -47,6 +47,15 @@ const SUPPLIER_COLS =
   'business_reg_no, postcode, area, mobile, fax, website, attention, business_nature, ' +
   'currency, statement_type, aging_basis, credit_limit_sen, country, created_at, updated_at';
 
+/* PR — Commander 2026-05-27 ("当 Assign SKU 之后，你就会知道它是什么 Category 了呀"):
+   List endpoint queries the `suppliers_with_derived_category` view (migration
+   0088) which adds a `derived_category` column auto-computed from the
+   distinct mfg_products.category of each supplier's assigned SKUs. Used by
+   the Suppliers list page's visible Category column. Detail/create/patch
+   keep reading from the base `suppliers` table because they don't need
+   the derived field (and to avoid touching the rest of the file). */
+const SUPPLIER_LIST_COLS = `${SUPPLIER_COLS}, derived_category`;
+
 const STATEMENT_TYPES = new Set(['OPEN_ITEM', 'BALANCE_FORWARD', 'NO_STATEMENT']);
 const AGING_BASES = new Set(['INVOICE_DATE', 'DUE_DATE']);
 
@@ -61,7 +70,12 @@ suppliers.get('/', async (c) => {
   const search = c.req.query('search');
   const supabase = c.get('supabase');
 
-  let q = supabase.from('suppliers').select(SUPPLIER_COLS).order('name', { ascending: true });
+  /* Query the derived-category view so the list page can show an
+     auto-derived Category column (see migration 0088). */
+  let q = supabase
+    .from('suppliers_with_derived_category')
+    .select(SUPPLIER_LIST_COLS)
+    .order('name', { ascending: true });
   if (status && SUPPLIER_STATUSES.has(status)) q = q.eq('status', status);
   if (search) q = q.or(`code.ilike.%${search}%,name.ilike.%${search}%,contact_person.ilike.%${search}%`);
 

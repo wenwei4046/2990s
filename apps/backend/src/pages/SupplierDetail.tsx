@@ -388,16 +388,21 @@ const SupplierOverviewPanel = ({
   defectTone: string | undefined;
   setSkuDialog: (s: { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }) => void;
 }) => {
-  /* PR — Commander 2026-05-27 ("Supplier SKU 那边, 要根据它的种类去设置"):
-     Group bindings by mfg_products.category so commander sees SOFA / BEDFRAME /
-     MATTRESS sections instead of one flat 50-row table. We look up the
-     category client-side via the same mfg-products cache the picker uses (no
-     new endpoint). Anything not found in the cache (orphan code, fabric,
-     raw material) lands in an OTHERS bucket so nothing is hidden.
+  /* PR — Commander 2026-05-27 ("为什么 SKU Mapping 那边没有根据我的
+     Product Maintenance 做出相对的排版呢"):
+     Group bindings using the SAME sub-section labels the Product Maintenance
+     sidebar uses, so Supplier Detail and Products feel like the same shape:
+       Bedframe Sizes  ← mfg_products where category = BEDFRAME
+       Mattress Sizes  ← mfg_products where category = MATTRESS
+       Sofa Compartments ← SOFA SKUs that belong to a Model (model_id != null)
+       Sofa (other)    ← legacy / non-Model sofa SKUs
+       Accessories     ← ACCESSORY
+       Services        ← SERVICE
+       Others          ← orphan codes (fabric / raw / unknown)
 
-     Category order is fixed (SOFA → BEDFRAME → MATTRESS → ACCESSORY →
-     SERVICE → OTHERS) for visual stability — the user shouldn't see sections
-     reshuffle as they add bindings.
+     We look up the product client-side via the same mfg-products cache the
+     picker uses (no new endpoint). Order is fixed so the UI doesn't
+     reshuffle as bindings are added.
 
      TODO (commander follow-up): per-tier supplier pricing per category. E.g.
      Sofa: one row per Model with columns for compartment widths 24/26/28/30.
@@ -408,31 +413,50 @@ const SupplierOverviewPanel = ({
   const products = useMfgProducts();
 
   const CATEGORY_ORDER: readonly string[] = [
-    'SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE', 'OTHERS',
+    'BEDFRAME_SIZES',
+    'MATTRESS_SIZES',
+    'SOFA_COMPARTMENTS',
+    'SOFA_OTHER',
+    'ACCESSORIES',
+    'SERVICES',
+    'OTHERS',
   ];
   const CATEGORY_LABEL: Record<string, string> = {
-    SOFA: 'Sofa',
-    BEDFRAME: 'Bedframe',
-    MATTRESS: 'Mattress',
-    ACCESSORY: 'Accessory',
-    SERVICE: 'Service',
-    OTHERS: 'Others',
+    BEDFRAME_SIZES:    'Bedframe Sizes',
+    MATTRESS_SIZES:    'Mattress Sizes',
+    SOFA_COMPARTMENTS: 'Sofa Compartments',
+    SOFA_OTHER:        'Sofa (other)',
+    ACCESSORIES:       'Accessories',
+    SERVICES:          'Services',
+    OTHERS:            'Others',
   };
 
   const byCategory = useMemo(() => {
     const productByCode = new Map<string, MfgProductRow>(
       (products.data ?? []).map((p) => [p.code, p]),
     );
+    /* Classify each binding's underlying mfg_product into one of the
+       Product Maintenance sub-sections. Anything we can't look up (no
+       cache hit — fabric / raw / orphan code) lands in OTHERS. */
+    const classify = (p: MfgProductRow | undefined): string => {
+      if (!p) return 'OTHERS';
+      switch (p.category) {
+        case 'BEDFRAME':  return 'BEDFRAME_SIZES';
+        case 'MATTRESS':  return 'MATTRESS_SIZES';
+        case 'SOFA':      return p.model_id ? 'SOFA_COMPARTMENTS' : 'SOFA_OTHER';
+        case 'ACCESSORY': return 'ACCESSORIES';
+        case 'SERVICE':   return 'SERVICES';
+        default:          return 'OTHERS';
+      }
+    };
     const buckets = new Map<string, BindingRow[]>();
     for (const b of bindings) {
-      const p = productByCode.get(b.material_code);
-      const cat = (p?.category ?? 'OTHERS').toUpperCase();
-      const key = CATEGORY_ORDER.includes(cat) ? cat : 'OTHERS';
+      const key = classify(productByCode.get(b.material_code));
       const arr = buckets.get(key) ?? [];
       arr.push(b);
       buckets.set(key, arr);
     }
-    // Stable order — categories with no bindings are omitted.
+    // Stable order — buckets with no bindings are omitted.
     return CATEGORY_ORDER
       .filter((c) => buckets.has(c))
       .map((c) => [c, buckets.get(c)!] as const);
@@ -2499,6 +2523,13 @@ const SupplierCategorySelect = ({
         <option key={c} value={c}>{SUPPLIER_CATEGORY_LABEL[c]}</option>
       ))}
     </select>
+    {/* PR — Commander 2026-05-27: this field is used by the Pricing tab to
+        decide which maintenance sub-sections to surface. The visible
+        Category column on the Suppliers list auto-derives from the
+        supplier's assigned SKUs (suppliers_with_derived_category view). */}
+    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
+      Used for surcharge filter only — Category column auto-derives from assigned SKUs.
+    </span>
   </label>
 );
 

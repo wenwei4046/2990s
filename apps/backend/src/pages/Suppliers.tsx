@@ -67,10 +67,14 @@ export const Suppliers = () => {
     search: search.trim() || undefined,
   });
 
+  /* PR — Commander 2026-05-27: filter against derived_category (auto-derived
+     from assigned SKUs), not the manually-picked `category` field. The
+     server returns `derived_category` from the suppliers_with_derived_category
+     view (migration 0088). */
   const rows = useMemo(() => {
     const all = data ?? [];
     if (category === 'all') return all;
-    return all.filter((r) => (r.category ?? '').toUpperCase() === category);
+    return all.filter((r) => (r.derived_category ?? '').toUpperCase() === category);
   }, [data, category]);
 
   return (
@@ -164,8 +168,13 @@ export const Suppliers = () => {
                 <td><span className={styles.codeChip}>{r.code}</span></td>
                 <td>{r.name}</td>
                 <td style={{ color: 'var(--fg-muted)' }}>
-                  {r.category
-                    ? (CATEGORY_CHIPS.find((c) => c.value === r.category)?.label ?? r.category)
+                  {/* PR — Commander 2026-05-27: auto-derived from assigned SKUs
+                      (suppliers_with_derived_category view in migration 0088).
+                      The manual `category` field stays on the edit form for the
+                      Pricing tab's surcharge filter — this column shows the
+                      truth derived from what the supplier actually supplies. */}
+                  {r.derived_category
+                    ? (CATEGORY_CHIPS.find((c) => c.value === r.derived_category)?.label ?? r.derived_category)
                     : '—'}
                 </td>
                 <td>{r.contact_person ?? '—'}</td>

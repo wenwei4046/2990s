@@ -69,6 +69,13 @@ export type SupplierRow = {
   credit_limit_sen: number;
   created_at: string;
   updated_at: string;
+  /* PR — Commander 2026-05-27: auto-derived from the supplier's assigned
+     SKUs (distinct mfg_products.category across supplier_material_bindings).
+     Populated ONLY on the list endpoint (suppliers_with_derived_category
+     view in migration 0088); detail/create/patch responses omit it.
+     Values: 'SOFA' / 'BEDFRAME' / 'MATTRESS' / 'ACCESSORY' / 'SERVICE'
+     / 'MIXED' (≥2 distinct) / null (no SKUs assigned yet). */
+  derived_category?: string | null;
 };
 
 export type BindingRow = {
