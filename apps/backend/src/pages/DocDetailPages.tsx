@@ -78,7 +78,7 @@ const daysSince = (iso: string | null | undefined): number => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const GRN_STATUS_CLASS: Record<string, string> = {
-  DRAFT:  styles.statusDraft ?? '',
+  // DRAFT removed in migration 0078 — GRNs post on create.
   POSTED: styles.statusOk ?? '',
   CLOSED: styles.statusClosed ?? '',
 };
@@ -88,7 +88,7 @@ export const GrnDetail = () => {
   const navigate = useNavigate();
   const detail = useGrnDetail(id ?? null);
   const linked = useGrnLinked(id ?? null);
-  const post = usePostGrn();
+  // PR-DRAFT-removal: usePostGrn no longer used here (GRN posts on create).
   const createPr = useCreatePurchaseReturn();
 
   if (detail.isLoading) return <Loading />;
@@ -110,7 +110,9 @@ export const GrnDetail = () => {
     qty_rejected: number; rejection_reason: string | null; unit_price_centi: number;
   }>) ?? [];
 
-  const isDraft = grn.status === 'DRAFT';
+  // DRAFT removed in migration 0078 — GRNs are POSTED on create.
+  const isPosted = grn.status === 'POSTED';
+  const isClosed = grn.status === 'CLOSED';
   const lineTotal = items.reduce((s, it) => s + it.qty_accepted * it.unit_price_centi, 0);
   const rejectedItems = items.filter((it) => it.qty_rejected > 0);
 
@@ -180,20 +182,14 @@ export const GrnDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {!isDraft && rejectedItems.length > 0 && (
+          {isPosted && rejectedItems.length > 0 && (
             <Button variant="ghost" size="md" onClick={raisePurchaseReturn} disabled={createPr.isPending}>
               <Undo2 {...ICON} />
               <span>{createPr.isPending ? 'Creating…' : 'Raise Purchase Return'}</span>
             </Button>
           )}
-          {isDraft && (
-            <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
-              <CheckCircle2 {...ICON} />
-              <span>{post.isPending ? 'Posting…' : 'Post GRN'}</span>
-            </Button>
-          )}
           {/* PR — Phase 3: only POSTED GRNs can produce a Purchase Invoice. */}
-          {!isDraft && grn.status !== 'CLOSED' && (
+          {isPosted && !isClosed && (
             <Button variant="primary" size="md" onClick={() => navigate(`/purchase-invoices/new?grnId=${id}`)}>
               <span>Generate Invoice</span>
             </Button>
@@ -202,7 +198,7 @@ export const GrnDetail = () => {
               "Raise Purchase Return" button above which auto-converts only
               rejected qty. This lands on the full-page picker where
               commander adjusts which lines + how much to return. */}
-          {!isDraft && grn.status !== 'CLOSED' && (
+          {isPosted && !isClosed && (
             <Button variant="ghost" size="md" onClick={() => navigate(`/purchase-returns/new?grnId=${id}`)}>
               <span>Raise Return</span>
             </Button>
@@ -281,7 +277,7 @@ export const GrnDetail = () => {
         </div>
       </section>
 
-      {!isDraft && grn.posted_at && (
+      {grn.posted_at && (
         <div className={styles.bannerWarn}>
           This GRN was posted on {fmtDate(grn.posted_at)}. Accepted quantities have been rolled up to the linked PO.
         </div>
@@ -295,7 +291,7 @@ export const GrnDetail = () => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const PI_STATUS_CLASS: Record<string, string> = {
-  DRAFT:           styles.statusDraft ?? '',
+  // DRAFT removed in migration 0078 — PIs post on create.
   POSTED:          styles.statusPosted ?? '',
   PARTIALLY_PAID:  styles.statusInProgress ?? '',
   PAID:            styles.statusOk ?? '',
@@ -306,7 +302,7 @@ export const PurchaseInvoiceDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseInvoiceDetail(id ?? null);
   const linked = usePurchaseInvoiceLinked(id ?? null);
-  const post = usePostPurchaseInvoice();
+  // PR-DRAFT-removal — usePostPurchaseInvoice unused now (PI posts on create).
   const cancel = useCancelPurchaseInvoice();
   const pay = useRecordPiPayment();
   const [payOpen, setPayOpen] = useState(false);
@@ -327,7 +323,6 @@ export const PurchaseInvoiceDetail = () => {
   }>) ?? [];
 
   const outstanding = pi.total_centi - pi.paid_centi;
-  const isDraft = pi.status === 'DRAFT';
   const isPayable = (pi.status === 'POSTED' || pi.status === 'PARTIALLY_PAID') && outstanding > 0;
   const isOverdue = pi.due_date && new Date(pi.due_date).getTime() < Date.now() && outstanding > 0;
 
@@ -369,12 +364,6 @@ export const PurchaseInvoiceDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {isDraft && (
-            <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
-              <CheckCircle2 {...ICON} />
-              <span>{post.isPending ? 'Posting…' : 'Post Invoice'}</span>
-            </Button>
-          )}
           {isPayable && (
             <Button variant="primary" size="md" onClick={() => setPayOpen(true)}>
               <span>Record Payment</span>
@@ -476,7 +465,7 @@ export const PurchaseInvoiceDetail = () => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const DO_STATUS_CLASS: Record<string, string> = {
-  DRAFT:       styles.statusDraft ?? '',
+  // DRAFT removed in migration 0078 — DOs now start at LOADED.
   LOADED:      styles.statusPosted ?? '',
   DISPATCHED:  styles.statusInProgress ?? '',
   IN_TRANSIT:  styles.statusInProgress ?? '',
@@ -487,7 +476,7 @@ const DO_STATUS_CLASS: Record<string, string> = {
 };
 
 const DO_NEXT: Record<string, string[]> = {
-  DRAFT:      ['LOADED', 'CANCELLED'],
+  // DRAFT removed in migration 0078.
   LOADED:     ['DISPATCHED', 'CANCELLED'],
   DISPATCHED: ['IN_TRANSIT', 'SIGNED'],
   IN_TRANSIT: ['SIGNED'],
@@ -629,7 +618,7 @@ export const DeliveryOrderDetail = () => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const SI_STATUS_CLASS: Record<string, string> = {
-  DRAFT:          styles.statusDraft ?? '',
+  // DRAFT removed in migration 0078.
   ISSUED:         styles.statusPosted ?? '',
   SENT:           styles.statusPosted ?? '',
   PARTIALLY_PAID: styles.statusInProgress ?? '',
@@ -640,7 +629,7 @@ const SI_STATUS_CLASS: Record<string, string> = {
 export const SalesInvoiceDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = useSalesInvoiceDetail(id ?? null);
-  const updateStatus = useUpdateSalesInvoiceStatus();
+  // PR-DRAFT-removal — useUpdateSalesInvoiceStatus unused now (no Issue button).
   const pay = useRecordSiPayment();
   const [payOpen, setPayOpen] = useState(false);
 
@@ -662,7 +651,6 @@ export const SalesInvoiceDetail = () => {
   }>) ?? [];
 
   const outstanding = si.total_centi - si.paid_centi;
-  const isDraft = si.status === 'DRAFT';
   const isPayable = (si.status === 'ISSUED' || si.status === 'SENT' || si.status === 'PARTIALLY_PAID') && outstanding > 0;
   const isOverdue = si.due_date && new Date(si.due_date).getTime() < Date.now() && outstanding > 0;
   const daysOverdue = isOverdue ? daysSince(si.due_date) : 0;
@@ -694,13 +682,6 @@ export const SalesInvoiceDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {isDraft && (
-            <Button variant="primary" size="md"
-              onClick={() => updateStatus.mutate({ id: id!, status: 'ISSUED' })}
-              disabled={updateStatus.isPending}>
-              <span>Issue Invoice</span>
-            </Button>
-          )}
           {isPayable && (
             <Button variant="primary" size="md" onClick={() => setPayOpen(true)}>
               <span>Record Payment</span>
@@ -1192,7 +1173,7 @@ const CreateConsignmentNoteModal = ({
    ════════════════════════════════════════════════════════════════════════ */
 
 const PR_STATUS_CLASS: Record<string, string> = {
-  DRAFT:     styles.statusDraft ?? '',
+  // DRAFT removed in migration 0078 — PRs post on create.
   POSTED:    styles.statusInProgress ?? '',
   COMPLETED: styles.statusOk ?? '',
   CANCELLED: styles.statusBad ?? '',
@@ -1202,7 +1183,7 @@ export const PurchaseReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseReturnDetail(id ?? null);
   const linked = usePurchaseReturnLinked(id ?? null);
-  const post = usePostPurchaseReturn();
+  // PR-DRAFT-removal — usePostPurchaseReturn unused (PR posts on create).
   const complete = useCompletePurchaseReturn();
   const cancel = useCancelPurchaseReturn();
   const [cnModal, setCnModal] = useState(false);
@@ -1223,7 +1204,6 @@ export const PurchaseReturnDetail = () => {
     unit_price_centi: number; line_refund_centi: number; reason: string | null;
   }>) ?? [];
 
-  const isDraft = pr.status === 'DRAFT';
   const isPosted = pr.status === 'POSTED';
 
   const linkedGrn = linked.data?.grn ?? null;
@@ -1261,12 +1241,6 @@ export const PurchaseReturnDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {isDraft && (
-            <Button variant="primary" size="md" onClick={() => post.mutate(id!)} disabled={post.isPending}>
-              <CheckCircle2 {...ICON} />
-              <span>{post.isPending ? 'Posting…' : 'Post to Supplier'}</span>
-            </Button>
-          )}
           {isPosted && (
             <Button variant="primary" size="md" onClick={() => setCnModal(true)}>
               <span>Mark Completed</span>

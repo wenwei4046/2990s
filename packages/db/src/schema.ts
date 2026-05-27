@@ -703,8 +703,7 @@ export const supplierStatus = pgEnum('supplier_status', ['ACTIVE', 'INACTIVE', '
 export const currencyCode = pgEnum('currency_code', ['MYR', 'RMB', 'USD', 'SGD']);
 
 export const poStatus = pgEnum('po_status', [
-  'DRAFT',                // editable, not sent
-  'SUBMITTED',            // sent to supplier, awaiting acknowledgement
+  'SUBMITTED',            // sent to supplier, awaiting acknowledgement (default on create)
   'PARTIALLY_RECEIVED',   // some GRN posted
   'RECEIVED',             // all items GRN'd
   'CANCELLED',
@@ -792,7 +791,7 @@ export const purchaseOrders = pgTable('purchase_orders', {
   poNumber:    text('po_number').notNull().unique(),       // 'PO-2026-001'
   supplierId:  uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
   // Extended fields (migration 0041)
-  status:      poStatus('status').notNull().default('DRAFT'),
+  status:      poStatus('status').notNull().default('SUBMITTED'),
   poDate:      date('po_date').notNull().defaultNow(),
   expectedAt:  date('expected_at'),                        // delivery ETA
   // PR #77 — Default ship-to warehouse for every line on this PO (mirrors
@@ -877,10 +876,10 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
    Migration 0042.
    ════════════════════════════════════════════════════════════════════════ */
 
-export const grnStatus = pgEnum('grn_status', ['DRAFT', 'POSTED', 'CLOSED']);
+export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED']);
 
 export const purchaseInvoiceStatus = pgEnum('purchase_invoice_status', [
-  'DRAFT', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
+  'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
 ]);
 
 export const grns = pgTable('grns', {
@@ -890,7 +889,7 @@ export const grns = pgTable('grns', {
   supplierId:        uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
   receivedAt:        date('received_at').notNull().defaultNow(),
   deliveryNoteRef:   text('delivery_note_ref'),                     // supplier's DO number
-  status:            grnStatus('status').notNull().default('DRAFT'),
+  status:            grnStatus('status').notNull().default('POSTED'),
   notes:             text('notes'),
   postedAt:          timestamp('posted_at', { withTimezone: true }),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -949,7 +948,7 @@ export const purchaseInvoices = pgTable('purchase_invoices', {
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),
   paidCenti:         integer('paid_centi').notNull().default(0),
-  status:            purchaseInvoiceStatus('status').notNull().default('DRAFT'),
+  status:            purchaseInvoiceStatus('status').notNull().default('POSTED'),
   notes:             text('notes'),
   postedAt:          timestamp('posted_at', { withTimezone: true }),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1003,17 +1002,17 @@ export const purchaseInvoiceItems = pgTable('purchase_invoice_items', {
    ════════════════════════════════════════════════════════════════════════ */
 
 export const mfgSoStatus = pgEnum('mfg_so_status', [
-  'DRAFT', 'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
+  'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED',
   'DELIVERED', 'INVOICED', 'CLOSED', 'ON_HOLD', 'CANCELLED',
 ]);
 
 export const doStatus = pgEnum('do_status', [
-  'DRAFT', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
+  'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
   'DELIVERED', 'INVOICED', 'CANCELLED',
 ]);
 
 export const salesInvoiceStatus = pgEnum('sales_invoice_status', [
-  'DRAFT', 'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
+  'SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'CANCELLED',
 ]);
 
 export const mfgSalesOrders = pgTable('mfg_sales_orders', {
@@ -1052,7 +1051,7 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   lineCount:         integer('line_count').notNull().default(0),
 
   currency:          currencyCode('currency').notNull().default('MYR'),
-  status:            mfgSoStatus('status').notNull().default('DRAFT'),
+  status:            mfgSoStatus('status').notNull().default('CONFIRMED'),
   remark2:           text('remark2'),
   remark3:           text('remark3'),
   remark4:           text('remark4'),
@@ -1325,7 +1324,7 @@ export const deliveryOrders = pgTable('delivery_orders', {
 
   podR2Key:          text('pod_r2_key'),                           // proof of delivery photo
   signatureData:     text('signature_data'),                       // base64 png
-  status:            doStatus('status').notNull().default('DRAFT'),
+  status:            doStatus('status').notNull().default('LOADED'),
   notes:             text('notes'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
@@ -1382,7 +1381,7 @@ export const salesInvoices = pgTable('sales_invoices', {
   taxCenti:          integer('tax_centi').notNull().default(0),
   totalCenti:        integer('total_centi').notNull().default(0),
   paidCenti:         integer('paid_centi').notNull().default(0),
-  status:            salesInvoiceStatus('status').notNull().default('DRAFT'),
+  status:            salesInvoiceStatus('status').notNull().default('SENT'),
   notes:             text('notes'),
   sentAt:            timestamp('sent_at', { withTimezone: true }),
   paidAt:            timestamp('paid_at', { withTimezone: true }),
@@ -1580,8 +1579,7 @@ export const deliveryReturnItems = pgTable('delivery_return_items', {
    ──────────────────────────────────────────────────────────────────────── */
 
 export const purchaseReturnStatus = pgEnum('purchase_return_status', [
-  'DRAFT',       // builder is still adding items
-  'POSTED',      // sent to supplier, awaiting confirmation
+  'POSTED',      // created + sent to supplier, awaiting confirmation (default on create)
   'COMPLETED',   // supplier confirmed refund / credit-note
   'CANCELLED',   // returned items kept after all
 ]);
@@ -1594,7 +1592,7 @@ export const purchaseReturns = pgTable('purchase_returns', {
   supplierId:        uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
   returnDate:        date('return_date').notNull().defaultNow(),
   reason:            text('reason'),                                 // 'DEFECT'|'WRONG_ITEM'|'OVERSUPPLY'|free text
-  status:            purchaseReturnStatus('status').notNull().default('DRAFT'),
+  status:            purchaseReturnStatus('status').notNull().default('POSTED'),
   postedAt:          timestamp('posted_at', { withTimezone: true }),
   completedAt:       timestamp('completed_at', { withTimezone: true }),
   creditNoteRef:     text('credit_note_ref'),                        // supplier's CN# once issued
@@ -2012,7 +2010,7 @@ export const inventoryLots = pgTable('inventory_lots', {
 export const stockTransfers = pgTable('stock_transfers', {
   id:                uuid('id').primaryKey().defaultRandom(),
   transferNo:        text('transfer_no').notNull().unique(),         // ST-YYMM-NNN
-  status:            text('status').notNull().default('DRAFT'),      // DRAFT|POSTED|CANCELLED
+  status:            text('status').notNull().default('POSTED'),     // POSTED|CANCELLED — DRAFT dropped in 0078
   fromWarehouseId:   uuid('from_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   toWarehouseId:     uuid('to_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   transferDate:      date('transfer_date').notNull().defaultNow(),
@@ -2026,7 +2024,7 @@ export const stockTransfers = pgTable('stock_transfers', {
   idxFromWh:  index('idx_stock_transfers_from_wh').on(t.fromWarehouseId),
   idxToWh:    index('idx_stock_transfers_to_wh').on(t.toWarehouseId),
   notSameWh:  check('stock_transfers_not_same_wh', sql`from_warehouse_id <> to_warehouse_id`),
-  statusEnum: check('stock_transfers_status_chk', sql`status IN ('DRAFT','POSTED','CANCELLED')`),
+  statusEnum: check('stock_transfers_status_chk', sql`status IN ('POSTED','CANCELLED')`),
 }));
 
 export const stockTransferLines = pgTable('stock_transfer_lines', {
@@ -2052,7 +2050,7 @@ export const stockTransferLines = pgTable('stock_transfer_lines', {
 export const stockTakes = pgTable('stock_takes', {
   id:              uuid('id').primaryKey().defaultRandom(),
   takeNo:          text('take_no').notNull().unique(),              // STK-YYMM-NNN
-  status:          text('status').notNull().default('DRAFT'),       // DRAFT|POSTED|CANCELLED
+  status:          text('status').notNull().default('OPEN'),        // OPEN|POSTED|CANCELLED — OPEN is the editable working state (commander enters counted_qty)
   warehouseId:     uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   scopeType:       text('scope_type').notNull().default('ALL'),     // ALL|CATEGORY|CODE_PREFIX
   scopeValue:      text('scope_value'),
@@ -2065,7 +2063,7 @@ export const stockTakes = pgTable('stock_takes', {
 }, (t) => ({
   idxStatus:    index('idx_stock_takes_status').on(t.status, t.takeDate),
   idxWarehouse: index('idx_stock_takes_warehouse').on(t.warehouseId),
-  statusEnum:   check('stock_takes_status_chk',     sql`status IN ('DRAFT','POSTED','CANCELLED')`),
+  statusEnum:   check('stock_takes_status_chk',     sql`status IN ('OPEN','POSTED','CANCELLED')`),
   scopeEnum:    check('stock_takes_scope_type_chk', sql`scope_type IN ('ALL','CATEGORY','CODE_PREFIX')`),
 }));
 

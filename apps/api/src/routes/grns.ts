@@ -54,11 +54,18 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
     await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
   }
 
+  // PR-DRAFT-removal — GRNs are now created as POSTED directly (see POST
+  // handler below). This helper still runs on legacy DRAFT rows + on already-
+  // POSTED rows (idempotent: matches any non-CLOSED status). Returns ok:true
+  // when posted_at is in place so downstream auto-post-on-create flows don't
+  // 409 themselves on the second pass.
   const { data, error } = await sb.from('grns').update({
-    status: 'POSTED', posted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }).eq('id', grnId).eq('status', 'DRAFT').select('id, status, posted_at').single();
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', grnId).neq('status', 'CLOSED').select('id, status, posted_at').single();
   if (error) return { ok: false, reason: error.message, status: 500 };
-  if (!data) return { ok: false, reason: 'not_draft', status: 409 };
+  if (!data) return { ok: false, reason: 'cannot_post', status: 409 };
 
   // ── Inventory IN per item — best effort, doesn't roll back the post. ─
   const grnNo = (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId;
@@ -161,6 +168,7 @@ grns.get('/:id/linked', async (c) => {
 grns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (body.status === 'DRAFT') return c.json({ error: 'draft_status_not_supported', message: 'DRAFT was removed in migration 0078 — GRNs post immediately on create.' }, 400);
   if (!body.purchaseOrderId || !body.supplierId) return c.json({ error: 'po_and_supplier_required' }, 400);
   const items = body.items as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
@@ -168,6 +176,11 @@ grns.post('/', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
   const grnNumber = await nextNumber(sb, 'GRN', 'grns', 'grn_number');
 
+  /* PR-DRAFT-removal — Commander 2026-05-27: GRN is created as POSTED
+     directly. Commander already enters Received/Accepted/Rejected per line
+     on the New GRN form, so there's never a moment where DRAFT is useful.
+     We insert with status:'POSTED' + posted_at, then call postGrnAndRollup
+     to do the receipt rollup + inventory IN. */
   const { data: header, error: hErr } = await sb.from('grns').insert({
     grn_number: grnNumber,
     purchase_order_id: body.purchaseOrderId,
@@ -175,6 +188,8 @@ grns.post('/', async (c) => {
     received_at: (body.receivedAt as string) ?? new Date().toISOString().slice(0, 10),
     delivery_note_ref: (body.deliveryNoteRef as string) ?? null,
     notes: (body.notes as string) ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
     created_by: user.id,
   }).select(HEADER).single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -195,6 +210,10 @@ grns.post('/', async (c) => {
   }));
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  // Roll up qty_accepted to PO items + write inventory IN. Best-effort.
+  await postGrnAndRollup(sb, h.id, user.id);
+
   return c.json({ id: h.id, grnNumber: h.grn_number }, 201);
 });
 
@@ -257,6 +276,9 @@ grns.post('/from-pos', async (c) => {
     received_at: new Date().toISOString().slice(0, 10),
     delivery_note_ref: body.deliveryNoteRef ?? null,
     notes: `Batch-converted from ${poList.length} POs: ${poNumbersJoined}${body.notes ? ` · ${body.notes}` : ''}`,
+    /* PR-DRAFT-removal — auto-POSTED on create. */
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
     created_by: user.id,
   }).select('id, grn_number').single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -291,17 +313,26 @@ grns.post('/from-pos', async (c) => {
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
+  /* PR-DRAFT-removal — auto-rollup + inventory IN after items insert. */
+  await postGrnAndRollup(sb, h.id, user.id);
+
   return c.json({ id: h.id, grnNumber: h.grn_number, poCount: poList.length, lineCount: itemList.length }, 201);
 });
 
 grns.patch('/:id/post', async (c) => {
+  /* PR-DRAFT-removal — kept as a no-op endpoint for backward compat. The
+     POST handler now creates GRNs in POSTED state directly. If the caller
+     hits this on a row that's already POSTED, we return 200 with the
+     current row (idempotent) instead of 409. */
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
-  const res = await postGrnAndRollup(sb, id, user.id);
-  if (!res.ok) {
-    if (res.status === 409) return c.json({ error: 'not_draft' }, 409);
-    return c.json({ error: 'post_failed', reason: res.reason }, 500);
+  const { data: cur } = await sb.from('grns').select('id, status, posted_at').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const row = cur as { id: string; status: string; posted_at: string | null };
+  if (row.status === 'POSTED') {
+    return c.json({ grn: row });
   }
-  // Return the updated GRN row to match the original response shape.
+  const res = await postGrnAndRollup(sb, id, user.id);
+  if (!res.ok) return c.json({ error: 'post_failed', reason: res.reason }, 500);
   const { data } = await sb.from('grns').select('id, status, posted_at').eq('id', id).single();
   return c.json({ grn: data });
 });

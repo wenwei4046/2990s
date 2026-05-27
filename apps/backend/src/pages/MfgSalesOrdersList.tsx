@@ -77,7 +77,7 @@ const liveBalance = (r: SoRow): number => {
 };
 
 const STATUS_CLASS: Record<string, string> = {
-  DRAFT:          soDetailStyles.statusDraft ?? '',
+  // DRAFT removed in migration 0078 — SOs start at CONFIRMED.
   CONFIRMED:      soDetailStyles.statusConfirmed ?? '',
   IN_PRODUCTION:  soDetailStyles.statusInProd ?? '',
   READY_TO_SHIP:  soDetailStyles.statusReady ?? '',

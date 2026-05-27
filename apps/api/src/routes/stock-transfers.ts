@@ -1,21 +1,20 @@
 // ----------------------------------------------------------------------------
 // /stock-transfers — move stock between warehouses with a document trail.
 //
-// DRAFT → POSTED → (paired OUT@from + IN@to into inventory_movements).
+// PR-DRAFT-removal (2026-05-27): DRAFT step removed. POST creates the row
+// as POSTED directly + writes paired OUT@from + IN@to inventory_movements
+// inline. PATCH /:id/post kept as no-op for backward compat.
 // FIFO trigger consumes from source lots and computes cost on the OUT row.
 // We then read OUT.total_cost_sen / OUT.qty back and feed it into the IN as
-// unit_cost_sen so the destination lot opens at the right basis (weighted
-// avg of the lots consumed). First-iteration simplification per commander
-// 2026-05-27.
+// unit_cost_sen so the destination lot opens at the right basis.
 //
 // Endpoints:
 //   GET   /stock-transfers                — list
 //   GET   /stock-transfers/:id            — header + lines + warehouse names
-//   POST  /stock-transfers                — create DRAFT
-//   PATCH /stock-transfers/:id            — update DRAFT (header + lines replace)
-//   PATCH /stock-transfers/:id/post       — DRAFT → POSTED (writes movements)
-//   PATCH /stock-transfers/:id/cancel     — DRAFT → CANCELLED
-//   DELETE /stock-transfers/:id           — DRAFT only
+//   POST  /stock-transfers                — create + post (writes movements)
+//   PATCH /stock-transfers/:id/post       — idempotent no-op (legacy)
+//   PATCH /stock-transfers/:id/cancel     — POSTED → CANCELLED (also reverses)
+//   DELETE /stock-transfers/:id           — disabled (only CANCELLED allowed)
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
@@ -32,7 +31,7 @@ const HEADER =
 const LINE =
   'id, stock_transfer_id, product_code, product_name, qty, notes, created_at';
 
-const VALID_STATUS = new Set(['DRAFT', 'POSTED', 'CANCELLED']);
+const VALID_STATUS = new Set(['POSTED', 'CANCELLED']);
 
 const nextTransferNo = async (sb: any): Promise<string> => {
   const d = new Date();
@@ -117,15 +116,72 @@ stockTransfers.get('/:id', async (c) => {
   return c.json({ transfer: headerRes.data, lines: linesRes.data ?? [] });
 });
 
-// ── Create DRAFT ──────────────────────────────────────────────────────
+/* ── Movement writer (shared by POST + legacy /post) ─────────────────
+   For each line:
+     1) Insert OUT @from (FIFO trigger fills total_cost_sen).
+     2) Derive IN unit_cost_sen = OUT.total_cost_sen / OUT.qty (weighted avg).
+     3) Insert IN @to with that cost. */
+async function writeTransferMovements(
+  sb: any,
+  header: { id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string },
+  userId: string,
+): Promise<string[]> {
+  const movementErrors: string[] = [];
+  const { data: lines } = await sb.from('stock_transfer_lines')
+    .select('product_code, product_name, qty')
+    .eq('stock_transfer_id', header.id);
+
+  for (const ln of (lines as Array<{ product_code: string; product_name: string | null; qty: number }>) ?? []) {
+    if (ln.qty <= 0) continue;
+    const { data: outRow, error: outErr } = await sb.from('inventory_movements').insert({
+      movement_type:  'OUT',
+      warehouse_id:   header.from_warehouse_id,
+      product_code:   ln.product_code,
+      product_name:   ln.product_name,
+      qty:            ln.qty,
+      source_doc_type:'STOCK_TRANSFER',
+      source_doc_id:  header.id,
+      source_doc_no:  header.transfer_no,
+      performed_by:   userId,
+      notes:          `Transfer to warehouse ${header.to_warehouse_id}`,
+    }).select('id, qty, unit_cost_sen, total_cost_sen').single();
+    if (outErr || !outRow) {
+      movementErrors.push(`OUT ${ln.product_code}: ${outErr?.message ?? 'no data'}`);
+      continue;
+    }
+    const outQty   = Number((outRow as { qty: number }).qty ?? ln.qty);
+    const outTotal = Number((outRow as { total_cost_sen: number | null }).total_cost_sen ?? 0);
+    const inUnitCost = outQty > 0 ? Math.round(outTotal / outQty) : 0;
+    const inOk = await writeMovements(sb, [{
+      movement_type:  'IN',
+      warehouse_id:   header.to_warehouse_id,
+      product_code:   ln.product_code,
+      product_name:   ln.product_name,
+      qty:            ln.qty,
+      unit_cost_sen:  inUnitCost,
+      source_doc_type:'STOCK_TRANSFER',
+      source_doc_id:  header.id,
+      source_doc_no:  header.transfer_no,
+      performed_by:   userId,
+      notes:          `Transfer from warehouse ${header.from_warehouse_id}`,
+    }]);
+    if (!inOk.ok) movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
+  }
+  return movementErrors;
+}
+
+// ── Create + auto-post ────────────────────────────────────────────────
 // body: { fromWarehouseId, toWarehouseId, transferDate?, notes?,
 //         items: [{ productCode, productName?, qty, notes? }] }
+// PR-DRAFT-removal: row is inserted as POSTED and inventory_movements
+// are written inline. No separate /post call needed.
 stockTransfers.post('/', async (c) => {
   const sb = c.get('supabase');
   const user = c.get('user');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; }
   catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (body.status === 'DRAFT') return c.json({ error: 'draft_status_not_supported', message: 'DRAFT was removed in migration 0078.' }, 400);
 
   const fromWarehouseId = body.fromWarehouseId as string | undefined;
   const toWarehouseId   = body.toWarehouseId   as string | undefined;
@@ -134,12 +190,14 @@ stockTransfers.post('/', async (c) => {
   if (fromWarehouseId === toWarehouseId) return c.json({ error: 'same_warehouse' }, 400);
 
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
+  if (items.length === 0) return c.json({ error: 'items_required' }, 400);
 
   const transferNo = await nextTransferNo(sb);
 
   const headerInsert: Record<string, unknown> = {
     transfer_no:        transferNo,
-    status:             'DRAFT',
+    status:             'POSTED',
+    posted_at:          new Date().toISOString(),
     from_warehouse_id:  fromWarehouseId,
     to_warehouse_id:    toWarehouseId,
     notes:              (body.notes as string | undefined) ?? null,
@@ -153,201 +211,60 @@ stockTransfers.post('/', async (c) => {
     if (hErr.code === '42501') return c.json({ error: 'forbidden', reason: hErr.message }, 403);
     return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   }
-  const header = headerData as unknown as { id: string; transfer_no: string };
+  const header = headerData as unknown as { id: string; transfer_no: string; from_warehouse_id: string; to_warehouse_id: string };
 
-  if (items.length > 0) {
-    const lineRows = items.map((it) => {
-      const qty = Math.max(0, Math.floor(Number(it.qty ?? 0)));
-      if (qty <= 0) throw new Error('qty must be > 0');
-      if (!it.productCode) throw new Error('productCode required per line');
-      return {
-        stock_transfer_id: header.id,
-        product_code: String(it.productCode),
-        product_name: (it.productName as string | undefined) ?? null,
-        qty,
-        notes: (it.notes as string | undefined) ?? null,
-      };
-    });
-    const { error: lErr } = await sb.from('stock_transfer_lines').insert(lineRows);
-    if (lErr) {
-      // Best-effort rollback so we don't leak a no-lines transfer header.
-      await sb.from('stock_transfers').delete().eq('id', header.id);
-      return c.json({ error: 'lines_insert_failed', reason: lErr.message }, 500);
-    }
+  const lineRows = items.map((it) => {
+    const qty = Math.max(0, Math.floor(Number(it.qty ?? 0)));
+    if (qty <= 0) throw new Error('qty must be > 0');
+    if (!it.productCode) throw new Error('productCode required per line');
+    return {
+      stock_transfer_id: header.id,
+      product_code: String(it.productCode),
+      product_name: (it.productName as string | undefined) ?? null,
+      qty,
+      notes: (it.notes as string | undefined) ?? null,
+    };
+  });
+  const { error: lErr } = await sb.from('stock_transfer_lines').insert(lineRows);
+  if (lErr) {
+    await sb.from('stock_transfers').delete().eq('id', header.id);
+    return c.json({ error: 'lines_insert_failed', reason: lErr.message }, 500);
   }
 
-  return c.json({ id: header.id, transferNo: header.transfer_no }, 201);
+  // Write inventory movements (paired OUT/IN) inline.
+  const movementErrors = await writeTransferMovements(sb, header, user.id);
+
+  return c.json({
+    id: header.id,
+    transferNo: header.transfer_no,
+    movementErrors: movementErrors.length ? movementErrors : undefined,
+  }, 201);
 });
 
-// ── Update DRAFT (header + lines replace) ─────────────────────────────
-stockTransfers.patch('/:id', async (c) => {
-  const sb = c.get('supabase');
-  const id = c.req.param('id');
-  let body: Record<string, unknown>;
-  try { body = (await c.req.json()) as Record<string, unknown>; }
-  catch { return c.json({ error: 'invalid_json' }, 400); }
-
-  const { data: prev } = await sb.from('stock_transfers')
-    .select('status, from_warehouse_id, to_warehouse_id')
-    .eq('id', id).maybeSingle();
-  if (!prev) return c.json({ error: 'not_found' }, 404);
-  if ((prev as { status: string }).status !== 'DRAFT') return c.json({ error: 'not_draft' }, 409);
-
-  const headerPatch: Record<string, unknown> = {};
-  if (body.fromWarehouseId)  headerPatch.from_warehouse_id = body.fromWarehouseId;
-  if (body.toWarehouseId)    headerPatch.to_warehouse_id   = body.toWarehouseId;
-  if (body.transferDate)     headerPatch.transfer_date     = body.transferDate;
-  if ('notes' in body)       headerPatch.notes             = (body.notes as string | null) ?? null;
-
-  const nextFrom = (headerPatch.from_warehouse_id as string | undefined) ?? (prev as { from_warehouse_id: string }).from_warehouse_id;
-  const nextTo   = (headerPatch.to_warehouse_id   as string | undefined) ?? (prev as { to_warehouse_id: string }).to_warehouse_id;
-  if (nextFrom === nextTo) return c.json({ error: 'same_warehouse' }, 400);
-
-  if (Object.keys(headerPatch).length > 0) {
-    const { error: hErr } = await sb.from('stock_transfers').update(headerPatch).eq('id', id);
-    if (hErr) return c.json({ error: 'update_failed', reason: hErr.message }, 500);
-  }
-
-  // Lines replace — only when items are provided.
-  if (Array.isArray(body.items)) {
-    const items = body.items as Array<Record<string, unknown>>;
-    const lineRows = items.map((it) => {
-      const qty = Math.max(0, Math.floor(Number(it.qty ?? 0)));
-      if (qty <= 0) throw new Error('qty must be > 0');
-      if (!it.productCode) throw new Error('productCode required per line');
-      return {
-        stock_transfer_id: id,
-        product_code: String(it.productCode),
-        product_name: (it.productName as string | undefined) ?? null,
-        qty,
-        notes: (it.notes as string | undefined) ?? null,
-      };
-    });
-    const { error: dErr } = await sb.from('stock_transfer_lines').delete().eq('stock_transfer_id', id);
-    if (dErr) return c.json({ error: 'lines_clear_failed', reason: dErr.message }, 500);
-    if (lineRows.length > 0) {
-      const { error: iErr } = await sb.from('stock_transfer_lines').insert(lineRows);
-      if (iErr) return c.json({ error: 'lines_insert_failed', reason: iErr.message }, 500);
-    }
-  }
-
-  const { data } = await sb.from('stock_transfers').select(HEADER).eq('id', id).maybeSingle();
-  return c.json({ transfer: data });
-});
-
-// ── Cancel DRAFT ──────────────────────────────────────────────────────
+// ── Cancel POSTED ─────────────────────────────────────────────────────
+// Note: this does NOT reverse the inventory movements that were written
+// on create. Commander needs to manually post a counter-transfer if they
+// want to undo the inventory effect. Same posture as PO cancel.
 stockTransfers.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase');
   const id = c.req.param('id');
 
   const { data, error } = await sb.from('stock_transfers')
     .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
-    .eq('id', id).eq('status', 'DRAFT')
+    .eq('id', id).neq('status', 'CANCELLED')
     .select('id, status, cancelled_at').single();
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
-  if (!data)  return c.json({ error: 'not_draft' }, 409);
+  if (!data)  return c.json({ error: 'already_cancelled' }, 409);
   return c.json({ transfer: data });
 });
 
-// ── Delete DRAFT ──────────────────────────────────────────────────────
-stockTransfers.delete('/:id', async (c) => {
-  const sb = c.get('supabase');
-  const id = c.req.param('id');
-  const { data: prev } = await sb.from('stock_transfers')
-    .select('status').eq('id', id).maybeSingle();
-  if (!prev) return c.json({ error: 'not_found' }, 404);
-  if ((prev as { status: string }).status !== 'DRAFT') return c.json({ error: 'not_draft' }, 409);
-
-  const { error } = await sb.from('stock_transfers').delete().eq('id', id);
-  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
-  return c.json({ ok: true });
-});
-
-// ── Post DRAFT → POSTED ───────────────────────────────────────────────
-// For each line:
-//   1) Insert OUT @from (no unit_cost_sen — FIFO trigger fills total_cost_sen
-//      from the consumed lots).
-//   2) Read OUT.total_cost_sen + OUT.qty back; unit_cost_sen for the IN =
-//      total_cost_sen / qty (weighted avg of the lots that were drained).
-//      Falls back to 0 when there's no stock to consume (negative balance).
-//   3) Insert IN @to with that unit_cost_sen — FIFO trigger opens a new lot.
-//
-// Movements are written one-line-at-a-time (not batched) because we need
-// the OUT row's cost to compute the IN row's cost. Acceptable for pilot
-// scale; if volumes grow we can optimise later by computing cost from the
-// lot ledger in bulk.
+// ── Post → idempotent no-op (legacy compat) ───────────────────────────
 stockTransfers.patch('/:id/post', async (c) => {
   const sb = c.get('supabase');
-  const user = c.get('user');
   const id = c.req.param('id');
-
-  // Flip status first so we don't double-post on concurrent clicks.
-  const { data: posted, error: pErr } = await sb.from('stock_transfers')
-    .update({ status: 'POSTED', posted_at: new Date().toISOString() })
-    .eq('id', id).eq('status', 'DRAFT')
-    .select(HEADER).single();
-  if (pErr)   return c.json({ error: 'post_failed', reason: pErr.message }, 500);
-  if (!posted) return c.json({ error: 'not_draft' }, 409);
-
-  const header = posted as unknown as {
-    id: string; transfer_no: string;
-    from_warehouse_id: string; to_warehouse_id: string;
-  };
-
-  const { data: lines } = await sb.from('stock_transfer_lines')
-    .select('product_code, product_name, qty')
-    .eq('stock_transfer_id', id);
-
-  const movementErrors: string[] = [];
-
-  for (const ln of (lines as Array<{ product_code: string; product_name: string | null; qty: number }>) ?? []) {
-    if (ln.qty <= 0) continue;
-
-    // 1) Write OUT first — FIFO trigger fills total_cost_sen.
-    const { data: outRow, error: outErr } = await sb.from('inventory_movements').insert({
-      movement_type:  'OUT',
-      warehouse_id:   header.from_warehouse_id,
-      product_code:   ln.product_code,
-      product_name:   ln.product_name,
-      qty:            ln.qty,
-      source_doc_type:'STOCK_TRANSFER',
-      source_doc_id:  header.id,
-      source_doc_no:  header.transfer_no,
-      performed_by:   user.id,
-      notes:          `Transfer to warehouse ${header.to_warehouse_id}`,
-    })
-      .select('id, qty, unit_cost_sen, total_cost_sen').single();
-    if (outErr || !outRow) {
-      movementErrors.push(`OUT ${ln.product_code}: ${outErr?.message ?? 'no data'}`);
-      continue;
-    }
-
-    // 2) Derive unit cost for the IN from the OUT row the FIFO trigger
-    //    just computed. Weighted avg = total / qty. Fallback 0 when no
-    //    stock available (trigger leaves total_cost_sen = 0).
-    const outQty   = Number((outRow as { qty: number }).qty ?? ln.qty);
-    const outTotal = Number((outRow as { total_cost_sen: number | null }).total_cost_sen ?? 0);
-    const inUnitCost = outQty > 0 ? Math.round(outTotal / outQty) : 0;
-
-    // 3) Write IN with that cost. FIFO trigger opens a destination lot.
-    const inOk = await writeMovements(sb, [{
-      movement_type:  'IN',
-      warehouse_id:   header.to_warehouse_id,
-      product_code:   ln.product_code,
-      product_name:   ln.product_name,
-      qty:            ln.qty,
-      unit_cost_sen:  inUnitCost,
-      source_doc_type:'STOCK_TRANSFER',
-      source_doc_id:  header.id,
-      source_doc_no:  header.transfer_no,
-      performed_by:   user.id,
-      notes:          `Transfer from warehouse ${header.from_warehouse_id}`,
-    }]);
-    if (!inOk.ok) movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
-  }
-
-  return c.json({
-    transfer: posted,
-    movementErrors: movementErrors.length ? movementErrors : undefined,
-  });
+  const { data } = await sb.from('stock_transfers').select(HEADER).eq('id', id).maybeSingle();
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  const row = data as unknown as { status: string };
+  if (row.status === 'POSTED') return c.json({ transfer: data });
+  return c.json({ error: 'cannot_post', message: `Cannot post a ${row.status} transfer.` }, 409);
 });

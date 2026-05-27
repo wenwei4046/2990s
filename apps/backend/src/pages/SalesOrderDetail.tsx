@@ -59,14 +59,15 @@ import styles from './SalesOrderDetail.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
+// PR-DRAFT-removal — DRAFT dropped from mfg_so_status (migration 0078).
+// SOs are CONFIRMED on create (PR #154); no DRAFT staging step.
 const STATUS_LIST = [
-  'DRAFT', 'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP',
+  'CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP',
   'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED',
 ] as const;
 type SoStatus = typeof STATUS_LIST[number];
 
 const STATUS_CLASS: Record<SoStatus, string> = {
-  DRAFT:          styles.statusDraft ?? '',
   CONFIRMED:      styles.statusConfirmed ?? '',
   IN_PRODUCTION:  styles.statusInProd ?? '',
   READY_TO_SHIP:  styles.statusReady ?? '',
@@ -430,11 +431,11 @@ export const SalesOrderDetail = () => {
     );
   };
 
-  // Lock mechanism — once SO leaves DRAFT, edits require explicit override.
-  // CANCELLED + CLOSED + INVOICED are also locked (terminal-ish states).
-  // PR #145 + #146 — IN_PRODUCTION + READY_TO_SHIP removed from forward
-  // flow (trading company). SHIPPED is now the earliest locked state —
-  // once goods leave our hands, the SO header is no longer editable.
+  // Lock mechanism — CANCELLED + CLOSED + INVOICED are locked (terminal-ish
+  // states). PR #145 + #146 — IN_PRODUCTION + READY_TO_SHIP removed from
+  // forward flow (trading company). SHIPPED is now the earliest locked
+  // state — once goods leave our hands, the SO header is no longer editable.
+  // PR-DRAFT-removal — CONFIRMED is the initial editable state (no DRAFT).
   const lockedStatuses: SoStatus[] = ['SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'];
 
   if (detail.isLoading) {

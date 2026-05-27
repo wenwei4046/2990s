@@ -121,7 +121,8 @@ salesInvoices.patch('/:id/payment', async (c) => {
   const { data: cur } = await sb.from('sales_invoices').select('paid_centi, total_centi, status').eq('id', id).maybeSingle();
   if (!cur) return c.json({ error: 'not_found' }, 404);
   const c0 = cur as { paid_centi: number; total_centi: number; status: string };
-  if (c0.status === 'CANCELLED' || c0.status === 'DRAFT') return c.json({ error: 'not_payable', message: 'SI must be issued before payment' }, 409);
+  // DRAFT removed in migration 0078 — only block CANCELLED now.
+  if (c0.status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'SI is cancelled' }, 409);
 
   const newPaid = c0.paid_centi + amount;
   const newStatus = newPaid >= c0.total_centi ? 'PAID' : 'PARTIALLY_PAID';

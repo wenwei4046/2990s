@@ -19,10 +19,12 @@ import styles from './Inventory.module.css';
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
 const ICON_MD = { size: 16, strokeWidth: 1.75 } as const;
 
-const STATUS_OPTIONS: Array<StockTakeStatus | 'ALL'> = ['ALL', 'DRAFT', 'POSTED', 'CANCELLED'];
+// PR-DRAFT-removal — DRAFT renamed to OPEN (migration 0078). Stock takes
+// keep an editable working state (commander enters counted_qty per line).
+const STATUS_OPTIONS: Array<StockTakeStatus | 'ALL'> = ['ALL', 'OPEN', 'POSTED', 'CANCELLED'];
 
 const STATUS_TONE: Record<StockTakeStatus, { bg: string; fg: string; label: string }> = {
-  DRAFT:     { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)',                label: 'Draft' },
+  OPEN:      { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)',                label: 'Open' },
   POSTED:    { bg: 'rgba(47, 93, 79, 0.16)',  fg: 'var(--c-secondary-a, #2F5D4F)',  label: 'Posted' },
   CANCELLED: { bg: 'rgba(184, 51, 31, 0.10)', fg: 'var(--c-festive-b, #B8331F)',    label: 'Cancelled' },
 };

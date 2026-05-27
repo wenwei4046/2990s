@@ -91,9 +91,40 @@ purchaseReturns.get('/:id/linked', async (c) => {
   return c.json({ grn, purchaseOrder: po });
 });
 
+/* PR-DRAFT-removal — shared inventory-OUT side-effect. Called inline on
+   POST so the new PR is created as POSTED with movements already written.
+   Best-effort: doesn't roll back the row on movement failure. */
+async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber: string, grnId: string | null, userId: string) {
+  let warehouseId: string | null = null;
+  if (grnId) {
+    const { data: grn } = await sb.from('grns').select('warehouse_id').eq('id', grnId).maybeSingle();
+    warehouseId = (grn as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+  }
+  if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
+  if (!warehouseId) return;
+  const { data: items } = await sb.from('purchase_return_items')
+    .select('material_code, material_name, qty_returned')
+    .eq('purchase_return_id', prId);
+  const movements = ((items ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number }>)
+    .filter((it) => it.qty_returned > 0)
+    .map((it) => ({
+      movement_type: 'OUT' as const,
+      warehouse_id: warehouseId!,
+      product_code: it.material_code,
+      product_name: it.material_name,
+      qty: it.qty_returned,
+      source_doc_type: 'PURCHASE_RETURN' as const,
+      source_doc_id: prId,
+      source_doc_no: returnNumber,
+      performed_by: userId,
+    }));
+  if (movements.length > 0) await writeMovements(sb, movements);
+}
+
 purchaseReturns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (body.status === 'DRAFT') return c.json({ error: 'draft_status_not_supported', message: 'DRAFT was removed in migration 0078 — PRs post immediately on create.' }, 400);
   if (!body.supplierId) return c.json({ error: 'supplier_required' }, 400);
   const items = body.items as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
@@ -120,15 +151,19 @@ purchaseReturns.post('/', async (c) => {
     };
   });
 
+  /* PR-DRAFT-removal — PR is created POSTED, inventory OUT written inline. */
+  const grnId = (body.grnId as string | undefined) ?? null;
   const { data: header, error: hErr } = await sb.from('purchase_returns').insert({
     return_number: returnNumber,
     purchase_order_id: (body.purchaseOrderId as string | undefined) ?? null,
-    grn_id: (body.grnId as string | undefined) ?? null,
+    grn_id: grnId,
     supplier_id: body.supplierId,
     return_date: (body.returnDate as string) ?? new Date().toISOString().slice(0, 10),
     reason: (body.reason as string | undefined) ?? null,
     refund_centi: totalRefund,
     notes: (body.notes as string | undefined) ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
     created_by: user.id,
   }).select(HEADER).single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -140,6 +175,9 @@ purchaseReturns.post('/', async (c) => {
     await sb.from('purchase_returns').delete().eq('id', h.id);
     return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
   }
+
+  await writePurchaseReturnMovements(sb, h.id, h.return_number, grnId, user.id);
+
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
@@ -192,15 +230,19 @@ purchaseReturns.post('/from-grns', async (c) => {
   const grnNumbersJoined = grnList.map((g) => g.grn_number).join(', ');
   const totalRefund = rejectedItems.reduce((s, it) => s + (it.qty_rejected * it.unit_price_centi), 0);
 
+  const primaryGrnId = grnList[0]!.id;
   const { data: header, error: hErr } = await sb.from('purchase_returns').insert({
     return_number: returnNumber,
     purchase_order_id: grnList[0]!.purchase_order_id,
-    grn_id: grnList[0]!.id,                              // primary GRN ref
+    grn_id: primaryGrnId,                              // primary GRN ref
     supplier_id: supplierId,
     return_date: new Date().toISOString().slice(0, 10),
     reason: body.reason ?? `Batch from ${grnList.length} GRNs: ${grnNumbersJoined}`,
     refund_centi: totalRefund,
     notes: body.notes ?? null,
+    /* PR-DRAFT-removal — auto-POSTED on create. */
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
     created_by: user.id,
   }).select('id, return_number').single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -220,48 +262,24 @@ purchaseReturns.post('/from-grns', async (c) => {
   const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
   if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
+  await writePurchaseReturnMovements(sb, h.id, h.return_number, primaryGrnId, user.id);
+
   return c.json({ id: h.id, returnNumber: h.return_number, grnCount: grnList.length, lineCount: rejectedItems.length }, 201);
 });
 
 purchaseReturns.patch('/:id/post', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
-  const { data, error } = await sb.from('purchase_returns').update({
-    status: 'POSTED', posted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }).eq('id', id).eq('status', 'DRAFT').select('id, status, posted_at, return_number, grn_id').single();
-  if (error) return c.json({ error: 'post_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'not_draft' }, 409);
-
-  // ── Inventory OUT — qty leaves the warehouse the GRN landed in. ─────
-  const header = data as { id: string; return_number: string; grn_id: string | null };
-  // Resolve warehouse from the linked GRN; fall back to default.
-  let warehouseId: string | null = null;
-  if (header.grn_id) {
-    const { data: grn } = await sb.from('grns').select('warehouse_id').eq('id', header.grn_id).maybeSingle();
-    warehouseId = (grn as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+  /* PR-DRAFT-removal — kept for backward compat; idempotent. POST handler
+     now creates PRs as POSTED with inventory OUT already written. If the
+     row is already POSTED we 200 without re-writing movements (would
+     double-debit inventory). */
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  const { data: cur } = await sb.from('purchase_returns').select('id, status, posted_at, return_number, grn_id').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const row = cur as { id: string; status: string; posted_at: string | null; return_number: string; grn_id: string | null };
+  if (row.status === 'POSTED' || row.status === 'COMPLETED') {
+    return c.json({ purchaseReturn: row });
   }
-  if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
-
-  if (warehouseId) {
-    const { data: items } = await sb.from('purchase_return_items')
-      .select('material_code, material_name, qty_returned')
-      .eq('purchase_return_id', id);
-    const movements = ((items ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number }>)
-      .filter((it) => it.qty_returned > 0)
-      .map((it) => ({
-        movement_type: 'OUT' as const,
-        warehouse_id: warehouseId!,
-        product_code: it.material_code,
-        product_name: it.material_name,
-        qty: it.qty_returned,
-        source_doc_type: 'PURCHASE_RETURN' as const,
-        source_doc_id: id,
-        source_doc_no: header.return_number,
-        performed_by: user.id,
-      }));
-    if (movements.length > 0) await writeMovements(sb, movements);
-  }
-
-  return c.json({ purchaseReturn: data });
+  return c.json({ error: 'cannot_post', message: `Cannot post a ${row.status} return.` }, 409);
 });
 
 purchaseReturns.patch('/:id/complete', async (c) => {

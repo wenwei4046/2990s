@@ -15,7 +15,7 @@
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, X } from 'lucide-react';
+import { ArrowLeft, Save, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useOutstandingPoItems,
@@ -73,6 +73,15 @@ export const GrnFromPo = () => {
       for (const l of lines) next[l.poItemId] = on ? { picked: true, qty: l.remainingQty } : { picked: false, qty: 0 };
       return next;
     });
+
+  const selectAll = () =>
+    setPicks(() => {
+      const next: Record<string, { picked: boolean; qty: number }> = {};
+      for (const l of items) next[l.poItemId] = { picked: true, qty: l.remainingQty };
+      return next;
+    });
+
+  const clearAll = () => setPicks({});
 
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
@@ -161,11 +170,19 @@ export const GrnFromPo = () => {
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Outstanding PO Lines</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {itemsQ.isLoading ? 'Loading…'
-              : items.length === 0 ? 'No outstanding lines — every PO line has already been received (or there are no outstanding POs).'
-              : `${items.length} line${items.length === 1 ? '' : 's'} across ${grouped.length} PO${grouped.length === 1 ? '' : 's'}`}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={selectAll} disabled={items.length === 0}>
+              <CheckSquare {...ICON} /> Select all (full qty)
+            </Button>
+            <Button variant="ghost" size="sm" onClick={clearAll} disabled={Object.keys(picks).length === 0}>
+              <Square {...ICON} /> Clear all
+            </Button>
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              {itemsQ.isLoading ? 'Loading…'
+                : items.length === 0 ? 'No outstanding lines — every PO line has already been received (or there are no outstanding POs).'
+                : `${items.length} line${items.length === 1 ? '' : 's'} across ${grouped.length} PO${grouped.length === 1 ? '' : 's'}`}
+            </span>
+          </div>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           {grouped.length === 0 && !itemsQ.isLoading && (

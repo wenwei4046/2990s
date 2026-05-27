@@ -6,15 +6,12 @@
 // lands here with ?poId={uuid} pre-loaded. The page shows the PO header
 // (supplier + dates as read-only context) and the PO line items with each
 // row's outstanding qty pre-filled in the Qty Received column. Commander
-// adjusts qty / rejects, hits Save. We:
+// adjusts qty / rejects, hits Save.
 //
-//   1. POST /grns        → creates DRAFT GRN + items
-//   2. PATCH /grns/:id/post  → flips to POSTED, rolls up received_qty on
-//                              the PO items, writes inventory_movements
-//                              (IN movement, FIFO lot creation).
-//
-// Two calls in one button so commander never sees DRAFT — saves directly
-// to the inventory-affecting POSTED state per AutoCount default behaviour.
+// PR-DRAFT-removal (2026-05-27, migration 0078): POST /grns now creates
+// the row as POSTED directly — the API handler rolls up received_qty on
+// the PO + writes inventory_movements inline. The legacy PATCH /post
+// remains as an idempotent no-op for older callers.
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';

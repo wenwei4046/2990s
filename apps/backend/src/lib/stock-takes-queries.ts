@@ -29,7 +29,10 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-export type StockTakeStatus = 'DRAFT' | 'POSTED' | 'CANCELLED';
+// PR-DRAFT-removal — DRAFT renamed to OPEN (migration 0078). Stock takes
+// keep an editable working state because the commander enters counted_qty
+// per line BEFORE posting; "OPEN" makes the intent explicit.
+export type StockTakeStatus = 'OPEN' | 'POSTED' | 'CANCELLED';
 export type StockTakeScopeType = 'ALL' | 'CATEGORY' | 'CODE_PREFIX';
 
 export type StockTakeWarehouse = {

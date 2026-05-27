@@ -19,7 +19,7 @@
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, X } from 'lucide-react';
+import { ArrowLeft, Save, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useOutstandingGrnItems,
@@ -78,6 +78,15 @@ export const PurchaseInvoiceFromGrn = () => {
       for (const l of lines) next[l.grnItemId] = on ? { picked: true, qty: l.qtyAccepted } : { picked: false, qty: 0 };
       return next;
     });
+
+  const selectAll = () =>
+    setPicks(() => {
+      const next: Record<string, { picked: boolean; qty: number }> = {};
+      for (const l of items) next[l.grnItemId] = { picked: true, qty: l.qtyAccepted };
+      return next;
+    });
+
+  const clearAll = () => setPicks({});
 
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
@@ -187,11 +196,19 @@ export const PurchaseInvoiceFromGrn = () => {
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Outstanding GRN Lines</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {itemsQ.isLoading ? 'Loading…'
-              : items.length === 0 ? 'No outstanding lines — every posted GRN has already been invoiced.'
-              : `${items.length} line${items.length === 1 ? '' : 's'} across ${grouped.length} GRN${grouped.length === 1 ? '' : 's'}`}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <Button variant="ghost" size="sm" onClick={selectAll} disabled={items.length === 0}>
+              <CheckSquare {...ICON} /> Select all (full qty)
+            </Button>
+            <Button variant="ghost" size="sm" onClick={clearAll} disabled={Object.keys(picks).length === 0}>
+              <Square {...ICON} /> Clear all
+            </Button>
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              {itemsQ.isLoading ? 'Loading…'
+                : items.length === 0 ? 'No outstanding lines — every posted GRN has already been invoiced.'
+                : `${items.length} line${items.length === 1 ? '' : 's'} across ${grouped.length} GRN${grouped.length === 1 ? '' : 's'}`}
+            </span>
+          </div>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           {grouped.length === 0 && !itemsQ.isLoading && (

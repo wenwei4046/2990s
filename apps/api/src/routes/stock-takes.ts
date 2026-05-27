@@ -1,23 +1,27 @@
 // ----------------------------------------------------------------------------
 // /stock-takes — AutoCount-style cycle count (PR — Inv PR5).
 //
-// DRAFT → POSTED. On create, the API snapshots system_qty for every SKU
-// in the chosen scope (ALL / CATEGORY / CODE_PREFIX) at the chosen
-// warehouse. The commander types counted_qty per line. On Post, for every
-// line with a non-zero variance, an ADJUSTMENT movement is inserted into
-// inventory_movements with a SIGNED qty (positive = counted > system →
-// stock found, negative = counted < system → write-off).
+// OPEN → POSTED. PR-DRAFT-removal (2026-05-27): renamed DRAFT → OPEN
+// because cycle counts legitimately need an editable working state
+// (commander types counted_qty per line BEFORE posting). "OPEN" makes
+// the intent explicit rather than borrowing the deprecated "DRAFT" label.
+//
+// On create, the API snapshots system_qty for every SKU in the chosen
+// scope (ALL / CATEGORY / CODE_PREFIX) at the chosen warehouse. The
+// commander types counted_qty per line. On Post, for every line with a
+// non-zero variance, an ADJUSTMENT movement is inserted into
+// inventory_movements with a SIGNED qty.
 //
 // Numbering: STK-YYMM-NNN (month-scoped count + 1), same pattern as ST.
 //
 // Endpoints:
 //   GET    /stock-takes                — list (status, warehouseId, dateFrom, dateTo)
 //   GET    /stock-takes/:id            — header + lines + warehouse name
-//   POST   /stock-takes                — create DRAFT + snapshot scope
-//   PATCH  /stock-takes/:id/lines      — bulk update counted_qty
-//   PATCH  /stock-takes/:id/post       — DRAFT → POSTED (writes ADJUSTMENT movements)
-//   PATCH  /stock-takes/:id/cancel     — DRAFT → CANCELLED
-//   DELETE /stock-takes/:id            — DRAFT only
+//   POST   /stock-takes                — create OPEN + snapshot scope
+//   PATCH  /stock-takes/:id/lines      — bulk update counted_qty (OPEN only)
+//   PATCH  /stock-takes/:id/post       — OPEN → POSTED (writes ADJUSTMENT movements)
+//   PATCH  /stock-takes/:id/cancel     — OPEN → CANCELLED
+//   DELETE /stock-takes/:id            — OPEN only
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
@@ -34,7 +38,7 @@ const LINE =
   'id, stock_take_id, product_code, product_name, system_qty, counted_qty, ' +
   'variance, notes, created_at';
 
-const VALID_STATUS = new Set(['DRAFT', 'POSTED', 'CANCELLED']);
+const VALID_STATUS = new Set(['OPEN', 'POSTED', 'CANCELLED']);
 const VALID_SCOPE  = new Set(['ALL', 'CATEGORY', 'CODE_PREFIX']);
 
 const nextTakeNo = async (sb: any): Promise<string> => {
@@ -152,7 +156,7 @@ stockTakes.get('/:id', async (c) => {
   return c.json({ take: headerRes.data, lines: linesRes.data ?? [] });
 });
 
-// ── Create DRAFT + snapshot scope ─────────────────────────────────────
+// ── Create OPEN + snapshot scope ──────────────────────────────────────
 // body: { warehouseId, takeDate?, scopeType, scopeValue?, notes? }
 stockTakes.post('/', async (c) => {
   const sb = c.get('supabase');
@@ -188,7 +192,7 @@ stockTakes.post('/', async (c) => {
 
   const headerInsert: Record<string, unknown> = {
     take_no:      takeNo,
-    status:       'DRAFT',
+    status:       'OPEN',
     warehouse_id: warehouseId,
     scope_type:   scopeType,
     scope_value:  scopeValue,
@@ -238,7 +242,7 @@ stockTakes.patch('/:id/lines', async (c) => {
 
   const { data: prev } = await sb.from('stock_takes').select('status').eq('id', id).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
-  if ((prev as { status: string }).status !== 'DRAFT') return c.json({ error: 'not_draft' }, 409);
+  if ((prev as { status: string }).status !== 'OPEN') return c.json({ error: 'not_open' }, 409);
 
   const lines = body.lines as Array<{
     id: string; countedQty?: number | null; notes?: string | null;
@@ -274,35 +278,35 @@ stockTakes.patch('/:id/lines', async (c) => {
   return c.json({ ok: true, updated: lines.length });
 });
 
-// ── Cancel DRAFT ──────────────────────────────────────────────────────
+// ── Cancel OPEN ───────────────────────────────────────────────────────
 stockTakes.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase');
   const id = c.req.param('id');
 
   const { data, error } = await sb.from('stock_takes')
     .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
-    .eq('id', id).eq('status', 'DRAFT')
+    .eq('id', id).eq('status', 'OPEN')
     .select('id, status, cancelled_at').single();
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
-  if (!data)  return c.json({ error: 'not_draft' }, 409);
+  if (!data)  return c.json({ error: 'not_open' }, 409);
   return c.json({ take: data });
 });
 
-// ── Delete DRAFT ──────────────────────────────────────────────────────
+// ── Delete OPEN ───────────────────────────────────────────────────────
 stockTakes.delete('/:id', async (c) => {
   const sb = c.get('supabase');
   const id = c.req.param('id');
   const { data: prev } = await sb.from('stock_takes')
     .select('status').eq('id', id).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
-  if ((prev as { status: string }).status !== 'DRAFT') return c.json({ error: 'not_draft' }, 409);
+  if ((prev as { status: string }).status !== 'OPEN') return c.json({ error: 'not_open' }, 409);
 
   const { error } = await sb.from('stock_takes').delete().eq('id', id);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   return c.json({ ok: true });
 });
 
-// ── Post DRAFT → POSTED ───────────────────────────────────────────────
+// ── Post OPEN → POSTED ────────────────────────────────────────────────
 // For every line where counted_qty IS NOT NULL and variance != 0, insert
 // a single ADJUSTMENT movement with SIGNED qty (mirrors what POST
 // /inventory/adjustments does — see apps/api/src/routes/inventory.ts).
@@ -318,10 +322,10 @@ stockTakes.patch('/:id/post', async (c) => {
   // Flip status first so concurrent posts don't double-write movements.
   const { data: posted, error: pErr } = await sb.from('stock_takes')
     .update({ status: 'POSTED', posted_at: new Date().toISOString() })
-    .eq('id', id).eq('status', 'DRAFT')
+    .eq('id', id).eq('status', 'OPEN')
     .select(HEADER).single();
   if (pErr)    return c.json({ error: 'post_failed', reason: pErr.message }, 500);
-  if (!posted) return c.json({ error: 'not_draft' }, 409);
+  if (!posted) return c.json({ error: 'not_open' }, 409);
 
   const header = posted as unknown as {
     id: string; take_no: string; warehouse_id: string;
