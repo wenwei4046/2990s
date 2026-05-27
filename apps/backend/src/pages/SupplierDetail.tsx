@@ -42,8 +42,11 @@ import {
   type SupplierRow,
   type SupplierStatus,
   type NewBinding,
+  type PriceMatrix,
+  type SofaPriceMatrix,
+  type BedframePriceMatrix,
 } from '../lib/suppliers-queries';
-import { useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useProductModels, type ProductModelRow } from '../lib/product-models-queries';
 import {
   useLocalities,
@@ -542,6 +545,7 @@ const SupplierOverviewPanel = ({
             <SkuMappingsTable
               supplierId={id}
               bindings={rows}
+              groupKind={groupKindFromCategory(category)}
               onEdit={(b) => setSkuDialog({ mode: 'edit', binding: b })}
             />
           </CategorySection>
@@ -683,10 +687,89 @@ const CategorySection = ({
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   SKU Mappings table — inline edit (main toggle, delete) + open dialog
+   SKU Mappings table — inline edit (main toggle, delete) + open dialog.
+
+   PR — Commander 2026-05-27 ("跟着 Product Maintenance 的排版"): the column
+   layout now depends on which Products Maintenance sub-section the group
+   belongs to. Sofa Compartments → seat-height matrix × P1/P2/P3 tier toggle.
+   Bedframe Sizes → Price 1 + Price 2. Mattress / Accessory / Service / Other
+   → unchanged single Unit Price column.
    ════════════════════════════════════════════════════════════════════════ */
 
+export type SkuGroupKind = 'sofa' | 'bedframe' | 'mattress' | 'other';
+
+/** Map a CATEGORY_ORDER key (set inside SupplierOverviewPanel) to the
+ *  column layout this table should render. New buckets default to 'other'. */
+function groupKindFromCategory(category: string): SkuGroupKind {
+  switch (category) {
+    case 'SOFA_COMPARTMENTS':
+    case 'SOFA_OTHER':
+      return 'sofa';
+    case 'BEDFRAME_SIZES':
+      return 'bedframe';
+    case 'MATTRESS_SIZES':
+      return 'mattress';
+    default:
+      return 'other';
+  }
+}
+
 const SkuMappingsTable = ({
+  supplierId,
+  bindings,
+  groupKind,
+  onEdit,
+}: {
+  supplierId: string;
+  bindings: BindingRow[];
+  /** PR — Commander 2026-05-27: which column layout to render. Derived from
+   *  the parent group label so Sofa Compartments / Bedframe Sizes / etc.
+   *  match the Products Maintenance shape. */
+  groupKind: SkuGroupKind;
+  onEdit: (b: BindingRow) => void;
+}) => {
+  if (bindings.length === 0) {
+    return (
+      <div className={styles.cardBody}>
+        <p className={styles.emptyRow}>No SKU mappings yet for this supplier.</p>
+      </div>
+    );
+  }
+
+  if (groupKind === 'sofa') {
+    return (
+      <SofaSkuMappingsTable
+        supplierId={supplierId}
+        bindings={bindings}
+        onEdit={onEdit}
+      />
+    );
+  }
+  if (groupKind === 'bedframe') {
+    return (
+      <BedframeSkuMappingsTable
+        supplierId={supplierId}
+        bindings={bindings}
+        onEdit={onEdit}
+      />
+    );
+  }
+  // Mattress / Accessory / Service / Other — single Unit Price column.
+  return (
+    <DefaultSkuMappingsTable
+      supplierId={supplierId}
+      bindings={bindings}
+      onEdit={onEdit}
+    />
+  );
+};
+
+/* ────────────────────────────────────────────────────────────────────────
+   Default (mattress / accessory / service / other) — single Unit Price col.
+   Unchanged from the pre-matrix layout.
+   ──────────────────────────────────────────────────────────────────────── */
+
+const DefaultSkuMappingsTable = ({
   supplierId,
   bindings,
   onEdit,
@@ -697,14 +780,6 @@ const SkuMappingsTable = ({
 }) => {
   const update = useUpdateBinding();
   const remove = useDeleteBinding();
-
-  if (bindings.length === 0) {
-    return (
-      <div className={styles.cardBody}>
-        <p className={styles.emptyRow}>No SKU mappings yet for this supplier.</p>
-      </div>
-    );
-  }
 
   return (
     <table className={styles.table}>
@@ -730,77 +805,19 @@ const SkuMappingsTable = ({
           >
             <td className={styles.codeCell}>{b.material_code}</td>
             <td>{b.material_name}</td>
-            {/* PR — Commander 2026-05-27: inline edit for supplier_sku +
-                unit_price. Same authedFetch + queryClient invalidate path as
-                the Supplier Info card edits. Stops row-level double-click
-                propagation so clicking inside the input doesn't open the
-                full edit modal. */}
             <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-              <InlineSupplierSku
-                binding={b}
-                supplierId={supplierId}
-                update={update}
-              />
+              <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
             </td>
             <td className={styles.priceCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-              <InlineUnitPrice
-                binding={b}
-                supplierId={supplierId}
-                update={update}
-              />
+              <InlineUnitPrice binding={b} supplierId={supplierId} update={update} />
             </td>
             <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
             <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
             <td>
-              <button
-                type="button"
-                className={styles.iconBtn}
-                title={b.is_main_supplier ? 'Main supplier' : 'Set as main'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  update.mutate({
-                    supplierId,
-                    bindingId: b.id,
-                    isMainSupplier: !b.is_main_supplier,
-                  });
-                }}
-              >
-                <Star
-                  size={16}
-                  strokeWidth={1.75}
-                  fill={b.is_main_supplier ? 'currentColor' : 'none'}
-                  style={{ color: b.is_main_supplier ? 'var(--c-burnt)' : 'var(--fg-muted)' }}
-                />
-              </button>
-              {b.is_main_supplier && <span className={styles.mainPill}>Main</span>}
+              <MainStarCell binding={b} supplierId={supplierId} update={update} />
             </td>
             <td>
-              <span className={styles.actionsCell}>
-                <button
-                  type="button"
-                  className={styles.iconBtn}
-                  title="Edit"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onEdit(b);
-                  }}
-                >
-                  <Pencil {...SM_ICON} />
-                </button>
-                <button
-                  type="button"
-                  className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                  title="Delete"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm(`Remove mapping ${b.material_code} → ${b.supplier_sku}?`)) {
-                      remove.mutate({ supplierId, bindingId: b.id });
-                    }
-                  }}
-                >
-                  <Trash2 {...SM_ICON} />
-                </button>
-              </span>
+              <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
             </td>
           </tr>
         ))}
@@ -808,6 +825,312 @@ const SkuMappingsTable = ({
     </table>
   );
 };
+
+/* ────────────────────────────────────────────────────────────────────────
+   Sofa SKU mappings — seat-height matrix × P1/P2/P3 tier toggle.
+
+   PR — Commander 2026-05-27. Mirrors the Products SOFA tab: pick a tier
+   chip (P1/P2/P3 — default P2) and edit one cell per seat-height. Each cell
+   PATCHes a deeply-merged copy of binding.price_matrix.
+
+   Seat-heights come from the maintenance config (`master` scope, sofaSizes
+   section). Falls back to the hardcoded HOOKKA defaults [24..35] if the
+   config request hasn't resolved yet — keeps the table renderable in cold-
+   start cases.
+   ──────────────────────────────────────────────────────────────────────── */
+
+const SOFA_TIER_CHIPS: { value: 'P1' | 'P2' | 'P3'; label: string }[] = [
+  { value: 'P1', label: 'P1' },
+  { value: 'P2', label: 'P2' },
+  { value: 'P3', label: 'P3' },
+];
+
+const SOFA_HEIGHT_FALLBACK = ['24', '26', '28', '30', '32', '35'];
+
+const SofaSkuMappingsTable = ({
+  supplierId,
+  bindings,
+  onEdit,
+}: {
+  supplierId: string;
+  bindings: BindingRow[];
+  onEdit: (b: BindingRow) => void;
+}) => {
+  const update = useUpdateBinding();
+  const remove = useDeleteBinding();
+  const [selectedTier, setSelectedTier] = useState<'P1' | 'P2' | 'P3'>('P2');
+
+  // Read seat-heights from the master maintenance config (Products Maintenance
+  // → Sofa Compartments). Same source the Products page reads from, so the
+  // two tables stay in lock-step when commander edits the size pool.
+  const config = useMaintenanceConfig('master');
+  const heights = (config.data?.data?.sofaSizes ?? SOFA_HEIGHT_FALLBACK).map(String);
+
+  return (
+    <div>
+      {/* Tier toggle row — same look as the Products SOFA tab. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          padding: 'var(--space-2) var(--space-4)',
+          borderBottom: '1px solid var(--line)',
+          background: 'var(--c-paper)',
+        }}
+      >
+        <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Fabric tier
+        </span>
+        {SOFA_TIER_CHIPS.map((c) => (
+          <button
+            key={c.value}
+            type="button"
+            onClick={() => setSelectedTier(c.value)}
+            style={{
+              fontFamily: 'var(--font-button)',
+              fontSize: 'var(--fs-12)',
+              fontWeight: 600,
+              padding: '2px var(--space-3)',
+              borderRadius: 'var(--radius-pill)',
+              border: selectedTier === c.value ? '1px solid var(--c-ink)' : '1px solid var(--line)',
+              background: selectedTier === c.value ? 'var(--c-ink)' : 'var(--c-paper)',
+              color: selectedTier === c.value ? 'var(--c-cream)' : 'var(--c-ink)',
+              cursor: 'pointer',
+            }}
+          >
+            {c.label}
+          </button>
+        ))}
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-soft)' }}>
+          Cost per (seat-height × tier). Empty cell = "no price set".
+        </span>
+      </div>
+
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th>Internal Code</th>
+            <th>Internal Description</th>
+            <th>Supplier SKU</th>
+            {heights.map((h) => (
+              <th key={h} className={styles.tableRight}>{h}"</th>
+            ))}
+            <th className={styles.tableRight}>Lead</th>
+            <th className={styles.tableRight}>MOQ</th>
+            <th>Main</th>
+            <th className={styles.tableRight}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {bindings.map((b) => (
+            <tr
+              key={b.id}
+              onDoubleClick={() => onEdit(b)}
+              title="Double-click to edit"
+              style={{ cursor: 'pointer' }}
+            >
+              <td className={styles.codeCell}>{b.material_code}</td>
+              <td>{b.material_name}</td>
+              <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+                <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
+              </td>
+              {heights.map((h) => (
+                <td
+                  key={h}
+                  className={styles.priceCell}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <InlineSofaMatrixCell
+                    binding={b}
+                    supplierId={supplierId}
+                    update={update}
+                    height={h}
+                    tier={selectedTier}
+                  />
+                </td>
+              ))}
+              <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
+              <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
+              <td>
+                <MainStarCell binding={b} supplierId={supplierId} update={update} />
+              </td>
+              <td>
+                <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────────────────────
+   Bedframe SKU mappings — Price 1 + Price 2 columns (fabric tiers).
+
+   PR — Commander 2026-05-27. Mirrors the Products BEDFRAME tab: two price
+   columns. Cells read/write `price_matrix.P1` / `price_matrix.P2` (centi).
+   ──────────────────────────────────────────────────────────────────────── */
+
+const BedframeSkuMappingsTable = ({
+  supplierId,
+  bindings,
+  onEdit,
+}: {
+  supplierId: string;
+  bindings: BindingRow[];
+  onEdit: (b: BindingRow) => void;
+}) => {
+  const update = useUpdateBinding();
+  const remove = useDeleteBinding();
+
+  return (
+    <table className={styles.table}>
+      <thead>
+        <tr>
+          <th>Internal Code</th>
+          <th>Internal Description</th>
+          <th>Supplier SKU</th>
+          <th className={styles.tableRight}>Price 1</th>
+          <th className={styles.tableRight}>Price 2</th>
+          <th className={styles.tableRight}>Lead</th>
+          <th className={styles.tableRight}>MOQ</th>
+          <th>Main</th>
+          <th className={styles.tableRight}>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {bindings.map((b) => (
+          <tr
+            key={b.id}
+            onDoubleClick={() => onEdit(b)}
+            title="Double-click to edit"
+            style={{ cursor: 'pointer' }}
+          >
+            <td className={styles.codeCell}>{b.material_code}</td>
+            <td>{b.material_name}</td>
+            <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+              <InlineSupplierSku binding={b} supplierId={supplierId} update={update} />
+            </td>
+            <td
+              className={styles.priceCell}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <InlineBedframeMatrixCell
+                binding={b}
+                supplierId={supplierId}
+                update={update}
+                tier="P1"
+              />
+            </td>
+            <td
+              className={styles.priceCell}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <InlineBedframeMatrixCell
+                binding={b}
+                supplierId={supplierId}
+                update={update}
+                tier="P2"
+              />
+            </td>
+            <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
+            <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
+            <td>
+              <MainStarCell binding={b} supplierId={supplierId} update={update} />
+            </td>
+            <td>
+              <RowActionsCell binding={b} supplierId={supplierId} remove={remove} onEdit={onEdit} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+};
+
+/* ────────────────────────────────────────────────────────────────────────
+   Shared row cells — main-star toggle + (edit / delete) icon group. Extracted
+   so the three table variants (sofa / bedframe / default) share the same
+   right-hand-side affordances without duplicating the JSX.
+   ──────────────────────────────────────────────────────────────────────── */
+
+const MainStarCell = ({
+  binding,
+  supplierId,
+  update,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  update: ReturnType<typeof useUpdateBinding>;
+}) => (
+  <>
+    <button
+      type="button"
+      className={styles.iconBtn}
+      title={binding.is_main_supplier ? 'Main supplier' : 'Set as main'}
+      onClick={(e) => {
+        e.stopPropagation();
+        update.mutate({
+          supplierId,
+          bindingId: binding.id,
+          isMainSupplier: !binding.is_main_supplier,
+        });
+      }}
+    >
+      <Star
+        size={16}
+        strokeWidth={1.75}
+        fill={binding.is_main_supplier ? 'currentColor' : 'none'}
+        style={{ color: binding.is_main_supplier ? 'var(--c-burnt)' : 'var(--fg-muted)' }}
+      />
+    </button>
+    {binding.is_main_supplier && <span className={styles.mainPill}>Main</span>}
+  </>
+);
+
+const RowActionsCell = ({
+  binding,
+  supplierId,
+  remove,
+  onEdit,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  remove: ReturnType<typeof useDeleteBinding>;
+  onEdit: (b: BindingRow) => void;
+}) => (
+  <span className={styles.actionsCell}>
+    <button
+      type="button"
+      className={styles.iconBtn}
+      title="Edit"
+      onClick={(e) => {
+        e.stopPropagation();
+        onEdit(binding);
+      }}
+    >
+      <Pencil {...SM_ICON} />
+    </button>
+    <button
+      type="button"
+      className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+      title="Delete"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (confirm(`Remove mapping ${binding.material_code} → ${binding.supplier_sku}?`)) {
+          remove.mutate({ supplierId, bindingId: binding.id });
+        }
+      }}
+    >
+      <Trash2 {...SM_ICON} />
+    </button>
+  </span>
+);
 
 /* ════════════════════════════════════════════════════════════════════════
    Inline editors — supplier_sku + unit_price cells on SkuMappingsTable
@@ -915,6 +1238,199 @@ const InlineUnitPrice = ({
         title="Click to edit · Enter to save · Esc to cancel"
       />
     </span>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   InlineSofaMatrixCell / InlineBedframeMatrixCell — per-category cost cells
+   (Commander 2026-05-27). Same edit ergonomics as InlineUnitPrice (draft in
+   RM string, commit on blur or Enter, Esc reverts) but the commit path is a
+   deep-merged PATCH against binding.price_matrix.
+
+   We intentionally treat the matrix as a sparse object: clearing a cell sets
+   the value to undefined, which `removeMatrixCell` strips out so the row's
+   JSON doesn't accumulate `null`s. NULL of the entire object means "fall
+   back to unit_price_centi or 0" downstream (see SO line pricing).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** Read sen value from a sofa matrix cell. Tolerant of empty / missing
+ *  branches so the UI can keep rendering during a partial fill-in. */
+function readSofaCell(
+  matrix: PriceMatrix | null,
+  height: string,
+  tier: 'P1' | 'P2' | 'P3',
+): number | null {
+  if (!matrix || typeof matrix !== 'object') return null;
+  const m = matrix as SofaPriceMatrix;
+  const row = m[height];
+  if (!row || typeof row !== 'object') return null;
+  const v = row[tier];
+  return typeof v === 'number' ? v : null;
+}
+
+/** Read sen value from a bedframe matrix cell. */
+function readBedframeCell(
+  matrix: PriceMatrix | null,
+  tier: 'P1' | 'P2',
+): number | null {
+  if (!matrix || typeof matrix !== 'object') return null;
+  const m = matrix as BedframePriceMatrix;
+  const v = m[tier];
+  return typeof v === 'number' ? v : null;
+}
+
+/** Deep-merge a new sofa cell into the existing matrix and prune any branch
+ *  that ends up empty. Pure — returns a new object. */
+function setSofaCell(
+  matrix: PriceMatrix | null,
+  height: string,
+  tier: 'P1' | 'P2' | 'P3',
+  valueSen: number | null,
+): SofaPriceMatrix | null {
+  const next: SofaPriceMatrix = { ...(matrix as SofaPriceMatrix | null ?? {}) };
+  const innerSrc = (next[height] ?? {}) as { P1?: number; P2?: number; P3?: number };
+  const inner: { P1?: number; P2?: number; P3?: number } = { ...innerSrc };
+  if (valueSen == null || valueSen === 0) {
+    delete inner[tier];
+  } else {
+    inner[tier] = valueSen;
+  }
+  if (Object.keys(inner).length === 0) delete next[height];
+  else next[height] = inner;
+  return Object.keys(next).length === 0 ? null : next;
+}
+
+/** Deep-merge a new bedframe price into the existing matrix. */
+function setBedframeCell(
+  matrix: PriceMatrix | null,
+  tier: 'P1' | 'P2',
+  valueSen: number | null,
+): BedframePriceMatrix | null {
+  const next: BedframePriceMatrix = { ...(matrix as BedframePriceMatrix | null ?? {}) };
+  if (valueSen == null || valueSen === 0) {
+    delete next[tier];
+  } else {
+    next[tier] = valueSen;
+  }
+  return Object.keys(next).length === 0 ? null : next;
+}
+
+/** Compact RM input shared by the sofa + bedframe matrix cells. Stays
+ *  visually consistent with InlineUnitPrice but allows blank (= clear). */
+const MatrixPriceInput = ({
+  valueSen,
+  currency,
+  onCommit,
+  placeholder,
+}: {
+  valueSen: number | null;
+  currency: Currency;
+  onCommit: (v: number | null) => void;
+  placeholder?: string;
+}) => {
+  const initial = valueSen == null ? '' : (valueSen / 100).toFixed(2);
+  const [draft, setDraft] = useState(initial);
+  // Re-sync if upstream changed (server response, tier switch).
+  const [committedSen, setCommittedSen] = useState(valueSen);
+  if (committedSen !== valueSen) {
+    setCommittedSen(valueSen);
+    setDraft(valueSen == null ? '' : (valueSen / 100).toFixed(2));
+  }
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed === '') {
+      if (valueSen == null) return;
+      onCommit(null);
+      return;
+    }
+    const next = Math.round(Number(trimmed) * 100);
+    if (!Number.isFinite(next) || next < 0) {
+      setDraft(initial);
+      return;
+    }
+    if (next === valueSen) return;
+    onCommit(next);
+  };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+      <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
+        {currency === 'MYR' ? 'RM' : currency}
+      </span>
+      <input
+        type="number"
+        step="0.01"
+        value={draft}
+        placeholder={placeholder ?? '—'}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+          if (e.key === 'Escape') { setDraft(initial); (e.target as HTMLInputElement).blur(); }
+        }}
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 'var(--fs-13)',
+          background: 'var(--c-cream)',
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '4px 8px',
+          outline: 'none',
+          width: 84,
+          textAlign: 'right',
+        }}
+        title="Click to edit · Enter to save · Esc to cancel · blank to clear"
+      />
+    </span>
+  );
+};
+
+const InlineSofaMatrixCell = ({
+  binding,
+  supplierId,
+  update,
+  height,
+  tier,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  update: ReturnType<typeof useUpdateBinding>;
+  height: string;
+  tier: 'P1' | 'P2' | 'P3';
+}) => {
+  const valueSen = readSofaCell(binding.price_matrix, height, tier);
+  return (
+    <MatrixPriceInput
+      valueSen={valueSen}
+      currency={binding.currency}
+      onCommit={(v) => {
+        const next = setSofaCell(binding.price_matrix, height, tier, v);
+        update.mutate({ supplierId, bindingId: binding.id, priceMatrix: next });
+      }}
+    />
+  );
+};
+
+const InlineBedframeMatrixCell = ({
+  binding,
+  supplierId,
+  update,
+  tier,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  update: ReturnType<typeof useUpdateBinding>;
+  tier: 'P1' | 'P2';
+}) => {
+  const valueSen = readBedframeCell(binding.price_matrix, tier);
+  return (
+    <MatrixPriceInput
+      valueSen={valueSen}
+      currency={binding.currency}
+      onCommit={(v) => {
+        const next = setBedframeCell(binding.price_matrix, tier, v);
+        update.mutate({ supplierId, bindingId: binding.id, priceMatrix: next });
+      }}
+    />
   );
 };
 

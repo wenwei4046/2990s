@@ -809,6 +809,17 @@ export const supplierMaterialBindings = pgTable('supplier_material_bindings', {
   priceValidTo:      date('price_valid_to'),
   isMainSupplier:    boolean('is_main_supplier').notNull().default(false),
   notes:             text('notes'),
+  /* PR — Commander 2026-05-27 ("跟着 Product Maintenance 的排版"): per-category
+     cost matrix that mirrors the Products Maintenance shape. Migration 0089.
+     SOFA:      {"24":{"P1":N,"P2":N,"P3":N},"26":{...},...} centi per
+                (seat-height × fabric tier) — same axes as the Products SOFA
+                price table.
+     BEDFRAME:  {"P1":N,"P2":N} centi per fabric upholstery tier.
+     MATTRESS/ACCESSORY/SERVICE: NULL — single price flows through
+                unit_price_centi above (unchanged).
+     Shape is validated server-side (apps/api/src/routes/suppliers.ts) per
+     the binding's mfg_products.category. */
+  priceMatrix:       jsonb('price_matrix'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
