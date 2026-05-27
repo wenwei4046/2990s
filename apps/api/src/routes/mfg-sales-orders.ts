@@ -27,7 +27,10 @@ const HEADER =
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
   'uom, location, qty, unit_price_centi, discount_centi, total_centi, tax_centi, total_inc_centi, balance_centi, ' +
-  'payment_status, venue, branding, remark, cancelled, variants, unit_cost_centi, line_cost_centi, line_margin_centi, created_at';
+  'payment_status, venue, branding, remark, cancelled, variants, unit_cost_centi, line_cost_centi, line_margin_centi, ' +
+  /* PR-E — per-item delivery date + cascade override flag (migration 0074) */
+  'line_delivery_date, line_delivery_date_overridden, ' +
+  'created_at';
 
 const nextDocNo = async (sb: any): Promise<string> => {
   // HOUZS pattern: SO-NNNNNN (6-digit zero-padded counter across all time)
@@ -73,6 +76,11 @@ mfgSalesOrders.post('/', async (c) => {
 
   // Compute totals + category breakdown
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
+  /* PR-E — Per-item delivery date inherits the SO header's
+     customer_delivery_date on create unless the client explicitly
+     supplies a per-line lineDeliveryDate. Override flag mirrors the
+     client's choice (defaults false → cascade-tracked). */
+  const headerDeliveryDate = (body.customerDeliveryDate as string | null | undefined) ?? null;
   const itemRows = items.map((it) => {
     const qty = Number(it.qty ?? 1);
     const unit = Number(it.unitPriceCenti ?? 0);
@@ -86,6 +94,16 @@ mfgSalesOrders.post('/', async (c) => {
     else if (group.includes('bedframe')) bedframe += lineTotal;
     else if (group.includes('accessor')) accessories += lineTotal;
     else others += lineTotal;
+    /* PR-E — Per-line cascade defaults. If the client sent a
+       lineDeliveryDate it wins (and overridden=true unless explicitly
+       false). Otherwise inherit the header date with overridden=false. */
+    const hasExplicitLineDate = it.lineDeliveryDate !== undefined && it.lineDeliveryDate !== null;
+    const lineDeliveryDate = hasExplicitLineDate
+      ? (it.lineDeliveryDate as string | null)
+      : headerDeliveryDate;
+    const lineDeliveryDateOverridden = hasExplicitLineDate
+      ? (it.lineDeliveryDateOverridden === undefined ? true : Boolean(it.lineDeliveryDateOverridden))
+      : Boolean(it.lineDeliveryDateOverridden ?? false);
     return {
       line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
       debtor_code: (body.debtorCode as string) ?? null,
@@ -105,6 +123,8 @@ mfgSalesOrders.post('/', async (c) => {
       unit_cost_centi: Number(it.unitCostCenti ?? 0),
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
+      line_delivery_date: lineDeliveryDate,
+      line_delivery_date_overridden: lineDeliveryDateOverridden,
     };
   });
 
@@ -338,6 +358,23 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
+
+  /* PR-E — Master-follower cascade. When the header's
+     customer_delivery_date changes, every line that hasn't been
+     manually overridden picks up the new date. Mirrors the SoLineCard
+     variants cascade pattern (PR #141 / #147). Lines with
+     line_delivery_date_overridden=true are left untouched.
+     Best-effort: if the cascade UPDATE fails we still report success
+     for the header — the audit trail (next header refresh) will show
+     the divergence. */
+  if (body['customerDeliveryDate'] !== undefined) {
+    const newDate = body['customerDeliveryDate'] as string | null;
+    await sb.from('mfg_sales_order_items')
+      .update({ line_delivery_date: newDate })
+      .eq('doc_no', docNo)
+      .eq('line_delivery_date_overridden', false);
+  }
+
   return c.json({ ok: true, docNo });
 });
 
@@ -380,7 +417,10 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
-  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue').eq('doc_no', docNo).maybeSingle();
+  /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
+     line added later still inherits the SO header's delivery date by
+     default. Client can override by sending lineDeliveryDate explicitly. */
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
   const qty = Number(it.qty ?? 1);
@@ -388,6 +428,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const discount = Number(it.discountCenti ?? 0);
   const lineTotal = (qty * unit) - discount;
   const lineCost = Number(it.unitCostCenti ?? 0) * qty;
+  /* PR-E — same inheritance rule as POST /. Explicit per-line value wins
+     (and flips overridden=true unless the client says otherwise);
+     otherwise fall back to header.customer_delivery_date with
+     overridden=false so the line tracks future header changes. */
+  const hasExplicitLineDate = it.lineDeliveryDate !== undefined && it.lineDeliveryDate !== null;
+  const lineDeliveryDate = hasExplicitLineDate
+    ? (it.lineDeliveryDate as string | null)
+    : (header.customer_delivery_date as string | null) ?? null;
+  const lineDeliveryDateOverridden = hasExplicitLineDate
+    ? (it.lineDeliveryDateOverridden === undefined ? true : Boolean(it.lineDeliveryDateOverridden))
+    : Boolean(it.lineDeliveryDateOverridden ?? false);
   const row = {
     doc_no: docNo,
     line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
@@ -411,6 +462,8 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     unit_cost_centi: Number(it.unitCostCenti ?? 0),
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
+    line_delivery_date: lineDeliveryDate,
+    line_delivery_date_overridden: lineDeliveryDateOverridden,
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
@@ -444,6 +497,21 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     ['remark', 'remark'], ['cancelled', 'cancelled'],
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
+  }
+
+  /* PR-E — Per-item delivery date PATCH. If the caller sends
+     lineDeliveryDate (including null to clear it), we ALSO server-side
+     flip line_delivery_date_overridden to true. This is defensive — the
+     UI should already mark the line as overridden when the user types
+     into the field, but enforcing it here protects against clients that
+     forget. A separate lineDeliveryDateOverridden=false reset path lets
+     the UI deliberately rejoin the header cascade. */
+  if (it.lineDeliveryDate !== undefined) {
+    updates['line_delivery_date'] = it.lineDeliveryDate as string | null;
+    updates['line_delivery_date_overridden'] = true;
+  }
+  if (it.lineDeliveryDateOverridden !== undefined) {
+    updates['line_delivery_date_overridden'] = Boolean(it.lineDeliveryDateOverridden);
   }
 
   const { error } = await sb.from('mfg_sales_order_items').update(updates).eq('id', itemId);
