@@ -714,6 +714,78 @@ export const useApAging = () => baseQuery<{ apAging: ApAgingRow[] }>(
 );
 
 /* ════════════════════════════════════════════════════════════════════════
+   Reports (PR-H) — AutoCount-style reporting endpoints
+   ════════════════════════════════════════════════════════════════════════ */
+
+export type SoDetailListingFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  docNo?: string;
+  debtorCode?: string;
+  itemCode?: string;
+  deliveryDateFrom?: string;
+  deliveryDateTo?: string;
+  groupBy?: 'none' | 'branding' | 'agent' | 'debtor' | 'item_group';
+  sortBy?: 'date' | 'doc_no' | 'item_code';
+};
+
+export type SoDetailListingRow = Record<string, unknown> & {
+  id: string;
+  doc_no: string;
+  line_date: string | null;
+  so_date: string | null;
+  debtor_code: string | null;
+  debtor_name: string | null;
+  agent: string | null;
+  branding: string | null;
+  item_group: string;
+  item_code: string;
+  description: string | null;
+  description2: string | null;
+  uom: string;
+  location: string | null;
+  qty: number;
+  unit_price_centi: number;
+  discount_centi: number;
+  total_centi: number;
+  tax_centi: number;
+  total_inc_centi: number;
+  balance_centi: number;
+  cancelled: boolean;
+  currency: string;
+  status: string | null;
+  local_total_centi: number;
+  remark4: string | null;
+  remark2: string | null;
+  remark3: string | null;
+  processing_date: string | null;
+  sales_exemption_expiry: string | null;
+  customer_delivery_date: string | null;
+};
+
+export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {
+  const params = new URLSearchParams();
+  if (filters.dateFrom)         params.set('dateFrom',         filters.dateFrom);
+  if (filters.dateTo)           params.set('dateTo',           filters.dateTo);
+  if (filters.docNo)            params.set('docNo',            filters.docNo);
+  if (filters.debtorCode)       params.set('debtorCode',       filters.debtorCode);
+  if (filters.itemCode)         params.set('itemCode',         filters.itemCode);
+  if (filters.deliveryDateFrom) params.set('deliveryDateFrom', filters.deliveryDateFrom);
+  if (filters.deliveryDateTo)   params.set('deliveryDateTo',   filters.deliveryDateTo);
+  if (filters.groupBy)          params.set('groupBy',          filters.groupBy);
+  if (filters.sortBy)           params.set('sortBy',           filters.sortBy);
+  const qs = params.toString();
+  return useQuery({
+    queryKey: ['reports', 'sales-order-detail-listing', qs],
+    queryFn: () => authedFetch<{ rows: SoDetailListingRow[] }>(
+      `/reports/sales-order-detail-listing${qs ? `?${qs}` : ''}`,
+    ),
+    placeholderData: (prev) => prev,  // TanStack v5 equivalent of keepPreviousData
+    staleTime: 30_000,
+  });
+};
+
+/* ════════════════════════════════════════════════════════════════════════
    Outstanding (PR #45) — unified outstanding filter across all 8 modules
    ════════════════════════════════════════════════════════════════════════ */
 
