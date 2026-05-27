@@ -39,7 +39,7 @@ mfgProducts.get('/', async (c) => {
   let q = supabase
     .from('mfg_products')
     .select(
-      'id, code, name, category, description, base_model, size_label, base_price_sen, price1_sen, ' +
+      'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, ' +
         'unit_m3_milli, status, sku_code, model_id, ' +
         'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
     )
