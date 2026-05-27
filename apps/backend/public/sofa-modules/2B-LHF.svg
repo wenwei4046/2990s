@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 110" width="160" height="110">
   <title>2990s Sofa Module — 2B-LHF — 2 Seater, LEFT Bench Cushion</title>
-  <desc>Top-down plan view. Same shape as 2A-LHF but the left strip is a soft Seat Bench Cushion (medium tan) instead of a hard armrest.</desc>
+  <desc>Top-down plan view. Same shape as 2A-LHF but the LEFT armrest position is a soft rounded bench cushion (shorter, sits at seat level, NOT a tall hard armrest).</desc>
   <g transform="translate(20,20)">
     <rect x="0" y="0" width="120" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"/>
     <rect x="0" y="0" width="120" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- LEFT bench cushion -->
-    <rect x="0" y="0" width="12" height="70" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- Seat-to-seat divider (matches 2A's dashed midline) -->
+    <!-- LEFT soft bench cushion: rounded pillow at seat level, does NOT extend up into the backrest -->
+    <rect x="3" y="16" width="14" height="50" rx="6" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
+    <!-- Seat-to-seat dashed divider -->
     <line x1="66" y1="0" x2="66" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
   </g>
 </svg>

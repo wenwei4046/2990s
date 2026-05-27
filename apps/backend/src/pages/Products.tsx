@@ -1276,6 +1276,10 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
 // Keys are the NORMALIZED code (parens collapsed to dashes); the value
 // is the SVG filename stem under apps/backend/public/sofa-modules/.
 const EXTRA_MODULE_IMAGE_BY_NORM: Record<string, string> = {
+  // 1-Seater / 2-Seater presets — both arms (live in BUNDLES, not SOFA_MODULES)
+  '1S':       '1S',
+  '2S':       '2S',
+  // Recliner variants
   '1A-P-LHF': '1A-P-LHF',
   '1A-P-RHF': '1A-P-RHF',
   '1A-R-LHF': '1A-R-LHF',
