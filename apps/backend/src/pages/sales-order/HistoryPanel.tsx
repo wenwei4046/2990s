@@ -57,9 +57,16 @@ const FIELD_LABEL: Record<string, string> = {
   emergencyContactRelationship: 'Emergency relationship',
   targetDate: 'Target date', branding: 'Branding', venue: 'Venue',
   salesLocation: 'Sales location', ref: 'Ref', poDocNo: 'PO doc no',
+  // Payment ledger fields (ADD_PAYMENT / DELETE_PAYMENT actions). Without
+  // these entries the drawer rendered raw camelCase ("paidAt 2026-05-27")
+  // which commander flagged as ambiguous on 2026-05-28.
+  paidAt: 'Payment date', method: 'Method', amountCenti: 'Amount',
+  merchantProvider: 'Merchant provider', installmentMonths: 'Installment term',
+  onlineType: 'Online type', approvalCode: 'Approval code',
+  accountSheet: 'Account', collectedBy: 'Collected by',
 };
 
-const MONEY_FIELDS = new Set(['unitPriceCenti', 'discountCenti', 'totalCenti', 'depositCenti', 'localTotalCenti', 'unitCostCenti']);
+const MONEY_FIELDS = new Set(['unitPriceCenti', 'discountCenti', 'totalCenti', 'depositCenti', 'localTotalCenti', 'unitCostCenti', 'amountCenti']);
 
 const fmtField = (field: string, val: unknown): string => {
   if (val === null || val === undefined || val === '') return '—';
@@ -191,22 +198,28 @@ const HistoryPanelInner = ({
                         </button>
                         {isExpanded && (
                           <div className={styles.historyChanges}>
-                            {fc.map((ch, idx) => (
-                              <div key={idx} className={styles.historyChange}>
-                                <span className={styles.historyChangeField}>
-                                  {FIELD_LABEL[ch.field] ?? ch.field}
-                                </span>
-                                <span className={styles.historyChangeDiff}>
-                                  {ch.from !== undefined && ch.from !== null && ch.from !== '' ? (
-                                    <>
-                                      <span className={styles.historyChangeFrom}>{fmtField(ch.field, ch.from)}</span>
-                                      <span className={styles.historyChangeArrow}>→</span>
-                                    </>
-                                  ) : null}
-                                  <span>{fmtField(ch.field, ch.to)}</span>
-                                </span>
-                              </div>
-                            ))}
+                            {fc.map((ch, idx) => {
+                              // Always render "from → to" with em-dash for the
+                              // null side. Commander 2026-05-28: bare
+                              // "paidAt 2026-05-27" reads ambiguously — is it
+                              // a key-value pair or a change? Showing
+                              // "— → 2026-05-27" makes INSERT clearly an "added"
+                              // change; "2026-05-27 → —" makes DELETE explicit.
+                              return (
+                                <div key={idx} className={styles.historyChange}>
+                                  <span className={styles.historyChangeField}>
+                                    {FIELD_LABEL[ch.field] ?? ch.field}
+                                  </span>
+                                  <span className={styles.historyChangeDiff}>
+                                    <span className={styles.historyChangeFrom}>
+                                      {fmtField(ch.field, ch.from)}
+                                    </span>
+                                    <span className={styles.historyChangeArrow}>→</span>
+                                    <span>{fmtField(ch.field, ch.to)}</span>
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </>
