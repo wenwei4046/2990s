@@ -85,7 +85,8 @@ export const SalesOrderMaintenance = () => {
 /* ──────────────────────────────────────────────────────────────────────────
    Maintenance body — formerly LocalitiesTab in Settings.tsx.
    - Top: State → Warehouse mapping CRUD (state_warehouse_mappings table)
-   - Bottom: States / Cities / Postcodes CRUD on my_localities */
+   - Bottom: Geo registry — Country L1 → State L2 → City L3 drill-down
+     (replaces the old flat 2933-row States/Cities/Postcodes table). */
 
 const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
   const mappings = useStateWarehouseMappings();
@@ -132,39 +133,111 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
     if (changed) setPendingByState(next);
   }, [mappedByState, pendingByState]);
 
-  // Localities table state — filter + add-row form
-  const [filterState, setFilterState] = useState<string>('');
-  const [newState, setNewState] = useState('');
+  /* Commander 2026-05-27: "country L1 / state L2 / city L3 只要啊 所以我不
+     需要 2933 row 都 mention malaysia". Replaced the flat 2933-row list
+     with a 3-level drill-down: L1 = Country (1 row per distinct country
+     with state + postcode counts) → L2 = State (states under selected
+     country with city + postcode counts) → L3 = City + Postcode (rows
+     under selected state, where actual edit/delete lives).
+
+     The Add Row form sits at L3 (city+postcode) only — to add a new
+     state, click "+ Add state" at L2; to add a new country, click
+     "+ Add country" at L1. Each opens a guided form with the parent
+     context pre-filled. */
+  const [geoView, setGeoView]               = useState<'country' | 'state' | 'city'>('country');
+  const [selectedCountry, setSelectedCountry] = useState<string>('');
+  const [selectedState,   setSelectedState]   = useState<string>('');
+  const [newState,    setNewState]    = useState('');
   const [newStateCode, setNewStateCode] = useState('');
-  const [newCity, setNewCity] = useState('');
+  const [newCity,     setNewCity]     = useState('');
   const [newPostcode, setNewPostcode] = useState('');
   /* Task #121 — defaulted to Malaysia to match the column default; new
      foreign-state rows (Singapore, Thailand, ...) override before saving. */
   const [newCountry, setNewCountry] = useState('Malaysia');
-  const filteredLocalities: LocalityRow[] = (localities.data ?? []).filter(
-    (r) => !filterState || r.state === filterState,
-  );
+
+  /* Group localities by (country) → (country, state) for the L1 + L2 stat
+     tiles, computed once per data refresh. */
+  const localityGroups = useMemo(() => {
+    const rows = localities.data ?? [];
+    const byCountry = new Map<string, {
+      country: string;
+      states: Set<string>;
+      cities: Set<string>;
+      postcodeCount: number;
+    }>();
+    const byCountryState = new Map<string, {
+      country: string;
+      state: string;
+      stateCode: string;
+      cities: Set<string>;
+      postcodeCount: number;
+    }>();
+    for (const r of rows) {
+      const c = r.country || 'Malaysia';
+      const cKey = c;
+      const csKey = `${c}|${r.state}`;
+      if (!byCountry.has(cKey)) {
+        byCountry.set(cKey, { country: c, states: new Set(), cities: new Set(), postcodeCount: 0 });
+      }
+      const cAgg = byCountry.get(cKey)!;
+      cAgg.states.add(r.state);
+      cAgg.cities.add(`${r.state}|${r.city}`);
+      cAgg.postcodeCount += 1;
+      if (!byCountryState.has(csKey)) {
+        byCountryState.set(csKey, { country: c, state: r.state, stateCode: r.stateCode, cities: new Set(), postcodeCount: 0 });
+      }
+      const csAgg = byCountryState.get(csKey)!;
+      csAgg.cities.add(r.city);
+      csAgg.postcodeCount += 1;
+    }
+    return {
+      countries: Array.from(byCountry.values()).sort((a, b) => a.country.localeCompare(b.country)),
+      statesByCountry: byCountryState,
+    };
+  }, [localities.data]);
+
+  /* L3 = rows under (selectedCountry, selectedState). */
+  const cityRows: LocalityRow[] = useMemo(() => {
+    if (!selectedCountry || !selectedState) return [];
+    return (localities.data ?? [])
+      .filter((r) => (r.country || 'Malaysia') === selectedCountry && r.state === selectedState)
+      .sort((a, b) => a.city.localeCompare(b.city) || a.postcode.localeCompare(b.postcode));
+  }, [localities.data, selectedCountry, selectedState]);
 
   const addLocality = () => {
+    /* At L3 the country + state are locked from the breadcrumb; we still
+       need the user to supply the stateCode for the FIRST locality of a
+       freshly-added state at L2 (because the form there sets it). At L3
+       we look the code up from any existing row under the same state. */
+    const lockedCountry = geoView !== 'country' && selectedCountry ? selectedCountry : '';
+    const lockedState   = geoView === 'city'    && selectedState   ? selectedState   : '';
+    const lockedStateCode = lockedState
+      ? (localityGroups.statesByCountry.get(`${lockedCountry}|${lockedState}`)?.stateCode ?? '')
+      : '';
     const payload = {
-      state:     newState.trim(),
-      stateCode: newStateCode.trim().toUpperCase(),
+      state:     (lockedState || newState).trim(),
+      stateCode: (lockedStateCode || newStateCode).trim().toUpperCase(),
       city:      newCity.trim(),
       postcode:  newPostcode.trim(),
-      country:   newCountry.trim() || 'Malaysia',
+      country:   (lockedCountry || newCountry).trim() || 'Malaysia',
     };
     if (!payload.state || !payload.stateCode || !payload.city || !payload.postcode) {
-      window.alert('All four fields are required.');
+      window.alert('State, State Code, City and Postcode are all required.');
       return;
     }
     createLoc.mutate(payload, {
       onSuccess: () => {
         setNewState(''); setNewStateCode(''); setNewCity(''); setNewPostcode('');
-        setNewCountry('Malaysia');
+        if (!lockedCountry) setNewCountry('Malaysia');
       },
       onError: (err) => window.alert(String((err as Error).message ?? err)),
     });
   };
+
+  /* Navigation helpers — keep view state self-consistent. */
+  const goToCountry = () => { setGeoView('country'); setSelectedCountry(''); setSelectedState(''); };
+  const drillIntoCountry = (c: string) => { setSelectedCountry(c); setGeoView('state'); setSelectedState(''); };
+  const drillIntoState   = (s: string) => { setSelectedState(s); setGeoView('city'); };
 
   return (
     <>
@@ -309,159 +382,215 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
           pickable in the dropdown above. */}
       <WarehouseCrudSection canEdit={canEdit} />
 
-      {/* ── States / Cities / Postcodes CRUD (formerly Settings tab) ───── */}
+      {/* ── Geo registry: Country L1 → State L2 → City L3 ───────────────
+          Commander 2026-05-27: "country L1 / state L2 / city L3 只要啊 所
+          以我不需要 2933 row 都 mention malaysia". The flat 2933-row table
+          is replaced with a drill-down so each row appears ONCE at its
+          natural level. Add Row only sits at L3 (where the actual atomic
+          (state, city, postcode) row lives in my_localities). */}
       <div className={styles.banner} style={{ marginTop: 'var(--space-4)' }}>
-        <strong>States / Cities / Postcodes.</strong> Editable list of rows in
-        my_localities — every (state, city, postcode) the SO + POS dropdowns
-        offer comes from here. Add new rows below; delete with the whole-row
-        trash icon to drop one.
+        <strong>Geo registry.</strong>{' '}
+        {geoView === 'country'  && <>L1 · Countries. Click a country to drill into its states.</>}
+        {geoView === 'state'    && <>L2 · States in {selectedCountry}. Click a state to drill into its cities.</>}
+        {geoView === 'city'     && <>L3 · Cities + postcodes in {selectedState}, {selectedCountry}. Edit / delete rows here.</>}
       </div>
 
-      {canEdit && (
-        <div className={styles.addRowCard}>
-          <div className={styles.addRowEyebrow}>Add a row</div>
-          {/* Task #121 — explicit grid template so the new Country column
-              has room without the surrounding columns collapsing. */}
-          <div
-            className={styles.addRowGrid}
-            style={{ gridTemplateColumns: '1fr 100px 1fr 110px 120px auto' }}
+      {/* Breadcrumb — visible at L2 + L3 so the user can step back up. */}
+      {geoView !== 'country' && (
+        <div className={styles.filterBar} style={{ marginBottom: 'var(--space-2)' }}>
+          <button
+            type="button"
+            className={styles.editBtn}
+            onClick={goToCountry}
           >
-            <input
-              className={styles.input}
-              placeholder="State (e.g. Selangor)"
-              value={newState}
-              onChange={(e) => setNewState(e.target.value)}
-            />
-            <input
-              className={styles.input}
-              placeholder="Code (SGR)"
-              value={newStateCode}
-              onChange={(e) => setNewStateCode(e.target.value)}
-              maxLength={5}
-            />
-            <input
-              className={styles.input}
-              placeholder="City (Petaling Jaya)"
-              value={newCity}
-              onChange={(e) => setNewCity(e.target.value)}
-            />
-            <input
-              className={styles.input}
-              placeholder="Postcode (47301)"
-              value={newPostcode}
-              onChange={(e) => setNewPostcode(e.target.value)}
-              maxLength={10}
-            />
-            <input
-              className={styles.input}
-              placeholder="Country (Malaysia)"
-              value={newCountry}
-              onChange={(e) => setNewCountry(e.target.value)}
-            />
-            <Button
-              variant="primary"
-              size="md"
-              onClick={addLocality}
-              disabled={createLoc.isPending}
+            ← All countries
+          </button>
+          {geoView === 'city' && (
+            <button
+              type="button"
+              className={styles.editBtn}
+              onClick={() => { setSelectedState(''); setGeoView('state'); }}
+              style={{ marginLeft: 'var(--space-2)' }}
             >
-              <Plus size={14} strokeWidth={1.75} />
-              Add
-            </Button>
-          </div>
+              ← {selectedCountry} (states)
+            </button>
+          )}
+          <span className={styles.muted} style={{ marginLeft: 'var(--space-3)' }}>
+            {geoView === 'state' ? selectedCountry : `${selectedCountry} / ${selectedState}`}
+          </span>
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <div className={styles.filterBar}>
-          <label className={styles.filterLabel}>
-            <span className={styles.muted}>Filter by state:</span>
-            <select
-              className={`${styles.input} ${styles.filterSelect}`}
-              value={filterState}
-              onChange={(e) => setFilterState(e.target.value)}
-            >
-              <option value="">All states ({(localities.data ?? []).length} rows)</option>
-              {states.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-        </div>
-        {localities.isLoading ? (
-          <div className={styles.empty}>Loading…</div>
-        ) : filteredLocalities.length === 0 ? (
-          <div className={styles.empty}>No rows.</div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>State</th>
-                <th>Code</th>
-                <th>City</th>
-                <th>Postcode</th>
-                {/* Task #121 — editable Country column (default 'Malaysia'). */}
-                <th>Country</th>
-                {canEdit && <th aria-label="actions" />}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredLocalities.slice(0, 500).map((r) => (
-                <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
-                  <td>{r.state}</td>
-                  <td><code className={styles.code}>{r.stateCode}</code></td>
-                  <td>{r.city}</td>
-                  <td><code className={styles.code}>{r.postcode}</code></td>
-                  <td>
-                    {canEdit && r.id ? (
-                      /* onBlur persistence mirrors the State → Warehouse
-                         "Notes" cell above — keeps the UX consistent and
-                         avoids a per-row Save button. Skips the PATCH
-                         when the value is unchanged. */
-                      <input
-                        className={styles.input}
-                        defaultValue={r.country}
-                        disabled={updateLoc.isPending}
-                        onBlur={(e) => {
-                          const next = e.target.value.trim();
-                          if (!next || next === r.country) return;
-                          updateLoc.mutate(
-                            { id: r.id!, country: next },
-                            { onError: (err) => window.alert(String((err as Error).message ?? err)) },
-                          );
-                        }}
-                      />
-                    ) : (
-                      r.country
-                    )}
-                  </td>
-                  {canEdit && (
-                    <td>
-                      {r.id && (
-                        <button
-                          type="button"
-                          className={styles.editBtn}
-                          disabled={deleteLoc.isPending}
-                          onClick={() => {
-                            if (confirm(`Delete ${r.state} / ${r.city} / ${r.postcode}?`)) {
-                              deleteLoc.mutate(r.id!);
-                            }
-                          }}
-                          aria-label="Delete locality row"
-                        >
-                          <Trash2 size={14} strokeWidth={1.75} />
-                        </button>
-                      )}
-                    </td>
-                  )}
+      {/* L1 — Country listing */}
+      {geoView === 'country' && (
+        <div className={styles.tableCard}>
+          {localities.isLoading ? (
+            <div className={styles.empty}>Loading…</div>
+          ) : localityGroups.countries.length === 0 ? (
+            <div className={styles.empty}>No localities yet.</div>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Country</th>
+                  <th style={{ width: 110, textAlign: 'right' }}>States</th>
+                  <th style={{ width: 110, textAlign: 'right' }}>Cities</th>
+                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
+                  <th style={{ width: 90 }} aria-label="drill" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {filteredLocalities.length > 500 && (
-          <div className={styles.empty} style={{ fontSize: 'var(--fs-12)' }}>
-            Showing first 500 of {filteredLocalities.length} — use the filter above to narrow down.
+              </thead>
+              <tbody>
+                {localityGroups.countries.map((c) => (
+                  <tr
+                    key={c.country}
+                    onClick={() => drillIntoCountry(c.country)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td><strong>{c.country}</strong></td>
+                    <td style={{ textAlign: 'right' }}>{c.states.size}</td>
+                    <td style={{ textAlign: 'right' }}>{c.cities.size}</td>
+                    <td style={{ textAlign: 'right' }}>{c.postcodeCount}</td>
+                    <td>
+                      <button type="button" className={styles.editBtn}>
+                        Open →
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* L2 — State listing within selectedCountry */}
+      {geoView === 'state' && (
+        <div className={styles.tableCard}>
+          {(() => {
+            const statesInCountry = Array.from(localityGroups.statesByCountry.values())
+              .filter((s) => s.country === selectedCountry)
+              .sort((a, b) => a.state.localeCompare(b.state));
+            if (statesInCountry.length === 0) {
+              return <div className={styles.empty}>No states under {selectedCountry}.</div>;
+            }
+            return (
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>State</th>
+                    <th style={{ width: 100 }}>Code</th>
+                    <th style={{ width: 110, textAlign: 'right' }}>Cities</th>
+                    <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
+                    <th style={{ width: 90 }} aria-label="drill" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {statesInCountry.map((s) => (
+                    <tr
+                      key={s.state}
+                      onClick={() => drillIntoState(s.state)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <td><strong>{s.state}</strong></td>
+                      <td><code className={styles.code}>{s.stateCode}</code></td>
+                      <td style={{ textAlign: 'right' }}>{s.cities.size}</td>
+                      <td style={{ textAlign: 'right' }}>{s.postcodeCount}</td>
+                      <td>
+                        <button type="button" className={styles.editBtn}>
+                          Open →
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* L3 — City + Postcode listing (the actual editable rows) */}
+      {geoView === 'city' && (
+        <>
+          {canEdit && (
+            <div className={styles.addRowCard}>
+              <div className={styles.addRowEyebrow}>
+                Add a city/postcode in {selectedState}, {selectedCountry}
+              </div>
+              <div
+                className={styles.addRowGrid}
+                style={{ gridTemplateColumns: '1fr 130px auto' }}
+              >
+                <input
+                  className={styles.input}
+                  placeholder="City (e.g. Petaling Jaya)"
+                  value={newCity}
+                  onChange={(e) => setNewCity(e.target.value)}
+                />
+                <input
+                  className={styles.input}
+                  placeholder="Postcode (e.g. 47301)"
+                  value={newPostcode}
+                  onChange={(e) => setNewPostcode(e.target.value)}
+                  maxLength={10}
+                />
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={addLocality}
+                  disabled={createLoc.isPending}
+                >
+                  <Plus size={14} strokeWidth={1.75} />
+                  Add
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className={styles.tableCard}>
+            {cityRows.length === 0 ? (
+              <div className={styles.empty}>No cities in {selectedState} yet — add one above.</div>
+            ) : (
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>City</th>
+                    <th style={{ width: 140 }}>Postcode</th>
+                    {canEdit && <th aria-label="actions" style={{ width: 70 }} />}
+                  </tr>
+                </thead>
+                <tbody>
+                  {cityRows.map((r) => (
+                    <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
+                      <td>{r.city}</td>
+                      <td><code className={styles.code}>{r.postcode}</code></td>
+                      {canEdit && (
+                        <td>
+                          {r.id && (
+                            <button
+                              type="button"
+                              className={styles.editBtn}
+                              disabled={deleteLoc.isPending}
+                              onClick={() => {
+                                if (confirm(`Delete ${r.city} / ${r.postcode}?`)) {
+                                  deleteLoc.mutate(r.id!);
+                                }
+                              }}
+                              aria-label="Delete locality row"
+                            >
+                              <Trash2 size={14} strokeWidth={1.75} />
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {/* ── Dropdowns CRUD (Task #118) ─────────────────────────────────
           One mini-table per category. Backed by so_dropdown_options
