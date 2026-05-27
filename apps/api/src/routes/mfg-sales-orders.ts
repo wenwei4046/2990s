@@ -759,20 +759,57 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
     created_by:         user.id,
   }).select(PAYMENT_COLS).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* Post-merge stitch — wire ADD_PAYMENT into the PR-D audit ledger.
+     Field-changes list mirrors what the user typed so the History panel
+     can render a readable diff. */
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'ADD_PAYMENT',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'paidAt',             from: null, to: p.paidAt },
+      { field: 'method',             from: null, to: p.method },
+      { field: 'amountCenti',        from: null, to: p.amountCenti },
+      ...(merchantProvider  ? [{ field: 'merchantProvider',  from: null, to: merchantProvider  } satisfies FieldChange] : []),
+      ...(installmentMonths ? [{ field: 'installmentMonths', from: null, to: installmentMonths } satisfies FieldChange] : []),
+      ...(p.approvalCode    ? [{ field: 'approvalCode',      from: null, to: p.approvalCode    } satisfies FieldChange] : []),
+      ...(p.accountSheet    ? [{ field: 'accountSheet',      from: null, to: p.accountSheet    } satisfies FieldChange] : []),
+    ],
+  });
+
   return c.json({ payment: data }, 201);
 });
 
 mfgSalesOrders.delete('/:docNo/payments/:id', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const id = c.req.param('id');
+  const user = c.get('user');
 
   // Guard: only delete if the row belongs to this docNo. Prevents a
   // mis-routed call from nuking another SO's payment.
-  const { data: row } = await sb.from('mfg_sales_order_payments').select('id, so_doc_no').eq('id', id).maybeSingle();
+  const { data: row } = await sb.from('mfg_sales_order_payments').select('*').eq('id', id).maybeSingle();
   if (!row) return c.json({ error: 'not_found' }, 404);
-  if ((row as { so_doc_no: string }).so_doc_no !== docNo) return c.json({ error: 'payment_doc_mismatch' }, 400);
+  const rowTyped = row as { so_doc_no: string; paid_at: string; method: string; amount_centi: number; approval_code: string | null };
+  if (rowTyped.so_doc_no !== docNo) return c.json({ error: 'payment_doc_mismatch' }, 400);
 
   const { error } = await sb.from('mfg_sales_order_payments').delete().eq('id', id);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+
+  /* Post-merge stitch — DELETE_PAYMENT audit row. */
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'DELETE_PAYMENT',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'paidAt',       from: rowTyped.paid_at,       to: null },
+      { field: 'method',       from: rowTyped.method,        to: null },
+      { field: 'amountCenti',  from: rowTyped.amount_centi,  to: null },
+      ...(rowTyped.approval_code ? [{ field: 'approvalCode', from: rowTyped.approval_code, to: null } satisfies FieldChange] : []),
+    ],
+  });
+
   return c.json({ ok: true });
 });
 

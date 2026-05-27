@@ -529,12 +529,16 @@ export const SalesOrderDetail = () => {
           everyone. To restore: uncomment <TotalsCard /> below. */}
       {/* <TotalsCard header={header} /> */}
 
-      {/* ── Payment (PR #143) ───────────────────────────────────── */}
+      {/* ── Payment (PR #143 → rebuilt as transactions ledger in PR-C) ── */}
+      {/* Post-merge stitch — collapse PR-A's isEditing into PR-C's existing
+          `locked` gate so the + Add Payment button + trash icons disappear
+          when the page is in read-only mode. Status-lock OR not-editing
+          both make PaymentCard immutable from the user's perspective. */}
       <PaymentCard
         header={header}
         onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
         saving={updateHeader.isPending}
-        locked={isLocked}
+        locked={isLocked || !isEditing}
       />
 
       {/* ── Status flow ─────────────────────────────────────────── */}
