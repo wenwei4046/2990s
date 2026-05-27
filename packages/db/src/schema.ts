@@ -1780,6 +1780,39 @@ export const mfgProducts = pgTable('mfg_products', {
   idxModelId:  index('idx_mfg_products_model_id').on(t.modelId),
 }));
 
+/* ─────────────────────────── sofa_combo_pricing ────────────────────────
+   PR #237 (Commander 2026-05-28 "去查看 hookka 的 combo module 把整个 copy
+   过来") — Module-set combo deals. When a SO/POS line composes the modules
+   array on this base model with the matching tier + customer scope, the
+   combo price OVERRIDES per-Model compartment pricing.
+
+   Append-only history: editing inserts a new effective-dated row with the
+   same (base_model, modules, tier, customer_id); the latest row whose
+   effective_from ≤ today wins. customer_id NULL = applies to all customers.
+   See migration 0090 header for full spec.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export const sofaComboPricing = pgTable('sofa_combo_pricing', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  baseModel:       text('base_model').notNull(),
+  modules:         text('modules').array().notNull(),                     // sorted text[]
+  tier:            fabricPriceTier('tier'),                               // NULL = applies any tier
+  customerId:      uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }),
+  pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null }
+  label:           text('label'),                                         // null = auto-build from modules
+  effectiveFrom:   date('effective_from').notNull(),
+  deletedAt:       timestamp('deleted_at', { withTimezone: true }),
+  notes:           text('notes'),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:       uuid('created_by'),
+}, (t) => ({
+  idxLookup: index('idx_sofa_combo_pricing_lookup')
+    .on(t.baseModel, t.tier, t.customerId, t.effectiveFrom),
+  idxHistory: index('idx_sofa_combo_pricing_history')
+    .on(t.baseModel, t.tier, t.customerId, t.effectiveFrom, t.createdAt),
+}));
+
 /* ─────────────────────────── product_models ─────────────────────────────
    PR #49 — Template / second-layer entity that owns the allowed-options
    pool per Model. Each SKU on mfg_products keeps its own row (separate

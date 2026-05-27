@@ -55,6 +55,7 @@ import {
 } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
+import { SofaComboTab } from '../components/SofaComboTab';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
 import { useQueryClient } from '@tanstack/react-query';
@@ -62,7 +63,7 @@ import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
 
-type TopTab = 'sku' | 'modular' | 'maintenance';
+type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos';
 
 
 export const Products = () => {
@@ -108,6 +109,18 @@ export const Products = () => {
             >
               Maintenance
             </button>
+            {/* PR #237 — Sofa Combo Pricing (Commander 2026-05-28
+                "去查看 hookka 的 combo module 把整个 copy 过来"). Module-set
+                combo deals that OVERRIDE per-Model compartment pricing. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'combos'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('combos')}
+            >
+              Combo Pricing
+            </button>
           </div>
         </div>
       </header>
@@ -115,6 +128,7 @@ export const Products = () => {
       {topTab === 'sku' && <SkuMasterTab />}
       {topTab === 'modular' && <ProductModels />}
       {topTab === 'maintenance' && <MaintenanceTab />}
+      {topTab === 'combos' && <SofaComboTab />}
     </div>
   );
 };
