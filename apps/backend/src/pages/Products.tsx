@@ -1204,6 +1204,10 @@ const MaintenanceList = ({
   // edit mode is on. Kept local so toggling tabs cancels in-flight adds.
   const [draftValue, setDraftValue] = useState('');
   const [draftPrice, setDraftPrice] = useState('0.00');
+  /* PR #216 — Commander 2026-05-27: parallel cost-side input. Operation
+     enters the estimated raw cost alongside the selling price; the value
+     persists into PricedOption.costSen and feeds computeMfgLineCost(). */
+  const [draftCost, setDraftCost] = useState('0.00');
 
   /* Commander 2026-05-27: "Maintenance 也要有 Sort 的功能" — drag-and-drop
      row reorder when editMode. Uses native HTML5 drag API (no library).
@@ -1486,13 +1490,20 @@ const MaintenanceList = ({
     const v = draftValue.trim();
     if (!v) return;
     const priceSen = Math.round((Number(draftPrice) || 0) * 100);
+    const costSenRaw = Math.round((Number(draftCost) || 0) * 100);
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
     const arr = (next[listKey] as PricedOption[] | undefined) ?? [];
-    arr.push({ value: v, priceSen });
+    // costSen is opt-in — store only when commander typed a non-zero value
+    // so old rows stay shape-identical (avoids dirty diffs on save).
+    const row: PricedOption = costSenRaw > 0
+      ? { value: v, priceSen, costSen: costSenRaw }
+      : { value: v, priceSen };
+    arr.push(row);
     (next as Record<string, unknown>)[listKey] = arr;
     onChange(next);
     setDraftValue('');
     setDraftPrice('0.00');
+    setDraftCost('0.00');
   };
 
   return (
@@ -1562,6 +1573,49 @@ const MaintenanceList = ({
                 </span>
               )}
             </span>
+            {/* PR #216 — parallel cost column. Edit mode renders an input;
+                read mode appends "· RM 80.00 cost" when costSen is set,
+                otherwise stays silent so old rows look unchanged. */}
+            {editMode ? (
+              <span className={styles.maintRowPrice} title="Estimated raw cost (Operation)">
+                <span className={styles.maintRowRmPrefix}>COST RM</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={((opt.costSen ?? 0) / 100).toFixed(2)}
+                  onChange={(e) => {
+                    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+                    const list = next[listKey] as PricedOption[];
+                    const sen = Math.round(Number(e.target.value) * 100);
+                    if (sen > 0) {
+                      list[i]!.costSen = sen;
+                    } else {
+                      delete list[i]!.costSen;
+                    }
+                    onChange(next);
+                  }}
+                  style={{
+                    width: 90,
+                    textAlign: 'right',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--fs-14)',
+                    background: 'var(--c-cream)',
+                    border: '1px dashed var(--line-strong)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '4px 8px',
+                    outline: 'none',
+                  }}
+                />
+              </span>
+            ) : (
+              opt.costSen != null && opt.costSen > 0 ? (
+                <span className={styles.maintRowPrice} style={{ color: 'var(--fg-muted)' }}>
+                  <span className={styles.maintRowRmPrefix}>RM</span>
+                  {(opt.costSen / 100).toFixed(2)}
+                  <span style={{ marginLeft: 4, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', letterSpacing: '0.08em' }}>COST</span>
+                </span>
+              ) : null
+            )}
             {editMode && (
               <button
                 type="button"
@@ -1619,6 +1673,27 @@ const MaintenanceList = ({
                 fontSize: 'var(--fs-14)',
                 background: 'var(--c-cream)',
                 border: '1px solid var(--line)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '6px 8px',
+                outline: 'none',
+              }}
+            />
+            {/* PR #216 — Operation-side cost input on the add-new row. */}
+            <span className={styles.maintRowRmPrefix}>COST RM</span>
+            <input
+              type="number"
+              step="0.01"
+              value={draftCost}
+              onChange={(e) => setDraftCost(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+              title="Estimated raw cost (Operation)"
+              style={{
+                width: 90,
+                textAlign: 'right',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-14)',
+                background: 'var(--c-cream)',
+                border: '1px dashed var(--line-strong)',
                 borderRadius: 'var(--radius-sm)',
                 padding: '6px 8px',
                 outline: 'none',
