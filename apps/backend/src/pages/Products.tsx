@@ -1500,7 +1500,12 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   '1NA(R)':     '1 seat, NO arms — Manual Recliner',
   '1NA-P':      '1 seat, NO arms — Power Recliner (electric)',
   '1NA-R':      '1 seat, NO arms — Manual Recliner',
-  Console:      'Console — wood divider/storage between two seats',
+  // ── Console variants ────────────────────────────────────────────────
+  // Commander 2026-05-28: "console 包布的就叫 Console；上面是木的盖那个叫
+  // Console/WC". Two distinct codes with different art.
+  Console:         'Console — fabric-wrapped console with cup holders',
+  'Console/WC':    'Console/WC — wood lid + fabric body, with cup holders',
+  'Console-WC':    'Console/WC — wood lid + fabric body, with cup holders',
 
   // ── 2-Seaters ──────────────────────────────────────────────────────
   '2S':     '2 seats, arms on BOTH sides',
@@ -1532,7 +1537,15 @@ const EXTRA_MODULE_IMAGE_BY_NORM: Record<string, string> = {
   '1A-R-RHF': '1A-R-RHF',
   '1NA-P':    '1NA-P',
   '1NA-R':    '1NA-R',
-  Console:    'Console',
+  // Console = fabric-wrapped (no wood lid). Console/WC = wood lid + fabric body.
+  // Commander 2026-05-28 split the original "Console" into 2 codes — the
+  // existing SVG (wood lid + fabric) reads as wood at a glance, so it moves
+  // to Console-WC; a new fabric-only design lives at Console.
+  Console:       'Console',
+  'Console-WC':  'Console-WC',
+  // normalizeCompartmentCode doesn't touch '/' so commander's raw "Console/WC"
+  // input falls through to this key directly (not via normalization).
+  'Console/WC':  'Console-WC',
 };
 
 // Resolve the seeded default for one compartment code. UI surfaces this
