@@ -645,6 +645,13 @@ export const SalesOrderDetail = () => {
                           onChange={(patch) => patchEditingDraft(it.id, patch)}
                           onRemove={() => stopEditLine(it.id)}
                           canRemove={true}
+                          /* PR-F (#79) wiring — enable photo upload on
+                             already-saved lines. New lines (addingDraft)
+                             don't have an itemId yet so photos defer to
+                             after the first save. */
+                          docNo={header.doc_no}
+                          itemId={it.id}
+                          isEditing={isEditing}
                         />
                         <div style={{
                           display: 'flex',
