@@ -428,14 +428,19 @@ export const useOverrideMfgSoLinePrice = () => {
 };
 
 /* PR #163 — SO payments ledger (transactions per migration 0073).
-   Replaces the legacy single-row payment fields on mfg_sales_orders. */
+   Replaces the legacy single-row payment fields on mfg_sales_orders.
+
+   Task #122 (cascade) — merchant_provider and installment_months widened
+   to open string/number (banks + plans are now editable dropdowns via
+   so_dropdown_options); new online_type column for Online sub-type. */
 export type SoPayment = {
   id: string;
   so_doc_no: string;
   paid_at: string;                       // YYYY-MM-DD
   method: 'merchant' | 'transfer' | 'cash';
-  merchant_provider: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
-  installment_months: 6 | 12 | null;
+  merchant_provider: string | null;
+  installment_months: number | null;
+  online_type: string | null;
   approval_code: string | null;
   amount_centi: number;
   account_sheet: string | null;

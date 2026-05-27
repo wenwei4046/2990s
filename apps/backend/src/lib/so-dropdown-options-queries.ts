@@ -40,7 +40,10 @@ export type SoDropdownCategory =
   | 'customer_type'
   | 'building_type'
   | 'relationship'
-  | 'payment_method';
+  | 'payment_method'
+  | 'payment_merchant'
+  | 'online_type'
+  | 'installment_plan';
 
 export type SoDropdownOption = {
   id:        string;
@@ -157,17 +160,38 @@ export const FALLBACK_OPTIONS: Record<SoDropdownCategory, SoDropdownOption[]> = 
     { id: 'fallback-rel-colleague', category: 'relationship', value: 'Colleague', label: 'Colleague', sortOrder: 7, active: true },
     { id: 'fallback-rel-other',     category: 'relationship', value: 'Other',     label: 'Other',     sortOrder: 8, active: true },
   ],
+  /* Task #122 (cascade) — Method is now a 3-step cascade. L1 is just
+     Merchant / Online / Cash; the bank list, online sub-type, and
+     installment plan are separate categories below. */
   payment_method: [
-    { id: 'fallback-pm-cash',    category: 'payment_method', value: 'CASH',        label: 'Cash',             sortOrder: 1,  active: true },
-    { id: 'fallback-pm-mbb',     category: 'payment_method', value: 'MBB',         label: 'Maybank (MBB)',    sortOrder: 2,  active: true },
-    { id: 'fallback-pm-visa',    category: 'payment_method', value: 'VISA',        label: 'Visa',             sortOrder: 3,  active: true },
-    { id: 'fallback-pm-master',  category: 'payment_method', value: 'MASTER',      label: 'Mastercard',       sortOrder: 4,  active: true },
-    { id: 'fallback-pm-cc',      category: 'payment_method', value: 'CREDIT CARD', label: 'Credit Card',      sortOrder: 5,  active: true },
-    { id: 'fallback-pm-epp',     category: 'payment_method', value: 'EPP',         label: 'EPP installment',  sortOrder: 6,  active: true },
-    { id: 'fallback-pm-online',  category: 'payment_method', value: 'ONLINE',      label: 'Online transfer',  sortOrder: 7,  active: true },
-    { id: 'fallback-pm-tng',     category: 'payment_method', value: 'TNG',         label: 'TouchNGo',         sortOrder: 8,  active: true },
-    { id: 'fallback-pm-duitnow', category: 'payment_method', value: 'DUITNOW',     label: 'DuitNow',          sortOrder: 9,  active: true },
-    { id: 'fallback-pm-other',   category: 'payment_method', value: 'OTHER',       label: 'Other',            sortOrder: 10, active: true },
+    { id: 'fallback-pm-merchant', category: 'payment_method', value: 'Merchant', label: 'Merchant', sortOrder: 1, active: true },
+    { id: 'fallback-pm-online',   category: 'payment_method', value: 'Online',   label: 'Online',   sortOrder: 2, active: true },
+    { id: 'fallback-pm-cash',     category: 'payment_method', value: 'Cash',     label: 'Cash',     sortOrder: 3, active: true },
+  ],
+  payment_merchant: [
+    { id: 'fallback-pmer-mbb',        category: 'payment_merchant', value: 'MBB',        label: 'MBB',        sortOrder: 1, active: true },
+    { id: 'fallback-pmer-cimb',       category: 'payment_merchant', value: 'CIMB',       label: 'CIMB',       sortOrder: 2, active: true },
+    { id: 'fallback-pmer-public',     category: 'payment_merchant', value: 'Public',     label: 'Public',     sortOrder: 3, active: true },
+    { id: 'fallback-pmer-hlb',        category: 'payment_merchant', value: 'HLB',        label: 'HLB',        sortOrder: 4, active: true },
+    { id: 'fallback-pmer-rhb',        category: 'payment_merchant', value: 'RHB',        label: 'RHB',        sortOrder: 5, active: true },
+    { id: 'fallback-pmer-bankislam',  category: 'payment_merchant', value: 'Bank Islam', label: 'Bank Islam', sortOrder: 6, active: true },
+    { id: 'fallback-pmer-bsn',        category: 'payment_merchant', value: 'BSN',        label: 'BSN',        sortOrder: 7, active: true },
+    { id: 'fallback-pmer-alliance',   category: 'payment_merchant', value: 'Alliance',   label: 'Alliance',   sortOrder: 8, active: true },
+    { id: 'fallback-pmer-ambank',     category: 'payment_merchant', value: 'AmBank',     label: 'AmBank',     sortOrder: 9, active: true },
+  ],
+  online_type: [
+    { id: 'fallback-ot-banktransfer', category: 'online_type', value: 'Bank Transfer', label: 'Bank Transfer', sortOrder: 1, active: true },
+    { id: 'fallback-ot-tng',          category: 'online_type', value: 'TNG',           label: 'TNG',           sortOrder: 2, active: true },
+    { id: 'fallback-ot-cheque',       category: 'online_type', value: 'Cheque',        label: 'Cheque',        sortOrder: 3, active: true },
+    { id: 'fallback-ot-duitnow',      category: 'online_type', value: 'DuitNow',       label: 'DuitNow',       sortOrder: 4, active: true },
+  ],
+  installment_plan: [
+    { id: 'fallback-ip-oneoff', category: 'installment_plan', value: 'One-off',    label: 'One-off',    sortOrder: 1, active: true },
+    { id: 'fallback-ip-3m',     category: 'installment_plan', value: '3 months',   label: '3 months',   sortOrder: 2, active: true },
+    { id: 'fallback-ip-6m',     category: 'installment_plan', value: '6 months',   label: '6 months',   sortOrder: 3, active: true },
+    { id: 'fallback-ip-12m',    category: 'installment_plan', value: '12 months',  label: '12 months',  sortOrder: 4, active: true },
+    { id: 'fallback-ip-24m',    category: 'installment_plan', value: '24 months',  label: '24 months',  sortOrder: 5, active: true },
+    { id: 'fallback-ip-36m',    category: 'installment_plan', value: '36 months',  label: '36 months',  sortOrder: 6, active: true },
   ],
 };
 

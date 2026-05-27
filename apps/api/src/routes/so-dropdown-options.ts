@@ -29,7 +29,18 @@ export const soDropdownOptions = new Hono<{ Bindings: Env; Variables: Variables 
 
 soDropdownOptions.use('*', supabaseAuth);
 
-const CATEGORIES = ['customer_type', 'building_type', 'relationship', 'payment_method'] as const;
+const CATEGORIES = [
+  'customer_type',
+  'building_type',
+  'relationship',
+  'payment_method',
+  // Task #122 (cascade) — Method is a 3-step pick: Method → (Merchant
+  // bank + installment plan | Online sub-type | Cash). Each level is
+  // editable here.
+  'payment_merchant',
+  'online_type',
+  'installment_plan',
+] as const;
 type Category = (typeof CATEGORIES)[number];
 const categoryEnum = z.enum(CATEGORIES);
 
@@ -100,10 +111,13 @@ soDropdownOptions.get('/', async (c) => {
   if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
 
   const grouped: Record<Category, ReturnType<typeof toApi>[]> = {
-    customer_type:  [],
-    building_type:  [],
-    relationship:   [],
-    payment_method: [],
+    customer_type:    [],
+    building_type:    [],
+    relationship:     [],
+    payment_method:   [],
+    payment_merchant: [],
+    online_type:      [],
+    installment_plan: [],
   };
   for (const r of (data ?? []) as DbRow[]) {
     if ((CATEGORIES as readonly string[]).includes(r.category)) {

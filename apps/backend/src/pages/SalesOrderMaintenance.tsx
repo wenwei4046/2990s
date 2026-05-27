@@ -880,10 +880,33 @@ const DROPDOWN_CARDS: Array<{ category: SoDropdownCategory; title: string; help:
   {
     category: 'payment_method',
     title:    'Payment Method',
-    help: 'Shown in the Payments table dropdown. Note: each label still maps to ' +
-          'the internal payment_method enum (merchant / transfer / cash) via the ' +
-          'PaymentsTable labelToApi() mapper — adding a brand new value here ' +
-          'without updating that mapper will default to "cash".',
+    help: 'L1 of the 3-step Payments cascade. Tight scope: Merchant / Online / ' +
+          'Cash. Each label maps to the internal payment_method enum via the ' +
+          'PaymentsTable labelToApi() mapper (Merchant → merchant, Online → ' +
+          'transfer, Cash → cash); adding a new label here without updating ' +
+          'that mapper defaults to "cash".',
+  },
+  /* Task #122 (cascade) — three L2 buckets that show up under Merchant
+     and Online, edited the same way as the L1 list above. */
+  {
+    category: 'payment_merchant',
+    title:    'Payment Merchant (Bank)',
+    help:     'Shown under Method=Merchant in the Payments table. The bank ' +
+              'the card was charged on (MBB / CIMB / Public / HLB / RHB / ' +
+              'Bank Islam / BSN / Alliance / AmBank).',
+  },
+  {
+    category: 'online_type',
+    title:    'Online Sub-type',
+    help:     'Shown under Method=Online in the Payments table. Bank Transfer / ' +
+              'TNG / Cheque / DuitNow.',
+  },
+  {
+    category: 'installment_plan',
+    title:    'Installment Plan',
+    help:     'Shown alongside Merchant bank when Method=Merchant. One-off (no ' +
+              'installment) / 3 / 6 / 12 / 24 / 36 months. Stored as the term ' +
+              'in months on the payment row.',
   },
 ];
 

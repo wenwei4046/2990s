@@ -1349,7 +1349,7 @@ mfgSalesOrders.delete('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
 // drop in a follow-up migration once live data is migrated.
 const PAYMENT_COLS =
   'id, so_doc_no, paid_at, method, merchant_provider, installment_months, ' +
-  'approval_code, amount_centi, account_sheet, collected_by, note, ' +
+  'online_type, approval_code, amount_centi, account_sheet, collected_by, note, ' +
   'created_at, created_by';
 
 mfgSalesOrders.get('/:docNo/payments', async (c) => {
@@ -1371,11 +1371,20 @@ mfgSalesOrders.get('/:docNo/payments', async (c) => {
   return c.json({ payments });
 });
 
+/* Task #122 (cascade) — Method is a 3-step pick now. merchantProvider was
+   a fixed 4-bank enum and installmentMonths was 6|12 only; both widened.
+   Banks are now an open-ended text field sourced from
+   so_dropdown_options('payment_merchant'). Installment plans likewise come
+   from so_dropdown_options('installment_plan') and are sent here as an
+   integer 0..60 (0 = "One-off", which we coerce to NULL below). A new
+   onlineType field carries the Online sub-type (Bank Transfer / TNG /
+   Cheque / DuitNow). */
 const paymentCreateSchema = z.object({
   paidAt:             z.string().min(1),
   method:             z.enum(['merchant', 'transfer', 'cash']),
-  merchantProvider:   z.enum(['GHL', 'HLB', 'MBB', 'PBB']).optional().nullable(),
-  installmentMonths:  z.union([z.literal(6), z.literal(12)]).optional().nullable(),
+  merchantProvider:   z.string().trim().min(1).optional().nullable(),
+  installmentMonths:  z.number().int().min(0).max(60).optional().nullable(),
+  onlineType:         z.string().trim().min(1).optional().nullable(),
   approvalCode:       z.string().optional().nullable(),
   amountCenti:        z.number().int().nonnegative(),
   accountSheet:       z.string().optional().nullable(),
@@ -1397,9 +1406,17 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
   if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
   const p = parsed.data;
 
-  // Method-scoped fields: installment/provider only apply to merchant.
+  // Method-scoped fields per the cascade:
+  //   merchant  → merchant_provider + installment_months (0 / null = One-off)
+  //   transfer  → online_type
+  //   cash      → no extras
   const merchantProvider  = p.method === 'merchant' ? (p.merchantProvider ?? null) : null;
-  const installmentMonths = p.method === 'merchant' ? (p.installmentMonths ?? null) : null;
+  // 0 = "One-off" — store as NULL so the integer column carries semantic
+  // "no installment". Anything > 0 is the term in months.
+  const installmentMonths = p.method === 'merchant'
+    ? (typeof p.installmentMonths === 'number' && p.installmentMonths > 0 ? p.installmentMonths : null)
+    : null;
+  const onlineType        = p.method === 'transfer' ? (p.onlineType ?? null) : null;
 
   const { data, error } = await sb.from('mfg_sales_order_payments').insert({
     so_doc_no:          docNo,
@@ -1407,6 +1424,7 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
     method:             p.method,
     merchant_provider:  merchantProvider,
     installment_months: installmentMonths,
+    online_type:        onlineType,
     approval_code:      p.approvalCode ?? null,
     amount_centi:       p.amountCenti,
     account_sheet:      p.accountSheet ?? null,
@@ -1430,6 +1448,7 @@ mfgSalesOrders.post('/:docNo/payments', async (c) => {
       { field: 'amountCenti',        from: null, to: p.amountCenti },
       ...(merchantProvider  ? [{ field: 'merchantProvider',  from: null, to: merchantProvider  } satisfies FieldChange] : []),
       ...(installmentMonths ? [{ field: 'installmentMonths', from: null, to: installmentMonths } satisfies FieldChange] : []),
+      ...(onlineType        ? [{ field: 'onlineType',        from: null, to: onlineType        } satisfies FieldChange] : []),
       ...(p.approvalCode    ? [{ field: 'approvalCode',      from: null, to: p.approvalCode    } satisfies FieldChange] : []),
       ...(p.accountSheet    ? [{ field: 'accountSheet',      from: null, to: p.accountSheet    } satisfies FieldChange] : []),
     ],

@@ -69,8 +69,12 @@ type SoItem = {
 type SoPayment = {
   paid_at: string;
   method: 'merchant' | 'transfer' | 'cash';
-  merchant_provider: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
-  installment_months: 6 | 12 | null;
+  /* Task #122 (cascade) — merchant_provider / installment_months are now
+     open string + integer (driven by the so_dropdown_options cascade
+     categories). online_type is the new Online sub-type column. */
+  merchant_provider: string | null;
+  installment_months: number | null;
+  online_type?: string | null;
   approval_code: string | null;
   amount_centi: number;
   account_sheet: string | null;
@@ -99,10 +103,13 @@ const variantSummary = (v: Record<string, unknown> | null): string => {
    SalesOrderDetail's PaymentCard but flattened to a single cell. */
 const methodLabel = (p: SoPayment): string => {
   if (p.method === 'merchant') {
-    const base = p.merchant_provider ? `Card (${p.merchant_provider})` : 'Card';
+    const base = p.merchant_provider ? `Merchant (${p.merchant_provider})` : 'Merchant';
     return p.installment_months ? `${base} · ${p.installment_months}m installment` : base;
   }
-  if (p.method === 'transfer') return 'Bank Transfer';
+  /* Task #122 (cascade) — surface the Online sub-type (Bank Transfer /
+     TNG / Cheque / DuitNow) so the printed PDF reads as the user actually
+     filed it, not a generic "Bank Transfer". */
+  if (p.method === 'transfer') return p.online_type ? `Online (${p.online_type})` : 'Online';
   return 'Cash';
 };
 
