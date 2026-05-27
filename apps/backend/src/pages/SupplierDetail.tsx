@@ -24,7 +24,7 @@ import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
   TrendingUp, Package, Plus, Pencil, Trash2, Star, X, Save, Search,
-  Tag, ChevronDown, ChevronRight,
+  Tag, ChevronDown, ChevronRight, Download, Upload,
 } from 'lucide-react';
 import { MaintenanceTab, type MaintenanceSection } from './Products';
 import { Button } from '@2990s/design-system';
@@ -310,6 +310,7 @@ export const SupplierDetail = () => {
       ) : (
         <SupplierOverviewPanel
           id={id!}
+          supplierCode={supplier.code}
           bindings={bindings}
           score={score}
           otrTone={otrTone}
@@ -380,6 +381,7 @@ const SupplierTabButton = ({
 
 const SupplierOverviewPanel = ({
   id,
+  supplierCode,
   bindings,
   score,
   otrTone,
@@ -387,12 +389,22 @@ const SupplierOverviewPanel = ({
   setSkuDialog,
 }: {
   id: string;
+  /** PR — Commander 2026-05-28: passed through to the Export filename
+   *  (`supplier-{code}-bindings-{date}.csv`). */
+  supplierCode: string;
   bindings: BindingRow[];
   score: ReturnType<typeof useSupplierScorecard>['data'];
   otrTone: string | undefined;
   defectTone: string | undefined;
   setSkuDialog: (s: { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }) => void;
 }) => {
+  /* PR — Commander 2026-05-28 ("我需要一个 import 跟 export 的功能"):
+     supplier-scoped CSV round-trip for the SKU MAPPINGS card. Mirrors the
+     Products page Export/Import toolbar but per-supplier (different shape:
+     one row per binding, per-category price-matrix columns). */
+  const [importing, setImporting] = useState(false);
+  const sofaConfig = useMaintenanceConfig('master');
+  const sofaHeights = (sofaConfig.data?.data?.sofaSizes ?? SOFA_HEIGHT_FALLBACK).map(String);
   /* PR — Commander 2026-05-27 ("为什么 SKU Mapping 那边没有根据我的
      Product Maintenance 做出相对的排版呢"):
      Group bindings using the SAME sub-section labels the Product Maintenance
@@ -527,12 +539,45 @@ const SupplierOverviewPanel = ({
               Surfaces a count + button when ≥2 bindings share an ambiguous
               (no '-') supplier_sku. */}
           <AutoSuffixButton supplierId={id} bindings={bindings} />
+          {/* PR — Commander 2026-05-28: per-supplier CSV round-trip.
+              Export = one row per binding (with per-category price-matrix
+              columns expanded); Import = update-in-place against
+              internal_code matches (unknown codes skip — won't auto-create
+              bindings to avoid wiring N missing SKUs by accident). */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => exportBindingsCsv(bindings, supplierCode, sofaHeights, products.data ?? [])}
+            disabled={bindings.length === 0}
+            title="Download CSV of every SKU mapping for this supplier"
+          >
+            <Download {...ICON} />
+            <span>Export Bindings</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setImporting(true)}
+            title="Update existing bindings from a CSV (rows matched by internal_code)"
+          >
+            <Upload {...ICON} />
+            <span>Import Bindings</span>
+          </Button>
           <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'multi' })}>
             <Plus {...ICON} />
             <span>Add SKU Mappings</span>
           </Button>
         </span>
       </header>
+      {importing && (
+        <ImportBindingsDialog
+          supplierId={id}
+          bindings={bindings}
+          products={products.data ?? []}
+          sofaHeights={sofaHeights}
+          onClose={() => setImporting(false)}
+        />
+      )}
       {bindings.length === 0 ? (
         <div className={styles.cardBody}>
           <p className={styles.emptyRow}>No SKU mappings yet for this supplier.</p>
@@ -747,6 +792,15 @@ const SkuMappingsTable = ({
   );
 };
 
+/* PR — Commander 2026-05-28: shared scroll wrapper so the three SKU
+   mapping table variants (sofa / bedframe / default) don't clip their
+   right-hand MAIN + ACTIONS columns when the cards get narrow. Lets the
+   inner table keep its natural width (set via .tableSofa / .tableBedframe
+   / .tableDefault min-widths) and scrolls horizontally inside. */
+const TableScroll = ({ children }: { children: React.ReactNode }) => (
+  <div className={styles.tableScroll}>{children}</div>
+);
+
 /* ────────────────────────────────────────────────────────────────────────
    Default (mattress / accessory / service / other) — single Unit Price col.
    Unchanged from the pre-matrix layout.
@@ -765,7 +819,8 @@ const DefaultSkuMappingsTable = ({
   const remove = useDeleteBinding();
 
   return (
-    <table className={styles.table}>
+    <TableScroll>
+    <table className={`${styles.table} ${styles.tableDefault}`}>
       <thead>
         <tr>
           <th>Internal Code</th>
@@ -806,6 +861,7 @@ const DefaultSkuMappingsTable = ({
         ))}
       </tbody>
     </table>
+    </TableScroll>
   );
 };
 
@@ -893,7 +949,8 @@ const SofaSkuMappingsTable = ({
         </span>
       </div>
 
-      <table className={styles.table}>
+      <TableScroll>
+      <table className={`${styles.table} ${styles.tableSofa}`}>
         <thead>
           <tr>
             <th>Internal Code</th>
@@ -949,6 +1006,7 @@ const SofaSkuMappingsTable = ({
           ))}
         </tbody>
       </table>
+      </TableScroll>
     </div>
   );
 };
@@ -973,7 +1031,8 @@ const BedframeSkuMappingsTable = ({
   const remove = useDeleteBinding();
 
   return (
-    <table className={styles.table}>
+    <TableScroll>
+    <table className={`${styles.table} ${styles.tableBedframe}`}>
       <thead>
         <tr>
           <th>Internal Code</th>
@@ -1036,6 +1095,7 @@ const BedframeSkuMappingsTable = ({
         ))}
       </tbody>
     </table>
+    </TableScroll>
   );
 };
 
@@ -1457,6 +1517,430 @@ const AutoSuffixButton = ({
           : `Auto-suffix supplier_sku · ${candidates.length}`}
       </span>
     </Button>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Bindings CSV Export + Import (Commander 2026-05-28).
+
+   One row per binding. Columns:
+     - internal_code, internal_description, supplier_sku
+     - unit_price_rm   (RM, 2dp — for non-sofa / non-bedframe bindings)
+     - sofa_{height}_P1/P2/P3  (only for sofa bindings, read from price_matrix)
+     - bedframe_P1, bedframe_P2  (only for bedframe bindings)
+     - lead_time_days, moq, is_main_supplier
+
+   Sofa seat-heights come from the master maintenance config (same source the
+   sofa SKU mappings table reads), so the export always matches whatever pool
+   commander currently maintains.
+
+   Import path is intentionally update-only: rows whose internal_code matches
+   an existing binding for this supplier get patched; rows whose code doesn't
+   match are tallied + reported in a "skipped N" summary. Auto-create would
+   need the new SKU's full descriptor + risks creating drift across N missing
+   codes if commander accidentally edits the wrong column.
+
+   Bulk endpoint isn't worth the round-trip cost yet — loop sequential PATCH
+   with a progress toast. Flag this as a follow-up to convert to a single
+   `POST /suppliers/:id/bindings/bulk-update` if N rows ever grows past ~50.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SOFA_TIERS_FOR_EXPORT: readonly ('P1' | 'P2' | 'P3')[] = ['P1', 'P2', 'P3'];
+
+/** RFC4180 quote when a cell contains comma / quote / newline. */
+function csvCell(v: unknown): string {
+  if (v == null) return '';
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** Centi → RM (2dp). Treat `0`/`null` as blank so the CSV doesn't write
+ *  "0.00" into every cell that's never been filled. */
+function fmtRmCell(centi: number | null | undefined): string {
+  if (centi == null || centi === 0) return '';
+  return (centi / 100).toFixed(2);
+}
+
+/** Read centi from a parsed CSV cell. Empty string / "—" → null (skip).
+ *  Anything else gets coerced through Number; non-finite → null. */
+function parseRmCell(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const t = raw.trim();
+  if (!t || t === '—' || t === '-') return null;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
+/** Classify a binding's underlying mfg_product so we know which optional
+ *  matrix columns it should populate. Mirrors SupplierOverviewPanel.classify
+ *  but returns the smaller set the CSV cares about. */
+function bindingKindForCsv(
+  binding: BindingRow,
+  productByCode: Map<string, MfgProductRow>,
+): 'sofa' | 'bedframe' | 'other' {
+  const p = productByCode.get(binding.material_code);
+  if (!p) return 'other';
+  if (p.category === 'SOFA') return 'sofa';
+  if (p.category === 'BEDFRAME') return 'bedframe';
+  return 'other';
+}
+
+function exportBindingsCsv(
+  bindings: BindingRow[],
+  supplierCode: string,
+  sofaHeights: string[],
+  products: MfgProductRow[],
+): void {
+  if (bindings.length === 0) return;
+  const productByCode = new Map<string, MfgProductRow>(
+    products.map((p) => [p.code, p]),
+  );
+  /* Build a wide column set up-front: base columns + sofa matrix columns +
+     bedframe matrix columns + tail. We always emit every column even if a
+     given supplier only has e.g. bedframe bindings — keeps the import path
+     position-stable, and commander can re-upload a partial sheet without
+     losing other categories. */
+  const sofaCols: string[] = [];
+  for (const h of sofaHeights) {
+    for (const t of SOFA_TIERS_FOR_EXPORT) {
+      sofaCols.push(`sofa_${h}_${t}`);
+    }
+  }
+  const header: string[] = [
+    'internal_code',
+    'internal_description',
+    'supplier_sku',
+    'unit_price_rm',
+    ...sofaCols,
+    'bedframe_P1',
+    'bedframe_P2',
+    'lead_time_days',
+    'moq',
+    'is_main_supplier',
+  ];
+
+  const lines: string[] = [header.map(csvCell).join(',')];
+  for (const b of bindings) {
+    const kind = bindingKindForCsv(b, productByCode);
+    const row: Record<string, unknown> = {
+      internal_code: b.material_code,
+      internal_description: b.material_name,
+      supplier_sku: b.supplier_sku,
+      // unit_price_rm only meaningful for non-matrix categories
+      unit_price_rm: kind === 'other' ? fmtRmCell(b.unit_price_centi) : '',
+      bedframe_P1: '',
+      bedframe_P2: '',
+      lead_time_days: b.lead_time_days || '',
+      moq: b.moq || '',
+      is_main_supplier: b.is_main_supplier ? 'true' : 'false',
+    };
+    if (kind === 'sofa') {
+      const matrix = (b.price_matrix ?? {}) as SofaPriceMatrix;
+      for (const h of sofaHeights) {
+        const inner = matrix[h] ?? {};
+        for (const t of SOFA_TIERS_FOR_EXPORT) {
+          row[`sofa_${h}_${t}`] = fmtRmCell(inner[t]);
+        }
+      }
+    } else if (kind === 'bedframe') {
+      const matrix = (b.price_matrix ?? {}) as BedframePriceMatrix;
+      row.bedframe_P1 = fmtRmCell(matrix.P1);
+      row.bedframe_P2 = fmtRmCell(matrix.P2);
+    }
+    lines.push(header.map((col) => csvCell(row[col])).join(','));
+  }
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `supplier-${supplierCode}-bindings-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Minimal CSV parser — handles RFC4180 quoting + escaped quotes. Doesn't
+ *  try to be clever about UTF-8 BOM or CRLF / mixed line endings; commander's
+ *  workflow is "Export → edit in Excel → save → Import" which produces
+ *  comma-separated UTF-8 with quoted strings. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"') { inQuotes = true; continue; }
+    if (ch === ',') { row.push(cell); cell = ''; continue; }
+    if (ch === '\r') { continue; }
+    if (ch === '\n') { row.push(cell); cell = ''; rows.push(row); row = []; continue; }
+    cell += ch;
+  }
+  // Flush trailing cell + row (no final newline).
+  if (cell.length > 0 || row.length > 0) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim().length > 0));
+}
+
+const ImportBindingsDialog = ({
+  supplierId,
+  bindings,
+  products,
+  sofaHeights,
+  onClose,
+}: {
+  supplierId: string;
+  bindings: BindingRow[];
+  products: MfgProductRow[];
+  sofaHeights: string[];
+  onClose: () => void;
+}) => {
+  const update = useUpdateBinding();
+  const [file, setFile] = useState<File | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [summary, setSummary] = useState<string | null>(null);
+
+  const productByCode = useMemo(
+    () => new Map<string, MfgProductRow>(products.map((p) => [p.code, p])),
+    [products],
+  );
+
+  const bindingByCode = useMemo(
+    () => new Map<string, BindingRow>(bindings.map((b) => [b.material_code, b])),
+    [bindings],
+  );
+
+  const run = async () => {
+    if (!file || running) return;
+    setRunning(true);
+    setSummary(null);
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      if (rows.length < 2) { setSummary('CSV has no data rows.'); setRunning(false); return; }
+      const header = rows[0]!.map((h) => h.trim());
+      const idx = (col: string) => header.indexOf(col);
+      const colCode = idx('internal_code');
+      if (colCode < 0) {
+        setSummary('Missing required column: internal_code');
+        setRunning(false);
+        return;
+      }
+      const dataRows = rows.slice(1);
+
+      // Pre-classify which sofa columns are present in this CSV so we don't
+      // index out of bounds when an exported file only includes a subset.
+      const sofaColIndex = new Map<string, Map<'P1' | 'P2' | 'P3', number>>();
+      for (const h of sofaHeights) {
+        const inner = new Map<'P1' | 'P2' | 'P3', number>();
+        for (const t of SOFA_TIERS_FOR_EXPORT) {
+          const i = idx(`sofa_${h}_${t}`);
+          if (i >= 0) inner.set(t, i);
+        }
+        sofaColIndex.set(h, inner);
+      }
+      const colBedP1 = idx('bedframe_P1');
+      const colBedP2 = idx('bedframe_P2');
+      const colSupSku = idx('supplier_sku');
+      const colUnitPriceRm = idx('unit_price_rm');
+      const colLead = idx('lead_time_days');
+      const colMoq = idx('moq');
+      const colMain = idx('is_main_supplier');
+
+      let updated = 0;
+      let skippedUnknown = 0;
+      let failed = 0;
+      const updates: Array<() => Promise<void>> = [];
+
+      for (const r of dataRows) {
+        const code = (r[colCode] ?? '').trim();
+        if (!code) continue;
+        const binding = bindingByCode.get(code);
+        if (!binding) { skippedUnknown += 1; continue; }
+        const product = productByCode.get(code);
+        const kind: 'sofa' | 'bedframe' | 'other' =
+          product?.category === 'SOFA' ? 'sofa'
+            : product?.category === 'BEDFRAME' ? 'bedframe'
+              : 'other';
+
+        const patch: Partial<NewBinding> = {};
+        if (colSupSku >= 0) {
+          const v = (r[colSupSku] ?? '').trim();
+          if (v && v !== binding.supplier_sku) patch.supplierSku = v;
+        }
+        if (kind === 'other' && colUnitPriceRm >= 0) {
+          const sen = parseRmCell(r[colUnitPriceRm]);
+          if (sen != null && sen !== binding.unit_price_centi) patch.unitPriceCenti = sen;
+        }
+        if (colLead >= 0) {
+          const raw = (r[colLead] ?? '').trim();
+          if (raw) {
+            const n = Number(raw);
+            if (Number.isFinite(n) && n >= 0 && n !== binding.lead_time_days) {
+              patch.leadTimeDays = Math.round(n);
+            }
+          }
+        }
+        if (colMoq >= 0) {
+          const raw = (r[colMoq] ?? '').trim();
+          if (raw) {
+            const n = Number(raw);
+            if (Number.isFinite(n) && n >= 0 && n !== binding.moq) patch.moq = Math.round(n);
+          }
+        }
+        if (colMain >= 0) {
+          const raw = (r[colMain] ?? '').trim().toLowerCase();
+          if (raw === 'true' || raw === '1') {
+            if (!binding.is_main_supplier) patch.isMainSupplier = true;
+          } else if (raw === 'false' || raw === '0') {
+            if (binding.is_main_supplier) patch.isMainSupplier = false;
+          }
+        }
+
+        // Price matrix updates are wholesale (we send the merged matrix) so
+        // partial CSVs don't wipe other categories' data.
+        if (kind === 'sofa') {
+          let next: SofaPriceMatrix = { ...((binding.price_matrix ?? {}) as SofaPriceMatrix) };
+          let changed = false;
+          for (const h of sofaHeights) {
+            const inner = { ...(next[h] ?? {}) } as { P1?: number; P2?: number; P3?: number };
+            let innerChanged = false;
+            const indices = sofaColIndex.get(h);
+            if (!indices) continue;
+            for (const t of SOFA_TIERS_FOR_EXPORT) {
+              const colIdx = indices.get(t);
+              if (colIdx == null) continue;
+              const sen = parseRmCell(r[colIdx]);
+              if (sen == null) {
+                if (inner[t] !== undefined) { delete inner[t]; innerChanged = true; }
+              } else if (inner[t] !== sen) {
+                inner[t] = sen;
+                innerChanged = true;
+              }
+            }
+            if (innerChanged) {
+              if (Object.keys(inner).length === 0) delete next[h];
+              else next[h] = inner;
+              changed = true;
+            }
+          }
+          if (changed) {
+            patch.priceMatrix = Object.keys(next).length === 0 ? null : next;
+          }
+        } else if (kind === 'bedframe') {
+          const next: BedframePriceMatrix = { ...((binding.price_matrix ?? {}) as BedframePriceMatrix) };
+          let changed = false;
+          if (colBedP1 >= 0) {
+            const sen = parseRmCell(r[colBedP1]);
+            if (sen == null) {
+              if (next.P1 !== undefined) { delete next.P1; changed = true; }
+            } else if (next.P1 !== sen) { next.P1 = sen; changed = true; }
+          }
+          if (colBedP2 >= 0) {
+            const sen = parseRmCell(r[colBedP2]);
+            if (sen == null) {
+              if (next.P2 !== undefined) { delete next.P2; changed = true; }
+            } else if (next.P2 !== sen) { next.P2 = sen; changed = true; }
+          }
+          if (changed) {
+            patch.priceMatrix = Object.keys(next).length === 0 ? null : next;
+          }
+        }
+
+        if (Object.keys(patch).length === 0) continue; // No-op row
+        const bindingId = binding.id;
+        updates.push(async () => {
+          try {
+            await update.mutateAsync({ supplierId, bindingId, ...patch });
+            updated += 1;
+          } catch {
+            failed += 1;
+          }
+        });
+      }
+
+      setProgress({ done: 0, total: updates.length });
+      for (let i = 0; i < updates.length; i++) {
+        await updates[i]!();
+        setProgress({ done: i + 1, total: updates.length });
+      }
+
+      const parts: string[] = [];
+      parts.push(`Updated ${updated} binding${updated === 1 ? '' : 's'}`);
+      if (skippedUnknown > 0) parts.push(`skipped ${skippedUnknown} unknown internal_code${skippedUnknown === 1 ? '' : 's'}`);
+      if (failed > 0) parts.push(`${failed} row${failed === 1 ? '' : 's'} failed`);
+      setSummary(parts.join(' · '));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <div
+        className={styles.modal}
+        style={{ width: 'min(560px, 95vw)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className={styles.modalHeader}>
+          <h3 className={styles.modalTitle}>Import Bindings (CSV)</h3>
+          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
+            <X {...ICON} />
+          </button>
+        </header>
+        <div className={styles.modalBody}>
+          <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+            Upload a CSV exported via <strong>Export Bindings</strong>. Rows whose
+            <code> internal_code </code>matches an existing binding are
+            <strong> updated</strong>; unknown codes are <strong>skipped</strong>
+            (no auto-create — use the SKU Mappings dialog to add new bindings).
+          </p>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            disabled={running}
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            style={{ marginBottom: 'var(--space-3)' }}
+          />
+          {progress.total > 0 && (
+            <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              Updating {progress.done} / {progress.total}…
+            </p>
+          )}
+          {summary && (
+            <p style={{
+              fontSize: 'var(--fs-13)',
+              color: 'var(--c-ink)',
+              padding: 'var(--space-2) var(--space-3)',
+              background: 'var(--c-paper)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              marginTop: 'var(--space-2)',
+            }}>
+              {summary}
+            </p>
+          )}
+        </div>
+        <footer className={styles.modalFooter}>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={running}>
+            {summary ? 'Close' : 'Cancel'}
+          </Button>
+          <Button variant="primary" size="md" onClick={run} disabled={!file || running}>
+            {running ? 'Importing…' : 'Import'}
+          </Button>
+        </footer>
+      </div>
+    </div>
   );
 };
 

@@ -19,7 +19,7 @@
 //       effective-date drawer.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState, type HTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Download,
   Upload,
@@ -32,6 +32,7 @@ import {
   X,
   Truck,
   Star,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SOFA_MODULES } from '@2990s/shared';
@@ -422,25 +423,19 @@ const SkuMasterTab = () => {
       </div>
 
       {/* PR #39 + #107 — Model filter chips, available on SOFA / BEDFRAME /
-          MATTRESS. ACCESSORY + SERVICE skip — no base_model on those rows. */}
+          MATTRESS. ACCESSORY + SERVICE skip — no base_model on those rows.
+          PR — Commander 2026-05-28 ("100个 model 不是排到尾巴去了吗"): when
+          the Model count exceeds MODEL_PILLS_VISIBLE_LIMIT we collapse the
+          extras behind a "More (N) ▼" pill that opens a searchable popover.
+          The currently-selected Model is always promoted into the visible
+          row so commander can see the active filter without opening the
+          popover. */}
       {supportsModelFilter && categoryModels.length > 1 && (
-        <div className={styles.categoryChips} style={{ marginTop: 'var(--space-2)' }}>
-          <CategoryChip
-            active={modelFilter === 'all'}
-            onClick={() => setModelFilter('all')}
-          >
-            All Models
-          </CategoryChip>
-          {categoryModels.map((m) => (
-            <CategoryChip
-              key={m}
-              active={modelFilter === m}
-              onClick={() => setModelFilter(m)}
-            >
-              {m}
-            </CategoryChip>
-          ))}
-        </div>
+        <ModelFilterRail
+          models={categoryModels}
+          activeModel={modelFilter}
+          onChange={setModelFilter}
+        />
       )}
 
       <p className={styles.eyebrow}>
@@ -612,7 +607,9 @@ const ProductRow = ({
     <tr
       className={styles.rowCompact}
       onDoubleClick={() => !editMode && onOpenSuppliers?.(row)}
-      title="Double-click to see suppliers for this product"
+      title={editMode
+        ? 'Click the truck icon to see suppliers (double-click is disabled in Edit Prices mode)'
+        : 'Double-click row — or click the truck icon — to see suppliers for this product'}
       style={{ cursor: editMode ? 'default' : 'pointer' }}
     >
       {/* PR #82 — row checkbox. stopPropagation so clicking the box
@@ -632,15 +629,39 @@ const ProductRow = ({
           the chip is read-only until commander explicitly hits "Edit Prices".
           When editMode is off the cell stops bubble propagation but stays
           a plain text/chip, so accidental clicks during row drilldown can't
-          drop into the input. */}
+          drop into the input.
+          PR — Commander 2026-05-28 ("双击点不进去，看得到里面的 supplier
+          是谁"): add an explicit Truck icon next to the code chip that ALWAYS
+          opens the Suppliers drawer (including during edit-mode where the
+          row-level double-click is intentionally disabled). */}
       <td onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-        <EditableTextCell
-          value={row.code}
-          chipClassName={styles.codeChip}
-          ariaLabel="Edit product code"
-          editable={editMode}
-          onSave={(val) => update.mutate({ id: row.id, code: val })}
-        />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <button
+            type="button"
+            aria-label={`View suppliers for ${row.code}`}
+            title="View suppliers carrying this SKU"
+            onClick={() => onOpenSuppliers?.(row)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              cursor: 'pointer',
+              color: 'var(--fg-muted)',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <Truck size={13} strokeWidth={1.75} />
+          </button>
+          <EditableTextCell
+            value={row.code}
+            chipClassName={styles.codeChip}
+            ariaLabel="Edit product code"
+            editable={editMode}
+            onSave={(val) => update.mutate({ id: row.id, code: val })}
+          />
+        </span>
       </td>
       {/* PR #89 — click description to edit. Description stored in the
           `name` column on mfg_products (commander calls it "description"
@@ -874,6 +895,217 @@ const CategoryChip = ({
     {children}
   </button>
 );
+
+/* ════════════════════════════════════════════════════════════════════════
+   ModelFilterRail — visible pills + "More (N) ▼" popover with search.
+
+   PR — Commander 2026-05-28 ("100个 model 不是排到尾巴去了吗"). At 4 Models
+   the row reads fine. At 100 the pills overflow horizontally off the page.
+   This wrapper keeps the first MODEL_PILLS_VISIBLE_LIMIT pills inline; the
+   rest hide behind a popover with a search input + scrolling list. The
+   active Model is always promoted into the visible row so commander can
+   see what's filtering without opening the popover.
+
+   Implementation notes:
+     - Click-outside closes the popover (mousedown listener on document).
+     - Esc also closes; search input autofocuses on open.
+     - No portal — popover positions absolutely under the "More" pill via
+       the wrapper's `position: relative`. Good enough at this density.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const MODEL_PILLS_VISIBLE_LIMIT = 12;
+
+const ModelFilterRail = ({
+  models,
+  activeModel,
+  onChange,
+}: {
+  models: string[];
+  activeModel: string;
+  onChange: (m: string) => void;
+}) => {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  // Decide which pills go inline vs into the "More" popover. The active
+  // Model (non-"all") is always promoted into the inline set.
+  const { inline, overflow } = useMemo(() => {
+    if (models.length <= MODEL_PILLS_VISIBLE_LIMIT) {
+      return { inline: models, overflow: [] as string[] };
+    }
+    const head = models.slice(0, MODEL_PILLS_VISIBLE_LIMIT);
+    const tail = models.slice(MODEL_PILLS_VISIBLE_LIMIT);
+    if (activeModel !== 'all' && tail.includes(activeModel)) {
+      // Promote the active model into the visible row — swap with the last
+      // inline pill so the inline count stays stable.
+      const promoted = [...head.slice(0, -1), activeModel];
+      const demoted = [head[head.length - 1]!, ...tail.filter((m) => m !== activeModel)];
+      return { inline: promoted, overflow: demoted };
+    }
+    return { inline: head, overflow: tail };
+  }, [models, activeModel]);
+
+  // Close popover on click outside + Esc.
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (!wrapperRef.current) return;
+      if (e.target instanceof Node && !wrapperRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const filteredOverflow = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return overflow;
+    return overflow.filter((m) => m.toLowerCase().includes(q));
+  }, [overflow, search]);
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={styles.categoryChips}
+      style={{
+        marginTop: 'var(--space-2)',
+        flexWrap: 'wrap',
+        position: 'relative',
+        rowGap: 'var(--space-2)',
+      }}
+    >
+      <CategoryChip
+        active={activeModel === 'all'}
+        onClick={() => onChange('all')}
+      >
+        All Models
+      </CategoryChip>
+      {inline.map((m) => (
+        <CategoryChip
+          key={m}
+          active={activeModel === m}
+          onClick={() => onChange(m)}
+        >
+          {m}
+        </CategoryChip>
+      ))}
+      {overflow.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-haspopup="listbox"
+            style={{
+              fontFamily: 'var(--font-button)',
+              fontSize: 'var(--fs-13)',
+              fontWeight: 600,
+              letterSpacing: '0.02em',
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-pill)',
+              border: '1px solid var(--line)',
+              background: 'var(--c-paper)',
+              color: 'var(--c-ink)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <span>More ({overflow.length})</span>
+            <ChevronDown size={12} strokeWidth={1.75} />
+          </button>
+          {open && (
+            <div
+              role="listbox"
+              style={{
+                position: 'absolute',
+                top: 'calc(100% + 4px)',
+                right: 0,
+                zIndex: 50,
+                width: 280,
+                maxHeight: 360,
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'var(--c-paper)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: 'var(--radius-md)',
+                boxShadow: 'var(--shadow-2)',
+                padding: 'var(--space-2)',
+              }}
+            >
+              <input
+                autoFocus
+                type="search"
+                value={search}
+                placeholder="Search models…"
+                onChange={(e) => setSearch(e.target.value)}
+                style={{
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-13)',
+                  background: 'var(--c-cream)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '4px 8px',
+                  outline: 'none',
+                  marginBottom: 'var(--space-2)',
+                }}
+              />
+              <div style={{ overflowY: 'auto', flex: 1 }}>
+                {filteredOverflow.length === 0 && (
+                  <p style={{
+                    fontSize: 'var(--fs-12)',
+                    color: 'var(--fg-muted)',
+                    padding: 'var(--space-2)',
+                    textAlign: 'center',
+                  }}>
+                    No models match “{search}”.
+                  </p>
+                )}
+                {filteredOverflow.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="option"
+                    aria-selected={activeModel === m}
+                    onClick={() => {
+                      onChange(m);
+                      setOpen(false);
+                      setSearch('');
+                    }}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-13)',
+                      padding: '4px var(--space-2)',
+                      background: activeModel === m ? 'var(--c-cream)' : 'transparent',
+                      border: 'none',
+                      borderRadius: 'var(--radius-sm)',
+                      color: 'var(--c-ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Maintenance tab
