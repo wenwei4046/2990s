@@ -10,6 +10,7 @@ import { HandoverConfirmed } from './pages/HandoverConfirmed';
 import { OrderStatus } from './pages/OrderStatus';
 import { Quotes } from './pages/Quotes';
 import { SalesOrderPrint } from './pages/SalesOrderPrint';
+import { Products } from './pages/Products';
 import { AuthGate } from './components/AuthGate';
 
 export const router = createBrowserRouter([
@@ -32,6 +33,12 @@ export const router = createBrowserRouter([
   { path: '/my-orders', element: <AuthGate><OrderStatus /></AuthGate> },
   { path: '/quotes', element: <AuthGate><Quotes /></AuthGate> },
   { path: '/print/sales-order/:orderId', element: <AuthGate><SalesOrderPrint /></AuthGate> },
+  /* PR — Commander 2026-05-28 ("把 Backend 的 Products 整个模块 port 到 POS").
+     Sales-side roles see this readonly; sales_director / admin can edit.
+     Page-level component reads useStaff() to derive readonly — no route
+     gate needed, every authed POS user lands here and the inner page
+     decides edit vs view. */
+  { path: '/products', element: <AuthGate><Products /></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
 ]);

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Bookmark, ListOrdered, LogOut, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, Bookmark, ListOrdered, LogOut, Package, ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/staff';
@@ -86,6 +86,13 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
             <Link to="/my-orders" className={styles.pill} aria-label="My orders">
               <ListOrdered size={13} strokeWidth={1.75} />
               <span>My orders</span>
+            </Link>
+            {/* PR — Commander 2026-05-28: Products module is now reachable
+                from POS. All authed roles see this pill; the page itself
+                renders readonly unless sales_director / admin. */}
+            <Link to="/products" className={styles.pill} aria-label="Products catalogue">
+              <Package size={13} strokeWidth={1.75} />
+              <span>Products</span>
             </Link>
             {count > 0 && (
               <Link to="/cart" className={styles.cartChip} aria-label="Cart">
