@@ -21,8 +21,16 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
+import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+
+/* Task #91 — small helper: normalize a body field to E.164 phone storage,
+   passing through nullish + non-string values untouched. */
+const normPhone = (v: unknown): string | null => {
+  if (typeof v !== 'string') return null;
+  return normalizePhone(v) ?? v;
+};
 
 export const suppliers = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -94,10 +102,11 @@ suppliers.post('/', async (c) => {
   const row = {
     code,
     name,
-    whatsapp_number: (body.whatsappNumber as string) ?? null,
+    /* Task #91 — normalize phone-like fields to E.164 on the server too. */
+    whatsapp_number: normPhone(body.whatsappNumber),
     email: (body.email as string) ?? null,
     contact_person: (body.contactPerson as string) ?? null,
-    phone: (body.phone as string) ?? null,
+    phone: normPhone(body.phone),
     address: (body.address as string) ?? null,
     state: (body.state as string) ?? null,
     payment_terms: (body.paymentTerms as string) ?? null,
@@ -113,7 +122,7 @@ suppliers.post('/', async (c) => {
     business_reg_no: (body.businessRegNo as string) ?? null,
     postcode: (body.postcode as string) ?? null,
     area: (body.area as string) ?? null,
-    mobile: (body.mobile as string) ?? null,
+    mobile: normPhone(body.mobile),
     fax: (body.fax as string) ?? null,
     website: (body.website as string) ?? null,
     attention: (body.attention as string) ?? null,
@@ -155,8 +164,16 @@ suppliers.patch('/:id', async (c) => {
     ['fax', 'fax'], ['website', 'website'], ['attention', 'attention'],
     ['businessNature', 'business_nature'], ['creditLimitSen', 'credit_limit_sen'],
   ];
+  /* Task #91 — normalize phone-like columns to E.164 on PATCH too. */
+  const PHONE_FIELDS = new Set(['phone', 'mobile', 'whatsappNumber']);
   for (const [from, to] of map) {
-    if (body[from] !== undefined) updates[to] = body[from];
+    if (body[from] === undefined) continue;
+    if (PHONE_FIELDS.has(from as string) && typeof body[from] === 'string') {
+      const raw = body[from] as string;
+      updates[to] = normalizePhone(raw) ?? raw;
+    } else {
+      updates[to] = body[from];
+    }
   }
   if (body.status !== undefined && SUPPLIER_STATUSES.has(body.status as string)) {
     updates.status = body.status;

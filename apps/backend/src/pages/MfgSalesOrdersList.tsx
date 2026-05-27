@@ -12,6 +12,7 @@ import {
   Plus, Pencil, Eye, Search, FileText, Printer, ListChecks, Trash2, RefreshCw,
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { formatPhone } from '@2990s/shared/phone';
 import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus } from '../lib/flow-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
@@ -32,6 +33,12 @@ type SoRow = {
   customer_so_no: string | null;
   local_total_centi: number;
   balance_centi: number;
+  /* Follow-up #83 — live balance derived from payments ledger. Comes from
+     the mfg_sales_orders_with_payment_totals view. May be null/absent on
+     older clients / failed view migration; column falls back to
+     balance_centi → (local_total − paid_centi). */
+  balance_centi_live?: number | null;
+  paid_total_centi?: number | null;
   paid_centi: number;
   remark2: string | null;
   remark3: string | null;
@@ -53,6 +60,16 @@ type SoRow = {
 
 const fmtRm = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* Follow-up #83 — Balance column source-of-truth chain:
+   1. view's balance_centi_live (local_total − sum(payments))
+   2. header.balance_centi (legacy stored value)
+   3. local_total − header.paid_centi (last-resort derivation) */
+const liveBalance = (r: SoRow): number => {
+  if (typeof r.balance_centi_live === 'number') return r.balance_centi_live;
+  if (typeof r.balance_centi === 'number') return r.balance_centi;
+  return r.local_total_centi - (r.paid_centi ?? 0);
+};
 
 const STATUS_CLASS: Record<string, string> = {
   DRAFT:          soDetailStyles.statusDraft ?? '',
@@ -92,25 +109,38 @@ export const MfgSalesOrdersList = () => {
   const onView = () => selectedRow && openDetail(selectedRow);
   const onFind = () => setFindNonce((n) => n + 1);
 
-  const renderPdf = async (row: SoRow, andPrint: boolean) => {
+  const renderPdf = async (row: SoRow, action: 'save' | 'print' | 'preview') => {
     // One-shot fetch when the toolbar button fires — avoids holding a
     // TanStack query open for every list selection.
+    // Followup #81: parallel-fetch payments from the ledger alongside the
+    // SO detail. Both endpoints are auth'd off the same Supabase session.
     const { data: session } = await supabase.auth.getSession();
-    const res = await fetch(
-      `${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}`,
-      { headers: { authorization: `Bearer ${session.session?.access_token ?? ''}` } },
-    );
-    if (!res.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
-    const json = (await res.json()) as { salesOrder: unknown; items: unknown[] };
-    /* PR-G: jspdf triggers download via doc.save(). Print mode reuses the
-       same generator and follows it with window.print(); the user's
-       browser then displays the OS print dialog over the downloaded PDF. */
-    await generateSalesOrderPdf(json.salesOrder as never, json.items as never);
-    if (andPrint) window.print();
+    const token = session.session?.access_token ?? '';
+    const headers = { authorization: `Bearer ${token}` };
+    /* Follow-up #81 — parallel-fetch detail + payments (ledger). */
+    const [detailRes, paymentsRes] = await Promise.all([
+      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}`, { headers }),
+      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}/payments`, { headers }),
+    ]);
+    if (!detailRes.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
+    const json = (await detailRes.json()) as { salesOrder: unknown; items: unknown[] };
+    /* Payments endpoint is best-effort: if it fails the PDF still renders
+       with an empty Payments table rather than blocking Preview/Print. */
+    let payments: unknown[] = [];
+    if (paymentsRes.ok) {
+      try {
+        const pj = (await paymentsRes.json()) as { payments?: unknown[] };
+        payments = pj.payments ?? [];
+      } catch { /* leave empty — PDF will show the no-payments state */ }
+    }
+    /* Follow-up #83 — action routes the PDF to doc.save() / hidden iframe
+       print / blob preview, instead of always downloading and asking the
+       user to find the file. Payments arg from #81 is threaded through. */
+    await generateSalesOrderPdf(json.salesOrder as never, json.items as never, payments as never, action);
   };
 
-  const onPreview = () => selectedRow && void renderPdf(selectedRow, false);
-  const onPrint = () => selectedRow && void renderPdf(selectedRow, true);
+  const onPreview = () => selectedRow && void renderPdf(selectedRow, 'preview');
+  const onPrint = () => selectedRow && void renderPdf(selectedRow, 'print');
 
   // Print listing — generate a PDF of the current visible grid (filtered
   // rows + visible columns) using jsPDF + autotable.
@@ -159,7 +189,31 @@ export const MfgSalesOrdersList = () => {
       headStyles: { fillColor: [240, 235, 225], textColor: [34, 31, 32], fontStyle: 'bold' },
       theme: 'grid',
     });
-    doc.save(`sales-orders-listing-${new Date().toISOString().slice(0, 10)}.pdf`);
+    /* Follow-up #83 — Print Listing now renders via hidden iframe +
+       window.print() instead of doc.save(). Same UX as the single-SO
+       Print button — user gets the OS print dialog directly, no need
+       to fish a downloaded PDF out of the Downloads folder. */
+    const blob = doc.output('blob');
+    const blobUrl = URL.createObjectURL(blob);
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch { /* PDF viewer may not have hydrated; cleanup still runs */ }
+    };
+    window.setTimeout(() => {
+      try { document.body.removeChild(iframe); } catch { /* already detached */ }
+      URL.revokeObjectURL(blobUrl);
+    }, 60_000);
   };
 
   const onDelete = () => {
@@ -296,15 +350,14 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
   },
   {
+    /* Follow-up #83 — prefer the view's live balance (local_total −
+       sum(payments)). Falls back to the stored header balance_centi if the
+       view column is missing (older API), then to a client-side derivation
+       from paid_centi as the last resort. */
     key: 'balance_centi', label: 'Balance', width: 110, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => {
-      const bal = r.balance_centi ?? (r.local_total_centi - (r.paid_centi ?? 0));
-      return <span className={styles.money}>{fmtRm(bal)}</span>;
-    },
-    searchValue: (r) => fmtRm(r.balance_centi ?? r.local_total_centi - (r.paid_centi ?? 0)),
-    sortFn: (a, b) =>
-      (a.balance_centi ?? a.local_total_centi - (a.paid_centi ?? 0)) -
-      (b.balance_centi ?? b.local_total_centi - (b.paid_centi ?? 0)),
+    accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
+    searchValue: (r) => fmtRm(liveBalance(r)),
+    sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
     key: 'remark2', label: 'Remark 2', width: 140, sortable: true,
@@ -367,9 +420,11 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.address4 ?? '',
   },
   {
+    /* Task #91 — display the pretty Malaysian format. searchValue keeps the
+       raw stored value so a user can paste either form into Find and match. */
     key: 'phone', label: 'Phone', width: 130, sortable: true,
-    accessor: (r) => r.phone ?? '',
-    searchValue: (r) => r.phone ?? '',
+    accessor: (r) => formatPhone(r.phone) || '',
+    searchValue: (r) => `${r.phone ?? ''} ${formatPhone(r.phone) ?? ''}`,
   },
   {
     key: 'venue', label: 'Venue', width: 130, sortable: true, groupable: true,

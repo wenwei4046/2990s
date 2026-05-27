@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
+import { normalizePhone } from '@2990s/shared/phone';
 import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 import { hashPin } from '../lib/bcrypt';
@@ -131,7 +132,8 @@ admin.post('/staff', async (c) => {
         role:         input.role,
         showroom_id:  input.showroomId ?? null,
         email,
-        phone:        input.phone ?? null,
+        /* Task #91 — staff phone normalized to E.164 storage form. */
+        phone:        input.phone ? (normalizePhone(input.phone) ?? input.phone) : null,
         initials:     input.initials,
         color:        input.color,
         active:       true,

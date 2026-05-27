@@ -29,6 +29,11 @@ export interface Env {
   // wrangler.toml. Until then this is typed for compile-time but the
   // endpoint will error at runtime with "env.PUBLIC_ASSETS is undefined".
   PUBLIC_ASSETS: R2Bucket;
+
+  // R2 binding for per-line SO item photos (Task #79 — PR-F).
+  // Bucket stays private; the SO photo routes proxy reads through the
+  // Worker so callers never hit R2 directly.
+  SO_ITEM_PHOTOS: R2Bucket;
 }
 
 // Hono context augmentation — middleware sets these.

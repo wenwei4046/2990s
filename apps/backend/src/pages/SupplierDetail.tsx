@@ -48,6 +48,8 @@ import {
   COUNTRIES,
   PAYMENT_TERMS_OPTIONS,
 } from '../lib/localities-queries';
+import { formatPhone } from '@2990s/shared/phone';
+import { PhoneInput } from '../components/PhoneInput';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -748,10 +750,13 @@ const SupplierInfoCard = ({
             <InfoCell label="Contact Person" value={supplier.contact_person ?? '—'} />
             <InfoCell label="Attention" value={supplier.attention ?? '—'} />
             <InfoCell label="Email" value={supplier.email ?? '—'} />
-            <InfoCell label="Phone" value={supplier.phone ?? '—'} />
-            <InfoCell label="Mobile" value={supplier.mobile ?? '—'} />
+            {/* Task #91 — formatPhone() displays stored E.164 as the pretty
+                Malaysian convention. Fax intentionally left raw (rarely MY-
+                formatted), as does an empty value which renders as "—". */}
+            <InfoCell label="Phone" value={supplier.phone ? formatPhone(supplier.phone) : '—'} />
+            <InfoCell label="Mobile" value={supplier.mobile ? formatPhone(supplier.mobile) : '—'} />
             <InfoCell label="Fax" value={supplier.fax ?? '—'} />
-            <InfoCell label="WhatsApp" value={supplier.whatsapp_number ?? '—'} />
+            <InfoCell label="WhatsApp" value={supplier.whatsapp_number ? formatPhone(supplier.whatsapp_number) : '—'} />
             <InfoCell label="Website" value={supplier.website ?? '—'} />
             <InfoCell label="Payment Terms" value={supplier.payment_terms ?? '—'} />
             <InfoCell label="Currency" value={supplier.currency} />
@@ -786,10 +791,13 @@ const SupplierInfoCard = ({
             <EditField label="Contact Person" value={form.contactPerson} onChange={(v) => setF('contactPerson', v)} />
             <EditField label="Attention" value={form.attention} onChange={(v) => setF('attention', v)} />
             <EditField label="Email" value={form.email} onChange={(v) => setF('email', v)} />
-            <EditField label="Phone" value={form.phone} onChange={(v) => setF('phone', v)} />
-            <EditField label="Mobile" value={form.mobile} onChange={(v) => setF('mobile', v)} />
+            {/* Task #91 — phone/mobile/WhatsApp use the unified phone field so
+                they normalize to E.164 on blur. Fax stays plain (non-MY format,
+                edge case). */}
+            <PhoneEditField label="Phone" value={form.phone} onChange={(v) => setF('phone', v)} />
+            <PhoneEditField label="Mobile" value={form.mobile} onChange={(v) => setF('mobile', v)} />
             <EditField label="Fax" value={form.fax} onChange={(v) => setF('fax', v)} />
-            <EditField label="WhatsApp" value={form.whatsappNumber} onChange={(v) => setF('whatsappNumber', v)} />
+            <PhoneEditField label="WhatsApp" value={form.whatsappNumber} onChange={(v) => setF('whatsappNumber', v)} />
             <EditField label="Website" value={form.website} onChange={(v) => setF('website', v)} />
             {/* Commercial */}
             <PaymentTermsSelect value={form.paymentTerms} onChange={(v) => setF('paymentTerms', v)} />
@@ -836,6 +844,19 @@ const EditField = ({
         placeholder={placeholder}
       />
     )}
+  </label>
+);
+
+/* Task #91 — Phone variant of EditField. Wraps PhoneInput with the same
+   label/field styling so it slots into the supplier grid without disruption. */
+const PhoneEditField = ({
+  label, value, onChange,
+}: {
+  label: string; value: string; onChange: (v: string) => void;
+}) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <PhoneInput className={styles.fieldInput} value={value} onChange={onChange} />
   </label>
 );
 

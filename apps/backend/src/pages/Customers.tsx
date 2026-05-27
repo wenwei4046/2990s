@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ChevronRight, Search, Users } from 'lucide-react';
-import { fmtDate, fmtRM, daysAgo } from '@2990s/shared';
+import { fmtDate, fmtRM, daysAgo, formatPhone } from '@2990s/shared';
 import { useOrders, type OrderLane, type OrderListRow } from '../lib/queries';
 import styles from './Customers.module.css';
 
@@ -223,7 +223,7 @@ const CustomerRow = ({ customer, isOpen, onToggle }: CustomerRowProps) => {
         </td>
         <td>
           {customer.phone
-            ? <span className={styles.phone}>{customer.phone}</span>
+            ? <span className={styles.phone}>{formatPhone(customer.phone)}</span>
             : <span className={styles.phoneEmpty}>—</span>}
         </td>
         <td className={styles.numericCol}>
