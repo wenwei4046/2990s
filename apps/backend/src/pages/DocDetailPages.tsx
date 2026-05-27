@@ -20,6 +20,7 @@ import {
   ClipboardCheck, Boxes, Undo2, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { LoadingButton } from '../components/LoadingButton';
 import {
   useGrnDetail,
   usePostGrn,
@@ -183,10 +184,16 @@ export const GrnDetail = () => {
             <span>Print PDF</span>
           </Button>
           {isPosted && rejectedItems.length > 0 && (
-            <Button variant="ghost" size="md" onClick={raisePurchaseReturn} disabled={createPr.isPending}>
+            <LoadingButton
+              variant="ghost"
+              size="md"
+              onClick={raisePurchaseReturn}
+              loading={createPr.isPending}
+              loadingText="Creating…"
+            >
               <Undo2 {...ICON} />
-              <span>{createPr.isPending ? 'Creating…' : 'Raise Purchase Return'}</span>
-            </Button>
+              Raise Purchase Return
+            </LoadingButton>
           )}
           {/* PR — Phase 3: only POSTED GRNs can produce a Purchase Invoice. */}
           {isPosted && !isClosed && (
@@ -599,11 +606,15 @@ export const DeliveryOrderDetail = () => {
           <div className={styles.cardBody}>
             <div className={styles.statusBar}>
               {next.map((s, i) => (
-                <Button key={s} variant={i === 0 ? 'primary' : 'ghost'} size="sm"
+                <LoadingButton
+                  key={s}
+                  variant={i === 0 ? 'primary' : 'ghost'}
+                  size="sm"
                   onClick={() => updateStatus.mutate({ id: id!, status: s })}
-                  disabled={updateStatus.isPending}>
-                  <span>{s.replace('_', ' ')}</span>
-                </Button>
+                  loading={updateStatus.isPending}
+                >
+                  {s.replace('_', ' ')}
+                </LoadingButton>
               ))}
             </div>
           </div>
@@ -1012,11 +1023,14 @@ export const ConsignmentDetail = () => {
                   <td className={styles.muted}>{n.signed_at ? `Posted ${fmtDate(n.signed_at)}` : 'Draft'}</td>
                   <td className={styles.tableRight}>
                     {!n.signed_at && (
-                      <Button variant="ghost" size="sm"
+                      <LoadingButton
+                        variant="ghost"
+                        size="sm"
                         onClick={() => postNote.mutate({ id: id!, noteId: n.id as string })}
-                        disabled={postNote.isPending}>
-                        <CheckCircle2 {...ICON} /><span>Post</span>
-                      </Button>
+                        loading={postNote.isPending}
+                      >
+                        <CheckCircle2 {...ICON} />Post
+                      </LoadingButton>
                     )}
                   </td>
                 </tr>
@@ -1031,21 +1045,30 @@ export const ConsignmentDetail = () => {
           <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Move to next stage</h2></header>
           <div className={styles.cardBody}>
             <div className={styles.statusBar}>
-              <Button variant="primary" size="sm"
+              <LoadingButton
+                variant="primary"
+                size="sm"
                 onClick={() => updateStatus.mutate({ id: id!, status: 'SOLD' })}
-                disabled={updateStatus.isPending}>
-                <span>Mark Sold</span>
-              </Button>
-              <Button variant="ghost" size="sm"
+                loading={updateStatus.isPending}
+              >
+                Mark Sold
+              </LoadingButton>
+              <LoadingButton
+                variant="ghost"
+                size="sm"
                 onClick={() => updateStatus.mutate({ id: id!, status: 'RETURNED' })}
-                disabled={updateStatus.isPending}>
-                <span>Mark Returned</span>
-              </Button>
-              <Button variant="ghost" size="sm"
+                loading={updateStatus.isPending}
+              >
+                Mark Returned
+              </LoadingButton>
+              <LoadingButton
+                variant="ghost"
+                size="sm"
                 onClick={() => updateStatus.mutate({ id: id!, status: 'DAMAGED' })}
-                disabled={updateStatus.isPending}>
-                <span>Mark Damaged</span>
-              </Button>
+                loading={updateStatus.isPending}
+              >
+                Mark Damaged
+              </LoadingButton>
             </div>
           </div>
         </section>
@@ -1159,9 +1182,15 @@ const CreateConsignmentNoteModal = ({
         </div>
         <footer className={styles.modalFooter}>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={addNote.isPending}>
-            {addNote.isPending ? 'Saving…' : `Create ${type} Note`}
-          </Button>
+          <LoadingButton
+            variant="primary"
+            size="md"
+            onClick={submit}
+            loading={addNote.isPending}
+            loadingText="Saving…"
+          >
+            {`Create ${type} Note`}
+          </LoadingButton>
         </footer>
       </div>
     </div>
