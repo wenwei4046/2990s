@@ -26,8 +26,13 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  computeMfgLinePrice,
+  type MfgPricingProduct,
+  type MfgFabricTier,
+} from '@2990s/shared/mfg-pricing';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
-import { useFabricTrackings } from '../lib/fabric-queries';
+import { useFabricTrackings, type FabricTrackingRow } from '../lib/fabric-queries';
 import {
   useUploadSoItemPhoto,
   useDeleteSoItemPhoto,
