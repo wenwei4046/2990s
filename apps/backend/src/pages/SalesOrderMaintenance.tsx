@@ -468,7 +468,35 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L1 — Country listing */}
+      {/* L1 — Country listing. Add Country form requires seeding one
+          (state, stateCode, city, postcode) row because my_localities is
+          the atomic table — there's no Country row independent of its
+          first state. Commander 2026-05-27: "我需要可以添加 country then
+          in country can add on state then in state i can add on cities
+          then in cities can add on postcode". */}
+      {geoView === 'country' && canEdit && (
+        <div className={styles.addRowCard}>
+          <div className={styles.addRowEyebrow}>Add a country (seeds one state + city + postcode)</div>
+          <div
+            className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 1fr 100px 1fr 110px auto' }}
+          >
+            <input className={styles.input} placeholder="Country (e.g. Singapore)"
+              value={newCountry} onChange={(e) => setNewCountry(e.target.value)} />
+            <input className={styles.input} placeholder="State (e.g. Central)"
+              value={newState} onChange={(e) => setNewState(e.target.value)} />
+            <input className={styles.input} placeholder="Code (SGC)" maxLength={5}
+              value={newStateCode} onChange={(e) => setNewStateCode(e.target.value)} />
+            <input className={styles.input} placeholder="City (Bugis)"
+              value={newCity} onChange={(e) => setNewCity(e.target.value)} />
+            <input className={styles.input} placeholder="Postcode (188022)" maxLength={10}
+              value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
+            <Button variant="primary" size="md" onClick={addLocality} disabled={createLoc.isPending}>
+              <Plus size={14} strokeWidth={1.75} /> Add
+            </Button>
+          </div>
+        </div>
+      )}
       {geoView === 'country' && (
         <div className={styles.tableCard}>
           {localities.isLoading ? (
@@ -507,6 +535,29 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
               </tbody>
             </table>
           )}
+        </div>
+      )}
+
+      {/* L2 — Add State form: requires first (city, postcode) too. */}
+      {geoView === 'state' && canEdit && (
+        <div className={styles.addRowCard}>
+          <div className={styles.addRowEyebrow}>Add a state in {selectedCountry} (seeds first city + postcode)</div>
+          <div
+            className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 100px 1fr 130px auto' }}
+          >
+            <input className={styles.input} placeholder="State (e.g. Selangor)"
+              value={newState} onChange={(e) => setNewState(e.target.value)} />
+            <input className={styles.input} placeholder="Code (SGR)" maxLength={5}
+              value={newStateCode} onChange={(e) => setNewStateCode(e.target.value)} />
+            <input className={styles.input} placeholder="City (Petaling Jaya)"
+              value={newCity} onChange={(e) => setNewCity(e.target.value)} />
+            <input className={styles.input} placeholder="Postcode (47301)" maxLength={10}
+              value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
+            <Button variant="primary" size="md" onClick={addLocality} disabled={createLoc.isPending}>
+              <Plus size={14} strokeWidth={1.75} /> Add
+            </Button>
+          </div>
         </div>
       )}
 
@@ -589,6 +640,25 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
               </table>
             );
           })()}
+        </div>
+      )}
+
+      {/* L3 — Add City form (within selectedState). */}
+      {geoView === 'city' && canEdit && (
+        <div className={styles.addRowCard}>
+          <div className={styles.addRowEyebrow}>Add a city in {selectedState}, {selectedCountry} (seeds first postcode)</div>
+          <div
+            className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 130px auto' }}
+          >
+            <input className={styles.input} placeholder="City (e.g. Subang Jaya)"
+              value={newCity} onChange={(e) => setNewCity(e.target.value)} />
+            <input className={styles.input} placeholder="Postcode (47600)" maxLength={10}
+              value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
+            <Button variant="primary" size="md" onClick={addLocality} disabled={createLoc.isPending}>
+              <Plus size={14} strokeWidth={1.75} /> Add
+            </Button>
+          </div>
         </div>
       )}
 
