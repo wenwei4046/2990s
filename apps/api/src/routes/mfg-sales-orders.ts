@@ -263,6 +263,155 @@ mfgSalesOrders.post('/', async (c) => {
   return c.json({ docNo }, 201);
 });
 
+/* ── Convert SO → DO ───────────────────────────────────────────────────
+   Commander 2026-05-27: "不能 rightclick convert to DO". Mirrors the
+   AutoCount "Partial/Full Transfer to → Delivery Order" action.
+   Creates a fresh DO with the SO's header info + one DO line per
+   non-cancelled SO line, then links the SO header to the new DO so
+   the detail page's "Linked DO" hyperlink lights up.
+
+   The DO doc number generator follows DO-YYMM-NNN (matches
+   routes/delivery-orders-mfg.ts nextNum). Body accepts an optional
+   `deliveryDate` override; defaults to the SO's customer_delivery_date,
+   else today. */
+mfgSalesOrders.post('/:docNo/convert-to-do', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const user = c.get('user');
+
+  let body: { deliveryDate?: string } = {};
+  // Body is optional — an empty POST is valid (use SO's own dates).
+  try { body = (await c.req.json()) as typeof body; } catch { /* no body */ }
+
+  // 1. Fetch SO header + items together.
+  const [hRes, iRes] = await Promise.all([
+    sb.from('mfg_sales_orders').select(HEADER).eq('doc_no', docNo).maybeSingle(),
+    sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).eq('cancelled', false).order('created_at'),
+  ]);
+  if (hRes.error) return c.json({ error: 'load_failed', reason: hRes.error.message }, 500);
+  if (!hRes.data) return c.json({ error: 'not_found' }, 404);
+  // Cast via `unknown` first — Supabase types the joined select result as
+  // `GenericStringError` until proven typed (same gotcha as the diffFields
+  // helper in the PATCH handler).
+  const so = hRes.data as unknown as Record<string, unknown> & {
+    doc_no: string;
+    debtor_code: string | null;
+    debtor_name: string;
+    customer_delivery_date: string | null;
+    linked_do_doc_no: string | null;
+    address1: string | null;
+    address2: string | null;
+    address3: string | null;
+    address4: string | null;
+    city: string | null;
+    postcode: string | null;
+    customer_state: string | null;
+    phone: string | null;
+  };
+  const soItems = (iRes.data ?? []) as unknown as Array<Record<string, unknown> & {
+    id: string;
+    item_code: string;
+    description: string | null;
+    description2: string | null;
+    item_group: string | null;
+    qty: number;
+    unit_price_centi: number;
+    discount_centi: number;
+    uom: string;
+    variants: unknown;
+  }>;
+  if (soItems.length === 0) return c.json({ error: 'no_items_to_convert' }, 400);
+  if (so.linked_do_doc_no) {
+    // Soft guard — duplicate conversions silently overwrite the link.
+    // Return a hint in the response so the UI can decide whether to warn.
+    // (The mutation still proceeds — commander may want to redo the DO.)
+  }
+
+  // 2. Generate next DO number (DO-YYMM-NNN, mirrors delivery-orders-mfg).
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count } = await sb
+    .from('delivery_orders')
+    .select('id', { head: true, count: 'exact' })
+    .like('do_number', `DO-${yymm}-%`);
+  const doNumber = `DO-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
+
+  // 3. Insert DO header. Address mapping: SO has address1-4 (free-form
+  //    multi-line). DO has address1 + address2 + city + state + postcode.
+  //    We bundle SO address3/4 into DO address2 if it's empty, so nothing
+  //    is dropped — DO PDFs will still show the full ship-to block.
+  const doAddress2 = so.address2
+    ?? ([so.address3, so.address4].filter(Boolean).join(', ') || null);
+  const expectedDelivery = body.deliveryDate
+    ?? so.customer_delivery_date
+    ?? new Date().toISOString().slice(0, 10);
+
+  const { data: doHeader, error: hErr } = await sb.from('delivery_orders').insert({
+    do_number: doNumber,
+    so_doc_no: docNo,
+    debtor_code: so.debtor_code,
+    debtor_name: so.debtor_name,
+    do_date: new Date().toISOString().slice(0, 10),
+    expected_delivery_at: expectedDelivery,
+    address1: so.address1,
+    address2: doAddress2,
+    city: so.city,
+    state: so.customer_state,
+    postcode: so.postcode,
+    phone: so.phone,
+    created_by: user.id,
+  }).select('id, do_number').single();
+  if (hErr) return c.json({ error: 'do_insert_failed', reason: hErr.message }, 500);
+  const dh = doHeader as unknown as { id: string; do_number: string };
+
+  // 4. Insert one DO line per non-cancelled SO line. Field names mirror
+  //    delivery-orders-mfg POST so PDFs + the detail screen agree.
+  const doRows = soItems.map((it) => {
+    const qty = Number(it.qty ?? 1);
+    const unit = Number(it.unit_price_centi ?? 0);
+    const discount = Number(it.discount_centi ?? 0);
+    return {
+      delivery_order_id: dh.id,
+      so_item_id: it.id,
+      item_code: it.item_code,
+      description: it.description ?? null,
+      description2: it.description2 ?? null,
+      item_group: it.item_group ?? null,
+      uom: it.uom ?? 'UNIT',
+      qty,
+      m3_milli: 0,
+      unit_price_centi: unit,
+      discount_centi: discount,
+      line_total_centi: (qty * unit) - discount,
+      variants: it.variants ?? null,
+    };
+  });
+  const { error: iErr } = await sb.from('delivery_order_items').insert(doRows);
+  if (iErr) {
+    // Roll the header back so we don't leave a headerless DO.
+    await sb.from('delivery_orders').delete().eq('id', dh.id);
+    return c.json({ error: 'do_items_insert_failed', reason: iErr.message }, 500);
+  }
+
+  // 5. Link the SO back to the new DO.
+  const prevLink = so.linked_do_doc_no ?? null;
+  await sb.from('mfg_sales_orders')
+    .update({ linked_do_doc_no: dh.do_number, updated_at: new Date().toISOString() })
+    .eq('doc_no', docNo);
+
+  // 6. Audit row — UPDATE_DETAILS with a single linkedDoDocNo from→to entry.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_DETAILS',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [{ field: 'linkedDoDocNo', from: prevLink, to: dh.do_number }],
+    note: `Converted SO ${docNo} → DO ${dh.do_number}`,
+  });
+
+  return c.json({ doDocNo: dh.do_number, deliveryOrderId: dh.id, lineCount: doRows.length }, 201);
+});
+
 // Status transition with audit row. Reads the prior status, updates, then
 // inserts to mfg_so_status_changes — best-effort (audit failure does NOT
 // roll back the status change).

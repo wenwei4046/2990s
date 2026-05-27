@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
-import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus } from '../lib/flow-queries';
+import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo } from '../lib/flow-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
 import styles from './MfgSalesOrdersList.module.css';
@@ -94,6 +94,7 @@ export const MfgSalesOrdersList = () => {
   const selectedRow = selected[0] ?? null;
 
   const updateStatus = useUpdateMfgSalesOrderStatus();
+  const convertToDoMut = useConvertSoToDo();
 
   // ── Toolbar handlers ────────────────────────────────────────────
   const onNew = () => navigate('/mfg-sales-orders/new');
@@ -210,16 +211,39 @@ export const MfgSalesOrdersList = () => {
     }, 60_000);
   };
 
-  const onDelete = () => {
-    if (!selectedRow) return;
-    if (!window.confirm(`Cancel SO ${selectedRow.doc_no}? This sets status = CANCELLED (soft delete).`)) return;
+  /* Soft-delete a SO row (sets status=CANCELLED). Shared by the toolbar's
+     Delete button and the row context menu's Delete entry. */
+  const doDelete = (row: SoRow) => {
+    if (!window.confirm(`Cancel SO ${row.doc_no}? This sets status = CANCELLED (soft delete).`)) return;
     updateStatus.mutate(
-      { docNo: selectedRow.doc_no, status: 'CANCELLED' },
+      { docNo: row.doc_no, status: 'CANCELLED' },
       {
         onSuccess: () => { setSelected([]); },
         onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`),
       },
     );
+  };
+  const onDelete = () => { if (selectedRow) doDelete(selectedRow); };
+
+  /* Convert an SO → new DO via the API, then navigate to the new DO so
+     commander can immediately review/dispatch. Confirmation prompt
+     matches the soft-delete tone — destructive enough to warrant a
+     "are you sure?" but not so dangerous it needs typed confirmation. */
+  const convertToDo = async (row: SoRow) => {
+    if (!window.confirm(`Convert SO ${row.doc_no} to a new Delivery Order?`)) return;
+    try {
+      const res = await convertToDoMut.mutateAsync({ docNo: row.doc_no });
+      navigate(`/mfg-delivery-orders/${res.deliveryOrderId}`);
+    } catch (e) {
+      alert(`Failed to convert: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  /* TODO(copy-to-new-so): out of scope for this PR. Will need a
+     sessionStorage handoff carrying the SO header + line items so the
+     New SO page can pre-fill. Wire up in a follow-up worktree. */
+  const copyToNewSo = (row: SoRow) => {
+    alert(`Copy to new SO is not implemented yet (would clone SO ${row.doc_no}).`);
   };
 
   const onRefresh = () => {
@@ -284,6 +308,17 @@ export const MfgSalesOrdersList = () => {
         onSelectionChange={setSelected}
         isLoading={isLoading}
         emptyMessage='No sales orders yet — click "New" to start.'
+        contextMenu={(row) => [
+          { label: 'Edit',                       onClick: () => openDetail(row, true) },
+          { label: 'View',                       onClick: () => openDetail(row) },
+          { label: 'Preview',                    onClick: () => void renderPdf(row, 'preview') },
+          { label: 'Print',                      onClick: () => void renderPdf(row, 'print') },
+          { divider: true },
+          { label: 'Convert to Delivery Order',  onClick: () => void convertToDo(row) },
+          { label: 'Copy to new Sales Order',    onClick: () => copyToNewSo(row) },
+          { divider: true },
+          { label: 'Delete', danger: true,       onClick: () => doDelete(row) },
+        ]}
       />
     </div>
   );

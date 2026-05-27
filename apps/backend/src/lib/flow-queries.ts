@@ -182,6 +182,27 @@ export const useUpdateMfgSalesOrderHeader = () => {
   });
 };
 
+/* Convert an SO → new DO. Server inserts the DO header + items, links
+   the SO back to the new DO, and emits a UPDATE_DETAILS audit row.
+   Invalidates both lists so the new DO shows up and the SO row reflects
+   the linked_do_doc_no change. */
+export const useConvertSoToDo = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, deliveryDate }: { docNo: string; deliveryDate?: string }) =>
+      authedFetch<{ doDocNo: string; deliveryOrderId: string; lineCount: number }>(
+        `/mfg-sales-orders/${docNo}/convert-to-do`,
+        { method: 'POST', body: JSON.stringify({ deliveryDate: deliveryDate ?? null }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+    },
+  });
+};
+
 export const useUpdateMfgSalesOrderStatus = () => {
   const qc = useQueryClient();
   return useMutation({
