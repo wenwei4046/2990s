@@ -961,6 +961,10 @@ export type SoDetailListingRow = Record<string, unknown> & {
   customer_delivery_date: string | null;
   /** Live paid total summed from mfg_sales_order_payments (replaces legacy paid_centi). */
   paid_total_centi: number;
+  /* Task #121 — country snapshot, auto-derived from customer_state via
+     my_localities at SO create/PATCH time (migration 0082). */
+  customer_state: string | null;
+  customer_country: string | null;
   /* Task #114 — per-line cost snapshot (from mfg_products.cost_price_sen
      server-side) + derived line cost + margin. Used by the listing
      report's cost columns + 6-tile KPI bar. */

@@ -259,6 +259,22 @@ export function useUpdateWarehouse() {
   });
 }
 
+/* Task #121 — inline Warehouse CRUD on /mfg-sales-orders/maintenance.
+   The /warehouses page only ever offered "Active / Inactive" toggle (not
+   delete) because warehouses are referenced by inventory_movements / lots
+   / cogs. The new inline CRUD section needs an actual delete affordance
+   for the "I just typed a wrong row" case — the API returns 409 in_use
+   when FKs from movement history block the delete, and the UI surfaces
+   that so the commander can toggle is_active instead. */
+export function useDeleteWarehouse() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ ok: true }>(`/inventory/warehouses/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['warehouses'] }),
+  });
+}
+
 export function useInventoryMovements(opts?: {
   warehouseId?: string;
   productCode?: string;

@@ -34,6 +34,7 @@ import {
 import { useStaff } from '../lib/admin-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
+  countryForState,
 } from '../lib/localities-queries';
 import {
   useSoDropdownOptions, optionsOrFallback,
@@ -246,6 +247,14 @@ export const SalesOrderNew = () => {
   const postcodes = useMemo(
     () => (state && city) ? postcodesInCity(locRows, state, city) : [],
     [locRows, state, city],
+  );
+  /* Task #121 — country derives from the picked state. Display-only on the
+     SO form; the API re-derives + snapshots it on POST/PATCH. Falls back
+     to 'Malaysia' when no state is picked yet so the field doesn't sit
+     visibly blank before the cascade fires. */
+  const country = useMemo(
+    () => (state ? countryForState(locRows, state) : null) ?? 'Malaysia',
+    [locRows, state],
   );
 
   const canSave = debtorName.trim().length > 0;
@@ -725,6 +734,18 @@ export const SalesOrderNew = () => {
                 {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </label>
+            {/* Task #121 — Country is auto-derived from the picked state via
+                my_localities. Read-only display; the API re-derives + snaps
+                it onto the SO header on POST. */}
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Country</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 26,
+                color: 'var(--fg-muted)',
+              }}>
+                {country}
+              </span>
+            </div>
           </div>
         </div>
       </section>

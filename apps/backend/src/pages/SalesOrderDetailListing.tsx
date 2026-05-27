@@ -123,6 +123,14 @@ const buildColumns = (
     accessor: (r) => r.agent ?? '—',
     searchValue: (r) => r.agent ?? '',
   },
+  /* Task #121 — country snapshot from SO header (auto-derived from
+     customer_state via my_localities on POST/PATCH). Groupable so the
+     listing can pivot by country once SG/TH SOs start flowing. */
+  {
+    key: 'customer_country', label: 'Country', width: 110, sortable: true, groupable: true,
+    accessor: (r) => (r.customer_country as string | null) ?? '—',
+    searchValue: (r) => (r.customer_country as string | null) ?? '',
+  },
   {
     key: 'currency', label: 'Curr. Code', width: 80, sortable: true, groupable: true,
     accessor: (r) => r.currency ?? 'MYR',

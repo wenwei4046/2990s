@@ -40,6 +40,10 @@ export interface LocalityRow {
   city: string;
   state: string;
   stateCode: string;
+  /* Task #121 — country auto-derives onto the SO header when a state is
+     picked. Default 'Malaysia' for all current rows; SG / TH states will
+     declare their own. */
+  country: string;
 }
 
 const LOCALITY_PAGE = 1000;
@@ -63,17 +67,28 @@ export const useLocalities = () =>
       for (let from = 0; ; from += LOCALITY_PAGE) {
         const { data, error } = await supabase
           .from('my_localities')
-          .select('id, postcode, city, state, state_code')
+          .select('id, postcode, city, state, state_code, country')
           .order('state')
           .order('city')
           .order('postcode')
           .range(from, from + LOCALITY_PAGE - 1);
         if (error) throw error;
         const page = (data ?? []) as Array<{
-          id: string; postcode: string; city: string; state: string; state_code: string;
+          id: string; postcode: string; city: string; state: string; state_code: string; country: string | null;
         }>;
         for (const r of page) {
-          all.push({ id: r.id, postcode: r.postcode, city: r.city, state: r.state, stateCode: r.state_code });
+          all.push({
+            id: r.id,
+            postcode: r.postcode,
+            city: r.city,
+            state: r.state,
+            stateCode: r.state_code,
+            /* Task #121 — fall back to Malaysia for rows seeded before
+               migration 0082 (defensive; the column defaults to Malaysia
+               server-side, so this branch only fires if the API returned
+               an unexpected null). */
+            country: r.country ?? 'Malaysia',
+          });
         }
         if (page.length < LOCALITY_PAGE) break;
       }
@@ -86,7 +101,7 @@ export const useLocalities = () =>
 export const useCreateLocality = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { state: string; stateCode: string; city: string; postcode: string }) =>
+    mutationFn: (payload: { state: string; stateCode: string; city: string; postcode: string; country?: string }) =>
       authedFetch<{ locality: { id: string } }>('/localities', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -98,7 +113,7 @@ export const useCreateLocality = () => {
 export const useUpdateLocality = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: string; state?: string; stateCode?: string; city?: string; postcode?: string }) =>
+    mutationFn: ({ id, ...patch }: { id: string; state?: string; stateCode?: string; city?: string; postcode?: string; country?: string }) =>
       authedFetch(`/localities/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
   });
@@ -129,6 +144,17 @@ export const postcodesInCity = (rows: LocalityRow[], state: string, city: string
   const s = new Set<string>();
   for (const r of rows) if (r.state === state && r.city === city) s.add(r.postcode);
   return Array.from(s).sort();
+};
+
+/* Task #121 — given a picked state, return the country declared on any
+   matching row in my_localities. All rows that share a state are expected
+   to share a country (it's a single column on the table, not per-(state,
+   city, postcode) tuple). Returns null when the state isn't in the
+   dataset yet so the UI can decide whether to fall back to a default. */
+export const countryForState = (rows: LocalityRow[], state: string): string | null => {
+  if (!state) return null;
+  const hit = rows.find((r) => r.state === state);
+  return hit?.country ?? null;
 };
 
 export const BUILDING_TYPES = [
