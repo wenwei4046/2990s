@@ -23,7 +23,6 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 type SoRow = {
   doc_no: string;
-  transfer_to: string | null;
   so_date: string;
   branding: string | null;
   debtor_name: string;
@@ -40,14 +39,9 @@ type SoRow = {
   balance_centi_live?: number | null;
   paid_total_centi?: number | null;
   paid_centi: number;
-  remark2: string | null;
-  remark3: string | null;
-  remark4: string | null;
   processing_date: string | null;
-  sales_exemption_expiry: string | null;
   customer_delivery_date: string | null;
   note: string | null;
-  po_doc_no: string | null;
   address1: string | null;
   address2: string | null;
   address3: string | null;
@@ -266,7 +260,7 @@ export const MfgSalesOrdersList = () => {
         <div>
           <h1 className={styles.title}>Sales Orders</h1>
           <p className={styles.subtitle}>
-            Manufacturer sales orders — AutoCount-style ledger view.
+            Sales orders — AutoCount-style ledger view.
             {' '}{isLoading ? 'Loading…' : `${rows.length} total`}
           </p>
         </div>
@@ -302,11 +296,6 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     key: 'doc_no', label: 'Doc. No.', width: 110, sortable: true, groupable: false,
     accessor: (r) => <span className={styles.docNo}>{r.doc_no}</span>,
     searchValue: (r) => r.doc_no,
-  },
-  {
-    key: 'transfer_to', label: 'Transfer To', width: 110, sortable: true, groupable: true,
-    accessor: (r) => r.transfer_to ?? '',
-    searchValue: (r) => r.transfer_to ?? '',
   },
   {
     key: 'so_date', label: 'Date', width: 100, sortable: true,
@@ -360,21 +349,6 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
-    key: 'remark2', label: 'Remark 2', width: 140, sortable: true,
-    accessor: (r) => r.remark2 ?? '',
-    searchValue: (r) => r.remark2 ?? '',
-  },
-  {
-    key: 'remark3', label: 'Remark 3', width: 140, sortable: true,
-    accessor: (r) => r.remark3 ?? '',
-    searchValue: (r) => r.remark3 ?? '',
-  },
-  {
-    key: 'remark4', label: 'Remark 4', width: 140, sortable: true,
-    accessor: (r) => r.remark4 ?? '',
-    searchValue: (r) => r.remark4 ?? '',
-  },
-  {
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
     accessor: (r) => r.processing_date ?? '',
     searchValue: (r) => r.processing_date ?? '',
@@ -385,19 +359,9 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.customer_delivery_date ?? '',
   },
   {
-    key: 'sales_exemption_expiry', label: 'Sales Exemption Expiry', width: 170, sortable: true,
-    accessor: (r) => r.sales_exemption_expiry ?? '',
-    searchValue: (r) => r.sales_exemption_expiry ?? '',
-  },
-  {
     key: 'note', label: 'Note', width: 200, sortable: true,
     accessor: (r) => r.note ?? '',
     searchValue: (r) => r.note ?? '',
-  },
-  {
-    key: 'po_doc_no', label: 'PO Doc No.', width: 130, sortable: true,
-    accessor: (r) => r.po_doc_no ?? '',
-    searchValue: (r) => r.po_doc_no ?? '',
   },
   {
     key: 'address1', label: 'Address 1', width: 180, sortable: true,
