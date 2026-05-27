@@ -1929,6 +1929,45 @@ export const inventoryLots = pgTable('inventory_lots', {
   idxWhProduct: index('idx_inv_lots_wh_product').on(t.warehouseId, t.productCode, t.receivedAt),
 }));
 
+/* PR — Inv PR4. Migration 0072. Stock transfers move qty between
+   warehouses with a proper document trail. POST writes paired OUT (from)
+   + IN (to) into inventory_movements with source_doc_type='STOCK_TRANSFER';
+   FIFO trigger handles cost basis on the source side, and the post handler
+   feeds the source's weighted-avg cost into the destination IN so the new
+   lot opens at the right basis. */
+export const stockTransfers = pgTable('stock_transfers', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  transferNo:        text('transfer_no').notNull().unique(),         // ST-YYMM-NNN
+  status:            text('status').notNull().default('DRAFT'),      // DRAFT|POSTED|CANCELLED
+  fromWarehouseId:   uuid('from_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
+  toWarehouseId:     uuid('to_warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
+  transferDate:      date('transfer_date').notNull().defaultNow(),
+  notes:             text('notes'),
+  postedAt:          timestamp('posted_at', { withTimezone: true }),
+  cancelledAt:       timestamp('cancelled_at', { withTimezone: true }),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxStatus:  index('idx_stock_transfers_status').on(t.status, t.transferDate),
+  idxFromWh:  index('idx_stock_transfers_from_wh').on(t.fromWarehouseId),
+  idxToWh:    index('idx_stock_transfers_to_wh').on(t.toWarehouseId),
+  notSameWh:  check('stock_transfers_not_same_wh', sql`from_warehouse_id <> to_warehouse_id`),
+  statusEnum: check('stock_transfers_status_chk', sql`status IN ('DRAFT','POSTED','CANCELLED')`),
+}));
+
+export const stockTransferLines = pgTable('stock_transfer_lines', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  stockTransferId:   uuid('stock_transfer_id').notNull().references(() => stockTransfers.id, { onDelete: 'cascade' }),
+  productCode:       text('product_code').notNull(),
+  productName:       text('product_name'),
+  qty:               integer('qty').notNull(),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxXfer: index('idx_stock_transfer_lines_xfer').on(t.stockTransferId),
+  qtyPos:  check('stock_transfer_lines_qty_pos', sql`qty > 0`),
+}));
+
 export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {
   id:             uuid('id').primaryKey().defaultRandom(),
   lotId:          uuid('lot_id').notNull().references(() => inventoryLots.id, { onDelete: 'cascade' }),
