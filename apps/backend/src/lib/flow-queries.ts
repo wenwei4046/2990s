@@ -849,6 +849,8 @@ export type SoDetailListingRow = Record<string, unknown> & {
   processing_date: string | null;
   sales_exemption_expiry: string | null;
   customer_delivery_date: string | null;
+  /** Live paid total summed from mfg_sales_order_payments (replaces legacy paid_centi). */
+  paid_total_centi: number;
 };
 
 export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {
