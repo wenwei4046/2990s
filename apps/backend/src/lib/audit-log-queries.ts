@@ -1,5 +1,4 @@
-import { useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -68,19 +67,8 @@ export const useAuditLog = (filters: AuditLogFilters) =>
     staleTime: 30_000,
   });
 
-export const useAuditLogRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('audit-log-orders')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => void qc.invalidateQueries({ queryKey: ['audit-log'] }),
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc]);
-};
+// useAuditLogRealtime removed (perf-router-realtime-sidebar). It duplicated
+// useOrdersRealtime's subscription on `public.orders` — two WebSocket channels
+// for the same underlying table. AuditLog now relies on staleTime-driven
+// refetch; if a live feed is needed later, fold it into useOrdersRealtime's
+// single channel rather than reopening a second one.
