@@ -16,7 +16,7 @@
 // PATCH /:docNo/status, GET /debtors/search.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
@@ -34,9 +34,13 @@ import {
   useMfgSalesOrderStatusChanges,
   useMfgSalesOrderPriceOverrides,
   useOverrideMfgSoLinePrice,
+  useSalesOrderPayments,
+  useAddSalesOrderPayment,
+  useDeleteSalesOrderPayment,
   type DebtorSuggestion,
   type SoStatusChange,
   type SoPriceOverride,
+  type SoPayment,
 } from '../lib/flow-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import {
@@ -1527,15 +1531,52 @@ const AddressCard = ({
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   PaymentCard — PR #143. Commander: "POS system 的 payment 那个地方也放进来
-   Sales Order 里面". Mirrors apps/pos/src/components/handover/
-   AddonsPaymentStep — same 4 methods, same sub-options (merchant provider /
-   installment term), same 50% deposit convention. Persists to migration
-   0068 columns on mfg_sales_orders.
+   PaymentCard — PR #163. HOOKKA-style transactions ledger.
+
+   Each payment is one row in mfg_sales_order_payments (migration 0073) —
+   no more single-row "current payment" overwrite. Sum of amount_centi =
+   "Deposit Paid"; balance = local_total_centi − paid.
+
+   Legacy header columns (payment_method, merchant_provider, installment_
+   months, approval_code, payment_date, paid_centi) still exist in the
+   schema but the UI no longer reads or writes them — they'll be dropped
+   in a follow-up migration once live data is migrated.
+
+   `depositCenti` stays on the header as the EXPECTED deposit target
+   (e.g. 50% rule), distinct from the paid total.
    ════════════════════════════════════════════════════════════════════════ */
 
-/* PR #150 — 3 top-level methods. Installment is a SUB-TYPE of merchant. */
-type PaymentMethod = 'cash' | 'transfer' | 'merchant';
+type PaymentMethod = 'merchant' | 'transfer' | 'cash';
+type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
+
+const METHOD_LABEL: Record<PaymentMethod, string> = {
+  merchant: 'Merchant',
+  transfer: 'Transfer',
+  cash:     'Cash',
+};
+
+const methodPillStyle = (m: PaymentMethod): CSSProperties => {
+  // Burnt for merchant, green for transfer, neutral muted for cash.
+  const bg =
+    m === 'merchant' ? 'rgba(232, 107, 58, 0.12)' :
+    m === 'transfer' ? 'rgba(47, 93, 79, 0.12)'   :
+                       'rgba(0, 0, 0, 0.06)';
+  const fg =
+    m === 'merchant' ? 'var(--c-burnt)' :
+    m === 'transfer' ? 'var(--c-secondary-a, #2F5D4F)' :
+                       'var(--fg-muted)';
+  return {
+    display: 'inline-block',
+    fontFamily: 'var(--font-sans)',
+    fontSize: 'var(--fs-11)',
+    fontWeight: 600,
+    padding: '1px 8px',
+    borderRadius: 'var(--radius-pill)',
+    background: bg,
+    color: fg,
+    letterSpacing: '0.02em',
+  };
+};
 
 const PaymentCard = ({
   header,
@@ -1551,272 +1592,307 @@ const PaymentCard = ({
   const grandTotal = header.local_total_centi ?? 0;
   const half = Math.round(grandTotal / 2);
 
-  const [form, setForm] = useState({
-    method:          (header.payment_method as PaymentMethod | null) ?? '',
-    installment:     header.installment_months ?? null,
-    merchant:        header.merchant_provider ?? '',
-    approvalCode:    header.approval_code ?? '',
-    paymentDate:     header.payment_date ?? '',
-    depositCenti:    header.deposit_centi ?? 0,
-    paidCenti:       header.paid_centi ?? 0,
-  });
+  const paymentsQ = useSalesOrderPayments(header.doc_no);
+  const payments = paymentsQ.data ?? [];
+  const addPayment = useAddSalesOrderPayment();
+  const deletePayment = useDeleteSalesOrderPayment();
+  const staff = useStaff();
 
-  useEffect(() => {
-    setForm({
-      method:          (header.payment_method as PaymentMethod | null) ?? '',
-      installment:     header.installment_months ?? null,
-      merchant:        header.merchant_provider ?? '',
-      approvalCode:    header.approval_code ?? '',
-      paymentDate:     header.payment_date ?? '',
-      depositCenti:    header.deposit_centi ?? 0,
-      paidCenti:       header.paid_centi ?? 0,
-    });
-  }, [header]);
+  /* ── Deposit (expected target on the header) ───────────────────────── */
+  const [depositCenti, setDepositCenti] = useState<number>(header.deposit_centi ?? 0);
+  useEffect(() => { setDepositCenti(header.deposit_centi ?? 0); }, [header.deposit_centi]);
+  const saveDeposit = () => onSave({ depositCenti });
 
-  /* PR #157 — Commander 2026-05-27: "Bank Transfer、Cash 也是需要 Approval
-     Code 的, 还需要一个日期填写收钱的日期". Approval code + payment date
-     now apply to ALL methods, not just merchant. Method-switch keeps both
-     across methods (they're general payment metadata, not merchant-only). */
-  const pick = (m: PaymentMethod) =>
-    setForm((s) => ({
-      ...s,
-      method: m,
-      installment: m === 'merchant' ? s.installment : null,
-      merchant:    m === 'merchant' ? (s.merchant || 'GHL') : '',
-    }));
+  /* ── Inline add-payment row ─────────────────────────────────────────── */
+  const today = new Date().toISOString().slice(0, 10);
+  const blankForm = {
+    paidAt: today,
+    method: 'merchant' as PaymentMethod,
+    merchantProvider: 'GHL' as MerchantProvider | '',
+    installmentMonths: '' as '' | '6' | '12',
+    approvalCode: '',
+    amountCenti: 0,
+    accountSheet: '',
+    collectedBy: '',
+    note: '',
+  };
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState(blankForm);
 
-  const balanceCenti = Math.max(0, grandTotal - form.paidCenti);
-  const isHalfPaid = form.paidCenti > 0 && form.paidCenti >= half && form.paidCenti < grandTotal;
-  const isFullPaid = grandTotal > 0 && form.paidCenti >= grandTotal;
+  const resetForm = () => setForm({ ...blankForm, paidAt: new Date().toISOString().slice(0, 10) });
 
-  const submit = () => {
-    onSave({
-      paymentMethod:     form.method || null,
-      installmentMonths: form.installment,
-      merchantProvider:  form.merchant || null,
-      approvalCode:      form.approvalCode || null,
-      paymentDate:       form.paymentDate || null,
-      depositCenti:      form.depositCenti,
-      paidCenti:         form.paidCenti,
+  const submitNew = () => {
+    if (!form.method) return;
+    if (!form.amountCenti || form.amountCenti <= 0) return;
+    const body: Record<string, unknown> = {
+      docNo:        header.doc_no,
+      paidAt:       form.paidAt,
+      method:       form.method,
+      amountCenti:  form.amountCenti,
+      approvalCode: form.approvalCode || null,
+      accountSheet: form.accountSheet || null,
+      collectedBy:  form.collectedBy  || null,
+      note:         form.note         || null,
+    };
+    if (form.method === 'merchant') {
+      body.merchantProvider  = form.merchantProvider || null;
+      body.installmentMonths = form.installmentMonths ? Number(form.installmentMonths) : null;
+    }
+    addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
+      onSuccess: () => { setAdding(false); resetForm(); },
     });
   };
 
-  const methodBtn = (m: PaymentMethod, label: string, hint: string) => {
-    const active = form.method === m;
-    return (
-      <button
-        type="button"
-        disabled={locked}
-        onClick={() => pick(m)}
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-start',
-          gap: 2,
-          padding: 'var(--space-3)',
-          background: active ? 'rgba(232, 107, 58, 0.10)' : 'var(--c-paper)',
-          border: '1px solid ' + (active ? 'var(--c-orange)' : 'var(--line)'),
-          borderRadius: 'var(--radius-md)',
-          color: active ? 'var(--c-burnt)' : 'var(--c-ink)',
-          cursor: locked ? 'not-allowed' : 'pointer',
-          fontFamily: 'var(--font-sans)',
-          textAlign: 'left',
-        }}
-      >
-        <strong style={{ fontSize: 'var(--fs-13)' }}>{label}</strong>
-        <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{hint}</span>
-      </button>
-    );
+  /* ── Summary ───────────────────────────────────────────────────────── */
+  const paidCenti = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
+  const balanceCenti = Math.max(0, grandTotal - paidCenti);
+  const isFullPaid = grandTotal > 0 && paidCenti >= grandTotal;
+  const isHalfPaid = paidCenti > 0 && paidCenti >= half && paidCenti < grandTotal;
+
+  const staffNameById = (id: string | null): string | null => {
+    if (!id) return null;
+    return staff.data?.find((s) => s.id === id)?.name ?? null;
   };
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Payment</h2>
-        <Button variant="primary" size="sm" onClick={submit} disabled={saving || locked}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
       </header>
       <div className={styles.cardBody}>
-        {/* Method picker — 3 buttons. Installment nested under Merchant. */}
-        <p className={styles.subHead}>Method</p>
-        <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-          {methodBtn('merchant',    'Merchant',                'Card via GHL / HLB / MBB / PBB')}
-          {methodBtn('transfer',    'Bank transfer / DuitNow', 'Slip required')}
-          {methodBtn('cash',        'Cash',                    'Cash received at counter')}
-        </div>
+        {/* ── Transactions table ─────────────────────────────────────── */}
+        <p className={styles.subHead}>Transactions</p>
+        {paymentsQ.isLoading ? (
+          <p className={styles.fieldLabel}>Loading…</p>
+        ) : payments.length === 0 && !adding ? (
+          <p className={styles.muted} style={{ fontSize: 'var(--fs-12)' }}>
+            No payments recorded yet.
+          </p>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Method</th>
+                <th className={styles.tableRight}>Amount</th>
+                <th>Account Sheet</th>
+                <th>Approval Code</th>
+                <th>Collected By</th>
+                <th style={{ width: 36 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.map((p: SoPayment) => (
+                <tr key={p.id}>
+                  <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    {p.paid_at}
+                  </td>
+                  <td>
+                    <span style={methodPillStyle(p.method)}>{METHOD_LABEL[p.method]}</span>
+                    {p.method === 'merchant' && p.merchant_provider && (
+                      <span className={styles.muted} style={{ marginLeft: 6, fontSize: 'var(--fs-11)' }}>
+                        · {p.merchant_provider}
+                        {p.installment_months ? ` · ${p.installment_months}m` : ''}
+                      </span>
+                    )}
+                  </td>
+                  <td className={styles.tableRight} style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                    {fmtRm(p.amount_centi, header.currency)}
+                  </td>
+                  <td>{p.account_sheet ?? <span className={styles.muted}>—</span>}</td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {p.approval_code ?? <span className={styles.muted}>—</span>}
+                  </td>
+                  <td>{p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={styles.muted}>—</span>}</td>
+                  <td>
+                    <button
+                      type="button"
+                      disabled={locked || deletePayment.isPending}
+                      onClick={() => {
+                        if (confirm(`Delete this ${METHOD_LABEL[p.method]} payment of ${fmtRm(p.amount_centi, header.currency)}?`)) {
+                          deletePayment.mutate({ docNo: header.doc_no, id: p.id });
+                        }
+                      }}
+                      title="Delete payment"
+                      style={{
+                        background: 'transparent', border: 'none', padding: 4,
+                        cursor: locked ? 'not-allowed' : 'pointer',
+                        color: 'var(--c-festive-b)',
+                      }}
+                    >
+                      <Trash2 size={14} strokeWidth={1.75} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
 
-        {/* Merchant sub-section: Provider + Type + Approval code (PR #150) */}
-        {form.method === 'merchant' && (
+              {/* Inline add-payment row */}
+              {adding && (
+                <tr style={{ background: 'var(--c-cream)' }}>
+                  <td>
+                    <input
+                      type="date"
+                      value={form.paidAt}
+                      onChange={(e) => setForm((s) => ({ ...s, paidAt: e.target.value }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={form.method}
+                      onChange={(e) => setForm((s) => ({ ...s, method: e.target.value as PaymentMethod }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    >
+                      <option value="merchant">Merchant</option>
+                      <option value="transfer">Transfer</option>
+                      <option value="cash">Cash</option>
+                    </select>
+                    {form.method === 'merchant' && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                        <select
+                          value={form.merchantProvider}
+                          onChange={(e) => setForm((s) => ({ ...s, merchantProvider: e.target.value as MerchantProvider | '' }))}
+                          className={styles.fieldInput}
+                          style={{ height: 26, fontSize: 'var(--fs-11)', flex: 1 }}
+                        >
+                          <option value="">Provider…</option>
+                          <option value="GHL">GHL</option>
+                          <option value="HLB">HLB</option>
+                          <option value="MBB">MBB</option>
+                          <option value="PBB">PBB</option>
+                        </select>
+                        <select
+                          value={form.installmentMonths}
+                          onChange={(e) => setForm((s) => ({ ...s, installmentMonths: e.target.value as '' | '6' | '12' }))}
+                          className={styles.fieldInput}
+                          style={{ height: 26, fontSize: 'var(--fs-11)', flex: 1 }}
+                        >
+                          <option value="">Normal</option>
+                          <option value="6">6 mo</option>
+                          <option value="12">12 mo</option>
+                        </select>
+                      </div>
+                    )}
+                  </td>
+                  <td className={styles.tableRight}>
+                    <input
+                      type="number" step="0.01" min={0}
+                      value={(form.amountCenti / 100).toFixed(2)}
+                      onChange={(e) => setForm((s) => ({ ...s, amountCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      value={form.accountSheet}
+                      onChange={(e) => setForm((s) => ({ ...s, accountSheet: e.target.value }))}
+                      placeholder="Bank / cashbook"
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      value={form.approvalCode}
+                      onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
+                      placeholder={
+                        form.method === 'merchant' ? 'Auth code' :
+                        form.method === 'transfer' ? 'Slip ref' :
+                                                     'Receipt'
+                      }
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)', fontVariantNumeric: 'tabular-nums' }}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={form.collectedBy}
+                      onChange={(e) => setForm((s) => ({ ...s, collectedBy: e.target.value }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    >
+                      <option value="">—</option>
+                      {(staff.data ?? []).filter((s) => s.active).map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={submitNew}
+                        disabled={addPayment.isPending || !form.amountCenti}
+                        title="Save payment"
+                        style={{
+                          background: 'transparent', border: 'none', padding: 4,
+                          cursor: 'pointer', color: 'var(--c-secondary-a, #2F5D4F)',
+                        }}
+                      >
+                        <Save size={14} strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setAdding(false); resetForm(); }}
+                        title="Cancel"
+                        style={{
+                          background: 'transparent', border: 'none', padding: 4,
+                          cursor: 'pointer', color: 'var(--fg-muted)',
+                        }}
+                      >
+                        <X size={14} strokeWidth={1.75} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {/* + Add Payment trigger */}
+        {!adding && !locked && (
+          <button
+            type="button"
+            onClick={() => { resetForm(); setAdding(true); }}
+            style={{
+              marginTop: 'var(--space-2)',
+              background: 'transparent', border: 'none', padding: 0,
+              color: 'var(--c-orange)', cursor: 'pointer',
+              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+            }}
+          >
+            + Add Payment
+          </button>
+        )}
+
+        {/* ── Summary ────────────────────────────────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Summary</p>
           <div style={{
-            marginTop: 'var(--space-3)',
-            padding: 'var(--space-3)',
-            background: 'var(--c-cream)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-3)',
+            display: 'grid', gridTemplateColumns: 'auto 1fr',
+            gap: '4px 16px',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-13)',
+            maxWidth: 360,
           }}>
-            {/* Provider */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              <span className={styles.fieldLabel}>Merchant</span>
-              {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => setForm((s) => ({ ...s, merchant: p }))}
-                  style={{
-                    fontFamily: 'var(--font-sans)',
-                    fontSize: 'var(--fs-12)',
-                    fontWeight: 600,
-                    padding: '4px 12px',
-                    borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (form.merchant === p ? 'var(--c-orange)' : 'var(--line)'),
-                    background: form.merchant === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: form.merchant === p ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: locked ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-
-            {/* Type: Normal vs Installment */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              <span className={styles.fieldLabel}>Type</span>
-              <button
-                type="button"
-                disabled={locked}
-                onClick={() => setForm((s) => ({ ...s, installment: null }))}
-                style={{
-                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                  padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                  border: '1px solid ' + (form.installment === null ? 'var(--c-orange)' : 'var(--line)'),
-                  background: form.installment === null ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                  color: form.installment === null ? 'var(--c-burnt)' : 'var(--c-ink)',
-                  cursor: locked ? 'not-allowed' : 'pointer',
-                }}
-              >
-                Normal Swipe
-              </button>
-              {([6, 12] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => setForm((s) => ({ ...s, installment: m }))}
-                  style={{
-                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (form.installment === m ? 'var(--c-orange)' : 'var(--line)'),
-                    background: form.installment === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: form.installment === m ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: locked ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  Installment · {m} months
-                </button>
-              ))}
-            </div>
-
-          </div>
-        )}
-
-        {/* PR #157 — Approval Code + Payment Date for ALL methods.
-            Commander: "Bank Transfer、Cash 也是需要 Approval Code 的，
-            还需要一个日期填写收钱的日期". Visible once any method is picked. */}
-        {form.method && (
-          <div style={{ marginTop: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-3)' }}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>
-                {form.method === 'merchant' ? 'Approval Code' :
-                 form.method === 'transfer' ? 'Slip / Reference No' :
-                                              'Receipt / Reference'}
-              </span>
-              <input
-                type="text"
-                value={form.approvalCode}
-                disabled={locked}
-                onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
-                placeholder={
-                  form.method === 'merchant' ? 'Auth code from terminal receipt' :
-                  form.method === 'transfer' ? 'Bank slip reference number' :
-                                               'Optional cash receipt reference'
-                }
-                className={styles.fieldInput}
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Payment Date</span>
-              <input
-                type="date"
-                value={form.paymentDate}
-                disabled={locked}
-                onChange={(e) => setForm((s) => ({ ...s, paymentDate: e.target.value }))}
-                className={styles.fieldInput}
-              />
-            </label>
-          </div>
-        )}
-
-        {/* Deposit / Paid / Balance row */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-4)' }}>Amounts</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Grand Total</span>
-            <span className={styles.fieldInput} style={{
-              display: 'inline-flex', alignItems: 'center', height: 32,
-              fontFamily: 'var(--font-mono)', color: 'var(--c-ink)', fontWeight: 600,
-            }}>
+            <span className={styles.muted}>Subtotal</span>
+            <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
               {fmtRm(grandTotal, header.currency)}
             </span>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>
-              Deposit ({header.currency})
-              {form.depositCenti === half && grandTotal > 0 && (
-                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
-              )}
+            <span className={styles.muted}>Deposit Paid</span>
+            <span style={{
+              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+              color: 'var(--c-burnt)', fontWeight: 600,
+            }}>
+              {fmtRm(paidCenti, header.currency)}
             </span>
-            <input
-              type="number" step="0.01" min={0}
-              className={styles.fieldInput}
-              value={(form.depositCenti / 100).toFixed(2)}
-              disabled={locked}
-              onChange={(e) => setForm((s) => ({ ...s, depositCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
-            />
-            <button
-              type="button"
-              onClick={() => setForm((s) => ({ ...s, depositCenti: half }))}
-              disabled={locked || grandTotal === 0}
-              style={{
-                marginTop: 4,
-                background: 'transparent', border: 'none',
-                color: 'var(--c-orange)', cursor: locked ? 'not-allowed' : 'pointer',
-                fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0, textAlign: 'left',
-              }}
-            >
-              Set 50% deposit ({fmtRm(half, header.currency)})
-            </button>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Paid ({header.currency})</span>
-            <input
-              type="number" step="0.01" min={0}
-              className={styles.fieldInput}
-              value={(form.paidCenti / 100).toFixed(2)}
-              disabled={locked}
-              onChange={(e) => setForm((s) => ({ ...s, paidCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
-            />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>
+            <span style={{ fontWeight: 600 }}>
               Balance
               {isFullPaid && (
                 <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-secondary-a, #2F5D4F)' }}>· PAID</span>
@@ -1825,15 +1901,59 @@ const PaymentCard = ({
                 <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· deposit only</span>
               )}
             </span>
-            <span className={styles.fieldInput} style={{
-              display: 'inline-flex', alignItems: 'center', height: 32,
-              fontFamily: 'var(--font-mono)',
-              color: isFullPaid ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--c-ink)',
+            <span style={{
+              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
               fontWeight: 600,
+              color: isFullPaid ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--c-ink)',
             }}>
               {fmtRm(balanceCenti, header.currency)}
             </span>
-          </label>
+          </div>
+        </div>
+
+        {/* ── Deposit target (expected, not paid) ─────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Expected Deposit</p>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+            <label className={styles.field} style={{ maxWidth: 200 }}>
+              <span className={styles.fieldLabel}>
+                Deposit ({header.currency})
+                {depositCenti === half && grandTotal > 0 && (
+                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
+                )}
+              </span>
+              <input
+                type="number" step="0.01" min={0}
+                className={styles.fieldInput}
+                value={(depositCenti / 100).toFixed(2)}
+                disabled={locked}
+                onChange={(e) => setDepositCenti(Math.round(Number(e.target.value) * 100) || 0)}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => setDepositCenti(half)}
+              disabled={locked || grandTotal === 0}
+              style={{
+                background: 'transparent', border: 'none',
+                color: 'var(--c-orange)', cursor: locked ? 'not-allowed' : 'pointer',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0,
+                marginBottom: 8,
+              }}
+            >
+              Set 50% deposit ({fmtRm(half, header.currency)})
+            </button>
+            <Button
+              variant="primary" size="sm"
+              onClick={saveDeposit}
+              disabled={saving || locked || depositCenti === (header.deposit_centi ?? 0)}
+              style={{ marginBottom: 4 }}
+            >
+              <Save {...ICON} />
+              <span>{saving ? 'Saving…' : 'Save deposit'}</span>
+            </Button>
+          </div>
         </div>
       </div>
     </section>
