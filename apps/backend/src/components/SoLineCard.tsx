@@ -34,6 +34,7 @@ import {
   fetchSoItemPhotoSignedUrl,
 } from '../lib/flow-queries';
 import { useDebouncedValue } from '../lib/hooks';
+import { CATEGORY_BADGE } from '../lib/category-badges';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -97,15 +98,10 @@ export const stripClientOnlyFields = (
   return rest;
 };
 
-/* ── Per-category badge swatches (Houzs groupChip equivalent) ──────── */
-
-const CATEGORY_BADGE: Record<string, { bg: string; fg: string; label: string }> = {
-  sofa:      { bg: 'rgba(166, 71, 30, 0.12)',  fg: 'var(--c-burnt)',                 label: 'SOFA' },
-  bedframe:  { bg: 'rgba(47, 93, 79, 0.12)',   fg: 'var(--c-secondary-a, #2F5D4F)',  label: 'BEDFRAME' },
-  mattress:  { bg: 'rgba(199, 127, 62, 0.16)', fg: 'var(--c-festive-a, #C77F3E)',    label: 'MATTRESS' },
-  accessory: { bg: 'rgba(34, 31, 32, 0.10)',   fg: 'var(--fg-muted)',                label: 'ACC' },
-  others:    { bg: 'rgba(34, 31, 32, 0.06)',   fg: 'var(--fg-muted)',                label: 'OTHERS' },
-};
+/* ── Per-category badge swatches ──────────────────────────────────────
+   2026-05-27: extracted to lib/category-badges.ts so MfgSalesOrdersList +
+   SalesOrderDetailListing can share the same chip palette. Re-import here
+   so the inline references below stay one-line. */
 
 /* ──────────────────────────────────────────────────────────────────────
    SoLineCard

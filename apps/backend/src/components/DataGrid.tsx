@@ -25,6 +25,7 @@ import {
   type DragEvent,
   type ReactNode,
   type MouseEvent,
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -52,6 +53,14 @@ export type DataGridColumn<T> = {
   groupValue?: (row: T) => string;
   /** value used by global search (defaults to String(accessor(row))) */
   searchValue?: (row: T) => string;
+  /**
+   * HOUZS port (so-list-houzs-port) — when true and the user hasn't manually
+   * hidden/shown anything yet (no persisted `layout.hidden` for this key),
+   * the column is hidden by default. User can show it via right-click "Show
+   * column" menu; the choice persists in localStorage from then on.
+   * Used to match Houzs "19 of 25 columns visible by default" semantics.
+   */
+  defaultHidden?: boolean;
 };
 
 /** A single entry in a row's right-click context menu. `divider: true`
@@ -88,6 +97,21 @@ export type DataGridProps<T> = {
    * suppresses the menu (browser default also suppressed).
    */
   contextMenu?: (row: T) => DataGridContextMenuItem[];
+  /**
+   * Optional inline-expand row support (HOUZS SO Listing pattern).
+   *   - prepends a 32px chevron column at the left
+   *   - clicking the chevron toggles an inline sub-row below the parent
+   *     (rendered by `renderExpansion(row)` spanning all visible columns)
+   *   - chevron rotates 90deg when expanded
+   * Pass `undefined` (default) to keep the legacy chevron-less layout
+   * untouched — existing callers (PO list, etc.) require no changes.
+   */
+  expandable?: {
+    /** Render the sub-row body. Return null to render an empty row. */
+    renderExpansion: (row: T) => ReactNode;
+    /** Optional: derive a stable row id for expansion state. Defaults to rowKey. */
+    rowExpansionKey?: (row: T) => string;
+  };
 };
 
 type Layout = {
@@ -148,7 +172,21 @@ function DataGridInner<T>({
   emptyMessage = 'No data.',
   isLoading = false,
   contextMenu,
+  expandable,
 }: DataGridProps<T>) {
+  /* HOUZS-style inline expansion (PR so-list-houzs-port). Tracks the set of
+     expanded row ids; rendering inserts a colSpan sub-<tr> directly under
+     each expanded parent. Stored as a Set so the chevron column accessor
+     can read state in O(1). */
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const expansionId = expandable?.rowExpansionKey ?? rowKey;
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedRows((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }, []);
   const [layout, setLayoutRaw] = useState<Layout>(() => readLayout(storageKey));
   const setLayout = useCallback((updater: (l: Layout) => Layout) => {
     setLayoutRaw((prev) => {
@@ -203,16 +241,46 @@ function DataGridInner<T>({
   }, [rowCtx]);
 
   // ── Resolve visible/ordered columns ───────────────────────────────
+  // If `expandable` is set, prepend a synthetic 32px chevron column that
+  // can't be reordered/hidden via the layout (filtered out of order /
+  // hidden persistence on read). The accessor is built per-row inside
+  // the tbody render so it can read expandedRows + call toggleExpand.
   const visibleColumns = useMemo(() => {
     const byKey = new Map(columns.map((c) => [c.key, c]));
     const order = layout.order.length
       ? [...layout.order.filter((k) => byKey.has(k)), ...columns.filter((c) => !layout.order.includes(c.key)).map((c) => c.key)]
       : columns.map((c) => c.key);
-    return order
-      .filter((k) => !layout.hidden.includes(k))
+    /* HOUZS port — when the persisted layout is pristine (no order +
+       no hidden customisations yet) apply `defaultHidden: true` from the
+       column spec so the grid starts with Houzs's 19-of-25 / 34-of-44
+       visible-by-default semantics. Once the user shows/hides anything,
+       the persisted `hidden` array takes precedence and we stop overlaying
+       defaults (their explicit choice wins). */
+    const pristineLayout = layout.order.length === 0 && layout.hidden.length === 0;
+    const effectiveHidden = pristineLayout
+      ? new Set(columns.filter((c) => c.defaultHidden).map((c) => c.key))
+      : new Set(layout.hidden);
+    const base = order
+      .filter((k) => !effectiveHidden.has(k))
       .map((k) => byKey.get(k)!)
       .filter(Boolean);
-  }, [columns, layout.order, layout.hidden]);
+    if (!expandable) return base;
+    /* Synthetic chevron column — accessor is a placeholder; the actual
+       chevron is rendered in a dedicated <td> in the tbody so it can wire
+       click handlers without leaking `toggleExpand` into the column spec
+       (which would force memoization headaches on the caller). */
+    const chevronCol: DataGridColumn<T> = {
+      key: '__expand__',
+      label: '',
+      width: 32,
+      minWidth: 32,
+      sortable: false,
+      groupable: false,
+      accessor: () => null,
+      searchValue: () => '',
+    };
+    return [chevronCol, ...base];
+  }, [columns, layout.order, layout.hidden, expandable]);
 
   // ── Filtered + sorted + grouped rows ──────────────────────────────
   const filteredRows = useMemo(() => {
@@ -522,36 +590,72 @@ function DataGridInner<T>({
               }
               const row = item.row;
               const key = rowKey(row);
+              const expandKey = expandable ? expansionId(row) : null;
+              const isExpanded = expandKey != null && expandedRows.has(expandKey);
               return (
-                <tr
-                  key={`r-${key}-${idx}`}
-                  className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
-                  onClick={() => setSelectedKey(key)}
-                  onDoubleClick={() => onRowDoubleClick?.(row)}
-                  onContextMenu={(e) => {
-                    if (!contextMenu) return;
-                    const items = contextMenu(row);
-                    if (!items || items.length === 0) return;
-                    e.preventDefault();
-                    // Single-row select on right-click so toolbar state + the
-                    // menu's onClick handlers agree on which row is in play.
-                    setSelectedKey(key);
-                    setRowCtx({ x: e.clientX, y: e.clientY, items });
-                  }}
-                >
-                  {visibleColumns.map((col) => {
-                    const w = layout.widths[col.key] ?? col.width ?? 140;
-                    return (
-                      <td
-                        key={col.key}
-                        className={`${styles.td} ${col.align === 'right' ? styles.tdAlignRight : ''}`}
-                        style={{ width: w, maxWidth: w }}
-                      >
-                        {col.accessor(row)}
+                <Fragment key={`f-${key}-${idx}`}>
+                  <tr
+                    className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
+                    onClick={() => setSelectedKey(key)}
+                    onDoubleClick={() => onRowDoubleClick?.(row)}
+                    onContextMenu={(e) => {
+                      if (!contextMenu) return;
+                      const items = contextMenu(row);
+                      if (!items || items.length === 0) return;
+                      e.preventDefault();
+                      // Single-row select on right-click so toolbar state + the
+                      // menu's onClick handlers agree on which row is in play.
+                      setSelectedKey(key);
+                      setRowCtx({ x: e.clientX, y: e.clientY, items });
+                    }}
+                  >
+                    {visibleColumns.map((col) => {
+                      const w = layout.widths[col.key] ?? col.width ?? 140;
+                      /* Synthetic chevron column — render the rotate-on-expand
+                         caret. Stops propagation so toggling doesn't also
+                         select the row, which would force the entire visible
+                         rowset to re-render. */
+                      if (col.key === '__expand__' && expandable && expandKey) {
+                        return (
+                          <td
+                            key={col.key}
+                            className={styles.td}
+                            style={{ width: w, maxWidth: w, padding: '4px 6px', textAlign: 'center' }}
+                          >
+                            <button
+                              type="button"
+                              aria-label={isExpanded ? 'Collapse row' : 'Expand row'}
+                              onClick={(e) => { e.stopPropagation(); toggleExpand(expandKey); }}
+                              style={{
+                                background: 'transparent', border: 0, padding: 0, cursor: 'pointer',
+                                color: 'var(--c-burnt)', fontSize: 12, lineHeight: 1,
+                                display: 'inline-block',
+                                transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                                transition: 'transform 120ms ease',
+                              }}
+                            >&#9656;</button>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td
+                          key={col.key}
+                          className={`${styles.td} ${col.align === 'right' ? styles.tdAlignRight : ''}`}
+                          style={{ width: w, maxWidth: w }}
+                        >
+                          {col.accessor(row)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  {isExpanded && expandable && (
+                    <tr className={styles.tr} style={{ background: 'var(--c-cream)' }}>
+                      <td colSpan={visibleColumns.length} style={{ padding: 0, borderTop: '1px solid var(--line)' }}>
+                        {expandable.renderExpansion(row)}
                       </td>
-                    );
-                  })}
-                </tr>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
@@ -582,20 +686,30 @@ function DataGridInner<T>({
                 setCtx(null);
               }}>{grouped ? 'Already grouped' : 'Group by this column'}</button>
             )}
-            {layout.hidden.length > 0 && (
-              <>
-                <div className={styles.ctxDivider} />
-                <div style={{ padding: '4px 10px', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>Hidden:</div>
-                {layout.hidden.map((k) => {
-                  const c = columns.find((cc) => cc.key === k);
-                  return (
-                    <button key={k} className={styles.ctxItem} onClick={() => { showColumn(k); setCtx(null); }}>
-                      Show {c?.label ?? k}
-                    </button>
-                  );
-                })}
-              </>
-            )}
+            {(() => {
+              /* HOUZS port — surface BOTH explicitly hidden columns and
+                 the pristine-default-hidden set so the user can reveal
+                 the optional 10 columns Houzs ships hidden by default. */
+              const pristine = layout.order.length === 0 && layout.hidden.length === 0;
+              const hiddenKeys = pristine
+                ? columns.filter((c) => c.defaultHidden).map((c) => c.key)
+                : layout.hidden;
+              if (hiddenKeys.length === 0) return null;
+              return (
+                <>
+                  <div className={styles.ctxDivider} />
+                  <div style={{ padding: '4px 10px', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>Hidden:</div>
+                  {hiddenKeys.map((k) => {
+                    const c = columns.find((cc) => cc.key === k);
+                    return (
+                      <button key={k} className={styles.ctxItem} onClick={() => { showColumn(k); setCtx(null); }}>
+                        Show {c?.label ?? k}
+                      </button>
+                    );
+                  })}
+                </>
+              );
+            })()}
             {hidden && (
               <button className={styles.ctxItem} onClick={() => { showColumn(ctx.colKey); setCtx(null); }}>
                 Show column
