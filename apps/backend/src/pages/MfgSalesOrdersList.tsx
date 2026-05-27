@@ -9,7 +9,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Pencil, Eye, Search, FileText, Printer, Trash2, RefreshCw, Wrench, X,
+  Plus, Pencil, Eye, Search, FileText, Printer, Trash2, RefreshCw, X,
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ListingPickerDialog, ListingPickerTrigger, type ListingChoice } from '../components/ListingPickerDialog';
@@ -350,16 +350,9 @@ export const MfgSalesOrdersList = () => {
       <button className={styles.tbarBtn} onClick={onRefresh} title="Refetch from server">
         <RefreshCw {...ICON} /> Refresh
       </button>
-      {/* Task #110 — Localities moved out of Settings into a dedicated SO
-          Maintenance page. Toolbar button is the primary entry; sidebar
-          also gets a direct link. */}
-      <button
-        className={styles.tbarBtn}
-        onClick={() => navigate('/mfg-sales-orders/maintenance')}
-        title="State → warehouse mapping + cascading address dropdowns"
-      >
-        <Wrench {...ICON} /> Maintenance
-      </button>
+      {/* Maintenance button removed — commander 2026-05-27 "then here
+          maintenance can remove alr". Sidebar already exposes a direct
+          link to /mfg-sales-orders/maintenance under B2B Sales. */}
     </>
   );
 
