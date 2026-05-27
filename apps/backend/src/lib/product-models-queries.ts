@@ -17,12 +17,17 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('not_authenticated');
+  // Only stamp content-type: application/json for string bodies (JSON
+  // payloads). For FormData (multipart upload) the browser sets the
+  // boundary-aware content-type itself — overriding it here would break
+  // the multipart parse on the Worker side.
+  const isStringBody = typeof init?.body === 'string';
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       ...(init?.headers ?? {}),
       authorization: `Bearer ${token}`,
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
+      ...(isStringBody ? { 'content-type': 'application/json' } : {}),
     },
   });
   if (!res.ok) {
@@ -198,6 +203,49 @@ export function useDeleteProductModel() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['product-models'] });
+    },
+  });
+}
+
+/* ─── Photo upload / delete (PR — Commander 2026-05-27) ─────────────────
+ *
+ * Multipart POST sends the file body straight to the Worker, which
+ * uploads to R2 (SO_ITEM_PHOTOS bucket, `product-models/{id}/...`
+ * prefix) and patches product_models.photo_url with the proxy URL.
+ *
+ * Don't set content-type here — fetch() needs to set the multipart
+ * boundary itself from the FormData. The shared authedFetch helper
+ * stamps content-type only when init.body is a string, so a FormData
+ * body slips past it correctly.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+export function useUploadProductModelPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, file }: { id: string; file: File }) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return authedFetch<{ photoUrl: string; photoKey: string }>(
+        `/product-models/${id}/photo`,
+        { method: 'POST', body: fd },
+      );
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['product-models'] });
+      qc.invalidateQueries({ queryKey: ['product-models', vars.id] });
+    },
+  });
+}
+
+export function useDeleteProductModelPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return authedFetch<{ ok: true }>(`/product-models/${id}/photo`, { method: 'DELETE' });
+    },
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['product-models'] });
+      qc.invalidateQueries({ queryKey: ['product-models', id] });
     },
   });
 }

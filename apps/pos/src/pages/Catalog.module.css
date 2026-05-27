@@ -387,6 +387,28 @@
 .photoStockLow { background: var(--c-burnt); color: var(--c-cream); }
 .photoStockOut { background: var(--c-burnt); color: var(--c-cream); }
 
+/* Subtle "no photo uploaded" hint on the photo placeholder. Bottom-left
+   corner, low-contrast so it doesn't fight the monogram. Shown only when
+   the Model has no photo_url yet — gives commander an at-a-glance signal
+   for which Models still need a hero photo via Backend → Products →
+   Modular. */
+.photoEmptyHint {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(166, 71, 30, 0.08);
+  color: rgba(166, 71, 30, 0.55);
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+}
+
 /* Orange round configure button — bottom-right corner of the photo area.
    Visual handle the staff can tap to skip into the configurator quickly. */
 .body {
