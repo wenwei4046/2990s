@@ -34,7 +34,7 @@ import {
 } from '../lib/inventory-queries';
 import {
   useLocalities, distinctStates,
-  useCreateLocality, useDeleteLocality,
+  useCreateLocality, useUpdateLocality, useDeleteLocality,
   type LocalityRow,
 } from '../lib/localities-queries';
 import styles from './SalesOrderMaintenance.module.css';
@@ -84,6 +84,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
   const upsert = useUpsertStateWarehouseMapping();
   const remove = useDeleteStateWarehouseMapping();
   const createLoc = useCreateLocality();
+  const updateLoc = useUpdateLocality();
   const deleteLoc = useDeleteLocality();
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
@@ -101,6 +102,9 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
   const [newStateCode, setNewStateCode] = useState('');
   const [newCity, setNewCity] = useState('');
   const [newPostcode, setNewPostcode] = useState('');
+  /* Task #121 — defaulted to Malaysia to match the column default; new
+     foreign-state rows (Singapore, Thailand, ...) override before saving. */
+  const [newCountry, setNewCountry] = useState('Malaysia');
   const filteredLocalities: LocalityRow[] = (localities.data ?? []).filter(
     (r) => !filterState || r.state === filterState,
   );
@@ -111,6 +115,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
       stateCode: newStateCode.trim().toUpperCase(),
       city:      newCity.trim(),
       postcode:  newPostcode.trim(),
+      country:   newCountry.trim() || 'Malaysia',
     };
     if (!payload.state || !payload.stateCode || !payload.city || !payload.postcode) {
       window.alert('All four fields are required.');
@@ -119,6 +124,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
     createLoc.mutate(payload, {
       onSuccess: () => {
         setNewState(''); setNewStateCode(''); setNewCity(''); setNewPostcode('');
+        setNewCountry('Malaysia');
       },
       onError: (err) => window.alert(String((err as Error).message ?? err)),
     });
@@ -224,7 +230,12 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
       {canEdit && (
         <div className={styles.addRowCard}>
           <div className={styles.addRowEyebrow}>Add a row</div>
-          <div className={styles.addRowGrid}>
+          {/* Task #121 — explicit grid template so the new Country column
+              has room without the surrounding columns collapsing. */}
+          <div
+            className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 100px 1fr 110px 120px auto' }}
+          >
             <input
               className={styles.input}
               placeholder="State (e.g. Selangor)"
@@ -250,6 +261,12 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
               value={newPostcode}
               onChange={(e) => setNewPostcode(e.target.value)}
               maxLength={10}
+            />
+            <input
+              className={styles.input}
+              placeholder="Country (Malaysia)"
+              value={newCountry}
+              onChange={(e) => setNewCountry(e.target.value)}
             />
             <Button
               variant="primary"
@@ -290,6 +307,8 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                 <th>Code</th>
                 <th>City</th>
                 <th>Postcode</th>
+                {/* Task #121 — editable Country column (default 'Malaysia'). */}
+                <th>Country</th>
                 {canEdit && <th aria-label="actions" />}
               </tr>
             </thead>
@@ -300,6 +319,29 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                   <td><code className={styles.code}>{r.stateCode}</code></td>
                   <td>{r.city}</td>
                   <td><code className={styles.code}>{r.postcode}</code></td>
+                  <td>
+                    {canEdit && r.id ? (
+                      /* onBlur persistence mirrors the State → Warehouse
+                         "Notes" cell above — keeps the UX consistent and
+                         avoids a per-row Save button. Skips the PATCH
+                         when the value is unchanged. */
+                      <input
+                        className={styles.input}
+                        defaultValue={r.country}
+                        disabled={updateLoc.isPending}
+                        onBlur={(e) => {
+                          const next = e.target.value.trim();
+                          if (!next || next === r.country) return;
+                          updateLoc.mutate(
+                            { id: r.id!, country: next },
+                            { onError: (err) => window.alert(String((err as Error).message ?? err)) },
+                          );
+                        }}
+                      />
+                    ) : (
+                      r.country
+                    )}
+                  </td>
                   {canEdit && (
                     <td>
                       {r.id && (
