@@ -73,6 +73,7 @@ export const ProductModelDetail = ({
   const maintenance = useMaintenanceConfig('master');
 
   const [branding, setBranding] = useState('');
+  const [modelCode, setModelCode] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [allowed, setAllowed] = useState<AllowedOptions>({});
@@ -97,6 +98,7 @@ export const ProductModelDetail = ({
   useEffect(() => {
     if (!data?.model) return;
     setBranding(data.model.branding ?? '');
+    setModelCode(data.model.model_code);
     setName(data.model.name);
     setDescription(data.model.description ?? '');
 
@@ -155,8 +157,14 @@ export const ProductModelDetail = ({
 
   const onSave = () => {
     if (!id) return;
+    const code = modelCode.trim();
+    if (!code) {
+      window.alert('Model code is required.');
+      return;
+    }
     updateMut.mutate({
       id,
+      modelCode: code,
       branding: branding.trim() || null,
       name,
       description: description.trim() || null,
@@ -280,7 +288,17 @@ export const ProductModelDetail = ({
         <div className={styles.fieldGrid}>
           <label className={styles.field}>
             <span className="t-eyebrow">Model code</span>
-            <input type="text" value={model.model_code} readOnly className={styles.readonly} />
+            {/* Commander 2026-05-27: "为什么不能 edit model code". Wired to
+                modelCode state. SKU rows under this Model reference it by
+                UUID (product_models.id), so renaming is safe — only the
+                display label changes. Unique constraint on (model_code,
+                category) prevents accidental clashes. */}
+            <input
+              type="text"
+              value={modelCode}
+              onChange={(e) => setModelCode(e.target.value)}
+              placeholder="e.g. SF 5530 / 1005 / Lotti"
+            />
           </label>
           <label className={styles.field}>
             <span className="t-eyebrow">Category</span>
