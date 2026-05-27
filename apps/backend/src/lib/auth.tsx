@@ -8,7 +8,16 @@ import {
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 
-export type StaffRole = 'sales' | 'showroom_lead' | 'coordinator' | 'finance' | 'admin';
+// Migration 0086 (2026-05-27) — 3 new sales-side roles.
+export type StaffRole =
+  | 'sales' | 'showroom_lead' | 'coordinator' | 'finance' | 'admin'
+  | 'sales_executive' | 'outlet_manager' | 'sales_director';
+
+/* Roles that may NOT access the Backend portal. They land on POS only.
+   Layout.tsx redirects them to /no-access. */
+export const POS_ONLY_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
+  'sales', 'sales_executive', 'outlet_manager',
+]);
 
 export interface StaffProfile {
   id: string;
@@ -16,6 +25,7 @@ export interface StaffProfile {
   name: string;
   role: StaffRole;
   showroomId: string | null;
+  venueId: string | null;
   initials: string;
   color: string;
 }
@@ -36,7 +46,7 @@ const AuthContext = createContext<AuthState | null>(null);
 const fetchStaff = async (userId: string): Promise<StaffProfile | null> => {
   const { data, error } = await supabase
     .from('staff')
-    .select('id, staff_code, name, role, showroom_id, initials, color, active')
+    .select('id, staff_code, name, role, showroom_id, venue_id, initials, color, active')
     .eq('id', userId)
     .eq('active', true)
     .maybeSingle();
@@ -48,6 +58,7 @@ const fetchStaff = async (userId: string): Promise<StaffProfile | null> => {
     name: data.name,
     role: data.role,
     showroomId: data.showroom_id,
+    venueId: data.venue_id,
     initials: data.initials,
     color: data.color,
   };

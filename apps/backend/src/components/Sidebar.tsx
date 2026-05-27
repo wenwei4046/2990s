@@ -27,6 +27,7 @@ import {
   LogOut,
   FileBarChart,
   Wrench,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -52,6 +53,10 @@ const formatRole = (role?: string | null): string => {
     coordinator: 'Order Coordinator',
     finance: 'Finance',
     admin: 'Administrator',
+    // Migration 0086 — sales-force expansion.
+    sales_executive: 'Sales Executive',
+    outlet_manager:  'Outlet Manager',
+    sales_director:  'Sales Director',
   };
   return map[role] ?? role;
 };
@@ -133,6 +138,14 @@ export const Sidebar = () => {
     { kind: 'group', label: 'Reference' },
     { kind: 'link', to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
     { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
+    /* Migration 0086 (2026-05-27) — Administration group, gated to admin /
+       sales_director / coordinator. Users page lives here. */
+    ...(staff && ['admin', 'sales_director', 'coordinator'].includes(staff.role)
+      ? [
+          { kind: 'group' as const, label: 'Administration' },
+          { kind: 'link' as const, to: '/users', icon: <ShieldCheck {...ICON_PROPS} />, label: 'Users' },
+        ]
+      : []),
   ];
 
   return (
