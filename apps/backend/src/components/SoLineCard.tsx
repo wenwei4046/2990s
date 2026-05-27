@@ -24,7 +24,7 @@
 // this in without touching the parent.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
@@ -33,6 +33,7 @@ import {
   useDeleteSoItemPhoto,
   fetchSoItemPhotoSignedUrl,
 } from '../lib/flow-queries';
+import { useDebouncedValue } from '../lib/hooks';
 import styles from './SoLineCard.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -93,7 +94,14 @@ const CATEGORY_BADGE: Record<string, { bg: string; fg: string; label: string }> 
    SoLineCard
    ────────────────────────────────────────────────────────────────────── */
 
-export const SoLineCard = ({
+/* Task #103 — Wrap in React.memo at module bottom. The parent (SO Detail)
+   now passes stable per-row callbacks via a useMemo'd Map keyed off
+   editingLineIds, so the memo comparator can rely on shallow-equal props.
+   `inheritVariantsByCategory` from SalesOrderNew is a fresh object on every
+   render but the only state it captures is LINE 1's variants, which change
+   exactly when the user is interacting with LINE 1 anyway — i.e. exactly
+   when we DO want the follower rows to re-render. */
+const SoLineCardInner = ({
   index,
   draft,
   onChange,
@@ -120,13 +128,23 @@ export const SoLineCard = ({
   const fabrics  = fabricsQ.data ?? [];
 
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
-  const productsQuery = useMfgProducts({ search: search.trim() || undefined });
-  const candidates = productsQuery.data ?? [];
-
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
   const [manualPrice, setManualPrice] = useState(false);
   const [showPicker, setShowPicker]   = useState(false);
   const [specialsOpen, setSpecialsOpen] = useState(false);
+  /* Task #102 — Same gate the debtor autocomplete got in PR #99. Without
+     this the product picker fired one /mfg-products?search=… request per
+     keystroke even when the picker wasn't open (every render of an
+     already-saved line re-issued the query for the description text). The
+     200 ms debounce smooths fast typists; the length>=2 + showPicker
+     enabled-flag guards the closed-picker + single-character cases. */
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const trimmedSearch   = debouncedSearch.trim();
+  const productsQuery = useMfgProducts({
+    search:  trimmedSearch || undefined,
+    enabled: showPicker && trimmedSearch.length >= 2,
+  });
+  const candidates = productsQuery.data ?? [];
 
   /* PR-F (Task #79) — Per-line photo state. */
   const uploadPhoto = useUploadSoItemPhoto();
@@ -330,7 +348,14 @@ export const SoLineCard = ({
           {showPicker && isEditing && candidates.length === 0 && (
             <ul className={styles.suggestList}>
               <li className={styles.suggestItem} style={{ color: 'var(--fg-muted)', cursor: 'default' }}>
-                No products match{search.trim() ? ` "${search}"` : ''}.
+                {/* Task #102 — Distinguish "type more" (gate hasn't tripped)
+                    from "no matches" (server returned []) so the user knows
+                    why nothing is showing. */}
+                {trimmedSearch.length < 2
+                  ? 'Type at least 2 characters to search…'
+                  : productsQuery.isFetching
+                    ? 'Searching…'
+                    : `No products match "${trimmedSearch}".`}
               </li>
             </ul>
           )}
@@ -624,6 +649,15 @@ export const SoLineCard = ({
     </div>
   );
 };
+SoLineCardInner.displayName = 'SoLineCard';
+
+/* Task #103 — Wrapped in React.memo with the default shallow comparator.
+   With the SO Detail page now passing stable per-row callbacks
+   (rowCallbacks Map + patchAddingDraft useCallback), the memo skips
+   re-renders when an unrelated row's draft state, an unrelated parent
+   state (History drawer toggle, Edit-mode flip, payment table activity),
+   or the routinely-stable header useQuery cache result changes. */
+export const SoLineCard = memo(SoLineCardInner);
 
 /* ──────────────────────────────────────────────────────────────────────
    VariantSelect — uniform <select> with label + optional "+RM x.xx" suffix

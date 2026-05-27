@@ -157,7 +157,23 @@ export type MaintenanceHistoryRow = {
 
 /* ────────────────────────── Hooks ────────────────────────────────────── */
 
-export function useMfgProducts(opts?: { category?: MfgCategory; search?: string }) {
+export function useMfgProducts(opts?: {
+  category?: MfgCategory;
+  search?: string;
+  /**
+   * Task #102 — Optional gate so search-as-you-type callers (SoLineCard's
+   * product picker) can avoid firing one query per keystroke. Defaults to
+   * `true` so existing callers (list pages, stock-take seeders, supplier
+   * detail product attach modal) keep their eager behaviour.
+   *
+   * Typical search-as-you-type usage:
+   *   useMfgProducts({
+   *     search: debouncedQ,
+   *     enabled: showPicker && debouncedQ.trim().length >= 2,
+   *   });
+   */
+  enabled?: boolean;
+}) {
   return useQuery({
     queryKey: ['mfg-products', opts?.category ?? 'all', opts?.search ?? ''],
     queryFn: async () => {
@@ -169,6 +185,7 @@ export function useMfgProducts(opts?: { category?: MfgCategory; search?: string 
       );
       return res.products;
     },
+    enabled: opts?.enabled ?? true,
     staleTime: 30_000,
     // Surface schema-missing errors (HTTP 500 'relation does not exist')
     // immediately instead of cycling through 3 default retries + exponential

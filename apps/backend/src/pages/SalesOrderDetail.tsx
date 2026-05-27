@@ -57,6 +57,7 @@ import {
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { useStaff } from '../lib/admin-queries';
+import { useDebouncedValue } from '../lib/hooks';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
 import paymentsStyles from './Payments.module.css';
@@ -87,16 +88,9 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
-/* Task #99 (UI perf) — Tiny local debounce hook for inputs that drive a
-   server query (debtor autocomplete). Not worth a separate file. */
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setV(value), delayMs);
-    return () => window.clearTimeout(t);
-  }, [value, delayMs]);
-  return v;
-}
+/* Task #99 (UI perf) — Local debounce hook lifted to ../lib/hooks.ts as
+   useDebouncedValue so SoLineCard's product picker (Task #102) can reuse
+   it without duplicating the implementation. */
 
 type SoHeader = {
   doc_no: string;
@@ -289,7 +283,14 @@ export const SalesOrderDetail = () => {
 
   /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
      except startAdd which seeds a brand-new SoLineDraft. The mutation payload
-     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side). */
+     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side).
+
+     Task #103 — startEditLine doesn't need to be stable (it only fires from
+     the table-row Pencil button, never as a child prop), but stopEditLine +
+     patchEditingDraft DO — they're closed over by the per-row callbacks the
+     memoized SoLineCard receives. useCallback with no deps keeps them
+     reference-stable across renders; both rely entirely on setState callbacks
+     so there's no stale-closure risk. */
   const startEditLine = (it: SoItem) => {
     setEditingLineIds((prev) => {
       const next = new Set(prev);
@@ -315,7 +316,7 @@ export const SalesOrderDetail = () => {
     }));
   };
 
-  const stopEditLine = (id: string) => {
+  const stopEditLine = useCallback((id: string) => {
     setEditingLineIds((prev) => {
       if (!prev.has(id)) return prev;
       const next = new Set(prev);
@@ -327,15 +328,39 @@ export const SalesOrderDetail = () => {
       const { [id]: _drop, ...rest } = prev;
       return rest;
     });
-  };
+  }, []);
 
-  const patchEditingDraft = (id: string, patch: Partial<SoLineDraft>) => {
+  const patchEditingDraft = useCallback((id: string, patch: Partial<SoLineDraft>) => {
     setEditingDrafts((prev) => {
       const cur = prev[id];
       if (!cur) return prev;
       return { ...prev, [id]: { ...cur, ...patch } };
     });
-  };
+  }, []);
+
+  /* Task #103 — Per-row callback map. SoLineCard is now React.memo'd, but a
+     fresh `(patch) => patchEditingDraft(it.id, patch)` arrow on every parent
+     render still busts shallow-equality on the props and forces a re-render
+     of the heaviest child component on the page (which carries its own
+     useMfgProducts + useMaintenanceConfig + useFabricTrackings sub-trees).
+     The map is keyed on the editing-row id; the Map identity changes only
+     when the set of editing rows changes — which is exactly when a row's
+     callbacks need to rebind anyway. patchEditingDraft + stopEditLine are
+     themselves stable via useCallback above, so the bound arrows here are
+     the only churn. */
+  const rowCallbacks = useMemo(() => {
+    const map = new Map<string, {
+      onChange: (patch: Partial<SoLineDraft>) => void;
+      onRemove: () => void;
+    }>();
+    for (const id of editingLineIds) {
+      map.set(id, {
+        onChange: (patch) => patchEditingDraft(id, patch),
+        onRemove: () => stopEditLine(id),
+      });
+    }
+    return map;
+  }, [editingLineIds, patchEditingDraft, stopEditLine]);
 
   const submitEditingDraft = (id: string) => {
     const d = editingDrafts[id];
@@ -376,7 +401,16 @@ export const SalesOrderDetail = () => {
     });
   };
 
-  const cancelAddLine = () => setAddingDraft(null);
+  const cancelAddLine = useCallback(() => setAddingDraft(null), []);
+
+  /* Task #103 — Stable onChange for the lone "+ Add Line Item" SoLineCard at
+     the bottom of the table. Mirrors rowCallbacks above but kept as a
+     standalone useCallback because there is at most one add-draft at a time. */
+  const patchAddingDraft = useCallback(
+    (patch: Partial<SoLineDraft>) =>
+      setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev),
+    [],
+  );
 
   const submitAddLine = () => {
     if (!addingDraft) return;
@@ -610,7 +644,7 @@ export const SalesOrderDetail = () => {
             <SoLineCard
               index={0}
               draft={addingDraft}
-              onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+              onChange={patchAddingDraft}
               onRemove={cancelAddLine}
               canRemove={true}
             />
@@ -671,14 +705,18 @@ export const SalesOrderDetail = () => {
                 const inlineEditing = editingLineIds.has(it.id);
                 const editDraft = editingDrafts[it.id];
                 if (inlineEditing && editDraft) {
+                  /* Task #103 — Pull the stable per-row callbacks built once
+                     above. The Map entry exists for every id in
+                     editingLineIds, so the !cb branch is theoretical. */
+                  const cb = rowCallbacks.get(it.id);
                   return (
                     <tr key={it.id}>
                       <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
                         <SoLineCard
                           index={items.indexOf(it)}
                           draft={editDraft}
-                          onChange={(patch) => patchEditingDraft(it.id, patch)}
-                          onRemove={() => stopEditLine(it.id)}
+                          onChange={cb?.onChange ?? ((patch) => patchEditingDraft(it.id, patch))}
+                          onRemove={cb?.onRemove ?? (() => stopEditLine(it.id))}
                           canRemove={true}
                           /* PR-F (#79) wiring — enable photo upload on
                              already-saved lines. New lines (addingDraft)
@@ -778,7 +816,7 @@ export const SalesOrderDetail = () => {
                     <SoLineCard
                       index={items.length}
                       draft={addingDraft}
-                      onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+                      onChange={patchAddingDraft}
                       onRemove={cancelAddLine}
                       canRemove={true}
                     />
@@ -1500,217 +1538,20 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Status transition bar
+   Task #101 — dead code removal (2026-05-27)
+   ────────────────────────────────────────────────────────────────────────
+   The following exports/components were removed because PR #171 (Houzs
+   rollout) replaced their callers:
+     • StatusBar + NEXT — status transition strip; the Edit/Save framework
+       now drives status changes via updateStatus.mutate() directly from
+       the page header (commander 2026-05-27: "这个不需要")
+     • AddressCard — multi-address (ship-to / bill-to / install-to) card;
+       PR #168 replaced it with the 4-section CustomerCard split below.
+   The DB columns the deleted components read from (ship_to_address /
+   bill_to_address / install_to_address / customer_po / customer_po_id /
+   customer_po_date / hub_name / overdue) remain in the schema so existing
+   rows stay queryable — only the UI rendering is gone.
    ════════════════════════════════════════════════════════════════════════ */
-
-/* PR #145 + #146 — Commander 2026-05-26: trading company flow.
-   - "2990 整套系统是 trading 公司来的，不需要 in production" → drop IN_PRODUCTION
-   - "ready to ship 和 in production 整个删掉" → drop READY_TO_SHIP too.
-     Goods sit in our warehouse, no "ready to ship" intermediate stage;
-     SHIPPED captures the moment they leave.
-   Final flow:
-     DRAFT → CONFIRMED → SHIPPED → DELIVERED → INVOICED → CLOSED
-   The DB enum still carries IN_PRODUCTION / READY_TO_SHIP rows from
-   pre-#146 records; the fallback rows below let the UI forward those
-   directly to SHIPPED instead of crashing. */
-const NEXT: Record<SoStatus, SoStatus[]> = {
-  DRAFT:          ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED:      ['SHIPPED', 'CANCELLED'],
-  IN_PRODUCTION:  ['SHIPPED', 'CANCELLED'], // legacy
-  READY_TO_SHIP:  ['SHIPPED'],              // legacy
-  SHIPPED:        ['DELIVERED'],
-  DELIVERED:      ['INVOICED'],
-  INVOICED:       ['CLOSED'],
-  CLOSED:         [],
-  CANCELLED:      [],
-};
-
-const StatusBar = ({
-  status,
-  onTransition,
-  pending,
-}: {
-  status: SoStatus;
-  onTransition: (s: SoStatus) => void;
-  pending: boolean;
-}) => {
-  const opts = NEXT[status];
-  if (opts.length === 0) {
-    return (
-      <section className={styles.card}>
-        <div className={styles.cardBody}>
-          <p className={styles.fieldLabel}>This SO is {status.replace(/_/g, ' ').toLowerCase()} — no further transitions available.</p>
-        </div>
-      </section>
-    );
-  }
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Move to next stage</h2>
-      </header>
-      <div className={styles.cardBody}>
-        <div className={styles.statusBar}>
-          {opts.map((s, i) => (
-            <Button
-              key={s}
-              variant={i === 0 ? 'primary' : 'ghost'}
-              size="sm"
-              onClick={() => onTransition(s)}
-              disabled={pending}
-            >
-              <span>{s.replace(/_/g, ' ')}</span>
-            </Button>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   AddressCard — PR #35 multi-address (ship-to / bill-to / install-to)
-   ════════════════════════════════════════════════════════════════════════ */
-
-const AddressCard = ({
-  header,
-  onSave,
-  saving,
-  locked = false,
-}: {
-  header: SoHeader;
-  onSave: (patch: Record<string, unknown>) => void;
-  saving: boolean;
-  locked?: boolean;
-}) => {
-  const [form, setForm] = useState({
-    shipToAddress: header.ship_to_address ?? '',
-    billToAddress: header.bill_to_address ?? '',
-    installToAddress: header.install_to_address ?? '',
-    customerPo: header.customer_po ?? '',
-    customerPoId: header.customer_po_id ?? '',
-    customerPoDate: header.customer_po_date ?? '',
-    customerDeliveryDate: header.customer_delivery_date ?? '',
-    internalExpectedDd: header.internal_expected_dd ?? '',
-    hubName: header.hub_name ?? '',
-    customerState: header.customer_state ?? '',
-  });
-
-  useEffect(() => {
-    setForm({
-      shipToAddress: header.ship_to_address ?? '',
-      billToAddress: header.bill_to_address ?? '',
-      installToAddress: header.install_to_address ?? '',
-      customerPo: header.customer_po ?? '',
-      customerPoId: header.customer_po_id ?? '',
-      customerPoDate: header.customer_po_date ?? '',
-      customerDeliveryDate: header.customer_delivery_date ?? '',
-      internalExpectedDd: header.internal_expected_dd ?? '',
-      hubName: header.hub_name ?? '',
-      customerState: header.customer_state ?? '',
-    });
-  }, [header]);
-
-  const set = (k: keyof typeof form, v: string) =>
-    setForm((s) => ({ ...s, [k]: v }));
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Multi-Address · Customer PO · Schedule</h2>
-        <Button variant="primary" size="sm"
-          onClick={() => onSave(form)} disabled={saving || locked}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
-      </header>
-      <div className={styles.cardBody}>
-        {/* Customer PO row */}
-        <p className={styles.subHead}>Customer Purchase Order</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer PO No</span>
-            <input className={styles.fieldInput} value={form.customerPo} disabled={locked}
-              onChange={(e) => set('customerPo', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer PO ID</span>
-            <input className={styles.fieldInput} value={form.customerPoId} disabled={locked}
-              onChange={(e) => set('customerPoId', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>PO Date</span>
-            <input type="date" className={styles.fieldInput} value={form.customerPoDate} disabled={locked}
-              onChange={(e) => set('customerPoDate', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>State</span>
-            <input className={styles.fieldInput} value={form.customerState} disabled={locked}
-              onChange={(e) => set('customerState', e.target.value)} />
-          </label>
-        </div>
-
-        {/* Schedule row */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Delivery Schedule</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer Delivery Date</span>
-            <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate} disabled={locked}
-              onChange={(e) => set('customerDeliveryDate', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Internal Expected DD</span>
-            <input type="date" className={styles.fieldInput} value={form.internalExpectedDd} disabled={locked}
-              onChange={(e) => set('internalExpectedDd', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Hub / Branch</span>
-            <input className={styles.fieldInput} value={form.hubName} disabled={locked}
-              onChange={(e) => set('hubName', e.target.value)} />
-          </label>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Overdue Flag</span>
-            <span className={styles.fieldInput} style={{ display: 'inline-flex', alignItems: 'center', height: 32 }}>
-              {header.overdue ? (
-                <strong style={{
-                  color: header.overdue === 'OVERDUE' ? 'var(--c-festive-b, #B8331F)' : 'var(--c-orange)',
-                }}>
-                  {header.overdue}
-                </strong>
-              ) : <span className={styles.muted}>—</span>}
-            </span>
-          </div>
-        </div>
-
-        {/* 3 address blocks */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Addresses</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Ship-To Address</span>
-            <textarea className={styles.fieldInput} rows={3} value={form.shipToAddress} disabled={locked}
-              onChange={(e) => set('shipToAddress', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Bill-To Address</span>
-            <textarea className={styles.fieldInput} rows={3} value={form.billToAddress} disabled={locked}
-              onChange={(e) => set('billToAddress', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 4' }}>
-            <span className={styles.fieldLabel}>Install-To Address</span>
-            <textarea className={styles.fieldInput} rows={2} value={form.installToAddress} disabled={locked}
-              onChange={(e) => set('installToAddress', e.target.value)} />
-          </label>
-        </div>
-
-        {header.linked_do_doc_no && (
-          <p className={styles.muted} style={{ marginTop: 'var(--space-2)' }}>
-            Linked DO: <Link to={`/mfg-delivery-orders/${header.linked_do_doc_no}`}>{header.linked_do_doc_no}</Link>
-          </p>
-        )}
-      </div>
-    </section>
-  );
-};
 
 /* ════════════════════════════════════════════════════════════════════════
    PaymentCard — Houzs-pattern transactions ledger.
