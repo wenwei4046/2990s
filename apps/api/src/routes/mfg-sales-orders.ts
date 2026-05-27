@@ -2,6 +2,7 @@
 // Separate from retail `orders` (POS) — different lifecycle, different ID format.
 
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -458,6 +459,101 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
   return c.body(null, 204);
+});
+
+// ── Payments — PR #163 (migration 0073) ───────────────────────────────
+//
+// HOOKKA-style transaction ledger per SO. Each row is one receipt /
+// auth slip. UI lists them, sums into a "Deposit Paid" total, and the
+// balance computes from header.local_total_centi − sum(amount_centi).
+//
+// Legacy single-row payment fields on mfg_sales_orders (payment_method,
+// merchant_provider, installment_months, approval_code, payment_date,
+// paid_centi) are NOT touched here — those columns are scheduled for
+// drop in a follow-up migration once live data is migrated.
+const PAYMENT_COLS =
+  'id, so_doc_no, paid_at, method, merchant_provider, installment_months, ' +
+  'approval_code, amount_centi, account_sheet, collected_by, note, ' +
+  'created_at, created_by';
+
+mfgSalesOrders.get('/:docNo/payments', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const { data, error } = await sb
+    .from('mfg_sales_order_payments')
+    .select(`${PAYMENT_COLS}, staff:collected_by ( name )`)
+    .eq('so_doc_no', docNo)
+    .order('paid_at', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  // Flatten the joined `staff.name` onto `collected_by_name` so the UI
+  // doesn't need to drill into a nested object.
+  const payments = (data ?? []).map((r: unknown) => {
+    const row = r as Record<string, unknown> & { staff: { name: string } | null };
+    const { staff, ...rest } = row;
+    return { ...rest, collected_by_name: staff?.name ?? null };
+  });
+  return c.json({ payments });
+});
+
+const paymentCreateSchema = z.object({
+  paidAt:             z.string().min(1),
+  method:             z.enum(['merchant', 'transfer', 'cash']),
+  merchantProvider:   z.enum(['GHL', 'HLB', 'MBB', 'PBB']).optional().nullable(),
+  installmentMonths:  z.union([z.literal(6), z.literal(12)]).optional().nullable(),
+  approvalCode:       z.string().optional().nullable(),
+  amountCenti:        z.number().int().nonnegative(),
+  accountSheet:       z.string().optional().nullable(),
+  collectedBy:        z.string().uuid().optional().nullable(),
+  note:               z.string().optional().nullable(),
+});
+
+mfgSalesOrders.post('/:docNo/payments', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+
+  // Ensure the SO exists before inserting a child row (gives a cleaner
+  // 404 than a deferred FK violation).
+  const { data: so } = await sb.from('mfg_sales_orders').select('doc_no').eq('doc_no', docNo).maybeSingle();
+  if (!so) return c.json({ error: 'sales_order_not_found' }, 404);
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = paymentCreateSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
+  const p = parsed.data;
+
+  // Method-scoped fields: installment/provider only apply to merchant.
+  const merchantProvider  = p.method === 'merchant' ? (p.merchantProvider ?? null) : null;
+  const installmentMonths = p.method === 'merchant' ? (p.installmentMonths ?? null) : null;
+
+  const { data, error } = await sb.from('mfg_sales_order_payments').insert({
+    so_doc_no:          docNo,
+    paid_at:            p.paidAt,
+    method:             p.method,
+    merchant_provider:  merchantProvider,
+    installment_months: installmentMonths,
+    approval_code:      p.approvalCode ?? null,
+    amount_centi:       p.amountCenti,
+    account_sheet:      p.accountSheet ?? null,
+    collected_by:       p.collectedBy ?? null,
+    note:               p.note ?? null,
+    created_by:         user.id,
+  }).select(PAYMENT_COLS).single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  return c.json({ payment: data }, 201);
+});
+
+mfgSalesOrders.delete('/:docNo/payments/:id', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const id = c.req.param('id');
+
+  // Guard: only delete if the row belongs to this docNo. Prevents a
+  // mis-routed call from nuking another SO's payment.
+  const { data: row } = await sb.from('mfg_sales_order_payments').select('id, so_doc_no').eq('id', id).maybeSingle();
+  if (!row) return c.json({ error: 'not_found' }, 404);
+  if ((row as { so_doc_no: string }).so_doc_no !== docNo) return c.json({ error: 'payment_doc_mismatch' }, 400);
+
+  const { error } = await sb.from('mfg_sales_order_payments').delete().eq('id', id);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  return c.json({ ok: true });
 });
 
 // ── Debtor lookup — autocomplete from prior SOs ───────────────────────
