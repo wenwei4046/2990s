@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
+import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -211,6 +212,37 @@ mfgSalesOrders.post('/', async (c) => {
     const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
     if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   }
+
+  // PR-D — audit row. Emit one CREATE entry with every non-null field the
+  // commander typed on the new-SO form so the timeline shows the genesis
+  // state. We deliberately include the line count rather than each line
+  // (those get their own ADD_LINE rows if they're added later via PATCH).
+  const createFields: FieldChange[] = [];
+  const captureIfSet = (k: string, v: unknown) => {
+    if (v !== undefined && v !== null && v !== '') createFields.push({ field: k, to: v });
+  };
+  captureIfSet('debtorName', customerName);
+  captureIfSet('debtorCode', body.debtorCode);
+  captureIfSet('agent', body.agent);
+  captureIfSet('phone', body.phone);
+  captureIfSet('email', body.email);
+  captureIfSet('soDate', body.soDate);
+  captureIfSet('lineCount', items.length);
+  captureIfSet('localTotalCenti', total);
+  captureIfSet('paymentMethod', body.paymentMethod);
+  captureIfSet('depositCenti', body.depositCenti);
+  captureIfSet('internalExpectedDd', body.internalExpectedDd);
+  captureIfSet('customerSoNo', body.customerSoNo);
+  captureIfSet('customerPo', body.customerPo);
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'CREATE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: createFields,
+    statusSnapshot: 'CONFIRMED',
+  });
+
   return c.json({ docNo }, 201);
 });
 
@@ -231,7 +263,9 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   }).eq('doc_no', docNo).select('doc_no, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
-  // Audit row — best-effort.
+  // Audit row — best-effort. We keep writing the legacy mfg_so_status_changes
+  // row for now (the existing StatusTimeline panel still reads it) and ALSO
+  // emit the unified mfg_so_audit_log row for the PR-D History panel.
   await sb.from('mfg_so_status_changes').insert({
     doc_no: docNo,
     from_status: fromStatus,
@@ -239,8 +273,31 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     changed_by: user.id,
     notes: body.notes ?? null,
   });
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_STATUS',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [{ field: 'status', from: fromStatus, to: body.status }],
+    statusSnapshot: body.status,
+    note: body.notes ?? undefined,
+  });
 
   return c.json({ salesOrder: data });
+});
+
+// ── GET /mfg-sales-orders/:docNo/audit-log ──────────────────────────
+// PR-D — unified history feed (newest first). Returns one envelope:
+//   { entries: [{ id, so_doc_no, action, actor_id, actor_name_snapshot,
+//                  field_changes, status_snapshot, source, note, created_at }] }
+mfgSalesOrders.get('/:docNo/audit-log', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const { data, error } = await sb.from('mfg_so_audit_log')
+    .select('id, so_doc_no, action, actor_id, actor_name_snapshot, field_changes, status_snapshot, source, note, created_at')
+    .eq('so_doc_no', docNo)
+    .order('created_at', { ascending: false });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ entries: data ?? [] });
 });
 
 // GET — list status change history for the SO detail timeline.
@@ -308,7 +365,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
 
 // ── PATCH header — edit debtor info, addresses, note, etc. ───────────
 mfgSalesOrders.patch('/:docNo', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
@@ -355,6 +412,11 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
+  // PR-D — snapshot the row before update so we can emit a field-level diff
+  // in the audit log. Only fields actually in the patch body are compared.
+  const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
+  const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
@@ -373,6 +435,21 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
       .update({ line_delivery_date: newDate })
       .eq('doc_no', docNo)
       .eq('line_delivery_date_overridden', false);
+  }
+
+  /* PR-D — Audit log row capturing field-level from→to diff. */
+  if (before) {
+    const fieldChanges = diffFields(before as Record<string, unknown>, body, map);
+    if (fieldChanges.length > 0) {
+      await recordSoAudit(sb, {
+        docNo,
+        action: 'UPDATE_DETAILS',
+        actorId: user.id,
+        actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+        fieldChanges,
+        statusSnapshot: (before as { status?: string }).status ?? null,
+      });
+    }
   }
 
   return c.json({ ok: true, docNo });
@@ -412,7 +489,7 @@ async function recomputeTotals(sb: any, docNo: string) {
 }
 
 mfgSalesOrders.post('/:docNo/items', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
@@ -468,16 +545,36 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
+
+  // PR-D — emit ADD_LINE audit row. Capture item code + qty + unit price
+  // so the timeline shows the meaningful what-was-added without an explosion
+  // of every column.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'ADD_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', to: row.item_code },
+      { field: 'qty', to: row.qty },
+      { field: 'unitPriceCenti', to: row.unit_price_centi },
+      { field: 'totalCenti', to: row.total_centi },
+    ],
+  });
+
   return c.json({ item: data }, 201);
 });
 
 mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
-  // Re-derive totals if qty/price/discount changed
-  const { data: prev } = await sb.from('mfg_sales_order_items').select('qty, unit_price_centi, discount_centi, unit_cost_centi').eq('id', itemId).maybeSingle();
+  // Re-derive totals if qty/price/discount changed. PR-D — also pull the
+  // human-facing columns (item_code, description, uom) for the audit diff.
+  const { data: prev } = await sb.from('mfg_sales_order_items')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, description2, uom, variants, remark, cancelled')
+    .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
@@ -517,14 +614,69 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const { error } = await sb.from('mfg_sales_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
+
+  // PR-D — diff old vs new and emit one UPDATE_LINE row only if any field
+  // moved. Compare across both the derived columns (qty/price/discount)
+  // and the passthrough columns (code/group/description/uom/etc).
+  const fieldChanges: FieldChange[] = [];
+  const cmp = (field: string, fromVal: unknown, toVal: unknown) => {
+    const a = fromVal == null ? '' : String(fromVal);
+    const b = toVal == null ? '' : String(toVal);
+    if (a !== b) fieldChanges.push({ field, from: fromVal ?? null, to: toVal ?? null });
+  };
+  cmp('qty', prev.qty, qty);
+  cmp('unitPriceCenti', prev.unit_price_centi, unit);
+  cmp('discountCenti', prev.discount_centi, discount);
+  cmp('unitCostCenti', prev.unit_cost_centi, unitCost);
+  for (const [from, to] of [
+    ['itemCode', 'item_code'], ['itemGroup', 'item_group'], ['description', 'description'],
+    ['description2', 'description2'], ['uom', 'uom'], ['remark', 'remark'], ['cancelled', 'cancelled'],
+  ] as const) {
+    if (it[from] !== undefined) cmp(from, (prev as Record<string, unknown>)[to], it[from]);
+  }
+  if (fieldChanges.length > 0) {
+    // Prefix with itemCode so the timeline can show "Updated line ITEM-123"
+    // without a dedicated column on the audit row.
+    fieldChanges.unshift({ field: 'itemCode', to: prev.item_code });
+    await recordSoAudit(sb, {
+      docNo,
+      action: 'UPDATE_LINE',
+      actorId: user.id,
+      actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      fieldChanges,
+    });
+  }
+
   return c.json({ ok: true });
 });
 
 mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+
+  // PR-D — capture the line snapshot before delete so the timeline can
+  // show what was removed (item code + qty + unit price).
+  const { data: prev } = await sb.from('mfg_sales_order_items')
+    .select('item_code, qty, unit_price_centi, total_centi')
+    .eq('id', itemId).maybeSingle();
+
   const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
+
+  if (prev) {
+    await recordSoAudit(sb, {
+      docNo,
+      action: 'DELETE_LINE',
+      actorId: user.id,
+      actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      fieldChanges: [
+        { field: 'itemCode', from: prev.item_code },
+        { field: 'qty', from: prev.qty },
+        { field: 'unitPriceCenti', from: prev.unit_price_centi },
+        { field: 'totalCenti', from: prev.total_centi },
+      ],
+    });
+  }
   return c.body(null, 204);
 });
 

@@ -1235,6 +1235,31 @@ export const mfgSoPriceOverrides = pgTable('mfg_so_price_overrides', {
   idxItem: index('idx_so_overrides_item').on(t.itemId),
 }));
 
+/* PR-D — Unified SO audit trail. Commander 2026-05-27: "要有 audit trail 的
+   谁 create 了什么 update 了什么 from 什么 changes to 什么 在几点几分".
+   Supersedes mfgSoStatusChanges conceptually (both coexist for now): this
+   log captures every mutation type (CREATE / UPDATE_DETAILS / UPDATE_STATUS /
+   ADD_LINE / UPDATE_LINE / DELETE_LINE / ADD_PAYMENT / DELETE_PAYMENT) with
+   field-level from→to diffs in `fieldChanges`. Insert-only — RLS denies
+   updates and deletes so the timeline is forensic-quality. */
+export const mfgSoAuditLog = pgTable('mfg_so_audit_log', {
+  id:                 uuid('id').primaryKey().defaultRandom(),
+  soDocNo:            text('so_doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  action:             text('action').notNull(),     // 'CREATE' | 'UPDATE_DETAILS' | 'UPDATE_STATUS' | 'ADD_PAYMENT' | 'DELETE_PAYMENT' | 'ADD_LINE' | 'UPDATE_LINE' | 'DELETE_LINE'
+  actorId:            uuid('actor_id').references(() => staff.id, { onDelete: 'set null' }),
+  actorNameSnapshot:  text('actor_name_snapshot'),   // captured at write time for display stability
+  fieldChanges:       jsonb('field_changes').notNull().default([]),
+                                                     // array of { field, from, to } objects
+  statusSnapshot:     text('status_snapshot'),       // SO status at time of action
+  source:             text('source').default('web'), // 'web' | 'pos' | 'cron' | 'automation'
+  note:               text('note'),
+  createdAt:          timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDoc:   index('idx_msoaudit_doc').on(t.soDocNo),
+  idxDocAt: index('idx_msoaudit_doc_at').on(t.soDocNo, t.createdAt),
+  idxActor: index('idx_msoaudit_actor').on(t.actorId),
+}));
+
 /* PR #163 — Payments as transactions. Commander 2026-05-27:
    "save了之后不会变成一个transaction出来的吗". Each receipt becomes one
    row here (HOOKKA-style ledger). Total paid = sum(amount_centi) per
