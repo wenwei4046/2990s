@@ -24,6 +24,12 @@ ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:
 R2_BUCKET_NAME = "2990s-slips"
 R2_ENDPOINT = "https://e2494242a0fd563cacee5a301cf95dd3.r2.cloudflarestorage.com"
 
+# Task #92 — SO item photos bucket name used for S3 SigV4 presigning.
+# Distinct from R2_BUCKET_NAME (which is slips). The Worker binding is
+# named SO_ITEM_PHOTOS (below) and shares the same R2_ENDPOINT +
+# R2_ACCESS_KEY_ID/SECRET credentials (account-scoped R2 token).
+SO_ITEM_PHOTOS_BUCKET_NAME = "2990s-so-item-photos"
+
 # R2 binding for slip storage (Slip MVP).
 [[r2_buckets]]
 binding = "SLIPS"

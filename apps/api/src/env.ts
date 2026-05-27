@@ -9,6 +9,11 @@ export interface Env {
   ALLOWED_ORIGINS: string;
   R2_BUCKET_NAME: string;
   R2_ENDPOINT: string;
+  // Task #92 — bucket name used when presigning SO item photo URLs.
+  // The binding (`SO_ITEM_PHOTOS` below) is sufficient for Worker-side
+  // get/put/delete, but S3 SigV4 needs the literal bucket name in the URL
+  // path. Kept separate from R2_BUCKET_NAME (which is the slips bucket).
+  SO_ITEM_PHOTOS_BUCKET_NAME: string;
   // PR #48 — anchor for invite + recovery magic links. The link's redirectTo
   // points to `${BACKEND_PORTAL_URL}/set-password` so invited staff land on
   // the onboarding screen, not the wrong-by-default Supabase Site URL.
