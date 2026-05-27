@@ -26,7 +26,8 @@
 // per-row context menu gated by current status.
 
 import { useMemo, useState } from 'react';
-import type { JSX } from 'react';
+import type { CSSProperties, JSX } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
   Plus, X, Filter, Search,
@@ -42,9 +43,39 @@ import {
 import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
-import { BrandingPill, ItemGroupPill, badgeFor } from '../lib/category-badges';
+import { BrandingPill, badgeFor } from '../lib/category-badges';
 import styles from './MfgSalesOrdersList.module.css';
 import soDetailStyles from './SalesOrderDetail.module.css';
+
+/* Local payments hook — lazy-loaded per expanded SO row alongside the detail
+   query. Kept local to this page (not exported to flow-queries.ts) because
+   the drill-down is the only consumer today; the SO Detail page has its own
+   PaymentsTable wiring. TanStack cache key matches the detail query so a
+   future refactor can dedupe.*/
+type SoPaymentRow = {
+  id: string;
+  so_doc_no: string;
+  paid_at: string | null;
+  method: string | null;
+  approval_code: string | null;
+  amount_centi: number | null;
+};
+const useSoPaymentsForDrilldown = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-order-payments', docNo],
+  queryFn: async () => {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session.session?.access_token ?? '';
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${docNo}/payments`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return (await res.json()) as { payments: SoPaymentRow[] };
+  },
+  enabled: Boolean(docNo),
+  staleTime: 30_000,
+  retry: 1,
+  retryDelay: 800,
+});
 
 /* Commander 2026-05-27: "SO 的那些 column 是根据我们的 column 去添加的
    没有的你不要跟 autocount". Align columns to ACTUAL 2990 schema (no
@@ -160,19 +191,76 @@ const StatusPill = ({ status }: { status: string }) => (
    single SO inline under its parent row. Lazy-fetches the SO detail (header
    + items) via useMfgSalesOrderDetail — TanStack caches it so re-expanding
    the same row is instant. Designed to render INSIDE a single <td colSpan>
-   provided by DataGrid.expandable. */
+   provided by DataGrid.expandable.
+
+   Columns match the Houzs reference shot (commander 2026-05-27):
+     GROUP · ITEM CODE · DESCRIPTION · UOM · QTY · UNIT PRICE · TOTAL
+       · UNIT COST · LINE COST · MARGIN · PAYMENT
+   Plus a Subtotal footer row summing TOTAL / LINE COST / MARGIN.
+
+   Cancelled lines are filtered client-side — the existing detail endpoint
+   does not apply a `cancelled = false` filter. */
 type SoItem = {
   id: string;
-  itemCode: string | null;
-  itemGroup: string | null;
+  /* snake_case off the Supabase REST response — matches the rest of the
+     fields surfaced by `ITEM` in apps/api/src/routes/mfg-sales-orders.ts.
+     Earlier camelCase typing here was wrong (the API never transforms). */
+  item_code: string | null;
+  item_group: string | null;
   description: string | null;
+  uom: string | null;
   qty: number | null;
-  unitPriceCenti: number | null;
-  totalCenti: number | null;
-  location: string | null;
+  unit_price_centi: number | null;
+  unit_cost_centi: number | null;
+  line_cost_centi: number | null;
+  line_margin_centi: number | null;
+  total_centi: number | null;
+  cancelled: boolean | null;
 };
+
+/* Inline `CategoryPill` re-uses the shared `badgeFor` palette so the pill
+   colours stay in lockstep with the SO list's category subtotal columns +
+   the per-row Mattress/Sofa/Bedframe/Acc swatches. Kept as a local thin
+   wrapper because `ItemGroupPill` already exists for the legacy 7-column
+   drill-down; renaming-in-place would risk diverging callers. */
+const CategoryPill = ({ group }: { group: string | null | undefined }) => {
+  const spec = badgeFor(group);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '1px 8px', borderRadius: 999,
+      background: spec.bg, color: spec.fg,
+      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+      fontWeight: 700, letterSpacing: '0.06em',
+      textTransform: 'uppercase', lineHeight: 1.4, whiteSpace: 'nowrap',
+    }}>
+      {spec.label}
+    </span>
+  );
+};
+
+/* Compact cell shells reused across the table — defined once at module
+   scope so we don't allocate fresh style objects on every render. */
+const TH_BASE: CSSProperties = {
+  padding: '2px 8px', textAlign: 'left',
+};
+const TH_RIGHT: CSSProperties = { ...TH_BASE, textAlign: 'right' };
+const TD_BASE: CSSProperties = { padding: '3px 8px', verticalAlign: 'top' };
+const TD_RIGHT: CSSProperties = { ...TD_BASE, textAlign: 'right' };
+const TFOOT_LABEL: CSSProperties = {
+  ...TD_RIGHT,
+  paddingTop: 6, paddingBottom: 4,
+  fontFamily: 'var(--font-button)',
+  fontSize: 'var(--fs-10)', letterSpacing: '0.06em',
+  textTransform: 'uppercase', color: 'var(--fg-muted)',
+};
+
 const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
   const q = useMfgSalesOrderDetail(docNo);
+  /* Parallel payments fetch — Houzs PAYMENT column shows
+     `(approvalCode/customer_so_ref)` per receipt. Failure is non-fatal:
+     the column falls back to a dash if the request errors. */
+  const pq = useSoPaymentsForDrilldown(docNo);
   if (q.isLoading) {
     return (
       <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
@@ -187,7 +275,28 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
       </div>
     );
   }
-  const items = (q.data?.items ?? []) as SoItem[];
+  const allItems = (q.data?.items ?? []) as SoItem[];
+  /* Filter out cancelled lines client-side — the existing detail endpoint
+     returns them too (used by the SO Detail page's cancelled-line audit
+     panel). Houzs drill-down only shows live lines. */
+  const items = allItems.filter((it) => !it.cancelled);
+  /* Customer-side SO ref (HC10883 etc.) — used as the second token in the
+     Houzs payment ref string `(approval/HCref)`. Falls back to the
+     header's `ref` text when customer_so_no is empty. */
+  const soHeader = (q.data?.salesOrder ?? null) as { customer_so_no?: string | null; ref?: string | null } | null;
+  const customerSoRef = soHeader?.customer_so_no || soHeader?.ref || '';
+  /* Houzs joins payment refs as `(approval/HCref)(approval/HCref)…` —
+     newest-first per the API's order(paid_at desc). Empty when no payments. */
+  const payments = (pq.data?.payments ?? []) as SoPaymentRow[];
+  const paymentRefs = payments
+    .map((p) => {
+      const left = (p.approval_code ?? '').trim();
+      if (!left && !customerSoRef) return '';
+      return customerSoRef ? `(${left || '—'}/${customerSoRef})` : `(${left || '—'})`;
+    })
+    .filter(Boolean)
+    .join('');
+
   if (items.length === 0) {
     return (
       <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
@@ -195,39 +304,104 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
       </div>
     );
   }
+
+  /* Subtotal/margin/cost rollups — drive the Houzs Subtotal footer row.
+     Mirrors the per-line accessors so the totals always agree with the
+     visible cells (no rounding drift from sub-cent math). */
+  let totalCenti = 0;
+  let costCenti  = 0;
+  for (const it of items) {
+    totalCenti += Number(it.total_centi ?? 0);
+    costCenti  += Number(it.line_cost_centi ?? 0);
+  }
+  const marginCenti = totalCenti - costCenti;
+  const marginColor = marginCenti > 0
+    ? 'var(--c-secondary-a, #2F5D4F)'
+    : marginCenti < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+
   return (
-    <div style={{ padding: '6px 12px 8px 40px', background: 'var(--c-cream)' }}>
+    <div style={{
+      padding: 'var(--space-2) var(--space-3) var(--space-2) 40px',
+      background: 'var(--c-cream)',
+    }}>
       <table style={{
-        width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-11)',
-        fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)',
+        width: '100%', borderCollapse: 'collapse',
+        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
+        color: 'var(--c-ink)',
       }}>
         <thead>
-          <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', fontFamily: 'var(--font-button)',
-            fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-            <th style={{ padding: '2px 8px 2px 0', width: 110 }}>Item Code</th>
-            <th style={{ padding: '2px 8px' }}>Description</th>
-            <th style={{ padding: '2px 8px', width: 100 }}>Group</th>
-            <th style={{ padding: '2px 8px', width: 70 }}>Location</th>
-            <th style={{ padding: '2px 8px', width: 50, textAlign: 'right' }}>Qty</th>
-            <th style={{ padding: '2px 8px', width: 100, textAlign: 'right' }}>Unit Price</th>
-            <th style={{ padding: '2px 8px 2px 8px', width: 110, textAlign: 'right' }}>Subtotal</th>
+          <tr style={{
+            color: 'var(--fg-muted)',
+            fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+            letterSpacing: '0.06em', textTransform: 'uppercase',
+            borderBottom: '1px solid rgba(34, 31, 32, 0.10)',
+          }}>
+            <th style={{ ...TH_BASE, width: 100 }}>Group</th>
+            <th style={{ ...TH_BASE, width: 140 }}>Item Code</th>
+            <th style={TH_BASE}>Description</th>
+            <th style={{ ...TH_BASE, width: 60 }}>UOM</th>
+            <th style={{ ...TH_RIGHT, width: 50 }}>Qty</th>
+            <th style={{ ...TH_RIGHT, width: 100 }}>Unit Price</th>
+            <th style={{ ...TH_RIGHT, width: 100 }}>Total</th>
+            <th style={{ ...TH_RIGHT, width: 100 }}>Unit Cost</th>
+            <th style={{ ...TH_RIGHT, width: 100 }}>Line Cost</th>
+            <th style={{ ...TH_RIGHT, width: 100 }}>Margin</th>
+            <th style={{ ...TH_BASE, width: 180 }}>Payment</th>
           </tr>
         </thead>
         <tbody>
-          {items.map((it) => (
-            <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
-              <td style={{ padding: '3px 8px 3px 0', fontWeight: 600 }}>{it.itemCode ?? '—'}</td>
-              <td style={{ padding: '3px 8px' }}>{it.description ?? '—'}</td>
-              <td style={{ padding: '3px 8px' }}><ItemGroupPill group={it.itemGroup} /></td>
-              <td style={{ padding: '3px 8px' }}>{it.location ?? '—'}</td>
-              <td style={{ padding: '3px 8px', textAlign: 'right' }}>{it.qty ?? 0}</td>
-              <td style={{ padding: '3px 8px', textAlign: 'right' }}>{fmtRm(it.unitPriceCenti ?? 0)}</td>
-              <td style={{ padding: '3px 8px', textAlign: 'right', fontWeight: 600, color: 'var(--c-burnt)' }}>
-                {fmtRm(it.totalCenti ?? 0)}
-              </td>
-            </tr>
-          ))}
+          {items.map((it) => {
+            const lineTotal  = Number(it.total_centi ?? 0);
+            /* Prefer the stored `line_cost_centi` (set server-side) and
+               fall back to qty × unit_cost so older rows still display. */
+            const lineCost   = it.line_cost_centi != null
+              ? Number(it.line_cost_centi)
+              : Number(it.qty ?? 0) * Number(it.unit_cost_centi ?? 0);
+            const lineMargin = it.line_margin_centi != null
+              ? Number(it.line_margin_centi)
+              : lineTotal - lineCost;
+            const lineMarginColor = lineMargin > 0
+              ? 'var(--c-secondary-a, #2F5D4F)'
+              : lineMargin < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+            return (
+              <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
+                <td style={TD_BASE}><CategoryPill group={it.item_group} /></td>
+                <td style={{ ...TD_BASE, fontWeight: 700, color: 'var(--c-burnt)' }}>
+                  {it.item_code ?? '—'}
+                </td>
+                <td style={TD_BASE}>{it.description ?? '—'}</td>
+                <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
+                <td style={TD_RIGHT}>{it.qty ?? 0}</td>
+                <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
+                <td style={{ ...TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
+                  {fmtRm(lineTotal)}
+                </td>
+                <td style={TD_RIGHT}>{fmtRm(Number(it.unit_cost_centi ?? 0))}</td>
+                <td style={TD_RIGHT}>{fmtRm(lineCost)}</td>
+                <td style={{ ...TD_RIGHT, color: lineMarginColor, fontWeight: 600 }}>
+                  {fmtRm(lineMargin)}
+                </td>
+                <td style={{ ...TD_BASE, color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>
+                  {paymentRefs || '—'}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
+        <tfoot>
+          <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
+            <td style={{ ...TFOOT_LABEL }} colSpan={6}>Subtotal</td>
+            <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: 'var(--c-burnt)' }}>
+              {fmtRm(totalCenti)}
+            </td>
+            <td style={{ ...TD_RIGHT, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
+            <td style={{ ...TD_RIGHT, paddingTop: 6 }}>{fmtRm(costCenti)}</td>
+            <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: marginColor }}>
+              {fmtRm(marginCenti)}
+            </td>
+            <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   );
