@@ -29,6 +29,20 @@ R2_ENDPOINT = "https://e2494242a0fd563cacee5a301cf95dd3.r2.cloudflarestorage.com
 binding = "SLIPS"
 bucket_name = "2990s-slips"
 
+# R2 binding for per-line SO item photos (Task #79 — PR-F).
+# Commander must create the bucket `2990s-so-item-photos` (production)
+# + `2990s-so-item-photos-preview` (wrangler dev preview) in the
+# Cloudflare dashboard before `wrangler deploy`. Bucket stays PRIVATE —
+# images are served via the proxy endpoint
+#   GET /mfg-sales-orders/:docNo/items/:itemId/photos/:photoKey
+# so the bucket does not need public access. Custom public domain
+# (e.g. r2.2990s.com) can be wired later; until then the proxy is the
+# only entry point.
+[[r2_buckets]]
+binding = "SO_ITEM_PHOTOS"
+bucket_name = "2990s-so-item-photos"
+preview_bucket_name = "2990s-so-item-photos-preview"
+
 # R2 binding for public assets (Task 18 — category hero photos).
 # TODO(Task 18): create the 2990s-public bucket in the Cloudflare dashboard,
 # enable public access (.r2.dev or custom domain), then set VITE_R2_PUBLIC_URL
