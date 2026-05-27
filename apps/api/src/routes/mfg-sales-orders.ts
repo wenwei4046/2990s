@@ -852,25 +852,55 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
 
   // PR-D — capture the line snapshot before delete so the timeline can
   // show what was removed (item code + qty + unit price).
+  // Task #93 — also fetch photo_urls so we can clean up R2 orphans
+  // after the DB row is gone. We grab them BEFORE the delete because
+  // the row is the source of truth for which keys belong to this line.
   const { data: prev } = await sb.from('mfg_sales_order_items')
-    .select('item_code, qty, unit_price_centi, total_centi')
+    .select('item_code, qty, unit_price_centi, total_centi, photo_urls')
     .eq('id', itemId).maybeSingle();
+  const prevTyped = prev as
+    | { item_code: string; qty: number; unit_price_centi: number; total_centi: number; photo_urls: string[] | null }
+    | null;
 
   const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
 
-  if (prev) {
+  // Task #93 — orphan cleanup. Loop over the photo keys and best-effort
+  // delete each from R2. Failures are swallowed (logged) so a flaky R2
+  // op doesn't leave the user with a "delete failed" toast on top of a
+  // DB delete that already succeeded — rolling back the row to recover
+  // a few KB of blob is worse than the orphan.
+  let photosCleaned = 0;
+  const photoKeys = prevTyped?.photo_urls ?? [];
+  if (photoKeys.length > 0 && c.env.SO_ITEM_PHOTOS) {
+    for (const key of photoKeys) {
+      try {
+        await c.env.SO_ITEM_PHOTOS.delete(key);
+        photosCleaned += 1;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[so-item-photo] orphan cleanup failed for', key, e);
+      }
+    }
+  }
+
+  if (prevTyped) {
     await recordSoAudit(sb, {
       docNo,
       action: 'DELETE_LINE',
       actorId: user.id,
       actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
       fieldChanges: [
-        { field: 'itemCode', from: prev.item_code },
-        { field: 'qty', from: prev.qty },
-        { field: 'unitPriceCenti', from: prev.unit_price_centi },
-        { field: 'totalCenti', from: prev.total_centi },
+        { field: 'itemCode', from: prevTyped.item_code },
+        { field: 'qty', from: prevTyped.qty },
+        { field: 'unitPriceCenti', from: prevTyped.unit_price_centi },
+        { field: 'totalCenti', from: prevTyped.total_centi },
+        // Task #93 — note the photo cleanup so the timeline shows
+        // "deleted N photos" alongside the line removal.
+        ...(photoKeys.length > 0
+          ? [{ field: 'photosCleaned', from: photoKeys.length, to: photosCleaned } satisfies FieldChange]
+          : []),
       ],
     });
   }
