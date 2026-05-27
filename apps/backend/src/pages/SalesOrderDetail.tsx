@@ -59,6 +59,7 @@ import {
 import { useStaff } from '../lib/admin-queries';
 import { useAuth } from '../lib/auth';
 import { useVenues } from '../lib/venues-queries';
+import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { useDebouncedValue } from '../lib/hooks';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
@@ -1138,6 +1139,12 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      useVenues drives the read-only Venue input's display name. */
   const { staff: currentStaff } = useAuth();
   const venuesQ = useVenues();
+  /* Commander 2026-05-27 ("delivery 一点没有跟着跳"): Sales Location no longer
+     just mirrors header.sales_location. When the user picks a delivery state
+     we look up state_warehouse_mappings and auto-populate the field with the
+     mapped warehouse code. The user can still leave it blank (no mapping
+     exists for that state) or manually override on Maintenance. */
+  const stateWarehousesQ = useStateWarehouseMappings();
   const canChangeSalesperson =
     currentStaff?.role === 'admin' || currentStaff?.role === 'sales_director';
 
@@ -1200,6 +1207,10 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     processingDate: h.internal_expected_dd ?? '',
     customerDeliveryDate: h.customer_delivery_date ?? '',
     note: h.note ?? '',
+    /* Commander 2026-05-27 cascade — seeded from the persisted value so we
+       don't clobber a manually-entered location on first paint. The cascade
+       effect below replaces it whenever the state changes. */
+    salesLocation: h.sales_location ?? '',
   });
 
   const [form, setForm] = useState(() => initialFormFor(header));
@@ -1240,6 +1251,24 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     if (resolvedId === form.venueId && resolvedName === form.venue) return;
     setForm((s) => ({ ...s, venueId: resolvedId, venue: resolvedName }));
   }, [form.salespersonId, staffList, venuesQ.data, form.venueId, form.venue]);
+
+  /* Commander 2026-05-27 (Fix 5) — State → Sales Location cascade. When the
+     user picks a delivery state, look up state_warehouse_mappings and set
+     the Sales Location to the mapped warehouse code (the canonical inventory
+     identifier; warehouse.name is also surfaced as a tooltip for context).
+     Only fires when we have a mapping AND the resolved code differs from
+     what the form already shows — guards against re-render loops and avoids
+     stomping a manual override before the mappings query resolves. */
+  useEffect(() => {
+    if (!form.state) return;
+    const list = stateWarehousesQ.data?.mappings ?? [];
+    if (list.length === 0) return;
+    const hit = list.find((m) => m.state === form.state);
+    const code = hit?.warehouse?.code ?? null;
+    if (!code) return;
+    if (form.salesLocation === code) return;
+    setForm((s) => ({ ...s, salesLocation: code }));
+  }, [form.state, stateWarehousesQ.data, form.salesLocation]);
 
   // Cascade derivations
   const states = useMemo(() => distinctStates(localityRows), [localityRows]);
@@ -1310,6 +1339,10 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     internalExpectedDd: form.processingDate || null,
     customerDeliveryDate: form.customerDeliveryDate || null,
     note: form.note,
+    /* Commander 2026-05-27 (Fix 5) — persist the auto-resolved sales location
+       so subsequent edits don't lose it. Empty string → null so we clear the
+       column when no mapping resolves AND the user blanks it. */
+    salesLocation: form.salesLocation || null,
   });
 
   /* PR #156 — Commander 2026-05-27: "为什么能 save processing date 呢
@@ -1647,11 +1680,19 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </div>
             <div className={styles.field}>
               <span className={styles.fieldLabel}>Sales Location</span>
+              {/* Commander 2026-05-27 (Fix 5) — Auto-derived from
+                  state_warehouse_mappings on State change. Surfaced as
+                  read-only display (mappings are managed from Maintenance)
+                  but the live form value is what gets persisted. */}
               <span className={styles.fieldInput} style={{
                 display: 'inline-flex', alignItems: 'center', height: 26,
                 color: 'var(--fg-muted)',
-              }}>
-                {header.sales_location ?? '—'}
+              }}
+                title={form.salesLocation
+                  ? `Auto-set from State → Warehouse mapping for "${form.state}"`
+                  : 'Pick a State above to auto-set'}
+              >
+                {form.salesLocation || header.sales_location || '—'}
               </span>
             </div>
           </div>

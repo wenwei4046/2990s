@@ -199,6 +199,10 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
             onChange={(e) => set('supplierCode', e.target.value)} />
         </label>
 
+        {/* Commander 2026-05-27 (Fix 6): only Price 1 and Price 2 are in
+            commercial use today. PRICE_3 dropped from the dropdown but
+            retained in the enum so historical rows still render their
+            tier; click-cycle on the table collapses to a 2-state toggle. */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
           <label>
             <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 4 }}>Sofa Tier</div>
@@ -207,7 +211,6 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
               onChange={(e) => set('sofaPriceTier', e.target.value as FabricTier)}>
               <option value="PRICE_1">Price 1</option>
               <option value="PRICE_2">Price 2</option>
-              <option value="PRICE_3">Price 3</option>
             </select>
           </label>
           <label>
@@ -217,7 +220,6 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
               onChange={(e) => set('bedframePriceTier', e.target.value as FabricTier)}>
               <option value="PRICE_1">Price 1</option>
               <option value="PRICE_2">Price 2</option>
-              <option value="PRICE_3">Price 3</option>
             </select>
           </label>
         </div>

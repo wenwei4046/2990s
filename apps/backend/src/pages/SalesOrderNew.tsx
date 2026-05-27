@@ -43,6 +43,7 @@ import {
 import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
+import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import {
   PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
@@ -146,6 +147,11 @@ export const SalesOrderNew = () => {
   const [state,       setState]       = useState('');
   const [city,        setCity]        = useState('');
   const [postcode,    setPostcode]    = useState('');
+  /* Commander 2026-05-27 (Fix 5) — Sales Location auto-derives from the
+     state_warehouse_mappings entry for the picked state. Held in local
+     state so the cascade effect can overwrite it whenever State changes
+     while still allowing future manual override. */
+  const [salesLocation, setSalesLocation] = useState('');
 
   // ── Emergency contact ──────────────────────────────────────────────
   const [emergencyName,  setEmergencyName]   = useState('');
@@ -276,6 +282,22 @@ export const SalesOrderNew = () => {
     () => (state && city) ? postcodesInCity(locRows, state, city) : [],
     [locRows, state, city],
   );
+
+  /* Commander 2026-05-27 (Fix 5) — State → Sales Location cascade. Same
+     rule as Edit SO: pick a state, the Sales Location auto-fills with the
+     warehouse code from state_warehouse_mappings. No-op when the state has
+     no mapping (commander needs to wire it up in Maintenance first). */
+  const stateWarehousesQ = useStateWarehouseMappings();
+  useEffect(() => {
+    if (!state) return;
+    const list = stateWarehousesQ.data?.mappings ?? [];
+    if (list.length === 0) return;
+    const hit = list.find((m) => m.state === state);
+    const code = hit?.warehouse?.code ?? null;
+    if (!code) return;
+    if (salesLocation === code) return;
+    setSalesLocation(code);
+  }, [state, stateWarehousesQ.data, salesLocation]);
   /* Task #121 — country derives from the picked state. Display-only on the
      SO form; the API re-derives + snapshots it on POST/PATCH. Falls back
      to 'Malaysia' when no state is picked yet so the field doesn't sit
@@ -481,6 +503,10 @@ export const SalesOrderNew = () => {
         customerState: state || undefined,
         city: city || undefined,
         postcode: postcode || undefined,
+        /* Commander 2026-05-27 (Fix 5) — auto-resolved from State via
+           state_warehouse_mappings; persisted so reports + dispatch flows
+           see it without a separate edit. */
+        salesLocation: salesLocation || undefined,
         buildingType: buildingType || undefined,
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
@@ -927,6 +953,23 @@ export const SalesOrderNew = () => {
                 color: 'var(--fg-muted)',
               }}>
                 {country}
+              </span>
+            </div>
+            {/* Commander 2026-05-27 (Fix 5) — Sales Location auto-derives
+                from state_warehouse_mappings on state change. Read-only
+                display (mappings live in Maintenance). Empty when the picked
+                state has no warehouse wired up yet. */}
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Sales Location</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 26,
+                color: 'var(--fg-muted)',
+              }}
+                title={salesLocation
+                  ? `Auto-set from State → Warehouse mapping for "${state}"`
+                  : 'Pick a State above to auto-set'}
+              >
+                {salesLocation || '—'}
               </span>
             </div>
           </div>

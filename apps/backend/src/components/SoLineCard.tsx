@@ -373,15 +373,19 @@ const SoLineCardInner = ({
           )}
           {showPicker && isEditing && candidates.length > 0 && (
             <ul className={styles.suggestList}>
+              {/* Commander 2026-05-27: picker dropdown rows show description +
+                  price only — code chip line + category pill stripped so the
+                  list is one scannable line per SKU. The code still binds on
+                  click (pickProduct uses p.code) and shows on the collapsed
+                  picker; only the dropdown's per-row chrome was trimmed. */}
               {candidates.slice(0, 50).map((p) => (
                 <li
                   key={p.id}
                   className={styles.suggestItem}
                   onMouseDown={() => { pickProduct(p); setShowPicker(false); }}
                 >
-                  <div><span className={styles.suggestItemCode}>{p.code}</span></div>
                   <div className={styles.suggestItemMeta}>
-                    {p.name} · {p.category} · {fmtRm(p.base_price_sen ?? 0)}
+                    {p.name} · {fmtRm(p.base_price_sen ?? 0)}
                   </div>
                 </li>
               ))}
@@ -486,10 +490,18 @@ const SoLineCardInner = ({
           RIGHT = price summary + photos (the always-visible context)
           The body only renders when there's something to show on either
           side, i.e. picked a product OR have variants. On a fresh empty
-          card with no SKU picked yet we collapse to just the header row. */}
+          card with no SKU picked yet we collapse to just the header row.
+
+          Commander 2026-05-27 (Fix 2): mattress / accessory / others have no
+          per-line variants — render only the right rail (pricing + photos)
+          so the row stays compact. We collapse the grid by skipping bodyLeft
+          when there's no variant UI to show. */}
       {(picked || hasVariants || canShowPhotos) && (
-      <div className={styles.body}>
-        <div className={styles.bodyLeft}>
+      <div
+        className={styles.body}
+        style={hasVariants ? undefined : { gridTemplateColumns: '1fr' }}
+      >
+        {hasVariants && <div className={styles.bodyLeft}>
       {hasVariants && category === 'bedframe' && (
         <div className={styles.variants}>
           <div className={styles.variantsHead}>BEDFRAME VARIANTS</div>
@@ -598,7 +610,7 @@ const SoLineCardInner = ({
         </div>
       )}
 
-        </div>
+        </div>}
         {/* /bodyLeft */}
 
         {/* ── Right rail (price summary + photos) ───────────────── */}
