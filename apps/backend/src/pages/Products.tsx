@@ -1213,15 +1213,50 @@ const SOFA_MODULE_BY_NORM_ID = new Map(
   SOFA_MODULES.map((m) => [normalizeCompartmentCode(m.id), m]),
 );
 
-// Commander 2026-05-27 wording overrides — POS labels are technical
-// ("1B · Left hand facing (wide arm)"); commander asked for shorter,
-// human-readable copy that emphasises the bench / no-arm rule. Only
-// listed codes get the override; others fall back to SOFA_MODULES.label.
+// Commander 2026-05-27 wording overrides — full taxonomy per commander's
+// definitive notes. POS labels are technical ("1A · Left hand facing");
+// these overrides give back-office staff plain definitions of what each
+// module actually IS. Listed codes get the override; others fall back to
+// SOFA_MODULES.label.
+//
+// Naming conventions (commander):
+//   nS  = N seats with arms on BOTH sides (1S = 1 seat + 2 arms)
+//   nA  = N seats with arm on ONE side (handed: LHF/RHF says which)
+//   nB  = N seats with arm on ONE side, opposite side is a Seat Cushion
+//         (bench-style — the missing-arm spot becomes seating)
+//   nNA = N seats, NO arms
+//   (P) suffix = Power Recliner (electric)
+//   (R) suffix = Manual Recliner
+//   Console = the divider/storage unit between two seats
 const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
-  '1B-LHF': '1-Sitter with Bench (LHF, no arm where bench)',
-  '1B-RHF': '1-Sitter with Bench (RHF, no arm where bench)',
-  '2B-LHF': '2-Bench (LHF, two seats, one arm)',
-  '2B-RHF': '2-Bench (RHF, two seats, one arm)',
+  // ── 1-Seaters ──────────────────────────────────────────────────────
+  '1S':     '1 seat, arms on BOTH sides',
+  '1A-LHF': '1 seat, ONE arm (left)',
+  '1A-RHF': '1 seat, ONE arm (right)',
+  '1B-LHF': '1 seat, ONE arm (left) — right side is a Seat Cushion (bench)',
+  '1B-RHF': '1 seat, ONE arm (right) — left side is a Seat Cushion (bench)',
+  '1NA':    '1 seat, NO arms',
+
+  // ── 1-Seater Recliners ────────────────────────────────────────────
+  // (P) = Power Recliner (electric) · (R) = Manual Recliner
+  '1A(P)-LHF': '1 seat + ONE arm (left) — Power Recliner (electric)',
+  '1A(P)-RHF': '1 seat + ONE arm (right) — Power Recliner (electric)',
+  '1A(R)-LHF': '1 seat + ONE arm (left) — Manual Recliner',
+  '1A(R)-RHF': '1 seat + ONE arm (right) — Manual Recliner',
+  '1NA(P)':    '1 seat, NO arms — Power Recliner (electric)',
+  '1NA(R)':    '1 seat, NO arms — Manual Recliner',
+
+  // ── 2-Seaters ──────────────────────────────────────────────────────
+  '2S':     '2 seats, arms on BOTH sides',
+  '2A-LHF': '2 seats, ONE arm (left)',
+  '2A-RHF': '2 seats, ONE arm (right)',
+  '2B-LHF': '2 seats, ONE arm (left) — opposite side is a Seat Cushion (bench)',
+  '2B-RHF': '2 seats, ONE arm (right) — opposite side is a Seat Cushion (bench)',
+  '2NA':    '2 seats, NO arms',
+
+  // ── Accessories ────────────────────────────────────────────────────
+  CNR:    'Console — middle divider/storage between two seats',
+  STOOL:  'Ottoman / stool',
 };
 
 // Resolve the seeded default for one compartment code. UI surfaces this
