@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 110" width="160" height="110">
+  <title>2990s Sofa Module — 2B-RHF — 2 Seater with RIGHT Bench (no armrest, cushion in arm position)</title>
+  <desc>Top-down plan view. Same shape as 2A-RHF, but where 2A has a regular hard armrest on the right, 2B has a wider Seat Bench Cushion. Left side is open (no arm).</desc>
+  <g transform="translate(20,20)">
+    <rect x="0" y="0" width="120" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"/>
+    <rect x="0" y="0" width="120" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
+    <!-- RIGHT Seat Bench Cushion -->
+    <rect x="106" y="11" width="14" height="59" fill="#EBDBC2" stroke="#2C2C2A" stroke-width="0.8"/>
+    <line x1="109" y1="22" x2="117" y2="22" stroke="#A89570" stroke-width="0.4" stroke-dasharray="1,1.5"/>
+    <line x1="109" y1="55" x2="117" y2="55" stroke="#A89570" stroke-width="0.4" stroke-dasharray="1,1.5"/>
+    <text x="113" y="42" font-family="sans-serif" font-size="5" fill="#8C7956" text-anchor="middle" font-weight="700" letter-spacing="0.5">BENCH</text>
+    <!-- Seat divider -->
+    <line x1="53" y1="0" x2="53" y2="70" stroke="#2C2C2A" stroke-width="0.5" stroke-dasharray="2,2"/>
+  </g>
+</svg>

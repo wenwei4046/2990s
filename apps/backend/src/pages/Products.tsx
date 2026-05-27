@@ -1213,28 +1213,25 @@ const SOFA_MODULE_BY_NORM_ID = new Map(
   SOFA_MODULES.map((m) => [normalizeCompartmentCode(m.id), m]),
 );
 
-// Commander 2026-05-27 wording overrides — full taxonomy per commander's
-// definitive notes. POS labels are technical ("1A · Left hand facing");
-// these overrides give back-office staff plain definitions of what each
-// module actually IS. Listed codes get the override; others fall back to
-// SOFA_MODULES.label.
+// Commander 2026-05-27 definitive taxonomy (CORRECTED):
 //
-// Naming conventions (commander):
 //   nS  = N seats with arms on BOTH sides (1S = 1 seat + 2 arms)
-//   nA  = N seats with arm on ONE side (handed: LHF/RHF says which)
-//   nB  = N seats with arm on ONE side, opposite side is a Seat Cushion
-//         (bench-style — the missing-arm spot becomes seating)
+//   nA  = N seats with arm on ONE side (LHF/RHF says which side has arm)
+//   nB  = N seats — the LHF/RHF side's "arm position" is a Seat Cushion
+//         (bench) instead of a real arm. Commander rule: "Left 就是左边是
+//         坐垫的意思" — 1B-LHF means LEFT is bench, RIGHT has the arm.
 //   nNA = N seats, NO arms
 //   (P) suffix = Power Recliner (electric)
 //   (R) suffix = Manual Recliner
-//   Console = the divider/storage unit between two seats
+//   CNR = Corner piece (90° L-shape connector — NOT a console)
+//   WC-45 = Wood Console (45cm) — divider/storage between two seats
 const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   // ── 1-Seaters ──────────────────────────────────────────────────────
   '1S':     '1 seat, arms on BOTH sides',
   '1A-LHF': '1 seat, ONE arm (left)',
   '1A-RHF': '1 seat, ONE arm (right)',
-  '1B-LHF': '1 seat, ONE arm (left) — right side is a Seat Cushion (bench)',
-  '1B-RHF': '1 seat, ONE arm (right) — left side is a Seat Cushion (bench)',
+  '1B-LHF': '1 seat — LEFT is Seat Cushion (bench), RIGHT has regular arm',
+  '1B-RHF': '1 seat — RIGHT is Seat Cushion (bench), LEFT has regular arm',
   '1NA':    '1 seat, NO arms',
 
   // ── 1-Seater Recliners ────────────────────────────────────────────
@@ -1250,13 +1247,14 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   '2S':     '2 seats, arms on BOTH sides',
   '2A-LHF': '2 seats, ONE arm (left)',
   '2A-RHF': '2 seats, ONE arm (right)',
-  '2B-LHF': '2 seats, ONE arm (left) — opposite side is a Seat Cushion (bench)',
-  '2B-RHF': '2 seats, ONE arm (right) — opposite side is a Seat Cushion (bench)',
+  '2B-LHF': '2 seats — LEFT is Seat Cushion (bench), RIGHT has regular arm',
+  '2B-RHF': '2 seats — RIGHT is Seat Cushion (bench), LEFT has regular arm',
   '2NA':    '2 seats, NO arms',
 
-  // ── Accessories ────────────────────────────────────────────────────
-  CNR:    'Console — middle divider/storage between two seats',
-  STOOL:  'Ottoman / stool',
+  // ── Corner + Accessories ──────────────────────────────────────────
+  CNR:     'Corner piece — 90° L-shape connector',
+  'WC-45': 'Console (Wood, 45cm) — divider/storage between two seats',
+  STOOL:   'Ottoman / stool',
 };
 
 // Resolve the seeded default for one compartment code. UI surfaces this
@@ -1266,8 +1264,13 @@ const seedCompartmentMeta = (code: string): CompartmentMeta => {
   const norm = normalizeCompartmentCode(code);
   const mod  = SOFA_MODULE_BY_NORM_ID.get(norm);
   if (!mod) return {};
+  // 1B + 2B got bespoke SVG redesigns showing the bench cushion side
+  // explicitly (commander 2026-05-27 — POS PNGs didn't differentiate from
+  // 1A/2A). Other modules still use the POS-canonical PNG.
+  const REDESIGNED_AS_SVG = new Set(['1B-LHF', '1B-RHF', '2B-LHF', '2B-RHF']);
+  const ext = REDESIGNED_AS_SVG.has(mod.id) ? 'svg' : 'png';
   return {
-    imageKey:    `sofa-modules/${mod.id}.png`,
+    imageKey:    `sofa-modules/${mod.id}.${ext}`,
     description: COMPARTMENT_DESCRIPTION_OVERRIDE[mod.id] ?? mod.label,
     // SOFA_MODULES carries no base price — POS reads pricing from
     // product_compartments per Model. Default to 0 here; commander can
