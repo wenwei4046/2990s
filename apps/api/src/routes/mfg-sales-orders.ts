@@ -42,7 +42,12 @@ const nextDocNo = async (sb: any): Promise<string> => {
 
 mfgSalesOrders.get('/', async (c) => {
   const sb = c.get('supabase');
-  let q = sb.from('mfg_sales_orders').select(HEADER).order('so_date', { ascending: false }).limit(500);
+  /* Follow-up #83 — read from the view that joins payments ledger totals so
+     Balance column is live (= local_total − sum(payments)). Header column
+     `balance_centi` is still in the SELECT for backward compat (the grid
+     falls back to it if the view's `balance_centi_live` is absent). */
+  const LIST_COLS = `${HEADER}, paid_total_centi, balance_centi_live`;
+  let q = sb.from('mfg_sales_orders_with_payment_totals').select(LIST_COLS).order('so_date', { ascending: false }).limit(500);
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const debtor = c.req.query('debtor'); if (debtor) q = q.ilike('debtor_name', `%${debtor}%`);
   const { data, error } = await q;

@@ -32,6 +32,12 @@ type SoRow = {
   customer_so_no: string | null;
   local_total_centi: number;
   balance_centi: number;
+  /* Follow-up #83 — live balance derived from payments ledger. Comes from
+     the mfg_sales_orders_with_payment_totals view. May be null/absent on
+     older clients / failed view migration; column falls back to
+     balance_centi → (local_total − paid_centi). */
+  balance_centi_live?: number | null;
+  paid_total_centi?: number | null;
   paid_centi: number;
   remark2: string | null;
   remark3: string | null;
@@ -53,6 +59,16 @@ type SoRow = {
 
 const fmtRm = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* Follow-up #83 — Balance column source-of-truth chain:
+   1. view's balance_centi_live (local_total − sum(payments))
+   2. header.balance_centi (legacy stored value)
+   3. local_total − header.paid_centi (last-resort derivation) */
+const liveBalance = (r: SoRow): number => {
+  if (typeof r.balance_centi_live === 'number') return r.balance_centi_live;
+  if (typeof r.balance_centi === 'number') return r.balance_centi;
+  return r.local_total_centi - (r.paid_centi ?? 0);
+};
 
 const STATUS_CLASS: Record<string, string> = {
   DRAFT:          soDetailStyles.statusDraft ?? '',
@@ -296,15 +312,14 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
   },
   {
+    /* Follow-up #83 — prefer the view's live balance (local_total −
+       sum(payments)). Falls back to the stored header balance_centi if the
+       view column is missing (older API), then to a client-side derivation
+       from paid_centi as the last resort. */
     key: 'balance_centi', label: 'Balance', width: 110, sortable: true, align: 'right', groupable: false,
-    accessor: (r) => {
-      const bal = r.balance_centi ?? (r.local_total_centi - (r.paid_centi ?? 0));
-      return <span className={styles.money}>{fmtRm(bal)}</span>;
-    },
-    searchValue: (r) => fmtRm(r.balance_centi ?? r.local_total_centi - (r.paid_centi ?? 0)),
-    sortFn: (a, b) =>
-      (a.balance_centi ?? a.local_total_centi - (a.paid_centi ?? 0)) -
-      (b.balance_centi ?? b.local_total_centi - (b.paid_centi ?? 0)),
+    accessor: (r) => <span className={styles.money}>{fmtRm(liveBalance(r))}</span>,
+    searchValue: (r) => fmtRm(liveBalance(r)),
+    sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
     key: 'remark2', label: 'Remark 2', width: 140, sortable: true,
