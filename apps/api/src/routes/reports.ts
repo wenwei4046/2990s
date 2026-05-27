@@ -276,18 +276,29 @@ reports.get('/sales-invoice-detail-listing', async (c) => {
 
   const rows = ((data ?? []) as unknown as AnyRow[])
     .map((r) => {
+      // Capture header totals before flatten — line items have their own
+      // `discount_centi` / `tax_centi`, and the LINE values win in flatten,
+      // so the header values must be snapshotted up front for the
+      // outstanding calculation.
+      const headerRaw = r.sales_invoices as AnyRow | AnyRow[] | null;
+      const headerObj: AnyRow = Array.isArray(headerRaw)
+        ? ((headerRaw[0] as AnyRow) ?? {})
+        : ((headerRaw as AnyRow) ?? {});
+      const headerTotal = Number(headerObj.total_centi ?? 0);
+      const headerPaid  = Number(headerObj.paid_centi ?? 0);
+      const headerDiscount = Number(headerObj.discount_centi ?? 0);
+      const headerTax      = Number(headerObj.tax_centi ?? 0);
+
       const flat = flattenJoin(r, 'sales_invoices');
       flat.doc_no = flat.invoice_number;
       flat.line_date = flat.invoice_date;
       // Use the LINE total, not the header total, for revenue column on L2.
       flat.total_centi = flat.line_total_centi ?? 0;
       // Outstanding = header total − header paid (per doc, repeated per line).
-      const headerTotal = Number(flat.total_centi_header ?? flat.total_centi ?? 0);
-      const headerPaid  = Number(flat.paid_centi ?? 0);
-      // Stash header totals under explicit names so the client can use them
-      // for the "Outstanding" KPI without colliding with the line total.
-      flat.header_total_centi = headerTotal;
-      flat.header_paid_centi  = headerPaid;
+      flat.header_total_centi    = headerTotal;
+      flat.header_paid_centi     = headerPaid;
+      flat.header_discount_centi = headerDiscount;
+      flat.header_tax_centi      = headerTax;
       flat.balance_centi = Math.max(headerTotal - headerPaid, 0);
       return flat;
     })
@@ -390,19 +401,25 @@ reports.get('/delivery-return-detail-listing', async (c) => {
 
   const rows = ((data ?? []) as unknown as AnyRow[])
     .map((r) => {
-      // Both line and header have refund_centi — preserve the line value
-      // before flatten clobbers it with the header value.
-      const lineRefund = r.refund_centi;
+      // Both line and header have refund_centi. Capture each explicitly
+      // before flattenJoin's "line wins" rule discards the header value.
+      const lineRefund = Number(r.refund_centi ?? 0);
+      const headerRaw = r.delivery_returns as AnyRow | AnyRow[] | null;
+      const headerObj: AnyRow = Array.isArray(headerRaw)
+        ? ((headerRaw[0] as AnyRow) ?? {})
+        : ((headerRaw as AnyRow) ?? {});
+      const headerRefund = Number(headerObj.refund_centi ?? 0);
       const flat = flattenJoin(r, 'delivery_returns');
-      flat.line_refund_centi = lineRefund ?? 0;
+      flat.line_refund_centi = lineRefund;
+      flat.refund_centi_header = headerRefund;
       flat.doc_no = flat.return_number;
       flat.line_date = flat.return_date;
-      flat.total_centi = Number(lineRefund ?? 0);
+      flat.total_centi = lineRefund;
       // "Outstanding" for a return = pending payout (status not yet REFUNDED
       // / CREDIT_NOTED / REJECTED).
       const headerStatus = String(flat.status ?? '');
       const settled = headerStatus === 'REFUNDED' || headerStatus === 'CREDIT_NOTED' || headerStatus === 'REJECTED';
-      flat.balance_centi = settled ? 0 : Number(flat.refund_centi_header ?? flat.total_centi ?? 0);
+      flat.balance_centi = settled ? 0 : headerRefund;
       return flat;
     })
     .filter((r) => {

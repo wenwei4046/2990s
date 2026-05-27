@@ -45,7 +45,6 @@ export type DetailListingKpis = {
 export interface DetailListingShellProps<R extends DetailListingRow> {
   title: string;
   subtitle: string;
-  /** Default sort label appearing in the Sort By dropdown. */
   /** Stable localStorage key for the DataGrid layout. */
   storageKey: string;
   /** Static placeholder for the doc number filter input ("DO-2605-001" etc.) */
