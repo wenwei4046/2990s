@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Plus, Save, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
@@ -662,16 +662,19 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Type</span>
-              <select
-                className={styles.fieldSelect}
-                value={customerType}
-                onChange={(e) => setCustomerType(e.target.value)}
-              >
-                <option value="">—</option>
-                {customerTypeOpts.map((t) => (
-                  <option key={t.id} value={t.value}>{t.label}</option>
-                ))}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={customerType}
+                  onChange={(e) => setCustomerType(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {customerTypeOpts.map((t) => (
+                    <option key={t.id} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Salesperson</span>
@@ -681,22 +684,25 @@ export const SalesOrderNew = () => {
                   disabled select pinned to themselves so the field is
                   visible-but-not-editable (UI parity with the editable
                   case). */}
-              <select
-                className={styles.fieldSelect}
-                value={salespersonId}
-                onChange={(e) => setSalespersonId(e.target.value)}
-                disabled={!canChangeSalesperson}
-              >
-                {!canChangeSalesperson && currentStaff && (
-                  <option value={currentStaff.id}>
-                    {currentStaff.name} ({currentStaff.staffCode})
-                  </option>
-                )}
-                {canChangeSalesperson && <option value="">— Pick staff —</option>}
-                {canChangeSalesperson && staffList.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
-                ))}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={salespersonId}
+                  onChange={(e) => setSalespersonId(e.target.value)}
+                  disabled={!canChangeSalesperson}
+                >
+                  {!canChangeSalesperson && currentStaff && (
+                    <option value={currentStaff.id}>
+                      {currentStaff.name} ({currentStaff.staffCode})
+                    </option>
+                  )}
+                  {canChangeSalesperson && <option value="">— Pick staff —</option>}
+                  {canChangeSalesperson && staffList.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
           </div>
         </div>
@@ -712,16 +718,19 @@ export const SalesOrderNew = () => {
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
-              <select
-                className={styles.fieldSelect}
-                value={buildingType}
-                onChange={(e) => setBuildingType(e.target.value)}
-              >
-                <option value="">—</option>
-                {buildingTypeOpts.map((b) => (
-                  <option key={b.id} value={b.value}>{b.label}</option>
-                ))}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={buildingType}
+                  onChange={(e) => setBuildingType(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {buildingTypeOpts.map((b) => (
+                    <option key={b.id} value={b.value}>{b.label}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Venue</span>
@@ -815,16 +824,19 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Relationship</span>
-              <select
-                className={styles.fieldSelect}
-                value={emergencyRel}
-                onChange={(e) => setEmergencyRel(e.target.value)}
-              >
-                <option value="">—</option>
-                {relationshipOpts.map((r) => (
-                  <option key={r.id} value={r.value}>{r.label}</option>
-                ))}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={emergencyRel}
+                  onChange={(e) => setEmergencyRel(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {relationshipOpts.map((r) => (
+                    <option key={r.id} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Phone</span>
@@ -909,39 +921,48 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>State</span>
-              <select
-                className={styles.fieldSelect}
-                value={state}
-                onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
-                disabled={loc.isLoading}
-              >
-                <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
-                {states.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={state}
+                  onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
+                  disabled={loc.isLoading}
+                >
+                  <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
+                  {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>City</span>
-              <select
-                className={styles.fieldSelect}
-                value={city}
-                onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
-                disabled={!state}
-              >
-                <option value="">{state ? 'Pick city' : '— pick state first'}</option>
-                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={city}
+                  onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
+                  disabled={!state}
+                >
+                  <option value="">{state ? 'Pick city' : '— pick state first'}</option>
+                  {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Postcode</span>
-              <select
-                className={styles.fieldSelect}
-                value={postcode}
-                onChange={(e) => setPostcode(e.target.value)}
-                disabled={!state || !city}
-              >
-                <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
-                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <span className={styles.selectWrap}>
+                <select
+                  className={styles.fieldSelect}
+                  value={postcode}
+                  onChange={(e) => setPostcode(e.target.value)}
+                  disabled={!state || !city}
+                >
+                  <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
+                  {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+              </span>
             </label>
             {/* Task #121 — Country is auto-derived from the picked state via
                 my_localities. Read-only display; the API re-derives + snaps
