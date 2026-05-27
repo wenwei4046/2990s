@@ -1476,8 +1476,8 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   '1S':     '1 seat, arms on BOTH sides',
   '1A-LHF': '1 seat, ONE arm (left)',
   '1A-RHF': '1 seat, ONE arm (right)',
-  '1B-LHF': '1 seat — LEFT is Seat Cushion (bench), RIGHT has regular arm',
-  '1B-RHF': '1 seat — RIGHT is Seat Cushion (bench), LEFT has regular arm',
+  '1B-LHF': '1 seat — LEFT is Seat Cushion (bench), no arm on the right',
+  '1B-RHF': '1 seat — RIGHT is Seat Cushion (bench), no arm on the left',
   '1NA':    '1 seat, NO arms',
 
   // ── 1-Seater Recliners ────────────────────────────────────────────
@@ -1511,8 +1511,8 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   '2S':     '2 seats, arms on BOTH sides',
   '2A-LHF': '2 seats, ONE arm (left)',
   '2A-RHF': '2 seats, ONE arm (right)',
-  '2B-LHF': '2 seats — LEFT is Seat Cushion (bench), RIGHT has regular arm',
-  '2B-RHF': '2 seats — RIGHT is Seat Cushion (bench), LEFT has regular arm',
+  '2B-LHF': '2 seats — LEFT is Seat Cushion (bench), no arm on the right',
+  '2B-RHF': '2 seats — RIGHT is Seat Cushion (bench), no arm on the left',
   '2NA':    '2 seats, NO arms',
 
   // ── Corner + Accessories ──────────────────────────────────────────
