@@ -23,7 +23,7 @@ import {
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
-  DollarSign, Lock, Clock, AlertCircle, History, ChevronDown, ChevronRight,
+  DollarSign, Lock, History, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -34,16 +34,12 @@ import {
   useUpdateMfgSalesOrderItem,
   useDeleteMfgSalesOrderItem,
   useDebtorSearch,
-  useMfgSalesOrderStatusChanges,
-  useMfgSalesOrderPriceOverrides,
   useOverrideMfgSoLinePrice,
   useSalesOrderAuditLog,
   useSalesOrderPayments,
   useAddSalesOrderPayment,
   useDeleteSalesOrderPayment,
   type DebtorSuggestion,
-  type SoStatusChange,
-  type SoPriceOverride,
   type SoAuditEntry,
   type SoAuditFieldChange,
   type SoPayment,
@@ -616,11 +612,13 @@ export const SalesOrderDetail = () => {
         );
       })()}
 
-      {/* ── Status timeline (audit) ─────────────────────────────── */}
-      <StatusTimeline docNo={header.doc_no} currentStatus={header.status} />
-
-      {/* ── Price override audit ────────────────────────────────── */}
-      <PriceOverridePanel docNo={header.doc_no} currency={header.currency} />
+      {/* Followup #85 — the standalone StatusTimeline + PriceOverridePanel
+          audit cards were superseded by the PR-D History drawer, which
+          shows ALL action types (CREATE / UPDATE_DETAILS / UPDATE_STATUS /
+          ADD_LINE / UPDATE_LINE / DELETE_LINE / ADD_PAYMENT / …) in one
+          unified feed. The underlying mfg_so_status_changes and
+          mfg_so_price_overrides tables stay (writes continue), so old
+          data remains queryable — only the rendering is removed. */}
 
       {/* ── Modals ─────────────────────────────────────────────── */}
       {(adding || editing) && (
@@ -2152,171 +2150,12 @@ const PaymentCard = ({
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   StatusTimeline — PR #35 audit trail of status changes
+   StatusTimeline + PriceOverridePanel — removed in followup #85
+   Both standalone audit cards were superseded by the PR-D History drawer
+   (useSalesOrderAuditLog), which renders the same data plus every other
+   action type in one unified feed. The underlying tables and writes are
+   retained so the data remains queryable for admin tooling.
    ════════════════════════════════════════════════════════════════════════ */
-
-const StatusTimeline = ({
-  docNo,
-  currentStatus,
-}: {
-  docNo: string;
-  currentStatus: SoStatus;
-}) => {
-  const q = useMfgSalesOrderStatusChanges(docNo);
-  const changes = q.data ?? [];
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>
-          <Clock {...ICON} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          Status Timeline
-          <span className={styles.muted} style={{ marginLeft: 8, fontWeight: 400 }}>
-            ({changes.length} {changes.length === 1 ? 'entry' : 'entries'})
-          </span>
-        </h2>
-      </header>
-      <div className={styles.cardBody}>
-        {q.isLoading ? (
-          <p className={styles.fieldLabel}>Loading…</p>
-        ) : changes.length === 0 ? (
-          <p className={styles.muted}>
-            No status changes recorded yet. Current status: <strong>{currentStatus.replace(/_/g, ' ')}</strong>.
-          </p>
-        ) : (
-          <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {changes.map((c: SoStatusChange) => (
-              <li key={c.id} style={{
-                display: 'grid',
-                gridTemplateColumns: '160px 1fr',
-                gap: 'var(--space-3)',
-                padding: 'var(--space-2) 0',
-                borderBottom: '1px solid var(--c-line, rgba(34,31,32,0.08))',
-                fontSize: 'var(--fs-13)',
-              }}>
-                <div className={styles.muted}>
-                  {new Date(c.created_at).toLocaleString('en-MY', {
-                    year: 'numeric', month: 'short', day: '2-digit',
-                    hour: '2-digit', minute: '2-digit',
-                  })}
-                </div>
-                <div>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    {c.from_status ? (
-                      <>
-                        <span className={`${styles.statusPill} ${STATUS_CLASS[c.from_status as SoStatus] ?? ''}`}>
-                          {c.from_status.replace(/_/g, ' ')}
-                        </span>
-                        <span>→</span>
-                      </>
-                    ) : null}
-                    <span className={`${styles.statusPill} ${STATUS_CLASS[c.to_status as SoStatus] ?? ''}`}>
-                      {c.to_status.replace(/_/g, ' ')}
-                    </span>
-                  </span>
-                  {c.notes && <div className={styles.muted} style={{ marginTop: 4 }}>{c.notes}</div>}
-                  {Array.isArray(c.auto_actions) && c.auto_actions.length > 0 && (
-                    <div className={styles.muted} style={{ marginTop: 4, fontStyle: 'italic' }}>
-                      Auto: {(c.auto_actions as string[]).join(', ')}
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
-    </section>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   PriceOverridePanel — PR #35 audit trail of line price overrides
-   ════════════════════════════════════════════════════════════════════════ */
-
-const PriceOverridePanel = ({
-  docNo,
-  currency,
-}: {
-  docNo: string;
-  currency: string;
-}) => {
-  const q = useMfgSalesOrderPriceOverrides(docNo);
-  const overrides = q.data ?? [];
-
-  if (q.isLoading) {
-    return (
-      <section className={styles.card}>
-        <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Price Overrides</h2>
-        </header>
-        <div className={styles.cardBody}>
-          <p className={styles.fieldLabel}>Loading…</p>
-        </div>
-      </section>
-    );
-  }
-
-  if (overrides.length === 0) return null;
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>
-          <AlertCircle {...ICON} style={{ verticalAlign: 'middle', marginRight: 6, color: 'var(--c-orange)' }} />
-          Price Overrides
-          <span className={styles.muted} style={{ marginLeft: 8, fontWeight: 400 }}>
-            ({overrides.length})
-          </span>
-        </h2>
-      </header>
-      <div className={styles.cardBody}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Item Code</th>
-              <th className={styles.tableRight}>Original</th>
-              <th className={styles.tableRight}>Override</th>
-              <th className={styles.tableRight}>Δ</th>
-              <th>Reason</th>
-              <th>When</th>
-            </tr>
-          </thead>
-          <tbody>
-            {overrides.map((o: SoPriceOverride) => {
-              const delta = o.override_price_sen - o.original_price_sen;
-              const deltaPct = o.original_price_sen > 0
-                ? (delta / o.original_price_sen) * 100
-                : 0;
-              return (
-                <tr key={o.id}>
-                  <td><div className={styles.codeCell}>{o.item_code}</div></td>
-                  <td className={styles.tableRight}>{fmtRm(o.original_price_sen, currency)}</td>
-                  <td className={styles.tableRight}>
-                    <strong>{fmtRm(o.override_price_sen, currency)}</strong>
-                  </td>
-                  <td className={styles.tableRight} style={{
-                    color: delta < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-burnt)',
-                  }}>
-                    {delta >= 0 ? '+' : ''}{fmtRm(delta, currency)}
-                    <div className={styles.muted}>{deltaPct.toFixed(1)}%</div>
-                  </td>
-                  <td className={styles.muted}>{o.reason ?? '—'}</td>
-                  <td className={styles.muted}>
-                    {new Date(o.created_at).toLocaleString('en-MY', {
-                      year: 'numeric', month: 'short', day: '2-digit',
-                      hour: '2-digit', minute: '2-digit',
-                    })}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-};
 
 /* ════════════════════════════════════════════════════════════════════════
    OverridePriceModal — PR #35 set line price override + reason audit
