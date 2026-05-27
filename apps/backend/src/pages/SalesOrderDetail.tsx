@@ -46,7 +46,7 @@ import {
   type SoAuditFieldChange,
   type SoPayment,
 } from '../lib/flow-queries';
-import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import {
   useLocalities,
   distinctStates,
@@ -192,7 +192,6 @@ export const SalesOrderDetail = () => {
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
-  const maint = useMaintenanceConfig('master');
 
   const header = (detail.data?.salesOrder as SoHeader | undefined) ?? null;
   const items = (detail.data?.items as SoItem[] | undefined) ?? [];
@@ -202,8 +201,18 @@ export const SalesOrderDetail = () => {
      and shares the cache entry — no double fetch. */
   const printPaymentsQ = useSalesOrderPayments(docNo ?? null);
 
-  const [editing, setEditing] = useState<SoItem | null>(null);
-  const [adding, setAdding] = useState(false);
+  /* Task #80 — Inline edit replaces the LineItemModal. Pencil on a row
+     toggles that row into an inline SoLineCard editor pre-populated with
+     the row's current values. The draft lives in editingDrafts keyed by
+     item id; the editingLineIds set drives the table-row swap. On submit
+     (updateItem) → success removes the id from the set + drops the draft.
+     The "+ Add Line Item" button seeds addingDraft with emptySoLine() +
+     the SO header's customer_delivery_date so the new row renders an
+     inline SoLineCard at the bottom of the table (same component, same
+     behavior as the New SO page — there is no longer a modal flow at all). */
+  const [editingLineIds, setEditingLineIds] = useState<Set<string>>(new Set());
+  const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
+  const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
   const [overriding, setOverriding] = useState<SoItem | null>(null);
   const [unlockOverride, setUnlockOverride] = useState(false);
   // PR-D — History panel toggle. Commander asked for the HOOKKA-style
@@ -235,6 +244,121 @@ export const SalesOrderDetail = () => {
       onSuccess: () => setIsEditing(false),
       onError:   (msg) => setSaveError(msg),
     });
+  };
+
+  /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
+     except startAdd which seeds a brand-new SoLineDraft. The mutation payload
+     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side). */
+  const startEditLine = (it: SoItem) => {
+    setEditingLineIds((prev) => {
+      const next = new Set(prev);
+      next.add(it.id);
+      return next;
+    });
+    setEditingDrafts((prev) => ({
+      ...prev,
+      [it.id]: {
+        itemCode:       it.item_code ?? '',
+        itemGroup:      it.item_group ?? 'others',
+        description:    it.description ?? '',
+        uom:            it.uom ?? 'UNIT',
+        qty:            it.qty ?? 1,
+        unitPriceCenti: it.unit_price_centi ?? 0,
+        discountCenti:  it.discount_centi ?? 0,
+        unitCostCenti:  it.unit_cost_centi ?? 0,
+        variants:       (it.variants as Record<string, unknown>) ?? {},
+        remark:         it.remark ?? '',
+        lineDeliveryDate:           it.line_delivery_date ?? null,
+        lineDeliveryDateOverridden: it.line_delivery_date_overridden ?? false,
+      },
+    }));
+  };
+
+  const stopEditLine = (id: string) => {
+    setEditingLineIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setEditingDrafts((prev) => {
+      if (!(id in prev)) return prev;
+      const { [id]: _drop, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const patchEditingDraft = (id: string, patch: Partial<SoLineDraft>) => {
+    setEditingDrafts((prev) => {
+      const cur = prev[id];
+      if (!cur) return prev;
+      return { ...prev, [id]: { ...cur, ...patch } };
+    });
+  };
+
+  const submitEditingDraft = (id: string) => {
+    const d = editingDrafts[id];
+    if (!d) return;
+    if (!d.itemCode.trim()) { window.alert('Pick a product first.'); return; }
+    if (!header) return;
+    updateItem.mutate(
+      {
+        docNo: header.doc_no,
+        itemId: id,
+        itemCode:       d.itemCode,
+        itemGroup:      d.itemGroup,
+        description:    d.description,
+        uom:            d.uom,
+        qty:            d.qty,
+        unitPriceCenti: d.unitPriceCenti,
+        discountCenti:  d.discountCenti,
+        unitCostCenti:  d.unitCostCenti,
+        variants:       d.variants,
+        remark:         d.remark,
+        lineDeliveryDate:           d.lineDeliveryDate ?? null,
+        lineDeliveryDateOverridden: d.lineDeliveryDateOverridden ?? false,
+      },
+      { onSuccess: () => stopEditLine(id) },
+    );
+  };
+
+  /* Add path — single inline SoLineCard appended below the table when
+     "+ Add Line Item" is clicked. Same submit-payload shape as edit. */
+  const startAddLine = () => {
+    if (!header) return;
+    setAddingDraft({
+      ...emptySoLine(),
+      // Seed the line delivery date from the SO header so the SoLineCard
+      // displays a default — same pattern SalesOrderNew uses.
+      lineDeliveryDate: header.customer_delivery_date ?? null,
+      lineDeliveryDateOverridden: false,
+    });
+  };
+
+  const cancelAddLine = () => setAddingDraft(null);
+
+  const submitAddLine = () => {
+    if (!addingDraft) return;
+    if (!addingDraft.itemCode.trim()) { window.alert('Pick a product first.'); return; }
+    if (!header) return;
+    addItem.mutate(
+      {
+        docNo: header.doc_no,
+        itemCode:       addingDraft.itemCode,
+        itemGroup:      addingDraft.itemGroup,
+        description:    addingDraft.description,
+        uom:            addingDraft.uom,
+        qty:            addingDraft.qty,
+        unitPriceCenti: addingDraft.unitPriceCenti,
+        discountCenti:  addingDraft.discountCenti,
+        unitCostCenti:  addingDraft.unitCostCenti,
+        variants:       addingDraft.variants,
+        remark:         addingDraft.remark,
+        lineDeliveryDate:           addingDraft.lineDeliveryDate ?? null,
+        lineDeliveryDateOverridden: addingDraft.lineDeliveryDateOverridden ?? false,
+      },
+      { onSuccess: () => setAddingDraft(null) },
+    );
   };
 
   // Lock mechanism — once SO leaves DRAFT, edits require explicit override.
@@ -429,17 +553,50 @@ export const SalesOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          {/* PR-A — Add Line Item is only shown in edit mode. */}
-          {isEditing && (
-            <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
+          {/* PR-A — Add Line Item is only shown in edit mode.
+              Task #80 — clicking now seeds an inline SoLineCard at the
+              bottom of the table (no more modal). Button hides itself
+              while a draft is open to avoid stacking two add-cards. */}
+          {isEditing && !addingDraft && (
+            <Button variant="primary" size="sm" onClick={startAddLine} disabled={isLocked}>
               <Plus {...ICON} />
               <span>Add Line Item</span>
             </Button>
           )}
         </header>
 
-        {items.length === 0 ? (
+        {items.length === 0 && !addingDraft ? (
           <p className={styles.emptyRow}>No items yet — click "Add Line Item" to begin.</p>
+        ) : items.length === 0 && addingDraft ? (
+          // Task #80 — Empty SO + Add clicked: render the SoLineCard without
+          // the surrounding table (no rows to keep the same column grid in
+          // sync with). Mirrors the empty-state add path on the New SO page.
+          <div style={{ padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            <SoLineCard
+              index={0}
+              draft={addingDraft}
+              onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+              onRemove={cancelAddLine}
+              canRemove={true}
+            />
+            <div style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 'var(--space-2)',
+            }}>
+              <Button variant="ghost" size="sm"
+                onClick={cancelAddLine}
+                disabled={addItem.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="sm"
+                onClick={submitAddLine}
+                disabled={addItem.isPending}>
+                <Save {...SM_ICON} />
+                <span>{addItem.isPending ? 'Saving…' : 'Add Line Item'}</span>
+              </Button>
+            </div>
+          </div>
         ) : (
           <table className={styles.table}>
             <thead>
@@ -471,6 +628,46 @@ export const SalesOrderDetail = () => {
                 const displayDate = it.line_delivery_date
                   ?? (!it.line_delivery_date_overridden ? header.customer_delivery_date : null);
                 const isAuto = !it.line_delivery_date_overridden;
+                /* Task #80 — When this row is in inline edit mode, replace
+                   the entire row's contents with a full-width SoLineCard.
+                   Save/Cancel buttons render under the card; the action
+                   icons in the right column are suppressed since the inline
+                   form supplies its own commit affordances. */
+                const inlineEditing = editingLineIds.has(it.id);
+                const editDraft = editingDrafts[it.id];
+                if (inlineEditing && editDraft) {
+                  return (
+                    <tr key={it.id}>
+                      <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
+                        <SoLineCard
+                          index={items.indexOf(it)}
+                          draft={editDraft}
+                          onChange={(patch) => patchEditingDraft(it.id, patch)}
+                          onRemove={() => stopEditLine(it.id)}
+                          canRemove={true}
+                        />
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'flex-end',
+                          gap: 'var(--space-2)',
+                          marginTop: 'var(--space-2)',
+                        }}>
+                          <Button variant="ghost" size="sm"
+                            onClick={() => stopEditLine(it.id)}
+                            disabled={updateItem.isPending}>
+                            <span>Cancel</span>
+                          </Button>
+                          <Button variant="primary" size="sm"
+                            onClick={() => submitEditingDraft(it.id)}
+                            disabled={updateItem.isPending}>
+                            <Save {...SM_ICON} />
+                            <span>{updateItem.isPending ? 'Saving…' : 'Save'}</span>
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
                 return (
                 <tr key={it.id}>
                   <td>
@@ -495,11 +692,13 @@ export const SalesOrderDetail = () => {
                   <td>
                     {/* PR-A — Line-item Edit / Override / Delete actions are
                         only rendered in edit mode. Read-only view shows an
-                        em-dash placeholder so the column doesn't collapse. */}
+                        em-dash placeholder so the column doesn't collapse.
+                        Task #80 — Pencil now opens an inline SoLineCard
+                        editor on the same row (replaces the legacy modal). */}
                     {isEditing ? (
                       <span className={styles.actionsCell}>
                         <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
-                          onClick={() => !isLocked && setEditing(it)}>
+                          onClick={() => !isLocked && startEditLine(it)}>
                           <Pencil {...SM_ICON} />
                         </button>
                         <button type="button" className={styles.iconBtn} title="Override price"
@@ -529,6 +728,39 @@ export const SalesOrderDetail = () => {
                 </tr>
                 );
               })}
+              {/* Task #80 — Inline "+ Add Line Item" SoLineCard appended at
+                  the bottom of the table when the user clicks the button. */}
+              {addingDraft && (
+                <tr>
+                  <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
+                    <SoLineCard
+                      index={items.length}
+                      draft={addingDraft}
+                      onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+                      onRemove={cancelAddLine}
+                      canRemove={true}
+                    />
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      gap: 'var(--space-2)',
+                      marginTop: 'var(--space-2)',
+                    }}>
+                      <Button variant="ghost" size="sm"
+                        onClick={cancelAddLine}
+                        disabled={addItem.isPending}>
+                        <span>Cancel</span>
+                      </Button>
+                      <Button variant="primary" size="sm"
+                        onClick={submitAddLine}
+                        disabled={addItem.isPending}>
+                        <Save {...SM_ICON} />
+                        <span>{addItem.isPending ? 'Saving…' : 'Add Line Item'}</span>
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         )}
@@ -637,27 +869,9 @@ export const SalesOrderDetail = () => {
           data remains queryable — only the rendering is removed. */}
 
       {/* ── Modals ─────────────────────────────────────────────── */}
-      {(adding || editing) && (
-        <LineItemModal
-          editing={editing}
-          maint={maint.data?.data ?? null}
-          onClose={() => { setAdding(false); setEditing(null); }}
-          onSave={(payload) => {
-            if (editing) {
-              updateItem.mutate(
-                { docNo: header.doc_no, itemId: editing.id, ...payload },
-                { onSuccess: () => setEditing(null) },
-              );
-            } else {
-              addItem.mutate(
-                { docNo: header.doc_no, ...payload },
-                { onSuccess: () => setAdding(false) },
-              );
-            }
-          }}
-          saving={addItem.isPending || updateItem.isPending}
-        />
-      )}
+      {/* Task #80 — LineItemModal removed (deleted with PR #125's inline
+          SoLineCard work). Both Add + Edit now use inline SoLineCard rows
+          inside the line-items table above. */}
       {overriding && (
         <OverridePriceModal
           item={overriding}
@@ -1275,328 +1489,6 @@ const StatusBar = ({
     </section>
   );
 };
-
-/* ════════════════════════════════════════════════════════════════════════
-   Line item modal — product picker + variants editor
-   ════════════════════════════════════════════════════════════════════════ */
-
-type LinePayload = {
-  itemCode: string;
-  itemGroup: string;
-  description: string;
-  uom: string;
-  qty: number;
-  unitPriceCenti: number;
-  discountCenti: number;
-  unitCostCenti: number;
-  variants: Record<string, unknown>;
-  remark: string;
-};
-
-const LineItemModal = ({
-  editing,
-  maint,
-  onClose,
-  onSave,
-  saving,
-}: {
-  editing: SoItem | null;
-  maint: import('../lib/mfg-products-queries').MaintenanceConfig | null;
-  onClose: () => void;
-  onSave: (p: LinePayload) => void;
-  saving: boolean;
-}) => {
-  const [search, setSearch] = useState(editing?.item_code ?? '');
-  const productsQuery = useMfgProducts({ search: search.trim() || undefined });
-  const candidates = productsQuery.data ?? [];
-
-  // PR #39 — Track the FULL picked product so we can read
-  // seat_height_prices for sofa pricing. Sofa tier defaults to PRICE_2
-  // (the "base"), commander can change later via "Override price".
-  const [picked, setPicked] = useState<import('../lib/mfg-products-queries').MfgProductRow | null>(null);
-
-  // Manual unit-price override — when commander types in the Unit Price
-  // box, we stop auto-recomputing. Tracked separately so any variant
-  // change doesn't overwrite their edit.
-  const [manualPrice, setManualPrice] = useState(false);
-
-  const [draft, setDraft] = useState<LinePayload>({
-    itemCode: editing?.item_code ?? '',
-    itemGroup: editing?.item_group ?? 'others',
-    description: editing?.description ?? '',
-    uom: editing?.uom ?? 'UNIT',
-    qty: editing?.qty ?? 1,
-    unitPriceCenti: editing?.unit_price_centi ?? 0,
-    discountCenti: editing?.discount_centi ?? 0,
-    unitCostCenti: editing?.unit_cost_centi ?? 0,
-    variants: (editing?.variants as Record<string, unknown>) ?? {},
-    remark: editing?.remark ?? '',
-  });
-
-  const pickProduct = (p: import('../lib/mfg-products-queries').MfgProductRow) => {
-    setPicked(p);
-    setManualPrice(false);
-    setDraft((s) => ({
-      ...s,
-      itemCode: p.code,
-      itemGroup: p.category.toLowerCase(),
-      description: p.name,
-      unitPriceCenti: p.base_price_sen ?? 0,
-      variants: {},                              // reset variants on new product
-    }));
-    setSearch(p.code);
-  };
-
-  const setVariant = (k: string, v: string | number) =>
-    setDraft((s) => ({ ...s, variants: { ...s.variants, [k]: v } }));
-
-  /* ── Auto-recompute unit price from base + variant surcharges ─────
-     Formula matches HOOKKA pricing.ts:
-       unitPriceSen = basePriceSen + divanPriceSen + legPriceSen + specialSen
-     For Sofa: basePriceSen comes from product.seat_height_prices
-     when a seat height is picked (defaults to PRICE_2 tier).
-     For Bedframe: basePriceSen is the product's base_price_sen.
-     Skip if user has manually overridden the price. */
-  useEffect(() => {
-    if (manualPrice || !maint || !picked) return;
-    const category = draft.itemGroup.toUpperCase();
-    let basePriceSen = picked.base_price_sen ?? 0;
-    let extraSen = 0;
-
-    if (category === 'SOFA') {
-      // Sofa base price comes from seat_height_prices (PRICE_2 default tier)
-      const sh = String(draft.variants.seatHeight ?? '');
-      if (sh && Array.isArray(picked.seat_height_prices)) {
-        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-          .find((p) => p.height === sh && p.tier === 'PRICE_2');
-        if (match) basePriceSen = match.priceSen;
-      }
-      const legV = String(draft.variants.legHeight ?? '');
-      const specV = String(draft.variants.special ?? '');
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      extraSen += maint.sofaSpecials.find((o) => o.value === specV)?.priceSen ?? 0;
-    } else if (category === 'BEDFRAME') {
-      const divanV = String(draft.variants.divanHeight ?? '');
-      const legV = String(draft.variants.legHeight ?? '');
-      const specV = String(draft.variants.special ?? '');
-      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
-      extraSen += maint.legHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      extraSen += maint.specials.find((o) => o.value === specV)?.priceSen ?? 0;
-    }
-
-    const newPrice = basePriceSen + extraSen;
-    setDraft((s) => (s.unitPriceCenti === newPrice ? s : { ...s, unitPriceCenti: newPrice }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
-
-  const lineTotal = (draft.qty * draft.unitPriceCenti) - draft.discountCenti;
-
-  const submit = () => {
-    if (!draft.itemCode.trim()) { alert('Pick a product first.'); return; }
-    onSave(draft);
-  };
-
-  return (
-    <div className={styles.modalBackdrop} onClick={onClose}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.modalHeader}>
-          <h3 className={styles.modalTitle}>{editing ? 'Edit Line Item' : 'Add Line Item'}</h3>
-          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
-            <X {...ICON} />
-          </button>
-        </header>
-
-        <div className={styles.modalBody}>
-          {/* Product picker */}
-          <div>
-            <p className={styles.subHead}>Product</p>
-            <div className={styles.pickerWrap}>
-              <input
-                className={styles.fieldInput}
-                placeholder="Search by code or name…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search.trim() && candidates.length > 0 && search !== draft.itemCode && (
-                <ul className={styles.suggestList}>
-                  {candidates.slice(0, 8).map((p) => (
-                    <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
-                      <div>
-                        <span className={styles.codeCell}>{p.code}</span> · {p.name}
-                      </div>
-                      <div className={styles.suggestCode}>
-                        {p.category} · {fmtRm(p.base_price_sen ?? 0)}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            {draft.itemCode && (
-              <div className={styles.previewLine} style={{ marginTop: 8 }}>
-                <span><strong>{draft.itemCode}</strong> · {draft.description}</span>
-                <span className={styles.previewPrice}>{fmtRm(draft.unitPriceCenti)}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Variants editor — shown by category */}
-          {(draft.itemGroup === 'bedframe' || draft.itemGroup === 'sofa') && maint && (
-            <div>
-              <p className={styles.subHead}>Variants</p>
-              {draft.itemGroup === 'bedframe' ? (
-                <div className={styles.formGrid4}>
-                  <VariantSelect
-                    label="Divan Height"
-                    options={maint.divanHeights}
-                    value={String(draft.variants.divanHeight ?? '')}
-                    onChange={(v) => setVariant('divanHeight', v)}
-                  />
-                  <VariantSelect
-                    label="Gap"
-                    options={maint.gaps.map((g) => ({ value: g, priceSen: 0 }))}
-                    value={String(draft.variants.gap ?? '')}
-                    onChange={(v) => setVariant('gap', v)}
-                  />
-                  <VariantSelect
-                    label="Leg Height"
-                    options={maint.legHeights}
-                    value={String(draft.variants.legHeight ?? '')}
-                    onChange={(v) => setVariant('legHeight', v)}
-                  />
-                  <VariantSelect
-                    label="Special"
-                    options={maint.specials}
-                    value={String(draft.variants.special ?? '')}
-                    onChange={(v) => setVariant('special', v)}
-                  />
-                </div>
-              ) : (
-                <div className={styles.formGrid4}>
-                  <VariantSelect
-                    label="Seat Height"
-                    options={maint.sofaSizes.map((s) => {
-                      // Surface the product's PRICE_2 sen for this height as
-                      // hint, so the dropdown shows e.g. "28 (RM 649.00)".
-                      const sh = picked?.seat_height_prices && Array.isArray(picked.seat_height_prices)
-                        ? (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-                            .find((p) => p.height === s && p.tier === 'PRICE_2')
-                        : null;
-                      return { value: s, priceSen: sh?.priceSen ?? 0 };
-                    })}
-                    value={String(draft.variants.seatHeight ?? '')}
-                    onChange={(v) => setVariant('seatHeight', v)}
-                  />
-                  <VariantSelect
-                    label="Leg Height"
-                    options={maint.sofaLegHeights}
-                    value={String(draft.variants.legHeight ?? '')}
-                    onChange={(v) => setVariant('legHeight', v)}
-                  />
-                  <VariantSelect
-                    label="Special"
-                    options={maint.sofaSpecials}
-                    value={String(draft.variants.special ?? '')}
-                    onChange={(v) => setVariant('special', v)}
-                  />
-                  <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Fabric Color (free text)</span>
-                    <input
-                      className={styles.fieldInput}
-                      value={String(draft.variants.fabricColor ?? '')}
-                      onChange={(e) => setVariant('fabricColor', e.target.value)}
-                    />
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Pricing */}
-          <div>
-            <p className={styles.subHead}>Pricing</p>
-            <div className={styles.formGrid4}>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Qty</span>
-                <input type="number" className={styles.fieldInput} value={draft.qty}
-                  onChange={(e) => setDraft((s) => ({ ...s, qty: Number(e.target.value) || 0 }))} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>
-                  Unit Price (RM)
-                  {!manualPrice && picked && (
-                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
-                      · auto
-                    </span>
-                  )}
-                </span>
-                <input type="number" step="0.01" className={styles.fieldInput}
-                  value={(draft.unitPriceCenti / 100).toFixed(2)}
-                  onChange={(e) => {
-                    setManualPrice(true);
-                    setDraft((s) => ({ ...s, unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 }));
-                  }} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Discount (RM)</span>
-                <input type="number" step="0.01" className={styles.fieldInput}
-                  value={(draft.discountCenti / 100).toFixed(2)}
-                  onChange={(e) => setDraft((s) => ({ ...s, discountCenti: Math.round(Number(e.target.value) * 100) || 0 }))} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Unit Cost (RM)</span>
-                <input type="number" step="0.01" className={styles.fieldInput}
-                  value={(draft.unitCostCenti / 100).toFixed(2)}
-                  onChange={(e) => setDraft((s) => ({ ...s, unitCostCenti: Math.round(Number(e.target.value) * 100) || 0 }))} />
-              </label>
-            </div>
-            <div className={styles.previewLine} style={{ marginTop: 8 }}>
-              <span>Line total</span>
-              <span className={styles.previewPrice}>{fmtRm(lineTotal)}</span>
-            </div>
-          </div>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Remark</span>
-            <input className={styles.fieldInput} value={draft.remark}
-              onChange={(e) => setDraft((s) => ({ ...s, remark: e.target.value }))} />
-          </label>
-        </div>
-
-        <footer className={styles.modalFooter}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={saving}>
-            {saving ? 'Saving…' : editing ? 'Save Changes' : 'Add Line Item'}
-          </Button>
-        </footer>
-      </div>
-    </div>
-  );
-};
-
-const VariantSelect = ({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: Array<{ value: string; priceSen: number }>;
-  value: string;
-  onChange: (v: string) => void;
-}) => (
-  <label className={styles.field}>
-    <span className={styles.fieldLabel}>{label}</span>
-    <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">—</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
-        </option>
-      ))}
-    </select>
-  </label>
-);
 
 /* ════════════════════════════════════════════════════════════════════════
    AddressCard — PR #35 multi-address (ship-to / bill-to / install-to)
