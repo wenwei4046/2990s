@@ -1,6 +1,8 @@
--- 0078 — Per-category cost breakdown on SO header (Task #114).
+-- 0079 — Per-category cost breakdown on SO header (Task #114).
 -- Commander 2026-05-27: Houzs auto-summarizes category costing. We
 -- already have category REVENUE columns; mirror with category COST.
+-- Renumbered from 0078 to avoid collision with PR #176's
+-- 0078_drop_draft_status.sql which landed on main concurrently.
 
 BEGIN;
 

@@ -62,7 +62,7 @@ type SoRow = {
   status: string;
   currency: string;
   /* Task #114 — Per-category REVENUE + COST + overall cost/margin from the
-     SO header. All four cost columns added in migration 0078; pre-existing
+     SO header. All four cost columns added in migration 0079; pre-existing
      rows backfill on next item mutation (recomputeTotals). Optional on the
      row type so the list still renders if the API hasn't been redeployed. */
   mattress_sofa_centi?: number;
@@ -495,7 +495,7 @@ const buildColumns = (
   },
   /* Task #114 — Category revenue + cost pairs. The grid is wide enough
      that not every user will want these visible, but they exist on the
-     header (migration 0078) so the right-click "Show column" affordance
+     header (migration 0079) so the right-click "Show column" affordance
      can surface them. Listed in revenue/cost pairs so they sort naturally
      in the column menu. */
   {

@@ -1045,7 +1045,7 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   // Task #114 — per-category COST breakdown mirrors the revenue columns
   // above. Computed server-side in recomputeTotals from
   // mfg_sales_order_items.line_cost_centi grouped by item_group. Migration
-  // 0078 adds the columns; existing rows backfill on next item mutation.
+  // 0079 adds the columns; existing rows backfill on next item mutation.
   mattressSofaCostCenti: integer('mattress_sofa_cost_centi').notNull().default(0),
   bedframeCostCenti:     integer('bedframe_cost_centi').notNull().default(0),
   accessoriesCostCenti:  integer('accessories_cost_centi').notNull().default(0),

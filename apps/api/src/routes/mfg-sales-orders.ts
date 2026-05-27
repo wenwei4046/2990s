@@ -16,7 +16,7 @@ const HEADER =
   'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, ' +
   'address1, address2, address3, address4, phone, ' +
   'mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi, local_total_centi, balance_centi, ' +
-  /* Task #114 — per-category cost columns (migration 0078). Mirrors the
+  /* Task #114 — per-category cost columns (migration 0079). Mirrors the
      four category revenue columns above so the SO list grid + Totals card
      can show category-level margins without per-item rollups. */
   'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, ' +
@@ -118,7 +118,7 @@ mfgSalesOrders.post('/', async (c) => {
   // Compute totals + category breakdown
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
   // Task #114 — also accumulate per-category COST so the four cost columns
-  // on the header (migration 0078) get populated on insert. Mirrors the
+  // on the header (migration 0079) get populated on insert. Mirrors the
   // revenue accumulators above.
   let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
   /* PR-E — Per-item delivery date inherits the SO header's
@@ -219,7 +219,7 @@ mfgSalesOrders.post('/', async (c) => {
     bedframe_centi: bedframe,
     accessories_centi: accessories,
     others_centi: others,
-    // Task #114 — per-category cost (migration 0078).
+    // Task #114 — per-category cost (migration 0079).
     mattress_sofa_cost_centi: mattressSofaCost,
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,
@@ -729,7 +729,7 @@ async function recomputeTotals(sb: any, docNo: string) {
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
   // Task #114 — per-category cost mirrors the revenue accumulators. Each
   // bucket below tracks both revenue (total_centi) and cost (line_cost_centi)
-  // so the SO header's 4 new cost columns (migration 0078) stay in sync
+  // so the SO header's 4 new cost columns (migration 0079) stay in sync
   // with the existing 4 revenue columns.
   let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
   for (const it of (items ?? []) as Array<{ item_group: string; total_centi: number; line_cost_centi: number }>) {
@@ -758,7 +758,7 @@ async function recomputeTotals(sb: any, docNo: string) {
     bedframe_centi: bedframe,
     accessories_centi: accessories,
     others_centi: others,
-    // Task #114 — per-category cost (migration 0078).
+    // Task #114 — per-category cost (migration 0079).
     mattress_sofa_cost_centi: mattressSofaCost,
     bedframe_cost_centi:      bedframeCost,
     accessories_cost_centi:   accessoriesCost,

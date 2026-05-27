@@ -108,10 +108,10 @@ type SoHeader = {
   bedframe_centi: number;
   accessories_centi: number;
   others_centi: number;
-  /* Task #114 — per-category cost rollup (migration 0078). Used by the
+  /* Task #114 — per-category cost rollup (migration 0079). Used by the
      Totals card category breakdown so each row can show Revenue / Cost /
      Margin without summing items. May be undefined on rows older than
-     0078 — fall back to 0 in the consumer. */
+     0079 — fall back to 0 in the consumer. */
   mattress_sofa_cost_centi?: number;
   bedframe_cost_centi?:      number;
   accessories_cost_centi?:   number;
@@ -1540,7 +1540,7 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
   /* Task #114 — Per-category rows. Each category surfaces revenue, cost,
      and margin (revenue − cost) so commander can see where the SO's
      margin is coming from at a glance. Cost columns fall back to 0 when
-     the row pre-dates migration 0078 (it'll backfill on next item write). */
+     the row pre-dates migration 0079 (it'll backfill on next item write). */
   const categories: Array<{ label: string; rev: number; cost: number }> = [
     { label: 'Mattress / Sofa', rev: header.mattress_sofa_centi, cost: header.mattress_sofa_cost_centi ?? 0 },
     { label: 'Bedframe',        rev: header.bedframe_centi,      cost: header.bedframe_cost_centi      ?? 0 },
