@@ -34,6 +34,9 @@ import {
   useDeleteSalesOrderPayment,
   type SoPayment,
 } from '../lib/flow-queries';
+import {
+  useSoDropdownOptions, optionsOrFallback,
+} from '../lib/so-dropdown-options-queries';
 import detailStyles from '../pages/SalesOrderDetail.module.css';
 import paymentsStyles from '../pages/Payments.module.css';
 
@@ -50,11 +53,19 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 export type PaymentMethod = 'merchant' | 'transfer' | 'cash';
 export type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
 
+/* The canonical legacy list — kept exported because it's still the
+   compile-time enum for PaymentDraft.methodLabel below. Task #118 made
+   the *visible* list editable via so_dropdown_options('payment_method'),
+   so the user can add/disable values without a code change — but the
+   label → API enum mapping (cash / transfer / merchant) still lives
+   here. New labels added via the maintenance page that aren't in the
+   switch below fall through to cash with provider=null + a console.warn
+   so a coordinator typo doesn't silently submit a card payment as cash. */
 export const PAYMENT_METHOD_OPTIONS = [
   'CASH', 'MBB', 'VISA', 'MASTER', 'CREDIT CARD', 'EPP',
   'ONLINE', 'TNG', 'DUITNOW', 'OTHER',
 ] as const;
-export type PaymentMethodLabel = typeof PAYMENT_METHOD_OPTIONS[number];
+export type PaymentMethodLabel = string;
 
 export const labelToApi = (label: PaymentMethodLabel): {
   method: PaymentMethod;
@@ -74,6 +85,19 @@ export const labelToApi = (label: PaymentMethodLabel): {
     case 'EPP':
     case 'OTHER':
       return { method: 'merchant', merchantProvider: null };
+    default:
+      // Task #118 — Commander can add new labels via SO Maintenance.
+      // We can't infer the merchant/transfer/cash routing for an arbitrary
+      // new label, so default to cash and warn loudly. If commander adds
+      // a real new method that should be merchant/transfer, this switch
+      // needs to be extended in code.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[PaymentsTable] Unknown payment label "${label}" — falling back to ` +
+        `method=cash, provider=null. Add it to labelToApi() in ` +
+        `apps/backend/src/components/PaymentsTable.tsx to route it correctly.`,
+      );
+      return { method: 'cash', merchantProvider: null };
   }
 };
 
@@ -172,6 +196,12 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
   const staffQ = useStaff();
   const staff  = staffQ.data ?? [];
   const auth   = useAuth();
+
+  /* Task #118 — methods are DB-backed (so_dropdown_options 'payment_method').
+     Falls back to PAYMENT_METHOD_OPTIONS during loading + when the DB has
+     zero rows so the user never sees an empty select. */
+  const methodOptsQ = useSoDropdownOptions('payment_method');
+  const methodOpts  = optionsOrFallback('payment_method', methodOptsQ.data);
 
   /* ── SAVED MODE hooks (always called — TanStack Query lazily skips
         when enabled=false). docNo is non-null in SAVED mode. ──────────── */
@@ -391,11 +421,17 @@ const PaymentsTableInner = (props: PaymentsTableProps) => {
                     className={paymentsStyles.inlineSelect}
                     value={d.methodLabel}
                     disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { methodLabel: e.target.value as PaymentMethodLabel })}
+                    onChange={(e) => patchDraft(d.uid, { methodLabel: e.target.value })}
                   >
-                    {PAYMENT_METHOD_OPTIONS.map((m) => (
-                      <option key={m} value={m}>{m}</option>
+                    {methodOpts.map((m) => (
+                      <option key={m.id} value={m.value}>{m.label}</option>
                     ))}
+                    {/* Persist labels that are no longer active in the
+                        list so existing drafts (rehydrated from
+                        somewhere) still render their selection. */}
+                    {d.methodLabel && !methodOpts.some((m) => m.value === d.methodLabel) && (
+                      <option value={d.methodLabel}>{d.methodLabel}</option>
+                    )}
                   </select>
                 </span>
                 <span className={paymentsStyles.cellRight}>
