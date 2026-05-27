@@ -15,6 +15,14 @@ import {
   type MfgItemForRecompute,
   type RecomputedLine,
 } from '../lib/mfg-pricing-recompute';
+/* PR #216 — per-Model variant chip enforcement (Commander 2026-05-27
+   follow-up to PR #205). Reject POST/PATCH SO line items that carry a
+   variant excluded by the Model's allowed_options. Empty pool = no
+   restriction; null model_id = skip entirely. */
+import {
+  checkAllowedOptions,
+  loadProductAndModel,
+} from '../lib/allowed-options-check';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -183,6 +191,26 @@ mfgSalesOrders.post('/', async (c) => {
      the request with HTTP 400. Manual override path (mfgSoPriceOverrides)
      stays intact at PATCH /:docNo/items/:itemId/override. */
   const cachedConfig = await loadMaintenanceConfig(sb);
+  /* PR #216 — allowed_options pre-flight. Run BEFORE the pricing recompute
+     so a disallowed variant returns the precise field/value/allowed
+     payload instead of getting silently re-priced. Loads (product,model)
+     once per line; reused inputs (item_code) hit Supabase's per-request
+     cache. First violation across all lines short-circuits the request. */
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it) continue;
+    const code = String(it.itemCode ?? '');
+    if (!code) continue;
+    const { product, model } = await loadProductAndModel(sb, code);
+    const err = checkAllowedOptions(
+      product,
+      model,
+      (it.variants as Parameters<typeof checkAllowedOptions>[2]) ?? null,
+    );
+    if (err) {
+      return c.json({ ...err, lineIdx: i, itemCode: code }, 400);
+    }
+  }
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
@@ -914,6 +942,16 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   // show what went wrong.
   const itemCodeStr = String(it.itemCode ?? '');
   const variantsObj = (it.variants as MfgItemForRecompute['variants']) ?? null;
+  /* PR #216 — allowed_options check on add-item. Same shape as POST /. */
+  {
+    const { product, model } = await loadProductAndModel(sb, itemCodeStr);
+    const aoErr = checkAllowedOptions(
+      product,
+      model,
+      variantsObj as Parameters<typeof checkAllowedOptions>[2],
+    );
+    if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
+  }
   const [cachedConfig, productLite, fabricLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
@@ -1044,6 +1082,21 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const itemCodeAfter = it.itemCode !== undefined ? String(it.itemCode) : prev.item_code;
   const itemGroupAfter = it.itemGroup !== undefined ? String(it.itemGroup) : prev.item_group;
   const shouldRecompute = it.variants !== undefined || it.unitPriceCenti !== undefined || it.itemCode !== undefined;
+
+  /* PR #216 — allowed_options check on PATCH. Only fires when the caller
+     touched variants OR itemCode (qty/price/discount alone don't move the
+     Model linkage). Uses the merged (prev+patch) shape so a partial PATCH
+     of just `specials: [...]` still validates against the existing item
+     code's Model. */
+  if (it.variants !== undefined || it.itemCode !== undefined) {
+    const { product, model } = await loadProductAndModel(sb, itemCodeAfter);
+    const aoErr = checkAllowedOptions(
+      product,
+      model,
+      variantsAfter as Parameters<typeof checkAllowedOptions>[2],
+    );
+    if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
+  }
   if (shouldRecompute && itemCodeAfter) {
     const [cfg, prodLite, fabLite] = await Promise.all([
       loadMaintenanceConfig(sb),

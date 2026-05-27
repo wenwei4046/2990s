@@ -98,7 +98,11 @@ export type MfgProductRow = {
   updated_at: string;
 };
 
-export type PricedOption = { value: string; priceSen: number };
+/* PR #216 — Commander 2026-05-27: parallel cost-side editor. Operation
+ * can input estimated `costSen` next to each `priceSen` on Maintenance
+ * surcharge rows. Read by computeMfgLineCost() in @2990s/shared. Opt-in
+ * per row — absence keeps cost-side surcharge at 0. */
+export type PricedOption = { value: string; priceSen: number; costSen?: number };
 
 export type MaintenanceConfig = {
   divanHeights:    PricedOption[];
