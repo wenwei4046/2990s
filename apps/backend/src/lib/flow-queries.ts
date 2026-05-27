@@ -241,6 +241,58 @@ export const useDeleteMfgSalesOrderItem = () => {
   });
 };
 
+/* PR-F (Task #79) — Per-line photo upload/delete mutations.
+   Upload uses multipart/form-data so authedFetch's JSON wrapper is
+   bypassed; we hand-roll the fetch with the auth header and the
+   browser's FormData boundary. */
+export const useUploadSoItemPhoto = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ docNo, itemId, file }: {
+      docNo: string; itemId: string; file: File;
+    }): Promise<{ photoKey: string; photoUrl: string }> => {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(
+        `${API_URL}/mfg-sales-orders/${docNo}/items/${itemId}/photos`,
+        { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: fd },
+      );
+      if (!res.ok) {
+        let detail = '';
+        try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+        throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+      }
+      return (await res.json()) as { photoKey: string; photoUrl: string };
+    },
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
+    },
+  });
+};
+
+export const useDeleteSoItemPhoto = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, itemId, photoKey }: {
+      docNo: string; itemId: string; photoKey: string;
+    }) =>
+      authedFetch<{ ok: boolean }>(
+        `/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
+    },
+  });
+};
+
 /* PR #35 — SO status change + price override audit hooks */
 export type SoStatusChange = {
   id: string;
