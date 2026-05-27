@@ -3,6 +3,12 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import { useCart, cartSubtotal } from '../state/cart';
 import { useCreateOrder, PricingDriftError, type PricingDriftPayload } from '../lib/orders';
+import {
+  usePosHandoffToSo,
+  cartLinesToSoItems,
+  PosHandoffApiError,
+  type PosHandoffPayload,
+} from '../lib/pos-handover-so';
 import { useDeleteQuote } from '../lib/quotes';
 import { useAddons, useLocalities, useDeliveryFeeConfig, useCatalog } from '../lib/queries';
 import { useAuth } from '../lib/auth';
@@ -88,6 +94,14 @@ export const Handover = () => {
   const [serverError, setServerError] = useState<string | null>(null);
 
   const createOrder = useCreateOrder();
+  /* Task #70 — Manufacturing SO handoff. Behind the VITE_HANDOVER_MODE flag
+     so we can ship the wiring without disturbing the retail flow until the
+     coordinator portal is ready. Values:
+       'mfg-so' → POST /mfg-sales-orders (the new B2B/handover flow)
+       anything else (incl. unset) → legacy POST /orders (retail receipt). */
+  const handoverMode = import.meta.env.VITE_HANDOVER_MODE as string | undefined;
+  const useMfgSoFlow = handoverMode === 'mfg-so';
+  const handoffToSo = usePosHandoffToSo();
   const deleteQuote = useDeleteQuote();
   const addons = useAddons();
   const localities = useLocalities();
@@ -161,11 +175,83 @@ export const Handover = () => {
       return;
     }
     if (isLast) {
-      await submitOrder();
+      if (useMfgSoFlow) {
+        await submitHandoffToSo();
+      } else {
+        await submitOrder();
+      }
       return;
     }
     setAttempted(false);
     setIdx(idx + 1);
+  };
+
+  /* Task #70 — POS handover → Backend manufacturing SO.
+     Maps the HandoverForm + cart into the camelCase payload the Backend's
+     POST /mfg-sales-orders endpoint expects, fires the mutation, and on
+     success navigates to /handover-confirmed/:docNo. The Backend's order
+     coordinator picks up the new SO from there.
+
+     Notes:
+       - The Backend SO API does NOT run the 0.5% pricing-drift recompute
+         the retail /orders flow uses, so we don't pass acceptedServerTotal
+         here. If/when manufacturing pricing recompute lands, plumb it
+         through the same way as the legacy flow.
+       - paid (whole-MYR) becomes depositCenti (sen) on the SO header. */
+  const submitHandoffToSo = async () => {
+    setServerError(null);
+    try {
+      const items = cartLinesToSoItems(lines, catalog.data);
+      // PaymentMethod / merchant / installments — narrow the HandoverForm's
+      // permissive string union to the API's value set. Empty string never
+      // reaches here because validity['addons'] gates it.
+      const paymentMethod = form.paymentMethod === ''
+        ? undefined
+        : form.paymentMethod;
+      const targetDate = form.deliveryDate || undefined;
+
+      const payload: PosHandoffPayload = {
+        debtorName: form.name.trim(),
+        ...(form.email.trim() ? { email: form.email.trim() } : {}),
+        customerType: form.customerType,
+        ...(form.salespersonId ? { salespersonId: form.salespersonId } : {}),
+        ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
+        ...(form.fullAddress.trim() ? { address1: form.fullAddress.trim() } : {}),
+        ...(form.addressLine2.trim() ? { address2: form.addressLine2.trim() } : {}),
+        ...(form.city.trim() ? { city: form.city.trim() } : {}),
+        ...(form.postcode.trim() ? { postcode: form.postcode.trim() } : {}),
+        ...(form.state.trim() ? { customerState: form.state.trim() } : {}),
+        ...(form.buildingType ? { buildingType: form.buildingType } : {}),
+        ...(form.emergencyName.trim() ? { emergencyContactName: form.emergencyName.trim() } : {}),
+        ...(form.emergencyPhone.trim() ? { emergencyContactPhone: form.emergencyPhone.trim() } : {}),
+        ...(form.emergencyRelation.trim()
+          ? { emergencyContactRelationship: form.emergencyRelation.trim() }
+          : {}),
+        // target_date = customer's preference; customer_delivery_date is the
+        // operational follower the Backend cascades to every line.
+        ...(targetDate ? { targetDate, customerDeliveryDate: targetDate } : {}),
+        ...(paymentMethod ? { paymentMethod } : {}),
+        ...(form.installmentMonths ? { installmentMonths: form.installmentMonths } : {}),
+        ...(form.merchantProvider ? { merchantProvider: form.merchantProvider } : {}),
+        ...(form.approvalCode.trim() ? { approvalCode: form.approvalCode.trim() } : {}),
+        // Whole-MYR → sen.
+        depositCenti: Math.round(form.amountPaid * 100),
+        items,
+      };
+
+      const result = await handoffToSo.mutateAsync(payload);
+      // Consume the originating quote (if any) — mirrors submitOrder().
+      if (sourceQuoteId) deleteQuote.mutate(sourceQuoteId);
+      clear();
+      navigate(`/handover-confirmed/${encodeURIComponent(result.docNo)}`, { replace: true });
+    } catch (err) {
+      if (err instanceof PosHandoffApiError) {
+        const reasonSuffix = err.payload.reason ? ` — ${err.payload.reason}` : '';
+        setServerError(`Order placement failed: ${err.payload.error}${reasonSuffix}`);
+        return;
+      }
+      setServerError(err instanceof Error ? err.message : 'Order submission failed');
+    }
   };
 
   const submitOrder = async (acceptedServerTotal?: number) => {
@@ -273,7 +359,7 @@ export const Handover = () => {
               isFirst={idx === 0}
               currentKey={current.key}
               valid={validity[current.key]}
-              submitting={createOrder.isPending}
+              submitting={createOrder.isPending || handoffToSo.isPending}
               paymentRecorded={form.paymentRecorded}
               blockers={getStepBlockers(current.key, form, subtotal, addonTotal)}
               attempted={attempted}
@@ -297,7 +383,7 @@ export const Handover = () => {
         {drift && (
           <PricingDriftModal
             drift={drift}
-            submitting={createOrder.isPending}
+            submitting={createOrder.isPending || handoffToSo.isPending}
             onAccept={(serverTotal) => { setDrift(null); void submitOrder(serverTotal); }}
             onCancel={() => setDrift(null)}
           />
