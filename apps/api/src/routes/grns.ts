@@ -9,6 +9,81 @@ import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
 
+/* ── Shared helper: post a GRN, roll up to PO items, write inventory IN ──
+   Pulled out of the PATCH /:id/post handler so both single-doc post and
+   the multi-PO `/from-po-items` route can reuse the same logic.
+   Best-effort inventory write (matches existing /post behaviour). */
+async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise<{ ok: true } | { ok: false; reason: string; status?: number }> {
+  const { data: grnHeader } = await sb.from('grns')
+    .select('grn_number, warehouse_id')
+    .eq('id', grnId).maybeSingle();
+  const { data: items } = await sb.from('grn_items')
+    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi')
+    .eq('grn_id', grnId);
+
+  // Roll up qty_accepted onto purchase_order_items.received_qty + update PO header status.
+  const touchedPoIds = new Set<string>();
+  if (items) {
+    for (const it of items) {
+      const poiId = (it as { purchase_order_item_id: string | null }).purchase_order_item_id;
+      const acc = (it as { qty_accepted: number }).qty_accepted;
+      if (!poiId) continue;
+      const { data: poi } = await sb.from('purchase_order_items')
+        .select('received_qty, qty, purchase_order_id').eq('id', poiId).maybeSingle();
+      if (!poi) continue;
+      const next = ((poi as { received_qty: number }).received_qty ?? 0) + acc;
+      await sb.from('purchase_order_items').update({ received_qty: next }).eq('id', poiId);
+      const poId = (poi as { purchase_order_id: string }).purchase_order_id;
+      if (poId) touchedPoIds.add(poId);
+    }
+  }
+
+  // Flip status on every touched PO: RECEIVED if all items fully received,
+  // else PARTIALLY_RECEIVED. CANCELLED never flips.
+  for (const poId of touchedPoIds) {
+    const { data: lines } = await sb.from('purchase_order_items')
+      .select('qty, received_qty').eq('purchase_order_id', poId);
+    if (!lines || lines.length === 0) continue;
+    const fully = (lines as Array<{ qty: number; received_qty: number }>)
+      .every((l) => (l.received_qty ?? 0) >= l.qty);
+    const newStatus = fully ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
+    const patch: Record<string, unknown> = {
+      status: newStatus, updated_at: new Date().toISOString(),
+    };
+    if (fully) patch.received_at = new Date().toISOString();
+    await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+  }
+
+  const { data, error } = await sb.from('grns').update({
+    status: 'POSTED', posted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).eq('id', grnId).eq('status', 'DRAFT').select('id, status, posted_at').single();
+  if (error) return { ok: false, reason: error.message, status: 500 };
+  if (!data) return { ok: false, reason: 'not_draft', status: 409 };
+
+  // ── Inventory IN per item — best effort, doesn't roll back the post. ─
+  const grnNo = (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId;
+  const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
+    ?? (await defaultWarehouseId(sb));
+  if (warehouseId && items) {
+    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null }>)
+      .filter((it) => it.qty_accepted > 0)
+      .map((it) => ({
+        movement_type: 'IN' as const,
+        warehouse_id: warehouseId,
+        product_code: it.material_code,
+        product_name: it.material_name,
+        qty: it.qty_accepted,
+        unit_cost_sen: Number(it.unit_price_centi ?? 0),
+        source_doc_type: 'GRN' as const,
+        source_doc_id: grnId,
+        source_doc_no: grnNo,
+        performed_by: userId,
+      }));
+    if (movements.length > 0) await writeMovements(sb, movements);
+  }
+  return { ok: true };
+}
+
 const HEADER =
   'id, grn_number, purchase_order_id, supplier_id, received_at, delivery_note_ref, status, notes, posted_at, created_at, created_by, updated_at';
 const ITEM =
@@ -221,57 +296,219 @@ grns.post('/from-pos', async (c) => {
 
 grns.patch('/:id/post', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
+  const res = await postGrnAndRollup(sb, id, user.id);
+  if (!res.ok) {
+    if (res.status === 409) return c.json({ error: 'not_draft' }, 409);
+    return c.json({ error: 'post_failed', reason: res.reason }, 500);
+  }
+  // Return the updated GRN row to match the original response shape.
+  const { data } = await sb.from('grns').select('id, status, posted_at').eq('id', id).single();
+  return c.json({ grn: data });
+});
 
-  // Load the full GRN + items so we know the warehouse + qty_accepted per item.
-  const { data: grnHeader } = await sb.from('grns')
-    .select('grn_number, warehouse_id')
-    .eq('id', id).maybeSingle();
-  const { data: items } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi')
-    .eq('grn_id', id);
+/* ── GET /outstanding-po-items ──────────────────────────────────────────
+   Returns a flat list of PO line items with remaining qty > 0. Used by
+   the multi-select "GRN from POs (line-level)" picker at /grns/from-po.
+   Filters:
+     - parent PO status must be SUBMITTED or PARTIALLY_RECEIVED
+     - line item must have qty - received_qty > 0
+     - limit 500 so the picker doesn't choke
+   Shape mirrors the GET /outstanding-so-items pattern on mfgPurchaseOrders. */
+grns.get('/outstanding-po-items', async (c) => {
+  const sb = c.get('supabase');
+  const { data: items, error } = await sb
+    .from('purchase_order_items')
+    .select(`
+      id, purchase_order_id, material_kind, material_code, material_name, item_group,
+      description, qty, received_qty, unit_price_centi, warehouse_id, variants,
+      po:purchase_orders!inner ( id, po_number, supplier_id, status, po_date, expected_at,
+        supplier:suppliers ( code, name ) )
+    `)
+    .order('purchase_order_id', { ascending: false })
+    .limit(500);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
 
-  // Roll up qty_accepted onto purchase_order_items.received_qty
-  if (items) {
-    for (const it of items) {
-      const poiId = (it as { purchase_order_item_id: string | null }).purchase_order_item_id;
-      const acc = (it as { qty_accepted: number }).qty_accepted;
-      if (!poiId) continue;
-      const { data: poi } = await sb.from('purchase_order_items').select('received_qty, qty, purchase_order_id').eq('id', poiId).maybeSingle();
-      if (!poi) continue;
-      const next = ((poi as { received_qty: number }).received_qty ?? 0) + acc;
-      await sb.from('purchase_order_items').update({ received_qty: next }).eq('id', poiId);
+  type Row = {
+    id: string; purchase_order_id: string; material_kind: string; material_code: string;
+    material_name: string; item_group: string | null; description: string | null;
+    qty: number; received_qty: number; unit_price_centi: number;
+    warehouse_id: string | null; variants: unknown;
+    po: {
+      id: string; po_number: string; supplier_id: string; status: string;
+      po_date: string; expected_at: string | null;
+      supplier: { code: string; name: string } | null;
+    };
+  };
+
+  const outstanding = ((items ?? []) as unknown as Row[])
+    .filter((r) => r.po.status === 'SUBMITTED' || r.po.status === 'PARTIALLY_RECEIVED')
+    .filter((r) => r.qty - (r.received_qty ?? 0) > 0)
+    .map((r) => ({
+      poItemId:        r.id,
+      poId:            r.po.id,
+      poDocNo:         r.po.po_number,
+      itemCode:        r.material_code,
+      description:     r.description ?? r.material_name,
+      itemGroup:       r.item_group ?? '',
+      qty:             r.qty,
+      receivedQty:     r.received_qty ?? 0,
+      remainingQty:    r.qty - (r.received_qty ?? 0),
+      unitPriceCenti:  r.unit_price_centi,
+      warehouseId:     r.warehouse_id,
+      variants:        r.variants,
+      supplierId:      r.po.supplier_id,
+      supplierCode:    r.po.supplier?.code ?? '',
+      supplierName:    r.po.supplier?.name ?? '',
+      poDate:          r.po.po_date,
+      expectedAt:      r.po.expected_at,
+    }));
+
+  return c.json({ items: outstanding });
+});
+
+/* ── POST /from-po-items ────────────────────────────────────────────────
+   Multi-select GRN creator. Body: { picks: [{ poItemId, qty }], notes?,
+   receivedDate? }. Groups picks by purchase_order_id (each GRN can only
+   reference one PO via grns.purchase_order_id FK) and emits one GRN per
+   PO. Each GRN is created in DRAFT then immediately posted via the shared
+   `postGrnAndRollup` helper so inventory + received_qty + PO status flip
+   atomically (per-doc; best-effort across docs).
+
+   Returns { created: [{ id, grnNumber, purchaseOrderId, poNumber, lineCount }], total }. */
+grns.post('/from-po-items', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { picks?: Array<{ poItemId: string; qty: number }>; notes?: string; receivedDate?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const picks = body.picks ?? [];
+  if (picks.length === 0) return c.json({ error: 'picks_required' }, 400);
+
+  // Load every selected PO item with its parent PO header.
+  const ids = picks.map((p) => p.poItemId);
+  const { data: itemsData, error: itemsErr } = await sb
+    .from('purchase_order_items')
+    .select(`
+      id, purchase_order_id, material_kind, material_code, material_name,
+      item_group, description, description2, uom, qty, received_qty,
+      unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen,
+      leg_height_inches, leg_price_sen, custom_specials, line_suffix,
+      special_order_price_sen, discount_centi,
+      po:purchase_orders!inner ( id, po_number, supplier_id, status, purchase_location_id )
+    `)
+    .in('id', ids);
+  if (itemsErr) return c.json({ error: 'load_failed', reason: itemsErr.message }, 500);
+
+  type ItemRow = {
+    id: string; purchase_order_id: string; material_kind: string; material_code: string;
+    material_name: string; item_group: string | null; description: string | null;
+    description2: string | null; uom: string | null;
+    qty: number; received_qty: number; unit_price_centi: number;
+    variants: unknown; gap_inches: number | null; divan_height_inches: number | null;
+    divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
+    custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
+    discount_centi: number;
+    po: { id: string; po_number: string; supplier_id: string; status: string; purchase_location_id: string | null };
+  };
+
+  const itemList = (itemsData ?? []) as unknown as ItemRow[];
+  const byId = new Map<string, ItemRow>();
+  for (const r of itemList) byId.set(r.id, r);
+
+  // Validate every pick — qty > 0 and qty ≤ remaining.
+  for (const p of picks) {
+    const row = byId.get(p.poItemId);
+    if (!row) return c.json({ error: 'item_not_found', poItemId: p.poItemId }, 400);
+    if (p.qty <= 0) return c.json({ error: 'qty_must_be_positive', poItemId: p.poItemId }, 400);
+    const remaining = row.qty - (row.received_qty ?? 0);
+    if (p.qty > remaining) {
+      return c.json({ error: 'qty_exceeds_remaining', poItemId: p.poItemId, requested: p.qty, remaining }, 409);
+    }
+    if (row.po.status !== 'SUBMITTED' && row.po.status !== 'PARTIALLY_RECEIVED') {
+      return c.json({ error: 'po_not_receivable', poItemId: p.poItemId, status: row.po.status }, 409);
     }
   }
 
-  const { data, error } = await sb.from('grns').update({
-    status: 'POSTED', posted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }).eq('id', id).eq('status', 'DRAFT').select('id, status, posted_at').single();
-  if (error) return c.json({ error: 'post_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'not_draft' }, 409);
-
-  // ── Inventory IN per item — best effort, doesn't roll back the post. ─
-  const grnNo = (grnHeader as { grn_number: string } | null)?.grn_number ?? id;
-  const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
-    ?? (await defaultWarehouseId(sb));
-  if (warehouseId && items) {
-    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null }>)
-      .filter((it) => it.qty_accepted > 0)
-      .map((it) => ({
-        movement_type: 'IN' as const,
-        warehouse_id: warehouseId,
-        product_code: it.material_code,
-        product_name: it.material_name,
-        qty: it.qty_accepted,
-        /* PR #37 — pass unit cost into the movement so the FIFO trigger
-           can create a lot with the correct cost basis. */
-        unit_cost_sen: Number(it.unit_price_centi ?? 0),
-        source_doc_type: 'GRN' as const,
-        source_doc_id: id,
-        source_doc_no: grnNo,
-        performed_by: user.id,
-      }));
-    if (movements.length > 0) await writeMovements(sb, movements);
+  // Group picks by purchase_order_id → emit one GRN per PO.
+  type Bucket = { poId: string; poNumber: string; supplierId: string; warehouseId: string | null; lines: Array<{ row: ItemRow; qty: number }> };
+  const buckets = new Map<string, Bucket>();
+  for (const p of picks) {
+    const row = byId.get(p.poItemId)!;
+    const cur = buckets.get(row.po.id) ?? {
+      poId: row.po.id, poNumber: row.po.po_number, supplierId: row.po.supplier_id,
+      warehouseId: row.po.purchase_location_id, lines: [],
+    };
+    cur.lines.push({ row, qty: p.qty });
+    buckets.set(row.po.id, cur);
   }
 
-  return c.json({ grn: data });
+  // Generate GRN numbers sequentially within this batch.
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count } = await sb.from('grns').select('id', { head: true, count: 'exact' }).like('grn_number', `GRN-${yymm}-%`);
+  let counter = count ?? 0;
+
+  const receivedAt = body.receivedDate ?? new Date().toISOString().slice(0, 10);
+  const created: Array<{ id: string; grnNumber: string; purchaseOrderId: string; poNumber: string; lineCount: number }> = [];
+
+  for (const bucket of buckets.values()) {
+    counter += 1;
+    const grnNumber = `GRN-${yymm}-${String(counter).padStart(3, '0')}`;
+    const { data: header, error: hErr } = await sb.from('grns').insert({
+      grn_number: grnNumber,
+      purchase_order_id: bucket.poId,
+      supplier_id: bucket.supplierId,
+      received_at: receivedAt,
+      warehouse_id: bucket.warehouseId,
+      notes: body.notes
+        ? `Multi-pick from ${bucket.poNumber} · ${body.notes}`
+        : `Multi-pick from ${bucket.poNumber}`,
+      created_by: user.id,
+    }).select('id, grn_number').single();
+    if (hErr) continue;
+    const h = header as unknown as { id: string; grn_number: string };
+
+    const rows = bucket.lines.map(({ row, qty }) => ({
+      grn_id: h.id,
+      purchase_order_item_id: row.id,
+      material_kind: row.material_kind,
+      material_code: row.material_code,
+      material_name: row.material_name,
+      qty_received: qty,
+      qty_accepted: qty,
+      qty_rejected: 0,
+      unit_price_centi: row.unit_price_centi,
+      // PR #44 — preserve variants from PO line
+      item_group: row.item_group,
+      description: row.description,
+      description2: row.description2,
+      uom: row.uom ?? 'UNIT',
+      variants: row.variants,
+      gap_inches: row.gap_inches,
+      divan_height_inches: row.divan_height_inches,
+      divan_price_sen: row.divan_price_sen ?? 0,
+      leg_height_inches: row.leg_height_inches,
+      leg_price_sen: row.leg_price_sen ?? 0,
+      custom_specials: row.custom_specials,
+      line_suffix: row.line_suffix,
+      special_order_price_sen: row.special_order_price_sen ?? 0,
+      discount_centi: row.discount_centi ?? 0,
+    }));
+    const { error: iErr } = await sb.from('grn_items').insert(rows);
+    if (iErr) {
+      await sb.from('grns').delete().eq('id', h.id);
+      continue;
+    }
+    // Immediately post — rolls up received_qty, flips PO status, writes inventory.
+    const postRes = await postGrnAndRollup(sb, h.id, user.id);
+    if (!postRes.ok) {
+      // Post failed — leave the GRN as DRAFT (it's created), report counts.
+      // Don't delete — commander can inspect and post manually.
+    }
+    created.push({
+      id: h.id, grnNumber: h.grn_number,
+      purchaseOrderId: bucket.poId, poNumber: bucket.poNumber,
+      lineCount: bucket.lines.length,
+    });
+  }
+
+  return c.json({ created, total: created.length }, 201);
 });

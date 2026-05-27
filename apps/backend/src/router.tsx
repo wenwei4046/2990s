@@ -39,7 +39,9 @@ import { PurchaseOrderDetail } from './pages/PurchaseOrderDetail';
 import { PurchaseOrderNew } from './pages/PurchaseOrderNew';
 import { PurchaseOrderFromSo } from './pages/PurchaseOrderFromSo';
 import { GrnNew } from './pages/GrnNew';
+import { GrnFromPo } from './pages/GrnFromPo';
 import { PurchaseInvoiceNew } from './pages/PurchaseInvoiceNew';
+import { PurchaseInvoiceFromGrn } from './pages/PurchaseInvoiceFromGrn';
 import { PurchaseReturnNew } from './pages/PurchaseReturnNew';
 import { Outstanding } from './pages/Outstanding';
 import { Placeholder } from './pages/Placeholder';
@@ -88,9 +90,11 @@ export const router = createBrowserRouter([
       { path: 'purchase-orders/:id',  element: <PurchaseOrderDetail /> },
       { path: 'grns', element: <Grns /> },
       { path: 'grns/new', element: <GrnNew /> },
+      { path: 'grns/from-po', element: <GrnFromPo /> },
       { path: 'grns/:id', element: <GrnDetail /> },
       { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
       { path: 'purchase-invoices/new', element: <PurchaseInvoiceNew /> },
+      { path: 'purchase-invoices/from-grn', element: <PurchaseInvoiceFromGrn /> },
       { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
