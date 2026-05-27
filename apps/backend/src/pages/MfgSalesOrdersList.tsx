@@ -111,10 +111,23 @@ type SoRow = {
   address1: string | null;
   address2: string | null;
   customer_state: string | null;
+  customer_country: string | null;
   city: string | null;
   postcode: string | null;
   processing_date: string | null;
   customer_delivery_date: string | null;
+  /* PR-E — Internal expected delivery date (commander's privately tracked
+     ETA, distinct from the customer-facing customer_delivery_date). Hidden
+     by default — coordinator reveals via right-click. */
+  internal_expected_dd: string | null;
+  /* PR #46 — POS handover target_date (Marketing-side "Target Date" stamp). */
+  target_date: string | null;
+  /* PR #143 — Header-level payment method (cash | transfer | merchant) +
+     installment plan / merchant provider. Populated when the SO carries a
+     single-shot deposit; per-payment ledger lives in mfg_sales_order_payments. */
+  payment_method: string | null;
+  installment_months: number | null;
+  merchant_provider: string | null;
   note: string | null;
   local_total_centi: number;
   /* Live balance + paid total come from mfg_sales_orders_with_payment_totals
@@ -1230,6 +1243,17 @@ const buildColumns = (
     searchValue: (r) => r.customer_state ?? '',
   },
   {
+    /* Task #121 — country snapshot, derived from customer_state via
+       my_localities at SO create/PATCH (migration 0082). Always 'Malaysia'
+       today; preserved as a separate column so a future MY/SG split surfaces
+       without a backfill. */
+    key: 'customer_country', label: 'Country', width: 110, sortable: true, groupable: true,
+    defaultHidden: true,
+    accessor: (r) => r.customer_country ?? '',
+    searchValue: (r) => r.customer_country ?? '',
+    groupValue: (r) => r.customer_country ?? '(none)',
+  },
+  {
     key: 'city', label: 'City', width: 130, sortable: true, groupable: true,
     defaultHidden: true,
     accessor: (r) => r.city ?? '',
@@ -1252,6 +1276,41 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => r.customer_delivery_date ?? '',
     searchValue: (r) => r.customer_delivery_date ?? '',
+  },
+  {
+    /* PR-E — Internal expected delivery date (private to ops). Separate
+       from customer_delivery_date so a buffered internal date can sit
+       behind the date Loo promised the customer. */
+    key: 'internal_expected_dd', label: 'Internal DD', width: 130, sortable: true,
+    defaultHidden: true,
+    accessor: (r) => r.internal_expected_dd ?? '',
+    searchValue: (r) => r.internal_expected_dd ?? '',
+  },
+  {
+    /* PR #46 — POS handover "Target Date" (marketing-side commitment). */
+    key: 'target_date', label: 'Target Date', width: 130, sortable: true,
+    defaultHidden: true,
+    accessor: (r) => r.target_date ?? '',
+    searchValue: (r) => r.target_date ?? '',
+  },
+  {
+    /* PR #143 — header-level payment method snapshot. The full per-receipt
+       ledger lives in mfg_sales_order_payments (surfaced on the SO Detail
+       Payments table). This column shows the SO's primary method at a glance. */
+    key: 'payment_method', label: 'Payment Method', width: 130, sortable: true, groupable: true,
+    defaultHidden: true,
+    accessor: (r) => {
+      if (!r.payment_method) return '';
+      const base = r.payment_method.toUpperCase();
+      if (r.payment_method === 'merchant') {
+        const parts = [r.merchant_provider, r.installment_months ? `${r.installment_months}m` : null]
+          .filter(Boolean).join(' · ');
+        return parts ? `${base} · ${parts}` : base;
+      }
+      return base;
+    },
+    searchValue: (r) => `${r.payment_method ?? ''} ${r.merchant_provider ?? ''}`,
+    groupValue: (r) => r.payment_method ?? '(none)',
   },
   {
     key: 'note', label: 'Note', width: 200, sortable: true,
