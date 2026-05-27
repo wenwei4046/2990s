@@ -4,6 +4,8 @@ import { useAuth } from '../lib/auth';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { ToastProvider } from './Toast';
+import { ErrorBoundary } from './ErrorBoundary';
+import { SkeletonDetailPage } from './Skeleton';
 import styles from './Layout.module.css';
 
 // Auth-gated layout shell. Redirects to /login if no session, /no-access if
@@ -74,8 +76,10 @@ export const Layout = () => {
                 See router.tsx — per-route code splitting means each page
                 module is fetched on demand, with this fallback shown while
                 its chunk downloads. */}
-            <Suspense fallback={<div style={{ padding: 'var(--space-4)' }}>Loading…</div>}>
-              <Outlet />
+            <Suspense fallback={<SkeletonDetailPage />}>
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
             </Suspense>
           </main>
         </div>

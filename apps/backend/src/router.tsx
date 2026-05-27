@@ -1,6 +1,7 @@
 import { lazy } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router';
 import { Layout, NoAccess } from './components/Layout';
+import { ErrorBoundaryRoot } from './components/ErrorBoundary';
 import { Login } from './pages/Login';
 import { SetPassword } from './pages/SetPassword';
 import { Dashboard } from './pages/Dashboard';
@@ -77,6 +78,7 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: <Layout />,
+    errorElement: <ErrorBoundaryRoot />,
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <Dashboard /> },

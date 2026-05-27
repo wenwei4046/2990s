@@ -1,0 +1,173 @@
+/* ErrorBoundary fallback — full-bleed centered card.
+   Used by both the class-component <ErrorBoundary> (per-page render errors)
+   and the router-level <ErrorBoundaryRoot> (loader/transition errors).
+   Tokens only; no Tailwind. */
+
+.wrap {
+  min-height: 60vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: var(--c-paper);
+}
+
+.card {
+  width: 100%;
+  max-width: 480px;
+}
+
+.iconRow {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-5);
+}
+
+.iconChip {
+  border-radius: var(--radius-md);
+  background: var(--c-error-bg);
+  border: 1px solid var(--c-error);
+  padding: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-error);
+}
+
+.heading {
+  text-align: center;
+  margin-bottom: var(--space-5);
+}
+
+.title {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-24);
+  letter-spacing: -0.01em;
+  color: var(--c-ink);
+  margin: 0 0 var(--space-2);
+}
+
+.message {
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  color: var(--fg-muted);
+  margin: 0;
+  line-height: var(--lh-14);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  justify-content: center;
+  margin-bottom: var(--space-5);
+}
+
+@media (min-width: 480px) {
+  .actions {
+    flex-direction: row;
+  }
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 40px;
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-decoration: none;
+  transition: background-color 120ms ease-out, color 120ms ease-out,
+              border-color 120ms ease-out;
+}
+
+.btnPrimary {
+  background: var(--c-ink);
+  color: var(--c-cream);
+}
+.btnPrimary:hover { background: var(--c-burnt); }
+
+.btnSecondary {
+  background: #fff;
+  color: var(--c-ink);
+  border-color: var(--line);
+}
+.btnSecondary:hover {
+  border-color: var(--c-burnt);
+  color: var(--c-burnt);
+}
+
+.details {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+
+.details summary {
+  cursor: pointer;
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  color: var(--fg-muted);
+  letter-spacing: var(--tk-wide);
+  text-transform: uppercase;
+  user-select: none;
+  outline: none;
+}
+
+.details summary:hover {
+  color: var(--c-ink);
+}
+
+.detailsBody {
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.label {
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-bold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-soft);
+  margin: 0 0 var(--space-1);
+}
+
+.errMsg {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--c-error);
+  background: var(--c-error-bg);
+  border-radius: var(--radius-xs);
+  padding: var(--space-3);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+
+.stack {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  background: var(--c-paper);
+  border-radius: var(--radius-xs);
+  padding: var(--space-3);
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
