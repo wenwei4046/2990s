@@ -389,7 +389,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
     fieldChanges: [
       { field: 'unitPriceCenti', from: originalPriceSen, to: overridePriceSen },
     ],
-    note: body.reason || null,
+    note: (body.reason as string) || undefined,
   });
 
   return c.json({ ok: true, itemId, newPrice });
