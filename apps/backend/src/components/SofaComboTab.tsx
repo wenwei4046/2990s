@@ -2,23 +2,28 @@
 // SofaComboTab — Sofa Combo Pricing UI.
 //
 // Commander 2026-05-28 ("去查看 hookka 的 combo module 把整个 copy 过来").
-// Ported from HOOKKA's combo module spec (the source code itself wasn't in
-// any local repo — built fresh from the UI screenshot + commander's
-// pricing-role + customer-scope + height-tier decisions).
+// Ported from HOOKKA's combo module spec — built fresh from the UI screenshot
+// + commander's pricing-role + height-tier decisions.
 //
-// Layout matches the HOOKKA screenshot:
-//   header        — "Sofa Combo Pricing" + subtitle + Copy/New Combo
-//   filters       — Base model dropdown + Customer dropdown + "N rules"
-//   list          — grouped by base model; each combo card has the module
-//                   composition + tier + customer + 5 height-tier prices +
-//                   Effective date + Edit/History/Delete actions.
+// 2026-05-28 update — commander dropped customer scoping for 2990's B2C model
+// ("2990 是不需要的。因为是 B2C 直接 apply 给全顾客的"). Removed:
+//   · Copy-to-customer button + modal + API endpoint
+//   · Customer filter dropdown
+//   · Customer picker in New Combo modal (always null = applies to all)
+//   · Customer chip on combo cards
+// The DB column `customer_id` stays for future optionality but the UI never
+// writes to it; every combo persists with customer_id = null.
 //
-// Form drawer = inline new-combo card at top of each group, OR a stacked
-// modal-style overlay (kept simple — no animation library).
+// Layout:
+//   header   — "Sofa Combo Pricing" + subtitle + "+ New Combo"
+//   filters  — Base model dropdown + "N rules"
+//   list     — grouped by base model; each combo card has the module
+//              composition + tier + 5 height-tier prices + Effective date
+//              + Edit/History/Delete actions.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type CSSProperties } from 'react';
-import { Plus, Copy, Pencil, Trash2, History, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SOFA_MODULES, type SofaPriceTier, buildComboLabel } from '@2990s/shared';
 import {
@@ -26,8 +31,6 @@ import {
   useCreateSofaCombo,
   useUpdateSofaCombo,
   useDeleteSofaCombo,
-  useCopyCombosToCustomer,
-  useCustomersLite,
   useSofaComboHistory,
   type SofaComboRule,
 } from '../lib/sofa-combos-queries';
@@ -47,7 +50,6 @@ const fmtRm = (centi: number | null | undefined): string => {
 };
 
 const fmtDate = (iso: string): string => {
-  // Display as DD/MM/YYYY to match HOOKKA's Malaysian locale.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
@@ -55,44 +57,26 @@ const fmtDate = (iso: string): string => {
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
-// All SOFA compartment codes (sorted) — used as the multi-select pool when
-// composing a new combo.
 const ALL_MODULE_CODES = SOFA_MODULES.map((m) => m.id).sort();
 
 type ComboTabProps = { /* no props for now */ };
 
 export const SofaComboTab = (_props: ComboTabProps) => {
-  // Filters
   const [baseModelFilter, setBaseModelFilter] = useState<string>('');
-  const [customerFilter, setCustomerFilter] = useState<string>('');  // '' = all; '__all__' = null-scope; uuid = customer
-
-  // New combo form open state
   const [composer, setComposer] = useState<{ open: boolean; editing?: SofaComboRule }>({ open: false });
-
-  // History drawer state
   const [historyFor, setHistoryFor] = useState<SofaComboRule | null>(null);
 
-  // Copy-to-customer modal
-  const [copyOpen, setCopyOpen] = useState(false);
-
-  // Data
+  // Default scope: customer_id = null (applies to all). 2990 is B2C, so we
+  // never let the UI write a customer_id.
   const combosQ = useSofaCombos({
     baseModel: baseModelFilter || undefined,
-    customerId:
-      customerFilter === '' ? undefined
-      : customerFilter === '__all__' ? null
-      : customerFilter,
+    customerId: null,
   });
-  const customersQ = useCustomersLite();
   const productsQ = useMfgProducts({ category: 'SOFA' });
 
-  // Unique base models from the SOFA SKUs (for the filter dropdown +
-  // composer base-model picker). Falls back to base models present on
-  // existing combos when products query is still loading.
   const baseModels = useMemo(() => {
     const set = new Set<string>();
     for (const p of productsQ.data ?? []) {
-      // mfg_products serializes snake_case from the API
       const bm = (p as unknown as { base_model?: string | null }).base_model;
       if (bm) set.add(bm);
     }
@@ -100,8 +84,6 @@ export const SofaComboTab = (_props: ComboTabProps) => {
     return [...set].sort();
   }, [productsQ.data, combosQ.data]);
 
-  // Group combos by base model in the same order as baseModels (so the
-  // page is deterministic and matches the filter dropdown).
   const grouped = useMemo(() => {
     const map = new Map<string, SofaComboRule[]>();
     for (const r of combosQ.data ?? []) {
@@ -138,16 +120,12 @@ export const SofaComboTab = (_props: ComboTabProps) => {
           }}>
             Module-set combo deals with optional same-fabric-tier discount.
             Append-only history; edits = a new row with a fresher effective date.
+            All combos apply to every customer (2990 B2C model).
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button variant="ghost" onClick={() => setCopyOpen(true)}>
-            <Copy {...ICON_PROPS} style={{ marginRight: 6 }} /> Copy to customer
-          </Button>
-          <Button variant="primary" onClick={() => setComposer({ open: true })}>
-            <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
-          </Button>
-        </div>
+        <Button variant="primary" onClick={() => setComposer({ open: true })}>
+          <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
+        </Button>
       </div>
 
       {/* Filters */}
@@ -163,17 +141,6 @@ export const SofaComboTab = (_props: ComboTabProps) => {
         >
           <option value="">All base models</option>
           {baseModels.map((m) => <option key={m} value={m}>{m}</option>)}
-        </select>
-        <select
-          value={customerFilter}
-          onChange={(e) => setCustomerFilter(e.target.value)}
-          style={selectStyle}
-        >
-          <option value="">All customers</option>
-          <option value="__all__">— Default (all customers) —</option>
-          {(customersQ.data ?? []).map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
         </select>
         <div style={{ flex: 1 }} />
         <span style={{
@@ -217,7 +184,6 @@ export const SofaComboTab = (_props: ComboTabProps) => {
                 <ComboCard
                   key={r.id}
                   rule={r}
-                  customerName={customersQ.data?.find((c) => c.id === r.customerId)?.name}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
                   onDelete={() => {
@@ -232,28 +198,16 @@ export const SofaComboTab = (_props: ComboTabProps) => {
         ))
       )}
 
-      {/* Composer modal */}
       {composer.open && (
         <ComposerModal
           editing={composer.editing}
           baseModels={baseModels}
-          customers={customersQ.data ?? []}
           onClose={() => setComposer({ open: false })}
         />
       )}
 
-      {/* History drawer */}
       {historyFor && (
         <HistoryModal rule={historyFor} onClose={() => setHistoryFor(null)} />
-      )}
-
-      {/* Copy-to-customer modal */}
-      {copyOpen && (
-        <CopyModal
-          customers={customersQ.data ?? []}
-          baseModels={baseModels}
-          onClose={() => setCopyOpen(false)}
-        />
       )}
     </div>
   );
@@ -262,10 +216,9 @@ export const SofaComboTab = (_props: ComboTabProps) => {
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, customerName, onEdit, onHistory, onDelete,
+  rule, onEdit, onHistory, onDelete,
 }: {
   rule: SofaComboRule;
-  customerName?: string;
   onEdit: () => void;
   onHistory: () => void;
   onDelete: () => void;
@@ -302,12 +255,6 @@ function ComboCard({
         >
           <Trash2 size={14} strokeWidth={1.75} />
         </button>
-      </div>
-
-      <div>
-        <span style={chipStyleSoft}>
-          {customerName ?? 'All customers'}
-        </span>
       </div>
 
       {/* Height tiers */}
@@ -360,11 +307,10 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, baseModels, customers, onClose,
+  editing, baseModels, onClose,
 }: {
   editing?: SofaComboRule;
   baseModels: string[];
-  customers: { id: string; name: string }[];
   onClose: () => void;
 }) {
   const create = useCreateSofaCombo();
@@ -373,7 +319,6 @@ function ComposerModal({
   const [baseModel, setBaseModel] = useState(editing?.baseModel ?? '');
   const [modules, setModules] = useState<string[]>(editing?.modules ?? []);
   const [tier, setTier] = useState<SofaPriceTier | ''>(editing?.tier ?? 'PRICE_2');
-  const [customerId, setCustomerId] = useState<string>(editing?.customerId ?? '');
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
   const [prices, setPrices] = useState<Record<string, string>>(() => {
@@ -407,7 +352,6 @@ function ComposerModal({
 
     try {
       if (editing) {
-        // Edit = create a new effective-dated row for the same logical combo
         await update.mutateAsync({
           id: editing.id,
           pricesByHeight,
@@ -420,7 +364,7 @@ function ComposerModal({
           baseModel,
           modules,
           tier: tier || null,
-          customerId: customerId || null,
+          customerId: null,  // B2C: always null = applies to all customers
           pricesByHeight,
           label: label || null,
           effectiveFrom,
@@ -436,7 +380,6 @@ function ComposerModal({
   return (
     <ModalShell title={editing ? 'Edit combo' : 'New combo'} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {/* Base model */}
         <Field label="Base model">
           {editing ? (
             <input value={baseModel} readOnly style={readonlyInputStyle} />
@@ -454,7 +397,6 @@ function ComposerModal({
           </datalist>
         </Field>
 
-        {/* Modules */}
         <Field label={`Modules (${modules.length} selected)`}>
           {editing ? (
             <div style={{ ...readonlyInputStyle, padding: 8 }}>
@@ -484,33 +426,18 @@ function ComposerModal({
           )}
         </Field>
 
-        {/* Tier + Customer */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <Field label="Tier">
-            <select
-              value={tier}
-              onChange={(e) => setTier(e.target.value as SofaPriceTier | '')}
-              style={selectStyle}
-              disabled={!!editing}
-            >
-              <option value="">— Any —</option>
-              {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </Field>
-          <Field label="Customer">
-            <select
-              value={customerId}
-              onChange={(e) => setCustomerId(e.target.value)}
-              style={selectStyle}
-              disabled={!!editing}
-            >
-              <option value="">All customers (default)</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </Field>
-        </div>
+        <Field label="Tier">
+          <select
+            value={tier}
+            onChange={(e) => setTier(e.target.value as SofaPriceTier | '')}
+            style={selectStyle}
+            disabled={!!editing}
+          >
+            <option value="">— Any —</option>
+            {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </Field>
 
-        {/* Prices */}
         <Field label="Prices by seat height (RM)">
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 8 }}>
             {HEIGHTS.map((h) => (
@@ -530,7 +457,6 @@ function ComposerModal({
           </div>
         </Field>
 
-        {/* Effective date */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12 }}>
           <Field label="Effective from">
             <input
@@ -550,7 +476,6 @@ function ComposerModal({
           </Field>
         </div>
 
-        {/* Notes */}
         <Field label="Notes (optional)">
           <textarea
             value={notes}
@@ -623,68 +548,6 @@ function HistoryModal({ rule, onClose }: { rule: SofaComboRule; onClose: () => v
   );
 }
 
-// ─── Copy-to-customer modal ───────────────────────────────────────────
-
-function CopyModal({
-  customers, baseModels, onClose,
-}: {
-  customers: { id: string; name: string }[];
-  baseModels: string[];
-  onClose: () => void;
-}) {
-  const copy = useCopyCombosToCustomer();
-  const [fromId, setFromId] = useState<string>('__all__');
-  const [toId, setToId] = useState<string>('');
-  const [baseModel, setBaseModel] = useState<string>('');
-
-  const run = async () => {
-    if (!toId) return alert('Pick a target customer.');
-    if (fromId === toId) return alert('Source and target are the same.');
-    try {
-      const r = await copy.mutateAsync({
-        fromCustomerId: fromId === '__all__' ? null : fromId,
-        toCustomerId: toId,
-        baseModel: baseModel || undefined,
-      });
-      alert(`Copied ${r.copied} rule(s).`);
-      onClose();
-    } catch (e) {
-      alert(`Copy failed: ${String(e)}`);
-    }
-  };
-
-  return (
-    <ModalShell title="Copy combos to customer" onClose={onClose}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <Field label="From">
-          <select value={fromId} onChange={(e) => setFromId(e.target.value)} style={selectStyle}>
-            <option value="__all__">Default (all-customers scope)</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </Field>
-        <Field label="To">
-          <select value={toId} onChange={(e) => setToId(e.target.value)} style={selectStyle}>
-            <option value="">— Pick customer —</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Limit to base model (optional)">
-          <select value={baseModel} onChange={(e) => setBaseModel(e.target.value)} style={selectStyle}>
-            <option value="">All base models</option>
-            {baseModels.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        </Field>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={run} disabled={copy.isPending}>
-            {copy.isPending ? 'Copying…' : 'Copy rules'}
-          </Button>
-        </div>
-      </div>
-    </ModalShell>
-  );
-}
-
 // ─── Small primitives ─────────────────────────────────────────────────
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -732,8 +595,6 @@ function ModalShell({
     </div>
   );
 }
-
-// ─── Inline styles (keeping consistent with Products.tsx convention) ──
 
 const selectStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',
