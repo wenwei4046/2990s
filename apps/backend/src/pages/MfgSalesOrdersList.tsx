@@ -1,9 +1,21 @@
 // PR-G — Sales Order list page rebuild (AutoCount data-grid style).
 //
-// 23-column ledger view backed by <DataGrid>. Replaces the old plain-table
-// MfgSalesOrdersPage in FlowPages.tsx. The page owns its toolbar buttons
-// (New / Edit / View / Find / Preview / Print / Print Listing / Delete /
-// Refresh) and the DataGrid owns the search + column UX.
+// 2026-05-27 HOUZS chrome-strip (so-list-houzs-chrome) — drop the Office-style
+// toolbar (New / Edit / View / Find / Preview / Print / Listing / Print
+// Listing PDF / Delete / Refresh) and DataGrid's "drag column header here to
+// group by that column" banner. Replace with the Houzs modern flat layout:
+//   - Title "Sales Orders" + subtitle ("AutoCount-style ledger view · N
+//     total · drag :: to reorder columns")
+//   - Top-right CTA: single `+ New Sales Order` button (every Edit / View /
+//     Issue DO / Issue SI / Cancel / Delete affordance now lives on the
+//     per-row context menu, gated by current status)
+//   - 4 KPI tiles (Total Orders · Revenue · Outstanding · Paid) scoped to
+//     the currently visible rows so narrowing the filter row re-scopes
+//     the headline numbers (matches the Houzs interactive feel)
+//   - Horizontal filter row (Filter icon · search · All Brands ▼ ·
+//     All Agents ▼ · All Venues ▼ · date from – to)
+//   - <DataGrid groupBanner={false}> hides the "drag column header here to
+//     group by that column" banner
 //
 // 2026-05-27 HOUZS port (so-list-houzs-port): re-ordered columns to match
 // HOUZS SO Listing — Doc.No (bold burnt + status pill inline) · Date · Debtor
@@ -14,13 +26,14 @@
 // per-row context menu gated by current status.
 
 import { useMemo, useState } from 'react';
+import type { JSX } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Pencil, Eye, Search, FileText, Printer, Trash2, RefreshCw, X,
+  Plus, X, Filter, Search,
 } from 'lucide-react';
+import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
-import { ListingPickerDialog, ListingPickerTrigger, type ListingChoice } from '../components/ListingPickerDialog';
+import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import {
   useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo,
@@ -32,8 +45,6 @@ import { supabase } from '../lib/supabase';
 import { BrandingPill, ItemGroupPill, badgeFor } from '../lib/category-badges';
 import styles from './MfgSalesOrdersList.module.css';
 import soDetailStyles from './SalesOrderDetail.module.css';
-
-const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 /* Commander 2026-05-27: "SO 的那些 column 是根据我们的 column 去添加的
    没有的你不要跟 autocount". Align columns to ACTUAL 2990 schema (no
@@ -224,19 +235,24 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
 
 export const MfgSalesOrdersList = () => {
   const navigate = useNavigate();
-  const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   /* Task #120 — Outstanding filter overlay. `?outstanding=1` narrows the
      list to rows with live balance > 0; clear-chip restores. Same param
      name used on every SO-family L1 and on the L2 listings. */
   const outstandingOnly = searchParams.get('outstanding') === '1';
-  const { data, isLoading, error, refetch } = useMfgSalesOrders(undefined);
+  const { data, isLoading, error } = useMfgSalesOrders(undefined);
   const allRows = useMemo<SoRow[]>(() => (data?.salesOrders ?? []) as SoRow[], [data]);
-  const rows = useMemo<SoRow[]>(
-    () => outstandingOnly ? allRows.filter((r) => liveBalance(r) > 0) : allRows,
-    [allRows, outstandingOnly],
-  );
-  const [pickerOpen, setPickerOpen] = useState(false);
+
+  /* Houzs filter row — search + brand + agent + venue + date range.
+     Each one narrows the visible rowset client-side. The outstanding-only
+     toggle continues to flow through ?outstanding=1 (shared with the
+     detail listing + sibling SO-family pages). */
+  const [search, setSearch] = useState('');
+  const [brand,  setBrand]  = useState('');
+  const [agent,  setAgent]  = useState('');
+  const [venue,  setVenue]  = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo,   setDateTo]   = useState('');
 
   const clearOutstanding = () => {
     const next = new URLSearchParams(searchParams);
@@ -244,6 +260,68 @@ export const MfgSalesOrdersList = () => {
     setSearchParams(next, { replace: true });
   };
 
+  /* Distinct dropdown values pulled off the raw rowset. Cheap O(n) — runs
+     once per refetch. */
+  const filterOptions = useMemo(() => {
+    const brands = new Set<string>();
+    const agents = new Set<string>();
+    const venues = new Set<string>();
+    for (const r of allRows) {
+      if (r.branding) brands.add(r.branding);
+      if (r.agent) agents.add(r.agent);
+      if (r.venue) venues.add(r.venue);
+    }
+    return {
+      brands: [...brands].sort(),
+      agents: [...agents].sort(),
+      venues: [...venues].sort(),
+    };
+  }, [allRows]);
+
+  const rows = useMemo<SoRow[]>(() => {
+    const q = search.trim().toLowerCase();
+    return allRows.filter((r) => {
+      if (outstandingOnly && liveBalance(r) <= 0) return false;
+      if (brand && r.branding !== brand) return false;
+      if (agent && r.agent !== agent) return false;
+      if (venue && r.venue !== venue) return false;
+      if (dateFrom && (r.so_date ?? '') < dateFrom) return false;
+      if (dateTo   && (r.so_date ?? '') > dateTo)   return false;
+      if (q) {
+        const blob = [
+          r.doc_no, r.debtor_name, r.debtor_code, r.agent, r.venue,
+          r.branding, r.customer_so_no, r.ref, r.po_doc_no, r.phone,
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allRows, outstandingOnly, search, brand, agent, venue, dateFrom, dateTo]);
+
+  /* 4 KPI tiles — scoped to the currently visible rows so narrowing the
+     filter re-scopes the headline numbers (matches Houzs interactive feel). */
+  const kpis = useMemo(() => {
+    let revenue = 0, outstanding = 0, paid = 0;
+    for (const r of rows) {
+      revenue += r.local_total_centi ?? 0;
+      paid    += r.paid_total_centi ?? r.paid_centi ?? 0;
+      const bal = liveBalance(r);
+      if (bal > 0) outstanding += bal;
+    }
+    return { totalOrders: rows.length, revenue, outstanding, paid };
+  }, [rows]);
+
+  const resetFilters = () => {
+    setSearch(''); setBrand(''); setAgent(''); setVenue('');
+    setDateFrom(''); setDateTo('');
+  };
+
+  /* The Listing picker dialog (Listing / Outstanding-only / Detail Listing /
+     Outstanding Detail Listing) is no longer surfaced in the chrome — the
+     outstanding toggle now flows in via ?outstanding=1 from the sidebar
+     and the detail listing has its own /reports/sales-order-detail-listing
+     route. Dialog kept dormant in case a future menu wants to reopen it. */
+  const [pickerOpen, setPickerOpen] = useState(false);
   const onPickListing = (choice: ListingChoice) => {
     const next = new URLSearchParams(searchParams);
     if (choice === 'listing') {
@@ -272,20 +350,14 @@ export const MfgSalesOrdersList = () => {
   }, [staffQ.data]);
   const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
-  const [selected, setSelected] = useState<SoRow[]>([]);
-  const [findNonce, setFindNonce] = useState(0);
-  const selectedRow = selected[0] ?? null;
-
   const updateStatus = useUpdateMfgSalesOrderStatus();
   const convertToDoMut = useConvertSoToDo();
 
-  // ── Toolbar handlers ────────────────────────────────────────────
+  // ── Row handlers (no toolbar — every action lives on the row's
+  //    right-click context menu, gated by status). ───────────────────
   const onNew = () => navigate('/mfg-sales-orders/new');
   const openDetail = (row: SoRow, edit = false) =>
     navigate(`/mfg-sales-orders/${row.doc_no}${edit ? '?edit=1' : ''}`);
-  const onEdit = () => selectedRow && openDetail(selectedRow, true);
-  const onView = () => selectedRow && openDetail(selectedRow);
-  const onFind = () => setFindNonce((n) => n + 1);
 
   const renderPdf = async (row: SoRow, action: 'save' | 'print' | 'preview') => {
     // One-shot fetch when the toolbar button fires — avoids holding a
@@ -317,96 +389,17 @@ export const MfgSalesOrdersList = () => {
     await generateSalesOrderPdf(json.salesOrder as never, json.items as never, payments as never, action);
   };
 
-  const onPreview = () => selectedRow && void renderPdf(selectedRow, 'preview');
-  const onPrint = () => selectedRow && void renderPdf(selectedRow, 'print');
-
-  // Print listing — generate a PDF of the current visible grid (filtered
-  // rows + visible columns) using jsPDF + autotable.
-  const onPrintListing = async () => {
-    const { jsPDF } = await import('jspdf');
-    const autoTable = (await import('jspdf-autotable')).default;
-    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14);
-    doc.text('Sales Orders — Listing', 14, 14);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text(`${rows.length} rows · ${new Date().toISOString().slice(0, 10)}`, 14, 20);
-
-    // Read layout from localStorage to honour the user's visible columns.
-    let visibleKeys: string[] = COLUMNS.map((c) => c.key);
-    let hidden: string[] = [];
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const layout = JSON.parse(raw) as { order?: string[]; hidden?: string[] };
-        const order = layout.order && layout.order.length
-          ? [...layout.order, ...COLUMNS.map((c) => c.key).filter((k) => !layout.order!.includes(k))]
-          : COLUMNS.map((c) => c.key);
-        hidden = layout.hidden ?? [];
-        visibleKeys = order.filter((k) => !hidden.includes(k));
-      }
-    } catch { /* fall back to all columns */ }
-
-    const visibleCols = visibleKeys
-      .map((k) => COLUMNS.find((c) => c.key === k))
-      .filter((c): c is DataGridColumn<SoRow> => Boolean(c));
-
-    const head = [visibleCols.map((c) => c.label)];
-    const body = rows.map((r) =>
-      visibleCols.map((c) => {
-        // Use search-friendly string form for the PDF (skip pill JSX).
-        if (c.searchValue) return c.searchValue(r);
-        const v = c.accessor(r);
-        return typeof v === 'string' || typeof v === 'number' ? String(v) : '';
-      }),
-    );
-    autoTable(doc, {
-      head, body, startY: 26,
-      styles: { fontSize: 7, cellPadding: 1.5 },
-      headStyles: { fillColor: [240, 235, 225], textColor: [34, 31, 32], fontStyle: 'bold' },
-      theme: 'grid',
-    });
-    /* Follow-up #83 — Print Listing now renders via hidden iframe +
-       window.print() instead of doc.save(). Same UX as the single-SO
-       Print button — user gets the OS print dialog directly, no need
-       to fish a downloaded PDF out of the Downloads folder. */
-    const blob = doc.output('blob');
-    const blobUrl = URL.createObjectURL(blob);
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.src = blobUrl;
-    document.body.appendChild(iframe);
-    iframe.onload = () => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } catch { /* PDF viewer may not have hydrated; cleanup still runs */ }
-    };
-    window.setTimeout(() => {
-      try { document.body.removeChild(iframe); } catch { /* already detached */ }
-      URL.revokeObjectURL(blobUrl);
-    }, 60_000);
-  };
-
-  /* Soft-delete a SO row (sets status=CANCELLED). Shared by the toolbar's
-     Delete button and the row context menu's Delete entry. */
+  /* Soft-delete a SO row (sets status=CANCELLED). Fired from the row
+     context menu — the toolbar Delete button is gone. */
   const doDelete = (row: SoRow) => {
     if (!window.confirm(`Cancel SO ${row.doc_no}? This sets status = CANCELLED (soft delete).`)) return;
     updateStatus.mutate(
       { docNo: row.doc_no, status: 'CANCELLED' },
       {
-        onSuccess: () => { setSelected([]); },
         onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`),
       },
     );
   };
-  const onDelete = () => { if (selectedRow) doDelete(selectedRow); };
 
   /* Convert an SO → new DO via the API, then navigate to the new DO so
      commander can immediately review/dispatch. Confirmation prompt
@@ -429,56 +422,66 @@ export const MfgSalesOrdersList = () => {
     alert(`Copy to new SO is not implemented yet (would clone SO ${row.doc_no}).`);
   };
 
-  const onRefresh = () => {
-    qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
-    void refetch();
-  };
-
   // ── Columns (23 reference + 1 status pill) ──────────────────────
   // Order matches the AutoCount reference layout the commander provided.
   // Customer Name = debtor_name (Commander PR #46 rename in flight).
   // Customer SO Ref + Delivery Date inserted into the AutoCount layout.
 
-  const tb = (
-    <>
-      <button className={styles.tbarBtn} onClick={onNew} title="Create a new SO"><Plus {...ICON} /> New</button>
-      <button className={styles.tbarBtn} onClick={onEdit} disabled={!selectedRow}><Pencil {...ICON} /> Edit</button>
-      <button className={styles.tbarBtn} onClick={onView} disabled={!selectedRow}><Eye {...ICON} /> View</button>
-      <button className={styles.tbarBtn} onClick={onFind}><Search {...ICON} /> Find</button>
-      <button className={styles.tbarBtn} onClick={onPreview} disabled={!selectedRow}><FileText {...ICON} /> Preview</button>
-      <button className={styles.tbarBtn} onClick={onPrint} disabled={!selectedRow}><Printer {...ICON} /> Print</button>
-      {/* Task #120 — "Listing" picker replaces the old standalone Print Listing
-          button. The PDF export still exists below as "Print Listing PDF" so
-          the existing capability isn't removed (per commander's spec #5). */}
-      <ListingPickerTrigger onClick={() => setPickerOpen(true)} />
-      <button className={styles.tbarBtn} onClick={onPrintListing}><Printer {...ICON} /> Print Listing PDF</button>
-      <button
-        className={`${styles.tbarBtn} ${styles.tbarBtnDanger}`}
-        onClick={onDelete}
-        disabled={!selectedRow || updateStatus.isPending}
-      >
-        <Trash2 {...ICON} /> Delete
-      </button>
-      <button className={styles.tbarBtn} onClick={onRefresh} title="Refetch from server">
-        <RefreshCw {...ICON} /> Refresh
-      </button>
-      {/* Maintenance button removed — commander 2026-05-27 "then here
-          maintenance can remove alr". Sidebar already exposes a direct
-          link to /mfg-sales-orders/maintenance under B2B Sales. */}
-    </>
+  /* Houzs chrome — KPI tile + filter-control styling kept inline so the
+     module CSS doesn't grow another 60 lines for one-off use. Compact
+     AutoCount card: uppercase 10px label + 14px semi-bold value. */
+  const kpiTile = (label: string, value: string, accent?: 'good' | 'bad' | 'burnt'): JSX.Element => (
+    <div key={label} style={{
+      background: 'var(--c-paper)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+      padding: '8px 12px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2,
+    }}>
+      <div style={{
+        fontFamily: 'var(--font-button)',
+        fontSize: 'var(--fs-10)',
+        fontWeight: 700,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        color: 'var(--fg-muted)',
+      }}>{label}</div>
+      <div style={{
+        fontFamily: 'var(--font-sans)',
+        fontSize: 'var(--fs-14)',
+        fontWeight: 700,
+        fontVariantNumeric: 'tabular-nums',
+        color: accent === 'good'  ? 'var(--c-secondary-a, #2F5D4F)'
+             : accent === 'bad'   ? 'var(--c-festive-b, #B8331F)'
+             : accent === 'burnt' ? 'var(--c-burnt)'
+             : 'var(--c-ink)',
+      }}>{value}</div>
+    </div>
   );
 
   return (
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Sales Orders {outstandingOnly && <span style={{ color: 'var(--c-burnt)' }}>· Outstanding only</span>}</h1>
+          <h1 className={styles.title}>
+            Sales Orders {outstandingOnly && <span style={{ color: 'var(--c-burnt)' }}>· Outstanding only</span>}
+          </h1>
           <p className={styles.subtitle}>
-            AutoCount-style ledger view · drag to reorder columns
+            AutoCount-style ledger view
             {' · '}{isLoading ? 'Loading…' : `${rows.length}${outstandingOnly ? ` of ${allRows.length}` : ''} total`}
+            {' · drag :: to reorder columns'}
           </p>
         </div>
+        <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+          <Button variant="primary" size="sm" onClick={onNew}>
+            <Plus size={14} strokeWidth={1.75} />
+            <span>New Sales Order</span>
+          </Button>
+        </div>
       </div>
+
       {outstandingOnly && (
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)',
@@ -501,12 +504,107 @@ export const MfgSalesOrdersList = () => {
           </button>
         </div>
       )}
+
       {error && !isLoading && (
         <div className={styles.bannerWarn}>
           <strong>Failed to load.</strong>{' '}
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* ── 4 KPI tiles (Houzs flat layout, scoped to current filters) ── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, 1fr)',
+        gap: 'var(--space-2)',
+      }}>
+        {kpiTile('Total Orders', kpis.totalOrders.toLocaleString('en-MY'))}
+        {kpiTile('Revenue (RM)', fmtRm(kpis.revenue))}
+        {kpiTile('Outstanding (RM)', fmtRm(kpis.outstanding), kpis.outstanding > 0 ? 'bad' : undefined)}
+        {kpiTile('Paid (RM)', fmtRm(kpis.paid), kpis.paid > 0 ? 'good' : undefined)}
+      </div>
+
+      {/* ── Compact horizontal filter row ─────────────────────────────── */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        padding: 'var(--space-2) var(--space-3)',
+        background: 'var(--c-paper)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-md)',
+      }}>
+        <Filter size={16} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} aria-label="Filters" />
+        <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200 }}>
+          <Search size={14} strokeWidth={1.75}
+            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Doc No, debtor, agent, venue…"
+            style={{
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+              background: 'var(--c-paper)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '4px var(--space-2) 4px 28px',
+              color: 'var(--c-ink)',
+              outline: 'none',
+              width: '100%',
+              lineHeight: 1.4,
+            }}
+          />
+        </div>
+        <select value={brand} onChange={(e) => setBrand(e.target.value)}
+          style={{ width: 'auto', minWidth: 130, padding: '4px var(--space-2)',
+            background: 'var(--c-paper)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
+            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }}>
+          <option value="">All Brands</option>
+          {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <select value={agent} onChange={(e) => setAgent(e.target.value)}
+          style={{ width: 'auto', minWidth: 130, padding: '4px var(--space-2)',
+            background: 'var(--c-paper)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
+            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }}>
+          <option value="">All Agents</option>
+          {filterOptions.agents.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select value={venue} onChange={(e) => setVenue(e.target.value)}
+          style={{ width: 'auto', minWidth: 130, padding: '4px var(--space-2)',
+            background: 'var(--c-paper)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
+            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }}>
+          <option value="">All Venues</option>
+          {filterOptions.venues.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+          style={{ width: 'auto', padding: '4px var(--space-2)',
+            background: 'var(--c-paper)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
+            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }} />
+        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>→</span>
+        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+          style={{ width: 'auto', padding: '4px var(--space-2)',
+            background: 'var(--c-paper)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
+            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }} />
+        {(search || brand || agent || venue || dateFrom || dateTo) && (
+          <button type="button" onClick={resetFilters}
+            style={{ background: 'transparent', border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)', padding: '4px 10px',
+              fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', cursor: 'pointer' }}>
+            Reset
+          </button>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          {isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} rows`}
+        </span>
+      </div>
 
       <ListingPickerDialog
         open={pickerOpen}
@@ -521,13 +619,13 @@ export const MfgSalesOrdersList = () => {
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.doc_no}
-        toolbar={tb}
         searchPlaceholder="Search SOs…"
-        focusSearchNonce={findNonce}
+        /* Houzs chrome — kill the "drag column header here to group by
+           that column" banner; the page-level filter row replaces it. */
+        groupBanner={false}
         onRowDoubleClick={(r) => openDetail(r)}
-        onSelectionChange={setSelected}
         isLoading={isLoading}
-        emptyMessage='No sales orders yet — click "New" to start.'
+        emptyMessage='No sales orders yet — click "+ New Sales Order" to start.'
         expandable={{
           renderExpansion: (row) => <ExpandedSoLines docNo={row.doc_no} />,
           rowExpansionKey: (row) => row.doc_no,
