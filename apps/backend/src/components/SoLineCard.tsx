@@ -29,6 +29,7 @@ import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { useUploadSoItemPhoto, useDeleteSoItemPhoto } from '../lib/flow-queries';
+import { useDebouncedValue } from '../lib/hooks';
 import { supabase } from '../lib/supabase';
 import styles from './SoLineCard.module.css';
 
@@ -119,13 +120,23 @@ export const SoLineCard = ({
   const fabrics  = fabricsQ.data ?? [];
 
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
-  const productsQuery = useMfgProducts({ search: search.trim() || undefined });
-  const candidates = productsQuery.data ?? [];
-
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
   const [manualPrice, setManualPrice] = useState(false);
   const [showPicker, setShowPicker]   = useState(false);
   const [specialsOpen, setSpecialsOpen] = useState(false);
+  /* Task #102 — Same gate the debtor autocomplete got in PR #99. Without
+     this the product picker fired one /mfg-products?search=… request per
+     keystroke even when the picker wasn't open (every render of an
+     already-saved line re-issued the query for the description text). The
+     200 ms debounce smooths fast typists; the length>=2 + showPicker
+     enabled-flag guards the closed-picker + single-character cases. */
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const trimmedSearch   = debouncedSearch.trim();
+  const productsQuery = useMfgProducts({
+    search:  trimmedSearch || undefined,
+    enabled: showPicker && trimmedSearch.length >= 2,
+  });
+  const candidates = productsQuery.data ?? [];
 
   /* PR-F (Task #79) — Per-line photo state. */
   const uploadPhoto = useUploadSoItemPhoto();
@@ -329,7 +340,14 @@ export const SoLineCard = ({
           {showPicker && isEditing && candidates.length === 0 && (
             <ul className={styles.suggestList}>
               <li className={styles.suggestItem} style={{ color: 'var(--fg-muted)', cursor: 'default' }}>
-                No products match{search.trim() ? ` "${search}"` : ''}.
+                {/* Task #102 — Distinguish "type more" (gate hasn't tripped)
+                    from "no matches" (server returned []) so the user knows
+                    why nothing is showing. */}
+                {trimmedSearch.length < 2
+                  ? 'Type at least 2 characters to search…'
+                  : productsQuery.isFetching
+                    ? 'Searching…'
+                    : `No products match "${trimmedSearch}".`}
               </li>
             </ul>
           )}

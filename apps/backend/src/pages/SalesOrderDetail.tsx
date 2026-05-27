@@ -57,6 +57,7 @@ import {
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { useStaff } from '../lib/admin-queries';
+import { useDebouncedValue } from '../lib/hooks';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
 import paymentsStyles from './Payments.module.css';
@@ -87,16 +88,9 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
-/* Task #99 (UI perf) — Tiny local debounce hook for inputs that drive a
-   server query (debtor autocomplete). Not worth a separate file. */
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setV(value), delayMs);
-    return () => window.clearTimeout(t);
-  }, [value, delayMs]);
-  return v;
-}
+/* Task #99 (UI perf) — Local debounce hook lifted to ../lib/hooks.ts as
+   useDebouncedValue so SoLineCard's product picker (Task #102) can reuse
+   it without duplicating the implementation. */
 
 type SoHeader = {
   doc_no: string;
