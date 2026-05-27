@@ -1223,6 +1223,34 @@ export const mfgSoPriceOverrides = pgTable('mfg_so_price_overrides', {
   idxItem: index('idx_so_overrides_item').on(t.itemId),
 }));
 
+/* PR #163 — Payments as transactions. Commander 2026-05-27:
+   "save了之后不会变成一个transaction出来的吗". Each receipt becomes one
+   row here (HOOKKA-style ledger). Total paid = sum(amount_centi) per
+   so_doc_no. Mirrors the HOOKKA payments grid columns: Date · Method ·
+   Amount · Account Sheet · Approval Code · Collected By. The legacy
+   single-shot payment fields on mfgSalesOrders (paymentMethod, approval
+   Code, paymentDate, paidCenti) remain for now but will be deprecated
+   once UI is migrated. depositCenti stays as the "expected deposit"
+   requirement (e.g. 50% rule). */
+export const mfgSalesOrderPayments = pgTable('mfg_sales_order_payments', {
+  id:                 uuid('id').primaryKey().defaultRandom(),
+  soDocNo:            text('so_doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  paidAt:             date('paid_at').notNull().defaultNow(),
+  method:             text('method').notNull(),               // 'merchant' | 'transfer' | 'cash'
+  merchantProvider:   text('merchant_provider'),              // 'GHL' | 'HLB' | 'MBB' | 'PBB'
+  installmentMonths:  integer('installment_months'),          // 6 | 12 — null = normal swipe
+  approvalCode:       text('approval_code'),                  // auth / slip / receipt no
+  amountCenti:        integer('amount_centi').notNull(),
+  accountSheet:       text('account_sheet'),                  // bank account / cashbook funds landed in
+  collectedBy:        uuid('collected_by').references(() => staff.id, { onDelete: 'set null' }),
+  note:               text('note'),
+  createdAt:          timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:          uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxDoc:    index('idx_msop_doc').on(t.soDocNo),
+  idxPaidAt: index('idx_msop_paid_at').on(t.paidAt),
+}));
+
 /* DO — delivery orders (we → customer) */
 export const deliveryOrders = pgTable('delivery_orders', {
   id:                uuid('id').primaryKey().defaultRandom(),

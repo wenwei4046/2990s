@@ -112,6 +112,10 @@ type SoHeader = {
   customer_po_id: string | null;
   customer_po_date: string | null;
   customer_po_image_b64: string | null;
+  /* PR #163 — customer's own SO number (their ERP reference). Already in
+     schema since PR #121 but the Detail page never exposed it. Commander
+     2026-05-27: "还需要顾客salesorder的reference在order details". */
+  customer_so_no: string | null;
   hub_id: string | null;
   hub_name: string | null;
   customer_delivery_date: string | null;
@@ -231,10 +235,24 @@ export const SalesOrderDetail = () => {
             <h1 className={styles.title}>
               <FileText size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
               {header.doc_no} — {header.debtor_name}
+              {/* PR #163 — Total badge in title row so commander sees the SO
+                  value the moment the page loads (was previously buried
+                  inside the Payment card). */}
+              <span style={{
+                marginLeft: 'var(--space-2)',
+                fontFamily: 'var(--font-mark)',
+                fontSize: 'var(--fs-18)',
+                fontWeight: 800,
+                fontStretch: '80%',
+                color: 'var(--c-burnt)',
+              }}>
+                {fmtRm(header.local_total_centi, header.currency)}
+              </span>
             </h1>
             <p className={styles.subtitle}>
               SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
+              {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
             </p>
           </div>
         </div>
@@ -683,203 +701,216 @@ const CustomerCard = ({
         </Button>
       </header>
       <div className={styles.cardBody}>
-        {/* ── Customer row (POS-aligned, PR #46) ─────────────────── */}
-        <p className={styles.subHead}>Customer</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer Code</span>
-            <input className={styles.fieldInput} value={form.customerCode}
-              onChange={(e) => set('customerCode', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 3' }}>
-            <span className={styles.fieldLabel}>Customer Name *</span>
-            <input
-              className={styles.fieldInput}
-              value={form.customerName}
-              onChange={(e) => { set('customerName', e.target.value); setShowSuggest(true); }}
-              onFocus={() => setShowSuggest(true)}
-              onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
-            />
-            {showSuggest && suggestions.length > 0 && (
-              <ul className={styles.suggestList}>
-                {suggestions.slice(0, 8).map((d, i) => (
-                  <li
-                    key={`${d.debtor_code ?? ''}-${i}`}
-                    className={styles.suggestItem}
-                    onMouseDown={() => applySuggestion(d)}
-                  >
-                    <div>{d.debtor_name}</div>
-                    {(d.debtor_code || d.phone) && (
-                      <div className={styles.suggestCode}>
-                        {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{d.phone ?? ''}
-                      </div>
-                    )}
-                  </li>
+        {/* ── 1. Customer ───────────────────────────────────────────── */}
+        {/* PR #163 — Commander 2026-05-27: "这些全部资料挤在一起 也是要
+            整理一下". Split into 4 visually-divided sub-sections with
+            top-border separators (.subSection). Each sub-section has its
+            own subhead. Fields regrouped so identification stays separate
+            from order scheduling. */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Customer</p>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer Code</span>
+              <input className={styles.fieldInput} value={form.customerCode}
+                onChange={(e) => set('customerCode', e.target.value)} />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 3' }}>
+              <span className={styles.fieldLabel}>Customer Name *</span>
+              <input
+                className={styles.fieldInput}
+                value={form.customerName}
+                onChange={(e) => { set('customerName', e.target.value); setShowSuggest(true); }}
+                onFocus={() => setShowSuggest(true)}
+                onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+              />
+              {showSuggest && suggestions.length > 0 && (
+                <ul className={styles.suggestList}>
+                  {suggestions.slice(0, 8).map((d, i) => (
+                    <li
+                      key={`${d.debtor_code ?? ''}-${i}`}
+                      className={styles.suggestItem}
+                      onMouseDown={() => applySuggestion(d)}
+                    >
+                      <div>{d.debtor_name}</div>
+                      {(d.debtor_code || d.phone) && (
+                        <div className={styles.suggestCode}>
+                          {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{d.phone ?? ''}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Phone *</span>
+              <input className={styles.fieldInput} value={form.phone}
+                onChange={(e) => set('phone', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Email *</span>
+              <input type="email" className={styles.fieldInput} value={form.email}
+                onChange={(e) => set('email', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer Type</span>
+              <select className={styles.fieldSelect} value={form.customerType}
+                onChange={(e) => set('customerType', e.target.value)}>
+                <option value="">—</option>
+                <option value="NEW">New</option>
+                <option value="EXISTING">Existing</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Salesperson</span>
+              <select className={styles.fieldSelect} value={form.salespersonId}
+                onChange={(e) => set('salespersonId', e.target.value)}>
+                <option value="">— Pick staff —</option>
+                {staffList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                 ))}
-              </ul>
-            )}
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Phone *</span>
-            <input className={styles.fieldInput} value={form.phone}
-              onChange={(e) => set('phone', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Email *</span>
-            <input type="email" className={styles.fieldInput} value={form.email}
-              onChange={(e) => set('email', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer Type</span>
-            <select className={styles.fieldSelect} value={form.customerType}
-              onChange={(e) => set('customerType', e.target.value)}>
-              <option value="">—</option>
-              <option value="NEW">New</option>
-              <option value="EXISTING">Existing</option>
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Salesperson</span>
-            <select className={styles.fieldSelect} value={form.salespersonId}
-              onChange={(e) => set('salespersonId', e.target.value)}>
-              <option value="">— Pick staff —</option>
-              {staffList.map((s) => (
-                <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
-              ))}
-            </select>
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Building Type</span>
-            <select className={styles.fieldSelect} value={form.buildingType}
-              onChange={(e) => set('buildingType', e.target.value)}>
-              <option value="">—</option>
-              {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
-            </select>
-          </label>
-          {/* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". */}
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Venue</span>
-            <input className={styles.fieldInput} value={form.venue}
-              placeholder="e.g. KL Showroom, Penang Branch"
-              onChange={(e) => set('venue', e.target.value)} />
-          </label>
-          {/* PR #140 / #156 — Processing + Delivery Date; XOR enforced on Save.
-              Red border on the empty side + banner below shows the rule. */}
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Processing Date</span>
-            <input type="date" className={styles.fieldInput} value={form.processingDate}
-              onChange={(e) => set('processingDate', e.target.value)}
-              style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Delivery Date</span>
-            <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
-              onChange={(e) => set('customerDeliveryDate', e.target.value)}
-              style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
-          </label>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Note</span>
-            <input className={styles.fieldInput} value={form.note}
-              onChange={(e) => set('note', e.target.value)} />
-          </label>
-        </div>
-        {datesXor && (
-          <div
-            style={{
-              background: 'rgba(184, 51, 31, 0.08)',
-              border: '1px solid var(--c-festive-b, #B8331F)',
-              color: 'var(--c-festive-b, #B8331F)',
-              padding: 'var(--space-2) var(--space-3)',
-              borderRadius: 'var(--radius-md)',
-              fontSize: 'var(--fs-12)',
-              fontWeight: 600,
-              marginTop: 'var(--space-2)',
-            }}
-          >
-            ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
+              </select>
+            </label>
           </div>
-        )}
-
-        {/* ── Emergency contact (PR #46) ───────────────────────────── */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>
-          Emergency Contact <span className={styles.muted} style={{ fontWeight: 400 }}>
-            — used only if we can't reach the customer on delivery day
-          </span>
-        </p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Contact Name</span>
-            <input className={styles.fieldInput} value={form.emergencyContactName}
-              placeholder="e.g. Lim Mei Hua"
-              onChange={(e) => set('emergencyContactName', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Relationship</span>
-            <input className={styles.fieldInput} value={form.emergencyContactRelationship}
-              placeholder="Spouse / Parent / Sibling …"
-              onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Phone</span>
-            <input className={styles.fieldInput} value={form.emergencyContactPhone}
-              placeholder="+60 12 345 6789"
-              onChange={(e) => set('emergencyContactPhone', e.target.value)} />
-          </label>
         </div>
 
-        {/* ── Address row ─────────────────────────────────────────── */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Delivery Address</p>
-        <div className={styles.formGrid4}>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
-            <span className={styles.fieldLabel}>Address Line 1</span>
-            <input className={styles.fieldInput} value={form.address1}
-              placeholder="Unit, street, area"
-              onChange={(e) => set('address1', e.target.value)} />
-          </label>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
-            <span className={styles.fieldLabel}>Address Line 2</span>
-            <input className={styles.fieldInput} value={form.address2}
-              placeholder="Apt, floor, building (optional)"
-              onChange={(e) => set('address2', e.target.value)} />
-          </label>
+        {/* ── 2. Order Info (venue / dates / note) ──────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Order Info</p>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Building Type</span>
+              <select className={styles.fieldSelect} value={form.buildingType}
+                onChange={(e) => set('buildingType', e.target.value)}>
+                <option value="">—</option>
+                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Venue</span>
+              <input className={styles.fieldInput} value={form.venue}
+                placeholder="e.g. KL Showroom, Penang Branch"
+                onChange={(e) => set('venue', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Processing Date</span>
+              <input type="date" className={styles.fieldInput} value={form.processingDate}
+                onChange={(e) => set('processingDate', e.target.value)}
+                style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Date</span>
+              <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
+                onChange={(e) => set('customerDeliveryDate', e.target.value)}
+                style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+            </label>
+            <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Note</span>
+              <input className={styles.fieldInput} value={form.note}
+                onChange={(e) => set('note', e.target.value)} />
+            </label>
+          </div>
+          {datesXor && (
+            <div
+              style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: '4px var(--space-2)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 'var(--fs-11)',
+                fontWeight: 600,
+                marginTop: 'var(--space-2)',
+              }}
+            >
+              ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
+            </div>
+          )}
+        </div>
 
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>State</span>
-            <select className={styles.fieldSelect} value={form.state}
-              onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
-              disabled={localities.isLoading}>
-              <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
-              {states.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>City</span>
-            <select className={styles.fieldSelect} value={form.city}
-              onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
-              disabled={!form.state}>
-              <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
-              {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Postcode</span>
-            <select className={styles.fieldSelect} value={form.postcode}
-              onChange={(e) => set('postcode', e.target.value)}
-              disabled={!form.city}>
-              <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
-              {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </label>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Sales Location</span>
-            <span className={styles.fieldInput} style={{
-              display: 'inline-flex', alignItems: 'center', height: 32,
-              color: 'var(--fg-muted)',
-            }}>
-              {header.sales_location ?? '—'}
+        {/* ── 3. Emergency Contact ──────────────────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>
+            Emergency Contact
+            <span className={styles.muted} style={{ fontWeight: 400, marginLeft: 6, textTransform: 'none', letterSpacing: 0 }}>
+              — used only if we can't reach the customer on delivery day
             </span>
+          </p>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Contact Name</span>
+              <input className={styles.fieldInput} value={form.emergencyContactName}
+                placeholder="e.g. Lim Mei Hua"
+                onChange={(e) => set('emergencyContactName', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Relationship</span>
+              <input className={styles.fieldInput} value={form.emergencyContactRelationship}
+                placeholder="Spouse / Parent / Sibling …"
+                onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Phone</span>
+              <input className={styles.fieldInput} value={form.emergencyContactPhone}
+                placeholder="+60 12 345 6789"
+                onChange={(e) => set('emergencyContactPhone', e.target.value)} />
+            </label>
+          </div>
+        </div>
+
+        {/* ── 4. Delivery Address ───────────────────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Delivery Address</p>
+          <div className={styles.formGrid4}>
+            <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Address Line 1</span>
+              <input className={styles.fieldInput} value={form.address1}
+                placeholder="Unit, street, area"
+                onChange={(e) => set('address1', e.target.value)} />
+            </label>
+            <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Address Line 2</span>
+              <input className={styles.fieldInput} value={form.address2}
+                placeholder="Apt, floor, building (optional)"
+                onChange={(e) => set('address2', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>State</span>
+              <select className={styles.fieldSelect} value={form.state}
+                onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
+                disabled={localities.isLoading}>
+                <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
+                {states.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>City</span>
+              <select className={styles.fieldSelect} value={form.city}
+                onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
+                disabled={!form.state}>
+                <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
+                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Postcode</span>
+              <select className={styles.fieldSelect} value={form.postcode}
+                onChange={(e) => set('postcode', e.target.value)}
+                disabled={!form.city}>
+                <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
+                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Sales Location</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 26,
+                color: 'var(--fg-muted)',
+              }}>
+                {header.sales_location ?? '—'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
