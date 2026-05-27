@@ -29,8 +29,10 @@ import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useCreateMfgSalesOrder, useDebtorSearch, useAddSalesOrderPayment,
+  useUploadSoItemPhoto,
   type DebtorSuggestion,
 } from '../lib/flow-queries';
+import { supabase } from '../lib/supabase';
 import { useStaff } from '../lib/admin-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
@@ -72,6 +74,7 @@ export const SalesOrderNew = () => {
   const navigate = useNavigate();
   const create   = useCreateMfgSalesOrder();
   const addPayment = useAddSalesOrderPayment();
+  const uploadPhoto = useUploadSoItemPhoto();
   const staffQ   = useStaff();
   const loc      = useLocalities();
 
@@ -268,6 +271,82 @@ export const SalesOrderNew = () => {
      hook (useAddSalesOrderPayment.mutateAsync). Failures don't roll the SO
      back (the SO is already created), but we surface them so commander can
      re-enter the affected rows on the Detail page. */
+  /* Line-card-redesign (Commander 2026-05-27) — Photos can now be staged
+     on a brand-new line BEFORE the SO is saved. The SoLineCard component
+     stages them as File objects on `draft.pendingPhotoFiles`. After
+     POST /mfg-sales-orders succeeds we GET /:docNo to read back the saved
+     item IDs, match each saved item to a draft line by index, then upload
+     every staged File via the existing per-item /photos endpoint.
+
+     Item ordering: the API inserts items in the order we send them and
+     returns them ordered by created_at, so positional matching is safe.
+     If the counts ever drift (server-side filtering of bad rows, etc.)
+     we surface a soft warning and skip the mismatched lines rather than
+     guess. The SO is already created so we don't roll back. */
+  const flushPendingPhotos = async (
+    docNo: string,
+    draftLines: DraftLine[],
+  ): Promise<{ failed: number; skipped: number }> => {
+    const linesWithPending = draftLines.filter(
+      (l) => (l.pendingPhotoFiles?.length ?? 0) > 0,
+    );
+    if (linesWithPending.length === 0) return { failed: 0, skipped: 0 };
+
+    // Fetch saved item IDs. We bypass the TanStack cache because the
+    // freshly-created detail may not be in the cache yet.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    const API_URL = import.meta.env.VITE_API_URL;
+    if (!token || !API_URL) return { failed: linesWithPending.length, skipped: 0 };
+
+    let savedItems: Array<{ id: string; item_code: string }> = [];
+    try {
+      const res = await fetch(`${API_URL}/mfg-sales-orders/${docNo}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const body = (await res.json()) as { items: Array<{ id: string; item_code: string }> };
+      savedItems = body.items ?? [];
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[so-line-photos] could not load saved item IDs:', e);
+      return { failed: linesWithPending.length, skipped: 0 };
+    }
+
+    /* Positional match — `validLines` is the same slice we sent to
+       POST /mfg-sales-orders so `savedItems[i]` corresponds to
+       `validLines[i]`. We only iterate over validLines so cancelled
+       drafts (no itemCode) are skipped without breaking the index. */
+    const validLines = draftLines.filter((l) => l.itemCode.trim() && l.qty > 0);
+    let failed = 0;
+    let skipped = 0;
+    for (let i = 0; i < validLines.length; i++) {
+      const line = validLines[i]!;
+      const files = line.pendingPhotoFiles ?? [];
+      if (files.length === 0) continue;
+      const saved = savedItems[i];
+      if (!saved || saved.item_code !== line.itemCode) {
+        // Mismatch — log + skip rather than upload to the wrong line.
+        // eslint-disable-next-line no-console
+        console.warn('[so-line-photos] index/item_code mismatch — skipping pending uploads', {
+          index: i, expected: line.itemCode, got: saved?.item_code,
+        });
+        skipped += files.length;
+        continue;
+      }
+      for (const f of files) {
+        try {
+          await uploadPhoto.mutateAsync({ docNo, itemId: saved.id, file: f });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('[so-line-photos] upload failed', { file: f.name, err });
+          failed++;
+        }
+      }
+    }
+    return { failed, skipped };
+  };
+
   const flushPaymentDrafts = async (docNo: string): Promise<{ failed: number }> => {
     if (paymentDrafts.length === 0) return { failed: 0 };
     const tasks = paymentDrafts
@@ -366,11 +445,24 @@ export const SalesOrderNew = () => {
              SO still exists, so we navigate to the Detail page where
              commander can re-enter the affected row. */
           const { failed } = await flushPaymentDrafts(res.docNo);
+          /* Line-card-redesign — Drain pendingPhotoFiles for every line
+             after the SO + items exist. Same non-blocking pattern as
+             payments: a photo failure leaves the SO intact and we
+             surface a warning rather than rolling back. */
+          const { failed: photoFailed, skipped: photoSkipped } =
+            await flushPendingPhotos(res.docNo, validLines);
           if (failed > 0) {
             window.alert(
               `Sales order ${res.docNo} was created, but ${failed} ` +
               `payment row${failed === 1 ? '' : 's'} failed to save. ` +
               `Please re-enter ${failed === 1 ? 'it' : 'them'} on the Detail page.`,
+            );
+          }
+          if (photoFailed > 0 || photoSkipped > 0) {
+            window.alert(
+              `Sales order ${res.docNo} was created, but ${photoFailed + photoSkipped} ` +
+              `staged photo${(photoFailed + photoSkipped) === 1 ? '' : 's'} could not be ` +
+              `uploaded. Please re-attach on the Detail page.`,
             );
           }
           navigate(`/mfg-sales-orders/${res.docNo}`);
