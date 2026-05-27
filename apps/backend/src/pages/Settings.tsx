@@ -24,7 +24,7 @@ import { PhoneInput } from '../components/PhoneInput';
 import { formatPhone, normalizePhone } from '@2990s/shared/phone';
 import styles from './Settings.module.css';
 
-type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'localities' | 'app';
+type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'app';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'suppliers',  label: 'Suppliers' },
@@ -32,11 +32,10 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'showrooms',  label: 'Showrooms' },
   { id: 'staff',      label: 'Staff' },
   { id: 'delivery',   label: 'Delivery fees' },
-  /* PR #158 — Commander 2026-05-27: "什么 State 对应哪个 Warehouse 也需要
-     设置清楚". One row per Malaysian state mapping to a warehouse for
-     dispatch routing. States/cities/postcodes themselves come from the
-     my_localities reference table (read-only display, no edit yet). */
-  { id: 'localities', label: 'Localities' },
+  /* Task #110 — Localities tab moved to /mfg-sales-orders/maintenance
+     (Commander 2026-05-27). It only powers the SO module's cascading
+     customer-address dropdowns + the state→warehouse mapping that
+     auto-suggests Sales Location, so it lives next to the SO list now. */
   { id: 'app',        label: 'App config' },
 ];
 
@@ -86,281 +85,16 @@ export const Settings = () => {
       {tab === 'showrooms' && <ShowroomsTab />}
       {tab === 'staff' && <StaffTab canEdit={isAdmin} />}
       {tab === 'delivery' && <DeliveryFeesTab canEdit={isCoordOrAdmin} />}
-      {tab === 'localities' && <LocalitiesTab canEdit={isCoordOrAdmin} />}
       {tab === 'app' && <AppConfigTab />}
     </div>
   );
 };
 
-/* ──────────────────────────────────────────────────────────────────────────
-   LocalitiesTab — PR #158
-   - Top: State → Warehouse mapping CRUD (state_warehouse_mappings table)
-   - Bottom: read-only reference of distinct states from my_localities
-   Cities/postcodes can be browsed via the cascading dropdowns in the New
-   SO form; full CRUD on those rows is out of scope for this PR. */
-
-import {
-  useStateWarehouseMappings,
-  useUpsertStateWarehouseMapping,
-  useDeleteStateWarehouseMapping,
-} from '../lib/state-warehouse-queries';
-import { useWarehouses } from '../lib/inventory-queries';
-import {
-  useLocalities, distinctStates,
-  useCreateLocality, useUpdateLocality, useDeleteLocality,
-  type LocalityRow,
-} from '../lib/localities-queries';
-import { Trash2 } from 'lucide-react';
-
-const LocalitiesTab = ({ canEdit }: { canEdit: boolean }) => {
-  const mappings = useStateWarehouseMappings();
-  const warehouses = useWarehouses();
-  const localities = useLocalities();
-  const upsert = useUpsertStateWarehouseMapping();
-  const remove = useDeleteStateWarehouseMapping();
-  const createLoc = useCreateLocality();
-  const deleteLoc = useDeleteLocality();
-
-  const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
-  const mappedByState = useMemo(() => {
-    const m = new Map<string, { warehouseId: string | null; notes: string | null }>();
-    for (const row of mappings.data?.mappings ?? []) {
-      m.set(row.state, { warehouseId: row.warehouseId, notes: row.notes });
-    }
-    return m;
-  }, [mappings.data]);
-
-  // Localities table state — filter + add-row form
-  const [filterState, setFilterState] = useState<string>('');
-  const [newState, setNewState] = useState('');
-  const [newStateCode, setNewStateCode] = useState('');
-  const [newCity, setNewCity] = useState('');
-  const [newPostcode, setNewPostcode] = useState('');
-  const filteredLocalities: LocalityRow[] = (localities.data ?? []).filter(
-    (r) => !filterState || r.state === filterState,
-  );
-
-  const addLocality = () => {
-    const payload = {
-      state:     newState.trim(),
-      stateCode: newStateCode.trim().toUpperCase(),
-      city:      newCity.trim(),
-      postcode:  newPostcode.trim(),
-    };
-    if (!payload.state || !payload.stateCode || !payload.city || !payload.postcode) {
-      window.alert('All four fields are required.');
-      return;
-    }
-    createLoc.mutate(payload, {
-      onSuccess: () => {
-        setNewState(''); setNewStateCode(''); setNewCity(''); setNewPostcode('');
-      },
-      onError: (err) => window.alert(String((err as Error).message ?? err)),
-    });
-  };
-
-  return (
-    <>
-      <div className={styles.readOnlyBanner}>
-        <strong>State → Warehouse mapping.</strong> Pick the dispatch warehouse
-        for each state. When a customer's delivery address is in that state, the
-        SO Detail page suggests this warehouse as the Sales Location automatically.
-      </div>
-
-      <div className={styles.tableCard}>
-        {mappings.isLoading || warehouses.isLoading || localities.isLoading ? (
-          <div className={styles.empty}>Loading…</div>
-        ) : states.length === 0 ? (
-          <div className={styles.empty}>No states found in my_localities.</div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>State</th>
-                <th>Warehouse</th>
-                <th>Notes</th>
-                {canEdit && <th aria-label="actions" />}
-              </tr>
-            </thead>
-            <tbody>
-              {states.map((state) => {
-                const current = mappedByState.get(state);
-                return (
-                  <tr key={state}>
-                    <td><strong>{state}</strong></td>
-                    <td>
-                      <select
-                        className={styles.input}
-                        value={current?.warehouseId ?? ''}
-                        disabled={!canEdit || upsert.isPending}
-                        onChange={(e) => {
-                          const warehouseId = e.target.value || null;
-                          upsert.mutate({ state, warehouseId, notes: current?.notes ?? null });
-                        }}
-                      >
-                        <option value="">— Unassigned —</option>
-                        {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
-                          <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        className={styles.input}
-                        value={current?.notes ?? ''}
-                        disabled={!canEdit || upsert.isPending}
-                        placeholder="Optional"
-                        onBlur={(e) => {
-                          const notes = e.target.value.trim() || null;
-                          if ((current?.notes ?? null) === notes) return;
-                          upsert.mutate({ state, warehouseId: current?.warehouseId ?? null, notes });
-                        }}
-                      />
-                    </td>
-                    {canEdit && (
-                      <td>
-                        {current && (
-                          <button
-                            type="button"
-                            className={styles.editBtn}
-                            disabled={remove.isPending}
-                            onClick={() => remove.mutate({ state })}
-                            aria-label={`Clear mapping for ${state}`}
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* ── States / Cities / Postcodes CRUD (PR #160) ──────────────── */}
-      <div className={styles.readOnlyBanner} style={{ marginTop: 'var(--space-4)' }}>
-        <strong>States / Cities / Postcodes.</strong> Editable list of rows in
-        my_localities — every (state, city, postcode) the SO + POS dropdowns
-        offer comes from here. Add new rows below; delete the whole-row trash
-        icon to drop one.
-      </div>
-
-      {canEdit && (
-        <div className={styles.tableCard} style={{ padding: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
-          <div className="t-eyebrow" style={{ marginBottom: 'var(--space-2)' }}>Add a row</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 1fr 110px auto', gap: 'var(--space-2)' }}>
-            <input
-              className={styles.input}
-              placeholder="State (e.g. Selangor)"
-              value={newState}
-              onChange={(e) => setNewState(e.target.value)}
-            />
-            <input
-              className={styles.input}
-              placeholder="Code (SGR)"
-              value={newStateCode}
-              onChange={(e) => setNewStateCode(e.target.value)}
-              maxLength={5}
-            />
-            <input
-              className={styles.input}
-              placeholder="City (Petaling Jaya)"
-              value={newCity}
-              onChange={(e) => setNewCity(e.target.value)}
-            />
-            <input
-              className={styles.input}
-              placeholder="Postcode (47301)"
-              value={newPostcode}
-              onChange={(e) => setNewPostcode(e.target.value)}
-              maxLength={10}
-            />
-            <Button
-              variant="primary"
-              size="md"
-              onClick={addLocality}
-              disabled={createLoc.isPending}
-            >
-              <Plus size={14} strokeWidth={1.75} />
-              Add
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <div className={styles.tableCard}>
-        <div style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--line)' }}>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--fs-13)' }}>
-            <span className={styles.muted}>Filter by state:</span>
-            <select
-              className={styles.input}
-              value={filterState}
-              onChange={(e) => setFilterState(e.target.value)}
-              style={{ width: 240 }}
-            >
-              <option value="">All states ({(localities.data ?? []).length} rows)</option>
-              {states.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-        </div>
-        {localities.isLoading ? (
-          <div className={styles.empty}>Loading…</div>
-        ) : filteredLocalities.length === 0 ? (
-          <div className={styles.empty}>No rows.</div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>State</th>
-                <th>Code</th>
-                <th>City</th>
-                <th>Postcode</th>
-                {canEdit && <th aria-label="actions" />}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredLocalities.slice(0, 500).map((r) => (
-                <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
-                  <td>{r.state}</td>
-                  <td><code className={styles.code}>{r.stateCode}</code></td>
-                  <td>{r.city}</td>
-                  <td><code className={styles.code}>{r.postcode}</code></td>
-                  {canEdit && (
-                    <td>
-                      {r.id && (
-                        <button
-                          type="button"
-                          className={styles.editBtn}
-                          disabled={deleteLoc.isPending}
-                          onClick={() => {
-                            if (confirm(`Delete ${r.state} / ${r.city} / ${r.postcode}?`)) {
-                              deleteLoc.mutate(r.id!);
-                            }
-                          }}
-                          aria-label="Delete locality row"
-                        >
-                          <Trash2 size={14} strokeWidth={1.75} />
-                        </button>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {filteredLocalities.length > 500 && (
-          <div className={styles.empty} style={{ fontSize: 'var(--fs-12)' }}>
-            Showing first 500 of {filteredLocalities.length} — use the filter above to narrow down.
-          </div>
-        )}
-      </div>
-    </>
-  );
-};
+/* Task #110 — LocalitiesTab (State → Warehouse mapping + my_localities CRUD)
+   moved to apps/backend/src/pages/SalesOrderMaintenance.tsx
+   (Commander 2026-05-27). Reachable from the SO list toolbar + the
+   sidebar's B2B Sales group. Don't reintroduce it here — keep the
+   maintenance data next to the module that actually consumes it. */
 
 /* ─── Suppliers ─── */
 

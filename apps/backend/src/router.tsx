@@ -38,6 +38,7 @@ const DeliveryReturnsPage = lazy(() => import('./pages/FlowPages').then(m => ({ 
 const PurchaseReturnsPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseReturnsPage })));
 const SalesOrderDetail = lazy(() => import('./pages/SalesOrderDetail').then(m => ({ default: m.SalesOrderDetail })));
 const SalesOrderNew = lazy(() => import('./pages/SalesOrderNew').then(m => ({ default: m.SalesOrderNew })));
+const SalesOrderMaintenance = lazy(() => import('./pages/SalesOrderMaintenance').then(m => ({ default: m.SalesOrderMaintenance })));
 const Inventory = lazy(() => import('./pages/Inventory').then(m => ({ default: m.Inventory })));
 const StockCard = lazy(() => import('./pages/StockCard').then(m => ({ default: m.StockCard })));
 const StockAdjustments = lazy(() => import('./pages/StockAdjustments').then(m => ({ default: m.StockAdjustments })));
@@ -117,6 +118,9 @@ export const router = createBrowserRouter([
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
       { path: 'mfg-sales-orders/new', element: <SalesOrderNew /> },
+      // Task #110 — Localities moved out of Settings → dedicated SO Maintenance
+      // page. Must precede :docNo so 'maintenance' isn't read as a doc number.
+      { path: 'mfg-sales-orders/maintenance', element: <SalesOrderMaintenance /> },
       { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
       { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
       { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
