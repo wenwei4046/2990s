@@ -59,6 +59,26 @@ const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const ALL_MODULE_CODES = SOFA_MODULES.map((m) => m.id).sort();
 
+/* Quick-pick presets that mirror what POS shows on the configurator's
+   Quick Pick screen. Click → REPLACES the current module selection with
+   the canonical oriented form. Commander 2026-05-28 ("为什么我不能选择第一
+   个/第二个/第三个 Modular?") — without these, composing a 1-Seater combo
+   meant manually toggling 1A-LHF + 1A-RHF every time, which is the kind
+   of friction that costs Loo 10s per row × 64 rules. */
+const COMBO_PRESETS: { id: string; label: string; modules: string[] }[] = [
+  { id: '1S',       label: '1-Seater',        modules: ['1A-LHF', '1A-RHF'] },
+  { id: '2S',       label: '2-Seater',        modules: ['2A-LHF', '2A-RHF'] },
+  { id: '3S-L',     label: '3-Seater (1+2)',  modules: ['1A-LHF', '2A-RHF'] },
+  { id: '3S-R',     label: '3-Seater (2+1)',  modules: ['2A-LHF', '1A-RHF'] },
+  { id: '2+L-L',    label: '2 + L (chaise left)',  modules: ['L-LHF', '2A-RHF'] },
+  { id: '2+L-R',    label: '2 + L (chaise right)', modules: ['2A-LHF', 'L-RHF'] },
+  { id: '3+L-L',    label: '3 + L (chaise left)',  modules: ['L-LHF', '1NA', '2A-RHF'] },
+  { id: '3+L-R',    label: '3 + L (chaise right)', modules: ['2A-LHF', '1NA', 'L-RHF'] },
+  { id: '2WC',      label: '2-Seater + Console',   modules: ['1A-LHF', 'WC-45', '1A-RHF'] },
+  { id: 'CORNER-L', label: 'Corner (LHF)',         modules: ['1A-LHF', 'CNR', '2A-RHF'] },
+  { id: 'CORNER-R', label: 'Corner (RHF)',         modules: ['2A-LHF', 'CNR', '1A-RHF'] },
+];
+
 type ComboTabProps = { /* no props for now */ };
 
 export const SofaComboTab = (_props: ComboTabProps) => {
@@ -397,6 +417,28 @@ function ComposerModal({
           </datalist>
         </Field>
 
+        {!editing && (
+          <Field label="Quick presets (click to fill modules)">
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', gap: 4,
+              padding: 8, border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)',
+            }}>
+              {COMBO_PRESETS.map((p) => (
+                <button
+                  type="button"
+                  key={p.id}
+                  onClick={() => setModules(p.modules)}
+                  title={p.modules.join(' + ')}
+                  style={presetChipStyle}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+        )}
+
         <Field label={`Modules (${modules.length} selected)`}>
           {editing ? (
             <div style={{ ...readonlyInputStyle, padding: 8 }}>
@@ -686,6 +728,18 @@ const ghostBtnStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
+};
+
+const presetChipStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-12)',
+  fontWeight: 600,
+  background: 'var(--c-paper)',
+  color: 'var(--c-ink)',
+  border: '1px solid var(--line-strong)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '4px 10px',
+  cursor: 'pointer',
 };
 
 const moduleChipOn: CSSProperties = {
