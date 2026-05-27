@@ -54,7 +54,11 @@ export type SoDropdownOption = {
   active:    boolean;
 };
 
-const STALE = 5 * 60 * 1000;
+/* Task #61 (aggressive perf) — bumped 5min → 30min. These DB-backed
+   dropdowns change a handful of times per year (customer_type / building_type /
+   relationship / payment_method); the maintenance page invalidates on every
+   mutation so edits surface immediately. */
+const STALE = 30 * 60 * 1000;
 
 /* Single-category list — active rows only. Consumers (SalesOrderNew,
    SalesOrderDetail, PaymentsTable) use this to render their dropdown. */

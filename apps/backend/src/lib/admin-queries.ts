@@ -94,7 +94,11 @@ export const useStaff = () =>
         phone: r.phone,
       }));
     },
-    staleTime: 60_000,
+    /* Task #61 (aggressive perf) — staff list is near-static; 10min
+       staleTime kills repeat refetches when navigating between SO Detail,
+       New SO, PaymentsTable, and the Customer card autocomplete. The
+       Settings page mutates with explicit invalidations. */
+    staleTime: 10 * 60_000,
   });
 
 export const useUpdateStaffActive = () => {
