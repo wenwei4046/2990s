@@ -698,17 +698,19 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                                   setCityWarehouse(selectedState, c.city, v || null);
                                 }}
                               >
-                                {c.mixed && <option value="__mixed__">— mixed (pick to normalise) —</option>}
-                                <option value="">— follow state ({stateWhLabel}) —</option>
+                                {c.mixed && <option value="__mixed__">(mixed)</option>}
+                                {/* Empty value = inherit state. Display the
+                                    inherited warehouse name directly, no
+                                    "— follow state (...)" decoration. */}
+                                <option value="">{stateWhLabel}</option>
                                 {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
                                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                                 ))}
                               </select>
-                              {followingState && (
-                                <div className={styles.muted} style={{ fontSize: 'var(--fs-11)', marginTop: 2 }}>
-                                  Inherits: {stateWhLabel}
-                                </div>
-                              )}
+                              {/* "Inherits:" hint dropped — commander
+                                  2026-05-27 "this direct show selangor
+                                  warehouse dont be 复杂". Inherited value
+                                  is already displayed in the select. */}
                             </>
                           ) : (
                             c.mixed ? '(mixed)' : (
@@ -989,6 +991,8 @@ const DropdownCategoryCard = ({
 
   return (
     <div className={styles.tableCard} style={{ marginBottom: 'var(--space-3)' }}>
+      {/* Header styled to match .addRowEyebrow / .table thead — uppercase
+          Raleway letter-spaced. Commander 2026-05-27 "字体 standardize". */}
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -1002,16 +1006,18 @@ const DropdownCategoryCard = ({
           cursor: 'pointer',
           textAlign: 'left',
           fontFamily: 'var(--font-button)',
-          fontWeight: 600,
-          fontSize: 'var(--fs-13)',
-          color: 'var(--fg)',
+          fontWeight: 'var(--w-semibold)',
+          fontSize: 'var(--fs-12)',
+          letterSpacing: 'var(--tk-loud)',
+          textTransform: 'uppercase',
+          color: 'var(--fg-soft)',
         }}
       >
         {expanded
           ? <ChevronDown  size={14} strokeWidth={1.75} />
           : <ChevronRight size={14} strokeWidth={1.75} />}
         <span>{title}</span>
-        <span style={{ color: 'var(--fg-muted)', fontWeight: 400, fontSize: 'var(--fs-12)' }}>
+        <span style={{ color: 'var(--fg-muted)', fontWeight: 400, fontSize: 'var(--fs-12)', textTransform: 'none', letterSpacing: 0 }}>
           · {rows.length} {rows.length === 1 ? 'option' : 'options'}
         </span>
       </button>
