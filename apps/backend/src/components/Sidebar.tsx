@@ -114,6 +114,10 @@ export const Sidebar = () => {
        State → warehouse mapping + cascading customer-address dropdowns
        that only the SO module consumes. */
     { kind: 'link', to: '/mfg-sales-orders/maintenance', icon: <Wrench {...ICON_PROPS} />, label: 'SO Maintenance' },
+    /* Commander 2026-05-27: "Sales Order Detail Listing 也是 under sales order".
+       Detail Listing is the line-item view of the same SOs — belongs under
+       B2B Sales, not a separate Reports group. */
+    { kind: 'link', to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'SO Detail View (line items)' },
     { kind: 'link', to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
     { kind: 'link', to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
     { kind: 'link', to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
@@ -122,15 +126,10 @@ export const Sidebar = () => {
     { kind: 'group', label: 'Finance' },
     { kind: 'link', to: '/accounting', icon: <BookOpen {...ICON_PROPS} />, label: 'Accounting' },
     { kind: 'link', to: '/outstanding', icon: <AlertCircle {...ICON_PROPS} />, label: 'Outstanding' },
-    { kind: 'group', label: 'Reports' },
-    /* PR-H — Sales Order Detail Listing report. AutoCount-style line-item
-       view of every SO. "Sales Order Listing" + "Outstanding Listing" are
-       placeholders for follow-up reports — route the latter to the unified
-       /outstanding dashboard so it isn't a dead link until the dedicated
-       report page lands. */
-    { kind: 'link', to: '/reports/sales-order-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'Sales Order Listing' },
-    { kind: 'link', to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'Sales Order Detail Listing' },
-    { kind: 'link', to: '/outstanding', icon: <FileBarChart {...ICON_PROPS} />, label: 'Outstanding Listing' },
+    /* Commander 2026-05-27: dropped the Reports group entirely.
+       - "Sales Order Listing" was redundant with /mfg-sales-orders
+       - "Sales Order Detail Listing" moved up under B2B Sales (line-item view)
+       - "Outstanding Listing" was just a filter on /outstanding which already lives under Finance */
     { kind: 'group', label: 'Reference' },
     { kind: 'link', to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
     { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
