@@ -108,7 +108,7 @@ export const MfgSalesOrdersList = () => {
   const onView = () => selectedRow && openDetail(selectedRow);
   const onFind = () => setFindNonce((n) => n + 1);
 
-  const renderPdf = async (row: SoRow, andPrint: boolean) => {
+  const renderPdf = async (row: SoRow, action: 'save' | 'print' | 'preview') => {
     // One-shot fetch when the toolbar button fires — avoids holding a
     // TanStack query open for every list selection.
     const { data: session } = await supabase.auth.getSession();
@@ -118,15 +118,15 @@ export const MfgSalesOrdersList = () => {
     );
     if (!res.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
     const json = (await res.json()) as { salesOrder: unknown; items: unknown[] };
-    /* PR-G: jspdf triggers download via doc.save(). Print mode reuses the
-       same generator and follows it with window.print(); the user's
-       browser then displays the OS print dialog over the downloaded PDF. */
-    await generateSalesOrderPdf(json.salesOrder as never, json.items as never);
-    if (andPrint) window.print();
+    /* Follow-up #83 — Pass the action through to generateSalesOrderPdf so
+       it can route to doc.save() (download), a hidden iframe + .print(),
+       or a new-tab blob preview. No more "find the downloaded file then
+       manually print" UX. */
+    await generateSalesOrderPdf(json.salesOrder as never, json.items as never, action);
   };
 
-  const onPreview = () => selectedRow && void renderPdf(selectedRow, false);
-  const onPrint = () => selectedRow && void renderPdf(selectedRow, true);
+  const onPreview = () => selectedRow && void renderPdf(selectedRow, 'preview');
+  const onPrint = () => selectedRow && void renderPdf(selectedRow, 'print');
 
   // Print listing — generate a PDF of the current visible grid (filtered
   // rows + visible columns) using jsPDF + autotable.
@@ -175,7 +175,31 @@ export const MfgSalesOrdersList = () => {
       headStyles: { fillColor: [240, 235, 225], textColor: [34, 31, 32], fontStyle: 'bold' },
       theme: 'grid',
     });
-    doc.save(`sales-orders-listing-${new Date().toISOString().slice(0, 10)}.pdf`);
+    /* Follow-up #83 — Print Listing now renders via hidden iframe +
+       window.print() instead of doc.save(). Same UX as the single-SO
+       Print button — user gets the OS print dialog directly, no need
+       to fish a downloaded PDF out of the Downloads folder. */
+    const blob = doc.output('blob');
+    const blobUrl = URL.createObjectURL(blob);
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch { /* PDF viewer may not have hydrated; cleanup still runs */ }
+    };
+    window.setTimeout(() => {
+      try { document.body.removeChild(iframe); } catch { /* already detached */ }
+      URL.revokeObjectURL(blobUrl);
+    }, 60_000);
   };
 
   const onDelete = () => {
