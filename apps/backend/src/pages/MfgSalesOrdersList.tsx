@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
-import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus } from '../lib/flow-queries';
+import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo } from '../lib/flow-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
 import styles from './MfgSalesOrdersList.module.css';
@@ -23,7 +23,6 @@ const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 type SoRow = {
   doc_no: string;
-  transfer_to: string | null;
   so_date: string;
   branding: string | null;
   debtor_name: string;
@@ -40,14 +39,9 @@ type SoRow = {
   balance_centi_live?: number | null;
   paid_total_centi?: number | null;
   paid_centi: number;
-  remark2: string | null;
-  remark3: string | null;
-  remark4: string | null;
   processing_date: string | null;
-  sales_exemption_expiry: string | null;
   customer_delivery_date: string | null;
   note: string | null;
-  po_doc_no: string | null;
   address1: string | null;
   address2: string | null;
   address3: string | null;
@@ -100,6 +94,7 @@ export const MfgSalesOrdersList = () => {
   const selectedRow = selected[0] ?? null;
 
   const updateStatus = useUpdateMfgSalesOrderStatus();
+  const convertToDoMut = useConvertSoToDo();
 
   // ── Toolbar handlers ────────────────────────────────────────────
   const onNew = () => navigate('/mfg-sales-orders/new');
@@ -216,16 +211,39 @@ export const MfgSalesOrdersList = () => {
     }, 60_000);
   };
 
-  const onDelete = () => {
-    if (!selectedRow) return;
-    if (!window.confirm(`Cancel SO ${selectedRow.doc_no}? This sets status = CANCELLED (soft delete).`)) return;
+  /* Soft-delete a SO row (sets status=CANCELLED). Shared by the toolbar's
+     Delete button and the row context menu's Delete entry. */
+  const doDelete = (row: SoRow) => {
+    if (!window.confirm(`Cancel SO ${row.doc_no}? This sets status = CANCELLED (soft delete).`)) return;
     updateStatus.mutate(
-      { docNo: selectedRow.doc_no, status: 'CANCELLED' },
+      { docNo: row.doc_no, status: 'CANCELLED' },
       {
         onSuccess: () => { setSelected([]); },
         onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`),
       },
     );
+  };
+  const onDelete = () => { if (selectedRow) doDelete(selectedRow); };
+
+  /* Convert an SO → new DO via the API, then navigate to the new DO so
+     commander can immediately review/dispatch. Confirmation prompt
+     matches the soft-delete tone — destructive enough to warrant a
+     "are you sure?" but not so dangerous it needs typed confirmation. */
+  const convertToDo = async (row: SoRow) => {
+    if (!window.confirm(`Convert SO ${row.doc_no} to a new Delivery Order?`)) return;
+    try {
+      const res = await convertToDoMut.mutateAsync({ docNo: row.doc_no });
+      navigate(`/mfg-delivery-orders/${res.deliveryOrderId}`);
+    } catch (e) {
+      alert(`Failed to convert: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  /* TODO(copy-to-new-so): out of scope for this PR. Will need a
+     sessionStorage handoff carrying the SO header + line items so the
+     New SO page can pre-fill. Wire up in a follow-up worktree. */
+  const copyToNewSo = (row: SoRow) => {
+    alert(`Copy to new SO is not implemented yet (would clone SO ${row.doc_no}).`);
   };
 
   const onRefresh = () => {
@@ -266,7 +284,7 @@ export const MfgSalesOrdersList = () => {
         <div>
           <h1 className={styles.title}>Sales Orders</h1>
           <p className={styles.subtitle}>
-            Manufacturer sales orders — AutoCount-style ledger view.
+            Sales orders — AutoCount-style ledger view.
             {' '}{isLoading ? 'Loading…' : `${rows.length} total`}
           </p>
         </div>
@@ -290,6 +308,17 @@ export const MfgSalesOrdersList = () => {
         onSelectionChange={setSelected}
         isLoading={isLoading}
         emptyMessage='No sales orders yet — click "New" to start.'
+        contextMenu={(row) => [
+          { label: 'Edit',                       onClick: () => openDetail(row, true) },
+          { label: 'View',                       onClick: () => openDetail(row) },
+          { label: 'Preview',                    onClick: () => void renderPdf(row, 'preview') },
+          { label: 'Print',                      onClick: () => void renderPdf(row, 'print') },
+          { divider: true },
+          { label: 'Convert to Delivery Order',  onClick: () => void convertToDo(row) },
+          { label: 'Copy to new Sales Order',    onClick: () => copyToNewSo(row) },
+          { divider: true },
+          { label: 'Delete', danger: true,       onClick: () => doDelete(row) },
+        ]}
       />
     </div>
   );
@@ -302,11 +331,6 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     key: 'doc_no', label: 'Doc. No.', width: 110, sortable: true, groupable: false,
     accessor: (r) => <span className={styles.docNo}>{r.doc_no}</span>,
     searchValue: (r) => r.doc_no,
-  },
-  {
-    key: 'transfer_to', label: 'Transfer To', width: 110, sortable: true, groupable: true,
-    accessor: (r) => r.transfer_to ?? '',
-    searchValue: (r) => r.transfer_to ?? '',
   },
   {
     key: 'so_date', label: 'Date', width: 100, sortable: true,
@@ -360,21 +384,6 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     sortFn: (a, b) => liveBalance(a) - liveBalance(b),
   },
   {
-    key: 'remark2', label: 'Remark 2', width: 140, sortable: true,
-    accessor: (r) => r.remark2 ?? '',
-    searchValue: (r) => r.remark2 ?? '',
-  },
-  {
-    key: 'remark3', label: 'Remark 3', width: 140, sortable: true,
-    accessor: (r) => r.remark3 ?? '',
-    searchValue: (r) => r.remark3 ?? '',
-  },
-  {
-    key: 'remark4', label: 'Remark 4', width: 140, sortable: true,
-    accessor: (r) => r.remark4 ?? '',
-    searchValue: (r) => r.remark4 ?? '',
-  },
-  {
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
     accessor: (r) => r.processing_date ?? '',
     searchValue: (r) => r.processing_date ?? '',
@@ -385,19 +394,9 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.customer_delivery_date ?? '',
   },
   {
-    key: 'sales_exemption_expiry', label: 'Sales Exemption Expiry', width: 170, sortable: true,
-    accessor: (r) => r.sales_exemption_expiry ?? '',
-    searchValue: (r) => r.sales_exemption_expiry ?? '',
-  },
-  {
     key: 'note', label: 'Note', width: 200, sortable: true,
     accessor: (r) => r.note ?? '',
     searchValue: (r) => r.note ?? '',
-  },
-  {
-    key: 'po_doc_no', label: 'PO Doc No.', width: 130, sortable: true,
-    accessor: (r) => r.po_doc_no ?? '',
-    searchValue: (r) => r.po_doc_no ?? '',
   },
   {
     key: 'address1', label: 'Address 1', width: 180, sortable: true,
