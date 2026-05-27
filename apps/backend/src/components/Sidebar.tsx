@@ -26,6 +26,7 @@ import {
   Settings,
   LogOut,
   FileBarChart,
+  Wrench,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useNotificationStore } from '../lib/notifications';
@@ -114,6 +115,10 @@ export const Sidebar = () => {
     { kind: 'link', to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
     { kind: 'group', label: 'B2B Sales' },
     { kind: 'link', to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders' },
+    /* Task #110 — SO Maintenance (formerly Settings → Localities tab).
+       State → warehouse mapping + cascading customer-address dropdowns
+       that only the SO module consumes. */
+    { kind: 'link', to: '/mfg-sales-orders/maintenance', icon: <Wrench {...ICON_PROPS} />, label: 'SO Maintenance' },
     { kind: 'link', to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
     { kind: 'link', to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
     { kind: 'link', to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
