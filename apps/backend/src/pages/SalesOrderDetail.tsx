@@ -10,7 +10,7 @@
 //      opens a modal with a product picker + variant editor (sofa: size +
 //      fabric color + leg height; bedframe: divan + gap + leg + specials).
 //   4. Totals card: per-category subtotal + grand total + margin
-//   5. Status transition strip: Draft → Confirmed → In production → ... etc.
+//   5. Status transition strip: Draft → Confirmed → Shipped → Delivered → Invoiced → Closed.
 //
 // Wires to: GET /mfg-sales-orders/:docNo, PATCH header, POST/PATCH/DELETE items,
 // PATCH /:docNo/status, GET /debtors/search.

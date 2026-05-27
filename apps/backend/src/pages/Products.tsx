@@ -1748,18 +1748,21 @@ const FabricsMaintenancePanel = () => {
 const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
   const create = useCreateMfgProduct();
   type Cat = 'BEDFRAME' | 'SOFA' | 'ACCESSORY' | 'MATTRESS' | 'SERVICE';
+  /* 2990 is a trading company — no in-house manufacturing. Production-time
+     tracking dropped (was HOOKKA legacy). DB column production_time_minutes
+     stays for now but the UI no longer collects it. */
   const [form, setForm] = useState<{
     code: string; name: string; category: Cat;
     description: string; baseModel: string; sizeLabel: string;
     branding: string; fabricColor: string;
     basePrice: string; price1: string; costPrice: string;
-    unitM3: string; productionTime: string;
+    unitM3: string;
   }>({
     code: '', name: '', category: 'BEDFRAME',
     description: '', baseModel: '', sizeLabel: '',
     branding: '', fabricColor: '',
     basePrice: '', price1: '', costPrice: '',
-    unitM3: '', productionTime: '',
+    unitM3: '',
   });
   const set = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
@@ -1796,7 +1799,6 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
       price1Sen: isMattress || isService ? null : toSen(form.price1),
       costPriceSen: toSen(form.costPrice) ?? 0,
       unitM3Milli: toMilli(form.unitM3),
-      productionTimeMinutes: Number(form.productionTime || 0) || 0,
     }, { onSuccess: onClose });
   };
 
@@ -1835,9 +1837,7 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
             )}
             <Field label="Cost Price (RM)" value={form.costPrice} onChange={(v) => set('costPrice', v)} type="number" />
             <Field label="Unit (m³)" value={form.unitM3} onChange={(v) => set('unitM3', v)} type="number" step="0.001" />
-            {!isService && (
-              <Field label="Production Time (min)" value={form.productionTime} onChange={(v) => set('productionTime', v)} type="number" />
-            )}
+            {/* Production Time field removed — 2990 is a trading company (PR-strip-production). */}
           </div>
         </div>
         <footer className={styles.drawerFooter}>
