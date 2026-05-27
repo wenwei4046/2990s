@@ -22,6 +22,7 @@ import {
 } from './pages/FlowPages';
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
 import { SalesOrderNew } from './pages/SalesOrderNew';
+import { SalesOrderMaintenance } from './pages/SalesOrderMaintenance';
 import { Inventory } from './pages/Inventory';
 import { StockCard } from './pages/StockCard';
 import { StockAdjustments } from './pages/StockAdjustments';
@@ -99,6 +100,9 @@ export const router = createBrowserRouter([
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
       { path: 'mfg-sales-orders/new', element: <SalesOrderNew /> },
+      // Task #110 — Localities moved out of Settings → dedicated SO Maintenance
+      // page. Must precede :docNo so 'maintenance' isn't read as a doc number.
+      { path: 'mfg-sales-orders/maintenance', element: <SalesOrderMaintenance /> },
       { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
       { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
       { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
