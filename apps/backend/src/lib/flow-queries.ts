@@ -458,11 +458,16 @@ export type DebtorSuggestion = {
   address3: string | null;
   address4: string | null;
 };
+/* Task #99 (UI perf) — Customer Name autocomplete on the SO Detail page
+   used to fire every keystroke regardless of length. With 2000+ debtors in
+   prod this was the worst offender on the page when typing in the customer
+   field. Guard on length>=2 + leave the debounce to the caller. */
 export const useDebtorSearch = (q: string) => useQuery({
   queryKey: ['mfg-sales-orders', 'debtors', q],
   queryFn: () => authedFetch<{ debtors: DebtorSuggestion[] }>(
     `/mfg-sales-orders/debtors/search${q ? `?q=${encodeURIComponent(q)}` : ''}`,
   ),
+  enabled: q.trim().length >= 2,
   staleTime: 30_000,
   retry: 1,
 });
