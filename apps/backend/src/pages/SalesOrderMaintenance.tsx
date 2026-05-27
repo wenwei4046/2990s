@@ -850,10 +850,9 @@ const DropdownCategoryCard = ({
   const updateOpt = useUpdateSoDropdownOption();
   const deleteOpt = useDeleteSoDropdownOption();
 
-  // Add-row state
+  // Add-row state (sort_order is auto-appended to end — no input field)
   const [newValue, setNewValue]    = useState('');
   const [newLabel, setNewLabel]    = useState('');
-  const [newSort,  setNewSort]     = useState('');
 
   // Per-row edit buffers (uncommitted edits) — keyed by id.
   const [edits, setEdits] = useState<Record<string, Partial<{ value: string; label: string; sortOrder: number }>>>({});
@@ -899,15 +898,15 @@ const DropdownCategoryCard = ({
       window.alert('Both Value and Label are required.');
       return;
     }
-    const sortOrder = newSort.trim() ? Number(newSort.trim()) : (rows.length + 1);
-    if (Number.isNaN(sortOrder)) {
-      window.alert('Sort must be a number.');
-      return;
-    }
+    /* Auto-append: new row gets sort_order = max(existing) + 1 so it
+       lands at the bottom. Commander hid the Sort field — order is
+       managed by add sequence, not by manual numbers. */
+    const maxSort = rows.reduce((m, r) => Math.max(m, r.sortOrder), 0);
+    const sortOrder = maxSort + 1;
     createOpt.mutate(
       { category, value, label, sortOrder },
       {
-        onSuccess: () => { setNewValue(''); setNewLabel(''); setNewSort(''); },
+        onSuccess: () => { setNewValue(''); setNewLabel(''); },
         onError:   (err) => window.alert(`Add failed: ${(err as Error).message ?? err}`),
       },
     );
@@ -960,9 +959,12 @@ const DropdownCategoryCard = ({
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th style={{ width: '25%' }}>Value</th>
-                  <th style={{ width: '40%' }}>Label</th>
-                  <th style={{ width: 80 }}>Sort</th>
+                  <th style={{ width: '30%' }}>Value</th>
+                  <th style={{ width: '50%' }}>Label</th>
+                  {/* Sort column hidden — commander 2026-05-27 "sort 1/2
+                      meaning? 不需要把？". Display order still follows
+                      sort_order ASC, but new rows auto-append (handled in
+                      addRow below) so users never type sort numbers. */}
                   <th style={{ width: 80 }}>Active</th>
                   {canEdit && <th style={{ width: 60 }} aria-label="actions" />}
                 </tr>
@@ -998,19 +1000,6 @@ const DropdownCategoryCard = ({
                           disabled={!canEdit || updateOpt.isPending}
                           onChange={(e) => setEdits((s) => ({
                             ...s, [row.id]: { ...s[row.id], label: e.target.value },
-                          }))}
-                          onBlur={() => commitRow(row)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          className={styles.input}
-                          value={curSortOrder}
-                          disabled={!canEdit || updateOpt.isPending}
-                          onChange={(e) => setEdits((s) => ({
-                            ...s, [row.id]: { ...s[row.id], sortOrder: Number(e.target.value) || 0 },
                           }))}
                           onBlur={() => commitRow(row)}
                           onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
@@ -1063,7 +1052,9 @@ const DropdownCategoryCard = ({
           {canEdit && (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1.5fr 80px auto',
+              /* Sort input removed — commander 2026-05-27. New rows auto-
+                 append to the end (sort_order = rows.length + 1). */
+              gridTemplateColumns: '1fr 1.5fr auto',
               gap: 'var(--space-2)',
               padding: 'var(--space-3) var(--space-4)',
               background: 'var(--bg-alt)',
@@ -1080,13 +1071,6 @@ const DropdownCategoryCard = ({
                 placeholder="Label (e.g. New customer)"
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
-              />
-              <input
-                type="number"
-                className={styles.input}
-                placeholder="Sort"
-                value={newSort}
-                onChange={(e) => setNewSort(e.target.value)}
               />
               <Button
                 variant="primary"
