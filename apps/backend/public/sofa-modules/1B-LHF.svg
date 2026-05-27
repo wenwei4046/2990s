@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 110" width="100" height="110">
   <title>2990s Sofa Module — 1B-LHF — 1 Seater, LEFT Bench Cushion</title>
-  <desc>Top-down plan view. Same shape as 1A-LHF but the left strip is a soft Seat Bench Cushion (medium tan, same color family as backrest) instead of a hard armrest (darkest tan).</desc>
+  <desc>Top-down plan view. Same shape as 1A-LHF but the LEFT armrest position is a soft rounded bench cushion (shorter, sits at seat level, NOT a tall hard armrest).</desc>
   <g transform="translate(20,20)">
     <rect x="0" y="0" width="60" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"/>
     <rect x="0" y="0" width="60" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- LEFT bench cushion: backrest-tan (medium) instead of armrest-tan (darkest) -->
-    <rect x="0" y="0" width="12" height="70" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
+    <!-- LEFT soft bench cushion: rounded pillow at seat level, does NOT extend up into the backrest -->
+    <rect x="3" y="16" width="14" height="50" rx="6" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
   </g>
 </svg>
