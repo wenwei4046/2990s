@@ -341,12 +341,14 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
   if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
 
   // Audit first (so we don't lose original even if the update fails)
+  const originalPriceSen = i.unit_price_centi;
+  const overridePriceSen = newPrice;
   await sb.from('mfg_so_price_overrides').insert({
     doc_no: docNo,
     item_id: itemId,
     item_code: i.item_code,
-    original_price_sen: i.unit_price_centi,
-    override_price_sen: newPrice,
+    original_price_sen: originalPriceSen,
+    override_price_sen: overridePriceSen,
     reason: body.reason ?? null,
     approved_by: user.id,
   });
@@ -360,6 +362,19 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
     line_margin_centi: newLineTotal - 0,  // line_cost_centi stays; margin recomputed by item PATCH path
   }).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  // PR-D — also emit a unified audit-log entry so the History drawer
+  // shows this price override alongside other UPDATE_LINE actions.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'unitPriceCenti', from: originalPriceSen, to: overridePriceSen },
+    ],
+    note: body.reason || null,
+  });
 
   return c.json({ ok: true, itemId, newPrice });
 });
