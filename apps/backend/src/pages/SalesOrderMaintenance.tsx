@@ -576,21 +576,66 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L2 — Add State form */}
+      {/* L2 — Add State form. Commander 2026-05-27: "add state is to choose
+          under which country and under which warehouse no more cities and
+          postcode". Only inputs the user provides are State name, Code,
+          Warehouse. We seed a placeholder my_localities row with city
+          '—' / postcode '—' so the state appears in L2's localityGroups
+          aggregation; commander drills in via L3 to add real cities. */}
       {geoView === 'state' && canEdit && (
         <div className={styles.addRowCard}>
-          <div className={styles.addRowEyebrow}>Add a state in {selectedCountry} (seeds first city · postcode)</div>
+          <div className={styles.addRowEyebrow}>Add a state in {selectedCountry} — pick its default warehouse</div>
           <div className={styles.addRowGrid}
-            style={{ gridTemplateColumns: '1fr 100px 1fr 130px auto' }}>
+            style={{ gridTemplateColumns: '1fr 100px 1fr auto' }}>
             <input className={styles.input} placeholder="State (Selangor)"
               value={newState} onChange={(e) => setNewState(e.target.value)} />
             <input className={styles.input} placeholder="Code (SGR)" maxLength={5}
               value={newStateCode} onChange={(e) => setNewStateCode(e.target.value)} />
-            <input className={styles.input} placeholder="City (Petaling Jaya)"
-              value={newCity} onChange={(e) => setNewCity(e.target.value)} />
-            <input className={styles.input} placeholder="Postcode (47301)" maxLength={10}
-              value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
-            <Button variant="primary" size="md" onClick={addLocality} disabled={createLoc.isPending}>
+            <select
+              className={styles.input}
+              value={newCountry /* repurposed as the new-state warehouseId picker */}
+              onChange={(e) => setNewCountry(e.target.value)}
+              aria-label="Default warehouse for this state"
+            >
+              <option value="">— Default warehouse (optional) —</option>
+              {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
+                <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+              ))}
+            </select>
+            <Button
+              variant="primary"
+              size="md"
+              disabled={createLoc.isPending || upsert.isPending}
+              onClick={async () => {
+                const state = newState.trim();
+                const stateCode = newStateCode.trim().toUpperCase();
+                const whId = newCountry.trim();  // repurposed; '' = no default
+                if (!state || !stateCode) {
+                  window.alert('State name and code are required.');
+                  return;
+                }
+                try {
+                  /* Seed placeholder locality so L2 picks up the new state.
+                     Commander adds real cities/postcodes by drilling into L3. */
+                  await createLoc.mutateAsync({
+                    state, stateCode, city: '—', postcode: '—',
+                    country: selectedCountry || 'Malaysia',
+                  });
+                  if (whId) {
+                    await new Promise<void>((resolve, reject) => {
+                      upsert.mutate(
+                        { state, warehouseId: whId, notes: null },
+                        { onSuccess: () => resolve(), onError: reject },
+                      );
+                    });
+                  }
+                  setNewState(''); setNewStateCode(''); setNewCountry('');
+                  toast.success(`Added ${state}${whId ? ' with default warehouse' : ''}`);
+                } catch (err) {
+                  toast.error(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }}
+            >
               <Plus size={14} strokeWidth={1.75} /> Add
             </Button>
           </div>
