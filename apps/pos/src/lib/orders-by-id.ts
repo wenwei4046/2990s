@@ -113,7 +113,10 @@ export const useOrderById = (orderId: string | undefined) =>
 
       const byCat = new Map<string, number>();
       for (const i of items ?? []) {
-        const cat: string | null = (i as any).products?.category_id ?? null;
+        // Supabase types embedded m2o joins as arrays; runtime is the
+        // single related row. Cast via unknown to recover the actual shape.
+        const products = (i as unknown as { products: { category_id: string | null } | null }).products;
+        const cat: string | null = products?.category_id ?? null;
         if (cat) byCat.set(cat, (byCat.get(cat) ?? 0) + (i.line_total as number));
       }
       const dominantId = [...byCat.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
@@ -125,7 +128,9 @@ export const useOrderById = (orderId: string | undefined) =>
           .select('id, label, hero_image_key')
           .eq('id', dominantId)
           .maybeSingle();
-        if (cat) dominantCategory = cat as any;
+        // Cast through `unknown` — Supabase typed selects return
+        // `GenericStringError` until generated types exist.
+        if (cat) dominantCategory = cat as unknown as OrderDetail['dominantCategory'];
       }
 
       return {

@@ -39,7 +39,9 @@ export function SlipUploadStep({ onConfirmed, onCleared }: Props) {
       return;
     }
 
-    if (!ALLOWED_SLIP_MIMES.includes(f.type as any)) {
+    // `as const` array narrows `.includes` arg to the literal union; widen
+    // for the runtime check against the file's freeform MIME string.
+    if (!(ALLOWED_SLIP_MIMES as readonly string[]).includes(f.type)) {
       setErrorMsg('Only JPG / PNG / WebP / PDF supported.');
       setPhase('error');
       return;

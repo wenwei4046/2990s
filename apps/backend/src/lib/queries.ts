@@ -720,7 +720,12 @@ export const usePurchaseOrders = (orderId: string | null) =>
       const seen = new Set<string>();
       const result: { id: string; poNumber: string; createdAt: string }[] = [];
       for (const row of data ?? []) {
-        const po = (row as any).purchase_orders;
+        // Supabase typed embedded selects as `GenericStringError`; runtime
+        // shape is the join. Cast through `unknown` to recover access.
+        const joined = row as unknown as {
+          purchase_orders: { id: string; po_number: string; created_at: string } | null;
+        };
+        const po = joined.purchase_orders;
         if (po && !seen.has(po.id)) {
           seen.add(po.id);
           result.push({ id: po.id, poNumber: po.po_number, createdAt: po.created_at });

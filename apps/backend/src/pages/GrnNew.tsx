@@ -96,8 +96,8 @@ export const GrnNew = () => {
   );
 
   const po       = poQ.data?.purchaseOrder;
-  const supplier = (po as any)?.supplier;
-  const currency = (po as any)?.currency ?? 'MYR';
+  const supplier = po?.supplier;
+  const currency = po?.currency ?? 'MYR';
 
   const canSave = !!po && lines.length > 0 && lines.every((l) => l.qtyReceived >= 0 && l.qtyAccepted + l.qtyRejected <= l.qtyReceived);
 
@@ -110,7 +110,7 @@ export const GrnNew = () => {
     try {
       const createRes = await create.mutateAsync({
         purchaseOrderId: po.id,
-        supplierId:      (po as any).supplier_id,
+        supplierId:      po.supplier_id,
         receivedAt,
         deliveryNoteRef: deliveryNoteRef || undefined,
         notes:           notes || undefined,

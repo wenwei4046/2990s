@@ -73,13 +73,20 @@ export async function exportXlsx(rows: AuditExportRow[]): Promise<Uint8Array> {
     ]);
   }
 
-  const ws = XLSX.utils.aoa_to_sheet(data);
-  (ws as any)['!cols'] = [
+  // xlsx exposes sheet-meta props (!cols, !freeze) as bracket-indexed keys
+  // typed as `unknown` in the base WorkSheet shape. Narrow once via an
+  // intersection rather than spraying `as any` on every assignment.
+  type WsMeta = {
+    '!cols'?: { wch: number }[];
+    '!freeze'?: { xSplit: number; ySplit: number };
+  };
+  const ws = XLSX.utils.aoa_to_sheet(data) as ReturnType<typeof XLSX.utils.aoa_to_sheet> & WsMeta;
+  ws['!cols'] = [
     { wch: 10 }, { wch: 18 }, { wch: 14 }, { wch: 22 },
     { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 18 },
     { wch: 16 }, { wch: 18 }, { wch: 18 }, { wch: 14 },
   ];
-  (ws as any)['!freeze'] = { xSplit: 0, ySplit: 1 };
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Payments');

@@ -117,7 +117,8 @@ export const CreateGrnDrawer = ({ onClose }: { onClose: () => void }) => {
         unitPriceCenti: r.poi.unit_price_centi,
       }));
     if (!itemsBody.length) return alert('Enter qty for at least one item.');
-    const po = poDetail.data?.purchaseOrder as any;
+    const po = poDetail.data?.purchaseOrder;
+    if (!po) return;
     create.mutate(
       {
         purchaseOrderId: poId,
@@ -442,7 +443,19 @@ export const CreateDeliveryOrderDrawer = ({ onClose }: { onClose: () => void }) 
 
   const upd = (k: keyof typeof form, v: string) => setForm({ ...form, [k]: v });
   const items = soDetail.data?.items ?? [];
-  const so = soDetail.data?.salesOrder as any;
+  // flow-queries.ts types this as `any`; narrow locally to the fields we
+  // touch. Keeps the rest of the file honest without a global refactor.
+  type SoHeader = {
+    doc_no?: string;
+    debtor_code?: string;
+    debtor_name?: string;
+    address1?: string | null;
+    address2?: string | null;
+    address3?: string | null;
+    address4?: string | null;
+    phone?: string | null;
+  };
+  const so = soDetail.data?.salesOrder as SoHeader | undefined;
 
   // Auto-fill address when SO picked
   useMemo(() => {
@@ -567,10 +580,11 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
   const remLine = (i: number) => setItems(items.filter((_, j) => j !== i));
 
   // Auto-fill from picked DO
+  type DoLite = { id: string; debtor_code?: string; debtor_name?: string; so_doc_no?: string };
   const pickDo = (id: string) => {
     setDeliveryOrderId(id || null);
     if (id) {
-      const d = allDos.find((x: any) => x.id === id) as any;
+      const d = (allDos as DoLite[]).find((x) => x.id === id);
       if (d) setForm((s) => ({ ...s, debtorCode: d.debtor_code ?? '', debtorName: d.debtor_name ?? '', soDocNo: d.so_doc_no ?? '' }));
     }
   };
@@ -736,10 +750,11 @@ export const CreateDeliveryReturnDrawer = ({ onClose }: { onClose: () => void })
   const addLine = () => setItems([...items, { itemCode: '', description: '', qtyReturned: 1, condition: 'NEW', unitPriceCenti: 0, refundCenti: 0 }]);
   const remLine = (i: number) => setItems(items.filter((_, j) => j !== i));
 
+  type DoLiteSimple = { id: string; debtor_code?: string; debtor_name?: string };
   const pickDo = (id: string) => {
     setDeliveryOrderId(id || null);
     if (id) {
-      const d = (dos.data?.deliveryOrders ?? []).find((x: any) => x.id === id) as any;
+      const d = ((dos.data?.deliveryOrders ?? []) as DoLiteSimple[]).find((x) => x.id === id);
       if (d) setForm((s) => ({ ...s, debtorCode: d.debtor_code ?? '', debtorName: d.debtor_name ?? '' }));
     }
   };
