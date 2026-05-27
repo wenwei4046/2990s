@@ -41,7 +41,7 @@ import {
 } from '../lib/so-dropdown-options-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import {
-  PaymentsTable, labelToApi, type PaymentDraft,
+  PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
 } from '../components/PaymentsTable';
 import { formatPhone } from '@2990s/shared/phone';
 import styles from './SalesOrderDetail.module.css';
@@ -273,7 +273,7 @@ export const SalesOrderNew = () => {
     const tasks = paymentDrafts
       .filter((d) => d.amountCenti > 0)
       .map(async (d) => {
-        const { method, merchantProvider } = labelToApi(d.methodLabel);
+        const { method } = labelToApi(d.methodLabel);
         const body: { docNo: string } & Record<string, unknown> = {
           docNo,
           paidAt:       d.paidAt,
@@ -283,7 +283,15 @@ export const SalesOrderNew = () => {
           approvalCode: d.approvalCode || null,
           collectedBy:  d.collectedBy  || null,
         };
-        if (method === 'merchant') body.merchantProvider = merchantProvider;
+        /* Task #122 (cascade) — replay the L2 picks per method so the
+           created payment row carries the bank + plan / sub-type that
+           commander entered during the draft. */
+        if (method === 'merchant') {
+          body.merchantProvider  = d.merchantProvider || null;
+          body.installmentMonths = parseInstallmentMonths(d.installmentMonthsLabel);
+        } else if (method === 'transfer') {
+          body.onlineType = d.onlineType || null;
+        }
         try {
           await addPayment.mutateAsync(body);
           return true;
