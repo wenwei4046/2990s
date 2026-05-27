@@ -983,6 +983,20 @@ export type SoDetailListingRow = Record<string, unknown> & {
   unit_cost_centi: number;
   line_cost_centi: number;
   line_margin_centi: number;
+  /* Task #63 — Houzs port gap closure. Line-level variant + payment-ledger
+     fields surfaced by the API so the Detail Listing's Fabric / Divan
+     Height / Leg Height / Specials / Account Sheet / Approval Code / Last
+     Payment / Collected By columns render typed data (no `r as Record<>`
+     hack). custom_specials is a jsonb array — element shape varies
+     (string | { label } | { description }) so the type stays loose. */
+  fabric: string | null;
+  divan_height: number | null;
+  leg_height: number | null;
+  custom_specials: unknown;
+  last_payment_at: string | null;
+  account_sheet: string | null;
+  approval_code: string | null;
+  collected_by: string | null;
 };
 
 export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {

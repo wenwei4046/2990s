@@ -34,7 +34,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, ClipboardList, Printer, Eye, Filter, X, Search,
+  ArrowLeft, ClipboardList, Printer, Eye, Filter, X, Search, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -98,6 +98,26 @@ const PaymentPill = ({ raw }: { raw: string | null | undefined }) => {
       background: spec.bg, color: spec.fg,
     }}>{state}</span>
   );
+};
+
+/* Task #63 — `custom_specials` is a jsonb array with mixed element shape
+   across PRs: some lines store plain strings ("Memory Foam Top"), others
+   store objects (`{ label, priceCenti }` per the latest schema, or the
+   older `{ description, surchargeSen }`). Render each element's most
+   user-facing string and comma-join. */
+const formatSpecials = (raw: unknown): string => {
+  if (!Array.isArray(raw)) return '';
+  const parts = raw.map((el) => {
+    if (el == null) return '';
+    if (typeof el === 'string') return el;
+    if (typeof el === 'object') {
+      const o = el as Record<string, unknown>;
+      const v = o.label ?? o.description ?? o.name ?? o.value;
+      return typeof v === 'string' ? v : '';
+    }
+    return '';
+  }).filter(Boolean);
+  return parts.join(', ');
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -251,25 +271,35 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       searchValue: (r) => r.branding ?? '',
       groupValue: (r) => r.branding ?? '(none)',
     },
-    /* 19 */ {
+    /* 19 — Task #63: typed read from variants->>'fabricColor' (extracted
+       server-side as `fabric` on the row). */
+    {
       key: 'fabric', label: 'Fabric', width: 120, sortable: true,
-      accessor: (r) => opt(r, 'fabric_code') || opt(r, 'fabric') || '—',
-      searchValue: (r) => opt(r, 'fabric_code') || opt(r, 'fabric'),
+      accessor: (r) => r.fabric ?? '—',
+      searchValue: (r) => r.fabric ?? '',
     },
-    /* 20 */ {
-      key: 'divan_height', label: 'Divan Height', width: 110, sortable: true,
-      accessor: (r) => opt(r, 'divan_height') || '—',
-      searchValue: (r) => opt(r, 'divan_height'),
+    /* 20 — Task #63: integer inches column rendered as `30"` etc. */
+    {
+      key: 'divan_height', label: 'Divan Height', width: 110, sortable: true, align: 'right',
+      accessor: (r) => r.divan_height != null ? `${r.divan_height}"` : '—',
+      searchValue: (r) => r.divan_height != null ? String(r.divan_height) : '',
+      sortFn: (a, b) => (a.divan_height ?? 0) - (b.divan_height ?? 0),
     },
-    /* 21 */ {
-      key: 'leg_height', label: 'Leg Height', width: 100, sortable: true,
-      accessor: (r) => opt(r, 'leg_height') || '—',
-      searchValue: (r) => opt(r, 'leg_height'),
+    /* 21 — Task #63: integer inches column rendered as `4"` etc. */
+    {
+      key: 'leg_height', label: 'Leg Height', width: 100, sortable: true, align: 'right',
+      accessor: (r) => r.leg_height != null ? `${r.leg_height}"` : '—',
+      searchValue: (r) => r.leg_height != null ? String(r.leg_height) : '',
+      sortFn: (a, b) => (a.leg_height ?? 0) - (b.leg_height ?? 0),
     },
-    /* 22 */ {
-      key: 'specials', label: 'Specials', width: 140, sortable: true,
-      accessor: (r) => opt(r, 'specials') || opt(r, 'special') || '—',
-      searchValue: (r) => opt(r, 'specials') || opt(r, 'special'),
+    /* 22 — Task #63: custom_specials is a jsonb array. Element shape
+       varies across PRs (some lines store strings, others store
+       `{ label } | { description }` objects), so coerce to a label
+       string per element and comma-join. */
+    {
+      key: 'specials', label: 'Specials', width: 160, sortable: true,
+      accessor: (r) => formatSpecials(r.custom_specials) || '—',
+      searchValue: (r) => formatSpecials(r.custom_specials),
     },
     /* 23 — Actions: per-row link to the SO Detail page. The reference column
        label in Houzs holds free-text action notes; we keep that semantic
@@ -305,12 +335,13 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       groupValue: (r) => r.status ?? '(none)',
     },
     /* 26 — Status 2: secondary lifecycle state (Houzs uses for sub-status
-       like "Photo Sent", "Awaiting Driver" etc.). We don't track this
-       server-side yet, so empty most rows; surface from `remark2` when set. */
+       like "Photo Sent", "Awaiting Driver" etc.). Sourced from the
+       header's `remark2` text column (typed on the row). */
     {
       key: 'status_2', label: 'Status 2', width: 110, sortable: true, groupable: true,
-      accessor: (r) => opt(r, 'remark2') || '—',
-      searchValue: (r) => opt(r, 'remark2'),
+      accessor: (r) => r.remark2 ?? '—',
+      searchValue: (r) => r.remark2 ?? '',
+      groupValue: (r) => r.remark2 ?? '(none)',
     },
     /* 27 */ {
       key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
@@ -333,31 +364,37 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       searchValue: (r) => fmtRm(r.paid_total_centi ?? 0),
       sortFn: (a, b) => (a.paid_total_centi ?? 0) - (b.paid_total_centi ?? 0),
     },
-    /* 31 */ {
-      key: 'last_payment', label: 'Last Payment', width: 120, sortable: true,
-      accessor: (r) => {
-        const d = opt(r, 'last_payment_date') || opt(r, 'payment_date');
-        return d ? compactDate(d) : '—';
-      },
-      searchValue: (r) => opt(r, 'last_payment_date') || opt(r, 'payment_date'),
-    },
-    /* 32 — Account Sheet: finance ledger slot. Not tracked in our schema
-       yet — render the customer's PO doc number as a useful proxy (Houzs
-       typically files SOs by the matching account-sheet line ref). */
+    /* 31 — Task #63: last payment date sourced server-side as MAX(paid_at)
+       from mfg_sales_order_payments per SO. */
     {
-      key: 'account_sheet', label: 'Account Sheet', width: 130, sortable: true,
-      accessor: (r) => opt(r, 'account_sheet') || opt(r, 'po_doc_no') || '—',
-      searchValue: (r) => opt(r, 'account_sheet') || opt(r, 'po_doc_no'),
+      key: 'last_payment', label: 'Last Payment', width: 120, sortable: true,
+      accessor: (r) => r.last_payment_at ? compactDate(r.last_payment_at) : '—',
+      searchValue: (r) => r.last_payment_at ?? '',
+      sortFn: (a, b) => String(a.last_payment_at ?? '').localeCompare(String(b.last_payment_at ?? '')),
     },
-    /* 33 */ {
+    /* 32 — Task #63: most-recent payment's account_sheet (bank account /
+       cashbook) from mfg_sales_order_payments. */
+    {
+      key: 'account_sheet', label: 'Account Sheet', width: 130, sortable: true, groupable: true,
+      accessor: (r) => r.account_sheet ?? '—',
+      searchValue: (r) => r.account_sheet ?? '',
+      groupValue: (r) => r.account_sheet ?? '(none)',
+    },
+    /* 33 — Task #63: most-recent payment's approval_code (auth / slip /
+       receipt no); falls back to legacy header-level approval_code for
+       SOs predating the payments ledger. */
+    {
       key: 'approval_code', label: 'Approval Code', width: 130, sortable: true,
-      accessor: (r) => opt(r, 'approval_code') || '—',
-      searchValue: (r) => opt(r, 'approval_code'),
+      accessor: (r) => r.approval_code ?? '—',
+      searchValue: (r) => r.approval_code ?? '',
     },
-    /* 34 */ {
-      key: 'collected_by', label: 'Collected By', width: 130, sortable: true,
-      accessor: (r) => opt(r, 'collected_by') || '—',
-      searchValue: (r) => opt(r, 'collected_by'),
+    /* 34 — Task #63: most-recent payment's collected_by, resolved
+       server-side from staff.id → staff.name. */
+    {
+      key: 'collected_by', label: 'Collected By', width: 130, sortable: true, groupable: true,
+      accessor: (r) => r.collected_by ?? '—',
+      searchValue: (r) => r.collected_by ?? '',
+      groupValue: (r) => r.collected_by ?? '(none)',
     },
     /* ── Default-hidden long tail (10 columns) ────────────────────────── */
     {
@@ -669,6 +706,14 @@ export const SalesOrderDetailListing = () => {
           <Button variant="ghost" size="sm" onClick={runPrint}>
             <Printer {...SM_ICON} />
             <span>Print</span>
+          </Button>
+          {/* Task #63 — restore the "New Line Item" CTA stripped from
+              the prior Houzs port. Line items only exist inside an SO,
+              so this routes to the Create SO page; the user adds lines
+              there and they show up here on next load. */}
+          <Button variant="primary" size="sm" onClick={() => navigate('/mfg-sales-orders/new')}>
+            <Plus {...SM_ICON} />
+            <span>New Line Item</span>
           </Button>
         </div>
       </div>
