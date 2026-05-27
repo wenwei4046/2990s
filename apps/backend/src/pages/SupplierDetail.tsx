@@ -24,7 +24,7 @@ import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
   TrendingUp, Package, Plus, Pencil, Trash2, Star, X, Save, Search,
-  Tag,
+  Tag, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { MaintenanceTab, type MaintenanceSection } from './Products';
 import { Button } from '@2990s/design-system';
@@ -387,7 +387,58 @@ const SupplierOverviewPanel = ({
   otrTone: string | undefined;
   defectTone: string | undefined;
   setSkuDialog: (s: { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }) => void;
-}) => (
+}) => {
+  /* PR — Commander 2026-05-27 ("Supplier SKU 那边, 要根据它的种类去设置"):
+     Group bindings by mfg_products.category so commander sees SOFA / BEDFRAME /
+     MATTRESS sections instead of one flat 50-row table. We look up the
+     category client-side via the same mfg-products cache the picker uses (no
+     new endpoint). Anything not found in the cache (orphan code, fabric,
+     raw material) lands in an OTHERS bucket so nothing is hidden.
+
+     Category order is fixed (SOFA → BEDFRAME → MATTRESS → ACCESSORY →
+     SERVICE → OTHERS) for visual stability — the user shouldn't see sections
+     reshuffle as they add bindings.
+
+     TODO (commander follow-up): per-tier supplier pricing per category. E.g.
+     Sofa: one row per Model with columns for compartment widths 24/26/28/30.
+     Bedframe: one row per Model with columns for size variants 3FT/5FT/6FT.
+     Needs a new supplier_material_binding_prices child table (or JSONB
+     price_tiers column on supplier_material_bindings) — out of scope for
+     this PR per task brief. */
+  const products = useMfgProducts();
+
+  const CATEGORY_ORDER: readonly string[] = [
+    'SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE', 'OTHERS',
+  ];
+  const CATEGORY_LABEL: Record<string, string> = {
+    SOFA: 'Sofa',
+    BEDFRAME: 'Bedframe',
+    MATTRESS: 'Mattress',
+    ACCESSORY: 'Accessory',
+    SERVICE: 'Service',
+    OTHERS: 'Others',
+  };
+
+  const byCategory = useMemo(() => {
+    const productByCode = new Map<string, MfgProductRow>(
+      (products.data ?? []).map((p) => [p.code, p]),
+    );
+    const buckets = new Map<string, BindingRow[]>();
+    for (const b of bindings) {
+      const p = productByCode.get(b.material_code);
+      const cat = (p?.category ?? 'OTHERS').toUpperCase();
+      const key = CATEGORY_ORDER.includes(cat) ? cat : 'OTHERS';
+      const arr = buckets.get(key) ?? [];
+      arr.push(b);
+      buckets.set(key, arr);
+    }
+    // Stable order — categories with no bindings are omitted.
+    return CATEGORY_ORDER
+      .filter((c) => buckets.has(c))
+      .map((c) => [c, buckets.get(c)!] as const);
+  }, [bindings, products.data]);
+
+  return (
   <>
     {/* ── KPI tiles ──────────────────────────────────────────────── */}
     <section className={styles.kpiGrid}>
@@ -434,7 +485,11 @@ const SupplierOverviewPanel = ({
           <Package {...ICON} style={{ color: 'var(--c-burnt)' }} />
           SKU Mappings
           <span className={styles.cardTitleCount}>
-            ({bindings.length} {bindings.length === 1 ? 'code' : 'codes'})
+            {bindings.length === 0
+              ? '(no codes yet)'
+              : byCategory.length === 1
+                ? `(${bindings.length} ${bindings.length === 1 ? 'code' : 'codes'})`
+                : `(${byCategory.length} categories · ${bindings.length} codes)`}
           </span>
         </h2>
         <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
@@ -449,11 +504,25 @@ const SupplierOverviewPanel = ({
           </Button>
         </span>
       </header>
-      <SkuMappingsTable
-        supplierId={id}
-        bindings={bindings}
-        onEdit={(b) => setSkuDialog({ mode: 'edit', binding: b })}
-      />
+      {bindings.length === 0 ? (
+        <div className={styles.cardBody}>
+          <p className={styles.emptyRow}>No SKU mappings yet for this supplier.</p>
+        </div>
+      ) : (
+        byCategory.map(([category, rows]) => (
+          <CategorySection
+            key={category}
+            label={CATEGORY_LABEL[category] ?? category}
+            count={rows.length}
+          >
+            <SkuMappingsTable
+              supplierId={id}
+              bindings={rows}
+              onEdit={(b) => setSkuDialog({ mode: 'edit', binding: b })}
+            />
+          </CategorySection>
+        ))
+      )}
     </section>
 
     {/* ── Last 10 POs ───────────────────────────────────────────── */}
@@ -468,7 +537,8 @@ const SupplierOverviewPanel = ({
       <LastTenPOsTable rows={score?.last10POs ?? []} />
     </section>
   </>
-);
+  );
+};
 
 const SupplierPricingPanel = ({
   supplierId,
@@ -523,6 +593,70 @@ const InfoCell = ({ label, value }: { label: string; value: string }) => (
     <span className={styles.infoValue}>{value}</span>
   </div>
 );
+
+/* ════════════════════════════════════════════════════════════════════════
+   CategorySection — collapsible wrapper for one category's SKU mappings.
+
+   PR — Commander 2026-05-27. Default open; click the header row to toggle.
+   Uses native <details>-style behaviour via useState so we can persist the
+   open/closed state across re-renders (which a raw <details> would lose on
+   key-change). No localStorage — the user's task brief explicitly says
+   "Persist nothing".
+   ════════════════════════════════════════════════════════════════════════ */
+
+const CategorySection = ({
+  label,
+  count,
+  children,
+}: {
+  label: string;
+  count: number;
+  children: React.ReactNode;
+}) => {
+  const [open, setOpen] = useState(true);
+  return (
+    <div style={{ borderTop: '1px solid var(--line)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          width: '100%',
+          padding: 'var(--space-2) var(--space-4)',
+          background: 'var(--c-cream)',
+          border: 'none',
+          borderBottom: open ? '1px solid var(--line)' : 'none',
+          cursor: 'pointer',
+          fontFamily: 'var(--font-button)',
+          fontSize: 'var(--fs-12)',
+          fontWeight: 700,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          color: 'var(--c-ink)',
+        }}
+      >
+        {open
+          ? <ChevronDown {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />
+          : <ChevronRight {...SM_ICON} style={{ color: 'var(--fg-muted)' }} />}
+        <span>{label}</span>
+        <span style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 'var(--fs-12)',
+          fontWeight: 400,
+          letterSpacing: 0,
+          textTransform: 'none',
+          color: 'var(--fg-soft)',
+        }}>
+          {count} {count === 1 ? 'code' : 'codes'}
+        </span>
+      </button>
+      {open && children}
+    </div>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    SKU Mappings table — inline edit (main toggle, delete) + open dialog
