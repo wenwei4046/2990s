@@ -35,8 +35,10 @@ import { useStaff } from '../lib/admin-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   countryForState,
-  BUILDING_TYPES,
 } from '../lib/localities-queries';
+import {
+  useSoDropdownOptions, optionsOrFallback,
+} from '../lib/so-dropdown-options-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import {
   PaymentsTable, labelToApi, type PaymentDraft,
@@ -45,14 +47,6 @@ import { formatPhone } from '@2990s/shared/phone';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-
-/* Customer type matches the POS handover dropdown. */
-const CUSTOMER_TYPES = ['NEW', 'EXISTING'] as const;
-
-/* Emergency-contact relationship dropdown — mirrors POS. */
-const RELATIONSHIP_OPTIONS = [
-  'Spouse', 'Parent', 'Child', 'Sibling', 'Relative', 'Friend', 'Colleague', 'Other',
-] as const;
 
 /* PR #114/#125 — Draft line shape mirrors SoLineDraft from SoLineCard but
    adds a stable React id so the local list can re-order / edit inline. */
@@ -81,19 +75,30 @@ export const SalesOrderNew = () => {
   const staffQ   = useStaff();
   const loc      = useLocalities();
 
+  /* Task #118 — these 3 dropdowns used to be `as const` arrays in this
+     file. Now sourced from so_dropdown_options via TanStack. Each call
+     falls back to the migration 0081 seed list during loading + when
+     the DB row count is 0 so the user never sees an empty select. */
+  const customerTypeOptsQ  = useSoDropdownOptions('customer_type');
+  const buildingTypeOptsQ  = useSoDropdownOptions('building_type');
+  const relationshipOptsQ  = useSoDropdownOptions('relationship');
+  const customerTypeOpts = optionsOrFallback('customer_type', customerTypeOptsQ.data);
+  const buildingTypeOpts = optionsOrFallback('building_type', buildingTypeOptsQ.data);
+  const relationshipOpts = optionsOrFallback('relationship',  relationshipOptsQ.data);
+
   // ── Customer fields ────────────────────────────────────────────────
   const [debtorCode,    setDebtorCode]    = useState('');
   const [debtorName,    setDebtorName]    = useState('');
   const [phone,         setPhone]         = useState('');
   const [email,         setEmail]         = useState('');
   const [salespersonId, setSalespersonId] = useState('');
-  const [customerType,  setCustomerType]  = useState<'NEW' | 'EXISTING' | ''>('');
+  const [customerType,  setCustomerType]  = useState<string>('');
   /* PR-A on Detail exposed Customer SO Ref inside the Customer card —
      mirror that here so the two pages line up. */
   const [customerSoNo,  setCustomerSoNo]  = useState('');
 
   // ── Order Info fields (Building Type / Venue / Dates / Note) ───────
-  const [buildingType,   setBuildingType] = useState<typeof BUILDING_TYPES[number] | ''>('');
+  const [buildingType,   setBuildingType] = useState<string>('');
   /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Detail page
      keeps Venue as a free-text field separate from Building Type — match
      that here so the two layouts line up. */
@@ -116,7 +121,7 @@ export const SalesOrderNew = () => {
 
   // ── Emergency contact ──────────────────────────────────────────────
   const [emergencyName,  setEmergencyName]   = useState('');
-  const [emergencyRel,   setEmergencyRel]    = useState<typeof RELATIONSHIP_OPTIONS[number] | ''>('');
+  const [emergencyRel,   setEmergencyRel]    = useState<string>('');
   const [emergencyPhone, setEmergencyPhone]  = useState('');
 
   // ── Items state ────────────────────────────────────────────────────
@@ -475,10 +480,12 @@ export const SalesOrderNew = () => {
               <select
                 className={styles.fieldSelect}
                 value={customerType}
-                onChange={(e) => setCustomerType(e.target.value as typeof customerType)}
+                onChange={(e) => setCustomerType(e.target.value)}
               >
                 <option value="">—</option>
-                {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t === 'NEW' ? 'New' : 'Existing'}</option>)}
+                {customerTypeOpts.map((t) => (
+                  <option key={t.id} value={t.value}>{t.label}</option>
+                ))}
               </select>
             </label>
             <label className={styles.field}>
@@ -511,10 +518,12 @@ export const SalesOrderNew = () => {
               <select
                 className={styles.fieldSelect}
                 value={buildingType}
-                onChange={(e) => setBuildingType(e.target.value as typeof buildingType)}
+                onChange={(e) => setBuildingType(e.target.value)}
               >
                 <option value="">—</option>
-                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+                {buildingTypeOpts.map((b) => (
+                  <option key={b.id} value={b.value}>{b.label}</option>
+                ))}
               </select>
             </label>
             <label className={styles.field}>
@@ -600,10 +609,12 @@ export const SalesOrderNew = () => {
               <select
                 className={styles.fieldSelect}
                 value={emergencyRel}
-                onChange={(e) => setEmergencyRel(e.target.value as typeof emergencyRel)}
+                onChange={(e) => setEmergencyRel(e.target.value)}
               >
                 <option value="">—</option>
-                {RELATIONSHIP_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                {relationshipOpts.map((r) => (
+                  <option key={r.id} value={r.value}>{r.label}</option>
+                ))}
               </select>
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>

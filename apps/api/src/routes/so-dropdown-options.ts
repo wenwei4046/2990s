@@ -1,0 +1,187 @@
+// ----------------------------------------------------------------------------
+// so-dropdown-options — Task #118.
+//
+// Commander 2026-05-27: "customer type, building type, relationship 和
+// payment dropdown where can do maintenance?". This route backs the SO
+// Maintenance page's four mini-tables. One generic table keyed by
+// category (customer_type / building_type / relationship / payment_method)
+// — see migration 0081.
+//
+// Endpoints:
+//   GET    /                        — list all categories grouped:
+//                                       { customer_type: [...], building_type: [...],
+//                                         relationship: [...], payment_method: [...] }
+//   GET    /?category=customer_type — list active rows for one category,
+//                                     ordered by sort_order
+//   POST   /                        — create a new option
+//   PATCH  /:id                     — update value/label/sort_order/active
+//   DELETE /:id                     — hard delete (seed list is short;
+//                                     soft-delete via PATCH active=false
+//                                     is the alternative the UI can use)
+// ----------------------------------------------------------------------------
+
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { supabaseAuth } from '../middleware/auth';
+import type { Env, Variables } from '../env';
+
+export const soDropdownOptions = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+soDropdownOptions.use('*', supabaseAuth);
+
+const CATEGORIES = ['customer_type', 'building_type', 'relationship', 'payment_method'] as const;
+type Category = (typeof CATEGORIES)[number];
+const categoryEnum = z.enum(CATEGORIES);
+
+const createSchema = z.object({
+  category:  categoryEnum,
+  value:     z.string().trim().min(1),
+  label:     z.string().trim().min(1),
+  sortOrder: z.number().int().optional(),
+  active:    z.boolean().optional(),
+});
+
+const updateSchema = z.object({
+  value:     z.string().trim().min(1).optional(),
+  label:     z.string().trim().min(1).optional(),
+  sortOrder: z.number().int().optional(),
+  active:    z.boolean().optional(),
+});
+
+type DbRow = {
+  id: string;
+  category: string;
+  value: string;
+  label: string;
+  sort_order: number;
+  active: boolean;
+};
+
+const toApi = (row: DbRow) => ({
+  id:        row.id,
+  category:  row.category,
+  value:     row.value,
+  label:     row.label,
+  sortOrder: row.sort_order,
+  active:    row.active,
+});
+
+// GET — either single-category list or all-categories grouped.
+soDropdownOptions.get('/', async (c) => {
+  const categoryParam = c.req.query('category');
+  const includeInactiveParam = c.req.query('includeInactive');
+  const includeInactive = includeInactiveParam === '1' || includeInactiveParam === 'true';
+
+  const sb = c.get('supabase');
+
+  if (categoryParam) {
+    const parsed = categoryEnum.safeParse(categoryParam);
+    if (!parsed.success) return c.json({ error: 'invalid_category' }, 400);
+    let q = sb
+      .from('so_dropdown_options')
+      .select('id, category, value, label, sort_order, active')
+      .eq('category', parsed.data)
+      .order('sort_order', { ascending: true })
+      .order('label', { ascending: true });
+    if (!includeInactive) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
+    return c.json({ options: (data ?? []).map((r) => toApi(r as DbRow)) });
+  }
+
+  // All categories grouped — maintenance page consumer wants every row,
+  // including inactive ones, so the user can flip `active` back on.
+  const { data, error } = await sb
+    .from('so_dropdown_options')
+    .select('id, category, value, label, sort_order, active')
+    .order('category', { ascending: true })
+    .order('sort_order', { ascending: true })
+    .order('label', { ascending: true });
+  if (error) return c.json({ error: 'fetch_failed', reason: error.message }, 500);
+
+  const grouped: Record<Category, ReturnType<typeof toApi>[]> = {
+    customer_type:  [],
+    building_type:  [],
+    relationship:   [],
+    payment_method: [],
+  };
+  for (const r of (data ?? []) as DbRow[]) {
+    if ((CATEGORIES as readonly string[]).includes(r.category)) {
+      grouped[r.category as Category].push(toApi(r));
+    }
+  }
+  return c.json({ options: grouped });
+});
+
+// POST / — create a new option.
+soDropdownOptions.post('/', async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = createSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
+
+  const sb = c.get('supabase');
+  const { data, error } = await sb
+    .from('so_dropdown_options')
+    .insert({
+      category:   parsed.data.category,
+      value:      parsed.data.value,
+      label:      parsed.data.label,
+      sort_order: parsed.data.sortOrder ?? 0,
+      active:     parsed.data.active ?? true,
+    })
+    .select('id, category, value, label, sort_order, active')
+    .single();
+  if (error) {
+    // 23505 = unique_violation (category, value)
+    const code = (error as { code?: string }).code;
+    if (code === '23505') {
+      return c.json({ error: 'duplicate_value', reason: 'A row with this (category, value) already exists.' }, 409);
+    }
+    return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  }
+  return c.json({ option: toApi(data as DbRow) });
+});
+
+// PATCH /:id — update fields.
+soDropdownOptions.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = updateSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
+
+  const patch: Record<string, unknown> = {};
+  if (parsed.data.value     !== undefined) patch.value      = parsed.data.value;
+  if (parsed.data.label     !== undefined) patch.label      = parsed.data.label;
+  if (parsed.data.sortOrder !== undefined) patch.sort_order = parsed.data.sortOrder;
+  if (parsed.data.active    !== undefined) patch.active     = parsed.data.active;
+  if (Object.keys(patch).length === 0) return c.json({ ok: true, changed: 0 });
+
+  const sb = c.get('supabase');
+  const { data, error } = await sb
+    .from('so_dropdown_options')
+    .update(patch)
+    .eq('id', id)
+    .select('id, category, value, label, sort_order, active')
+    .maybeSingle();
+  if (error) {
+    const code = (error as { code?: string }).code;
+    if (code === '23505') {
+      return c.json({ error: 'duplicate_value', reason: 'A row with this (category, value) already exists.' }, 409);
+    }
+    return c.json({ error: 'update_failed', reason: error.message }, 500);
+  }
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  return c.json({ option: toApi(data as DbRow) });
+});
+
+// DELETE /:id — hard delete (seed list is short; PATCH active=false works
+// when commander wants the value preserved for historical SOs).
+soDropdownOptions.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  const sb = c.get('supabase');
+  const { error } = await sb.from('so_dropdown_options').delete().eq('id', id);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  return c.json({ ok: true });
+});

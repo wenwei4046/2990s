@@ -18,7 +18,7 @@
 
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import {
@@ -37,6 +37,14 @@ import {
   useCreateLocality, useUpdateLocality, useDeleteLocality,
   type LocalityRow,
 } from '../lib/localities-queries';
+import {
+  useAllSoDropdownOptions,
+  useCreateSoDropdownOption,
+  useUpdateSoDropdownOption,
+  useDeleteSoDropdownOption,
+  type SoDropdownCategory,
+  type SoDropdownOption,
+} from '../lib/so-dropdown-options-queries';
 import styles from './SalesOrderMaintenance.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -55,7 +63,8 @@ export const SalesOrderMaintenance = () => {
           <div>
             <h1 className={styles.title}>Sales Order Maintenance</h1>
             <p className={styles.subtitle}>
-              State → warehouse mapping · cascading dropdowns for customer addresses
+              State → warehouse mapping · cascading address dropdowns ·
+              customer / building / relationship / payment dropdowns
             </p>
           </div>
         </div>
@@ -372,6 +381,13 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
           </div>
         )}
       </div>
+
+      {/* ── Dropdowns CRUD (Task #118) ─────────────────────────────────
+          One mini-table per category. Backed by so_dropdown_options
+          (migration 0081) — replaces the four hardcoded TS consts that
+          used to drive customer type / building type / relationship /
+          payment method dropdowns. */}
+      <DropdownsSection canEdit={canEdit} />
     </>
   );
 };
@@ -543,3 +559,339 @@ const WarehouseCrudSection = ({ canEdit }: { canEdit: boolean }) => {
     </>
   );
 };
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Dropdowns section — 4 collapsible sub-cards (one per category) backed
+   by so_dropdown_options. Each card renders a mini-table with edit-in-
+   place rows + an "+ Add option" affordance inline at the bottom.
+   ────────────────────────────────────────────────────────────────────── */
+
+const DROPDOWN_CARDS: Array<{ category: SoDropdownCategory; title: string; help: string }> = [
+  {
+    category: 'customer_type',
+    title:    'Customer Type',
+    help:     'Shown in the Customer card of SO Detail + New SO (NEW / EXISTING).',
+  },
+  {
+    category: 'building_type',
+    title:    'Building Type',
+    help:     'Shown in the Order Info card. Condo / Landed / Apartment etc.',
+  },
+  {
+    category: 'relationship',
+    title:    'Relationship',
+    help:     'Shown in the Emergency Contact card on New SO.',
+  },
+  {
+    category: 'payment_method',
+    title:    'Payment Method',
+    help: 'Shown in the Payments table dropdown. Note: each label still maps to ' +
+          'the internal payment_method enum (merchant / transfer / cash) via the ' +
+          'PaymentsTable labelToApi() mapper — adding a brand new value here ' +
+          'without updating that mapper will default to "cash".',
+  },
+];
+
+const DropdownsSection = ({ canEdit }: { canEdit: boolean }) => {
+  const all = useAllSoDropdownOptions();
+
+  return (
+    <>
+      <div className={styles.banner} style={{ marginTop: 'var(--space-4)' }}>
+        <strong>Dropdowns.</strong> Edit the values commander sees in the
+        Customer Type / Building Type / Relationship / Payment Method
+        selects on New SO and Edit SO. Used to be hardcoded in code — now
+        editable here. Toggle <em>Active</em> off to hide a value from new
+        SOs while keeping existing rows that reference it valid.
+      </div>
+
+      {all.isLoading ? (
+        <div className={styles.tableCard}>
+          <div className={styles.empty}>Loading dropdowns…</div>
+        </div>
+      ) : (
+        DROPDOWN_CARDS.map((card) => (
+          <DropdownCategoryCard
+            key={card.category}
+            category={card.category}
+            title={card.title}
+            help={card.help}
+            rows={all.data?.[card.category] ?? []}
+            canEdit={canEdit}
+          />
+        ))
+      )}
+    </>
+  );
+};
+
+const DropdownCategoryCard = ({
+  category, title, help, rows, canEdit,
+}: {
+  category: SoDropdownCategory;
+  title:    string;
+  help:     string;
+  rows:     SoDropdownOption[];
+  canEdit:  boolean;
+}) => {
+  const [expanded, setExpanded] = useState(true);
+
+  const createOpt = useCreateSoDropdownOption();
+  const updateOpt = useUpdateSoDropdownOption();
+  const deleteOpt = useDeleteSoDropdownOption();
+
+  // Add-row state
+  const [newValue, setNewValue]    = useState('');
+  const [newLabel, setNewLabel]    = useState('');
+  const [newSort,  setNewSort]     = useState('');
+
+  // Per-row edit buffers (uncommitted edits) — keyed by id.
+  const [edits, setEdits] = useState<Record<string, Partial<{ value: string; label: string; sortOrder: number }>>>({});
+
+  const commitRow = (row: SoDropdownOption) => {
+    const buf = edits[row.id];
+    if (!buf) return;
+    const patch: Parameters<typeof updateOpt.mutate>[0] = { id: row.id };
+    if (buf.value     !== undefined && buf.value     !== row.value)     patch.value     = buf.value;
+    if (buf.label     !== undefined && buf.label     !== row.label)     patch.label     = buf.label;
+    if (buf.sortOrder !== undefined && buf.sortOrder !== row.sortOrder) patch.sortOrder = buf.sortOrder;
+    if (Object.keys(patch).length === 1) {
+      // no real change — just clear the buffer
+      setEdits((e) => { const next = { ...e }; delete next[row.id]; return next; });
+      return;
+    }
+    updateOpt.mutate(patch, {
+      onSuccess: () => {
+        setEdits((e) => { const next = { ...e }; delete next[row.id]; return next; });
+      },
+      onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`),
+    });
+  };
+
+  const toggleActive = (row: SoDropdownOption) => {
+    updateOpt.mutate(
+      { id: row.id, active: !row.active },
+      { onError: (err) => window.alert(`Update failed: ${(err as Error).message ?? err}`) },
+    );
+  };
+
+  const removeRow = (row: SoDropdownOption) => {
+    if (!confirm(`Delete "${row.label}" from ${title}? Historical SOs that reference "${row.value}" stay valid; this just removes the option from new dropdowns.`)) return;
+    deleteOpt.mutate(row.id, {
+      onError: (err) => window.alert(`Delete failed: ${(err as Error).message ?? err}`),
+    });
+  };
+
+  const addRow = () => {
+    const value = newValue.trim();
+    const label = newLabel.trim();
+    if (!value || !label) {
+      window.alert('Both Value and Label are required.');
+      return;
+    }
+    const sortOrder = newSort.trim() ? Number(newSort.trim()) : (rows.length + 1);
+    if (Number.isNaN(sortOrder)) {
+      window.alert('Sort must be a number.');
+      return;
+    }
+    createOpt.mutate(
+      { category, value, label, sortOrder },
+      {
+        onSuccess: () => { setNewValue(''); setNewLabel(''); setNewSort(''); },
+        onError:   (err) => window.alert(`Add failed: ${(err as Error).message ?? err}`),
+      },
+    );
+  };
+
+  return (
+    <div className={styles.tableCard} style={{ marginBottom: 'var(--space-3)' }}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          width: '100%',
+          background: 'var(--bg-alt)',
+          border: 'none',
+          borderBottom: '1px solid var(--line)',
+          padding: 'var(--space-3) var(--space-4)',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontFamily: 'var(--font-button)',
+          fontWeight: 600,
+          fontSize: 'var(--fs-13)',
+          color: 'var(--fg)',
+        }}
+      >
+        {expanded
+          ? <ChevronDown  size={14} strokeWidth={1.75} />
+          : <ChevronRight size={14} strokeWidth={1.75} />}
+        <span>{title}</span>
+        <span style={{ color: 'var(--fg-muted)', fontWeight: 400, fontSize: 'var(--fs-12)' }}>
+          · {rows.length} {rows.length === 1 ? 'option' : 'options'}
+        </span>
+      </button>
+
+      {expanded && (
+        <>
+          <div style={{
+            padding: 'var(--space-2) var(--space-4)',
+            fontSize: 'var(--fs-12)',
+            color: 'var(--fg-muted)',
+            background: 'var(--c-cream)',
+            borderBottom: '1px solid var(--line)',
+          }}>
+            {help}
+          </div>
+
+          {rows.length === 0 ? (
+            <div className={styles.empty}>No options yet — add one below.</div>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th style={{ width: '25%' }}>Value</th>
+                  <th style={{ width: '40%' }}>Label</th>
+                  <th style={{ width: 80 }}>Sort</th>
+                  <th style={{ width: 80 }}>Active</th>
+                  {canEdit && <th style={{ width: 60 }} aria-label="actions" />}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const buf = edits[row.id] ?? {};
+                  const curValue     = buf.value     ?? row.value;
+                  const curLabel     = buf.label     ?? row.label;
+                  const curSortOrder = buf.sortOrder ?? row.sortOrder;
+                  const dirty =
+                    curValue     !== row.value ||
+                    curLabel     !== row.label ||
+                    curSortOrder !== row.sortOrder;
+                  return (
+                    <tr key={row.id}>
+                      <td>
+                        <input
+                          className={styles.input}
+                          value={curValue}
+                          disabled={!canEdit || updateOpt.isPending}
+                          onChange={(e) => setEdits((s) => ({
+                            ...s, [row.id]: { ...s[row.id], value: e.target.value },
+                          }))}
+                          onBlur={() => commitRow(row)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className={styles.input}
+                          value={curLabel}
+                          disabled={!canEdit || updateOpt.isPending}
+                          onChange={(e) => setEdits((s) => ({
+                            ...s, [row.id]: { ...s[row.id], label: e.target.value },
+                          }))}
+                          onBlur={() => commitRow(row)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          className={styles.input}
+                          value={curSortOrder}
+                          disabled={!canEdit || updateOpt.isPending}
+                          onChange={(e) => setEdits((s) => ({
+                            ...s, [row.id]: { ...s[row.id], sortOrder: Number(e.target.value) || 0 },
+                          }))}
+                          onBlur={() => commitRow(row)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') commitRow(row); }}
+                        />
+                      </td>
+                      <td>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={row.active}
+                            disabled={!canEdit || updateOpt.isPending}
+                            onChange={() => toggleActive(row)}
+                          />
+                          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                            {row.active ? 'Yes' : 'No'}
+                          </span>
+                        </label>
+                      </td>
+                      {canEdit && (
+                        <td>
+                          {dirty && (
+                            <button
+                              type="button"
+                              className={styles.editBtn}
+                              disabled={updateOpt.isPending}
+                              onClick={() => commitRow(row)}
+                              style={{ marginRight: 4 }}
+                            >
+                              Save
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className={styles.editBtn}
+                            disabled={deleteOpt.isPending}
+                            onClick={() => removeRow(row)}
+                            aria-label="Delete option"
+                          >
+                            <Trash2 size={14} strokeWidth={1.75} />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          {canEdit && (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1.5fr 80px auto',
+              gap: 'var(--space-2)',
+              padding: 'var(--space-3) var(--space-4)',
+              background: 'var(--bg-alt)',
+              borderTop: rows.length > 0 ? '1px solid var(--line)' : undefined,
+            }}>
+              <input
+                className={styles.input}
+                placeholder="Value (e.g. NEW)"
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+              />
+              <input
+                className={styles.input}
+                placeholder="Label (e.g. New customer)"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+              />
+              <input
+                type="number"
+                className={styles.input}
+                placeholder="Sort"
+                value={newSort}
+                onChange={(e) => setNewSort(e.target.value)}
+              />
+              <Button
+                variant="primary"
+                size="md"
+                onClick={addRow}
+                disabled={createOpt.isPending}
+              >
+                <Plus size={14} strokeWidth={1.75} />
+                Add
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
