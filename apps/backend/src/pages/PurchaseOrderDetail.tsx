@@ -29,6 +29,7 @@ import {
   useDeletePurchaseOrderItem,
   useSubmitPurchaseOrder,
   useCancelPurchaseOrder,
+  useDeletePurchaseOrder,
   useSuppliers,
   useSupplierDetail,
   useConvertPoFromSo,
@@ -74,6 +75,7 @@ export const PurchaseOrderDetail = () => {
   const convertFromSo = useConvertPoFromSo();
   const submit = useSubmitPurchaseOrder();
   const cancel = useCancelPurchaseOrder();
+  const deletePo = useDeletePurchaseOrder();
   const addItem = useAddPurchaseOrderItem();
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
@@ -212,11 +214,36 @@ export const PurchaseOrderDetail = () => {
               <span>{submit.isPending ? 'Submitting…' : 'Submit'}</span>
             </Button>
           )}
-          {po.status === 'DRAFT' && (
+          {/* PR — Commander 2026-05-27: "Cancel/Delete PO 没反应".
+              Cancel: extended to any pre-receipt status. API guards: blocked
+              when status = RECEIVED.
+              Delete: hard-delete only for DRAFT or CANCELLED (no downstream
+              GRN/PI). API rejects otherwise with a friendly message. */}
+          {(po.status === 'DRAFT' || po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
-              onClick={() => { if (confirm(`Cancel PO ${po.po_number}?`)) cancel.mutate(po.id); }}>
+              onClick={() => {
+                if (!confirm(`Cancel PO ${po.po_number}? This sets status to CANCELLED — line items + linked docs stay for audit.`)) return;
+                cancel.mutate(po.id, {
+                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                });
+              }}
+              disabled={cancel.isPending}>
               <Ban {...ICON} />
-              <span>Cancel</span>
+              <span>{cancel.isPending ? 'Cancelling…' : 'Cancel'}</span>
+            </Button>
+          )}
+          {(po.status === 'DRAFT' || po.status === 'CANCELLED') && (
+            <Button variant="ghost" size="md"
+              onClick={() => {
+                if (!confirm(`Permanently delete PO ${po.po_number}? This removes the header + all line items and cannot be undone.`)) return;
+                deletePo.mutate(po.id, {
+                  onSuccess: () => navigate('/purchase-orders'),
+                  onError:   (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),
+                });
+              }}
+              disabled={deletePo.isPending}>
+              <Trash2 {...ICON} />
+              <span>{deletePo.isPending ? 'Deleting…' : 'Delete'}</span>
             </Button>
           )}
           {/* PR — Phase 2: "Receive Goods" → /grns/new?poId=X. Only shown
