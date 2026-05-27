@@ -1264,10 +1264,14 @@ const seedCompartmentMeta = (code: string): CompartmentMeta => {
   const norm = normalizeCompartmentCode(code);
   const mod  = SOFA_MODULE_BY_NORM_ID.get(norm);
   if (!mod) return {};
-  // 1B + 2B got bespoke SVG redesigns showing the bench cushion side
-  // explicitly (commander 2026-05-27 — POS PNGs didn't differentiate from
-  // 1A/2A). Other modules still use the POS-canonical PNG.
-  const REDESIGNED_AS_SVG = new Set(['1B-LHF', '1B-RHF', '2B-LHF', '2B-RHF']);
+  // 1B + 2B + CNR got bespoke SVG redesigns (commander 2026-05-27):
+  // - 1B/2B: POS PNGs didn't differentiate from 1A/2A; new SVG shows the
+  //   wider "Seat Bench Cushion" in place of a hard armrest.
+  // - CNR: new SVG shows the L-shaped backrest (two adjacent sides) +
+  //   "CORNER" label so commander sees it's the 90° connector, not a
+  //   chaise or console.
+  // Other modules still load POS-canonical PNGs.
+  const REDESIGNED_AS_SVG = new Set(['1B-LHF', '1B-RHF', '2B-LHF', '2B-RHF', 'CNR']);
   const ext = REDESIGNED_AS_SVG.has(mod.id) ? 'svg' : 'png';
   return {
     imageKey:    `sofa-modules/${mod.id}.${ext}`,
