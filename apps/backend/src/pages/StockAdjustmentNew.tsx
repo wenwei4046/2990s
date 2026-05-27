@@ -277,7 +277,7 @@ export const StockAdjustmentNew = () => {
                 placeholder="Why this adjustment? e.g. 'Damaged in transit, lot #4', 'Found 2 PCS during recount on 27/05'"
                 className={styles.fieldInput}
                 rows={3}
-                style={{ minHeight: 80, resize: 'vertical' }}
+                style={{ minHeight: 52, resize: 'vertical' }}
               />
             </label>
           </div>

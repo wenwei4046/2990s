@@ -374,7 +374,7 @@ export const PurchaseOrderNew = () => {
                   .filter(Boolean).join(', ')}
                 placeholder="(auto-filled when supplier selected)"
                 className={styles.fieldInput}
-                style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)', minHeight: 80, resize: 'vertical' }}
+                style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)', minHeight: 52, resize: 'vertical' }}
                 rows={3}
               />
             </label>
@@ -414,7 +414,7 @@ export const PurchaseOrderNew = () => {
                 placeholder="Free text — supplier instructions, internal notes…"
                 className={styles.fieldInput}
                 rows={3}
-                style={{ minHeight: 80, resize: 'vertical' }}
+                style={{ minHeight: 52, resize: 'vertical' }}
               />
             </label>
           </div>
