@@ -18,6 +18,7 @@ import { pos } from './routes/pos';
 import { mfgProducts } from './routes/mfg-products';
 import { productModels } from './routes/product-models';
 import { maintenanceConfig } from './routes/maintenance-config';
+import { sofaCompartmentPhotos } from './routes/sofa-compartment-photos';
 import { sofaCombos } from './routes/sofa-combos';
 import { fabricTracking } from './routes/fabric-tracking';
 import { suppliers } from './routes/suppliers';
@@ -75,6 +76,11 @@ app.route('/delivery-fees', deliveryFees);
 app.route('/pos', pos);
 app.route('/mfg-products', mfgProducts);
 app.route('/product-models', productModels);
+// PR — Commander 2026-05-28: Sofa Compartment photos. Mount BEFORE
+// /maintenance-config so the public GET .../photo/:key proxy doesn't get
+// caught by maintenance-config's app-wide supabaseAuth middleware. The
+// authed POST/DELETE routes inside this sub-app re-apply supabaseAuth.
+app.route('/maintenance-config/sofa-compartments', sofaCompartmentPhotos);
 app.route('/maintenance-config', maintenanceConfig);
 app.route('/sofa-combos', sofaCombos);
 app.route('/fabric-tracking', fabricTracking);

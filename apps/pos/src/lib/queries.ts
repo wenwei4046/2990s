@@ -548,6 +548,176 @@ export const useMfgCatalog = () =>
     },
   });
 
+/* ─── Sofa Customizer per-Model data (PR — Commander 2026-05-28) ──────────
+ *
+ * The POS Configurator's Custom build mode used to read the palette from
+ * the LEGACY product_compartments table (per-Model active/price ticks). The
+ * source of truth is now Backend → Products → Modular → [Model] → Allowed
+ * Options (commander ticks which compartments + sizes this Model offers).
+ *
+ * This hook resolves a leadSkuId (the link target on /configure/:id) up to
+ * the Model row's allowed_options, then ANDs that against the master
+ * maintenance config's sofaCompartments pool + sofaCompartmentMeta map.
+ * Output: an array of ResolvedCompartment rows the CustomBuilder palette
+ * can render (image src, description, default price), grouped by the POS
+ * palette buckets (1-seater / 2-seater / Corner / L-Shape / Accessory).
+ *
+ * The configurator can pass this data into <CustomBuilder modelCustomizer />
+ * as an override layer; absent the prop the builder falls back to the
+ * legacy pricing.compartments filter + bundled /sofa-modules/*.png assets.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+export interface ResolvedSofaCompartment {
+  /** Raw code as commander typed it (e.g. '1A-LHF' or '1A(LHF)'). */
+  code:        string;
+  /** Normalized code (collapsed to dash form) — matches shared SOFA_MODULES.id. */
+  normalizedCode: string;
+  /** Free-text label for the palette card. */
+  label:       string;
+  /** Default price in cents (1 RM = 100). 0 = no default. */
+  priceSen:    number;
+  /** Fully-resolved image URL — Worker proxy when uploaded, /sofa-modules/<id>.png
+   *  fallback otherwise. null = no image. */
+  imageUrl:    string | null;
+  /** POS palette group (1-seater / 2-seater / Corner / L-Shape / Accessory / Other). */
+  group:       'Other' | '1-seater' | '2-seater' | 'Corner' | 'L-Shape' | 'Accessory';
+}
+
+export interface SofaCustomizerData {
+  /** Compartments commander ticked on this Model, intersected with the master
+   *  compartment pool. Each row carries the resolved photo + price + label. */
+  compartments: ResolvedSofaCompartment[];
+  /** Seat-size inches commander ticked (24/26/28/30/32/35). */
+  sizes:        string[];
+  /** Leg height options ticked (subset of master pool). */
+  legHeights:   string[];
+  /** Special options ticked. */
+  specials:     string[];
+  /** The Model row that resolved (so caller can show Model name / branding). */
+  modelId:      string;
+  modelName:    string;
+  modelCode:    string;
+}
+
+interface MaintenanceCompartmentMeta {
+  imageKey?:          string;
+  description?:       string;
+  defaultPriceCenti?: number;
+}
+
+/** Resolve a Maintenance compartment imageKey to a fetchable URL.
+ *   - Worker-uploaded photos (`sofa-compartments/{code}/...`) go through the
+ *     public Worker proxy so the POS <img src> works from any origin.
+ *   - Legacy bundled paths (`sofa-modules/...`) go through /public.
+ *   - Absolute http(s) URLs pass through. */
+function resolveCompartmentPhoto(code: string, imageKey: string | undefined): string | null {
+  if (!imageKey) return null;
+  if (/^https?:\/\//i.test(imageKey)) return imageKey;
+  if (imageKey.startsWith('sofa-compartments/')) {
+    if (!API_URL) return null;
+    return `${API_URL}/maintenance-config/sofa-compartments/${encodeURIComponent(code)}/photo/${encodeURIComponent(imageKey)}`;
+  }
+  return `/${imageKey}`;
+}
+
+/** Classify a compartment code into the POS palette group. Mirrors
+ *  `classifySofaCompartment` from @2990s/shared so the hook stays usable
+ *  without importing the heavy sofa-build module here. */
+function classifyCompartmentCode(rawCode: string): ResolvedSofaCompartment['group'] {
+  const norm = rawCode.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+  if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
+  if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';
+  if (/^STOOL|^Console|^WC-/i.test(norm)) return 'Accessory';
+  if (/^2/.test(norm)) return '2-seater';
+  if (/^1/.test(norm)) return '1-seater';
+  return 'Other';
+}
+
+/** Fetch + resolve everything the Custom Builder needs per the Model
+ *  commander ticked from. Pass any SKU id from the catalog click — we
+ *  follow `mfg_products.model_id → product_models` to land on the Model.
+ *  When the SKU has no model_id (orphan, predates the Model layer), the
+ *  query resolves to null and the configurator falls back to its legacy
+ *  per-Model `products` row. */
+export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
+  useQuery({
+    enabled: !!leadSkuId,
+    queryKey: ['sofa-customizer-data', leadSkuId],
+    queryFn: async (): Promise<SofaCustomizerData | null> => {
+      if (!leadSkuId) return null;
+
+      // Step 1: resolve the SKU → Model. mfg_products carries the model_id FK.
+      const { data: sku, error: skuErr } = await supabase
+        .from('mfg_products')
+        .select('id, model_id, category, product_models:model_id ( id, name, model_code, allowed_options, active )')
+        .eq('id', leadSkuId)
+        .maybeSingle();
+      if (skuErr) throw skuErr;
+      if (!sku) return null;
+
+      const model = Array.isArray(sku.product_models)
+        ? sku.product_models[0]
+        : sku.product_models;
+      if (!model || sku.category !== 'SOFA') return null;
+
+      const allowed = (model.allowed_options ?? {}) as {
+        compartments?: string[];
+        sizes?:        string[];
+        leg_heights?:  string[];
+        specials?:     string[];
+      };
+
+      // Step 2: pull the current effective master maintenance config so we
+      // can resolve compartment images + descriptions + default prices.
+      const { data: cfgRow, error: cfgErr } = await supabase
+        .from('maintenance_config_history')
+        .select('config')
+        .eq('scope', 'master')
+        .lte('effective_from', new Date().toISOString().slice(0, 10))
+        .order('effective_from', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cfgErr) throw cfgErr;
+      const cfg = (cfgRow?.config ?? {}) as {
+        sofaCompartmentMeta?: Record<string, MaintenanceCompartmentMeta>;
+        sofaCompartments?:    string[];
+      };
+      const metaMap = cfg.sofaCompartmentMeta ?? {};
+
+      const tickedCompartments = allowed.compartments ?? [];
+      const compartments: ResolvedSofaCompartment[] = tickedCompartments.map((rawCode) => {
+        const meta = metaMap[rawCode] ?? {};
+        // Legacy bundled SVG fallback — when commander hasn't uploaded a
+        // photo yet, render the design-system's hand-drawn SVG so the
+        // palette card isn't empty. Maintenance UI auto-seeds the imageKey
+        // (defaulting to `sofa-modules/<NORM_ID>.svg`) on read but stored
+        // overrides may omit it.
+        const norm = rawCode.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+        const imageKey = meta.imageKey ?? `sofa-modules/${norm}.svg`;
+        return {
+          code:           rawCode,
+          normalizedCode: norm,
+          label:          meta.description ?? rawCode,
+          priceSen:       meta.defaultPriceCenti ?? 0,
+          imageUrl:       resolveCompartmentPhoto(rawCode, imageKey),
+          group:          classifyCompartmentCode(rawCode),
+        };
+      });
+
+      return {
+        compartments,
+        sizes:      allowed.sizes ?? [],
+        legHeights: allowed.leg_heights ?? [],
+        specials:   allowed.specials ?? [],
+        modelId:    model.id,
+        modelName:  model.name,
+        modelCode:  model.model_code,
+      };
+    },
+    staleTime: 30_000,
+  });
+
 /** Realtime invalidate on mfg_products + product_models edits so commander's
  *  Backend changes land on the POS catalog within ~300ms. Mirrors the
  *  prototype's localStorage push but via Supabase Realtime. */
@@ -611,6 +781,32 @@ export const useLocalities = () =>
       return all;
     },
   });
+
+/** PR — Commander 2026-05-28: realtime invalidate the sofa customizer
+ *  cache whenever commander edits the Model row (allowed_options) OR the
+ *  master maintenance_config_history row (compartment meta). Mirrors the
+ *  catalog realtime hook; mount inside the Configurator so a price/photo
+ *  tweak in the Backend lands within ~300ms. */
+export const useSofaCustomizerRealtime = (leadSkuId: string | undefined) => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!leadSkuId) return;
+    const channel = supabase
+      .channel(`sofa-customizer-${leadSkuId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'product_models' },
+        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'maintenance_config_history' },
+        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
+      )
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [qc, leadSkuId]);
+};
 
 // Realtime invalidate any product_bundles / product_compartments / product_size_variants
 // row matching this productId. Used inside Configurator so Backend price tweaks

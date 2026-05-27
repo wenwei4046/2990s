@@ -145,6 +145,52 @@ export const findModule = (id: string): SofaModuleSpec | undefined => MODULE_BY_
 
 export const isAccessoryModule = (id: string): boolean => MODULE_BY_ID.get(id)?.accessory === true;
 
+/* ─── Maintenance compartment code helpers (PR — Commander 2026-05-28) ──
+ *
+ * Commander's Maintenance compartment pool stores codes in either dash form
+ * (`1A-LHF`) or parens form (`1A(LHF)`). The POS shared lib expects the
+ * dash form. `normalizeCompartmentCode` collapses both to the dash form so
+ * lookups (findModule, palette filtering) hit regardless of which form
+ * commander typed.
+ *
+ * `classifySofaCompartment` groups a code into the POS palette buckets so
+ * CustomBuilder can build "1-SEATER / 2-SEATER / CORNER / L-SHAPE / OTHER"
+ * sections from the Model's allowed-options list. Mirrors SOFA_MODULES.group
+ * for codes the shared lib already knows about; codes unique to the
+ * Maintenance pool (recliner variants like `1A(P)(LHF)`, the `Console`
+ * alias) fall back to a prefix heuristic so unknown commander codes still
+ * show up under the right header.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+export const normalizeCompartmentCode = (raw: string): string =>
+  raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+
+export type SofaCompartmentGroup =
+  | '1-seater'
+  | '2-seater'
+  | 'Corner'
+  | 'L-Shape'
+  | 'Accessory'
+  | 'Other';
+
+/** Best-effort classifier for a compartment code → POS palette group.
+ *  Tries SOFA_MODULES first (canonical), falls back to a prefix heuristic
+ *  so any recliner / console variant still lands in a sensible group. */
+export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup => {
+  const norm = normalizeCompartmentCode(rawCode);
+  const known = MODULE_BY_ID.get(norm);
+  if (known) return known.group;
+  // Heuristic fallback for codes outside SOFA_MODULES (recliner variants,
+  // Console alias, etc.). Matches the descriptions in
+  // COMPARTMENT_DESCRIPTION_OVERRIDE on the Backend side.
+  if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
+  if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';
+  if (/^STOOL|^Console|^WC-/i.test(norm)) return 'Accessory';
+  if (/^2/.test(norm)) return '2-seater';
+  if (/^1/.test(norm)) return '1-seater';
+  return 'Other';
+};
+
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
 
 const RECLINER_RE = /^(1[AB]-[LR]HF|1NA|2[AB]-[LR]HF|2NA)$/;
