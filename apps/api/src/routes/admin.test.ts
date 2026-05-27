@@ -28,6 +28,11 @@ const baseEnv = {
   ALLOWED_ORIGINS: '*',
   R2_BUCKET_NAME: 't', R2_ENDPOINT: 'r2', R2_ACCESS_KEY_ID: 'k', R2_SECRET_ACCESS_KEY: 's',
   SLIPS: {} as any,
+  // 2026-05-27 (role-based redirect) — both portals must be set so the
+  // route's per-role redirectTo selection has somewhere to point. Tests
+  // below assert on the exact URL passed into inviteUserByEmail.
+  BACKEND_PORTAL_URL: 'https://backend.test',
+  POS_PORTAL_URL: 'https://pos.test',
 } as unknown as Env;
 
 const ADMIN_USER_ID = '00000000-0000-0000-0000-000000000001';
@@ -114,6 +119,49 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
     expect(res.status).toBe(201);
     expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
     expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-05-27 (role-based redirect) — magic-link `redirectTo` is per-role.
+  // POS-only roles anchor to POS_PORTAL_URL so the invited sales person
+  // lands in the POS app. Backend roles still anchor to BACKEND_PORTAL_URL.
+  it('sales role uses POS_PORTAL_URL in redirectTo', async () => {
+    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-pos' } }, error: null });
+    adminFromMock.mockImplementation(() => ({
+      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-pos' }, error: null }) }) }),
+    }));
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'AW', name: 'Aisha Wong', role: 'sales',
+        email: 'aisha@2990s.my', initials: 'AW', color: '#E86B3A',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
+    const opts = inviteByEmailMock.mock.calls[0]![1];
+    expect(opts.redirectTo).toBe('https://pos.test/set-password');
+  });
+
+  it('admin role uses BACKEND_PORTAL_URL in redirectTo', async () => {
+    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-be' } }, error: null });
+    adminFromMock.mockImplementation(() => ({
+      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-be' }, error: null }) }) }),
+    }));
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'LO', name: 'Loo', role: 'admin',
+        email: 'loo@2990s.my', initials: 'LO', color: '#221F20',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
+    const opts = inviteByEmailMock.mock.calls[0]![1];
+    expect(opts.redirectTo).toBe('https://backend.test/set-password');
   });
 
   it('rejects invite without email (400 — email is now required for all roles)', async () => {

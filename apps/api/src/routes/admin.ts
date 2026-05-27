@@ -104,12 +104,20 @@ admin.post('/staff', async (c) => {
 
   // Unified invite path — every role, POS or Backend, gets a magic-link
   // email. The invited user starts with `password_set: false` so the
-  // Backend Layout auto-redirects them to /set-password on first sign-in
-  // (see apps/backend/src/components/Layout.tsx). `redirectTo` anchors the
-  // magic link to the production portal so the email link is not blank /
-  // not localhost when Supabase's Site URL defaults are wrong.
+  // corresponding portal's AuthGate / Layout auto-redirects them to
+  // /set-password on first sign-in.
+  //
+  // 2026-05-27 (role-based redirect) — `redirectTo` is now per-role:
+  // POS-only roles (sales / sales_executive / outlet_manager) land on the
+  // POS portal so they can take orders immediately after onboarding.
+  // Backend roles (admin / sales_director / coordinator / finance /
+  // showroom_lead) land on the Backend portal. Both URLs must be on the
+  // Supabase Auth → URL Configuration → Redirect URLs allow-list.
+  const POS_ONLY_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager']);
   const email = input.email;
-  const portal = c.env.BACKEND_PORTAL_URL;
+  const portal = POS_ONLY_ROLES.has(input.role)
+    ? c.env.POS_PORTAL_URL
+    : c.env.BACKEND_PORTAL_URL;
   const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
     email,
     {
