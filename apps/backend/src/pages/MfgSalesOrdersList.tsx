@@ -26,7 +26,7 @@
 // per-row context menu gated by current status.
 
 import { useMemo, useState } from 'react';
-import type { CSSProperties, JSX } from 'react';
+import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
@@ -255,6 +255,125 @@ const TFOOT_LABEL: CSSProperties = {
   textTransform: 'uppercase', color: 'var(--fg-muted)',
 };
 
+/* Issue #4 fix (so-list-pixel-perfect-houzs) — Houzs uses pill-style
+   selects: `h-8 rounded-md border-[#DDE5E5] bg-white pl-2.5 pr-7
+   text-[11px] font-semibold text-gray-600 appearance-none` + custom
+   caret SVG. Match exactly so dropdowns look identical to Houzs.
+   Caret is a 10x6 chevron-down inlined as base64-free data URI. */
+const HOUZS_CARET = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none'><path d='M1 1l4 4 4-4' stroke='%23878D8D' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")`;
+const HOUZS_SELECT: CSSProperties = {
+  height: 32,
+  padding: '0 28px 0 10px',
+  background: `#FFFFFF ${HOUZS_CARET} no-repeat right 10px center / 10px 6px`,
+  border: '1px solid #DDE5E5',
+  borderRadius: 6,
+  fontFamily: 'var(--font-sans)',
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#4B5563',
+  outline: 'none',
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  MozAppearance: 'none',
+  cursor: 'pointer',
+  lineHeight: '30px',
+  minWidth: 130,
+};
+const HOUZS_INPUT_DATE: CSSProperties = {
+  height: 32,
+  padding: '0 10px',
+  background: '#FFFFFF',
+  border: '1px solid #DDE5E5',
+  borderRadius: 6,
+  fontFamily: 'var(--font-sans)',
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#4B5563',
+  outline: 'none',
+  cursor: 'pointer',
+  lineHeight: '30px',
+};
+
+/* Issue #3 fix (so-list-pixel-perfect-houzs) — make the filter row
+   reorderable via HTML5 drag-and-drop. Each filter is wrapped in a
+   <DraggableFilter> that listens for dragstart/drop on a sibling and
+   swaps their positions in the `filterOrder` state (persisted to
+   localStorage so the user's preferred order survives reload).
+
+   The wrapper renders a small `::` grab handle so the affordance is
+   visible without inflating the filter footprint. */
+type FilterId = 'search' | 'brand' | 'agent' | 'venue' | 'dateRange';
+const DEFAULT_FILTER_ORDER: FilterId[] = ['search', 'brand', 'agent', 'venue', 'dateRange'];
+const FILTER_ORDER_KEY = 'pr-g.so-list.filter-order.v1';
+
+const readFilterOrder = (): FilterId[] => {
+  if (typeof window === 'undefined') return DEFAULT_FILTER_ORDER;
+  try {
+    const raw = window.localStorage.getItem(FILTER_ORDER_KEY);
+    if (!raw) return DEFAULT_FILTER_ORDER;
+    const parsed = JSON.parse(raw) as FilterId[];
+    // Validate — drop unknowns, append any missing defaults so a future
+    // filter addition shows up without nuking persisted order.
+    const known = new Set<FilterId>(DEFAULT_FILTER_ORDER);
+    const valid = parsed.filter((f): f is FilterId => known.has(f));
+    for (const f of DEFAULT_FILTER_ORDER) if (!valid.includes(f)) valid.push(f);
+    return valid;
+  } catch { return DEFAULT_FILTER_ORDER; }
+};
+
+const DraggableFilter = ({
+  id, order, setOrder, children,
+}: {
+  id: FilterId;
+  order: FilterId[];
+  setOrder: (next: FilterId[]) => void;
+  children: ReactNode;
+}) => {
+  const [over, setOver] = useState(false);
+  const onDragStart = (e: DragEvent<HTMLDivElement>) => {
+    e.dataTransfer.setData('text/x-so-filter', id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setOver(true);
+  };
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setOver(false);
+    const src = e.dataTransfer.getData('text/x-so-filter') as FilterId;
+    if (!src || src === id) return;
+    const next = order.filter((f) => f !== src);
+    const idx = next.indexOf(id);
+    next.splice(idx, 0, src);
+    setOrder(next);
+  };
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={() => setOver(false)}
+      onDrop={onDrop}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '2px 4px 2px 2px',
+        background: over ? 'rgba(232, 107, 58, 0.10)' : 'transparent',
+        borderRadius: 6,
+        cursor: 'grab',
+      }}
+      title="Drag to reorder"
+    >
+      <span aria-hidden style={{
+        color: '#B0B7B7', fontSize: 11, fontWeight: 700,
+        userSelect: 'none', lineHeight: 1,
+        cursor: 'grab', letterSpacing: -2,
+      }}>::</span>
+      {children}
+    </div>
+  );
+};
+
 const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
   const q = useMfgSalesOrderDetail(docNo);
   /* Parallel payments fetch — Houzs PAYMENT column shows
@@ -324,11 +443,21 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
       padding: 'var(--space-2) var(--space-3) var(--space-2) 40px',
       background: 'var(--c-cream)',
     }}>
-      <table style={{
-        width: '100%', borderCollapse: 'collapse',
-        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
-        color: 'var(--c-ink)',
-      }}>
+      {/* Issue #1 fix (so-list-pixel-perfect-houzs) — sub-table sits
+          inside a single <td colSpan> of the parent grid. Without its own
+          horizontal scroll, columns 4-11 (UOM / Qty / Unit Price / Total /
+          Unit Cost / Line Cost / Margin / Payment) get clipped because
+          the parent <td> is constrained to viewport width.
+          Wrap in overflow-x: auto so the drilldown gets its own scrollbar
+          independent of the main grid. Also constrain Description (col 3)
+          width so it stops stealing space from the right-hand cols. */}
+      <div style={{ width: '100%', overflowX: 'auto' }}>
+        <table style={{
+          width: '100%', minWidth: 1180, borderCollapse: 'collapse',
+          fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
+          color: 'var(--c-ink)',
+          tableLayout: 'fixed',
+        }}>
         <thead>
           <tr style={{
             color: 'var(--fg-muted)',
@@ -336,17 +465,17 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             letterSpacing: '0.06em', textTransform: 'uppercase',
             borderBottom: '1px solid rgba(34, 31, 32, 0.10)',
           }}>
-            <th style={{ ...TH_BASE, width: 100 }}>Group</th>
-            <th style={{ ...TH_BASE, width: 140 }}>Item Code</th>
-            <th style={TH_BASE}>Description</th>
+            <th style={{ ...TH_BASE, width: 90 }}>Group</th>
+            <th style={{ ...TH_BASE, width: 130 }}>Item Code</th>
+            <th style={{ ...TH_BASE, width: 240, minWidth: 200, maxWidth: 320 }}>Description</th>
             <th style={{ ...TH_BASE, width: 60 }}>UOM</th>
             <th style={{ ...TH_RIGHT, width: 50 }}>Qty</th>
-            <th style={{ ...TH_RIGHT, width: 100 }}>Unit Price</th>
-            <th style={{ ...TH_RIGHT, width: 100 }}>Total</th>
-            <th style={{ ...TH_RIGHT, width: 100 }}>Unit Cost</th>
-            <th style={{ ...TH_RIGHT, width: 100 }}>Line Cost</th>
-            <th style={{ ...TH_RIGHT, width: 100 }}>Margin</th>
-            <th style={{ ...TH_BASE, width: 180 }}>Payment</th>
+            <th style={{ ...TH_RIGHT, width: 90 }}>Unit Price</th>
+            <th style={{ ...TH_RIGHT, width: 90 }}>Total</th>
+            <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
+            <th style={{ ...TH_RIGHT, width: 90 }}>Line Cost</th>
+            <th style={{ ...TH_RIGHT, width: 90 }}>Margin</th>
+            <th style={{ ...TH_BASE, width: 160 }}>Payment</th>
           </tr>
         </thead>
         <tbody>
@@ -402,7 +531,8 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
           </tr>
         </tfoot>
-      </table>
+        </table>
+      </div>
     </div>
   );
 };
@@ -427,6 +557,15 @@ export const MfgSalesOrdersList = () => {
   const [venue,  setVenue]  = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo,   setDateTo]   = useState('');
+
+  /* Issue #3 (so-list-pixel-perfect-houzs) — persisted filter order.
+     Each filter chip is draggable via <DraggableFilter>; reorder commits
+     to localStorage so the user's preferred layout survives reload. */
+  const [filterOrder, setFilterOrderRaw] = useState<FilterId[]>(() => readFilterOrder());
+  const setFilterOrder = (next: FilterId[]) => {
+    setFilterOrderRaw(next);
+    try { window.localStorage.setItem(FILTER_ORDER_KEY, JSON.stringify(next)); } catch { /* quota */ }
+  };
 
   const clearOutstanding = () => {
     const next = new URLSearchParams(searchParams);
@@ -698,7 +837,11 @@ export const MfgSalesOrdersList = () => {
         {kpiTile('Paid (RM)', fmtRm(kpis.paid), kpis.paid > 0 ? 'good' : undefined)}
       </div>
 
-      {/* ── Compact horizontal filter row ─────────────────────────────── */}
+      {/* ── Compact horizontal filter row (Houzs pill style + draggable) ─
+          Issue #3 + #4 (so-list-pixel-perfect-houzs): filter chips are
+          draggable to reorder (persisted via localStorage), and the
+          dropdowns match Houzs pill styling exactly (h-8, rounded-md,
+          11px font-weight-600 text, custom chevron caret). */}
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
@@ -710,68 +853,78 @@ export const MfgSalesOrdersList = () => {
         borderRadius: 'var(--radius-md)',
       }}>
         <Filter size={16} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} aria-label="Filters" />
-        <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200 }}>
-          <Search size={14} strokeWidth={1.75}
-            style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Doc No, debtor, agent, venue…"
-            style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 'var(--fs-13)',
-              background: 'var(--c-paper)',
-              border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px var(--space-2) 4px 28px',
-              color: 'var(--c-ink)',
-              outline: 'none',
-              width: '100%',
-              lineHeight: 1.4,
-            }}
-          />
-        </div>
-        <select value={brand} onChange={(e) => setBrand(e.target.value)}
-          style={{ width: 'auto', minWidth: 130, padding: '4px var(--space-2)',
-            background: 'var(--c-paper)', border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
-            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }}>
-          <option value="">All Brands</option>
-          {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
-        </select>
-        <select value={agent} onChange={(e) => setAgent(e.target.value)}
-          style={{ width: 'auto', minWidth: 130, padding: '4px var(--space-2)',
-            background: 'var(--c-paper)', border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
-            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }}>
-          <option value="">All Agents</option>
-          {filterOptions.agents.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-        <select value={venue} onChange={(e) => setVenue(e.target.value)}
-          style={{ width: 'auto', minWidth: 130, padding: '4px var(--space-2)',
-            background: 'var(--c-paper)', border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
-            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }}>
-          <option value="">All Venues</option>
-          {filterOptions.venues.map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
-        <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-          style={{ width: 'auto', padding: '4px var(--space-2)',
-            background: 'var(--c-paper)', border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
-            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }} />
-        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>→</span>
-        <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-          style={{ width: 'auto', padding: '4px var(--space-2)',
-            background: 'var(--c-paper)', border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)', fontSize: 'var(--fs-13)',
-            color: 'var(--c-ink)', outline: 'none', lineHeight: 1.4 }} />
+        {filterOrder.map((fid) => {
+          switch (fid) {
+            case 'search':
+              return (
+                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
+                  <div style={{ position: 'relative', flex: '1 1 240px', minWidth: 200, display: 'inline-block' }}>
+                    <Search size={14} strokeWidth={1.75}
+                      style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
+                    <input
+                      type="text"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Doc No, debtor, agent, venue…"
+                      style={{
+                        ...HOUZS_INPUT_DATE,
+                        paddingLeft: 30,
+                        paddingRight: 12,
+                        width: 240,
+                        cursor: 'text',
+                      }}
+                    />
+                  </div>
+                </DraggableFilter>
+              );
+            case 'brand':
+              return (
+                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
+                  <select value={brand} onChange={(e) => setBrand(e.target.value)} style={HOUZS_SELECT}>
+                    <option value="">All Brands</option>
+                    {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </DraggableFilter>
+              );
+            case 'agent':
+              return (
+                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
+                  <select value={agent} onChange={(e) => setAgent(e.target.value)} style={HOUZS_SELECT}>
+                    <option value="">All Agents</option>
+                    {filterOptions.agents.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </DraggableFilter>
+              );
+            case 'venue':
+              return (
+                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
+                  <select value={venue} onChange={(e) => setVenue(e.target.value)} style={HOUZS_SELECT}>
+                    <option value="">All Venues</option>
+                    {filterOptions.venues.map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </DraggableFilter>
+              );
+            case 'dateRange':
+              return (
+                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+                      style={HOUZS_INPUT_DATE} />
+                    <span style={{ color: 'var(--fg-muted)', fontSize: 11 }}>→</span>
+                    <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+                      style={HOUZS_INPUT_DATE} />
+                  </span>
+                </DraggableFilter>
+              );
+            default:
+              return null;
+          }
+        })}
         {(search || brand || agent || venue || dateFrom || dateTo) && (
           <button type="button" onClick={resetFilters}
-            style={{ background: 'transparent', border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-sm)', padding: '4px 10px',
-              fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', cursor: 'pointer' }}>
+            style={{ background: 'transparent', border: '1px solid #DDE5E5',
+              borderRadius: 6, padding: '0 12px', height: 32,
+              fontSize: 11, fontWeight: 600, color: 'var(--fg-muted)', cursor: 'pointer' }}>
             Reset
           </button>
         )}
