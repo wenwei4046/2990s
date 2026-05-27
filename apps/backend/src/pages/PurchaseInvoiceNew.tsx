@@ -88,9 +88,20 @@ export const PurchaseInvoiceNew = () => {
     [lines],
   );
 
-  const grn      = grnQ.data?.grn;
-  const supplier = (grn as any)?.supplier;
-  const po       = (grn as any)?.purchase_order;
+  // flow-queries.ts types this as `any`; narrow locally to the fields we
+  // actually touch here. Keeps the rest of the page honest without forcing
+  // a global refactor of the shared queries file.
+  type GrnDetail = {
+    id: string;
+    grn_number: string;
+    supplier_id: string;
+    purchase_order_id: string | null;
+    supplier?: { id?: string; name?: string; code?: string } | null;
+    purchase_order?: { id?: string; po_number?: string } | null;
+  };
+  const grn      = grnQ.data?.grn as GrnDetail | undefined;
+  const supplier = grn?.supplier;
+  const po       = grn?.purchase_order;
   const currency = 'MYR';
 
   const canSave = !!grn && lines.length > 0 && lines.every((l) => l.qty > 0);
@@ -100,9 +111,9 @@ export const PurchaseInvoiceNew = () => {
     if (!canSave) { window.alert('Each line needs qty > 0.'); return; }
     try {
       const createRes = await create.mutateAsync({
-        supplierId:          (grn as any).supplier_id,
-        purchaseOrderId:     (grn as any).purchase_order_id,
-        grnId:               (grn as any).id,
+        supplierId:          grn.supplier_id,
+        purchaseOrderId:     grn.purchase_order_id,
+        grnId:               grn.id,
         supplierInvoiceRef:  supplierInvoiceRef || undefined,
         invoiceDate,
         dueDate:             dueDate || undefined,
