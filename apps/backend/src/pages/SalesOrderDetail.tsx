@@ -17,7 +17,7 @@
 // ----------------------------------------------------------------------------
 
 import {
-  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
 import { Link, useParams } from 'react-router';
@@ -83,6 +83,17 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
+
+/* Task #99 (UI perf) — Tiny local debounce hook for inputs that drive a
+   server query (debtor autocomplete). Not worth a separate file. */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = window.setTimeout(() => setV(value), delayMs);
+    return () => window.clearTimeout(t);
+  }, [value, delayMs]);
+  return v;
+}
 
 type SoHeader = {
   doc_no: string;
@@ -245,6 +256,33 @@ export const SalesOrderDetail = () => {
       onError:   (msg) => setSaveError(msg),
     });
   };
+
+  /* Task #99 (UI perf) — Stable callbacks for the memo'd child cards. Without
+     these, every parent render produces a new `onSave`/`onClose`, defeating
+     React.memo on PaymentCard / CustomerCard / HistoryPanel. The mutations
+     they call are stable across renders (TanStack Query returns the same
+     mutate fn) so the only moving piece is `docNo` from URL params, which
+     never changes inside one mounted page. */
+  const stableDocNo = docNo ?? '';
+  const handleHeaderSave = useCallback(
+    (patch: Record<string, unknown>, cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
+      updateHeader.mutate(
+        { docNo: stableDocNo, ...patch },
+        {
+          onSuccess: () => cb?.onSuccess?.(),
+          onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),
+        },
+      );
+    },
+    [stableDocNo, updateHeader],
+  );
+  const handlePaymentSave = useCallback(
+    (patch: Record<string, unknown>) => {
+      updateHeader.mutate({ docNo: stableDocNo, ...patch });
+    },
+    [stableDocNo, updateHeader],
+  );
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
 
   /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
      except startAdd which seeds a brand-new SoLineDraft. The mutation payload
@@ -530,13 +568,7 @@ export const SalesOrderDetail = () => {
       <CustomerCard
         ref={customerCardRef}
         header={header}
-        onSave={(patch, cb) => updateHeader.mutate(
-          { docNo: header.doc_no, ...patch },
-          {
-            onSuccess: () => cb?.onSuccess?.(),
-            onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),
-          },
-        )}
+        onSave={handleHeaderSave}
         saving={updateHeader.isPending}
         locked={isLocked}
         isEditing={isEditing}
@@ -787,7 +819,7 @@ export const SalesOrderDetail = () => {
           both make PaymentCard immutable from the user's perspective. */}
       <PaymentCard
         header={header}
-        onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
+        onSave={handlePaymentSave}
         saving={updateHeader.isPending}
         locked={isLocked || !isEditing}
       />
@@ -890,7 +922,7 @@ export const SalesOrderDetail = () => {
 
       {/* PR-D — History drawer ─────────────────────────────────── */}
       {historyOpen && (
-        <HistoryPanel docNo={header.doc_no} onClose={() => setHistoryOpen(false)} />
+        <HistoryPanel docNo={header.doc_no} onClose={closeHistory} />
       )}
     </div>
   );
@@ -929,7 +961,12 @@ type CustomerCardProps = {
   isEditing?: boolean;
 };
 
-const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
+/* Task #99 (UI perf) — Wrap the CustomerCard in memo so parent page state
+   churn (Edit-mode toggle, History drawer, line-item edits) doesn't
+   re-render the full address-cascade tree. Combined with the `onSave`
+   useCallback in the page below + the debtor-search debounce, this is the
+   biggest single saving on the Detail page. */
+const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   header,
   onSave,
   /* PR-A — `saving` prop kept on the type for compatibility but the
@@ -998,7 +1035,16 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 
   const [form, setForm] = useState(() => initialFormFor(header));
   const [showSuggest, setShowSuggest] = useState(false);
-  const debtorQuery = useDebtorSearch(form.customerName);
+  /* Task #99 (UI perf) — 200 ms debounce on the debtor autocomplete. Until
+     this commit each keystroke in the Customer Name field issued a
+     /debtors/search request. The hook itself now guards length>=2 (see
+     flow-queries.ts) but a fast typist still produced one request per
+     character on top of that, which was the dominant freeze when entering
+     a new customer. Debouncing here keeps `form.customerName` reactive for
+     the rest of the card (state cascade, save payload) while the autocomplete
+     hook sees a settled value. */
+  const debouncedDebtorQ = useDebouncedValue(form.customerName, 200);
+  const debtorQuery = useDebtorSearch(debouncedDebtorQ);
   const suggestions = (debtorQuery.data?.debtors ?? []).filter(
     (d) => (d.debtor_name ?? '').toLowerCase() !== form.customerName.trim().toLowerCase(),
   );
@@ -1353,13 +1399,18 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     </section>
   );
 });
-CustomerCard.displayName = 'CustomerCard';
+CustomerCardInner.displayName = 'CustomerCardInner';
+const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
 
 /* ════════════════════════════════════════════════════════════════════════
    Variants summary pills (for line items table)
    ════════════════════════════════════════════════════════════════════════ */
 
-const VariantsPills = ({ variants }: { variants: Record<string, unknown> | null }) => {
+/* Task #99 (UI perf) — VariantsPills renders once per line item in the
+   table. With ~20 lines on a typical SO + 36-col DataGrid in the same
+   page, the cumulative re-render cost was non-trivial. Pure prop-driven
+   so React.memo is a free win. */
+const VariantsPills = memo(({ variants }: { variants: Record<string, unknown> | null }) => {
   if (!variants || typeof variants !== 'object') return null;
   const entries = Object.entries(variants).filter(([, v]) => v != null && v !== '');
   if (entries.length === 0) return null;
@@ -1372,7 +1423,8 @@ const VariantsPills = ({ variants }: { variants: Record<string, unknown> | null 
       ))}
     </div>
   );
-};
+});
+VariantsPills.displayName = 'VariantsPills';
 
 /* ════════════════════════════════════════════════════════════════════════
    Totals card
@@ -1689,7 +1741,14 @@ const methodPillStyle = (m: PaymentMethod): CSSProperties => {
   };
 };
 
-const PaymentCard = ({
+/* Task #99 (UI perf) — Wrap in React.memo so the inline-add / +Payment /
+   delete state inside PaymentCard doesn't cascade re-renders from the
+   parent page's unrelated state changes (e.g. opening the History
+   drawer, toggling Edit mode, typing in the search box). `header` is
+   the only object prop and it comes from useQuery cache so its
+   reference is stable across renders. `onSave` is recreated on each
+   parent render — see SalesOrderDetail for the useCallback wrapping. */
+const PaymentCard = memo(({
   header,
   onSave,
   saving,
@@ -2069,7 +2128,8 @@ const PaymentCard = ({
       </div>
     </section>
   );
-};
+});
+PaymentCard.displayName = 'PaymentCard';
 
 /* ════════════════════════════════════════════════════════════════════════
    StatusTimeline + PriceOverridePanel — removed in followup #85
@@ -2261,7 +2321,14 @@ const relTime = (iso: string): string => {
   return new Date(iso).toLocaleDateString('en-MY', { year: 'numeric', month: 'short', day: '2-digit' });
 };
 
-const HistoryPanel = ({
+/* Task #99 (UI perf) — Memoize the History drawer. It only mounts when
+   `historyOpen` is true (so the audit-log query is correctly lazy by
+   construction) but once opened, scrolling / expanding individual entries
+   triggers internal state changes that would otherwise re-render the entire
+   parent page. With docNo + onClose stable from the parent (the parent's
+   onClose is wrapped in useCallback below), shallow-compare prevents the
+   parent-driven re-renders. */
+const HistoryPanel = memo(({
   docNo,
   onClose,
 }: {
@@ -2382,4 +2449,5 @@ const HistoryPanel = ({
       </aside>
     </>
   );
-};
+});
+HistoryPanel.displayName = 'HistoryPanel';
