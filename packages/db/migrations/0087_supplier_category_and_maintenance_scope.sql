@@ -1,5 +1,5 @@
 -- ----------------------------------------------------------------------------
--- 0086 — Supplier category canonical values + supplier-scoped maintenance.
+-- 0087 — Supplier category canonical values + supplier-scoped maintenance.
 --
 -- Commander 2026-05-27: "supplier 那边不能选择我们现有 SKU category 就是说
 -- 这个 supplier 是负责什么的 然后直接把整个 product maintenance 塞过去.
