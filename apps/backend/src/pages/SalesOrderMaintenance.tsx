@@ -197,10 +197,28 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
 
   /* L3 = distinct cities under selectedState, with postcode count badge. */
   const citiesInState = useMemo(() => {
-    const byCity = new Map<string, { city: string; postcodeCount: number }>();
+    /* Per-city aggregate: postcode count + the single warehouseId that
+       all postcodes under the city share. If postcodes diverge (mixed),
+       the city's warehouseId is null and the UI shows a "(mixed)"
+       indicator — commander's bulk-stamp edit normalises them. */
+    const byCity = new Map<string, {
+      city: string;
+      postcodeCount: number;
+      warehouseId: string | null;
+      mixed: boolean;
+    }>();
     for (const r of stateLocalities) {
-      if (!byCity.has(r.city)) byCity.set(r.city, { city: r.city, postcodeCount: 0 });
-      byCity.get(r.city)!.postcodeCount += 1;
+      const wh = r.warehouseId ?? null;
+      const ex = byCity.get(r.city);
+      if (!ex) {
+        byCity.set(r.city, { city: r.city, postcodeCount: 1, warehouseId: wh, mixed: false });
+        continue;
+      }
+      ex.postcodeCount += 1;
+      if (ex.warehouseId !== wh) {
+        ex.mixed = true;
+        ex.warehouseId = null;
+      }
     }
     return Array.from(byCity.values()).sort((a, b) => a.city.localeCompare(b.city));
   }, [stateLocalities]);
@@ -243,6 +261,24 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
       },
       onError: (err) => window.alert(String((err as Error).message ?? err)),
     });
+  };
+
+  /* Bulk-stamp every locality under (state, city) with the same
+     warehouse_id. Commander 2026-05-27: "manually 换那个 cities 是要 under
+     什么 warehouse 可是全部 postcode 都是跟着一起换 因为上级已经混改了". */
+  const setCityWarehouse = async (state: string, city: string, warehouseId: string | null) => {
+    const rows = stateLocalities.filter((r) => r.city === city && r.id);
+    if (rows.length === 0) return;
+    try {
+      await Promise.all(rows.map((r) =>
+        updateLoc.mutateAsync({
+          id: r.id!,
+          warehouseId: warehouseId ?? '',
+        }),
+      ));
+    } catch (err) {
+      window.alert(`Save failed partway: ${String((err as Error).message ?? err)}`);
+    }
   };
 
   /* Move every locality under a state to a new country in one shot.
@@ -563,34 +599,77 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L3 — Cities */}
+      {/* L3 — Cities. Warehouse column lets commander override the state-
+          level default per city. Bulk-stamps all postcodes under the city
+          when changed. Empty value means "follow state". */}
       {geoView === 'city' && (
         <div className={styles.tableCard}>
           {citiesInState.length === 0 ? (
             <div className={styles.empty}>No cities in {selectedState} yet — add one below.</div>
-          ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>City</th>
-                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {citiesInState.map((c) => (
-                  <tr
-                    key={c.city}
-                    onDoubleClick={() => drillIntoCity(c.city)}
-                    title="Double-click to drill into postcodes"
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td><strong>{c.city}</strong></td>
-                    <td style={{ textAlign: 'right' }}>{c.postcodeCount}</td>
+          ) : (() => {
+            const stateMappingId = mappedByState.get(selectedState)?.warehouseId ?? null;
+            const stateWh = (warehouses.data ?? []).find((w) => w.id === stateMappingId);
+            const stateWhLabel = stateWh ? `${stateWh.code} · ${stateWh.name}` : '— state default unset —';
+            return (
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>City</th>
+                    <th>Warehouse (override · blank = follow state)</th>
+                    <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {citiesInState.map((c) => {
+                    const followingState = c.warehouseId === null && !c.mixed;
+                    return (
+                      <tr
+                        key={c.city}
+                        onDoubleClick={() => drillIntoCity(c.city)}
+                        title="Double-click an empty cell to drill into postcodes"
+                      >
+                        <td style={{ cursor: 'pointer' }}><strong>{c.city}</strong></td>
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          {canEdit ? (
+                            <>
+                              <select
+                                className={styles.input}
+                                value={c.mixed ? '__mixed__' : (c.warehouseId ?? '')}
+                                disabled={updateLoc.isPending}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === '__mixed__') return; // sentinel
+                                  setCityWarehouse(selectedState, c.city, v || null);
+                                }}
+                              >
+                                {c.mixed && <option value="__mixed__">— mixed (pick to normalise) —</option>}
+                                <option value="">— follow state ({stateWhLabel}) —</option>
+                                {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
+                                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                                ))}
+                              </select>
+                              {followingState && (
+                                <div className={styles.muted} style={{ fontSize: 'var(--fs-11)', marginTop: 2 }}>
+                                  Inherits: {stateWhLabel}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            c.mixed ? '(mixed)' : (
+                              c.warehouseId
+                                ? ((warehouses.data ?? []).find((w) => w.id === c.warehouseId)?.code ?? c.warehouseId)
+                                : `(follows state: ${stateWhLabel})`
+                            )
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', cursor: 'pointer' }}>{c.postcodeCount}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       )}
 

@@ -28,11 +28,14 @@ const createSchema = z.object({
 });
 
 const updateSchema = z.object({
-  state:     z.string().trim().min(1).optional(),
-  stateCode: z.string().trim().min(1).optional(),
-  city:      z.string().trim().min(1).optional(),
-  postcode:  z.string().trim().min(1).optional(),
-  country:   z.string().trim().min(1).optional(),
+  state:       z.string().trim().min(1).optional(),
+  stateCode:   z.string().trim().min(1).optional(),
+  city:        z.string().trim().min(1).optional(),
+  postcode:    z.string().trim().min(1).optional(),
+  country:     z.string().trim().min(1).optional(),
+  /* Commander 2026-05-27 — city-level warehouse override.
+     '' or null explicitly clears the override (falls back to state-level). */
+  warehouseId: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
 });
 
 // POST / — create a new row.
@@ -68,12 +71,18 @@ localities.patch('/:id', async (c) => {
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
 
-  const patch: Record<string, string> = {};
+  const patch: Record<string, string | null> = {};
   if (parsed.data.state)     patch.state      = parsed.data.state;
   if (parsed.data.stateCode) patch.state_code = parsed.data.stateCode.toUpperCase();
   if (parsed.data.city)      patch.city       = parsed.data.city;
   if (parsed.data.postcode)  patch.postcode   = parsed.data.postcode;
   if (parsed.data.country)   patch.country    = parsed.data.country;
+  /* warehouseId: empty string or null clears the override; uuid sets it. */
+  if (parsed.data.warehouseId !== undefined) {
+    patch.warehouse_id = parsed.data.warehouseId === '' || parsed.data.warehouseId === null
+      ? null
+      : parsed.data.warehouseId;
+  }
   if (Object.keys(patch).length === 0) return c.json({ ok: true, changed: 0 });
 
   const sb = c.get('supabase');
@@ -81,7 +90,7 @@ localities.patch('/:id', async (c) => {
     .from('my_localities')
     .update(patch)
     .eq('id', id)
-    .select('id, state, state_code, city, postcode, country')
+    .select('id, state, state_code, city, postcode, country, warehouse_id')
     .maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);

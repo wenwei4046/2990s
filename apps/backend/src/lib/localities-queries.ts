@@ -40,10 +40,12 @@ export interface LocalityRow {
   city: string;
   state: string;
   stateCode: string;
-  /* Task #121 — country auto-derives onto the SO header when a state is
-     picked. Default 'Malaysia' for all current rows; SG / TH states will
-     declare their own. */
   country: string;
+  /* Commander 2026-05-27 — city-level warehouse OVERRIDE. NULL → follow
+     state-level mapping (state_warehouse_mappings). Set → this row's
+     warehouse wins over the state default. All postcodes under the same
+     city get the same value when commander edits at L3. */
+  warehouseId?: string | null;
 }
 
 const LOCALITY_PAGE = 1000;
@@ -67,14 +69,15 @@ export const useLocalities = () =>
       for (let from = 0; ; from += LOCALITY_PAGE) {
         const { data, error } = await supabase
           .from('my_localities')
-          .select('id, postcode, city, state, state_code, country')
+          .select('id, postcode, city, state, state_code, country, warehouse_id')
           .order('state')
           .order('city')
           .order('postcode')
           .range(from, from + LOCALITY_PAGE - 1);
         if (error) throw error;
         const page = (data ?? []) as Array<{
-          id: string; postcode: string; city: string; state: string; state_code: string; country: string | null;
+          id: string; postcode: string; city: string; state: string; state_code: string;
+          country: string | null; warehouse_id: string | null;
         }>;
         for (const r of page) {
           all.push({
@@ -83,11 +86,8 @@ export const useLocalities = () =>
             city: r.city,
             state: r.state,
             stateCode: r.state_code,
-            /* Task #121 — fall back to Malaysia for rows seeded before
-               migration 0082 (defensive; the column defaults to Malaysia
-               server-side, so this branch only fires if the API returned
-               an unexpected null). */
             country: r.country ?? 'Malaysia',
+            warehouseId: r.warehouse_id,
           });
         }
         if (page.length < LOCALITY_PAGE) break;
@@ -113,7 +113,13 @@ export const useCreateLocality = () => {
 export const useUpdateLocality = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...patch }: { id: string; state?: string; stateCode?: string; city?: string; postcode?: string; country?: string }) =>
+    mutationFn: ({ id, ...patch }: {
+      id: string;
+      state?: string; stateCode?: string; city?: string; postcode?: string;
+      country?: string;
+      /* warehouseId: uuid sets the override; '' or null clears it. */
+      warehouseId?: string | null;
+    }) =>
       authedFetch(`/localities/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['my_localities'] }); },
   });
