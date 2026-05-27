@@ -1,4 +1,4 @@
-// ----------------------------------------------------------------------------
+﻿// ----------------------------------------------------------------------------
 // SalesOrderDetail — full-page route at /mfg-sales-orders/:docNo.
 //
 // HOUZS-pattern B2B sales order:
@@ -18,18 +18,15 @@
 
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
-  type CSSProperties,
 } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
   DollarSign, Lock, History, ChevronDown, ChevronRight,
-  Calendar as CalIcon, User as UserIcon, Tag,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
-import { useAuth } from '../lib/auth';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
@@ -41,14 +38,12 @@ import {
   useOverrideMfgSoLinePrice,
   useSalesOrderAuditLog,
   useSalesOrderPayments,
-  useAddSalesOrderPayment,
-  useDeleteSalesOrderPayment,
   type DebtorSuggestion,
   type SoAuditEntry,
   type SoAuditFieldChange,
-  type SoPayment,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { PaymentsTable } from '../components/PaymentsTable';
 import {
   useLocalities,
   distinctStates,
@@ -59,7 +54,6 @@ import {
 import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
-import paymentsStyles from './Payments.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -820,9 +814,13 @@ export const SalesOrderDetail = () => {
           port of houzs-erp/src/components/NewSalesOrderForm.tsx Payments
           block (lines 1047-1126). Subtotal / Expected Deposit dropped —
           Houzs doesn't have them, and commander wants the ledger view
-          (transactions + Deposit Paid + Balance) only. */}
-      <PaymentCard
-        header={header}
+          (transactions + Deposit Paid + Balance) only.
+          Task #105 — PaymentCard was extracted into <PaymentsTable> so
+          New SO and Edit SO render the same ledger from one source. */}
+      <PaymentsTable
+        docNo={header.doc_no}
+        grandTotalCenti={header.local_total_centi}
+        currency={header.currency}
         locked={isLocked || !isEditing}
       />
 
@@ -1711,431 +1709,6 @@ const AddressCard = ({
     </section>
   );
 };
-
-/* ════════════════════════════════════════════════════════════════════════
-   PaymentCard — Houzs-pattern transactions ledger.
-
-   Commander 2026-05-27: "Payment 也 follow Hookka 那个排版". Verbatim port
-   of houzs-erp/src/components/NewSalesOrderForm.tsx Payments block (lines
-   1047-1126). The previous Subtotal / Expected Deposit (50% rule) section
-   is dropped — Houzs doesn't have it, and commander wants only the
-   transactions table + Deposit Paid + Balance summary.
-
-   Each row in the table = one row in mfg_sales_order_payments (migration
-   0073). Sum of amount_centi = "Deposit Paid"; balance = local_total_centi
-   − paid. Legacy header columns (payment_method, merchant_provider,
-   installment_months, approval_code, payment_date, paid_centi) still exist
-   in the schema but the UI no longer reads or writes them.
-
-   Houzs has a flat list of "method" strings (CASH/MBB/VISA/EPP/...). The
-   2990 API uses a typed enum: 'merchant' | 'transfer' | 'cash' + optional
-   merchantProvider/installmentMonths. We map Houzs string → API enum at
-   submit time:
-     - CASH                            → method=cash
-     - MBB / ONLINE / TNG / DUITNOW    → method=transfer, merchant_provider=null
-     - VISA / MASTER / CREDIT / EPP    → method=merchant, merchant_provider derived
-   Reverse mapping for display: rebuild the friendly label from method +
-   merchant_provider + installment_months so legacy ledger rows still show
-   sensibly.
-   ════════════════════════════════════════════════════════════════════════ */
-
-type PaymentMethod = 'merchant' | 'transfer' | 'cash';
-type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
-
-/** Friendly Houzs-style method labels. Top of the list = sensible default. */
-const PAYMENT_METHOD_OPTIONS = [
-  'CASH', 'MBB', 'VISA', 'MASTER', 'CREDIT CARD', 'EPP',
-  'ONLINE', 'TNG', 'DUITNOW', 'OTHER',
-] as const;
-type PaymentMethodLabel = typeof PAYMENT_METHOD_OPTIONS[number];
-
-/** Houzs string → API enum (method, optional merchant provider). */
-const labelToApi = (label: PaymentMethodLabel): {
-  method: PaymentMethod;
-  merchantProvider: MerchantProvider | null;
-} => {
-  switch (label) {
-    case 'CASH':
-      return { method: 'cash', merchantProvider: null };
-    case 'MBB':
-    case 'ONLINE':
-    case 'TNG':
-    case 'DUITNOW':
-      // Bank transfer family — provider field stays null on the API.
-      return { method: 'transfer', merchantProvider: null };
-    case 'VISA':
-    case 'MASTER':
-    case 'CREDIT CARD':
-    case 'EPP':
-    case 'OTHER':
-      // Merchant rails. Provider isn't intrinsic to the user's label here
-      // (cardholder doesn't know which acquirer settles); leave null so
-      // commander can pick it in a follow-up edit if needed.
-      return { method: 'merchant', merchantProvider: null };
-  }
-};
-
-/** API row → friendly label (best-effort, falls back to METHOD). */
-const apiToLabel = (p: SoPayment): string => {
-  if (p.method === 'cash') return 'CASH';
-  if (p.method === 'transfer') return p.merchant_provider ?? 'MBB';
-  // merchant
-  if (p.merchant_provider) return p.merchant_provider;
-  return 'CREDIT CARD';
-};
-
-/** Per-method pill swatch (Houzs uses category-coloured chip tags). */
-const methodPillStyle = (m: PaymentMethod): CSSProperties => {
-  const bg =
-    m === 'merchant' ? 'rgba(232, 107, 58, 0.12)' :
-    m === 'transfer' ? 'rgba(47, 93, 79, 0.12)'   :
-                       'rgba(0, 0, 0, 0.06)';
-  const fg =
-    m === 'merchant' ? 'var(--c-burnt)' :
-    m === 'transfer' ? 'var(--c-secondary-a, #2F5D4F)' :
-                       'var(--fg-muted)';
-  return {
-    display: 'inline-block',
-    fontFamily: 'var(--font-sans)',
-    fontSize: 'var(--fs-11)',
-    fontWeight: 600,
-    padding: '1px 8px',
-    borderRadius: 'var(--radius-pill)',
-    background: bg,
-    color: fg,
-    letterSpacing: '0.02em',
-  };
-};
-
-/* Task #99 (UI perf) — Wrap in React.memo so the inline-add / +Payment /
-   delete state inside PaymentCard doesn't cascade re-renders from the
-   parent page's unrelated state changes (e.g. opening the History
-   drawer, toggling Edit mode, typing in the search box). `header` is
-   the only object prop and it comes from useQuery cache so its
-   reference is stable across renders. `onSave` is recreated on each
-   parent render — see SalesOrderDetail for the useCallback wrapping. */
-const PaymentCard = memo(({
-  header,
-  locked = false,
-}: {
-  header: SoHeader;
-  locked?: boolean;
-}) => {
-  const grandTotal = header.local_total_centi ?? 0;
-
-  const paymentsQ    = useSalesOrderPayments(header.doc_no);
-  const payments     = paymentsQ.data ?? [];
-  const addPayment   = useAddSalesOrderPayment();
-  const deletePayment = useDeleteSalesOrderPayment();
-  const staffQ       = useStaff();
-  const staff        = staffQ.data ?? [];
-  const auth         = useAuth();
-
-  /* In-flight "draft" rows. Houzs lets commander Add Payment which appends
-     a blank row inline; the same model is used here so a row is fully
-     editable as soon as it appears. We store local drafts keyed by a uid
-     and POST them when commander tabs/blurs out (after at least one
-     non-trivial change). */
-  type DraftRow = {
-    uid:          string;
-    paidAt:       string;
-    methodLabel:  PaymentMethodLabel;
-    amountCenti:  number;
-    accountSheet: string;
-    approvalCode: string;
-    collectedBy:  string;        // staff.id (uuid) | ''
-  };
-
-  const newDraft = (): DraftRow => ({
-    uid: Math.random().toString(36).slice(2, 10),
-    paidAt: new Date().toISOString().slice(0, 10),
-    methodLabel: 'CASH',
-    amountCenti: 0,
-    accountSheet: '',
-    approvalCode: '',
-    // Default Collected By = current logged-in staff (commander screenshot).
-    collectedBy: auth.staff?.id ?? '',
-  });
-
-  const [drafts, setDrafts] = useState<DraftRow[]>([]);
-
-  const addDraft = () => setDrafts((prev) => [...prev, newDraft()]);
-  const patchDraft = (uid: string, patch: Partial<DraftRow>) =>
-    setDrafts((prev) => prev.map((d) => d.uid === uid ? { ...d, ...patch } : d));
-  const removeDraft = (uid: string) =>
-    setDrafts((prev) => prev.filter((d) => d.uid !== uid));
-
-  /* Commit a draft to the API. Trips on:
-     - amountCenti > 0
-     - method present (always true since CASH is the default) */
-  const commitDraft = (d: DraftRow) => {
-    if (d.amountCenti <= 0) return;
-    const { method, merchantProvider } = labelToApi(d.methodLabel);
-    const body: Record<string, unknown> = {
-      docNo:        header.doc_no,
-      paidAt:       d.paidAt,
-      method,
-      amountCenti:  d.amountCenti,
-      accountSheet: d.accountSheet || null,
-      approvalCode: d.approvalCode || null,
-      collectedBy:  d.collectedBy  || null,
-    };
-    if (method === 'merchant') {
-      body.merchantProvider = merchantProvider;
-    }
-    addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
-      onSuccess: () => removeDraft(d.uid),
-      onError: (e) => {
-        // eslint-disable-next-line no-console
-        console.error('[payment] add failed:', e);
-        window.alert(`Failed to save payment: ${e instanceof Error ? e.message : String(e)}`);
-      },
-    });
-  };
-
-  /* Summary maths — same as Houzs (paid = Σ amount_centi; balance =
-     grandTotal − paid, clamped at 0). */
-  const paidCenti    = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
-  const balanceCenti = Math.max(0, grandTotal - paidCenti);
-
-  const staffNameById = (id: string | null): string | null => {
-    if (!id) return null;
-    return staff.find((s) => s.id === id)?.name ?? null;
-  };
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>
-          <DollarSign size={14} strokeWidth={1.75} /> Payments
-        </h2>
-      </header>
-      <div className={styles.cardBody}>
-        <div className={paymentsStyles.section}>
-          {/* Top bar with + Add Payment trigger ─────────────────────── */}
-          <div className={paymentsStyles.head}>
-            <span className={paymentsStyles.headLabel}>
-              {payments.length + drafts.length} transaction{payments.length + drafts.length === 1 ? '' : 's'}
-            </span>
-            {!locked && (
-              <button
-                type="button"
-                className={paymentsStyles.addBtn}
-                onClick={addDraft}
-                disabled={addPayment.isPending}
-              >
-                <Plus size={14} strokeWidth={1.75} />
-                Add Payment
-              </button>
-            )}
-          </div>
-
-          {/* Transactions table ──────────────────────────────────────── */}
-          <div className={paymentsStyles.grid}>
-            {/* Header row */}
-            <span className={paymentsStyles.headerCell}>
-              Date <CalIcon size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Payment Method <Tag size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCellRight}>
-              Amount <DollarSign size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Account Sheet <FileText size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Approval Code <FileText size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Collected By <UserIcon size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell} />
-
-            {/* Empty state */}
-            {paymentsQ.isLoading && (
-              <span className={paymentsStyles.emptyRow} style={{ gridColumn: '1 / -1' }}>
-                Loading…
-              </span>
-            )}
-            {!paymentsQ.isLoading && payments.length === 0 && drafts.length === 0 && (
-              <span className={paymentsStyles.emptyRow} style={{ gridColumn: '1 / -1' }}>
-                No payments recorded yet · click "Add Payment" to log a deposit
-              </span>
-            )}
-
-            {/* Persisted payment rows */}
-            {payments.map((p: SoPayment) => (
-              <div className={paymentsStyles.row} key={p.id}>
-                <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {p.paid_at}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <span className={paymentsStyles.methodPill} style={methodPillStyle(p.method)}>
-                    {apiToLabel(p)}
-                  </span>
-                  {p.installment_months ? (
-                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
-                      · {p.installment_months}m
-                    </span>
-                  ) : null}
-                </span>
-                <span className={paymentsStyles.cellRight}
-                      style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-                  {fmtRm(p.amount_centi, header.currency)}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  {p.account_sheet ?? <span className={styles.muted}>—</span>}
-                </span>
-                <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {p.approval_code ?? <span className={styles.muted}>—</span>}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  {p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={styles.muted}>—</span>}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  {!locked && (
-                    <button
-                      type="button"
-                      className={paymentsStyles.trashBtn}
-                      disabled={deletePayment.isPending}
-                      onClick={() => {
-                        if (confirm(`Delete this ${apiToLabel(p)} payment of ${fmtRm(p.amount_centi, header.currency)}?`)) {
-                          deletePayment.mutate({ docNo: header.doc_no, id: p.id });
-                        }
-                      }}
-                      title="Remove payment"
-                    >
-                      <Trash2 size={14} strokeWidth={1.75} />
-                    </button>
-                  )}
-                </span>
-              </div>
-            ))}
-
-            {/* In-flight draft rows (commander typing) */}
-            {drafts.map((d) => (
-              <div className={paymentsStyles.row} key={d.uid}>
-                <span className={paymentsStyles.cell}>
-                  <input
-                    type="date"
-                    className={paymentsStyles.inlineInput}
-                    value={d.paidAt}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { paidAt: e.target.value })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <select
-                    className={paymentsStyles.inlineSelect}
-                    value={d.methodLabel}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { methodLabel: e.target.value as PaymentMethodLabel })}
-                  >
-                    {PAYMENT_METHOD_OPTIONS.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </span>
-                <span className={paymentsStyles.cellRight}>
-                  <input
-                    type="number" min={0} step="0.01"
-                    className={paymentsStyles.inlineInputRight}
-                    value={d.amountCenti === 0 ? '' : (d.amountCenti / 100).toFixed(2)}
-                    placeholder="0"
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, {
-                      amountCenti: Math.round(Number(e.target.value) * 100) || 0,
-                    })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <input
-                    type="text"
-                    className={`${paymentsStyles.inlineInput} ${paymentsStyles.placeholderHint}`}
-                    placeholder="e.g. AKHC 3809"
-                    value={d.accountSheet}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { accountSheet: e.target.value })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <input
-                    type="text"
-                    className={paymentsStyles.inlineInput}
-                    value={d.approvalCode}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { approvalCode: e.target.value })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <select
-                    className={paymentsStyles.inlineInputUser}
-                    value={d.collectedBy}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { collectedBy: e.target.value })}
-                  >
-                    <option value="">—</option>
-                    {staff.filter((s) => s.active).map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
-                    <button
-                      type="button"
-                      onClick={() => commitDraft(d)}
-                      disabled={locked || addPayment.isPending || d.amountCenti <= 0}
-                      title={d.amountCenti <= 0 ? 'Enter an amount > 0 first' : 'Save payment'}
-                      style={{
-                        background: 'transparent', border: 'none', padding: 4,
-                        cursor: d.amountCenti <= 0 ? 'not-allowed' : 'pointer',
-                        color: d.amountCenti <= 0 ? 'var(--fg-muted)' : 'var(--c-secondary-a, #2F5D4F)',
-                      }}
-                    >
-                      <Save size={14} strokeWidth={1.75} />
-                    </button>
-                    <button
-                      type="button"
-                      className={paymentsStyles.trashBtn}
-                      onClick={() => removeDraft(d.uid)}
-                      title="Discard"
-                      disabled={locked}
-                    >
-                      <Trash2 size={14} strokeWidth={1.75} />
-                    </button>
-                  </div>
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* ── Summary (Deposit Paid + Balance) ────────────────────── */}
-          <div className={paymentsStyles.summary}>
-            <span className={paymentsStyles.summaryLabel}>
-              Deposit Paid <DollarSign size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.summaryValueAccent}>
-              {fmtRm(paidCenti, header.currency)}
-            </span>
-            <span className={paymentsStyles.summaryLabel}>
-              Balance <DollarSign size={12} strokeWidth={1.75} />
-            </span>
-            <span className={balanceCenti > 0 ? paymentsStyles.balanceOutstanding : paymentsStyles.balanceClear}>
-              {fmtRm(balanceCenti, header.currency)}
-              {grandTotal > 0 && paidCenti >= grandTotal && (
-                <span style={{ marginLeft: 8, fontSize: 'var(--fs-11)' }}>· PAID</span>
-              )}
-            </span>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-});
-PaymentCard.displayName = 'PaymentCard';
 
 
 /* ════════════════════════════════════════════════════════════════════════
