@@ -95,17 +95,30 @@ export const MfgSalesOrdersList = () => {
   const renderPdf = async (row: SoRow, andPrint: boolean) => {
     // One-shot fetch when the toolbar button fires — avoids holding a
     // TanStack query open for every list selection.
+    // Followup #81: parallel-fetch payments from the ledger alongside the
+    // SO detail. Both endpoints are auth'd off the same Supabase session.
     const { data: session } = await supabase.auth.getSession();
-    const res = await fetch(
-      `${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}`,
-      { headers: { authorization: `Bearer ${session.session?.access_token ?? ''}` } },
-    );
-    if (!res.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
-    const json = (await res.json()) as { salesOrder: unknown; items: unknown[] };
+    const token = session.session?.access_token ?? '';
+    const headers = { authorization: `Bearer ${token}` };
+    const [detailRes, paymentsRes] = await Promise.all([
+      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}`, { headers }),
+      fetch(`${import.meta.env.VITE_API_URL}/mfg-sales-orders/${row.doc_no}/payments`, { headers }),
+    ]);
+    if (!detailRes.ok) { alert(`Failed to load SO ${row.doc_no}`); return; }
+    const json = (await detailRes.json()) as { salesOrder: unknown; items: unknown[] };
+    /* Payments endpoint is best-effort: if it fails the PDF still renders
+       with an empty Payments table rather than blocking Preview/Print. */
+    let payments: unknown[] = [];
+    if (paymentsRes.ok) {
+      try {
+        const pj = (await paymentsRes.json()) as { payments?: unknown[] };
+        payments = pj.payments ?? [];
+      } catch { /* leave empty — PDF will show the no-payments state */ }
+    }
     /* PR-G: jspdf triggers download via doc.save(). Print mode reuses the
        same generator and follows it with window.print(); the user's
        browser then displays the OS print dialog over the downloaded PDF. */
-    await generateSalesOrderPdf(json.salesOrder as never, json.items as never);
+    await generateSalesOrderPdf(json.salesOrder as never, json.items as never, payments as never);
     if (andPrint) window.print();
   };
 

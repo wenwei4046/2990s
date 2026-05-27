@@ -199,6 +199,11 @@ export const SalesOrderDetail = () => {
   const header = (detail.data?.salesOrder as SoHeader | undefined) ?? null;
   const items = (detail.data?.items as SoItem[] | undefined) ?? [];
 
+  /* Followup #81 — Print PDF reads payments from the ledger now. PaymentCard
+     also calls this hook (with the same docNo), so TanStack Query dedupes
+     and shares the cache entry — no double fetch. */
+  const printPaymentsQ = useSalesOrderPayments(docNo ?? null);
+
   const [editing, setEditing] = useState<SoItem | null>(null);
   const [adding, setAdding] = useState(false);
   const [overriding, setOverriding] = useState<SoItem | null>(null);
@@ -262,7 +267,16 @@ export const SalesOrderDetail = () => {
   const isLocked = lockedStatuses.includes(header.status) && !unlockOverride;
 
   const handlePrint = () => {
-    generateSalesOrderPdf(header, items).catch((e) => {
+    /* Followup #81 — Wait for the payments query before generating; legacy
+       header columns (paid_centi, payment_method, …) are deprecated. If
+       the query is still loading we surface a brief notice and bail out
+       rather than printing a PDF with an empty Payments table. */
+    if (printPaymentsQ.isLoading) {
+      alert('Loading payments… please try again in a moment.');
+      return;
+    }
+    const payments = printPaymentsQ.data ?? [];
+    generateSalesOrderPdf(header, items, payments).catch((e) => {
       // eslint-disable-next-line no-console
       console.error('PDF generation failed:', e);
       alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`);
