@@ -1181,6 +1181,18 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
   // more POs (cumulative). Remaining convertible = qty - po_qty_picked.
   poQtyPicked:       integer('po_qty_picked').notNull().default(0),
 
+  /* PR-E (migration 0074) — Per-item delivery date with master-follower
+     cascade. Commander 2026-05-27: each line carries its own delivery
+     date, defaulting to the SO header's customer_delivery_date but
+     editable per line. The `overridden` flag freezes a line against
+     header-date cascade: when the header's customer_delivery_date
+     changes, all lines with overridden=false get re-stamped server-side
+     (see PATCH /:docNo in apps/api/src/routes/mfg-sales-orders.ts); lines
+     with overridden=true keep their manual value. Same master-follower
+     pattern as the variants cascade in SoLineCard (PR #141 / #147). */
+  lineDeliveryDate:            date('line_delivery_date'),
+  lineDeliveryDateOverridden:  boolean('line_delivery_date_overridden').notNull().default(false),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),
@@ -1221,6 +1233,59 @@ export const mfgSoPriceOverrides = pgTable('mfg_so_price_overrides', {
 }, (t) => ({
   idxDoc:  index('idx_so_overrides_doc').on(t.docNo),
   idxItem: index('idx_so_overrides_item').on(t.itemId),
+}));
+
+/* PR-D — Unified SO audit trail. Commander 2026-05-27: "要有 audit trail 的
+   谁 create 了什么 update 了什么 from 什么 changes to 什么 在几点几分".
+   Supersedes mfgSoStatusChanges conceptually (both coexist for now): this
+   log captures every mutation type (CREATE / UPDATE_DETAILS / UPDATE_STATUS /
+   ADD_LINE / UPDATE_LINE / DELETE_LINE / ADD_PAYMENT / DELETE_PAYMENT) with
+   field-level from→to diffs in `fieldChanges`. Insert-only — RLS denies
+   updates and deletes so the timeline is forensic-quality. */
+export const mfgSoAuditLog = pgTable('mfg_so_audit_log', {
+  id:                 uuid('id').primaryKey().defaultRandom(),
+  soDocNo:            text('so_doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  action:             text('action').notNull(),     // 'CREATE' | 'UPDATE_DETAILS' | 'UPDATE_STATUS' | 'ADD_PAYMENT' | 'DELETE_PAYMENT' | 'ADD_LINE' | 'UPDATE_LINE' | 'DELETE_LINE'
+  actorId:            uuid('actor_id').references(() => staff.id, { onDelete: 'set null' }),
+  actorNameSnapshot:  text('actor_name_snapshot'),   // captured at write time for display stability
+  fieldChanges:       jsonb('field_changes').notNull().default([]),
+                                                     // array of { field, from, to } objects
+  statusSnapshot:     text('status_snapshot'),       // SO status at time of action
+  source:             text('source').default('web'), // 'web' | 'pos' | 'cron' | 'automation'
+  note:               text('note'),
+  createdAt:          timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxDoc:   index('idx_msoaudit_doc').on(t.soDocNo),
+  idxDocAt: index('idx_msoaudit_doc_at').on(t.soDocNo, t.createdAt),
+  idxActor: index('idx_msoaudit_actor').on(t.actorId),
+}));
+
+/* PR #163 — Payments as transactions. Commander 2026-05-27:
+   "save了之后不会变成一个transaction出来的吗". Each receipt becomes one
+   row here (HOOKKA-style ledger). Total paid = sum(amount_centi) per
+   so_doc_no. Mirrors the HOOKKA payments grid columns: Date · Method ·
+   Amount · Account Sheet · Approval Code · Collected By. The legacy
+   single-shot payment fields on mfgSalesOrders (paymentMethod, approval
+   Code, paymentDate, paidCenti) remain for now but will be deprecated
+   once UI is migrated. depositCenti stays as the "expected deposit"
+   requirement (e.g. 50% rule). */
+export const mfgSalesOrderPayments = pgTable('mfg_sales_order_payments', {
+  id:                 uuid('id').primaryKey().defaultRandom(),
+  soDocNo:            text('so_doc_no').notNull().references(() => mfgSalesOrders.docNo, { onDelete: 'cascade' }),
+  paidAt:             date('paid_at').notNull().defaultNow(),
+  method:             text('method').notNull(),               // 'merchant' | 'transfer' | 'cash'
+  merchantProvider:   text('merchant_provider'),              // 'GHL' | 'HLB' | 'MBB' | 'PBB'
+  installmentMonths:  integer('installment_months'),          // 6 | 12 — null = normal swipe
+  approvalCode:       text('approval_code'),                  // auth / slip / receipt no
+  amountCenti:        integer('amount_centi').notNull(),
+  accountSheet:       text('account_sheet'),                  // bank account / cashbook funds landed in
+  collectedBy:        uuid('collected_by').references(() => staff.id, { onDelete: 'set null' }),
+  note:               text('note'),
+  createdAt:          timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:          uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxDoc:    index('idx_msop_doc').on(t.soDocNo),
+  idxPaidAt: index('idx_msop_paid_at').on(t.paidAt),
 }));
 
 /* DO — delivery orders (we → customer) */

@@ -53,14 +53,29 @@ export type SoLineDraft = {
   variants:       Record<string, unknown>;
   remark:         string;
   overriddenKeys?: string[];
+  /* PR-E — Per-item delivery date + cascade override flag.
+     - lineDeliveryDate: string | null — ISO date for THIS line's expected
+       delivery. Inherits from SO header.customer_delivery_date by default
+       (parent seeds this when constructing a fresh draft).
+     - lineDeliveryDateOverridden: boolean — once the user edits the field
+       in this card, this flips to true so the server-side cascade
+       (PATCH /mfg-sales-orders/:docNo) stops re-stamping this line when
+       the header date changes. Same master-follower contract as variants. */
+  lineDeliveryDate?:           string | null;
+  lineDeliveryDateOverridden?: boolean;
 };
 
 /** Factory for a fresh empty SO line draft. Used by the parent page to
- *  seed the initial card + on every "+ Add another item" click. */
+ *  seed the initial card + on every "+ Add another item" click.
+ *  PR-E — Per-item delivery date starts null + non-overridden; the parent
+ *  page is expected to immediately patch in the SO header's
+ *  customer_delivery_date so the card displays a default. */
 export const emptySoLine = (): SoLineDraft => ({
   itemCode: '', itemGroup: 'others', description: '', uom: 'UNIT',
   qty: 1, unitPriceCenti: 0, discountCenti: 0, unitCostCenti: 0,
   variants: {}, remark: '',
+  lineDeliveryDate: null,
+  lineDeliveryDateOverridden: false,
 });
 
 const CATEGORY_BADGES: Record<string, { bg: string; fg: string; label: string }> = {
@@ -266,79 +281,55 @@ export const SoLineCard = ({
   const fallbackBadge = CATEGORY_BADGES.others!;
   const badge = CATEGORY_BADGES[draft.itemGroup] ?? fallbackBadge;
 
+  /* PR #162 — Commander 2026-05-27: "排版再优化 才一个line 就那么大了".
+     Compacted layout: header + picker on row 1, qty/price/discount on row 2,
+     variants only when category actually has them (mattress/accessory/others
+     render nothing), price breakdown collapsed to a single inline summary
+     line, notes input is a single row without a separate label row. */
+  const hasVariants = draft.itemCode && maint && (draft.itemGroup === 'bedframe' || draft.itemGroup === 'sofa');
+
   return (
     <div
       style={{
         background: 'var(--c-paper)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-lg)',
-        padding: 'var(--space-4)',
+        padding: 'var(--space-3)',
         display: 'flex',
         flexDirection: 'column',
-        gap: 'var(--space-3)',
+        gap: 'var(--space-2)',
       }}
     >
-      {/* ── Card header ──────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <span
-            style={{
-              fontFamily: 'var(--font-button)',
-              fontSize: 'var(--fs-12)',
-              fontWeight: 700,
-              letterSpacing: '0.10em',
-              color: 'var(--fg-muted)',
-            }}
-          >
-            LINE {index + 1}
-          </span>
-          <span
-            style={{
-              fontFamily: 'var(--font-button)',
-              fontSize: 'var(--fs-11)',
-              fontWeight: 700,
-              letterSpacing: '0.10em',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-pill)',
-              background: badge.bg,
-              color: badge.fg,
-            }}
-          >
-            {badge.label}
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <span className={styles.previewPrice}>{fmtRm(lineTotal)}</span>
-          <button
-            type="button"
-            title="Remove this line"
-            onClick={onRemove}
-            disabled={!canRemove}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: canRemove ? 'pointer' : 'not-allowed',
-              color: canRemove ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)',
-              opacity: canRemove ? 1 : 0.4,
-              padding: 4,
-              display: 'inline-flex',
-            }}
-          >
-            <Trash2 {...ICON} />
-          </button>
-        </div>
-      </div>
-
-      {/* ── Product picker ───────────────────────────────────────────── */}
-      {/* PR #129 — Commander: "为什么我点的时候会没反应". The picker only
-          rendered suggestions when commander typed text. Now it also opens
-          on focus, so clicking the input pops the full SKU list (top 50
-          when empty, top 10 matches when typing). Closes on blur unless
-          mousedown is over an item (the onMouseDown handler already pre-
-          empts blur). */}
-      <div>
-        <p className={styles.subHead}>Product</p>
-        <div className={styles.pickerWrap}>
+      {/* ── Row 1: header + product picker ─────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+        <span
+          style={{
+            fontFamily: 'var(--font-button)',
+            fontSize: 'var(--fs-11)',
+            fontWeight: 700,
+            letterSpacing: '0.10em',
+            color: 'var(--fg-muted)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          LINE {index + 1}
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--font-button)',
+            fontSize: 'var(--fs-10)',
+            fontWeight: 700,
+            letterSpacing: '0.10em',
+            padding: '2px 6px',
+            borderRadius: 'var(--radius-pill)',
+            background: badge.bg,
+            color: badge.fg,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {badge.label}
+        </span>
+        <div className={styles.pickerWrap} style={{ flex: 1, minWidth: 0 }}>
           <input
             className={styles.fieldInput}
             placeholder="Click to pick or type to filter…"
@@ -347,10 +338,6 @@ export const SoLineCard = ({
             onBlur={() => setTimeout(() => setShowPicker(false), 150)}
             onChange={(e) => { setSearch(e.target.value); setShowPicker(true); }}
           />
-          {/* PR #133/#136 — show picker on focus unless commander has just
-              picked something (in which case search shows the picked
-              description). Guard now checks description, since PR #136
-              switched the visible value from code → name. */}
           {showPicker && candidates.length > 0 && !(draft.itemCode && search === draft.description) && (
             <ul className={styles.suggestList}>
               {candidates.slice(0, 50).map((p) => (
@@ -373,230 +360,208 @@ export const SoLineCard = ({
             </ul>
           )}
         </div>
-        {/* PR #136 — preview row removed; the picker input above already
-            shows the description after a pick. */}
+        <span className={styles.previewPrice} style={{ whiteSpace: 'nowrap' }}>{fmtRm(lineTotal)}</span>
+        <button
+          type="button"
+          title="Remove this line"
+          onClick={onRemove}
+          disabled={!canRemove}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            cursor: canRemove ? 'pointer' : 'not-allowed',
+            color: canRemove ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)',
+            opacity: canRemove ? 1 : 0.4,
+            padding: 4,
+            display: 'inline-flex',
+          }}
+        >
+          <Trash2 {...ICON} />
+        </button>
       </div>
 
-      {/* ── Variant editor (per category) ────────────────────────────── */}
-      {draft.itemCode && maint && (
-        <div>
-          <p className={styles.subHead}>Variants</p>
-
-          {/* BEDFRAME — divan / leg / gap / [auto] total / fabric / specials.
-              PR #136: Total Height select dropped (auto-computed); Fabric
-              dropdown added (Common Fabrics applies to both bedframe & sofa). */}
-          {draft.itemGroup === 'bedframe' && (
-            <div className={styles.formGrid4}>
-              <VariantSelect
-                label="Divan Height"
-                options={maint.divanHeights}
-                value={String(draft.variants.divanHeight ?? '')}
-                onChange={(v) => setVariant('divanHeight', v)}
-              />
-              <VariantSelect
-                label="Leg Height"
-                options={maint.legHeights}
-                value={String(draft.variants.legHeight ?? '')}
-                onChange={(v) => setVariant('legHeight', v)}
-              />
-              <VariantSelect
-                label="Gap"
-                options={maint.gaps.map((g) => ({ value: g, priceSen: 0 }))}
-                value={String(draft.variants.gap ?? '')}
-                onChange={(v) => setVariant('gap', v)}
-              />
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>
-                  Total Height
-                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
-                    · auto
-                  </span>
-                </span>
-                <input
-                  readOnly
-                  className={styles.fieldInput}
-                  value={computedTotalHeight || '—'}
-                  style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
-                  title="Auto-computed: Divan + Leg + Gap"
-                />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Fabric</span>
-                <select
-                  className={styles.fieldSelect}
-                  value={String(draft.variants.fabricCode ?? '')}
-                  onChange={(e) => setVariant('fabricCode', e.target.value)}
-                >
-                  <option value="">—</option>
-                  {fabrics.map((f) => (
-                    <option key={f.id} value={f.fabric_code}>
-                      {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-          {/* PR #127 — Special Orders multi-select for bedframe */}
-          {draft.itemGroup === 'bedframe' && (
-            <SpecialsMultiSelect
-              label="Special Orders"
-              options={maint.specials}
-              picked={specialsList(draft.variants.specials ?? draft.variants.special)}
-              onChange={(arr) => setVariant('specials', arr)}
+      {/* ── Row 2: variants (only when category actually has them) ──── */}
+      {hasVariants && draft.itemGroup === 'bedframe' && (
+        <div className={styles.formGrid4}>
+          <VariantSelect
+            label="Divan Height"
+            options={maint!.divanHeights}
+            value={String(draft.variants.divanHeight ?? '')}
+            onChange={(v) => setVariant('divanHeight', v)}
+          />
+          <VariantSelect
+            label="Leg Height"
+            options={maint!.legHeights}
+            value={String(draft.variants.legHeight ?? '')}
+            onChange={(v) => setVariant('legHeight', v)}
+          />
+          <VariantSelect
+            label="Gap"
+            options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+            value={String(draft.variants.gap ?? '')}
+            onChange={(v) => setVariant('gap', v)}
+          />
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>
+              Total<span style={{ marginLeft: 4, color: 'var(--c-orange)' }}>· auto</span>
+            </span>
+            <input
+              readOnly
+              className={styles.fieldInput}
+              value={computedTotalHeight || '—'}
+              style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+              title="Auto-computed: Divan + Leg + Gap"
             />
-          )}
-
-          {/* SOFA — seat / leg / fabric / specials.
-              PR #136: Commander said "Fabric Code 就是 Color Code，为什么会
-              出来两个" — merged into single Fabric dropdown. Divan Height
-              dropped (it's a bedframe attribute, not sofa). */}
-          {draft.itemGroup === 'sofa' && (
-            <div className={styles.formGrid4}>
-              <VariantSelect
-                label="Seat Height"
-                options={maint.sofaSizes.map((s) => {
-                  const sh = picked?.seat_height_prices && Array.isArray(picked.seat_height_prices)
-                    ? (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-                        .find((p) => p.height === s && p.tier === 'PRICE_2')
-                    : null;
-                  return { value: s, priceSen: sh?.priceSen ?? 0 };
-                })}
-                value={String(draft.variants.seatHeight ?? '')}
-                onChange={(v) => setVariant('seatHeight', v)}
-              />
-              <VariantSelect
-                label="Leg Height"
-                options={maint.sofaLegHeights}
-                value={String(draft.variants.legHeight ?? '')}
-                onChange={(v) => setVariant('legHeight', v)}
-              />
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Fabric</span>
-                <select
-                  className={styles.fieldSelect}
-                  value={String(draft.variants.fabricCode ?? '')}
-                  onChange={(e) => setVariant('fabricCode', e.target.value)}
-                >
-                  <option value="">—</option>
-                  {fabrics.map((f) => (
-                    <option key={f.id} value={f.fabric_code}>
-                      {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-          {/* PR #127 — Special Orders multi-select for sofa */}
-          {draft.itemGroup === 'sofa' && (
-            <SpecialsMultiSelect
-              label="Special Orders"
-              options={maint.sofaSpecials}
-              picked={specialsList(draft.variants.specials ?? draft.variants.special)}
-              onChange={(arr) => setVariant('specials', arr)}
-            />
-          )}
-
-          {/* MATTRESS / ACCESSORY / OTHERS — no structured variants.
-              PR #136 — Commander: "Mattress 的 size 应该跟 SKU 已经绑定了的，
-              不需要再填写". Mattress SKU codes like "HAPPI.S ACECOOL MATT (Q)"
-              already encode the size, so the dropdown was redundant. */}
-          {(draft.itemGroup === 'mattress' || draft.itemGroup === 'accessory' || draft.itemGroup === 'others') && (
-            <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', margin: 0 }}>
-              No variants for this category — use the line notes below for any free-text details.
-            </p>
-          )}
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Fabric</span>
+            <select
+              className={styles.fieldSelect}
+              value={String(draft.variants.fabricCode ?? '')}
+              onChange={(e) => setVariant('fabricCode', e.target.value)}
+            >
+              <option value="">—</option>
+              {fabrics.map((f) => (
+                <option key={f.id} value={f.fabric_code}>
+                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <SpecialsMultiSelect
+            label="Specials"
+            options={maint!.specials}
+            picked={specialsList(draft.variants.specials ?? draft.variants.special)}
+            onChange={(arr) => setVariant('specials', arr)}
+          />
         </div>
       )}
 
-      {/* ── Pricing ──────────────────────────────────────────────────── */}
-      <div>
-        <p className={styles.subHead}>Pricing</p>
+      {hasVariants && draft.itemGroup === 'sofa' && (
         <div className={styles.formGrid4}>
+          <VariantSelect
+            label="Seat Height"
+            options={maint!.sofaSizes.map((s) => {
+              const sh = picked?.seat_height_prices && Array.isArray(picked.seat_height_prices)
+                ? (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
+                    .find((p) => p.height === s && p.tier === 'PRICE_2')
+                : null;
+              return { value: s, priceSen: sh?.priceSen ?? 0 };
+            })}
+            value={String(draft.variants.seatHeight ?? '')}
+            onChange={(v) => setVariant('seatHeight', v)}
+          />
+          <VariantSelect
+            label="Leg Height"
+            options={maint!.sofaLegHeights}
+            value={String(draft.variants.legHeight ?? '')}
+            onChange={(v) => setVariant('legHeight', v)}
+          />
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Qty</span>
-            <input
-              type="number" min={1} className={styles.fieldInput} value={draft.qty}
-              onChange={(e) => onChange({ qty: Number(e.target.value) || 1 })}
-            />
+            <span className={styles.fieldLabel}>Fabric</span>
+            <select
+              className={styles.fieldSelect}
+              value={String(draft.variants.fabricCode ?? '')}
+              onChange={(e) => setVariant('fabricCode', e.target.value)}
+            >
+              <option value="">—</option>
+              {fabrics.map((f) => (
+                <option key={f.id} value={f.fabric_code}>
+                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                </option>
+              ))}
+            </select>
           </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>
-              Unit Price (RM)
-              {!manualPrice && picked && (
-                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
-                  · auto
-                </span>
-              )}
-            </span>
-            <input
-              type="number" step="0.01" className={styles.fieldInput}
-              value={(draft.unitPriceCenti / 100).toFixed(2)}
-              onChange={(e) => {
-                setManualPrice(true);
-                onChange({ unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 });
-              }}
-            />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Discount (RM)</span>
-            <input
-              type="number" step="0.01" className={styles.fieldInput}
-              value={(draft.discountCenti / 100).toFixed(2)}
-              onChange={(e) => onChange({ discountCenti: Math.round(Number(e.target.value) * 100) || 0 })}
-            />
-          </label>
-          {/* PR #139 — Commander: "Sales Order 怎么需要 Unit Cost 呢？".
-              Cost is for internal margin tracking, not a salesperson input.
-              The SO detail page still shows TOTAL COST + MARGIN, sourced
-              from the SKU's cost on the server side. The unitCostCenti
-              field stays on SoLineDraft (and ships as 0) so existing
-              types don't break. */}
+          <SpecialsMultiSelect
+            label="Specials"
+            options={maint!.sofaSpecials}
+            picked={specialsList(draft.variants.specials ?? draft.variants.special)}
+            onChange={(arr) => setVariant('specials', arr)}
+          />
         </div>
+      )}
 
-        {/* PR #127 — HOOKKA-style footer breakdown */}
-        {picked && (
-          <div style={{
-            marginTop: 8,
-            display: 'grid',
-            gap: 4,
-            padding: 'var(--space-2) var(--space-3)',
-            background: 'var(--c-cream)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--fs-12)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
-              <span>Base price</span><span>{fmtRm(basePriceSen)}</span>
-            </div>
-            {extraSen > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
-                <span>+ Variant surcharges</span><span>+ {fmtRm(extraSen)}</span>
-              </div>
+      {/* ── Row 3: pricing inputs + delivery date + notes ─────────────
+          PR-E — Delivery Date sits between Discount and Line Notes.
+          Inherits from the SO header's customer_delivery_date until
+          the user types into it; once edited, the line is flagged as
+          overridden so the header-date cascade leaves it alone (same
+          master-follower pattern as the variants cascade). The "· auto"
+          hint shows when the value is currently the cascaded default. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '80px 130px 130px 130px 1fr', gap: 'var(--space-2)', alignItems: 'end' }}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Qty</span>
+          <input
+            type="number" min={1} className={styles.fieldInput} value={draft.qty}
+            onChange={(e) => onChange({ qty: Number(e.target.value) || 1 })}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>
+            Unit (RM){!manualPrice && picked && <span style={{ marginLeft: 4, color: 'var(--c-orange)' }}>· auto</span>}
+          </span>
+          <input
+            type="number" step="0.01" className={styles.fieldInput}
+            value={(draft.unitPriceCenti / 100).toFixed(2)}
+            onChange={(e) => {
+              setManualPrice(true);
+              onChange({ unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 });
+            }}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Discount (RM)</span>
+          <input
+            type="number" step="0.01" className={styles.fieldInput}
+            value={(draft.discountCenti / 100).toFixed(2)}
+            onChange={(e) => onChange({ discountCenti: Math.round(Number(e.target.value) * 100) || 0 })}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>
+            Delivery Date
+            {!draft.lineDeliveryDateOverridden && draft.lineDeliveryDate && (
+              <span style={{ marginLeft: 4, color: 'var(--c-orange)' }}>· auto</span>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
-              <span>Unit price × {draft.qty}{draft.discountCenti > 0 ? ` − ${fmtRm(draft.discountCenti)} discount` : ''}</span>
-              <span>{fmtRm(draft.unitPriceCenti)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--c-burnt)', fontSize: 'var(--fs-14)', borderTop: '1px solid var(--line)', paddingTop: 4, marginTop: 2 }}>
-              <span>Line total</span><span>{fmtRm(lineTotal)}</span>
-            </div>
-          </div>
-        )}
+          </span>
+          <input
+            type="date"
+            className={styles.fieldInput}
+            value={draft.lineDeliveryDate ?? ''}
+            onChange={(e) => onChange({
+              lineDeliveryDate: e.target.value || null,
+              lineDeliveryDateOverridden: true,
+            })}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Line Notes</span>
+          <input
+            className={styles.fieldInput}
+            value={draft.remark}
+            onChange={(e) => onChange({ remark: e.target.value })}
+            placeholder="Free-text for this line"
+          />
+        </label>
       </div>
 
-      {/* ── Line Notes (PR #127 — renamed from Remark) ───────────────── */}
-      <label className={styles.field}>
-        <span className={styles.fieldLabel}>Line Notes</span>
-        <input
-          className={styles.fieldInput}
-          value={draft.remark}
-          onChange={(e) => onChange({ remark: e.target.value })}
-          placeholder="Free-text for this line (e.g. customer's special request)"
-        />
-      </label>
+      {/* PR #162 — Single-line price summary. Replaces the 4-row box that
+          ate vertical space. Only shows when a product is picked. */}
+      {picked && (
+        <div style={{
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--fs-12)',
+          color: 'var(--fg-muted)',
+          display: 'flex',
+          gap: 'var(--space-3)',
+          flexWrap: 'wrap',
+        }}>
+          <span>Base {fmtRm(basePriceSen)}</span>
+          {extraSen > 0 && <span>+ Variants {fmtRm(extraSen)}</span>}
+          <span>· Unit {fmtRm(draft.unitPriceCenti)} × {draft.qty}</span>
+          {draft.discountCenti > 0 && <span>− Disc {fmtRm(draft.discountCenti)}</span>}
+        </div>
+      )}
     </div>
   );
 };
@@ -633,47 +598,54 @@ const SpecialsMultiSelect = ({
   picked:   string[];
   onChange: (next: string[]) => void;
 }) => {
-  const [open, setOpen] = useState(picked.length > 0);
+  /* PR #162 — fits into a 4-col grid cell now: label row matches sibling
+     selects, picker is a compact summary button that pops a chip row
+     below the grid only when expanded. */
+  const [open, setOpen] = useState(false);
   const toggle = (v: string) => {
     const next = picked.includes(v) ? picked.filter((x) => x !== v) : [...picked, v];
     onChange(next);
   };
+  const summary = picked.length === 0 ? '—' : `${picked.length} selected`;
   return (
-    <div style={{ marginTop: 'var(--space-3)' }}>
+    <label className={styles.field} style={{ position: 'relative' }}>
+      <span className={styles.fieldLabel}>{label}</span>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        className={styles.fieldInput}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          background: 'transparent',
-          border: '1px dashed var(--line-strong)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '6px 10px',
-          fontFamily: 'var(--font-sans)',
-          fontSize: 'var(--fs-13)',
-          color: 'var(--fg)',
+          textAlign: 'left',
           cursor: 'pointer',
-          width: '100%',
-          justifyContent: 'space-between',
+          color: picked.length > 0 ? 'var(--c-ink)' : 'var(--fg-muted)',
+          background: 'var(--c-paper)',
         }}
       >
-        <span>
-          <span style={{ fontWeight: 600 }}>{label}</span>
-          {picked.length > 0 && (
-            <span style={{ marginLeft: 8, color: 'var(--c-orange)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
-              ({picked.length} selected)
-            </span>
-          )}
-        </span>
-        <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>{open ? '▾' : '▸'}</span>
+        {summary} {open ? '▾' : '▸'}
       </button>
       {open && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            marginTop: 4,
+            background: 'var(--c-paper)',
+            border: '1px solid var(--line-strong)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: 'var(--shadow-2)',
+            padding: 'var(--space-2)',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 6,
+            zIndex: 20,
+            minWidth: 240,
+          }}
+        >
           {options.length === 0 && (
             <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              No specials configured in Maintenance.
+              No specials configured.
             </span>
           )}
           {options.map((o) => {
@@ -688,8 +660,8 @@ const SpecialsMultiSelect = ({
                   color: on ? 'var(--bg)' : 'var(--fg)',
                   border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line-strong)'}`,
                   borderRadius: 999,
-                  padding: '4px 12px',
-                  fontFamily: 'var(--font-mono)',
+                  padding: '4px 10px',
+                  fontFamily: 'var(--font-sans)',
                   fontSize: 'var(--fs-12)',
                   cursor: 'pointer',
                 }}
@@ -700,6 +672,6 @@ const SpecialsMultiSelect = ({
           })}
         </div>
       )}
-    </div>
+    </label>
   );
 };

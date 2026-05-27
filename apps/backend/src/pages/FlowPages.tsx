@@ -10,7 +10,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
-  useGrns, usePurchaseInvoices, useMfgSalesOrders, useMfgDeliveryOrders,
+  useGrns, usePurchaseInvoices, useMfgDeliveryOrders,
   useSalesInvoices, useConsignments, useDeliveryReturns,
   usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
@@ -307,63 +307,11 @@ export const PurchaseInvoicesPage = () => {
 /* ════════════════════════════════════════════════════════════════════════
    Mfg Sales Orders (HOUZS pattern)
    ════════════════════════════════════════════════════════════════════════ */
-// PR #103 — Commander 2026-05-26: "这些 status 不需要". Dropped the
-// All / Draft / Confirmed / In production / Ready / Shipped / Delivered /
-// Invoiced / Closed / Cancelled chip strip. Lifecycle filtering will
-// re-appear when the SO rebuild lands; the current chips were noise.
-
-export const MfgSalesOrdersPage = () => {
-  const navigate = useNavigate();
-  const { data, isLoading, error } = useMfgSalesOrders(undefined);
-  const rows = useMemo(() => data?.salesOrders ?? [], [data]);
-
-  return (
-    <div className={styles.page}>
-      <Header
-        title="Sales Orders (B2B)"
-        subtitle="Manufacturer sales orders — HOUZS pattern, separate from retail POS orders"
-        newLabel="New SO"
-        // PR #106 — "+ New SO" now navigates to a dedicated full-page route
-        // (Commander: "我是要直接整个一个 Full 的界面") instead of opening
-        // the side drawer. CreateSalesOrderDrawer lives in FlowDrawers.tsx
-        // until PR 2 / 3 of the SO rebuild lands, then it can be deleted.
-        onNew={() => navigate('/mfg-sales-orders/new')}
-      />
-      <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} sales orders`}</p>
-      {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead><tr>
-            <th>Doc #</th><th>Date</th><th>Debtor</th><th>Branding</th><th>Agent</th><th>Venue</th>
-            <th style={{ textAlign: 'right' }}>Total</th><th>Status</th>
-          </tr></thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((r: any) => (
-              <tr
-                key={r.doc_no}
-                onClick={() => navigate(`/mfg-sales-orders/${r.doc_no}`)}
-                style={{ cursor: 'pointer' }}
-              >
-                <td><span className={styles.codeChip}>{r.doc_no}</span></td>
-                <td>{r.so_date}</td>
-                <td>{r.debtor_name}</td>
-                <td>{r.branding ?? '—'}</td>
-                <td>{r.agent ?? '—'}</td>
-                <td>{r.venue ?? '—'}</td>
-                <td className={styles.priceCell}>{fmtMoney(r.local_total_centi, r.currency)}</td>
-                <td><span className={styles.statusPill}>{r.status.replace('_', ' ')}</span></td>
-              </tr>
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={8} className={styles.emptyRow}>No sales orders yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
+// PR-G — Rebuilt as AutoCount-style data grid. The page lives in its own
+// file so the column config + toolbar wiring stay readable; re-exported
+// here under the original symbol name so router + any other imports keep
+// working.
+export { MfgSalesOrdersList as MfgSalesOrdersPage } from './MfgSalesOrdersList';
 
 /* ════════════════════════════════════════════════════════════════════════
    Delivery Orders (mfg)

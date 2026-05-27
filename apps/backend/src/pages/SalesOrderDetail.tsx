@@ -16,11 +16,14 @@
 // PATCH /:docNo/status, GET /debtors/search.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import {
+  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  type CSSProperties,
+} from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
-  DollarSign, Lock, Clock, AlertCircle,
+  DollarSign, Lock, Clock, AlertCircle, History, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -34,9 +37,16 @@ import {
   useMfgSalesOrderStatusChanges,
   useMfgSalesOrderPriceOverrides,
   useOverrideMfgSoLinePrice,
+  useSalesOrderAuditLog,
+  useSalesOrderPayments,
+  useAddSalesOrderPayment,
+  useDeleteSalesOrderPayment,
   type DebtorSuggestion,
   type SoStatusChange,
   type SoPriceOverride,
+  type SoAuditEntry,
+  type SoAuditFieldChange,
+  type SoPayment,
 } from '../lib/flow-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import {
@@ -112,6 +122,10 @@ type SoHeader = {
   customer_po_id: string | null;
   customer_po_date: string | null;
   customer_po_image_b64: string | null;
+  /* PR #163 — customer's own SO number (their ERP reference). Already in
+     schema since PR #121 but the Detail page never exposed it. Commander
+     2026-05-27: "还需要顾客salesorder的reference在order details". */
+  customer_so_no: string | null;
   hub_id: string | null;
   hub_name: string | null;
   customer_delivery_date: string | null;
@@ -163,6 +177,13 @@ type SoItem = {
   variants: Record<string, unknown> | null;
   remark: string | null;
   cancelled: boolean;
+  /* PR-E — Per-item delivery date with cascade override flag.
+     line_delivery_date null + overridden=false → display falls back to
+     header.customer_delivery_date. Once the user types in the SoLineCard
+     date input, overridden=true and the line keeps its own value even
+     when the header date changes. */
+  line_delivery_date: string | null;
+  line_delivery_date_overridden: boolean;
 };
 
 export const SalesOrderDetail = () => {
@@ -182,6 +203,36 @@ export const SalesOrderDetail = () => {
   const [adding, setAdding] = useState(false);
   const [overriding, setOverriding] = useState<SoItem | null>(null);
   const [unlockOverride, setUnlockOverride] = useState(false);
+  // PR-D — History panel toggle. Commander asked for the HOOKKA-style
+  // floating right-side history drawer.
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  /* PR-A — Page-level Edit/Save framework. Default is read-only: all inputs
+     are disabled, the "+ Add Line Item" button + per-line trash icons are
+     hidden, and CustomerCard's own Save button is suppressed. Click Edit in
+     the page header → entire page enters edit mode (CustomerCard inputs
+     unlock, line-item actions appear, Edit button is replaced with Save +
+     Cancel). Save commits via updateHeader; Cancel resets the local form.
+     Status transitions remain accessible outside edit mode. */
+  const [isEditing, setIsEditing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const customerCardRef = useRef<CustomerCardHandle | null>(null);
+
+  const enterEdit  = () => { setSaveError(null); setIsEditing(true); };
+  const cancelEdit = () => {
+    customerCardRef.current?.reset();
+    setSaveError(null);
+    setIsEditing(false);
+  };
+  const saveEdit = () => {
+    const handle = customerCardRef.current;
+    if (!handle) return;
+    setSaveError(null);
+    handle.save({
+      onSuccess: () => setIsEditing(false),
+      onError:   (msg) => setSaveError(msg),
+    });
+  };
 
   // Lock mechanism — once SO leaves DRAFT, edits require explicit override.
   // CANCELLED + CLOSED + INVOICED are also locked (terminal-ish states).
@@ -231,10 +282,24 @@ export const SalesOrderDetail = () => {
             <h1 className={styles.title}>
               <FileText size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
               {header.doc_no} — {header.debtor_name}
+              {/* PR #163 — Total badge in title row so commander sees the SO
+                  value the moment the page loads (was previously buried
+                  inside the Payment card). */}
+              <span style={{
+                marginLeft: 'var(--space-2)',
+                fontFamily: 'var(--font-mark)',
+                fontSize: 'var(--fs-18)',
+                fontWeight: 800,
+                fontStretch: '80%',
+                color: 'var(--c-burnt)',
+              }}>
+                {fmtRm(header.local_total_centi, header.currency)}
+              </span>
             </h1>
             <p className={styles.subtitle}>
               SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
+              {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
             </p>
           </div>
         </div>
@@ -242,12 +307,51 @@ export const SalesOrderDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status]}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
+          {/* PR-D — History drawer toggle. Commander 2026-05-27 wants a
+              HOOKKA-style timeline showing who did what, when, and what
+              changed. Reads from mfg_so_audit_log via useSalesOrderAuditLog. */}
+          <Button variant="ghost" size="md" onClick={() => setHistoryOpen(true)}>
+            <History {...ICON} />
+            <span>History</span>
+          </Button>
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* PR-A — Page-level Edit/Save/Cancel. Default view is read-only
+              (Edit shown). In edit mode, Edit is replaced by Save + Cancel.
+              Edit is disabled while the SO is locked (e.g. SHIPPED+) unless
+              the override is in effect. */}
+          {!isEditing ? (
+            <Button variant="primary" size="md"
+              onClick={enterEdit} disabled={isLocked}>
+              <Pencil {...ICON} />
+              <span>Edit</span>
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" size="md"
+                onClick={cancelEdit} disabled={updateHeader.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="md"
+                onClick={saveEdit} disabled={updateHeader.isPending}>
+                <Save {...ICON} />
+                <span>{updateHeader.isPending ? 'Saving…' : 'Save'}</span>
+              </Button>
+            </>
+          )}
         </div>
       </div>
+
+      {/* PR-A — Inline error from the page-level Save. Cleared on Edit /
+          Cancel / next successful Save. */}
+      {saveError && (
+        <div className={styles.bannerWarn}>
+          <strong>Save failed.</strong>
+          <span>{saveError}</span>
+        </div>
+      )}
 
       {/* ── Lock banner ─────────────────────────────────────────── */}
       {lockedStatuses.includes(header.status) && (
@@ -288,10 +392,18 @@ export const SalesOrderDetail = () => {
 
       {/* ── Customer info ───────────────────────────────────────── */}
       <CustomerCard
+        ref={customerCardRef}
         header={header}
-        onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
+        onSave={(patch, cb) => updateHeader.mutate(
+          { docNo: header.doc_no, ...patch },
+          {
+            onSuccess: () => cb?.onSuccess?.(),
+            onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),
+          },
+        )}
         saving={updateHeader.isPending}
         locked={isLocked}
+        isEditing={isEditing}
       />
 
       {/* PR #140 — Commander 2026-05-26: "这个 multi address、customer PO
@@ -305,10 +417,13 @@ export const SalesOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
-            <Plus {...ICON} />
-            <span>Add Line Item</span>
-          </Button>
+          {/* PR-A — Add Line Item is only shown in edit mode. */}
+          {isEditing && (
+            <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
+              <Plus {...ICON} />
+              <span>Add Line Item</span>
+            </Button>
+          )}
         </header>
 
         {items.length === 0 ? (
@@ -325,12 +440,26 @@ export const SalesOrderDetail = () => {
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
+                {/* PR-E — Per-line delivery date. Falls back to the SO
+                    header date when the line hasn't been overridden. */}
+                <th className={styles.tableRight}>Delivery</th>
                 <th className={styles.tableRight}>Total</th>
                 <th className={styles.tableRight}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
+              {items.map((it) => {
+                /* PR-E — Display fallback: a line whose own date is null
+                   AND that hasn't been overridden displays the SO header's
+                   customer_delivery_date with a small "· auto" marker. The
+                   API cascade keeps line_delivery_date populated for
+                   non-overridden lines after each header save, so this
+                   fallback mostly serves rows from before migration 0074
+                   landed. */
+                const displayDate = it.line_delivery_date
+                  ?? (!it.line_delivery_date_overridden ? header.customer_delivery_date : null);
+                const isAuto = !it.line_delivery_date_overridden;
+                return (
                 <tr key={it.id}>
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
@@ -340,36 +469,54 @@ export const SalesOrderDetail = () => {
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
+                  <td className={styles.tableRight}>
+                    {displayDate ? (
+                      <span style={isAuto ? { color: 'var(--fg-muted)' } : undefined}>
+                        {displayDate}
+                        {isAuto && (
+                          <span style={{ marginLeft: 4, color: 'var(--c-orange)', fontSize: 'var(--fs-11)' }}>· auto</span>
+                        )}
+                      </span>
+                    ) : '—'}
+                  </td>
                   <td className={styles.priceCell}>{fmtRm(it.total_centi, header.currency)}</td>
                   <td>
-                    <span className={styles.actionsCell}>
-                      <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
-                        onClick={() => !isLocked && setEditing(it)}>
-                        <Pencil {...SM_ICON} />
-                      </button>
-                      <button type="button" className={styles.iconBtn} title="Override price"
-                        disabled={isLocked}
-                        onClick={() => !isLocked && setOverriding(it)}>
-                        <DollarSign {...SM_ICON} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        title="Delete"
-                        disabled={isLocked}
-                        onClick={() => {
-                          if (isLocked) return;
-                          if (confirm(`Remove ${it.item_code} from this SO?`)) {
-                            deleteItem.mutate({ docNo: header.doc_no, itemId: it.id });
-                          }
-                        }}
-                      >
-                        <Trash2 {...SM_ICON} />
-                      </button>
-                    </span>
+                    {/* PR-A — Line-item Edit / Override / Delete actions are
+                        only rendered in edit mode. Read-only view shows an
+                        em-dash placeholder so the column doesn't collapse. */}
+                    {isEditing ? (
+                      <span className={styles.actionsCell}>
+                        <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
+                          onClick={() => !isLocked && setEditing(it)}>
+                          <Pencil {...SM_ICON} />
+                        </button>
+                        <button type="button" className={styles.iconBtn} title="Override price"
+                          disabled={isLocked}
+                          onClick={() => !isLocked && setOverriding(it)}>
+                          <DollarSign {...SM_ICON} />
+                        </button>
+                        <button
+                          type="button"
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          title="Delete"
+                          disabled={isLocked}
+                          onClick={() => {
+                            if (isLocked) return;
+                            if (confirm(`Remove ${it.item_code} from this SO?`)) {
+                              deleteItem.mutate({ docNo: header.doc_no, itemId: it.id });
+                            }
+                          }}
+                        >
+                          <Trash2 {...SM_ICON} />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -382,12 +529,16 @@ export const SalesOrderDetail = () => {
           everyone. To restore: uncomment <TotalsCard /> below. */}
       {/* <TotalsCard header={header} /> */}
 
-      {/* ── Payment (PR #143) ───────────────────────────────────── */}
+      {/* ── Payment (PR #143 → rebuilt as transactions ledger in PR-C) ── */}
+      {/* Post-merge stitch — collapse PR-A's isEditing into PR-C's existing
+          `locked` gate so the + Add Payment button + trash icons disappear
+          when the page is in read-only mode. Status-lock OR not-editing
+          both make PaymentCard immutable from the user's perspective. */}
       <PaymentCard
         header={header}
         onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
         saving={updateHeader.isPending}
-        locked={isLocked}
+        locked={isLocked || !isEditing}
       />
 
       {/* ── Status flow ─────────────────────────────────────────── */}
@@ -501,6 +652,11 @@ export const SalesOrderDetail = () => {
           onClose={() => setOverriding(null)}
         />
       )}
+
+      {/* PR-D — History drawer ─────────────────────────────────── */}
+      {historyOpen && (
+        <HistoryPanel docNo={header.doc_no} onClose={() => setHistoryOpen(false)} />
+      )}
     </div>
   );
 };
@@ -509,19 +665,45 @@ export const SalesOrderDetail = () => {
    Customer info card — editable, with debtor autocomplete
    ════════════════════════════════════════════════════════════════════════ */
 
-const CustomerCard = ({
-  header,
-  onSave,
-  saving,
-}: {
+/* PR-A — Imperative handle for the page-level Edit/Save framework.
+   The parent calls save() with onSuccess/onError callbacks; reset() reverts
+   the local form to the current header snapshot (used by Cancel). */
+type CustomerCardHandle = {
+  save: (cb: { onSuccess: () => void; onError: (msg: string) => void }) => void;
+  reset: () => void;
+};
+
+type CustomerCardProps = {
   header: SoHeader;
-  onSave: (patch: Record<string, unknown>) => void;
+  /** PR-A — Optional callbacks let the parent's page-level Save flow know
+      when the mutation succeeded or failed, so it can return to read-only /
+      surface an inline error. The per-card Save button (legacy) still works
+      without callbacks. */
+  onSave: (
+    patch: Record<string, unknown>,
+    cb?: { onSuccess?: () => void; onError?: (msg: string) => void },
+  ) => void;
   saving: boolean;
   /** When true, disable input editing — accepted but consumer must show
       the visual lock. We keep the prop optional so existing call sites
       compile. */
   locked?: boolean;
-}) => {
+  /** PR-A — Page-level edit mode. When false (default), every input in this
+      card is disabled and the per-card Save button is hidden — the parent
+      page renders Edit/Save/Cancel in its own header. */
+  isEditing?: boolean;
+};
+
+const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
+  header,
+  onSave,
+  /* PR-A — `saving` prop kept on the type for compatibility but the
+     per-card Save button it drove was removed. The page-level Save in
+     SalesOrderDetail's header now surfaces the in-flight spinner. */
+  saving: _saving,
+  locked = false,
+  isEditing = false,
+}, ref) => {
   // PR #39 — POS-aligned customer + address form. Maps:
   //   • address1, address2 → free-text lines (POS "Address line 1/2")
   //   • address3           → city (cascade from localities)
@@ -545,29 +727,41 @@ const CustomerCard = ({
   //   - processingDate (= internal_expected_dd column, just renamed for UI)
   //   - customerDeliveryDate
   // The DB column `internal_expected_dd` stays — only the label changes.
-  const [form, setForm] = useState({
-    customerCode: header.debtor_code ?? '',
-    customerName: header.debtor_name ?? '',
-    email: header.email ?? '',
-    customerType: header.customer_type ?? '',
-    salespersonId: header.salesperson_id ?? '',
-    buildingType: header.building_type ?? '',
+  /* PR-A — initialFormFor() is the single source-of-truth for what the
+     local form looks like when reset (Cancel) or when the header reloads
+     after a successful Save. Keeps the snapshot + reset paths consistent. */
+  const initialFormFor = (h: SoHeader) => ({
+    /* customerCode kept in state but the UI no longer renders an input
+       (commander 2026-05-27: "customer code 不需要"). Payload still sends
+       debtorCode so the server-side mapping is unchanged. */
+    customerCode: h.debtor_code ?? '',
+    customerName: h.debtor_name ?? '',
+    /* PR-A — customer's own SO reference number (their ERP doc no). The
+       column has existed since PR #121; this exposes it as an editable
+       field inside the Customer sub-section. */
+    customerSoNo: h.customer_so_no ?? '',
+    email: h.email ?? '',
+    customerType: h.customer_type ?? '',
+    salespersonId: h.salesperson_id ?? '',
+    buildingType: h.building_type ?? '',
     /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Reinstate
        venue as a free-text field separate from Building Type. */
-    venue: header.venue ?? '',
-    phone: header.phone ?? '',
-    address1: header.address1 ?? '',
-    address2: header.address2 ?? '',
-    city: header.city ?? header.address3 ?? '',
-    postcode: header.postcode ?? header.address4 ?? '',
-    state: header.customer_state ?? '',
-    emergencyContactName: header.emergency_contact_name ?? '',
-    emergencyContactPhone: header.emergency_contact_phone ?? '',
-    emergencyContactRelationship: header.emergency_contact_relationship ?? '',
-    processingDate: header.internal_expected_dd ?? '',
-    customerDeliveryDate: header.customer_delivery_date ?? '',
-    note: header.note ?? '',
+    venue: h.venue ?? '',
+    phone: h.phone ?? '',
+    address1: h.address1 ?? '',
+    address2: h.address2 ?? '',
+    city: h.city ?? h.address3 ?? '',
+    postcode: h.postcode ?? h.address4 ?? '',
+    state: h.customer_state ?? '',
+    emergencyContactName: h.emergency_contact_name ?? '',
+    emergencyContactPhone: h.emergency_contact_phone ?? '',
+    emergencyContactRelationship: h.emergency_contact_relationship ?? '',
+    processingDate: h.internal_expected_dd ?? '',
+    customerDeliveryDate: h.customer_delivery_date ?? '',
+    note: h.note ?? '',
   });
+
+  const [form, setForm] = useState(() => initialFormFor(header));
   const [showSuggest, setShowSuggest] = useState(false);
   const debtorQuery = useDebtorSearch(form.customerName);
   const suggestions = (debtorQuery.data?.debtors ?? []).filter(
@@ -575,27 +769,8 @@ const CustomerCard = ({
   );
 
   useEffect(() => {
-    setForm({
-      customerCode: header.debtor_code ?? '',
-      customerName: header.debtor_name ?? '',
-      email: header.email ?? '',
-      customerType: header.customer_type ?? '',
-      salespersonId: header.salesperson_id ?? '',
-      buildingType: header.building_type ?? '',
-      venue: header.venue ?? '',
-      phone: header.phone ?? '',
-      address1: header.address1 ?? '',
-      address2: header.address2 ?? '',
-      city: header.city ?? header.address3 ?? '',
-      postcode: header.postcode ?? header.address4 ?? '',
-      state: header.customer_state ?? '',
-      emergencyContactName: header.emergency_contact_name ?? '',
-      emergencyContactPhone: header.emergency_contact_phone ?? '',
-      emergencyContactRelationship: header.emergency_contact_relationship ?? '',
-      processingDate: header.internal_expected_dd ?? '',
-      customerDeliveryDate: header.customer_delivery_date ?? '',
-      note: header.note ?? '',
-    });
+    setForm(initialFormFor(header));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [header]);
 
   const set = <K extends keyof typeof form>(k: K, v: string) =>
@@ -633,6 +808,9 @@ const CustomerCard = ({
   const buildPayload = () => ({
     debtorCode: form.customerCode,
     debtorName: form.customerName,
+    /* PR-A — Persist customer's own SO ref. Empty string → null so we
+       clear the column when the field is blanked. */
+    customerSoNo: form.customerSoNo || null,
     email: form.email,
     customerType: form.customerType,
     salespersonId: form.salespersonId || null,
@@ -662,230 +840,278 @@ const CustomerCard = ({
   const datesXor =
     (form.processingDate.trim() !== '') !== (form.customerDeliveryDate.trim() !== '');
 
-  const trySave = () => {
+  const trySave = (cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
     if (datesXor) {
-      window.alert(
+      const msg =
         'Processing Date and Delivery Date must be set together.\n\n' +
-        'Either fill in BOTH dates, or leave BOTH empty.',
-      );
+        'Either fill in BOTH dates, or leave BOTH empty.';
+      if (cb?.onError) cb.onError(msg);
+      else window.alert(msg);
       return;
     }
-    onSave(buildPayload());
+    onSave(buildPayload(), cb);
   };
+
+  /* PR-A — Expose imperative save()/reset() so the page-level Edit/Save/
+     Cancel buttons can drive this card without lifting all of its form
+     state to the parent. No deps array → handle re-binds every render so
+     `save` always closes over the latest form snapshot. */
+  useImperativeHandle(ref, () => ({
+    save: (cb) => trySave(cb),
+    reset: () => setForm(initialFormFor(header)),
+  }));
+
+  /* PR-A — Inputs are read-only when the page isn't in edit mode OR the
+     SO is locked (post-SHIPPED). Combining both keeps the existing lock
+     semantics intact. */
+  const inputsDisabled = !isEditing || locked;
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Customer · Addresses</h2>
-        <Button variant="primary" size="sm" onClick={trySave} disabled={saving || datesXor}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
+        {/* PR-A — Per-card Save removed. The page-level Save in the page
+            header is now the single commit point for header edits. */}
       </header>
       <div className={styles.cardBody}>
-        {/* ── Customer row (POS-aligned, PR #46) ─────────────────── */}
-        <p className={styles.subHead}>Customer</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer Code</span>
-            <input className={styles.fieldInput} value={form.customerCode}
-              onChange={(e) => set('customerCode', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 3' }}>
-            <span className={styles.fieldLabel}>Customer Name *</span>
-            <input
-              className={styles.fieldInput}
-              value={form.customerName}
-              onChange={(e) => { set('customerName', e.target.value); setShowSuggest(true); }}
-              onFocus={() => setShowSuggest(true)}
-              onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
-            />
-            {showSuggest && suggestions.length > 0 && (
-              <ul className={styles.suggestList}>
-                {suggestions.slice(0, 8).map((d, i) => (
-                  <li
-                    key={`${d.debtor_code ?? ''}-${i}`}
-                    className={styles.suggestItem}
-                    onMouseDown={() => applySuggestion(d)}
-                  >
-                    <div>{d.debtor_name}</div>
-                    {(d.debtor_code || d.phone) && (
-                      <div className={styles.suggestCode}>
-                        {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{d.phone ?? ''}
-                      </div>
-                    )}
-                  </li>
+        {/* ── 1. Customer ───────────────────────────────────────────── */}
+        {/* PR #163 — Commander 2026-05-27: "这些全部资料挤在一起 也是要
+            整理一下". Split into 4 visually-divided sub-sections with
+            top-border separators (.subSection). Each sub-section has its
+            own subhead. Fields regrouped so identification stays separate
+            from order scheduling. */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Customer</p>
+          {/* PR-A — Customer Code input removed (commander 2026-05-27:
+              "customer code 不需要"). Field still flows through state +
+              payload so the server-side mapping is untouched.
+              Customer SO Ref added next to Customer Name. */}
+          <div className={styles.formGrid4}>
+            <label className={styles.field} style={{ gridColumn: 'span 3' }}>
+              <span className={styles.fieldLabel}>Customer Name *</span>
+              <input
+                className={styles.fieldInput}
+                value={form.customerName}
+                disabled={inputsDisabled}
+                onChange={(e) => { set('customerName', e.target.value); setShowSuggest(true); }}
+                onFocus={() => setShowSuggest(true)}
+                onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+              />
+              {showSuggest && suggestions.length > 0 && !inputsDisabled && (
+                <ul className={styles.suggestList}>
+                  {suggestions.slice(0, 8).map((d, i) => (
+                    <li
+                      key={`${d.debtor_code ?? ''}-${i}`}
+                      className={styles.suggestItem}
+                      onMouseDown={() => applySuggestion(d)}
+                    >
+                      <div>{d.debtor_name}</div>
+                      {(d.debtor_code || d.phone) && (
+                        <div className={styles.suggestCode}>
+                          {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{d.phone ?? ''}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer SO Ref</span>
+              <input className={styles.fieldInput} value={form.customerSoNo}
+                placeholder="Their PO / SO number"
+                disabled={inputsDisabled}
+                onChange={(e) => set('customerSoNo', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Phone *</span>
+              <input className={styles.fieldInput} value={form.phone}
+                disabled={inputsDisabled}
+                onChange={(e) => set('phone', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Email *</span>
+              <input type="email" className={styles.fieldInput} value={form.email}
+                disabled={inputsDisabled}
+                onChange={(e) => set('email', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer Type</span>
+              <select className={styles.fieldSelect} value={form.customerType}
+                disabled={inputsDisabled}
+                onChange={(e) => set('customerType', e.target.value)}>
+                <option value="">—</option>
+                <option value="NEW">New</option>
+                <option value="EXISTING">Existing</option>
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Salesperson</span>
+              <select className={styles.fieldSelect} value={form.salespersonId}
+                disabled={inputsDisabled}
+                onChange={(e) => set('salespersonId', e.target.value)}>
+                <option value="">— Pick staff —</option>
+                {staffList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                 ))}
-              </ul>
-            )}
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Phone *</span>
-            <input className={styles.fieldInput} value={form.phone}
-              onChange={(e) => set('phone', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Email *</span>
-            <input type="email" className={styles.fieldInput} value={form.email}
-              onChange={(e) => set('email', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer Type</span>
-            <select className={styles.fieldSelect} value={form.customerType}
-              onChange={(e) => set('customerType', e.target.value)}>
-              <option value="">—</option>
-              <option value="NEW">New</option>
-              <option value="EXISTING">Existing</option>
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Salesperson</span>
-            <select className={styles.fieldSelect} value={form.salespersonId}
-              onChange={(e) => set('salespersonId', e.target.value)}>
-              <option value="">— Pick staff —</option>
-              {staffList.map((s) => (
-                <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
-              ))}
-            </select>
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Building Type</span>
-            <select className={styles.fieldSelect} value={form.buildingType}
-              onChange={(e) => set('buildingType', e.target.value)}>
-              <option value="">—</option>
-              {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
-            </select>
-          </label>
-          {/* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". */}
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Venue</span>
-            <input className={styles.fieldInput} value={form.venue}
-              placeholder="e.g. KL Showroom, Penang Branch"
-              onChange={(e) => set('venue', e.target.value)} />
-          </label>
-          {/* PR #140 / #156 — Processing + Delivery Date; XOR enforced on Save.
-              Red border on the empty side + banner below shows the rule. */}
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Processing Date</span>
-            <input type="date" className={styles.fieldInput} value={form.processingDate}
-              onChange={(e) => set('processingDate', e.target.value)}
-              style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Delivery Date</span>
-            <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
-              onChange={(e) => set('customerDeliveryDate', e.target.value)}
-              style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
-          </label>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Note</span>
-            <input className={styles.fieldInput} value={form.note}
-              onChange={(e) => set('note', e.target.value)} />
-          </label>
-        </div>
-        {datesXor && (
-          <div
-            style={{
-              background: 'rgba(184, 51, 31, 0.08)',
-              border: '1px solid var(--c-festive-b, #B8331F)',
-              color: 'var(--c-festive-b, #B8331F)',
-              padding: 'var(--space-2) var(--space-3)',
-              borderRadius: 'var(--radius-md)',
-              fontSize: 'var(--fs-12)',
-              fontWeight: 600,
-              marginTop: 'var(--space-2)',
-            }}
-          >
-            ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
+              </select>
+            </label>
           </div>
-        )}
-
-        {/* ── Emergency contact (PR #46) ───────────────────────────── */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>
-          Emergency Contact <span className={styles.muted} style={{ fontWeight: 400 }}>
-            — used only if we can't reach the customer on delivery day
-          </span>
-        </p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Contact Name</span>
-            <input className={styles.fieldInput} value={form.emergencyContactName}
-              placeholder="e.g. Lim Mei Hua"
-              onChange={(e) => set('emergencyContactName', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Relationship</span>
-            <input className={styles.fieldInput} value={form.emergencyContactRelationship}
-              placeholder="Spouse / Parent / Sibling …"
-              onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Phone</span>
-            <input className={styles.fieldInput} value={form.emergencyContactPhone}
-              placeholder="+60 12 345 6789"
-              onChange={(e) => set('emergencyContactPhone', e.target.value)} />
-          </label>
         </div>
 
-        {/* ── Address row ─────────────────────────────────────────── */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Delivery Address</p>
-        <div className={styles.formGrid4}>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
-            <span className={styles.fieldLabel}>Address Line 1</span>
-            <input className={styles.fieldInput} value={form.address1}
-              placeholder="Unit, street, area"
-              onChange={(e) => set('address1', e.target.value)} />
-          </label>
-          <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
-            <span className={styles.fieldLabel}>Address Line 2</span>
-            <input className={styles.fieldInput} value={form.address2}
-              placeholder="Apt, floor, building (optional)"
-              onChange={(e) => set('address2', e.target.value)} />
-          </label>
+        {/* ── 2. Order Info (venue / dates / note) ──────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Order Info</p>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Building Type</span>
+              <select className={styles.fieldSelect} value={form.buildingType}
+                disabled={inputsDisabled}
+                onChange={(e) => set('buildingType', e.target.value)}>
+                <option value="">—</option>
+                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Venue</span>
+              <input className={styles.fieldInput} value={form.venue}
+                placeholder="e.g. KL Showroom, Penang Branch"
+                disabled={inputsDisabled}
+                onChange={(e) => set('venue', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Processing Date</span>
+              <input type="date" className={styles.fieldInput} value={form.processingDate}
+                disabled={inputsDisabled}
+                onChange={(e) => set('processingDate', e.target.value)}
+                style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Date</span>
+              <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
+                disabled={inputsDisabled}
+                onChange={(e) => set('customerDeliveryDate', e.target.value)}
+                style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+            </label>
+            <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Note</span>
+              <input className={styles.fieldInput} value={form.note}
+                disabled={inputsDisabled}
+                onChange={(e) => set('note', e.target.value)} />
+            </label>
+          </div>
+          {datesXor && (
+            <div
+              style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: '4px var(--space-2)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 'var(--fs-11)',
+                fontWeight: 600,
+                marginTop: 'var(--space-2)',
+              }}
+            >
+              ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
+            </div>
+          )}
+        </div>
 
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>State</span>
-            <select className={styles.fieldSelect} value={form.state}
-              onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
-              disabled={localities.isLoading}>
-              <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
-              {states.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>City</span>
-            <select className={styles.fieldSelect} value={form.city}
-              onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
-              disabled={!form.state}>
-              <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
-              {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Postcode</span>
-            <select className={styles.fieldSelect} value={form.postcode}
-              onChange={(e) => set('postcode', e.target.value)}
-              disabled={!form.city}>
-              <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
-              {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </label>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Sales Location</span>
-            <span className={styles.fieldInput} style={{
-              display: 'inline-flex', alignItems: 'center', height: 32,
-              color: 'var(--fg-muted)',
-            }}>
-              {header.sales_location ?? '—'}
+        {/* ── 3. Emergency Contact ──────────────────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>
+            Emergency Contact
+            <span className={styles.muted} style={{ fontWeight: 400, marginLeft: 6, textTransform: 'none', letterSpacing: 0 }}>
+              — used only if we can't reach the customer on delivery day
             </span>
+          </p>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Contact Name</span>
+              <input className={styles.fieldInput} value={form.emergencyContactName}
+                placeholder="e.g. Lim Mei Hua"
+                disabled={inputsDisabled}
+                onChange={(e) => set('emergencyContactName', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Relationship</span>
+              <input className={styles.fieldInput} value={form.emergencyContactRelationship}
+                placeholder="Spouse / Parent / Sibling …"
+                disabled={inputsDisabled}
+                onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Phone</span>
+              <input className={styles.fieldInput} value={form.emergencyContactPhone}
+                placeholder="+60 12 345 6789"
+                disabled={inputsDisabled}
+                onChange={(e) => set('emergencyContactPhone', e.target.value)} />
+            </label>
+          </div>
+        </div>
+
+        {/* ── 4. Delivery Address ───────────────────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Delivery Address</p>
+          <div className={styles.formGrid4}>
+            <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Address Line 1</span>
+              <input className={styles.fieldInput} value={form.address1}
+                placeholder="Unit, street, area"
+                disabled={inputsDisabled}
+                onChange={(e) => set('address1', e.target.value)} />
+            </label>
+            <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Address Line 2</span>
+              <input className={styles.fieldInput} value={form.address2}
+                placeholder="Apt, floor, building (optional)"
+                disabled={inputsDisabled}
+                onChange={(e) => set('address2', e.target.value)} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>State</span>
+              <select className={styles.fieldSelect} value={form.state}
+                onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
+                disabled={inputsDisabled || localities.isLoading}>
+                <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
+                {states.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>City</span>
+              <select className={styles.fieldSelect} value={form.city}
+                onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
+                disabled={inputsDisabled || !form.state}>
+                <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
+                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Postcode</span>
+              <select className={styles.fieldSelect} value={form.postcode}
+                onChange={(e) => set('postcode', e.target.value)}
+                disabled={inputsDisabled || !form.city}>
+                <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
+                {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Sales Location</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 26,
+                color: 'var(--fg-muted)',
+              }}>
+                {header.sales_location ?? '—'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
     </section>
   );
-};
+});
+CustomerCard.displayName = 'CustomerCard';
 
 /* ════════════════════════════════════════════════════════════════════════
    Variants summary pills (for line items table)
@@ -1496,15 +1722,52 @@ const AddressCard = ({
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   PaymentCard — PR #143. Commander: "POS system 的 payment 那个地方也放进来
-   Sales Order 里面". Mirrors apps/pos/src/components/handover/
-   AddonsPaymentStep — same 4 methods, same sub-options (merchant provider /
-   installment term), same 50% deposit convention. Persists to migration
-   0068 columns on mfg_sales_orders.
+   PaymentCard — PR #163. HOOKKA-style transactions ledger.
+
+   Each payment is one row in mfg_sales_order_payments (migration 0073) —
+   no more single-row "current payment" overwrite. Sum of amount_centi =
+   "Deposit Paid"; balance = local_total_centi − paid.
+
+   Legacy header columns (payment_method, merchant_provider, installment_
+   months, approval_code, payment_date, paid_centi) still exist in the
+   schema but the UI no longer reads or writes them — they'll be dropped
+   in a follow-up migration once live data is migrated.
+
+   `depositCenti` stays on the header as the EXPECTED deposit target
+   (e.g. 50% rule), distinct from the paid total.
    ════════════════════════════════════════════════════════════════════════ */
 
-/* PR #150 — 3 top-level methods. Installment is a SUB-TYPE of merchant. */
-type PaymentMethod = 'cash' | 'transfer' | 'merchant';
+type PaymentMethod = 'merchant' | 'transfer' | 'cash';
+type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
+
+const METHOD_LABEL: Record<PaymentMethod, string> = {
+  merchant: 'Merchant',
+  transfer: 'Transfer',
+  cash:     'Cash',
+};
+
+const methodPillStyle = (m: PaymentMethod): CSSProperties => {
+  // Burnt for merchant, green for transfer, neutral muted for cash.
+  const bg =
+    m === 'merchant' ? 'rgba(232, 107, 58, 0.12)' :
+    m === 'transfer' ? 'rgba(47, 93, 79, 0.12)'   :
+                       'rgba(0, 0, 0, 0.06)';
+  const fg =
+    m === 'merchant' ? 'var(--c-burnt)' :
+    m === 'transfer' ? 'var(--c-secondary-a, #2F5D4F)' :
+                       'var(--fg-muted)';
+  return {
+    display: 'inline-block',
+    fontFamily: 'var(--font-sans)',
+    fontSize: 'var(--fs-11)',
+    fontWeight: 600,
+    padding: '1px 8px',
+    borderRadius: 'var(--radius-pill)',
+    background: bg,
+    color: fg,
+    letterSpacing: '0.02em',
+  };
+};
 
 const PaymentCard = ({
   header,
@@ -1520,272 +1783,307 @@ const PaymentCard = ({
   const grandTotal = header.local_total_centi ?? 0;
   const half = Math.round(grandTotal / 2);
 
-  const [form, setForm] = useState({
-    method:          (header.payment_method as PaymentMethod | null) ?? '',
-    installment:     header.installment_months ?? null,
-    merchant:        header.merchant_provider ?? '',
-    approvalCode:    header.approval_code ?? '',
-    paymentDate:     header.payment_date ?? '',
-    depositCenti:    header.deposit_centi ?? 0,
-    paidCenti:       header.paid_centi ?? 0,
-  });
+  const paymentsQ = useSalesOrderPayments(header.doc_no);
+  const payments = paymentsQ.data ?? [];
+  const addPayment = useAddSalesOrderPayment();
+  const deletePayment = useDeleteSalesOrderPayment();
+  const staff = useStaff();
 
-  useEffect(() => {
-    setForm({
-      method:          (header.payment_method as PaymentMethod | null) ?? '',
-      installment:     header.installment_months ?? null,
-      merchant:        header.merchant_provider ?? '',
-      approvalCode:    header.approval_code ?? '',
-      paymentDate:     header.payment_date ?? '',
-      depositCenti:    header.deposit_centi ?? 0,
-      paidCenti:       header.paid_centi ?? 0,
-    });
-  }, [header]);
+  /* ── Deposit (expected target on the header) ───────────────────────── */
+  const [depositCenti, setDepositCenti] = useState<number>(header.deposit_centi ?? 0);
+  useEffect(() => { setDepositCenti(header.deposit_centi ?? 0); }, [header.deposit_centi]);
+  const saveDeposit = () => onSave({ depositCenti });
 
-  /* PR #157 — Commander 2026-05-27: "Bank Transfer、Cash 也是需要 Approval
-     Code 的, 还需要一个日期填写收钱的日期". Approval code + payment date
-     now apply to ALL methods, not just merchant. Method-switch keeps both
-     across methods (they're general payment metadata, not merchant-only). */
-  const pick = (m: PaymentMethod) =>
-    setForm((s) => ({
-      ...s,
-      method: m,
-      installment: m === 'merchant' ? s.installment : null,
-      merchant:    m === 'merchant' ? (s.merchant || 'GHL') : '',
-    }));
+  /* ── Inline add-payment row ─────────────────────────────────────────── */
+  const today = new Date().toISOString().slice(0, 10);
+  const blankForm = {
+    paidAt: today,
+    method: 'merchant' as PaymentMethod,
+    merchantProvider: 'GHL' as MerchantProvider | '',
+    installmentMonths: '' as '' | '6' | '12',
+    approvalCode: '',
+    amountCenti: 0,
+    accountSheet: '',
+    collectedBy: '',
+    note: '',
+  };
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState(blankForm);
 
-  const balanceCenti = Math.max(0, grandTotal - form.paidCenti);
-  const isHalfPaid = form.paidCenti > 0 && form.paidCenti >= half && form.paidCenti < grandTotal;
-  const isFullPaid = grandTotal > 0 && form.paidCenti >= grandTotal;
+  const resetForm = () => setForm({ ...blankForm, paidAt: new Date().toISOString().slice(0, 10) });
 
-  const submit = () => {
-    onSave({
-      paymentMethod:     form.method || null,
-      installmentMonths: form.installment,
-      merchantProvider:  form.merchant || null,
-      approvalCode:      form.approvalCode || null,
-      paymentDate:       form.paymentDate || null,
-      depositCenti:      form.depositCenti,
-      paidCenti:         form.paidCenti,
+  const submitNew = () => {
+    if (!form.method) return;
+    if (!form.amountCenti || form.amountCenti <= 0) return;
+    const body: Record<string, unknown> = {
+      docNo:        header.doc_no,
+      paidAt:       form.paidAt,
+      method:       form.method,
+      amountCenti:  form.amountCenti,
+      approvalCode: form.approvalCode || null,
+      accountSheet: form.accountSheet || null,
+      collectedBy:  form.collectedBy  || null,
+      note:         form.note         || null,
+    };
+    if (form.method === 'merchant') {
+      body.merchantProvider  = form.merchantProvider || null;
+      body.installmentMonths = form.installmentMonths ? Number(form.installmentMonths) : null;
+    }
+    addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
+      onSuccess: () => { setAdding(false); resetForm(); },
     });
   };
 
-  const methodBtn = (m: PaymentMethod, label: string, hint: string) => {
-    const active = form.method === m;
-    return (
-      <button
-        type="button"
-        disabled={locked}
-        onClick={() => pick(m)}
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-start',
-          gap: 2,
-          padding: 'var(--space-3)',
-          background: active ? 'rgba(232, 107, 58, 0.10)' : 'var(--c-paper)',
-          border: '1px solid ' + (active ? 'var(--c-orange)' : 'var(--line)'),
-          borderRadius: 'var(--radius-md)',
-          color: active ? 'var(--c-burnt)' : 'var(--c-ink)',
-          cursor: locked ? 'not-allowed' : 'pointer',
-          fontFamily: 'var(--font-sans)',
-          textAlign: 'left',
-        }}
-      >
-        <strong style={{ fontSize: 'var(--fs-13)' }}>{label}</strong>
-        <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{hint}</span>
-      </button>
-    );
+  /* ── Summary ───────────────────────────────────────────────────────── */
+  const paidCenti = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
+  const balanceCenti = Math.max(0, grandTotal - paidCenti);
+  const isFullPaid = grandTotal > 0 && paidCenti >= grandTotal;
+  const isHalfPaid = paidCenti > 0 && paidCenti >= half && paidCenti < grandTotal;
+
+  const staffNameById = (id: string | null): string | null => {
+    if (!id) return null;
+    return staff.data?.find((s) => s.id === id)?.name ?? null;
   };
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Payment</h2>
-        <Button variant="primary" size="sm" onClick={submit} disabled={saving || locked}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
       </header>
       <div className={styles.cardBody}>
-        {/* Method picker — 3 buttons. Installment nested under Merchant. */}
-        <p className={styles.subHead}>Method</p>
-        <div style={{ display: 'flex', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-          {methodBtn('merchant',    'Merchant',                'Card via GHL / HLB / MBB / PBB')}
-          {methodBtn('transfer',    'Bank transfer / DuitNow', 'Slip required')}
-          {methodBtn('cash',        'Cash',                    'Cash received at counter')}
-        </div>
+        {/* ── Transactions table ─────────────────────────────────────── */}
+        <p className={styles.subHead}>Transactions</p>
+        {paymentsQ.isLoading ? (
+          <p className={styles.fieldLabel}>Loading…</p>
+        ) : payments.length === 0 && !adding ? (
+          <p className={styles.muted} style={{ fontSize: 'var(--fs-12)' }}>
+            No payments recorded yet.
+          </p>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Method</th>
+                <th className={styles.tableRight}>Amount</th>
+                <th>Account Sheet</th>
+                <th>Approval Code</th>
+                <th>Collected By</th>
+                <th style={{ width: 36 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.map((p: SoPayment) => (
+                <tr key={p.id}>
+                  <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    {p.paid_at}
+                  </td>
+                  <td>
+                    <span style={methodPillStyle(p.method)}>{METHOD_LABEL[p.method]}</span>
+                    {p.method === 'merchant' && p.merchant_provider && (
+                      <span className={styles.muted} style={{ marginLeft: 6, fontSize: 'var(--fs-11)' }}>
+                        · {p.merchant_provider}
+                        {p.installment_months ? ` · ${p.installment_months}m` : ''}
+                      </span>
+                    )}
+                  </td>
+                  <td className={styles.tableRight} style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                    {fmtRm(p.amount_centi, header.currency)}
+                  </td>
+                  <td>{p.account_sheet ?? <span className={styles.muted}>—</span>}</td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {p.approval_code ?? <span className={styles.muted}>—</span>}
+                  </td>
+                  <td>{p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={styles.muted}>—</span>}</td>
+                  <td>
+                    <button
+                      type="button"
+                      disabled={locked || deletePayment.isPending}
+                      onClick={() => {
+                        if (confirm(`Delete this ${METHOD_LABEL[p.method]} payment of ${fmtRm(p.amount_centi, header.currency)}?`)) {
+                          deletePayment.mutate({ docNo: header.doc_no, id: p.id });
+                        }
+                      }}
+                      title="Delete payment"
+                      style={{
+                        background: 'transparent', border: 'none', padding: 4,
+                        cursor: locked ? 'not-allowed' : 'pointer',
+                        color: 'var(--c-festive-b)',
+                      }}
+                    >
+                      <Trash2 size={14} strokeWidth={1.75} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
 
-        {/* Merchant sub-section: Provider + Type + Approval code (PR #150) */}
-        {form.method === 'merchant' && (
+              {/* Inline add-payment row */}
+              {adding && (
+                <tr style={{ background: 'var(--c-cream)' }}>
+                  <td>
+                    <input
+                      type="date"
+                      value={form.paidAt}
+                      onChange={(e) => setForm((s) => ({ ...s, paidAt: e.target.value }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={form.method}
+                      onChange={(e) => setForm((s) => ({ ...s, method: e.target.value as PaymentMethod }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    >
+                      <option value="merchant">Merchant</option>
+                      <option value="transfer">Transfer</option>
+                      <option value="cash">Cash</option>
+                    </select>
+                    {form.method === 'merchant' && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                        <select
+                          value={form.merchantProvider}
+                          onChange={(e) => setForm((s) => ({ ...s, merchantProvider: e.target.value as MerchantProvider | '' }))}
+                          className={styles.fieldInput}
+                          style={{ height: 26, fontSize: 'var(--fs-11)', flex: 1 }}
+                        >
+                          <option value="">Provider…</option>
+                          <option value="GHL">GHL</option>
+                          <option value="HLB">HLB</option>
+                          <option value="MBB">MBB</option>
+                          <option value="PBB">PBB</option>
+                        </select>
+                        <select
+                          value={form.installmentMonths}
+                          onChange={(e) => setForm((s) => ({ ...s, installmentMonths: e.target.value as '' | '6' | '12' }))}
+                          className={styles.fieldInput}
+                          style={{ height: 26, fontSize: 'var(--fs-11)', flex: 1 }}
+                        >
+                          <option value="">Normal</option>
+                          <option value="6">6 mo</option>
+                          <option value="12">12 mo</option>
+                        </select>
+                      </div>
+                    )}
+                  </td>
+                  <td className={styles.tableRight}>
+                    <input
+                      type="number" step="0.01" min={0}
+                      value={(form.amountCenti / 100).toFixed(2)}
+                      onChange={(e) => setForm((s) => ({ ...s, amountCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      value={form.accountSheet}
+                      onChange={(e) => setForm((s) => ({ ...s, accountSheet: e.target.value }))}
+                      placeholder="Bank / cashbook"
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      value={form.approvalCode}
+                      onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
+                      placeholder={
+                        form.method === 'merchant' ? 'Auth code' :
+                        form.method === 'transfer' ? 'Slip ref' :
+                                                     'Receipt'
+                      }
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)', fontVariantNumeric: 'tabular-nums' }}
+                    />
+                  </td>
+                  <td>
+                    <select
+                      value={form.collectedBy}
+                      onChange={(e) => setForm((s) => ({ ...s, collectedBy: e.target.value }))}
+                      className={styles.fieldInput}
+                      style={{ height: 28, fontSize: 'var(--fs-12)' }}
+                    >
+                      <option value="">—</option>
+                      {(staff.data ?? []).filter((s) => s.active).map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={submitNew}
+                        disabled={addPayment.isPending || !form.amountCenti}
+                        title="Save payment"
+                        style={{
+                          background: 'transparent', border: 'none', padding: 4,
+                          cursor: 'pointer', color: 'var(--c-secondary-a, #2F5D4F)',
+                        }}
+                      >
+                        <Save size={14} strokeWidth={1.75} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setAdding(false); resetForm(); }}
+                        title="Cancel"
+                        style={{
+                          background: 'transparent', border: 'none', padding: 4,
+                          cursor: 'pointer', color: 'var(--fg-muted)',
+                        }}
+                      >
+                        <X size={14} strokeWidth={1.75} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+
+        {/* + Add Payment trigger */}
+        {!adding && !locked && (
+          <button
+            type="button"
+            onClick={() => { resetForm(); setAdding(true); }}
+            style={{
+              marginTop: 'var(--space-2)',
+              background: 'transparent', border: 'none', padding: 0,
+              color: 'var(--c-orange)', cursor: 'pointer',
+              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
+            }}
+          >
+            + Add Payment
+          </button>
+        )}
+
+        {/* ── Summary ────────────────────────────────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Summary</p>
           <div style={{
-            marginTop: 'var(--space-3)',
-            padding: 'var(--space-3)',
-            background: 'var(--c-cream)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-md)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-3)',
+            display: 'grid', gridTemplateColumns: 'auto 1fr',
+            gap: '4px 16px',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-13)',
+            maxWidth: 360,
           }}>
-            {/* Provider */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              <span className={styles.fieldLabel}>Merchant</span>
-              {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => setForm((s) => ({ ...s, merchant: p }))}
-                  style={{
-                    fontFamily: 'var(--font-sans)',
-                    fontSize: 'var(--fs-12)',
-                    fontWeight: 600,
-                    padding: '4px 12px',
-                    borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (form.merchant === p ? 'var(--c-orange)' : 'var(--line)'),
-                    background: form.merchant === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: form.merchant === p ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: locked ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-
-            {/* Type: Normal vs Installment */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              <span className={styles.fieldLabel}>Type</span>
-              <button
-                type="button"
-                disabled={locked}
-                onClick={() => setForm((s) => ({ ...s, installment: null }))}
-                style={{
-                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                  padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                  border: '1px solid ' + (form.installment === null ? 'var(--c-orange)' : 'var(--line)'),
-                  background: form.installment === null ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                  color: form.installment === null ? 'var(--c-burnt)' : 'var(--c-ink)',
-                  cursor: locked ? 'not-allowed' : 'pointer',
-                }}
-              >
-                Normal Swipe
-              </button>
-              {([6, 12] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => setForm((s) => ({ ...s, installment: m }))}
-                  style={{
-                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (form.installment === m ? 'var(--c-orange)' : 'var(--line)'),
-                    background: form.installment === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: form.installment === m ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: locked ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  Installment · {m} months
-                </button>
-              ))}
-            </div>
-
-          </div>
-        )}
-
-        {/* PR #157 — Approval Code + Payment Date for ALL methods.
-            Commander: "Bank Transfer、Cash 也是需要 Approval Code 的，
-            还需要一个日期填写收钱的日期". Visible once any method is picked. */}
-        {form.method && (
-          <div style={{ marginTop: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-3)' }}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>
-                {form.method === 'merchant' ? 'Approval Code' :
-                 form.method === 'transfer' ? 'Slip / Reference No' :
-                                              'Receipt / Reference'}
-              </span>
-              <input
-                type="text"
-                value={form.approvalCode}
-                disabled={locked}
-                onChange={(e) => setForm((s) => ({ ...s, approvalCode: e.target.value }))}
-                placeholder={
-                  form.method === 'merchant' ? 'Auth code from terminal receipt' :
-                  form.method === 'transfer' ? 'Bank slip reference number' :
-                                               'Optional cash receipt reference'
-                }
-                className={styles.fieldInput}
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Payment Date</span>
-              <input
-                type="date"
-                value={form.paymentDate}
-                disabled={locked}
-                onChange={(e) => setForm((s) => ({ ...s, paymentDate: e.target.value }))}
-                className={styles.fieldInput}
-              />
-            </label>
-          </div>
-        )}
-
-        {/* Deposit / Paid / Balance row */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-4)' }}>Amounts</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Grand Total</span>
-            <span className={styles.fieldInput} style={{
-              display: 'inline-flex', alignItems: 'center', height: 32,
-              fontFamily: 'var(--font-mono)', color: 'var(--c-ink)', fontWeight: 600,
-            }}>
+            <span className={styles.muted}>Subtotal</span>
+            <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
               {fmtRm(grandTotal, header.currency)}
             </span>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>
-              Deposit ({header.currency})
-              {form.depositCenti === half && grandTotal > 0 && (
-                <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
-              )}
+            <span className={styles.muted}>Deposit Paid</span>
+            <span style={{
+              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+              color: 'var(--c-burnt)', fontWeight: 600,
+            }}>
+              {fmtRm(paidCenti, header.currency)}
             </span>
-            <input
-              type="number" step="0.01" min={0}
-              className={styles.fieldInput}
-              value={(form.depositCenti / 100).toFixed(2)}
-              disabled={locked}
-              onChange={(e) => setForm((s) => ({ ...s, depositCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
-            />
-            <button
-              type="button"
-              onClick={() => setForm((s) => ({ ...s, depositCenti: half }))}
-              disabled={locked || grandTotal === 0}
-              style={{
-                marginTop: 4,
-                background: 'transparent', border: 'none',
-                color: 'var(--c-orange)', cursor: locked ? 'not-allowed' : 'pointer',
-                fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0, textAlign: 'left',
-              }}
-            >
-              Set 50% deposit ({fmtRm(half, header.currency)})
-            </button>
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Paid ({header.currency})</span>
-            <input
-              type="number" step="0.01" min={0}
-              className={styles.fieldInput}
-              value={(form.paidCenti / 100).toFixed(2)}
-              disabled={locked}
-              onChange={(e) => setForm((s) => ({ ...s, paidCenti: Math.round(Number(e.target.value) * 100) || 0 }))}
-            />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>
+            <span style={{ fontWeight: 600 }}>
               Balance
               {isFullPaid && (
                 <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-secondary-a, #2F5D4F)' }}>· PAID</span>
@@ -1794,15 +2092,59 @@ const PaymentCard = ({
                 <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· deposit only</span>
               )}
             </span>
-            <span className={styles.fieldInput} style={{
-              display: 'inline-flex', alignItems: 'center', height: 32,
-              fontFamily: 'var(--font-mono)',
-              color: isFullPaid ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--c-ink)',
+            <span style={{
+              textAlign: 'right', fontVariantNumeric: 'tabular-nums',
               fontWeight: 600,
+              color: isFullPaid ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--c-ink)',
             }}>
               {fmtRm(balanceCenti, header.currency)}
             </span>
-          </label>
+          </div>
+        </div>
+
+        {/* ── Deposit target (expected, not paid) ─────────────────────── */}
+        <div className={styles.subSection}>
+          <p className={styles.subHead}>Expected Deposit</p>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+            <label className={styles.field} style={{ maxWidth: 200 }}>
+              <span className={styles.fieldLabel}>
+                Deposit ({header.currency})
+                {depositCenti === half && grandTotal > 0 && (
+                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
+                )}
+              </span>
+              <input
+                type="number" step="0.01" min={0}
+                className={styles.fieldInput}
+                value={(depositCenti / 100).toFixed(2)}
+                disabled={locked}
+                onChange={(e) => setDepositCenti(Math.round(Number(e.target.value) * 100) || 0)}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => setDepositCenti(half)}
+              disabled={locked || grandTotal === 0}
+              style={{
+                background: 'transparent', border: 'none',
+                color: 'var(--c-orange)', cursor: locked ? 'not-allowed' : 'pointer',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0,
+                marginBottom: 8,
+              }}
+            >
+              Set 50% deposit ({fmtRm(half, header.currency)})
+            </button>
+            <Button
+              variant="primary" size="sm"
+              onClick={saveDeposit}
+              disabled={saving || locked || depositCenti === (header.deposit_centi ?? 0)}
+              style={{ marginBottom: 4 }}
+            >
+              <Save {...ICON} />
+              <span>{saving ? 'Saving…' : 'Save deposit'}</span>
+            </Button>
+          </div>
         </div>
       </div>
     </section>
@@ -2073,5 +2415,208 @@ const OverridePriceModal = ({
         </footer>
       </div>
     </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   PR-D — HistoryPanel
+   Right-side drawer driven by mfg_so_audit_log. HOOKKA / Inistate-style:
+     • avatar (initials in hash-colored circle)
+     • "<actor> performed <action> [status pill] · <relative time>"
+     • "via <source>" suffix
+     • "Changes" toggle expands a field-level from→to diff block
+   ════════════════════════════════════════════════════════════════════════ */
+
+const ACTION_LABEL: Record<string, string> = {
+  CREATE:         'Created order',
+  UPDATE_DETAILS: 'Updated details',
+  UPDATE_STATUS:  'Status changed',
+  ADD_LINE:       'Added line',
+  UPDATE_LINE:    'Updated line',
+  DELETE_LINE:    'Removed line',
+  ADD_PAYMENT:    'Added payment',
+  DELETE_PAYMENT: 'Removed payment',
+};
+
+const FIELD_LABEL: Record<string, string> = {
+  debtorCode: 'Customer code', debtorName: 'Customer', agent: 'Agent',
+  phone: 'Phone', email: 'Email', soDate: 'SO date', status: 'Status',
+  paymentMethod: 'Payment method', depositCenti: 'Deposit',
+  internalExpectedDd: 'Processing date', customerSoNo: 'Customer SO ref',
+  customerPo: 'Customer PO', customerState: 'State',
+  customerDeliveryDate: 'Delivery date', city: 'City', postcode: 'Postcode',
+  buildingType: 'Building type', address1: 'Address 1', address2: 'Address 2',
+  address3: 'Address 3', address4: 'Address 4', note: 'Note',
+  remark2: 'Remark 2', remark3: 'Remark 3', remark4: 'Remark 4',
+  itemCode: 'Item', itemGroup: 'Group', description: 'Description',
+  description2: 'Description 2', uom: 'UOM', qty: 'Qty',
+  unitPriceCenti: 'Unit price', discountCenti: 'Discount',
+  unitCostCenti: 'Unit cost', totalCenti: 'Line total',
+  lineCount: 'Lines', localTotalCenti: 'Total', cancelled: 'Cancelled',
+  remark: 'Remark', salespersonId: 'Salesperson', customerType: 'Customer type',
+  emergencyContactName: 'Emergency name', emergencyContactPhone: 'Emergency phone',
+  emergencyContactRelationship: 'Emergency relationship',
+  targetDate: 'Target date', branding: 'Branding', venue: 'Venue',
+  salesLocation: 'Sales location', ref: 'Ref', poDocNo: 'PO doc no',
+};
+
+const MONEY_FIELDS = new Set(['unitPriceCenti', 'discountCenti', 'totalCenti', 'depositCenti', 'localTotalCenti', 'unitCostCenti']);
+
+const fmtField = (field: string, val: unknown): string => {
+  if (val === null || val === undefined || val === '') return '—';
+  if (MONEY_FIELDS.has(field) && typeof val === 'number') {
+    return `RM ${(val / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  if (typeof val === 'object') return JSON.stringify(val);
+  return String(val).replace(/_/g, ' ');
+};
+
+const hashHue = (s: string): number => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+};
+
+const initialsFor = (name: string | null): string => {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
+const relTime = (iso: string): string => {
+  const then = new Date(iso).getTime();
+  const diffMs = Date.now() - then;
+  const m = Math.round(diffMs / 60_000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 14) return `${d}d ago`;
+  return new Date(iso).toLocaleDateString('en-MY', { year: 'numeric', month: 'short', day: '2-digit' });
+};
+
+const HistoryPanel = ({
+  docNo,
+  onClose,
+}: {
+  docNo: string;
+  onClose: () => void;
+}) => {
+  const q = useSalesOrderAuditLog(docNo);
+  const entries = q.data ?? [];
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  return (
+    <>
+      <div className={styles.historyBackdrop} onClick={onClose} />
+      <aside className={styles.historyPanel} role="dialog" aria-label="Sales order history">
+        <header className={styles.historyPanelHead}>
+          <h3 className={styles.historyPanelTitle}>
+            <History {...SM_ICON} />
+            History · {docNo}
+            <span style={{ marginLeft: 8, fontWeight: 400 }}>
+              ({entries.length})
+            </span>
+          </h3>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            <X {...SM_ICON} />
+          </Button>
+        </header>
+        <div className={styles.historyPanelBody}>
+          {q.isLoading ? (
+            <p className={styles.fieldLabel} style={{ padding: 'var(--space-3)' }}>Loading…</p>
+          ) : entries.length === 0 ? (
+            <p className={styles.muted} style={{ padding: 'var(--space-3)' }}>
+              No history yet.
+            </p>
+          ) : (
+            entries.map((e: SoAuditEntry) => {
+              const name = e.actor_name_snapshot ?? '(unknown)';
+              const hue = hashHue(name);
+              const fc: SoAuditFieldChange[] = Array.isArray(e.field_changes) ? e.field_changes : [];
+              const isExpanded = !!expanded[e.id];
+              const label = ACTION_LABEL[e.action] ?? e.action.replace(/_/g, ' ').toLowerCase();
+              const statusPillStatus = e.action === 'UPDATE_STATUS'
+                ? (fc.find((f) => f.field === 'status')?.to as string | undefined)
+                : null;
+              return (
+                <div key={e.id} className={styles.historyItem}>
+                  <span
+                    className={styles.historyAvatar}
+                    style={{ background: `hsl(${hue}, 50%, 60%)` }}
+                    aria-hidden
+                  >
+                    {initialsFor(name)}
+                  </span>
+                  <div>
+                    <div className={styles.historyLine}>
+                      <span className={styles.historyActor}>{name}</span>
+                      {' performed '}
+                      <strong>{label}</strong>
+                      {statusPillStatus && (
+                        <span
+                          className={`${styles.statusPill} ${STATUS_CLASS[statusPillStatus as SoStatus] ?? ''}`}
+                          style={{ marginLeft: 6, fontSize: 'var(--fs-10)' }}
+                        >
+                          {statusPillStatus.replace(/_/g, ' ')}
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.historyMeta}>
+                      {new Date(e.created_at).toLocaleString('en-MY', {
+                        year: 'numeric', month: 'short', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit',
+                      })}
+                      {' · '}{relTime(e.created_at)}
+                      {e.source ? ` · via ${e.source}` : ''}
+                    </div>
+                    {e.note && (
+                      <div className={styles.historyMeta} style={{ fontStyle: 'italic' }}>
+                        “{e.note}”
+                      </div>
+                    )}
+                    {fc.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          className={styles.historyChangesBtn}
+                          onClick={() => setExpanded((s) => ({ ...s, [e.id]: !s[e.id] }))}
+                        >
+                          {isExpanded ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
+                          {' '}Changes ({fc.length})
+                        </button>
+                        {isExpanded && (
+                          <div className={styles.historyChanges}>
+                            {fc.map((ch, idx) => (
+                              <div key={idx} className={styles.historyChange}>
+                                <span className={styles.historyChangeField}>
+                                  {FIELD_LABEL[ch.field] ?? ch.field}
+                                </span>
+                                <span className={styles.historyChangeDiff}>
+                                  {ch.from !== undefined && ch.from !== null && ch.from !== '' ? (
+                                    <>
+                                      <span className={styles.historyChangeFrom}>{fmtField(ch.field, ch.from)}</span>
+                                      <span className={styles.historyChangeArrow}>→</span>
+                                    </>
+                                  ) : null}
+                                  <span>{fmtField(ch.field, ch.to)}</span>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </aside>
+    </>
   );
 };

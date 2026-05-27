@@ -54,8 +54,14 @@ const RELATIONSHIP_OPTIONS = [
    adds a stable React id so the local list can re-order / edit inline. */
 type DraftLine = SoLineDraft & { rid: string };
 
-const newLine = (): DraftLine => ({
+/* PR-E — New lines inherit the SO header's delivery date by default.
+   The header date isn't persisted until the SO is saved, so we seed the
+   line client-side; once the SO exists, the server-side cascade in
+   PATCH /:docNo takes over. */
+const newLine = (deliveryDate: string | null = null): DraftLine => ({
   ...emptySoLine(),
+  lineDeliveryDate: deliveryDate,
+  lineDeliveryDateOverridden: false,
   rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
 });
 
@@ -143,8 +149,32 @@ export const SalesOrderNew = () => {
   const updateLine = (rid: string, patch: Partial<SoLineDraft>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
 
-  const addLine  = () => setLines((prev) => [...prev, newLine()]);
+  /* PR-E — New lines seed their lineDeliveryDate from the current header
+     deliveryDate (null until the user fills it in). The cascade effect
+     below keeps non-overridden lines in sync with subsequent header
+     changes. */
+  const addLine  = () => setLines((prev) => [...prev, newLine(deliveryDate || null)]);
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
+
+  /* PR-E — Client-side master-follower cascade for delivery date.
+     Mirrors the server-side cascade in PATCH /mfg-sales-orders/:docNo —
+     except the SO doesn't exist yet here, so we do it locally. When
+     header `deliveryDate` changes, every line that hasn't been manually
+     overridden picks up the new value. Lines with
+     `lineDeliveryDateOverridden=true` keep whatever the user typed. */
+  useEffect(() => {
+    setLines((prev) => {
+      let didUpdate = false;
+      const target = deliveryDate || null;
+      const next = prev.map((l) => {
+        if (l.lineDeliveryDateOverridden) return l;
+        if ((l.lineDeliveryDate ?? null) === target) return l;
+        didUpdate = true;
+        return { ...l, lineDeliveryDate: target };
+      });
+      return didUpdate ? next : prev;
+    });
+  }, [deliveryDate]);
 
   /* PR #148 — Commander 2026-05-26: "Hookka 是随着我选的第一个东西，自动
      detect 是不是 sofa、bed frame 还是 mattress". The standalone Sofa Set
@@ -323,6 +353,9 @@ export const SalesOrderNew = () => {
           unitCostCenti:  l.unitCostCenti,
           variants:       l.variants,
           remark:         l.remark,
+          /* PR-E — per-item delivery date + cascade override flag. */
+          lineDeliveryDate:           l.lineDeliveryDate ?? null,
+          lineDeliveryDateOverridden: l.lineDeliveryDateOverridden ?? false,
         })),
       },
       {

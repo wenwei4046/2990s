@@ -177,6 +177,7 @@ export const useUpdateMfgSalesOrderHeader = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -191,6 +192,8 @@ export const useUpdateMfgSalesOrderStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-status-changes', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -205,6 +208,7 @@ export const useAddMfgSalesOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -219,6 +223,7 @@ export const useUpdateMfgSalesOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -231,6 +236,7 @@ export const useDeleteMfgSalesOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -271,6 +277,34 @@ export const useMfgSalesOrderPriceOverrides = (docNo: string | null) => useQuery
   staleTime: 30_000,
 });
 
+/* PR-D — unified SO audit trail. Commander 2026-05-27 wants HOOKKA-style
+   history timeline (who · action · status pill · timestamp · expandable
+   field-level from→to diff). Reads from mfg_so_audit_log. */
+export type SoAuditFieldChange = {
+  field: string;
+  from?: unknown;
+  to?: unknown;
+};
+export type SoAuditEntry = {
+  id: string;
+  so_doc_no: string;
+  action: string;                       // CREATE | UPDATE_DETAILS | UPDATE_STATUS | ADD_LINE | UPDATE_LINE | DELETE_LINE | ADD_PAYMENT | DELETE_PAYMENT
+  actor_id: string | null;
+  actor_name_snapshot: string | null;
+  field_changes: SoAuditFieldChange[];
+  status_snapshot: string | null;
+  source: string | null;                // 'web' | 'pos' | 'cron' | 'automation'
+  note: string | null;
+  created_at: string;
+};
+export const useSalesOrderAuditLog = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-order-audit-log', docNo],
+  queryFn: () => authedFetch<{ entries: SoAuditEntry[] }>(`/mfg-sales-orders/${docNo}/audit-log`).then((r) => r.entries),
+  enabled: Boolean(docNo),
+  staleTime: 15_000,
+  retry: 1,
+});
+
 export const useOverrideMfgSoLinePrice = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -284,6 +318,60 @@ export const useOverrideMfgSoLinePrice = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-price-overrides', vars.docNo] });
+    },
+  });
+};
+
+/* PR #163 — SO payments ledger (transactions per migration 0073).
+   Replaces the legacy single-row payment fields on mfg_sales_orders. */
+export type SoPayment = {
+  id: string;
+  so_doc_no: string;
+  paid_at: string;                       // YYYY-MM-DD
+  method: 'merchant' | 'transfer' | 'cash';
+  merchant_provider: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
+  installment_months: 6 | 12 | null;
+  approval_code: string | null;
+  amount_centi: number;
+  account_sheet: string | null;
+  collected_by: string | null;            // staff.id (uuid)
+  collected_by_name: string | null;       // joined staff.name
+  note: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export const useSalesOrderPayments = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-orders', docNo, 'payments'],
+  queryFn: () => authedFetch<{ payments: SoPayment[] }>(`/mfg-sales-orders/${docNo}/payments`).then((r) => r.payments),
+  enabled: Boolean(docNo),
+  staleTime: 30_000,
+  retry: 1,
+  retryDelay: 800,
+});
+
+export const useAddSalesOrderPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, ...body }: { docNo: string } & Record<string, unknown>) =>
+      authedFetch<{ payment: SoPayment }>(`/mfg-sales-orders/${docNo}/payments`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
+    },
+  });
+};
+
+export const useDeleteSalesOrderPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, id }: { docNo: string; id: string }) =>
+      authedFetch<{ ok: boolean }>(`/mfg-sales-orders/${docNo}/payments/${id}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
     },
   });
 };
@@ -712,6 +800,78 @@ export type ApAgingRow = {
 export const useApAging = () => baseQuery<{ apAging: ApAgingRow[] }>(
   ['ap-aging'], `/accounting/ap-aging`,
 );
+
+/* ════════════════════════════════════════════════════════════════════════
+   Reports (PR-H) — AutoCount-style reporting endpoints
+   ════════════════════════════════════════════════════════════════════════ */
+
+export type SoDetailListingFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  docNo?: string;
+  debtorCode?: string;
+  itemCode?: string;
+  deliveryDateFrom?: string;
+  deliveryDateTo?: string;
+  groupBy?: 'none' | 'branding' | 'agent' | 'debtor' | 'item_group';
+  sortBy?: 'date' | 'doc_no' | 'item_code';
+};
+
+export type SoDetailListingRow = Record<string, unknown> & {
+  id: string;
+  doc_no: string;
+  line_date: string | null;
+  so_date: string | null;
+  debtor_code: string | null;
+  debtor_name: string | null;
+  agent: string | null;
+  branding: string | null;
+  item_group: string;
+  item_code: string;
+  description: string | null;
+  description2: string | null;
+  uom: string;
+  location: string | null;
+  qty: number;
+  unit_price_centi: number;
+  discount_centi: number;
+  total_centi: number;
+  tax_centi: number;
+  total_inc_centi: number;
+  balance_centi: number;
+  cancelled: boolean;
+  currency: string;
+  status: string | null;
+  local_total_centi: number;
+  remark4: string | null;
+  remark2: string | null;
+  remark3: string | null;
+  processing_date: string | null;
+  sales_exemption_expiry: string | null;
+  customer_delivery_date: string | null;
+};
+
+export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {
+  const params = new URLSearchParams();
+  if (filters.dateFrom)         params.set('dateFrom',         filters.dateFrom);
+  if (filters.dateTo)           params.set('dateTo',           filters.dateTo);
+  if (filters.docNo)            params.set('docNo',            filters.docNo);
+  if (filters.debtorCode)       params.set('debtorCode',       filters.debtorCode);
+  if (filters.itemCode)         params.set('itemCode',         filters.itemCode);
+  if (filters.deliveryDateFrom) params.set('deliveryDateFrom', filters.deliveryDateFrom);
+  if (filters.deliveryDateTo)   params.set('deliveryDateTo',   filters.deliveryDateTo);
+  if (filters.groupBy)          params.set('groupBy',          filters.groupBy);
+  if (filters.sortBy)           params.set('sortBy',           filters.sortBy);
+  const qs = params.toString();
+  return useQuery({
+    queryKey: ['reports', 'sales-order-detail-listing', qs],
+    queryFn: () => authedFetch<{ rows: SoDetailListingRow[] }>(
+      `/reports/sales-order-detail-listing${qs ? `?${qs}` : ''}`,
+    ),
+    placeholderData: (prev) => prev,  // TanStack v5 equivalent of keepPreviousData
+    staleTime: 30_000,
+  });
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    Outstanding (PR #45) — unified outstanding filter across all 8 modules

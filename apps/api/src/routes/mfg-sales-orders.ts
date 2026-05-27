@@ -2,7 +2,9 @@
 // Separate from retail `orders` (POS) — different lifecycle, different ID format.
 
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { supabaseAuth } from '../middleware/auth';
+import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -27,7 +29,10 @@ const HEADER =
 const ITEM =
   'id, doc_no, line_date, debtor_code, debtor_name, agent, item_group, item_code, description, description2, ' +
   'uom, location, qty, unit_price_centi, discount_centi, total_centi, tax_centi, total_inc_centi, balance_centi, ' +
-  'payment_status, venue, branding, remark, cancelled, variants, unit_cost_centi, line_cost_centi, line_margin_centi, created_at';
+  'payment_status, venue, branding, remark, cancelled, variants, unit_cost_centi, line_cost_centi, line_margin_centi, ' +
+  /* PR-E — per-item delivery date + cascade override flag (migration 0074) */
+  'line_delivery_date, line_delivery_date_overridden, ' +
+  'created_at';
 
 const nextDocNo = async (sb: any): Promise<string> => {
   // HOUZS pattern: SO-NNNNNN (6-digit zero-padded counter across all time)
@@ -73,6 +78,11 @@ mfgSalesOrders.post('/', async (c) => {
 
   // Compute totals + category breakdown
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
+  /* PR-E — Per-item delivery date inherits the SO header's
+     customer_delivery_date on create unless the client explicitly
+     supplies a per-line lineDeliveryDate. Override flag mirrors the
+     client's choice (defaults false → cascade-tracked). */
+  const headerDeliveryDate = (body.customerDeliveryDate as string | null | undefined) ?? null;
   const itemRows = items.map((it) => {
     const qty = Number(it.qty ?? 1);
     const unit = Number(it.unitPriceCenti ?? 0);
@@ -86,6 +96,16 @@ mfgSalesOrders.post('/', async (c) => {
     else if (group.includes('bedframe')) bedframe += lineTotal;
     else if (group.includes('accessor')) accessories += lineTotal;
     else others += lineTotal;
+    /* PR-E — Per-line cascade defaults. If the client sent a
+       lineDeliveryDate it wins (and overridden=true unless explicitly
+       false). Otherwise inherit the header date with overridden=false. */
+    const hasExplicitLineDate = it.lineDeliveryDate !== undefined && it.lineDeliveryDate !== null;
+    const lineDeliveryDate = hasExplicitLineDate
+      ? (it.lineDeliveryDate as string | null)
+      : headerDeliveryDate;
+    const lineDeliveryDateOverridden = hasExplicitLineDate
+      ? (it.lineDeliveryDateOverridden === undefined ? true : Boolean(it.lineDeliveryDateOverridden))
+      : Boolean(it.lineDeliveryDateOverridden ?? false);
     return {
       line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
       debtor_code: (body.debtorCode as string) ?? null,
@@ -105,6 +125,8 @@ mfgSalesOrders.post('/', async (c) => {
       unit_cost_centi: Number(it.unitCostCenti ?? 0),
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
+      line_delivery_date: lineDeliveryDate,
+      line_delivery_date_overridden: lineDeliveryDateOverridden,
     };
   });
 
@@ -191,6 +213,37 @@ mfgSalesOrders.post('/', async (c) => {
     const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
     if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   }
+
+  // PR-D — audit row. Emit one CREATE entry with every non-null field the
+  // commander typed on the new-SO form so the timeline shows the genesis
+  // state. We deliberately include the line count rather than each line
+  // (those get their own ADD_LINE rows if they're added later via PATCH).
+  const createFields: FieldChange[] = [];
+  const captureIfSet = (k: string, v: unknown) => {
+    if (v !== undefined && v !== null && v !== '') createFields.push({ field: k, to: v });
+  };
+  captureIfSet('debtorName', customerName);
+  captureIfSet('debtorCode', body.debtorCode);
+  captureIfSet('agent', body.agent);
+  captureIfSet('phone', body.phone);
+  captureIfSet('email', body.email);
+  captureIfSet('soDate', body.soDate);
+  captureIfSet('lineCount', items.length);
+  captureIfSet('localTotalCenti', total);
+  captureIfSet('paymentMethod', body.paymentMethod);
+  captureIfSet('depositCenti', body.depositCenti);
+  captureIfSet('internalExpectedDd', body.internalExpectedDd);
+  captureIfSet('customerSoNo', body.customerSoNo);
+  captureIfSet('customerPo', body.customerPo);
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'CREATE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: createFields,
+    statusSnapshot: 'CONFIRMED',
+  });
+
   return c.json({ docNo }, 201);
 });
 
@@ -211,7 +264,9 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   }).eq('doc_no', docNo).select('doc_no, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
-  // Audit row — best-effort.
+  // Audit row — best-effort. We keep writing the legacy mfg_so_status_changes
+  // row for now (the existing StatusTimeline panel still reads it) and ALSO
+  // emit the unified mfg_so_audit_log row for the PR-D History panel.
   await sb.from('mfg_so_status_changes').insert({
     doc_no: docNo,
     from_status: fromStatus,
@@ -219,8 +274,31 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     changed_by: user.id,
     notes: body.notes ?? null,
   });
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_STATUS',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [{ field: 'status', from: fromStatus, to: body.status }],
+    statusSnapshot: body.status,
+    note: body.notes ?? undefined,
+  });
 
   return c.json({ salesOrder: data });
+});
+
+// ── GET /mfg-sales-orders/:docNo/audit-log ──────────────────────────
+// PR-D — unified history feed (newest first). Returns one envelope:
+//   { entries: [{ id, so_doc_no, action, actor_id, actor_name_snapshot,
+//                  field_changes, status_snapshot, source, note, created_at }] }
+mfgSalesOrders.get('/:docNo/audit-log', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const { data, error } = await sb.from('mfg_so_audit_log')
+    .select('id, so_doc_no, action, actor_id, actor_name_snapshot, field_changes, status_snapshot, source, note, created_at')
+    .eq('so_doc_no', docNo)
+    .order('created_at', { ascending: false });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ entries: data ?? [] });
 });
 
 // GET — list status change history for the SO detail timeline.
@@ -288,7 +366,7 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
 
 // ── PATCH header — edit debtor info, addresses, note, etc. ───────────
 mfgSalesOrders.patch('/:docNo', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
@@ -335,9 +413,46 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
+  // PR-D — snapshot the row before update so we can emit a field-level diff
+  // in the audit log. Only fields actually in the patch body are compared.
+  const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
+  const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
+
+  /* PR-E — Master-follower cascade. When the header's
+     customer_delivery_date changes, every line that hasn't been
+     manually overridden picks up the new date. Mirrors the SoLineCard
+     variants cascade pattern (PR #141 / #147). Lines with
+     line_delivery_date_overridden=true are left untouched.
+     Best-effort: if the cascade UPDATE fails we still report success
+     for the header — the audit trail (next header refresh) will show
+     the divergence. */
+  if (body['customerDeliveryDate'] !== undefined) {
+    const newDate = body['customerDeliveryDate'] as string | null;
+    await sb.from('mfg_sales_order_items')
+      .update({ line_delivery_date: newDate })
+      .eq('doc_no', docNo)
+      .eq('line_delivery_date_overridden', false);
+  }
+
+  /* PR-D — Audit log row capturing field-level from→to diff. */
+  if (before) {
+    const fieldChanges = diffFields(before as Record<string, unknown>, body, map);
+    if (fieldChanges.length > 0) {
+      await recordSoAudit(sb, {
+        docNo,
+        action: 'UPDATE_DETAILS',
+        actorId: user.id,
+        actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+        fieldChanges,
+        statusSnapshot: (before as { status?: string }).status ?? null,
+      });
+    }
+  }
+
   return c.json({ ok: true, docNo });
 });
 
@@ -375,12 +490,15 @@ async function recomputeTotals(sb: any, docNo: string) {
 }
 
 mfgSalesOrders.post('/:docNo/items', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
-  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue').eq('doc_no', docNo).maybeSingle();
+  /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
+     line added later still inherits the SO header's delivery date by
+     default. Client can override by sending lineDeliveryDate explicitly. */
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
   const qty = Number(it.qty ?? 1);
@@ -388,6 +506,17 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const discount = Number(it.discountCenti ?? 0);
   const lineTotal = (qty * unit) - discount;
   const lineCost = Number(it.unitCostCenti ?? 0) * qty;
+  /* PR-E — same inheritance rule as POST /. Explicit per-line value wins
+     (and flips overridden=true unless the client says otherwise);
+     otherwise fall back to header.customer_delivery_date with
+     overridden=false so the line tracks future header changes. */
+  const hasExplicitLineDate = it.lineDeliveryDate !== undefined && it.lineDeliveryDate !== null;
+  const lineDeliveryDate = hasExplicitLineDate
+    ? (it.lineDeliveryDate as string | null)
+    : (header.customer_delivery_date as string | null) ?? null;
+  const lineDeliveryDateOverridden = hasExplicitLineDate
+    ? (it.lineDeliveryDateOverridden === undefined ? true : Boolean(it.lineDeliveryDateOverridden))
+    : Boolean(it.lineDeliveryDateOverridden ?? false);
   const row = {
     doc_no: docNo,
     line_date: (it.lineDate as string) ?? new Date().toISOString().slice(0, 10),
@@ -411,20 +540,42 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     unit_cost_centi: Number(it.unitCostCenti ?? 0),
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
+    line_delivery_date: lineDeliveryDate,
+    line_delivery_date_overridden: lineDeliveryDateOverridden,
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
+
+  // PR-D — emit ADD_LINE audit row. Capture item code + qty + unit price
+  // so the timeline shows the meaningful what-was-added without an explosion
+  // of every column.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'ADD_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', to: row.item_code },
+      { field: 'qty', to: row.qty },
+      { field: 'unitPriceCenti', to: row.unit_price_centi },
+      { field: 'totalCenti', to: row.total_centi },
+    ],
+  });
+
   return c.json({ item: data }, 201);
 });
 
 mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
-  // Re-derive totals if qty/price/discount changed
-  const { data: prev } = await sb.from('mfg_sales_order_items').select('qty, unit_price_centi, discount_centi, unit_cost_centi').eq('id', itemId).maybeSingle();
+  // Re-derive totals if qty/price/discount changed. PR-D — also pull the
+  // human-facing columns (item_code, description, uom) for the audit diff.
+  const { data: prev } = await sb.from('mfg_sales_order_items')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, description2, uom, variants, remark, cancelled')
+    .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
@@ -446,18 +597,220 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (it[from] !== undefined) updates[to] = it[from];
   }
 
+  /* PR-E — Per-item delivery date PATCH. If the caller sends
+     lineDeliveryDate (including null to clear it), we ALSO server-side
+     flip line_delivery_date_overridden to true. This is defensive — the
+     UI should already mark the line as overridden when the user types
+     into the field, but enforcing it here protects against clients that
+     forget. A separate lineDeliveryDateOverridden=false reset path lets
+     the UI deliberately rejoin the header cascade. */
+  if (it.lineDeliveryDate !== undefined) {
+    updates['line_delivery_date'] = it.lineDeliveryDate as string | null;
+    updates['line_delivery_date_overridden'] = true;
+  }
+  if (it.lineDeliveryDateOverridden !== undefined) {
+    updates['line_delivery_date_overridden'] = Boolean(it.lineDeliveryDateOverridden);
+  }
+
   const { error } = await sb.from('mfg_sales_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
+
+  // PR-D — diff old vs new and emit one UPDATE_LINE row only if any field
+  // moved. Compare across both the derived columns (qty/price/discount)
+  // and the passthrough columns (code/group/description/uom/etc).
+  const fieldChanges: FieldChange[] = [];
+  const cmp = (field: string, fromVal: unknown, toVal: unknown) => {
+    const a = fromVal == null ? '' : String(fromVal);
+    const b = toVal == null ? '' : String(toVal);
+    if (a !== b) fieldChanges.push({ field, from: fromVal ?? null, to: toVal ?? null });
+  };
+  cmp('qty', prev.qty, qty);
+  cmp('unitPriceCenti', prev.unit_price_centi, unit);
+  cmp('discountCenti', prev.discount_centi, discount);
+  cmp('unitCostCenti', prev.unit_cost_centi, unitCost);
+  for (const [from, to] of [
+    ['itemCode', 'item_code'], ['itemGroup', 'item_group'], ['description', 'description'],
+    ['description2', 'description2'], ['uom', 'uom'], ['remark', 'remark'], ['cancelled', 'cancelled'],
+  ] as const) {
+    if (it[from] !== undefined) cmp(from, (prev as Record<string, unknown>)[to], it[from]);
+  }
+  if (fieldChanges.length > 0) {
+    // Prefix with itemCode so the timeline can show "Updated line ITEM-123"
+    // without a dedicated column on the audit row.
+    fieldChanges.unshift({ field: 'itemCode', to: prev.item_code });
+    await recordSoAudit(sb, {
+      docNo,
+      action: 'UPDATE_LINE',
+      actorId: user.id,
+      actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      fieldChanges,
+    });
+  }
+
   return c.json({ ok: true });
 });
 
 mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+
+  // PR-D — capture the line snapshot before delete so the timeline can
+  // show what was removed (item code + qty + unit price).
+  const { data: prev } = await sb.from('mfg_sales_order_items')
+    .select('item_code, qty, unit_price_centi, total_centi')
+    .eq('id', itemId).maybeSingle();
+
   const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
+
+  if (prev) {
+    await recordSoAudit(sb, {
+      docNo,
+      action: 'DELETE_LINE',
+      actorId: user.id,
+      actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+      fieldChanges: [
+        { field: 'itemCode', from: prev.item_code },
+        { field: 'qty', from: prev.qty },
+        { field: 'unitPriceCenti', from: prev.unit_price_centi },
+        { field: 'totalCenti', from: prev.total_centi },
+      ],
+    });
+  }
   return c.body(null, 204);
+});
+
+// ── Payments — PR #163 (migration 0073) ───────────────────────────────
+//
+// HOOKKA-style transaction ledger per SO. Each row is one receipt /
+// auth slip. UI lists them, sums into a "Deposit Paid" total, and the
+// balance computes from header.local_total_centi − sum(amount_centi).
+//
+// Legacy single-row payment fields on mfg_sales_orders (payment_method,
+// merchant_provider, installment_months, approval_code, payment_date,
+// paid_centi) are NOT touched here — those columns are scheduled for
+// drop in a follow-up migration once live data is migrated.
+const PAYMENT_COLS =
+  'id, so_doc_no, paid_at, method, merchant_provider, installment_months, ' +
+  'approval_code, amount_centi, account_sheet, collected_by, note, ' +
+  'created_at, created_by';
+
+mfgSalesOrders.get('/:docNo/payments', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo');
+  const { data, error } = await sb
+    .from('mfg_sales_order_payments')
+    .select(`${PAYMENT_COLS}, staff:collected_by ( name )`)
+    .eq('so_doc_no', docNo)
+    .order('paid_at', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  // Flatten the joined `staff.name` onto `collected_by_name` so the UI
+  // doesn't need to drill into a nested object.
+  const payments = (data ?? []).map((r: unknown) => {
+    const row = r as Record<string, unknown> & { staff: { name: string } | null };
+    const { staff, ...rest } = row;
+    return { ...rest, collected_by_name: staff?.name ?? null };
+  });
+  return c.json({ payments });
+});
+
+const paymentCreateSchema = z.object({
+  paidAt:             z.string().min(1),
+  method:             z.enum(['merchant', 'transfer', 'cash']),
+  merchantProvider:   z.enum(['GHL', 'HLB', 'MBB', 'PBB']).optional().nullable(),
+  installmentMonths:  z.union([z.literal(6), z.literal(12)]).optional().nullable(),
+  approvalCode:       z.string().optional().nullable(),
+  amountCenti:        z.number().int().nonnegative(),
+  accountSheet:       z.string().optional().nullable(),
+  collectedBy:        z.string().uuid().optional().nullable(),
+  note:               z.string().optional().nullable(),
+});
+
+mfgSalesOrders.post('/:docNo/payments', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+
+  // Ensure the SO exists before inserting a child row (gives a cleaner
+  // 404 than a deferred FK violation).
+  const { data: so } = await sb.from('mfg_sales_orders').select('doc_no').eq('doc_no', docNo).maybeSingle();
+  if (!so) return c.json({ error: 'sales_order_not_found' }, 404);
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = paymentCreateSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_body', issues: parsed.error.issues }, 400);
+  const p = parsed.data;
+
+  // Method-scoped fields: installment/provider only apply to merchant.
+  const merchantProvider  = p.method === 'merchant' ? (p.merchantProvider ?? null) : null;
+  const installmentMonths = p.method === 'merchant' ? (p.installmentMonths ?? null) : null;
+
+  const { data, error } = await sb.from('mfg_sales_order_payments').insert({
+    so_doc_no:          docNo,
+    paid_at:            p.paidAt,
+    method:             p.method,
+    merchant_provider:  merchantProvider,
+    installment_months: installmentMonths,
+    approval_code:      p.approvalCode ?? null,
+    amount_centi:       p.amountCenti,
+    account_sheet:      p.accountSheet ?? null,
+    collected_by:       p.collectedBy ?? null,
+    note:               p.note ?? null,
+    created_by:         user.id,
+  }).select(PAYMENT_COLS).single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* Post-merge stitch — wire ADD_PAYMENT into the PR-D audit ledger.
+     Field-changes list mirrors what the user typed so the History panel
+     can render a readable diff. */
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'ADD_PAYMENT',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'paidAt',             from: null, to: p.paidAt },
+      { field: 'method',             from: null, to: p.method },
+      { field: 'amountCenti',        from: null, to: p.amountCenti },
+      ...(merchantProvider  ? [{ field: 'merchantProvider',  from: null, to: merchantProvider  } satisfies FieldChange] : []),
+      ...(installmentMonths ? [{ field: 'installmentMonths', from: null, to: installmentMonths } satisfies FieldChange] : []),
+      ...(p.approvalCode    ? [{ field: 'approvalCode',      from: null, to: p.approvalCode    } satisfies FieldChange] : []),
+      ...(p.accountSheet    ? [{ field: 'accountSheet',      from: null, to: p.accountSheet    } satisfies FieldChange] : []),
+    ],
+  });
+
+  return c.json({ payment: data }, 201);
+});
+
+mfgSalesOrders.delete('/:docNo/payments/:id', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const id = c.req.param('id');
+  const user = c.get('user');
+
+  // Guard: only delete if the row belongs to this docNo. Prevents a
+  // mis-routed call from nuking another SO's payment.
+  const { data: row } = await sb.from('mfg_sales_order_payments').select('*').eq('id', id).maybeSingle();
+  if (!row) return c.json({ error: 'not_found' }, 404);
+  const rowTyped = row as { so_doc_no: string; paid_at: string; method: string; amount_centi: number; approval_code: string | null };
+  if (rowTyped.so_doc_no !== docNo) return c.json({ error: 'payment_doc_mismatch' }, 400);
+
+  const { error } = await sb.from('mfg_sales_order_payments').delete().eq('id', id);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+
+  /* Post-merge stitch — DELETE_PAYMENT audit row. */
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'DELETE_PAYMENT',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'paidAt',       from: rowTyped.paid_at,       to: null },
+      { field: 'method',       from: rowTyped.method,        to: null },
+      { field: 'amountCenti',  from: rowTyped.amount_centi,  to: null },
+      ...(rowTyped.approval_code ? [{ field: 'approvalCode', from: rowTyped.approval_code, to: null } satisfies FieldChange] : []),
+    ],
+  });
+
+  return c.json({ ok: true });
 });
 
 // ── Debtor lookup — autocomplete from prior SOs ───────────────────────
