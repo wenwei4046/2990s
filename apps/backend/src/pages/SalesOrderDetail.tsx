@@ -792,20 +792,15 @@ export const SalesOrderDetail = () => {
         locked={isLocked || !isEditing}
       />
 
-      {/* ── Status flow ─────────────────────────────────────────── */}
-      {/* PR #144 — Commander 2026-05-26 gating rule:
-            1. 没 Processing Date → bedframe variants 可以不填，自由 proceed
-            2. 有 Processing Date → bedframe 的 fabric / color / design / total
-               height / divan / leg / gap 必须都填齐才能 proceed
-          Rule encoded server-agnostic on the client: if processingDate is
-          set, scan bedframe items' variants. If any of the canonical
-          variant keys (divanHeight / legHeight / gap / fabricCode) is
-          missing on a bedframe line, block the next-stage transition. */}
+      {/* ── Variant-completeness banner ─────────────────────────────
+          PR #144 + #156 gating rule kept as a read-only warning. The
+          "Move to next stage" pill strip below it (commander 2026-05-27:
+          "这个不需要") was removed — status transitions now flow through
+          the Edit/Save path or the API directly, while this banner stays
+          so the Order Coordinator still sees which lines are incomplete
+          when a Processing Date is set. updateStatus is still wired for
+          the lock-override flow above. */}
       {(() => {
-        /* PR #144 / #156 — Processing-Date gating.
-           Commander 2026-05-27 broadened: "variant 也没有补完" — sofa
-           lines ALSO need their seat/leg/fabric set when Processing Date is
-           on, not just bedframe. Each category has its own required keys: */
         const requireVariants = !!header.internal_expected_dd;
         const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
           bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
@@ -824,46 +819,28 @@ export const SalesOrderDetail = () => {
               })
               .map((it) => ({ code: it.item_code, group: (it.item_group ?? '').toLowerCase() }))
           : [];
-        const gated = incompleteLines.length > 0;
+        if (incompleteLines.length === 0) return null;
         const formatGroupRequirements = (g: string) =>
           g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
           g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
         return (
-          <>
-            {gated && (
-              <div style={{
-                background: 'rgba(184, 51, 31, 0.08)',
-                border: '1px solid var(--c-festive-b, #B8331F)',
-                color: 'var(--c-festive-b, #B8331F)',
-                padding: 'var(--space-3) var(--space-4)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--fs-13)',
-              }}>
-                <strong>Processing Date is set — line variants must be filled before next stage.</strong>
-                <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-                  {incompleteLines.map((l, i) => (
-                    <div key={i}>
-                      • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
-                    </div>
-                  ))}
+          <div style={{
+            background: 'rgba(184, 51, 31, 0.08)',
+            border: '1px solid var(--c-festive-b, #B8331F)',
+            color: 'var(--c-festive-b, #B8331F)',
+            padding: 'var(--space-3) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: 'var(--fs-13)',
+          }}>
+            <strong>Processing Date is set — line variants must be filled before next stage.</strong>
+            <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
+              {incompleteLines.map((l, i) => (
+                <div key={i}>
+                  • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
                 </div>
-              </div>
-            )}
-            <StatusBar
-              status={header.status}
-              onTransition={(s) => {
-                if (gated) {
-                  window.alert(
-                    'Processing Date is set, so all line variants must be filled before moving to the next stage.\n\n' +
-                    'Incomplete:\n' + incompleteLines.map((l) => `  ${l.code} (${l.group})`).join('\n'),
-                  );
-                  return;
-                }
-                updateStatus.mutate({ docNo: header.doc_no, status: s });
-              }}
-              pending={updateStatus.isPending}
-            />
-          </>
+              ))}
+            </div>
+          </div>
         );
       })()}
 
@@ -1101,22 +1078,22 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      semantics intact. */
   const inputsDisabled = !isEditing || locked;
 
+  /* PR #168 — Commander 2026-05-27 screenshot diff vs. Create SO: Detail
+     was using one big "Customer · Addresses" card with 4 hairline-divided
+     sub-blocks; Create SO uses 4 visually distinct top-level cards. Mirror
+     the New SO layout here — same module classes (.card / .cardHeader /
+     .cardTitle / .formGrid4 / .field / .fieldLabel) — so the two pages
+     read identically. The component still exposes its imperative save() /
+     reset() handle to the page-level Edit/Save flow; the 4 cards just
+     replace the single wrapper. */
   return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Customer · Addresses</h2>
-        {/* PR-A — Per-card Save removed. The page-level Save in the page
-            header is now the single commit point for header edits. */}
-      </header>
-      <div className={styles.cardBody}>
-        {/* ── 1. Customer ───────────────────────────────────────────── */}
-        {/* PR #163 — Commander 2026-05-27: "这些全部资料挤在一起 也是要
-            整理一下". Split into 4 visually-divided sub-sections with
-            top-border separators (.subSection). Each sub-section has its
-            own subhead. Fields regrouped so identification stays separate
-            from order scheduling. */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Customer</p>
+    <>
+      {/* ── CUSTOMER ──────────────────────────────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Customer</h2>
+        </header>
+        <div className={styles.cardBody}>
           {/* PR-A — Customer Code input removed (commander 2026-05-27:
               "customer code 不需要"). Field still flows through state +
               payload so the server-side mapping is untouched.
@@ -1198,10 +1175,14 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
           </div>
         </div>
+      </section>
 
-        {/* ── 2. Order Info (venue / dates / note) ──────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Order Info</p>
+      {/* ── ORDER INFO (venue / dates / note) ─────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Order Info</h2>
+        </header>
+        <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
@@ -1257,15 +1238,17 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </div>
           )}
         </div>
+      </section>
 
-        {/* ── 3. Emergency Contact ──────────────────────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>
-            Emergency Contact
-            <span className={styles.muted} style={{ fontWeight: 400, marginLeft: 6, textTransform: 'none', letterSpacing: 0 }}>
-              — used only if we can't reach the customer on delivery day
-            </span>
-          </p>
+      {/* ── EMERGENCY CONTACT ─────────────────────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Emergency Contact</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Used only if we cannot reach the customer on delivery day
+          </span>
+        </header>
+        <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Contact Name</span>
@@ -1292,10 +1275,14 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
           </div>
         </div>
+      </section>
 
-        {/* ── 4. Delivery Address ───────────────────────────────────── */}
-        <div className={styles.subSection}>
-          <p className={styles.subHead}>Delivery Address</p>
+      {/* ── DELIVERY ADDRESS ──────────────────────────────────────── */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Delivery Address</h2>
+        </header>
+        <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Address Line 1</span>
@@ -1349,8 +1336,8 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </>
   );
 });
 CustomerCard.displayName = 'CustomerCard';
@@ -1359,15 +1346,45 @@ CustomerCard.displayName = 'CustomerCard';
    Variants summary pills (for line items table)
    ════════════════════════════════════════════════════════════════════════ */
 
+/* PR #168 — Commander 2026-05-27: "字体统一". Pill keys were rendering as
+   camelCase variable names (gap / legHeight / fabricCode) which read like
+   debug output. Map known keys to human Title Case labels, fall back to
+   camelCase → "Camel Case" splitter for anything unmapped. Array values
+   (e.g. specials: ['Extra cushion', 'Pet-proof']) join with ", ". */
+const VARIANT_KEY_LABELS: Record<string, string> = {
+  gap:          'Gap',
+  legHeight:    'Leg Height',
+  fabricCode:   'Fabric Code',
+  divanHeight:  'Divan Height',
+  totalHeight:  'Total Height',
+  seatHeight:   'Seat Height',
+  specials:     'Specials',
+};
+
+const camelCaseToTitle = (s: string): string => {
+  if (!s) return s;
+  const spaced = s.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+};
+
+const formatVariantValue = (v: unknown): string => {
+  if (Array.isArray(v)) return v.map((x) => String(x)).join(', ');
+  return String(v);
+};
+
 const VariantsPills = ({ variants }: { variants: Record<string, unknown> | null }) => {
   if (!variants || typeof variants !== 'object') return null;
-  const entries = Object.entries(variants).filter(([, v]) => v != null && v !== '');
+  const entries = Object.entries(variants).filter(([, v]) => {
+    if (v == null || v === '') return false;
+    if (Array.isArray(v) && v.length === 0) return false;
+    return true;
+  });
   if (entries.length === 0) return null;
   return (
     <div className={styles.variantBlock}>
       {entries.map(([k, v]) => (
         <span key={k} className={styles.variantPill}>
-          {k}: {String(v)}
+          {VARIANT_KEY_LABELS[k] ?? camelCaseToTitle(k)}: {formatVariantValue(v)}
         </span>
       ))}
     </div>
