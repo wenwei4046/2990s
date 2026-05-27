@@ -33,6 +33,8 @@ import { GrnNew } from './pages/GrnNew';
 import { PurchaseInvoiceNew } from './pages/PurchaseInvoiceNew';
 import { PurchaseReturnNew } from './pages/PurchaseReturnNew';
 import { Outstanding } from './pages/Outstanding';
+import { Placeholder } from './pages/Placeholder';
+import { SalesOrderDetailListing } from './pages/SalesOrderDetailListing';
 import {
   GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
   ConsignmentDetail, PurchaseReturnDetail,
@@ -85,6 +87,8 @@ export const router = createBrowserRouter([
       { path: 'purchase-returns/:id', element: <PurchaseReturnDetail /> },
       { path: 'accounting', element: <Accounting /> },
       { path: 'outstanding', element: <Outstanding /> },
+      { path: 'reports/sales-order-listing', element: <Placeholder title="Sales Order Listing" phase="a follow-up PR" hint="One row per SO header. Use Sales Order Detail Listing for line-item view." /> },
+      { path: 'reports/sales-order-detail-listing', element: <SalesOrderDetailListing /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
