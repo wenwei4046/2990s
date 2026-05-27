@@ -33,7 +33,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Columns3, RotateCcw } from 'lucide-react';
 import styles from './DataGrid.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -204,6 +204,11 @@ function DataGridInner<T>({
   const [rowCtx, setRowCtx] = useState<{ x: number; y: number; items: DataGridContextMenuItem[] } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [groupZoneActive, setGroupZoneActive] = useState(false);
+  /* HOUZS-parity Columns popover — commander 2026-05-27: "为什么不是跟houzs的一样".
+     The right-click header menu still works (backwards compat); this adds a
+     discoverable toolbar button + popover with a per-column checkbox + Reset
+     link, matching houzs-erp/src/pages/SalesOrderPage.tsx lines 576-624. */
+  const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Refocus search when parent bumps focusSearchNonce ("Find" button).
@@ -240,26 +245,69 @@ function DataGridInner<T>({
     };
   }, [rowCtx]);
 
+  /* Close the Columns popover on outside click — mirrors the `ctx` pattern.
+     The popover itself stops propagation on its container so clicks inside
+     don't dismiss it. Escape also closes for keyboard parity. */
+  useEffect(() => {
+    if (!columnsMenuOpen) return;
+    const close = () => setColumnsMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [columnsMenuOpen]);
+
+  /* HOUZS-parity column show/hide actions for the Columns popover. Reset
+     clears hidden + order + widths (preserving groupBy + sort so search
+     state survives). toggleColumn flips a column's presence in `hidden`. */
+  const resetColumns = useCallback(() => {
+    setLayout((l) => ({ ...l, hidden: [], order: [], widths: {} }));
+    setColumnsMenuOpen(false);
+  }, [setLayout]);
+  const toggleColumn = useCallback((colKey: string) => {
+    setLayout((l) => {
+      /* If we're still on the pristine-defaults overlay (no explicit
+         choices yet) materialize the current set of hidden keys before
+         toggling, so the first interaction doesn't silently un-hide every
+         defaultHidden column. */
+      const pristine = l.order.length === 0 && l.hidden.length === 0;
+      const baseHidden = pristine
+        ? columns.filter((c) => c.defaultHidden).map((c) => c.key)
+        : l.hidden;
+      const hidden = baseHidden.includes(colKey)
+        ? baseHidden.filter((k) => k !== colKey)
+        : [...baseHidden, colKey];
+      return { ...l, hidden };
+    });
+  }, [columns, setLayout]);
+
   // ── Resolve visible/ordered columns ───────────────────────────────
   // If `expandable` is set, prepend a synthetic 32px chevron column that
   // can't be reordered/hidden via the layout (filtered out of order /
   // hidden persistence on read). The accessor is built per-row inside
   // the tbody render so it can read expandedRows + call toggleExpand.
+  /* HOUZS port — when the persisted layout is pristine (no order +
+     no hidden customisations yet) apply `defaultHidden: true` from the
+     column spec so the grid starts with Houzs's 19-of-25 / 34-of-44
+     visible-by-default semantics. Once the user shows/hides anything,
+     the persisted `hidden` array takes precedence and we stop overlaying
+     defaults (their explicit choice wins). Lifted out of the visibleColumns
+     memo so the Columns popover can read the same set without recomputing. */
+  const effectiveHidden = useMemo(() => {
+    const pristineLayout = layout.order.length === 0 && layout.hidden.length === 0;
+    return pristineLayout
+      ? new Set(columns.filter((c) => c.defaultHidden).map((c) => c.key))
+      : new Set(layout.hidden);
+  }, [columns, layout.order, layout.hidden]);
+
   const visibleColumns = useMemo(() => {
     const byKey = new Map(columns.map((c) => [c.key, c]));
     const order = layout.order.length
       ? [...layout.order.filter((k) => byKey.has(k)), ...columns.filter((c) => !layout.order.includes(c.key)).map((c) => c.key)]
       : columns.map((c) => c.key);
-    /* HOUZS port — when the persisted layout is pristine (no order +
-       no hidden customisations yet) apply `defaultHidden: true` from the
-       column spec so the grid starts with Houzs's 19-of-25 / 34-of-44
-       visible-by-default semantics. Once the user shows/hides anything,
-       the persisted `hidden` array takes precedence and we stop overlaying
-       defaults (their explicit choice wins). */
-    const pristineLayout = layout.order.length === 0 && layout.hidden.length === 0;
-    const effectiveHidden = pristineLayout
-      ? new Set(columns.filter((c) => c.defaultHidden).map((c) => c.key))
-      : new Set(layout.hidden);
     const base = order
       .filter((k) => !effectiveHidden.has(k))
       .map((k) => byKey.get(k)!)
@@ -280,7 +328,7 @@ function DataGridInner<T>({
       searchValue: () => '',
     };
     return [chevronCol, ...base];
-  }, [columns, layout.order, layout.hidden, expandable]);
+  }, [columns, layout.order, effectiveHidden, expandable]);
 
   // ── Filtered + sorted + grouped rows ──────────────────────────────
   const filteredRows = useMemo(() => {
@@ -485,10 +533,57 @@ function DataGridInner<T>({
 
   return (
     <div className={styles.root}>
-      {/* Toolbar — caller's actions + global search */}
+      {/* Toolbar — caller's actions + global search + Columns popover.
+          Commander 2026-05-27 ("为什么不是跟houzs的一样"): Houzs surfaces
+          column show/hide as a visible pill button. The right-click header
+          menu is preserved (backwards compat — both write to layout.hidden). */}
       <div className={styles.toolbar}>
         {toolbar}
         <div className={styles.toolbarSpacer} />
+        <div className={styles.columnsAnchor}>
+          <button
+            type="button"
+            className={`${styles.toolbarPill} ${columnsMenuOpen ? styles.toolbarPillOn : ''}`}
+            onClick={(e) => { e.stopPropagation(); setColumnsMenuOpen((v) => !v); }}
+          >
+            <Columns3 size={14} strokeWidth={1.75} aria-hidden />
+            <span>Columns</span>
+            <span className={styles.toolbarPillBadge}>
+              {visibleColumns.length - (expandable ? 1 : 0)}/{columns.length}
+            </span>
+          </button>
+          {columnsMenuOpen && (
+            <div className={styles.columnsMenu} onClick={(e) => e.stopPropagation()}>
+              <header className={styles.columnsMenuHeader}>
+                <span>Columns ({visibleColumns.length - (expandable ? 1 : 0)})</span>
+                <button
+                  type="button"
+                  className={styles.columnsMenuReset}
+                  onClick={resetColumns}
+                  title="Reset to defaults"
+                >
+                  <RotateCcw size={12} strokeWidth={1.75} aria-hidden />
+                  <span>Reset</span>
+                </button>
+              </header>
+              <div className={styles.columnsMenuBody}>
+                {columns.map((c) => {
+                  const isHidden = effectiveHidden.has(c.key);
+                  return (
+                    <label key={c.key} className={styles.columnsMenuItem}>
+                      <input
+                        type="checkbox"
+                        checked={!isHidden}
+                        onChange={() => toggleColumn(c.key)}
+                      />
+                      <span>{c.label || c.key}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
         <div className={styles.searchWrap}>
           <Search {...ICON} aria-hidden />
           <input

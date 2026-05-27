@@ -72,11 +72,14 @@ const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
    keeps stable referential identity on host elements between renders).
    ────────────────────────────────────────────────────────────────────────── */
 const TITLE_ICON_STYLE: CSSProperties = { color: 'var(--c-burnt)' };
+/* PR — commander 2026-05-27 typography polish. Title total badge was
+   fs-18/800 which made it dominate the page header. Step down to fs-14/700
+   so it reads as a meta value next to the doc no rather than another title. */
 const TITLE_TOTAL_STYLE: CSSProperties = {
   marginLeft: 'var(--space-2)',
   fontFamily: 'var(--font-mark)',
-  fontSize: 'var(--fs-18)',
-  fontWeight: 800,
+  fontSize: 'var(--fs-14)',
+  fontWeight: 700,
   fontStretch: '80%',
   color: 'var(--c-burnt)',
 };
@@ -113,7 +116,9 @@ const TOTALS_KPI_GRID_STYLE: CSSProperties = {
   paddingBottom: 'var(--space-3)',
   borderBottom: '1px solid var(--line)',
 };
-const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-18)' };
+/* PR — Step KPI tile values from fs-18 → fs-15 so the totals card no longer
+   reads as another hero. Margin / Margin % share this override. */
+const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-15, 15px)' };
 const HISTORY_NOTE_STYLE: CSSProperties = { fontStyle: 'italic' };
 
 /* Fix 2 — Lifted out of the render-time IIFE so the object literal isn't
@@ -621,7 +626,7 @@ export const SalesOrderDetail = () => {
           </Link>
           <div>
             <h1 className={styles.title}>
-              <FileText size={20} strokeWidth={1.75} style={TITLE_ICON_STYLE} />
+              <FileText size={16} strokeWidth={1.75} style={TITLE_ICON_STYLE} />
               {header.doc_no} — {header.debtor_name}
               {/* PR #163 — Total badge in title row so commander sees the SO
                   value the moment the page loads (was previously buried

@@ -47,8 +47,13 @@
 .backBtn:hover { background: var(--c-cream); }
 
 .title {
+  /* PR — commander 2026-05-27: "字体小一点 走系统风格".
+     Step the page title down to fs-15 (was fs-16) so the SO-XXXX header
+     reads like a list-row anchor rather than a hero. Total badge moves out
+     of the title via TITLE_TOTAL_STYLE override below — we shrink it to
+     match. */
   font-family: var(--font-title);
-  font-size: var(--fs-16);
+  font-size: var(--fs-15, 15px);
   font-weight: 700;
   color: var(--c-ink);
   margin: 0;
@@ -128,7 +133,10 @@
 }
 
 .cardBody {
-  padding: var(--space-2) var(--space-3);
+  /* PR — commander 2026-05-27: trim card internal padding so the page reads
+     denser. Cards stack tightly; each one used to feel like a brochure
+     section. */
+  padding: var(--space-2);
 }
 
 /* ── Customer info grid ─────────────────────────────────────────────── */
@@ -170,19 +178,47 @@
 
 .fieldInput,
 .fieldSelect {
+  /* PR — commander 2026-05-27: "该填入资料的地方，还有 column 那些 dropdown
+     的状态切换，看起来差异不大". Editable inputs get a brighter paper
+     background + slightly heavier border so they're obviously editable; the
+     disabled override below muted them so the difference reads at a glance.
+     Padding bumps from 3px → 6px so text doesn't crowd the border. */
   font-family: var(--font-sans);
   font-size: var(--fs-12);
   background: var(--c-paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 3px 8px;
+  padding: 6px 10px;
   color: var(--c-ink);
   outline: none;
   width: 100%;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 .fieldInput:focus,
-.fieldSelect:focus { border-color: var(--line-strong); background: var(--c-cream); }
+.fieldSelect:focus {
+  border-color: var(--c-burnt);
+  background: var(--c-paper);
+  box-shadow: 0 0 0 2px rgba(232, 107, 58, 0.16);
+}
+/* Disabled / read-only treatment — clearly distinct from editable inputs.
+   Uses the soft cream background and a muted text color so commander can
+   tell at a glance which fields are locked. */
+.fieldInput:disabled,
+.fieldSelect:disabled,
+.fieldInput[readonly] {
+  background: var(--c-cream);
+  border-color: var(--line);
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+/* Native select still needs a visible chevron when editable — keep the
+   default UA chevron and just align the right padding so text doesn't
+   overlap it. */
+.fieldSelect {
+  padding-right: 24px;
+  appearance: auto;
+  background-position: right 8px center;
+}
 
 /* ── Debtor autocomplete dropdown ───────────────────────────────────── */
 
@@ -221,8 +257,14 @@
 /* ── Line items table ───────────────────────────────────────────────── */
 
 .table {
+  /* PR — commander 2026-05-27: "MARGIN 那一列跟 ACTIONS 重叠了".
+     Fix: switch to fixed table layout so column widths stick + use `nth-child`
+     widths below for the numeric cluster. Item column flexes; everything
+     right of it gets a min width that fits the longest expected value
+     (MYR 9,999.99 → ~96px). */
   width: 100%;
   border-collapse: collapse;
+  table-layout: auto;
 }
 
 .table thead th {
@@ -236,7 +278,33 @@
   padding: 4px var(--space-2);
   background: var(--c-cream);
   border-bottom: 1px solid var(--line);
+  white-space: nowrap;
 }
+/* PR — Tight + predictable widths for the right-side numeric cluster + the
+   actions column so margin doesn't bleed under actions. The 10-col layout
+   is: 1 Item · 2 Qty · 3 Unit · 4 Disc · 5 Delivery · 6 Total · 7 Unit Cost ·
+   8 Line Cost · 9 Margin · 10 Actions. */
+.table thead th:nth-child(2),
+.table tbody td:nth-child(2) { width: 56px; min-width: 56px; }
+.table thead th:nth-child(3),
+.table tbody td:nth-child(3),
+.table thead th:nth-child(4),
+.table tbody td:nth-child(4),
+.table thead th:nth-child(6),
+.table tbody td:nth-child(6),
+.table thead th:nth-child(7),
+.table tbody td:nth-child(7),
+.table thead th:nth-child(8),
+.table tbody td:nth-child(8),
+.table thead th:nth-child(9),
+.table tbody td:nth-child(9) {
+  width: 96px;
+  min-width: 96px;
+}
+.table thead th:nth-child(5),
+.table tbody td:nth-child(5) { width: 104px; min-width: 104px; }
+.table thead th:nth-child(10),
+.table tbody td:nth-child(10) { width: 96px; min-width: 96px; }
 
 .table tbody td {
   padding: 6px var(--space-2);
@@ -284,9 +352,13 @@
 }
 
 .priceCell {
+  /* PR — commander 2026-05-27: "字体好像太大了，在格子里都放不下".
+     Step down to fs-12 + weight 700 (was fs-14 / 800) so the price fits the
+     ~96px column without wrapping. Still bolded + burnt so the value is
+     visually distinct from the cost/margin cells next to it. */
   font-family: var(--font-mark);
-  font-size: var(--fs-14);
-  font-weight: 800;
+  font-size: var(--fs-12);
+  font-weight: 700;
   font-stretch: 80%;
   color: var(--c-burnt);
   text-align: right;
@@ -366,9 +438,12 @@
 }
 
 .grandTotal {
+  /* PR — commander 2026-05-27: drop weight 800 → 700 and step size down so
+     "MYR 2,150.00" fits on one row inside the KPI tile. The category-row
+     totalValue cells also override this via TOTALS_KPI_VALUE_STYLE. */
   font-family: var(--font-mark);
-  font-size: var(--fs-24);
-  font-weight: 800;
+  font-size: var(--fs-20, 20px);
+  font-weight: 700;
   font-stretch: 80%;
   color: var(--c-burnt);
 }
