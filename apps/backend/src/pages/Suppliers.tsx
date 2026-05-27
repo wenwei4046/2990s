@@ -32,6 +32,20 @@ const STATUS_CHIPS: { value: 'all' | SupplierStatus; label: string }[] = [
   { value: 'BLOCKED', label: 'Blocked' },
 ];
 
+// PR #208 — Commander 2026-05-27: filter the suppliers list by what they
+// supply. Categories are canonical (see migration 0086); MIXED catches
+// fabric / hardware / multi-category resellers.
+type SupplierCategoryFilter = 'all' | 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | 'MIXED';
+const CATEGORY_CHIPS: { value: SupplierCategoryFilter; label: string }[] = [
+  { value: 'all',       label: 'All categories' },
+  { value: 'SOFA',      label: 'Sofa' },
+  { value: 'BEDFRAME',  label: 'Bedframe' },
+  { value: 'MATTRESS',  label: 'Mattress' },
+  { value: 'ACCESSORY', label: 'Accessory' },
+  { value: 'SERVICE',   label: 'Service' },
+  { value: 'MIXED',     label: 'Mixed / Other' },
+];
+
 const STATUS_CLASS: Record<SupplierStatus, string> = {
   ACTIVE: styles.statusActive ?? '',
   INACTIVE: styles.statusInactive ?? '',
@@ -41,6 +55,10 @@ const STATUS_CLASS: Record<SupplierStatus, string> = {
 export const Suppliers = () => {
   const navigate = useNavigate();
   const [status, setStatus] = useState<'all' | SupplierStatus>('all');
+  // PR #208 — supplier category filter (commander 2026-05-27). Client-side
+  // since the server doesn't yet expose ?category= and the list is small
+  // (< a few hundred rows).
+  const [category, setCategory] = useState<SupplierCategoryFilter>('all');
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -49,7 +67,11 @@ export const Suppliers = () => {
     search: search.trim() || undefined,
   });
 
-  const rows = useMemo(() => data ?? [], [data]);
+  const rows = useMemo(() => {
+    const all = data ?? [];
+    if (category === 'all') return all;
+    return all.filter((r) => (r.category ?? '').toUpperCase() === category);
+  }, [data, category]);
 
   return (
     <div className={styles.page}>
@@ -89,6 +111,20 @@ export const Suppliers = () => {
         </div>
       </div>
 
+      {/* PR #208 — category filter chips. Client-side filter on the in-memory
+          list (small dataset). Hides nothing when "All categories" is on. */}
+      <div className={styles.statusChips} style={{ marginTop: 'var(--space-2)' }}>
+        {CATEGORY_CHIPS.map((c) => (
+          <StatusChip
+            key={c.value}
+            active={category === c.value}
+            onClick={() => setCategory(c.value)}
+          >
+            {c.label}
+          </StatusChip>
+        ))}
+      </div>
+
       <p className={styles.eyebrow}>
         {isLoading ? 'Loading suppliers…' : `${rows.length} suppliers`}
       </p>
@@ -109,6 +145,7 @@ export const Suppliers = () => {
             <tr>
               <th>Code</th>
               <th>Name</th>
+              <th>Category</th>
               <th>Contact</th>
               <th>Phone</th>
               <th>State</th>
@@ -119,13 +156,18 @@ export const Suppliers = () => {
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={7} className={styles.emptyRow}>Loading…</td>
+                <td colSpan={8} className={styles.emptyRow}>Loading…</td>
               </tr>
             )}
             {!isLoading && rows.map((r) => (
               <tr key={r.id} onClick={() => navigate(`/suppliers/${r.id}`)}>
                 <td><span className={styles.codeChip}>{r.code}</span></td>
                 <td>{r.name}</td>
+                <td style={{ color: 'var(--fg-muted)' }}>
+                  {r.category
+                    ? (CATEGORY_CHIPS.find((c) => c.value === r.category)?.label ?? r.category)
+                    : '—'}
+                </td>
                 <td>{r.contact_person ?? '—'}</td>
                 <td>{formatPhone(r.phone ?? r.whatsapp_number) || '—'}</td>
                 <td>{r.state ?? '—'}</td>
@@ -138,7 +180,7 @@ export const Suppliers = () => {
               </tr>
             ))}
             {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>No suppliers yet.</td></tr>
+              <tr><td colSpan={8} className={styles.emptyRow}>No suppliers yet.</td></tr>
             )}
           </tbody>
         </table>

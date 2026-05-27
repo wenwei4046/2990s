@@ -24,7 +24,9 @@ import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, Building2, Clock, AlertTriangle, CheckCircle2,
   TrendingUp, Package, Plus, Pencil, Trash2, Star, X, Save, Search,
+  Tag,
 } from 'lucide-react';
+import { MaintenanceTab, type MaintenanceSection } from './Products';
 import { Button } from '@2990s/design-system';
 import {
   useSupplierDetail,
@@ -95,6 +97,68 @@ function deliveryDelta(expected: string | null, received: string | null): Delive
   return { label: `${diffDays}d late`, tone: 'late' };
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   PR #208 — Supplier category + per-supplier maintenance config.
+
+   `SupplierCategory` is the canonical set commander asked for: SOFA /
+   BEDFRAME / MATTRESS / ACCESSORY / SERVICE / MIXED. The MIXED slot covers
+   fabric / hardware / multi-category resellers — surfaces every Maintenance
+   tab so commander can edit any surcharge that might apply.
+
+   `MAINTENANCE_SECTIONS_FOR_CATEGORY` filters the Pricing tab's left rail.
+   Sofa supplier → Sofa + Common (Fabrics). Bedframe supplier → Bedframe +
+   Common. Mattress supplier → Products Maintenance only (size pool). Etc.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SUPPLIER_CATEGORIES = ['SOFA', 'BEDFRAME', 'MATTRESS', 'ACCESSORY', 'SERVICE', 'MIXED'] as const;
+type SupplierCategory = typeof SUPPLIER_CATEGORIES[number];
+
+const SUPPLIER_CATEGORY_LABEL: Record<SupplierCategory, string> = {
+  SOFA:      'Sofa',
+  BEDFRAME:  'Bedframe',
+  MATTRESS:  'Mattress',
+  ACCESSORY: 'Accessory',
+  SERVICE:   'Service',
+  MIXED:     'Mixed / Other',
+};
+
+const isSupplierCategory = (v: string | null | undefined): v is SupplierCategory =>
+  typeof v === 'string' && (SUPPLIER_CATEGORIES as readonly string[]).includes(v);
+
+/** Section allow-list per supplier category. Returns undefined when the
+ *  category is MIXED or null — show every section (default behaviour). */
+function maintenanceSectionsForCategory(
+  cat: SupplierCategory | null,
+): MaintenanceSection[] | undefined {
+  if (!cat || cat === 'MIXED') return undefined;
+  switch (cat) {
+    case 'BEDFRAME':  return ['Bedframe', 'Common', 'Products Maintenance'];
+    case 'SOFA':      return ['Sofa', 'Common', 'Products Maintenance'];
+    case 'MATTRESS':  return ['Common', 'Products Maintenance'];
+    case 'ACCESSORY': return ['Products Maintenance'];
+    case 'SERVICE':   return ['Common'];
+    default:          return undefined;
+  }
+}
+
+/** MfgCategory mapping for the Model picker filter — sofa Models hidden
+ *  from bedframe suppliers, etc. MIXED returns null (no filter). */
+function mfgCategoryFromSupplierCategory(
+  cat: SupplierCategory | null,
+): MfgCategory | null {
+  if (!cat || cat === 'MIXED') return null;
+  switch (cat) {
+    case 'BEDFRAME':  return 'BEDFRAME';
+    case 'SOFA':      return 'SOFA';
+    case 'MATTRESS':  return 'MATTRESS';
+    case 'ACCESSORY': return 'ACCESSORY';
+    case 'SERVICE':   return 'SERVICE';
+    default:          return null;
+  }
+}
+
+type SupplierDetailTab = 'overview' | 'pricing';
+
 export const SupplierDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = useSupplierDetail(id ?? null);
@@ -103,6 +167,14 @@ export const SupplierDetail = () => {
   const supplier = detail.data?.supplier;
   const bindings = detail.data?.bindings ?? [];
   const score = scorecard.data;
+
+  // PR #208 — top-level tab on the SupplierDetail page (Overview / Pricing).
+  // Pricing surfaces the same MaintenanceTab UI from Products, scoped to
+  // this supplier and filtered by category.
+  const [activeTab, setActiveTab] = useState<SupplierDetailTab>('overview');
+  const supplierCategory: SupplierCategory | null = isSupplierCategory(supplier?.category)
+    ? supplier!.category
+    : null;
 
   // KPI tone selection — same thresholds as HOOKKA.
   const otrTone = useMemo(() => {
@@ -184,8 +256,140 @@ export const SupplierDetail = () => {
         onClose={() => setEditingInfo(false)}
       />
 
-      {/* ── KPI tiles ──────────────────────────────────────────────── */}
-      <section className={styles.kpiGrid}>
+      {/* ── PR #208: Overview / Pricing tab strip ──────────────────── */}
+      <div
+        role="tablist"
+        style={{
+          display: 'flex',
+          gap: 0,
+          borderBottom: '1px solid var(--line)',
+          marginTop: 'var(--space-4)',
+        }}
+      >
+        <SupplierTabButton
+          active={activeTab === 'overview'}
+          onClick={() => setActiveTab('overview')}
+        >
+          Overview
+        </SupplierTabButton>
+        <SupplierTabButton
+          active={activeTab === 'pricing'}
+          onClick={() => setActiveTab('pricing')}
+        >
+          Pricing
+          {supplierCategory && (
+            <span
+              style={{
+                marginLeft: 'var(--space-2)',
+                padding: '0 var(--space-2)',
+                borderRadius: 'var(--radius-pill)',
+                background: 'var(--c-paper)',
+                border: '1px solid var(--line)',
+                fontSize: 'var(--fs-11)',
+                color: 'var(--fg-muted)',
+              }}
+            >
+              {SUPPLIER_CATEGORY_LABEL[supplierCategory]}
+            </span>
+          )}
+        </SupplierTabButton>
+      </div>
+
+      {activeTab === 'pricing' ? (
+        <SupplierPricingPanel
+          supplierId={id!}
+          supplierName={supplier.name}
+          supplierCategory={supplierCategory}
+        />
+      ) : (
+        <SupplierOverviewPanel
+          id={id!}
+          bindings={bindings}
+          score={score}
+          otrTone={otrTone}
+          defectTone={defectTone}
+          setSkuDialog={setSkuDialog}
+        />
+      )}
+
+      {/* ── SKU dialogs (modals) ──────────────────────────────────── */}
+      {skuDialog.mode === 'multi' && (
+        <ModelSkuPickerDialog
+          supplierId={id!}
+          existingBindings={bindings}
+          supplierCategory={supplierCategory}
+          onClose={() => setSkuDialog({ mode: 'closed' })}
+        />
+      )}
+      {skuDialog.mode === 'edit' && (
+        <SkuFormDialog
+          supplierId={id!}
+          editing={skuDialog.binding}
+          onClose={() => setSkuDialog({ mode: 'closed' })}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   PR #208 — Tab pill + Overview & Pricing panels.
+
+   Overview keeps the existing KPI / SKU Mappings / PO history sections.
+   Pricing mounts the shared MaintenanceTab scoped to this supplier with
+   a section allow-list derived from the supplier's category.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SupplierTabButton = ({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    role="tab"
+    aria-selected={active}
+    onClick={onClick}
+    style={{
+      padding: 'var(--space-3) var(--space-4)',
+      background: 'transparent',
+      border: 'none',
+      borderBottom: active ? '2px solid var(--c-burnt)' : '2px solid transparent',
+      color: active ? 'var(--c-ink)' : 'var(--fg-muted)',
+      fontFamily: 'var(--font-button)',
+      fontSize: 'var(--fs-14)',
+      fontWeight: 600,
+      cursor: 'pointer',
+      display: 'inline-flex',
+      alignItems: 'center',
+    }}
+  >
+    {children}
+  </button>
+);
+
+const SupplierOverviewPanel = ({
+  id,
+  bindings,
+  score,
+  otrTone,
+  defectTone,
+  setSkuDialog,
+}: {
+  id: string;
+  bindings: BindingRow[];
+  score: ReturnType<typeof useSupplierScorecard>['data'];
+  otrTone: string;
+  defectTone: string;
+  setSkuDialog: (s: { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }) => void;
+}) => (
+  <>
+    {/* ── KPI tiles ──────────────────────────────────────────────── */}
+    <section className={styles.kpiGrid}>
         <div className={styles.kpiCard}>
           <div className={styles.kpiHead}>
             <span className={styles.kpiLabel}>On-Time Rate</span>
@@ -222,56 +426,86 @@ export const SupplierDetail = () => {
         </div>
       </section>
 
-      {/* ── SKU Mappings ──────────────────────────────────────────── */}
-      <section className={styles.card}>
-        <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>
-            <Package {...ICON} style={{ color: 'var(--c-burnt)' }} />
-            SKU Mappings
+    {/* ── SKU Mappings ──────────────────────────────────────────── */}
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>
+          <Package {...ICON} style={{ color: 'var(--c-burnt)' }} />
+          SKU Mappings
+          <span className={styles.cardTitleCount}>
+            ({bindings.length} {bindings.length === 1 ? 'code' : 'codes'})
+          </span>
+        </h2>
+        <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'multi' })}>
+          <Plus {...ICON} />
+          <span>Add SKU Mappings</span>
+        </Button>
+      </header>
+      <SkuMappingsTable
+        supplierId={id}
+        bindings={bindings}
+        onEdit={(b) => setSkuDialog({ mode: 'edit', binding: b })}
+      />
+    </section>
+
+    {/* ── Last 10 POs ───────────────────────────────────────────── */}
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>
+          <TrendingUp {...ICON} style={{ color: 'var(--c-burnt)' }} />
+          Last 10 Purchase Orders
+          <span className={styles.cardTitleCount}>({score?.totalPOs ?? 0} total)</span>
+        </h2>
+      </header>
+      <LastTenPOsTable rows={score?.last10POs ?? []} />
+    </section>
+  </>
+);
+
+const SupplierPricingPanel = ({
+  supplierId,
+  supplierName,
+  supplierCategory,
+}: {
+  supplierId: string;
+  supplierName: string;
+  supplierCategory: SupplierCategory | null;
+}) => {
+  const sectionFilter = maintenanceSectionsForCategory(supplierCategory);
+  return (
+    <section className={styles.card} style={{ marginTop: 'var(--space-3)' }}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>
+          <Tag {...ICON} style={{ color: 'var(--c-burnt)' }} />
+          Pricing · {supplierName}
+          {supplierCategory && (
             <span className={styles.cardTitleCount}>
-              ({bindings.length} {bindings.length === 1 ? 'code' : 'codes'})
+              ({SUPPLIER_CATEGORY_LABEL[supplierCategory]} surcharges)
             </span>
-          </h2>
-          <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'multi' })}>
-            <Plus {...ICON} />
-            <span>Add SKU Mappings</span>
-          </Button>
-        </header>
-        <SkuMappingsTable
-          supplierId={id!}
-          bindings={bindings}
-          onEdit={(b) => setSkuDialog({ mode: 'edit', binding: b })}
-        />
-      </section>
-
-      {/* ── Last 10 POs ───────────────────────────────────────────── */}
-      <section className={styles.card}>
-        <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>
-            <TrendingUp {...ICON} style={{ color: 'var(--c-burnt)' }} />
-            Last 10 Purchase Orders
-            <span className={styles.cardTitleCount}>({score?.totalPOs ?? 0} total)</span>
-          </h2>
-        </header>
-        <LastTenPOsTable rows={score?.last10POs ?? []} />
-      </section>
-
-      {/* ── SKU dialogs (modals) ──────────────────────────────────── */}
-      {skuDialog.mode === 'multi' && (
-        <ModelSkuPickerDialog
-          supplierId={id!}
-          existingBindings={bindings}
-          onClose={() => setSkuDialog({ mode: 'closed' })}
-        />
-      )}
-      {skuDialog.mode === 'edit' && (
-        <SkuFormDialog
-          supplierId={id!}
-          editing={skuDialog.binding}
-          onClose={() => setSkuDialog({ mode: 'closed' })}
-        />
-      )}
-    </div>
+          )}
+        </h2>
+      </header>
+      <div className={styles.cardBody}>
+        {!supplierCategory ? (
+          <p className={styles.emptyRow}>
+            Set this supplier's category in Supplier Info first — Pricing shows
+            the surcharges that match what this supplier supplies.
+          </p>
+        ) : (
+          <MaintenanceTab
+            scope={`supplier:${supplierId}`}
+            sectionFilter={sectionFilter}
+            emptyHint={
+              <>
+                No supplier-specific pricing yet. The master / selling-price
+                config will be used by default; commander can override below
+                by editing + saving a row scoped to this supplier.
+              </>
+            }
+          />
+        )}
+      </div>
+    </section>
   );
 };
 
@@ -745,7 +979,14 @@ const SupplierInfoCard = ({
             <InfoCell label="Credit Account" value={supplier.code} />
             <InfoCell label="Company Name" value={supplier.name} />
             <InfoCell label="Supplier Type" value={supplier.supplier_type ?? '—'} />
-            <InfoCell label="Category" value={supplier.category ?? '—'} />
+            <InfoCell
+              label="Category"
+              value={
+                isSupplierCategory(supplier.category)
+                  ? SUPPLIER_CATEGORY_LABEL[supplier.category]
+                  : supplier.category ?? '—'
+              }
+            />
             <InfoCell label="TIN Number" value={supplier.tin_number ?? '—'} />
             <InfoCell label="Business Reg No" value={supplier.business_reg_no ?? '—'} />
             <InfoCell label="Contact Person" value={supplier.contact_person ?? '—'} />
@@ -785,7 +1026,10 @@ const SupplierInfoCard = ({
             <EditField label="Credit Account *" value={form.code} onChange={(v) => setF('code', v)} />
             <EditField label="Company Name *" value={form.name} onChange={(v) => setF('name', v)} />
             <EditField label="Supplier Type" value={form.supplierType} onChange={(v) => setF('supplierType', v)} placeholder="Matrix / Distributor / Maker" />
-            <EditField label="Category" value={form.category} onChange={(v) => setF('category', v)} placeholder="Bedframe / Fabric / Hardware" />
+            {/* PR #208 — Category is now a constrained dropdown. Commander
+                picks SOFA / BEDFRAME / MATTRESS / ACCESSORY / SERVICE / MIXED;
+                the Pricing tab filters its maintenance sub-tabs off this. */}
+            <SupplierCategorySelect value={form.category} onChange={(v) => setF('category', v)} />
             <EditField label="TIN Number" value={form.tinNumber} onChange={(v) => setF('tinNumber', v)} />
             <EditField label="Business Reg No" value={form.businessRegNo} onChange={(v) => setF('businessRegNo', v)} />
             {/* Contact */}
@@ -924,15 +1168,25 @@ function bindingStatus(skuCount: number, boundCount: number): {
 const ModelSkuPickerDialog = ({
   supplierId,
   existingBindings,
+  supplierCategory,
   onClose,
 }: {
   supplierId: string;
   existingBindings: BindingRow[];
+  /** PR #208 — pre-filter the Model picker to the supplier's category so
+   *  e.g. sofa Models don't appear for a bedframe supplier. Null/MIXED =
+   *  no filter (the chip row defaults to "All"). */
+  supplierCategory: SupplierCategory | null;
   onClose: () => void;
 }) => {
   const batch = useCreateBindingsBatch();
   const [step, setStep] = useState<1 | 2>(1);
-  const [category, setCategory] = useState<'all' | MfgCategory>('all');
+  // PR #208 — seed the category chip from the supplier's category. Commander
+  // can still flip to "All" if they need to bind a Model from another category
+  // (rare — flagged by the chip row staying visible).
+  const initialCategory: 'all' | MfgCategory =
+    mfgCategoryFromSupplierCategory(supplierCategory) ?? 'all';
+  const [category, setCategory] = useState<'all' | MfgCategory>(initialCategory);
   const [search, setSearch] = useState('');
   const [advanced, setAdvanced] = useState(false);
 
@@ -1672,7 +1926,22 @@ const smallInputStyle: React.CSSProperties = {
 
 /* ════════════════════════════════════════════════════════════════════════
    PR #47 — Country + State + Payment Terms dropdowns (commander 2026-05-26)
+   PR #208 — Supplier category dropdown (canonical: SOFA / BEDFRAME / ...)
    ════════════════════════════════════════════════════════════════════════ */
+
+const SupplierCategorySelect = ({
+  value, onChange,
+}: { value: string; onChange: (v: string) => void }) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>Category</span>
+    <select className={styles.fieldInput} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">— Pick category —</option>
+      {SUPPLIER_CATEGORIES.map((c) => (
+        <option key={c} value={c}>{SUPPLIER_CATEGORY_LABEL[c]}</option>
+      ))}
+    </select>
+  </label>
+);
 
 const CountrySelect = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
   <label className={styles.field}>

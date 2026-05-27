@@ -78,7 +78,21 @@ export const PurchaseOrderDetail = () => {
   const addItem = useAddPurchaseOrderItem();
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
-  const maint = useMaintenanceConfig('master');
+  // PR #208 — surcharge config follows the supplier first, master second.
+  // The supplier_id is on po.supplier_id below; we read it via detail.data
+  // before the React render branches, then drive a conditional query.
+  const supplierId = detail.data?.purchaseOrder?.supplier_id ?? null;
+  const supplierMaint = useMaintenanceConfig(
+    supplierId ? `supplier:${supplierId}` : '',
+    { enabled: Boolean(supplierId) },
+  );
+  const masterMaint = useMaintenanceConfig('master', {
+    enabled: !supplierId || !supplierMaint.data?.data,
+  });
+  /** Combined: supplier scope wins, master fallback otherwise. Mirrors the
+   *  shape of the original `useMaintenanceConfig('master')` so callers below
+   *  reading `maint.data?.data` keep working without rework. */
+  const maint = supplierMaint.data?.data ? supplierMaint : masterMaint;
   // PR #102 — PO PDF (AutoCount layout) needs the Purchase Location's
   // human-readable name; the header only carries the warehouse id. Load
   // warehouses once at the top so the print handler can resolve it.

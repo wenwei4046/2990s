@@ -358,11 +358,24 @@ export function useDeleteMfgProduct() {
 
 /* Maintenance config */
 
-export function useMaintenanceConfig(scope = 'master') {
+/**
+ * Maintenance config resolved at the given scope.
+ *
+ * PR #208 — accepts an `opts.enabled` flag so callers can defer the fetch
+ * (e.g. PO pages waiting for the supplier id before scoping the query, or
+ * the supplier-pricing tab fetching the master fallback only when the
+ * supplier scope is empty). Defaults to enabled when `scope` is truthy.
+ */
+export function useMaintenanceConfig(
+  scope = 'master',
+  opts?: { enabled?: boolean },
+) {
+  const enabled = opts?.enabled ?? Boolean(scope);
   return useQuery({
     queryKey: ['maintenance-config', 'resolved', scope],
     queryFn: () =>
       authedFetch<MaintenanceResolved>(`/maintenance-config/resolved?scope=${encodeURIComponent(scope)}`),
+    enabled,
     staleTime: 60_000,
     // See useMfgProducts comment — settle errors fast for the migration-pending case.
     retry: 1,

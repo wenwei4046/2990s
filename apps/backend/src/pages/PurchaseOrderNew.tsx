@@ -116,9 +116,20 @@ export const PurchaseOrderNew = () => {
   //   0 bindings  → one-off purchase, commander enters everything manually
   const allSkus = useMfgProducts();
   /* PR #126 — Pull maintenance config + fabrics list so per-category variant
-     editors can render the same dropdowns SO uses (single source of truth). */
-  const maintQ  = useMaintenanceConfig('master');
-  const maint   = maintQ.data?.data ?? null;
+     editors can render the same dropdowns SO uses (single source of truth).
+     PR #208 — when a supplier is picked, surcharges resolve from the supplier
+     scope first (commander's per-supplier price book) and fall back to the
+     master / selling-price config when no supplier row exists. The query is
+     gated so a no-supplier PO doesn't fire a doomed lookup. */
+  const supplierMaintQ = useMaintenanceConfig(
+    supplierId ? `supplier:${supplierId}` : '',
+    { enabled: Boolean(supplierId) },
+  );
+  const masterMaintQ = useMaintenanceConfig('master', {
+    enabled: !supplierId || !supplierMaintQ.data?.data,
+  });
+  const maint =
+    supplierMaintQ.data?.data ?? masterMaintQ.data?.data ?? null;
   const fabrics = useFabricTrackings().data ?? [];
 
   /* PR #126 — Helper: look up an mfg_product by code → returns its category

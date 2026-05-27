@@ -19,7 +19,7 @@
 //       effective-date drawer.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState, type HTMLAttributes } from 'react';
+import { useEffect, useMemo, useState, type HTMLAttributes, type ReactNode } from 'react';
 import {
   Download,
   Upload,
@@ -892,7 +892,9 @@ type MaintenanceListKey =
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics';
 
-type MaintenanceSection = 'Bedframe' | 'Sofa' | 'Common' | 'Products Maintenance';
+// PR #208 — exported so SupplierDetail can pass a `sectionFilter` prop to
+// the reused MaintenanceTab.
+export type MaintenanceSection = 'Bedframe' | 'Sofa' | 'Common' | 'Products Maintenance';
 
 const MAINTENANCE_TABS: {
   key: MaintenanceListKey;
@@ -926,12 +928,67 @@ const MAINTENANCE_TABS: {
   { key: 'sofaCompartments', label: 'Sofa Compartments', description: 'Sofa compartment pool (1A(LHF), 1A(RHF), 1NA, 2A(LHF), ...). Models tick which they offer.', priced: false, section: 'Products Maintenance' },
 ];
 
-const MaintenanceTab = () => {
-  const resolved = useMaintenanceConfig('master');
-  const history = useMaintenanceConfigHistory('master');
+/**
+ * Maintenance tab.
+ *
+ * PR #208 (Commander 2026-05-27) — exported + parameterised so SupplierDetail
+ * can mount the same UI scoped to a specific supplier. Defaults preserve
+ * the original Products-page behaviour: scope='master' and every section
+ * is visible.
+ *
+ *   scope          — maintenance_config_history.scope to read + write.
+ *   sectionFilter  — optional allow-list of MaintenanceSection labels. Omit
+ *                    to show every section.
+ *   emptyHint      — optional message rendered when this scope has no row
+ *                    yet AND the master fallback also has none. Supplier
+ *                    Detail uses this to nudge "Click Edit to seed".
+ */
+export const MaintenanceTab = ({
+  scope = 'master',
+  sectionFilter,
+  emptyHint,
+}: {
+  scope?: string;
+  sectionFilter?: MaintenanceSection[];
+  emptyHint?: ReactNode;
+} = {}) => {
+  const resolved = useMaintenanceConfig(scope);
+  const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
 
-  const [activeKey, setActiveKey] = useState<MaintenanceListKey>('divanHeights');
+  // PR #208 — when the supplier scope has no row yet, fall through to the
+  // master config so commander can see what's there before deciding to
+  // override. Save still writes back to the prop scope, never to master —
+  // the fallback never silently mutates the global config.
+  const masterFallback = useMaintenanceConfig('master', {
+    enabled: scope !== 'master' && !resolved.data?.data && !resolved.isLoading,
+  });
+
+  // PR #208 — sectionFilter restricts which sections show on the left rail.
+  // BEDFRAME-only supplier hides Sofa sub-tabs entirely so commander only
+  // edits surcharges that actually apply to what this supplier supplies.
+  const allSections: MaintenanceSection[] = ['Bedframe', 'Sofa', 'Common', 'Products Maintenance'];
+  const sections: MaintenanceSection[] = sectionFilter ?? allSections;
+  const visibleTabs = useMemo(
+    () => MAINTENANCE_TABS.filter((t) => sections.includes(t.section)),
+    [sections],
+  );
+
+  // First visible tab — the section filter may have hidden 'divanHeights'.
+  const defaultActiveKey: MaintenanceListKey = visibleTabs[0]?.key ?? 'divanHeights';
+
+  const [activeKey, setActiveKey] = useState<MaintenanceListKey>(defaultActiveKey);
+
+  // Keep activeKey valid when the section filter changes (e.g. supplier
+  // category switched). Pin to the first visible tab if the current one
+  // got filtered out.
+  useEffect(() => {
+    if (!visibleTabs.find((t) => t.key === activeKey)) {
+      setActiveKey(defaultActiveKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTabs]);
+
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<MaintenanceConfig | null>(null);
   const [showMaintHistory, setShowMaintHistory] = useState(false);
@@ -941,19 +998,19 @@ const MaintenanceTab = () => {
   const fabricsList = useFabricTrackings();
   const fabricsCount = fabricsList.data?.length ?? 0;
 
-  const config = draft ?? resolved.data?.data ?? null;
-  const active = MAINTENANCE_TABS.find((t) => t.key === activeKey)!;
-
-  // PR #74 — Commander 2026-05-26: drop the Mattress section (no
-  // commander-edited pools live there anymore — Mattress Sizes moved into
-  // Products Maintenance below). Order: per-category variant pools first,
-  // Common (Fabrics), Products Maintenance (cross-category pools driving
-  // the bulk SKU generator) last.
-  const sections: MaintenanceSection[] = ['Bedframe', 'Sofa', 'Common', 'Products Maintenance'];
+  // PR #208 — draft beats supplier-scope-resolved beats master-fallback.
+  // Any of those three can be null (commander hasn't seeded yet).
+  const config =
+    draft ?? resolved.data?.data ?? masterFallback.data?.data ?? null;
+  const active = MAINTENANCE_TABS.find((t) => t.key === activeKey) ?? visibleTabs[0];
 
   const startEdit = () => {
-    if (!resolved.data?.data) return;
-    setDraft(JSON.parse(JSON.stringify(resolved.data.data)) as MaintenanceConfig);
+    // Seed the draft from whichever config we're currently showing — could
+    // be the supplier-scope row or the master fallback. Either way commander
+    // edits a copy; save writes back to `scope`.
+    const seed = resolved.data?.data ?? masterFallback.data?.data ?? null;
+    if (!seed) return;
+    setDraft(JSON.parse(JSON.stringify(seed)) as MaintenanceConfig);
     setEditMode(true);
   };
 
@@ -966,8 +1023,11 @@ const MaintenanceTab = () => {
     if (!draft) return;
     const effectiveFrom = window.prompt('Effective from (YYYY-MM-DD)?', new Date().toISOString().slice(0, 10));
     if (!effectiveFrom) return;
+    // PR #208 — write back to the same scope this tab was mounted with.
+    // Supplier scope (e.g. 'supplier:abc-123') gets its own append-only row;
+    // master scope is unchanged for the SO / selling-price flow.
     save.mutate(
-      { scope: 'master', config: draft, effectiveFrom },
+      { scope, config: draft, effectiveFrom },
       {
         onSuccess: () => {
           setDraft(null);
@@ -998,11 +1058,32 @@ const MaintenanceTab = () => {
   if (!config) {
     return (
       <div className={styles.bannerWarn}>
-        No maintenance config baseline found. The migration ran but the master
-        baseline row is missing — re-apply migration 0039 to seed it.
+        {emptyHint ?? (
+          <>
+            No maintenance config baseline found. The migration ran but the master
+            baseline row is missing — re-apply migration 0039 to seed it.
+          </>
+        )}
       </div>
     );
   }
+
+  // active falls through to the first visible tab when the section filter
+  // hides the previously-active key. Should never be null when config is set,
+  // but guard anyway.
+  if (!active) {
+    return (
+      <div className={styles.bannerWarn}>
+        No maintenance sections visible for this scope.
+      </div>
+    );
+  }
+
+  // PR #208 — show "using fallback" hint when the supplier scope is empty
+  // but the master fallback is rendering. Encourages commander to hit Edit
+  // → Save which seeds this supplier's own row.
+  const showingMasterFallback =
+    scope !== 'master' && !resolved.data?.data && Boolean(masterFallback.data?.data);
 
   return (
     <div className={styles.maintLayout}>
@@ -1042,6 +1123,12 @@ const MaintenanceTab = () => {
                     · Pending change on {resolved.data.pendingEffectiveFrom}
                   </span>
                 )}
+              </p>
+            )}
+            {showingMasterFallback && (
+              <p className={styles.stateInfo} style={{ marginTop: 8, color: 'var(--c-burnt)' }}>
+                No supplier-specific pricing yet — showing the master baseline.
+                Hit Edit + Save to override.
               </p>
             )}
           </div>
