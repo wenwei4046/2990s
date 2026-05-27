@@ -51,6 +51,7 @@ import {
   COUNTRIES,
   PAYMENT_TERMS_OPTIONS,
 } from '../lib/localities-queries';
+import { composeSupplierSku, looksAmbiguous } from '../lib/supplier-sku-helpers';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
 import styles from './SupplierDetail.module.css';
@@ -436,10 +437,17 @@ const SupplierOverviewPanel = ({
             ({bindings.length} {bindings.length === 1 ? 'code' : 'codes'})
           </span>
         </h2>
-        <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'multi' })}>
-          <Plus {...ICON} />
-          <span>Add SKU Mappings</span>
-        </Button>
+        <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+          {/* PR — Commander 2026-05-27: one-click cleanup for the legacy
+              literal-"5539" rows from before the per-SKU auto-suffix fix.
+              Surfaces a count + button when ≥2 bindings share an ambiguous
+              (no '-') supplier_sku. */}
+          <AutoSuffixButton supplierId={id} bindings={bindings} />
+          <Button variant="primary" size="sm" onClick={() => setSkuDialog({ mode: 'multi' })}>
+            <Plus {...ICON} />
+            <span>Add SKU Mappings</span>
+          </Button>
+        </span>
       </header>
       <SkuMappingsTable
         supplierId={id}
@@ -564,8 +572,25 @@ const SkuMappingsTable = ({
           >
             <td className={styles.codeCell}>{b.material_code}</td>
             <td>{b.material_name}</td>
-            <td className={styles.codeCell}>{b.supplier_sku}</td>
-            <td className={styles.priceCell}>{fmtCurrency(b.unit_price_centi, b.currency)}</td>
+            {/* PR — Commander 2026-05-27: inline edit for supplier_sku +
+                unit_price. Same authedFetch + queryClient invalidate path as
+                the Supplier Info card edits. Stops row-level double-click
+                propagation so clicking inside the input doesn't open the
+                full edit modal. */}
+            <td className={styles.codeCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+              <InlineSupplierSku
+                binding={b}
+                supplierId={supplierId}
+                update={update}
+              />
+            </td>
+            <td className={styles.priceCell} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+              <InlineUnitPrice
+                binding={b}
+                supplierId={supplierId}
+                update={update}
+              />
+            </td>
             <td className={`${styles.tableRight} ${styles.muted}`}>{b.lead_time_days}d</td>
             <td className={`${styles.tableRight} ${styles.muted}`}>{b.moq}</td>
             <td>
@@ -623,6 +648,185 @@ const SkuMappingsTable = ({
         ))}
       </tbody>
     </table>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Inline editors — supplier_sku + unit_price cells on SkuMappingsTable
+   (Commander 2026-05-27). Pattern mirrors the Supplier Info card inline
+   edits: local draft state, blur or Enter to commit via useUpdateBinding,
+   Escape to revert. Both use the same authedFetch + react-query invalidate
+   that the rest of this page relies on.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const InlineSupplierSku = ({
+  binding, supplierId, update,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  update: ReturnType<typeof useUpdateBinding>;
+}) => {
+  const [draft, setDraft] = useState(binding.supplier_sku);
+  // Re-sync if the server cache returns a new value (e.g. the AutoSuffix
+  // batch updates this row while it's mounted). Without this the local
+  // draft would stick to the stale value.
+  const [committed, setCommitted] = useState(binding.supplier_sku);
+  if (committed !== binding.supplier_sku) {
+    setCommitted(binding.supplier_sku);
+    setDraft(binding.supplier_sku);
+  }
+  const commit = () => {
+    const next = draft.trim();
+    if (next === binding.supplier_sku) return;
+    if (!next) { setDraft(binding.supplier_sku); return; }
+    update.mutate({ supplierId, bindingId: binding.id, supplierSku: next });
+  };
+  return (
+    <input
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+        if (e.key === 'Escape') { setDraft(binding.supplier_sku); (e.target as HTMLInputElement).blur(); }
+      }}
+      style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: 'var(--fs-13)',
+        background: 'var(--c-cream)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '4px 8px',
+        outline: 'none',
+        width: '100%',
+        minWidth: 120,
+      }}
+      title="Click to edit · Enter to save · Esc to cancel"
+    />
+  );
+};
+
+const InlineUnitPrice = ({
+  binding, supplierId, update,
+}: {
+  binding: BindingRow;
+  supplierId: string;
+  update: ReturnType<typeof useUpdateBinding>;
+}) => {
+  // Local draft in RM (2dp string). Centi conversion happens on commit so
+  // small typos during typing don't fire a PATCH per keystroke.
+  const initial = (binding.unit_price_centi / 100).toFixed(2);
+  const [draft, setDraft] = useState(initial);
+  const [committed, setCommitted] = useState(binding.unit_price_centi);
+  if (committed !== binding.unit_price_centi) {
+    setCommitted(binding.unit_price_centi);
+    setDraft((binding.unit_price_centi / 100).toFixed(2));
+  }
+  const commit = () => {
+    const next = Math.round(Number(draft) * 100);
+    if (!Number.isFinite(next) || next < 0) { setDraft(initial); return; }
+    if (next === binding.unit_price_centi) return;
+    update.mutate({ supplierId, bindingId: binding.id, unitPriceCenti: next });
+  };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+      <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
+        {binding.currency === 'MYR' ? 'RM' : binding.currency}
+      </span>
+      <input
+        type="number"
+        step="0.01"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+          if (e.key === 'Escape') { setDraft(initial); (e.target as HTMLInputElement).blur(); }
+        }}
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 'var(--fs-13)',
+          background: 'var(--c-cream)',
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '4px 8px',
+          outline: 'none',
+          width: 100,
+          textAlign: 'right',
+        }}
+        title="Click to edit · Enter to save · Esc to cancel"
+      />
+    </span>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   AutoSuffixButton — one-click migration of legacy bindings that store the
+   bare Model-level supplier code (e.g. "5539") into every SKU's
+   supplier_sku column. Computes the per-SKU suffix via composeSupplierSku
+   and PATCHes each row.
+
+   Heuristic for "ambiguous": ≥2 bindings share the same supplier_sku that
+   contains no '-'. Single-SKU suppliers using a dash-less code (e.g. a
+   custom service item "FREIGHT") are NOT touched — they're legitimately
+   meant to be the same string.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const AutoSuffixButton = ({
+  supplierId, bindings,
+}: { supplierId: string; bindings: BindingRow[] }) => {
+  const products = useMfgProducts();
+  const update = useUpdateBinding();
+  const [running, setRunning] = useState(false);
+
+  // Group bindings by supplier_sku → bindings[]. Anything with ≥2 entries
+  // and a dash-less key is a candidate.
+  const candidates = useMemo(() => {
+    const byKey = new Map<string, BindingRow[]>();
+    for (const b of bindings) {
+      if (!looksAmbiguous(b.supplier_sku)) continue;
+      const arr = byKey.get(b.supplier_sku) ?? [];
+      arr.push(b);
+      byKey.set(b.supplier_sku, arr);
+    }
+    const list: BindingRow[] = [];
+    for (const arr of byKey.values()) if (arr.length >= 2) list.push(...arr);
+    return list;
+  }, [bindings]);
+
+  if (candidates.length === 0) return null;
+
+  const onClick = async () => {
+    if (running) return;
+    const productsByCode = new Map((products.data ?? []).map((p) => [p.code, p]));
+    const ok = window.confirm(
+      `Auto-suffix ${candidates.length} binding${candidates.length === 1 ? '' : 's'}?\n\n` +
+      'Each row will get its per-SKU suffix appended to its current supplier_sku (e.g. "5539" → "5539-1A(LHF)").',
+    );
+    if (!ok) return;
+    setRunning(true);
+    try {
+      for (const b of candidates) {
+        const p = productsByCode.get(b.material_code);
+        if (!p) continue;
+        const next = composeSupplierSku(b.supplier_sku, p);
+        if (next === b.supplier_sku) continue;
+        // Sequential to keep server load + audit log linear.
+        await update.mutateAsync({ supplierId, bindingId: b.id, supplierSku: next });
+      }
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Button variant="ghost" size="sm" onClick={onClick} disabled={running}>
+      <span>
+        {running
+          ? 'Auto-suffixing…'
+          : `Auto-suffix supplier_sku · ${candidates.length}`}
+      </span>
+    </Button>
   );
 };
 
@@ -1146,8 +1350,12 @@ type ModelDraft = {
   modelCode: string;
   modelName: string;
   category: MfgCategory;
-  skuCodes: string[];          // ACTIVE SKU codes under this Model
-  alreadyBoundCodes: string[]; // subset of skuCodes already bound for this supplier
+  /** PR — Commander 2026-05-27: full SKU rows (not just codes) so the
+      preview / save path can derive a per-SKU `supplier_sku` suffix via
+      composeSupplierSku(). Previously held string[] which lost size_code /
+      category context. */
+  skus: MfgProductRow[];
+  alreadyBoundCodes: string[]; // subset of sku codes already bound for this supplier
   supplierCode: string;
   // PR — Commander follow-up to PR #206: free-text description the supplier
   // uses for that model line (e.g. "Foam B grade, 6-week lead"). Persisted
@@ -1289,7 +1497,7 @@ const ModelSkuPickerDialog = ({
         modelCode: row.model.model_code,
         modelName: row.model.name,
         category: row.model.category,
-        skuCodes: row.skus.map((s) => s.code),
+        skus: row.skus,
         alreadyBoundCodes: row.skus
           .filter((s) => boundCodes.has(`mfg_product|${s.code}`))
           .map((s) => s.code),
@@ -1317,18 +1525,20 @@ const ModelSkuPickerDialog = ({
       // safer than auto-defaulting to the internal code which produces N
       // misleading rows).
       if (!code) continue;
-      for (const skuCode of d.skuCodes) {
+      for (const sku of d.skus) {
         // Skip SKUs already bound for this supplier; the batch endpoint also
         // de-dupes server-side but pre-filtering keeps the inserted/skipped
         // counts accurate for the toast.
-        if (d.alreadyBoundCodes.includes(skuCode)) continue;
-        // Find the SKU row to grab name for material_name.
-        const sku = (productsQ.data ?? []).find((p) => p.code === skuCode);
+        if (d.alreadyBoundCodes.includes(sku.code)) continue;
+        // PR — Commander 2026-05-27: per-SKU supplier_sku auto-suffix.
+        // composeSupplierSku("5539", sofaSku) → "5539-1A(LHF)" etc., instead
+        // of writing the literal model-level code into every binding row.
+        const supplierSku = composeSupplierSku(code, sku);
         list.push({
           materialKind: 'mfg_product' as MaterialKind,
-          materialCode: skuCode,
-          materialName: sku?.name ?? skuCode,
-          supplierSku: code,
+          materialCode: sku.code,
+          materialName: sku.name ?? sku.code,
+          supplierSku,
           unitPriceCenti: d.unitPriceCenti,
           currency: 'MYR' as Currency,
           leadTimeDays: d.leadTimeDays,
@@ -1551,9 +1761,18 @@ const ModelSkuPickerDialog = ({
                   </thead>
                   <tbody>
                     {Object.values(drafts).map((d) => {
-                      const remaining = d.skuCodes.length - d.alreadyBoundCodes.length;
+                      const remaining = d.skus.length - d.alreadyBoundCodes.length;
                       const expanded = expandedSkuPreview.has(d.modelId);
-                      const toMap = d.skuCodes.filter((c) => !d.alreadyBoundCodes.includes(c));
+                      const skusToMap = d.skus.filter((s) => !d.alreadyBoundCodes.includes(s.code));
+                      const toMap = skusToMap.map((s) => s.code);
+                      // PR — Commander 2026-05-27: compute the per-SKU
+                      // supplier_sku preview so commander sees
+                      // "BOOQIT-1A(LHF) → 5539-1A(LHF)" before Save.
+                      const previewMap = d.supplierCode.trim()
+                        ? Object.fromEntries(
+                            skusToMap.map((s) => [s.code, composeSupplierSku(d.supplierCode, s)]),
+                          )
+                        : undefined;
                       return (
                         <Fragment key={d.modelId}>
                           <tr>
@@ -1574,14 +1793,14 @@ const ModelSkuPickerDialog = ({
                                   padding: 0,
                                   marginTop: 2,
                                   fontSize: 'var(--fs-12)',
-                                  cursor: d.skuCodes.length === 0 ? 'default' : 'pointer',
+                                  cursor: d.skus.length === 0 ? 'default' : 'pointer',
                                   color: expanded ? 'var(--c-burnt)' : 'var(--fg-muted)',
                                   textDecoration: 'underline',
                                   textUnderlineOffset: 2,
                                 }}
                                 title={expanded ? 'Hide SKU list' : 'Show SKU list'}
                               >
-                                {expanded ? '▾' : '▸'} {remaining} of {d.skuCodes.length} SKUs to map
+                                {expanded ? '▾' : '▸'} {remaining} of {d.skus.length} SKUs to map
                                 {d.alreadyBoundCodes.length > 0 ? ` (${d.alreadyBoundCodes.length} already)` : ''}
                               </button>
                             </td>
@@ -1636,14 +1855,18 @@ const ModelSkuPickerDialog = ({
                               />
                             </td>
                           </tr>
-                          {expanded && d.skuCodes.length > 0 && (
+                          {expanded && d.skus.length > 0 && (
                             <tr>
                               <td colSpan={7} style={{
                                 background: 'var(--c-cream)',
                                 padding: 'var(--space-2) var(--space-3)',
                                 borderTop: '1px dashed var(--line)',
                               }}>
-                                <SkuPreviewStrip toMap={toMap} alreadyBound={d.alreadyBoundCodes} />
+                                <SkuPreviewStrip
+                                  toMap={toMap}
+                                  alreadyBound={d.alreadyBoundCodes}
+                                  previewMap={previewMap}
+                                />
                               </td>
                             </tr>
                           )}
@@ -1983,12 +2206,18 @@ const MultiSkuPickerDialog = ({
 /* SKU-preview chip strip shared by ModelSkuPickerDialog (SupplierDetail) and
    ModularAssignSupplierDialog (ProductModels). Renders the SKUs about to be
    bulk-mapped as monospaced pills + the ones being skipped as struck-through
-   pills. Pure presentational — no state. */
+   pills. Pure presentational — no state.
+
+   PR — Commander 2026-05-27: optional `previewMap` shows the COMPUTED
+   per-SKU `supplier_sku` next to the internal code so commander sees the
+   final string before Save (e.g. `BOOQIT-1A(LHF) → 5539-1A(LHF)`). Falls
+   back to the bare internal code for callers that don't pass a map. */
 export function SkuPreviewStrip({
-  toMap, alreadyBound,
+  toMap, alreadyBound, previewMap,
 }: {
   toMap:         string[];
   alreadyBound:  string[];
+  previewMap?:   Record<string, string>;
 }) {
   return (
     <div style={{
@@ -2010,21 +2239,30 @@ export function SkuPreviewStrip({
         <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
           All SKUs already mapped.
         </span>
-      ) : toMap.map((c) => (
-        <code
-          key={c}
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--fs-12)',
-            background: 'var(--c-paper)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--radius-sm)',
-            padding: '2px 8px',
-          }}
-        >
-          {c}
-        </code>
-      ))}
+      ) : toMap.map((c) => {
+        const resolved = previewMap?.[c];
+        return (
+          <code
+            key={c}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-12)',
+              background: 'var(--c-paper)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '2px 8px',
+            }}
+          >
+            {c}
+            {resolved && (
+              <span style={{ color: 'var(--fg-muted)' }}>
+                {' → '}
+                <span style={{ color: 'var(--c-burnt)', fontWeight: 600 }}>{resolved}</span>
+              </span>
+            )}
+          </code>
+        );
+      })}
       {alreadyBound.length > 0 && (
         <>
           <span style={{

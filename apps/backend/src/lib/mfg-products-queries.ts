@@ -68,6 +68,12 @@ export type MfgProductRow = {
   category: MfgCategory;
   description: string | null;
   base_model: string | null;
+  /** PR — supplier_sku auto-suffix (Commander 2026-05-27). Surfaced on the
+      wire for bedframe / mattress SKUs so the supplier-mapping bulk-create
+      can derive a per-SKU suffix ("5539" → "5539-K") instead of writing the
+      literal model-level code into every binding. NULL for sofa / accessory /
+      service rows; helper falls back to parsing `code` after the first '-'. */
+  size_code: string | null;
   size_label: string | null;
   base_price_sen: number | null;
   price1_sen: number | null;

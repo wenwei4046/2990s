@@ -17,13 +17,14 @@ import {
   useProductModels, useCreateProductModel, useGenerateModelSkus, useDeleteProductModel,
   type ProductModelRow,
 } from '../lib/product-models-queries';
-import { useMaintenanceConfig, useMfgProducts, type MfgCategory } from '../lib/mfg-products-queries';
+import { useMaintenanceConfig, useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
 import {
   useSuppliers, useCreateBindingsBatch,
   type Currency, type MaterialKind, type NewBinding,
 } from '../lib/suppliers-queries';
 import { resolveSizeInfo } from '../lib/size-info';
 import { SkuPreviewStrip } from './SupplierDetail';
+import { composeSupplierSku } from '../lib/supplier-sku-helpers';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -883,7 +884,10 @@ type AssignDraft = {
   modelId:        string;
   modelCode:      string;
   modelName:      string;
-  skuCodes:       string[];
+  /** Full SKU rows so the preview / save path can derive a per-SKU
+      supplier_sku suffix (compartment for sofa, size_code for bedframe /
+      mattress) via composeSupplierSku(). PR — Commander 2026-05-27. */
+  skus:           MfgProductRow[];
   // Per-supplier already-bound subset (computed in supplier-select effect).
   alreadyBound:   string[];
   supplierCode:   string;
@@ -922,11 +926,11 @@ function ModularAssignSupplierDialog({
   // model_id; price defaults to the average base_price of those SKUs.
   useEffect(() => {
     if (!modelsQ.data || !productsQ.data) return;
-    const skusByModel = new Map<string, { code: string; price: number }[]>();
+    const skusByModel = new Map<string, MfgProductRow[]>();
     for (const p of productsQ.data) {
       if (!p.model_id) continue;
       const arr = skusByModel.get(p.model_id) ?? [];
-      arr.push({ code: p.code, price: p.base_price_sen ?? 0 });
+      arr.push(p);
       skusByModel.set(p.model_id, arr);
     }
     const seeded: Record<string, AssignDraft> = {};
@@ -934,7 +938,7 @@ function ModularAssignSupplierDialog({
       const model = modelsQ.data.find((m) => m.id === id);
       if (!model) continue;
       const skus = skusByModel.get(id) ?? [];
-      const prices = skus.map((s) => s.price).filter((v) => v > 0);
+      const prices = skus.map((s) => s.base_price_sen ?? 0).filter((v) => v > 0);
       const avg = prices.length
         ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length)
         : 0;
@@ -942,7 +946,7 @@ function ModularAssignSupplierDialog({
         modelId:        model.id,
         modelCode:      model.model_code,
         modelName:      model.name,
-        skuCodes:       skus.map((s) => s.code),
+        skus,
         alreadyBound:   [],
         supplierCode:   '',
         description:    '',
@@ -968,20 +972,23 @@ function ModularAssignSupplierDialog({
     setError(null);
     if (!supplierId) { setError('Pick a supplier first.'); return; }
     const list: NewBinding[] = [];
-    const productsByCode = new Map((productsQ.data ?? []).map((p) => [p.code, p]));
     for (const d of Object.values(drafts)) {
       const code = d.supplierCode.trim();
       // Skip Models with no supplier code typed — commander left this Model
       // empty on purpose. Same convention as ModelSkuPickerDialog so the
       // toast counts match expectations.
       if (!code) continue;
-      for (const skuCode of d.skuCodes) {
-        const sku = productsByCode.get(skuCode);
+      for (const sku of d.skus) {
+        // PR — Commander 2026-05-27: per-SKU supplier_sku auto-suffix.
+        // composeSupplierSku("5539", sofaSku) → "5539-1A(LHF)" etc.
+        // Previously wrote the literal model-level code into every binding,
+        // producing 16 BOOQIT rows all reading "5539".
+        const supplierSku = composeSupplierSku(code, sku);
         list.push({
           materialKind:   'mfg_product' as MaterialKind,
-          materialCode:   skuCode,
-          materialName:   sku?.name ?? skuCode,
-          supplierSku:    code,
+          materialCode:   sku.code,
+          materialName:   sku.name ?? sku.code,
+          supplierSku,
           unitPriceCenti: d.unitPriceCenti,
           currency:       'MYR' as Currency,
           leadTimeDays:   d.leadTimeDays,
@@ -1013,7 +1020,7 @@ function ModularAssignSupplierDialog({
   const supplierOptions = suppliersQ.data ?? [];
   const draftRows       = Object.values(drafts);
   const totalSkus       = draftRows.reduce(
-    (sum, d) => sum + (d.supplierCode.trim() ? d.skuCodes.length : 0), 0,
+    (sum, d) => sum + (d.supplierCode.trim() ? d.skus.length : 0), 0,
   );
 
   return (
@@ -1103,21 +1110,21 @@ function ModularAssignSupplierDialog({
                         <button
                           type="button"
                           onClick={() => toggleExpanded(d.modelId)}
-                          disabled={d.skuCodes.length === 0}
+                          disabled={d.skus.length === 0}
                           style={{
                             background: 'transparent',
                             border: 'none',
                             padding: 0,
                             marginTop: 2,
                             fontSize: 'var(--fs-12)',
-                            cursor: d.skuCodes.length === 0 ? 'default' : 'pointer',
+                            cursor: d.skus.length === 0 ? 'default' : 'pointer',
                             color: isOpen ? 'var(--c-burnt)' : 'var(--fg-muted)',
                             textDecoration: 'underline',
                             textUnderlineOffset: 2,
                           }}
                           title={isOpen ? 'Hide SKU list' : 'Show SKU list'}
                         >
-                          {isOpen ? '▾' : '▸'} {d.skuCodes.length} SKU{d.skuCodes.length === 1 ? '' : 's'} will be mapped
+                          {isOpen ? '▾' : '▸'} {d.skus.length} SKU{d.skus.length === 1 ? '' : 's'} will be mapped
                         </button>
                       </td>
                       <td style={tdStyle}>
@@ -1171,14 +1178,27 @@ function ModularAssignSupplierDialog({
                         />
                       </td>
                     </tr>
-                    {isOpen && d.skuCodes.length > 0 && (
+                    {isOpen && d.skus.length > 0 && (
                       <tr style={{ background: 'var(--c-cream)' }}>
                         <td colSpan={7} style={{
                           padding: 'var(--space-2) var(--space-3)',
                           borderBottom: '1px solid var(--line)',
                           borderTop: '1px dashed var(--line)',
                         }}>
-                          <SkuPreviewStrip toMap={d.skuCodes} alreadyBound={[]} />
+                          {/* PR — Commander 2026-05-27: preview shows COMPUTED
+                              supplier_sku next to each our-SKU so commander sees
+                              "BOOQIT-1A(LHF) → 5539-1A(LHF)" before Save. */}
+                          <SkuPreviewStrip
+                            toMap={d.skus.map((s) => s.code)}
+                            alreadyBound={[]}
+                            previewMap={
+                              d.supplierCode.trim()
+                                ? Object.fromEntries(
+                                    d.skus.map((s) => [s.code, composeSupplierSku(d.supplierCode, s)]),
+                                  )
+                                : undefined
+                            }
+                          />
                         </td>
                       </tr>
                     )}
