@@ -39,6 +39,7 @@ import {
   useOverrideMfgSoLinePrice,
   useSalesOrderAuditLog,
   useSalesOrderPayments,
+  useUploadSoItemPhoto,
   type DebtorSuggestion,
   type SoAuditEntry,
   type SoAuditFieldChange,
@@ -270,6 +271,7 @@ export const SalesOrderDetail = () => {
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
+  const uploadPhoto = useUploadSoItemPhoto();
 
   const header = (detail.data?.salesOrder as SoHeader | undefined) ?? null;
   const items = (detail.data?.items as SoItem[] | undefined) ?? [];
@@ -506,6 +508,7 @@ export const SalesOrderDetail = () => {
     if (!addingDraft) return;
     if (!addingDraft.itemCode.trim()) { window.alert('Pick a product first.'); return; }
     if (!header) return;
+    const pendingFiles = addingDraft.pendingPhotoFiles ?? [];
     addItem.mutate(
       {
         docNo: header.doc_no,
@@ -522,7 +525,38 @@ export const SalesOrderDetail = () => {
         lineDeliveryDate:           addingDraft.lineDeliveryDate ?? null,
         lineDeliveryDateOverridden: addingDraft.lineDeliveryDateOverridden ?? false,
       },
-      { onSuccess: () => setAddingDraft(null) },
+      {
+        onSuccess: async (res: { item: unknown }) => {
+          /* Line-card-redesign — Drain pendingPhotoFiles staged on the
+             draft. POST /:docNo/items returns the inserted row; we pull
+             its `.id` and upload each File against the new itemId.
+             Failures don't undo the line — we surface a soft warning so
+             commander knows to re-attach on the row. */
+          const newItem = res.item as { id?: string } | null;
+          const newItemId = newItem?.id;
+          if (newItemId && pendingFiles.length > 0) {
+            let failed = 0;
+            for (const f of pendingFiles) {
+              try {
+                await uploadPhoto.mutateAsync({
+                  docNo: header.doc_no, itemId: newItemId, file: f,
+                });
+              } catch (err) {
+                // eslint-disable-next-line no-console
+                console.error('[so-line-photos] add-line upload failed', { file: f.name, err });
+                failed++;
+              }
+            }
+            if (failed > 0) {
+              window.alert(
+                `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
+                `failed to upload. Please re-attach on the row.`,
+              );
+            }
+          }
+          setAddingDraft(null);
+        },
+      },
     );
   };
 

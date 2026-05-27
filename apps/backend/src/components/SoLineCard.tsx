@@ -66,8 +66,13 @@ export type SoLineDraft = {
   /* PR-E — Per-item delivery date + cascade override flag. */
   lineDeliveryDate?:           string | null;
   lineDeliveryDateOverridden?: boolean;
-  /* PR-F (Task #79) — Per-line photo R2 object keys. */
+  /* PR-F (Task #79) — Per-line photo R2 object keys (already-saved photos). */
   photoUrls?:                  string[];
+  /* Line-card-redesign (Commander 2026-05-27) — Client-only pending File
+     uploads staged before the line has a DB id. Parent strips this before
+     POST/PATCH and re-uploads each File against the saved itemId after
+     create. NEVER persisted to the API. */
+  pendingPhotoFiles?:          File[];
 };
 
 /** Factory for a fresh empty SO line draft. */
@@ -78,7 +83,19 @@ export const emptySoLine = (): SoLineDraft => ({
   lineDeliveryDate: null,
   lineDeliveryDateOverridden: false,
   photoUrls: [],
+  pendingPhotoFiles: [],
 });
+
+/** Strip client-only fields (pendingPhotoFiles, photoUrls) from a draft
+ *  before POST / PATCH. The API doesn't accept File objects and photo
+ *  keys are managed by the dedicated /items/:id/photos endpoints. */
+export const stripClientOnlyFields = (
+  draft: SoLineDraft,
+): Omit<SoLineDraft, 'pendingPhotoFiles' | 'photoUrls'> => {
+  const { pendingPhotoFiles: _f, photoUrls: _p, ...rest } = draft;
+  void _f; void _p;
+  return rest;
+};
 
 /* ── Per-category badge swatches (Houzs groupChip equivalent) ──────── */
 
@@ -146,13 +163,34 @@ const SoLineCardInner = ({
   });
   const candidates = productsQuery.data ?? [];
 
-  /* PR-F (Task #79) — Per-line photo state. */
+  /* PR-F (Task #79) — Per-line photo state.
+     Line-card-redesign (Commander 2026-05-27): also support DRAFT mode
+     where the line hasn't been saved yet. In draft mode we stage File
+     objects in `draft.pendingPhotoFiles` and preview them via
+     URL.createObjectURL(). The parent (SalesOrderNew / SalesOrderDetail
+     Add Line flow) drains pendingPhotoFiles after save and uploads each
+     file against the freshly-minted itemId. */
   const uploadPhoto = useUploadSoItemPhoto();
   const deletePhoto = useDeleteSoItemPhoto();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const photoUrls = draft.photoUrls ?? [];
+  const pendingFiles = draft.pendingPhotoFiles ?? [];
+  const isSaved = Boolean(docNo) && Boolean(itemId);
   const canShowPhotos = Boolean(draft.itemCode);
-  const canMutatePhotos = canShowPhotos && Boolean(docNo) && Boolean(itemId) && isEditing;
+  const canMutatePhotos = canShowPhotos && isSaved && isEditing;
+  const canStagePhotos = canShowPhotos && !isSaved && isEditing;
+
+  /* Object URL lifecycle: mint a URL per pending File and revoke when
+     the file changes or the component unmounts. Keyed by index because
+     File objects don't have stable IDs and the Array reference shifts
+     on every patch. */
+  const pendingPreviews = useMemo(
+    () => pendingFiles.map((f) => ({ name: f.name, url: URL.createObjectURL(f) })),
+    [pendingFiles],
+  );
+  useEffect(() => () => {
+    pendingPreviews.forEach((p) => URL.revokeObjectURL(p.url));
+  }, [pendingPreviews]);
 
   // Sync picker search box to the description after picking.
   useEffect(() => { setSearch(draft.description ?? ''); }, [draft.description]);
@@ -439,7 +477,15 @@ const SoLineCardInner = ({
         ) : <span />}
       </div>
 
-      {/* ── Variants section (BEDFRAME / SOFA only) ─────────────────── */}
+      {/* ── Two-column body (Commander 2026-05-27 redesign) ──────────
+          LEFT  = variants + specials (the "fat" content)
+          RIGHT = price summary + photos (the always-visible context)
+          The body only renders when there's something to show on either
+          side, i.e. picked a product OR have variants. On a fresh empty
+          card with no SKU picked yet we collapse to just the header row. */}
+      {(picked || hasVariants || canShowPhotos) && (
+      <div className={styles.body}>
+        <div className={styles.bodyLeft}>
       {hasVariants && category === 'bedframe' && (
         <div className={styles.variants}>
           <div className={styles.variantsHead}>BEDFRAME VARIANTS</div>
@@ -548,104 +594,189 @@ const SoLineCardInner = ({
         </div>
       )}
 
-      {/* ── Photos strip (PR-F) ─────────────────────────────────────── */}
-      {canShowPhotos && (
-        <div className={styles.photos}>
-          <div className={styles.photosHead}>
-            PHOTOS{photoUrls.length > 0 && (
-              <span style={{ marginLeft: 6, color: 'var(--c-ink)', fontWeight: 600 }}>· {photoUrls.length}</span>
-            )}
-          </div>
-          <div className={styles.photosStrip}>
-            {photoUrls.map((key) => (
-              <PhotoThumb
-                key={key}
-                photoKey={key}
-                docNo={docNo}
-                itemId={itemId}
-                canDelete={canMutatePhotos && !deletePhoto.isPending}
-                onDelete={() => {
-                  if (!docNo || !itemId) return;
-                  deletePhoto.mutate({ docNo, itemId, photoKey: key }, {
-                    onSuccess: () => {
-                      onChange({ photoUrls: photoUrls.filter((k) => k !== key) });
-                    },
-                  });
-                }}
-              />
-            ))}
-            {canMutatePhotos && (
-              <>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  style={{ display: 'none' }}
-                  onChange={async (e) => {
-                    const files = Array.from(e.target.files ?? []);
-                    if (files.length === 0 || !docNo || !itemId) return;
-                    const newKeys: string[] = [];
-                    for (const f of files) {
-                      try {
-                        const res = await uploadPhoto.mutateAsync({ docNo, itemId, file: f });
-                        newKeys.push(res.photoKey);
-                        // Task #92 — seed the signed-URL cache with the
-                        // URL the API just minted so PhotoThumb doesn't
-                        // do a redundant /signed round-trip on first
-                        // render of the just-uploaded photo.
-                        if (res.expiresAt && res.photoUrl?.startsWith('http')) {
-                          signedUrlCache.set(res.photoKey, {
-                            signedUrl: res.photoUrl,
-                            expiresAt: new Date(res.expiresAt).getTime(),
-                          });
-                        }
-                      } catch (err) {
-                        // eslint-disable-next-line no-console
-                        console.error('[so-line-photo] upload failed:', err);
-                        window.alert(`Photo upload failed for ${f.name}: ${err instanceof Error ? err.message : String(err)}`);
-                      }
-                    }
-                    if (newKeys.length > 0) {
-                      onChange({ photoUrls: [...photoUrls, ...newKeys] });
-                    }
-                    if (fileInputRef.current) fileInputRef.current.value = '';
-                  }}
-                />
-                <button
-                  type="button"
-                  className={styles.photoAddBtn}
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploadPhoto.isPending}
-                  title={uploadPhoto.isPending ? 'Uploading…' : 'Add photo'}
-                >
-                  <ImagePlus {...ICON} />
-                </button>
-              </>
-            )}
-            {!canMutatePhotos && photoUrls.length === 0 && (
-              <span className={styles.photoHint}>
-                {!docNo || !itemId
-                  ? 'Save the line first to attach photos.'
-                  : 'Read-only — photos can be edited in edit mode.'}
-              </span>
-            )}
-          </div>
         </div>
-      )}
+        {/* /bodyLeft */}
 
-      {/* ── Pricing breakdown summary ───────────────────────────────── */}
-      {picked && (
-        <div className={styles.summary}>
-          <span>Base <strong>{fmtRm(basePriceSen)}</strong></span>
-          {extraSen > 0 && <span>+ Variants <strong>{fmtRm(extraSen)}</strong></span>}
-          <span>· Unit <strong>{fmtRm(draft.unitPriceCenti)}</strong> × {draft.qty}</span>
-          {draft.discountCenti > 0 && <span>− Disc <strong>{fmtRm(draft.discountCenti)}</strong></span>}
-          {!manualPrice && (
-            <span style={{ color: 'var(--c-orange)' }}>· auto-priced</span>
+        {/* ── Right rail (price summary + photos) ───────────────── */}
+        <div className={styles.bodyRight}>
+          {/* Price summary — only meaningful once a SKU is picked. */}
+          {picked && (
+            <div className={styles.priceSummary}>
+              <div className={styles.priceSummaryHead}>
+                <span>Pricing</span>
+                {!manualPrice && (
+                  <span className={styles.autoBadge}>auto</span>
+                )}
+              </div>
+              <div className={styles.priceRow}>
+                <span className={styles.priceLabel}>Base</span>
+                <span className={styles.priceValue}>{fmtRm(basePriceSen)}</span>
+              </div>
+              {extraSen > 0 && (
+                <div className={styles.priceRow}>
+                  <span className={styles.priceLabel}>+ Variants</span>
+                  <span className={styles.priceValue}>{fmtRm(extraSen)}</span>
+                </div>
+              )}
+              <div className={styles.priceRow}>
+                <span className={styles.priceLabel}>
+                  Unit × {draft.qty}
+                </span>
+                <span className={styles.priceValue}>{fmtRm(draft.unitPriceCenti)}</span>
+              </div>
+              {draft.discountCenti > 0 && (
+                <div className={styles.priceRow}>
+                  <span className={styles.priceLabel}>− Discount</span>
+                  <span className={styles.priceValue}>{fmtRm(draft.discountCenti)}</span>
+                </div>
+              )}
+              <div className={styles.priceTotalRow}>
+                <span className={styles.priceLabel}>Subtotal</span>
+                <span className={styles.priceTotalValue}>{fmtRm(lineTotal)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Photos — saved mode (R2 thumbs) + draft mode (object-URL
+              previews staged on the draft). canStagePhotos === !isSaved
+              && isEditing; canMutatePhotos === isSaved && isEditing. */}
+          {canShowPhotos && (
+            <div className={styles.photosCard}>
+              <div className={styles.photosHead}>
+                PHOTOS
+                {(photoUrls.length > 0 || pendingFiles.length > 0) && (
+                  <span style={{ marginLeft: 6, color: 'var(--c-ink)', fontWeight: 600 }}>
+                    · {photoUrls.length + pendingFiles.length}
+                  </span>
+                )}
+              </div>
+              <div className={styles.photosStrip}>
+                {/* Saved photos (R2 signed URL thumbs) */}
+                {photoUrls.map((key) => (
+                  <PhotoThumb
+                    key={key}
+                    photoKey={key}
+                    docNo={docNo}
+                    itemId={itemId}
+                    canDelete={canMutatePhotos && !deletePhoto.isPending}
+                    onDelete={() => {
+                      if (!docNo || !itemId) return;
+                      deletePhoto.mutate({ docNo, itemId, photoKey: key }, {
+                        onSuccess: () => {
+                          onChange({ photoUrls: photoUrls.filter((k) => k !== key) });
+                        },
+                      });
+                    }}
+                  />
+                ))}
+
+                {/* Pending (DRAFT) photos — preview from object URL with
+                    a small "pending" stripe + a delete X that removes
+                    the File from the staged array. */}
+                {pendingPreviews.map((p, i) => (
+                  <div key={`pending-${i}`} className={styles.photoTile}>
+                    <img src={p.url} alt={p.name} />
+                    <span className={styles.photoPendingMark}>pending</span>
+                    {canStagePhotos && (
+                      <button
+                        type="button"
+                        className={styles.photoDelete}
+                        title="Remove (not uploaded yet)"
+                        onClick={() => {
+                          const next = pendingFiles.filter((_, idx) => idx !== i);
+                          onChange({ pendingPhotoFiles: next });
+                        }}
+                      >
+                        <X size={12} strokeWidth={2.5} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {/* Hidden file input + Add button. The same input is used
+                    for both saved (immediate upload) and draft (stage in
+                    component-state) modes. */}
+                {(canMutatePhotos || canStagePhotos) && (
+                  <>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        const files = Array.from(e.target.files ?? []);
+                        if (files.length === 0) return;
+
+                        if (canStagePhotos) {
+                          // DRAFT mode — stage Files on the draft. Parent
+                          // drains pendingPhotoFiles after the line saves.
+                          onChange({ pendingPhotoFiles: [...pendingFiles, ...files] });
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                          return;
+                        }
+
+                        // SAVED mode — upload immediately to R2.
+                        if (!docNo || !itemId) return;
+                        const newKeys: string[] = [];
+                        for (const f of files) {
+                          try {
+                            const res = await uploadPhoto.mutateAsync({ docNo, itemId, file: f });
+                            newKeys.push(res.photoKey);
+                            // Task #92 — seed the signed-URL cache with
+                            // the URL the API just minted so PhotoThumb
+                            // doesn't do a redundant /signed round-trip
+                            // on first render of the just-uploaded photo.
+                            if (res.expiresAt && res.photoUrl?.startsWith('http')) {
+                              signedUrlCache.set(res.photoKey, {
+                                signedUrl: res.photoUrl,
+                                expiresAt: new Date(res.expiresAt).getTime(),
+                              });
+                            }
+                          } catch (err) {
+                            // eslint-disable-next-line no-console
+                            console.error('[so-line-photo] upload failed:', err);
+                            window.alert(`Photo upload failed for ${f.name}: ${err instanceof Error ? err.message : String(err)}`);
+                          }
+                        }
+                        if (newKeys.length > 0) {
+                          onChange({ photoUrls: [...photoUrls, ...newKeys] });
+                        }
+                        if (fileInputRef.current) fileInputRef.current.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className={styles.photoAddBtn}
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadPhoto.isPending}
+                      title={
+                        uploadPhoto.isPending
+                          ? 'Uploading…'
+                          : canStagePhotos
+                            ? 'Stage photo (uploads on save)'
+                            : 'Add photo'
+                      }
+                    >
+                      <ImagePlus {...ICON} />
+                    </button>
+                  </>
+                )}
+
+                {!canMutatePhotos && !canStagePhotos
+                  && photoUrls.length === 0 && pendingFiles.length === 0 && (
+                  <span className={styles.photoHint}>
+                    Read-only — photos can be edited in edit mode.
+                  </span>
+                )}
+              </div>
+            </div>
           )}
         </div>
+        {/* /bodyRight */}
+      </div>
       )}
+      {/* /body */}
     </div>
   );
 };

@@ -220,6 +220,32 @@
   font-weight: 500;
 }
 
+/* ── Two-column body (Commander 2026-05-27) ──────────────────────────
+   Below the single-line header row, the card splits into a left column
+   (variants + special orders) and a right column (price summary +
+   photos). On narrow viewports the columns stack vertically again. */
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.bodyLeft,
+.bodyRight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Variants section ─────────────────────────────────────────────── */
 
 .variants {
@@ -243,12 +269,12 @@
 
 .variantsGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* Auto-fit: each variant cell wants at least 140px; the grid hands out
+     however many columns will fit. With the new right-rail price/photos
+     column eating ~280px the variants block typically ends up with 3
+     columns at desktop and 2 at narrower widths without a fixed breakpoint. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: var(--space-2);
-}
-
-@media (max-width: 900px) {
-  .variantsGrid { grid-template-columns: repeat(2, 1fr); }
 }
 
 .variantField {
@@ -439,20 +465,113 @@
   color: var(--fg-muted);
 }
 
-/* ── Pricing breakdown summary ─────────────────────────────────────── */
+/* ── Pricing breakdown summary (right rail) ────────────────────────
+   Commander 2026-05-27: "3 prices makes the line very thick". The
+   summary now lives in the right column, vertically stacked, smaller
+   font, so the line height stays bounded by the variants on the left. */
 
-.summary {
+.priceSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   font-family: var(--font-sans);
   font-size: var(--fs-12);
   color: var(--fg-muted);
+}
+
+.priceSummaryHead {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
   display: flex;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  padding-top: var(--space-2);
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.priceRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.priceLabel {
+  color: var(--fg-muted);
+  font-size: var(--fs-12);
+}
+
+.priceValue {
+  color: var(--c-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.priceTotalRow {
+  composes: priceRow;
+  padding-top: 4px;
+  margin-top: 2px;
   border-top: 1px solid var(--line);
 }
 
-.summary strong {
-  color: var(--c-ink);
-  font-weight: 600;
+.priceTotalValue {
+  composes: priceValue;
+  color: var(--c-burnt);
+  font-family: var(--font-mark);
+  font-size: var(--fs-14);
+  font-weight: 800;
+  font-stretch: 80%;
+}
+
+.autoBadge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(199, 127, 62, 0.16);
+  color: var(--c-festive-a, #C77F3E);
+  margin-left: auto;
+}
+
+/* ── Photos block (right rail) ──────────────────────────────────────
+   In DRAFT mode (no docNo/itemId yet) the photos are staged client-side
+   as File objects and previewed via URL.createObjectURL(). The parent
+   pulls them off `draft.pendingPhotoFiles` after save and uploads them
+   to R2 against the freshly-minted item IDs. */
+
+.photosCard {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--c-paper);
+}
+
+.photoPendingMark {
+  position: absolute;
+  bottom: -1px;
+  left: -1px;
+  right: -1px;
+  background: var(--c-orange);
+  color: var(--c-paper);
+  font-family: var(--font-button);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 1px 0;
+  line-height: 1;
 }
