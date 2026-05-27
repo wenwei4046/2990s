@@ -455,7 +455,11 @@ export const useSalesOrderPayments = (docNo: string | null) => useQuery({
   queryKey: ['mfg-sales-orders', docNo, 'payments'],
   queryFn: () => authedFetch<{ payments: SoPayment[] }>(`/mfg-sales-orders/${docNo}/payments`).then((r) => r.payments),
   enabled: Boolean(docNo),
-  staleTime: 30_000,
+  /* Task #61 (aggressive perf) — bumped 30s → 2min. Payments are append-only
+     from the UI side; invalidation on add/delete still fires immediately so
+     edits show up without delay. The longer staleTime kills the repeat
+     refetches when the user toggles edit mode or switches drawers. */
+  staleTime: 2 * 60_000,
   retry: 1,
   retryDelay: 800,
 });
@@ -505,7 +509,10 @@ export const useDebtorSearch = (q: string) => useQuery({
     `/mfg-sales-orders/debtors/search${q ? `?q=${encodeURIComponent(q)}` : ''}`,
   ),
   enabled: q.trim().length >= 2,
-  staleTime: 30_000,
+  /* Task #61 (aggressive perf) — bumped 30s → 5min. Debtor records change
+     rarely after creation; a typist returning to a previous prefix should
+     hit cache, not re-fire /debtors/search. */
+  staleTime: 5 * 60_000,
   retry: 1,
 });
 
