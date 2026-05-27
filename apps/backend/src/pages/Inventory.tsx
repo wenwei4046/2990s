@@ -16,6 +16,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import {
   Boxes, Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, X, Plus,
   Warehouse as WarehouseIcon,
@@ -255,7 +256,18 @@ const BalancesTab = ({
                   title="Double-click to see per-warehouse breakdown"
                   style={{ cursor: 'pointer' }}
                 >
-                  <td><span className={styles.codeChip}>{r.product_code}</span></td>
+                  <td>
+                    <Link
+                      to={`/inventory/stock-card/${encodeURIComponent(r.product_code)}`}
+                      className={styles.codeChip}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      title="Open Stock Card"
+                      style={{ textDecoration: 'none' }}
+                    >
+                      {r.product_code}
+                    </Link>
+                  </td>
                   <td>
                     {r.product_name}
                     {r.branding && <span className={styles.numCellZero}> · {r.branding}</span>}

@@ -1,0 +1,96 @@
+/* SmartButtons — Odoo-style document-linkage fan-out.
+   Renders a horizontal row of pill buttons that link to child docs
+   (e.g. "2 GRNs", "1 Invoice", "0 Returns") at the top of a detail
+   page. Buttons with count=0 are dimmed + non-interactive.
+
+   Visual contract:
+     - sits above the page title in detail layouts
+     - pill-shaped, cream/paper background, orange accent on hover
+     - count is the dominant glyph; label muted below
+*/
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: stretch;
+  margin: 0;
+  padding: 0;
+}
+
+.btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 96px;
+  padding: 8px 14px;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--c-ink);
+  text-decoration: none;
+  cursor: pointer;
+  font-family: var(--font-button);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.btn:hover {
+  background: var(--c-cream);
+  border-color: var(--c-orange);
+  color: var(--c-burnt);
+}
+
+.btn:active { transform: translateY(1px); }
+
+.btn:focus-visible {
+  outline: 2px solid var(--c-orange);
+  outline-offset: 2px;
+}
+
+/* Count = dominant glyph. Use orange accent so the eye picks it up. */
+.count {
+  font-family: var(--font-title);
+  font-size: var(--fs-18);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--c-burnt);
+}
+
+.label {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* count=0 → dimmed, non-clickable (rendered as a span, not Link). */
+.dim {
+  background: var(--c-paper);
+  border: 1px dashed var(--line);
+  cursor: default;
+  opacity: 0.55;
+}
+.dim:hover {
+  background: var(--c-paper);
+  border-color: var(--line);
+  color: var(--c-ink);
+}
+.dim .count { color: var(--fg-muted); }
+
+/* Loading shimmer — keep skeleton row reserved so the page doesn't jump
+   when the counts arrive. */
+.skeleton {
+  min-width: 96px;
+  height: 50px;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  opacity: 0.5;
+}

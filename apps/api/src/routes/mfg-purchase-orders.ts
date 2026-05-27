@@ -84,6 +84,39 @@ mfgPurchaseOrders.get('/:id', async (c) => {
   return c.json({ purchaseOrder: headerRes.data, items: itemsRes.data ?? [] });
 });
 
+// ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
+// Returns the GRNs, Purchase Invoices and Purchase Returns that descend
+// from this PO. Tiny shape per child — counters + clickable link only.
+mfgPurchaseOrders.get('/:id/linked', async (c) => {
+  const id = c.req.param('id');
+  const sb = c.get('supabase');
+
+  const [grnRes, piRes, prRes] = await Promise.all([
+    sb.from('grns')
+      .select('id, grn_number, status, received_at')
+      .eq('purchase_order_id', id)
+      .order('received_at', { ascending: false }),
+    sb.from('purchase_invoices')
+      .select('id, invoice_number, status, invoice_date')
+      .eq('purchase_order_id', id)
+      .order('invoice_date', { ascending: false }),
+    sb.from('purchase_returns')
+      .select('id, return_number, status, return_date')
+      .eq('purchase_order_id', id)
+      .order('return_date', { ascending: false }),
+  ]);
+
+  if (grnRes.error) return c.json({ error: 'load_failed', reason: grnRes.error.message }, 500);
+  if (piRes.error)  return c.json({ error: 'load_failed', reason: piRes.error.message  }, 500);
+  if (prRes.error)  return c.json({ error: 'load_failed', reason: prRes.error.message  }, 500);
+
+  return c.json({
+    grns:     grnRes.data ?? [],
+    invoices: piRes.data  ?? [],
+    returns:  prRes.data  ?? [],
+  });
+});
+
 // ── Create ────────────────────────────────────────────────────────────
 // body: {
 //   supplierId, currency?, expectedAt?, notes?,
