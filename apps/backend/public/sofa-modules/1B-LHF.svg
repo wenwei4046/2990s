@@ -1,19 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 110" width="100" height="110">
-  <title>2990s Sofa Module — 1B-LHF — 1 Seater with LEFT Bench (no armrest, cushion in arm position)</title>
-  <desc>Top-down plan view. Same shape as 1A-LHF, but where 1A has a regular hard armrest on the left, 1B has a wider Seat Bench Cushion. Right side is open (no arm) for connecting other modules.</desc>
+  <title>2990s Sofa Module — 1B-LHF — 1 Seater, LEFT Bench Cushion</title>
+  <desc>Top-down plan view. Same shape as 1A-LHF but the left strip is a soft Seat Bench Cushion (medium tan, same color family as backrest) instead of a hard armrest (darkest tan).</desc>
   <g transform="translate(20,20)">
-    <!-- body 60×70 (cream) -->
     <rect x="0" y="0" width="60" height="70" rx="3" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="1.4"/>
-    <!-- backrest top strip across full width -->
     <rect x="0" y="0" width="60" height="11" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- LEFT Seat Bench Cushion (where 1A would have a hard armrest) -->
-    <!-- Uses cushion fill (lighter than backrest, no hard arm wall) -->
-    <rect x="0" y="11" width="14" height="59" fill="#EBDBC2" stroke="#2C2C2A" stroke-width="0.8"/>
-    <!-- Two subtle cushion stitch lines to make it read as a soft bench cushion -->
-    <line x1="3" y1="22" x2="11" y2="22" stroke="#A89570" stroke-width="0.4" stroke-dasharray="1,1.5"/>
-    <line x1="3" y1="55" x2="11" y2="55" stroke="#A89570" stroke-width="0.4" stroke-dasharray="1,1.5"/>
-    <!-- "BENCH" label so it's unambiguous -->
-    <text x="7" y="42" font-family="sans-serif" font-size="5" fill="#8C7956" text-anchor="middle" font-weight="700" letter-spacing="0.5">BENCH</text>
+    <!-- LEFT bench cushion: backrest-tan (medium) instead of armrest-tan (darkest) -->
+    <rect x="0" y="0" width="12" height="70" fill="#D9C2A0" stroke="#2C2C2A" stroke-width="0.8"/>
   </g>
 </svg>
