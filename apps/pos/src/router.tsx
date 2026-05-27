@@ -11,6 +11,7 @@ import { OrderStatus } from './pages/OrderStatus';
 import { Quotes } from './pages/Quotes';
 import { SalesOrderPrint } from './pages/SalesOrderPrint';
 import { Products } from './pages/Products';
+import { SalesOrderMaintenance } from './pages/SalesOrderMaintenance';
 import { AuthGate } from './components/AuthGate';
 
 export const router = createBrowserRouter([
@@ -39,6 +40,14 @@ export const router = createBrowserRouter([
      gate needed, every authed POS user lands here and the inner page
      decides edit vs view. */
   { path: '/products', element: <AuthGate><Products /></AuthGate> },
+  /* PR — Commander 2026-05-28 ("Sales Order Maintenance 这个 module 也要 port
+     到 POS"). Mode-based role gate inside the page:
+       - admin                              → full
+       - outlet_manager / sales_director    → add-only (no edit, no delete)
+       - sales_executive / sales / default  → view
+     Hits the SAME /venues, /localities, /state-warehouse-mappings,
+     /so-dropdown-options API endpoints as Backend — bidirectional sync. */
+  { path: '/sales-order-maintenance', element: <AuthGate><SalesOrderMaintenance /></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
 ]);

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Bookmark, ListOrdered, LogOut, Package, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, Bookmark, ListOrdered, LogOut, Package, Settings, ShoppingBag } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useAuth } from '../lib/auth';
 import { useStaff } from '../lib/staff';
@@ -93,6 +93,13 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
             <Link to="/products" className={styles.pill} aria-label="Products catalogue">
               <Package size={13} strokeWidth={1.75} />
               <span>Products</span>
+            </Link>
+            {/* PR — Commander 2026-05-28: SO Maintenance is now reachable from
+                POS. All authed roles see this pill; the page itself derives
+                view / add-only / full from the staff role. */}
+            <Link to="/sales-order-maintenance" className={styles.pill} aria-label="SO maintenance">
+              <Settings size={13} strokeWidth={1.75} />
+              <span>SO Maintenance</span>
             </Link>
             {count > 0 && (
               <Link to="/cart" className={styles.cartChip} aria-label="Cart">
