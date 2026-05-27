@@ -177,6 +177,7 @@ export const useUpdateMfgSalesOrderHeader = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -191,6 +192,8 @@ export const useUpdateMfgSalesOrderStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-status-changes', vars.docNo] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -205,6 +208,7 @@ export const useAddMfgSalesOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -219,6 +223,7 @@ export const useUpdateMfgSalesOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -231,6 +236,7 @@ export const useDeleteMfgSalesOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
     },
   });
 };
@@ -269,6 +275,34 @@ export const useMfgSalesOrderPriceOverrides = (docNo: string | null) => useQuery
   queryFn: () => authedFetch<{ overrides: SoPriceOverride[] }>(`/mfg-sales-orders/${docNo}/price-overrides`).then((r) => r.overrides),
   enabled: Boolean(docNo),
   staleTime: 30_000,
+});
+
+/* PR-D — unified SO audit trail. Commander 2026-05-27 wants HOOKKA-style
+   history timeline (who · action · status pill · timestamp · expandable
+   field-level from→to diff). Reads from mfg_so_audit_log. */
+export type SoAuditFieldChange = {
+  field: string;
+  from?: unknown;
+  to?: unknown;
+};
+export type SoAuditEntry = {
+  id: string;
+  so_doc_no: string;
+  action: string;                       // CREATE | UPDATE_DETAILS | UPDATE_STATUS | ADD_LINE | UPDATE_LINE | DELETE_LINE | ADD_PAYMENT | DELETE_PAYMENT
+  actor_id: string | null;
+  actor_name_snapshot: string | null;
+  field_changes: SoAuditFieldChange[];
+  status_snapshot: string | null;
+  source: string | null;                // 'web' | 'pos' | 'cron' | 'automation'
+  note: string | null;
+  created_at: string;
+};
+export const useSalesOrderAuditLog = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-sales-order-audit-log', docNo],
+  queryFn: () => authedFetch<{ entries: SoAuditEntry[] }>(`/mfg-sales-orders/${docNo}/audit-log`).then((r) => r.entries),
+  enabled: Boolean(docNo),
+  staleTime: 15_000,
+  retry: 1,
 });
 
 export const useOverrideMfgSoLinePrice = () => {
