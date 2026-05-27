@@ -22,6 +22,7 @@ import {
   useAddMfgSalesOrderItem,
   useUpdateMfgSalesOrderItem,
   useDeleteMfgSalesOrderItem,
+  useUpdateSoItemStockStatus,
 } from '../../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../../components/SoLineCard';
 import { VariantsPills } from './VariantsPills';
@@ -46,6 +47,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
+  const updateStock = useUpdateSoItemStockStatus();
 
   const [editingLineIds, setEditingLineIds] = useState<Set<string>>(new Set());
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
@@ -236,6 +238,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
                 <th className={styles.tableRight}>Unit Cost</th>
                 <th className={styles.tableRight}>Line Cost</th>
                 <th className={styles.tableRight}>Margin</th>
+                <th className={styles.tableRight}>Stock</th>
                 <th className={styles.tableRight}>Actions</th>
               </tr>
             </thead>
@@ -250,7 +253,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
                   const cb = rowCallbacks.get(it.id);
                   return (
                     <tr key={it.id}>
-                      <td colSpan={10} style={{ padding: 'var(--space-3)' }}>
+                      <td colSpan={11} style={{ padding: 'var(--space-3)' }}>
                         <SoLineCard
                           index={items.indexOf(it)}
                           draft={editDraft}
@@ -324,6 +327,49 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
                           {fmtRm(it.line_margin_centi, header.currency)}
                         </span>
                       ) : <span className={styles.muted}>—</span>}
+                    </td>
+                    {/* PR — Commander 2026-05-28: per-line stock toggle.
+                        Click the pill to flip PENDING ↔ READY. When all lines
+                        become READY, the SO status auto-advances to
+                        READY_TO_SHIP (server-side; see PATCH /:docNo/items/
+                        :itemId/stock-status). Eventually will be set
+                        automatically from inventory allocation. */}
+                    <td className={styles.tableRight}>
+                      {(() => {
+                        const cur = it.stock_status === 'READY' ? 'READY' : 'PENDING';
+                        const next = cur === 'READY' ? 'PENDING' : 'READY';
+                        const isReady = cur === 'READY';
+                        return (
+                          <button
+                            type="button"
+                            disabled={it.cancelled || updateStock.isPending}
+                            onClick={() => {
+                              if (it.cancelled) return;
+                              updateStock.mutate({
+                                docNo: header.doc_no,
+                                itemId: it.id,
+                                status: next,
+                              });
+                            }}
+                            title={`Click to mark ${next}`}
+                            style={{
+                              fontFamily: 'var(--font-sans)',
+                              fontSize: 'var(--fs-11)',
+                              fontWeight: 700,
+                              letterSpacing: 0.5,
+                              padding: '2px 10px',
+                              borderRadius: 'var(--radius-pill, 999px)',
+                              cursor: it.cancelled ? 'not-allowed' : 'pointer',
+                              border: '1px solid transparent',
+                              background: isReady ? 'var(--c-mint, #d4edda)' : 'var(--c-paper)',
+                              color: isReady ? 'var(--c-green, #1a7a3a)' : 'var(--fg-soft)',
+                              borderColor: isReady ? 'transparent' : 'var(--line)',
+                            }}
+                          >
+                            {cur}
+                          </button>
+                        );
+                      })()}
                     </td>
                     <td>
                       {isEditing ? (
