@@ -19,6 +19,25 @@
 // The "Group By" zone follows AutoCount: drag a column header onto the zone
 // to group rows; click the chip to remove it. The header can also be set via
 // the Group By dropdown in the Report Options card.
+//
+// ── Temporary placeholders (Task #86 follow-up) ────────────────────────────
+// Malaysia is currently in a no-SST regime, so `tax_centi` is always 0 across
+// every SO row. Until SST returns (and the codebase wires a real tax-code
+// source) the following columns render constants:
+//   - Inclusive?       → "Yes"  (a zero-tax doc is, by AutoCount convention,
+//                                 "tax-inclusive at 0%")
+//   - Tax (header/line) → "0.00"
+//   - Detail Tax Code  → "SR"   (AutoCount's Standard-Rated 0% code)
+//
+// Likewise, cross-doc linking from SO line → supplier PO isn't tracked in our
+// schema yet, so the following columns render "—":
+//   - Creditor Code
+//   - Post to PO
+// Future work: add a `linked_po_doc_no` (or similar) FK on
+// mfg_sales_order_items if the commander wants these populated. The PAYEMENT
+// column (note: AutoCount preserved the typo) reads `paid_total_centi`,
+// derived server-side from mfg_sales_order_payments (PR-C dropped the legacy
+// header column).
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type ReactNode } from 'react';
@@ -65,12 +84,15 @@ const COLS: ColDef[] = [
   { key: 'debtor_name',     label: 'Debtor Name',   render: (r) => r.debtor_name ?? '—' },
   { key: 'agent',           label: 'Agent',         render: (r) => r.agent ?? '—' },
   { key: 'currency',        label: 'Curr. Code',    render: (r) => r.currency ?? 'MYR' },
+  // Inclusive? — see top-of-file note: constant "Yes" while Malaysia is in
+  // the no-SST regime (every doc is effectively tax-inclusive at 0%).
   { key: 'inclusive',       label: 'Inclusive?',    align: 'center',
-    render: (r) => ((r.tax_centi ?? 0) > 0 ? 'Y' : 'N') },
+    render: () => 'Yes' },
   { key: 'subtotal_ex',     label: 'SubTotal (Ex)', align: 'right',
     render: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency) },
+  // Tax (header) — constant 0.00 placeholder while no-SST regime is in effect.
   { key: 'tax_header',      label: 'Tax',           align: 'right',
-    render: (r) => fmtRm(r.tax_centi ?? 0, r.currency) },
+    render: (r) => fmtRm(0, r.currency) },
   { key: 'header_total',    label: 'Total',         align: 'right',
     render: (r) => fmtRm(r.local_total_centi ?? 0, r.currency) },
   { key: 'local_total',     label: 'Local Total',   align: 'right',
@@ -95,24 +117,30 @@ const COLS: ColDef[] = [
     render: (r) => fmtRm(r.unit_price_centi, r.currency) },
   { key: 'discount',        label: 'Discount',      align: 'right',
     render: (r) => fmtRm(r.discount_centi, r.currency) },
+  // Detail Tax Code — constant "SR" (Standard-Rated 0%) placeholder while
+  // the no-SST regime is in effect. See top-of-file note.
   { key: 'detail_tax_code', label: 'Detail Tax Code',
-    render: (r) => ((r.tax_centi ?? 0) > 0 ? 'SR' : '—') },
+    render: () => 'SR' },
   { key: 'line_total',      label: 'Total',         align: 'right',
     render: (r) => fmtRm(r.total_centi, r.currency) },
+  // Tax (line) — constant 0.00 placeholder while no-SST regime is in effect.
   { key: 'line_tax',        label: 'Tax',           align: 'right',
-    render: (r) => fmtRm(r.tax_centi ?? 0, r.currency) },
+    render: (r) => fmtRm(0, r.currency) },
   { key: 'total_ex',        label: 'Total (Ex)',    align: 'right',
     render: (r) => fmtRm((r.total_centi ?? 0) - (r.tax_centi ?? 0), r.currency) },
   { key: 'total_inc',       label: 'Total (Inc)',   align: 'right',
     render: (r) => fmtRm(r.total_inc_centi ?? r.total_centi ?? 0, r.currency) },
+  // Creditor Code / Post to PO — cross-doc linking from SO line to supplier
+  // PO isn't tracked in our schema yet. See top-of-file note.
   { key: 'creditor_code',   label: 'Creditor Code', render: () => '—' },
   { key: 'post_to_po',      label: 'Post to PO',    align: 'center', render: () => '—' },
   { key: 'balance',         label: 'BALANCE',       align: 'right',
     render: (r) => fmtRm(r.balance_centi ?? 0, r.currency) },
+  // PAYEMENT — AutoCount preserves the typo. Sums mfg_sales_order_payments
+  // server-side (paid_total_centi); the legacy header column paid_centi was
+  // dropped by PR-C.
   { key: 'payment',         label: 'PAYEMENT',      align: 'right',
-    // AutoCount columns spells it "PAYEMENT" (typo preserved). Surfaces paid
-    // amount from the header — we don't have a per-line payment yet.
-    render: (r) => fmtRm(((r as Record<string, unknown>).paid_centi as number) ?? 0, r.currency) },
+    render: (r) => fmtRm(r.paid_total_centi ?? 0, r.currency) },
   { key: 'remark5',         label: 'Remark5',       render: (r) => (r.remark2 ?? '—') as string },
   { key: 'remark6',         label: 'Remark6',       render: (r) => (r.remark3 ?? '—') as string },
 ];
