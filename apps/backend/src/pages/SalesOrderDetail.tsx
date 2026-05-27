@@ -57,6 +57,8 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { useStaff } from '../lib/admin-queries';
+import { useAuth } from '../lib/auth';
+import { useVenues } from '../lib/venues-queries';
 import { useDebouncedValue } from '../lib/hooks';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
@@ -162,6 +164,9 @@ type SoHeader = {
   ref: string | null;
   po_doc_no: string | null;
   venue: string | null;
+  /* Migration 0086 — venue master FK. Auto-stamped from staff.venue_id on
+     POST/PATCH when the row's salesperson belongs to a venue. */
+  venue_id: string | null;
   branding: string | null;
   transfer_to: string | null;
   address1: string | null;
@@ -1128,6 +1133,13 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   const localityRows = localities.data ?? [];
   const staffQ = useStaff();
   const staffList = (staffQ.data ?? []).filter((s) => s.active);
+  /* Commander 2026-05-27: Venue is locked to the picked salesperson's
+     staff.venue_id; only admin / sales_director may swap the salesperson.
+     useVenues drives the read-only Venue input's display name. */
+  const { staff: currentStaff } = useAuth();
+  const venuesQ = useVenues();
+  const canChangeSalesperson =
+    currentStaff?.role === 'admin' || currentStaff?.role === 'sales_director';
 
   /* Task #118 — DB-backed dropdowns (was hardcoded). Falls back to the
      migration 0081 seed list when loading or when the DB has zero rows
@@ -1167,8 +1179,15 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     salespersonId: h.salesperson_id ?? '',
     buildingType: h.building_type ?? '',
     /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Reinstate
-       venue as a free-text field separate from Building Type. */
+       venue as a free-text field separate from Building Type.
+
+       Commander 2026-05-27 follow-up: "venue就不能换 自动跳出来". Venue is
+       now read-only on Edit too — derived from the picked salesperson's
+       staff.venue_id. We keep the free-text `venue` column on the row
+       (back-compat with PDFs / reports) and also persist `venue_id` so the
+       master link is durable. */
     venue: h.venue ?? '',
+    venueId: h.venue_id ?? '',
     phone: h.phone ?? '',
     address1: h.address1 ?? '',
     address2: h.address2 ?? '',
@@ -1206,6 +1225,21 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 
   const set = <K extends keyof typeof form>(k: K, v: string) =>
     setForm((s) => ({ ...s, [k]: v }));
+
+  /* Commander 2026-05-27: keep form.venueId / form.venue in lock-step with
+     the picked salesperson's home venue. Runs whenever the salesperson
+     swaps OR when the staff/venue lookups arrive (since the staff row may
+     not be in the list at first paint). We only patch when the resolved
+     values differ from the current form to avoid an infinite loop. */
+  useEffect(() => {
+    if (!form.salespersonId) return;
+    const picked = staffList.find((s) => s.id === form.salespersonId);
+    const resolvedId = picked?.venueId ?? '';
+    const resolvedName =
+      (venuesQ.data ?? []).find((v) => v.id === resolvedId)?.name ?? '';
+    if (resolvedId === form.venueId && resolvedName === form.venue) return;
+    setForm((s) => ({ ...s, venueId: resolvedId, venue: resolvedName }));
+  }, [form.salespersonId, staffList, venuesQ.data, form.venueId, form.venue]);
 
   // Cascade derivations
   const states = useMemo(() => distinctStates(localityRows), [localityRows]);
@@ -1257,7 +1291,10 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     customerType: form.customerType,
     salespersonId: form.salespersonId || null,
     buildingType: form.buildingType,
+    /* Commander 2026-05-27: Venue is locked to the salesperson's
+       staff.venue_id. We persist both the FK + the resolved name. */
     venue: form.venue,
+    venueId: form.venueId || null,
     phone: form.phone,
     address1: form.address1,
     address2: form.address2,
@@ -1401,13 +1438,27 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Salesperson</span>
+              {/* Commander 2026-05-27: only admin / sales_director can swap
+                  the salesperson on an existing SO. Non-admin sales roles
+                  see a disabled select pinned to whoever owns the SO. */}
               <select className={styles.fieldSelect} value={form.salespersonId}
-                disabled={inputsDisabled}
+                disabled={inputsDisabled || !canChangeSalesperson}
                 onChange={(e) => set('salespersonId', e.target.value)}>
                 <option value="">— Pick staff —</option>
                 {staffList.map((s) => (
                   <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                 ))}
+                {/* Persisted salesperson may not be in the active list
+                    (deactivated since the SO was created) — render
+                    explicitly so the select still shows the original
+                    name instead of blanking out. */}
+                {form.salespersonId
+                  && !staffList.some((s) => s.id === form.salespersonId)
+                  && (
+                    <option value={form.salespersonId}>
+                      (former staff)
+                    </option>
+                  )}
               </select>
             </label>
           </div>
@@ -1437,10 +1488,20 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Venue</span>
-              <input className={styles.fieldInput} value={form.venue}
-                placeholder="e.g. KL Showroom, Penang Branch"
-                disabled={inputsDisabled}
-                onChange={(e) => set('venue', e.target.value)} />
+              {/* Commander 2026-05-27: "venue就不能换 自动跳出来". Venue is
+                  derived from the picked salesperson's staff.venue_id and
+                  is read-only on Edit too. The auto-sync effect above
+                  keeps form.venue / form.venueId aligned. */}
+              <input className={styles.fieldInput} value={form.venue || '—'}
+                disabled readOnly
+                aria-label="Venue (auto-set from salesperson)" />
+              <span style={{
+                fontSize: 'var(--fs-11)',
+                color: 'var(--fg-muted)',
+                marginTop: 2,
+              }}>
+                Auto-set from the salesperson's assigned venue. Contact admin to change.
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
@@ -1927,7 +1988,7 @@ const FIELD_LABEL: Record<string, string> = {
   remark: 'Remark', salespersonId: 'Salesperson', customerType: 'Customer type',
   emergencyContactName: 'Emergency name', emergencyContactPhone: 'Emergency phone',
   emergencyContactRelationship: 'Emergency relationship',
-  targetDate: 'Target date', branding: 'Branding', venue: 'Venue',
+  targetDate: 'Target date', branding: 'Branding', venue: 'Venue', venueId: 'Venue (master)',
   salesLocation: 'Sales location', ref: 'Ref', poDocNo: 'PO doc no',
 };
 

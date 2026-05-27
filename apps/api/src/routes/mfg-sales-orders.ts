@@ -29,7 +29,7 @@ export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>(
 mfgSalesOrders.use('*', supabaseAuth);
 
 const HEADER =
-  'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, ' +
+  'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, venue_id, ' +
   'address1, address2, address3, address4, phone, ' +
   'mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi, local_total_centi, balance_centi, ' +
   /* Task #114 — per-category cost columns (migration 0079). Mirrors the
@@ -760,7 +760,7 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const map: Array<[string, string]> = [
     ['debtorCode', 'debtor_code'], ['debtorName', 'debtor_name'], ['agent', 'agent'],
     ['salesLocation', 'sales_location'], ['ref', 'ref'], ['poDocNo', 'po_doc_no'],
-    ['venue', 'venue'], ['branding', 'branding'], ['transferTo', 'transfer_to'],
+    ['venue', 'venue'], ['venueId', 'venue_id'], ['branding', 'branding'], ['transferTo', 'transfer_to'],
     ['address1', 'address1'], ['address2', 'address2'], ['address3', 'address3'],
     ['address4', 'address4'], ['phone', 'phone'], ['note', 'note'],
     ['remark2', 'remark2'], ['remark3', 'remark3'], ['remark4', 'remark4'],

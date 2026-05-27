@@ -34,6 +34,8 @@ import {
 } from '../lib/flow-queries';
 import { supabase } from '../lib/supabase';
 import { useStaff } from '../lib/admin-queries';
+import { useAuth } from '../lib/auth';
+import { useVenues } from '../lib/venues-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   countryForState,
@@ -76,7 +78,21 @@ export const SalesOrderNew = () => {
   const addPayment = useAddSalesOrderPayment();
   const uploadPhoto = useUploadSoItemPhoto();
   const staffQ   = useStaff();
+  const venuesQ  = useVenues();
   const loc      = useLocalities();
+  /* Commander 2026-05-27: "他们都要有自己的account... 用自己的account开单
+     都是自己的名字...salesperson 还是可以换 只是default跳出来 venue就不能换
+     自动跳出来". The current logged-in staff drives:
+       1. Default salesperson (admin/director can still pick another).
+       2. The locked Venue (always derived from the picked salesperson's
+          venue_id — non-admin roles also can't change the salesperson, so
+          the venue is fully locked to their home venue). */
+  const { staff: currentStaff } = useAuth();
+  /* Roles that may swap the salesperson on an SO they're entering on
+     behalf of someone else. Everyone else gets a read-only salesperson
+     pinned to themselves. */
+  const canChangeSalesperson =
+    currentStaff?.role === 'admin' || currentStaff?.role === 'sales_director';
 
   /* Task #118 — these 3 dropdowns used to be `as const` arrays in this
      file. Now sourced from so_dropdown_options via TanStack. Each call
@@ -85,11 +101,13 @@ export const SalesOrderNew = () => {
   const customerTypeOptsQ  = useSoDropdownOptions('customer_type');
   const buildingTypeOptsQ  = useSoDropdownOptions('building_type');
   const relationshipOptsQ  = useSoDropdownOptions('relationship');
-  const venueOptsQ         = useSoDropdownOptions('venue');
   const customerTypeOpts = optionsOrFallback('customer_type', customerTypeOptsQ.data);
   const buildingTypeOpts = optionsOrFallback('building_type', buildingTypeOptsQ.data);
   const relationshipOpts = optionsOrFallback('relationship',  relationshipOptsQ.data);
-  const venueOpts        = optionsOrFallback('venue',         venueOptsQ.data);
+  /* Commander 2026-05-27: Venue is no longer user-pickable on New SO —
+     it's locked to the salesperson's staff.venue_id. The `venue`
+     so_dropdown_options category remains for legacy back-compat but
+     this page no longer reads it. */
 
   // ── Customer fields ────────────────────────────────────────────────
   const [debtorCode,    setDebtorCode]    = useState('');
@@ -106,8 +124,13 @@ export const SalesOrderNew = () => {
   const [buildingType,   setBuildingType] = useState<string>('');
   /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Detail page
      keeps Venue as a free-text field separate from Building Type — match
-     that here so the two layouts line up. */
-  const [venue,          setVenue]         = useState('');
+     that here so the two layouts line up.
+
+     Commander 2026-05-27 follow-up: "venue就不能换 自动跳出来". The venue
+     is now derived from the picked salesperson's staff.venue_id and is
+     read-only. We keep the free-text `venue` column on the row for
+     back-compat (we send the resolved venue name) and also send
+     `venueId` (FK) so the API persists the master link. */
   const [processingDate, setProcessingDate] = useState('');
   const [deliveryDate,   setDeliveryDate]   = useState('');
   const [note,           setNote]           = useState('');
@@ -262,6 +285,37 @@ export const SalesOrderNew = () => {
     [locRows, state],
   );
 
+  // ── Salesperson + Venue resolution ─────────────────────────────────
+  /* Commander 2026-05-27: default Salesperson to the current user; the
+     Venue is then resolved from that staff row's venue_id and locked. */
+  const staffList = useMemo(
+    () => (staffQ.data ?? []).filter((s) => s.active),
+    [staffQ.data],
+  );
+
+  /* Seed salespersonId once the current staff row arrives. We only seed
+     when the user hasn't already picked someone (otherwise we'd stomp on
+     an admin's manual choice on every re-render). */
+  useEffect(() => {
+    if (!currentStaff?.id) return;
+    setSalespersonId((prev) => prev || currentStaff.id);
+  }, [currentStaff?.id]);
+
+  /* Derive the resolved venue from whichever salesperson is currently
+     picked. Falls back to the auth user's own venue_id if the staff list
+     hasn't loaded yet — which is the common case on first paint. */
+  const selectedStaff = useMemo(
+    () => staffList.find((s) => s.id === salespersonId) ?? null,
+    [staffList, salespersonId],
+  );
+  const resolvedVenueId: string | null =
+    selectedStaff?.venueId ?? currentStaff?.venueId ?? null;
+  const resolvedVenueName: string = useMemo(() => {
+    if (!resolvedVenueId) return '';
+    const v = (venuesQ.data ?? []).find((r) => r.id === resolvedVenueId);
+    return v?.name ?? '';
+  }, [resolvedVenueId, venuesQ.data]);
+
   const canSave = debtorName.trim().length > 0;
 
   /* Mirror Detail's XOR rule (PR #156): Processing Date and Delivery Date
@@ -414,7 +468,12 @@ export const SalesOrderNew = () => {
         salespersonId: salespersonId || undefined,
         customerType: customerType || undefined,
         customerSoNo: customerSoNo || undefined,
-        venue: venue || undefined,
+        /* Commander 2026-05-27: Venue is locked to the picked salesperson's
+           home venue. Send the FK so the API persists `venue_id`; we also
+           send the resolved name as the legacy free-text `venue` column
+           for back-compat with reports / PDFs that still read it. */
+        venueId: resolvedVenueId ?? undefined,
+        venue: resolvedVenueName || undefined,
         /* Address handling: address1/2 skipped when fill-later is on, but
            State/City/Postcode/BuildingType always submit. */
         address1: fillAddressLater ? undefined : (address1 || undefined),
@@ -481,8 +540,6 @@ export const SalesOrderNew = () => {
       },
     );
   };
-
-  const staffList = (staffQ.data ?? []).filter((s) => s.active);
 
   return (
     <div className={styles.page}>
@@ -592,13 +649,25 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Salesperson</span>
+              {/* Commander 2026-05-27: "salesperson 还是可以换 只是default
+                  跳出来". Defaults to the current user; only admin /
+                  sales_director can re-pick. Non-admin roles see a
+                  disabled select pinned to themselves so the field is
+                  visible-but-not-editable (UI parity with the editable
+                  case). */}
               <select
                 className={styles.fieldSelect}
                 value={salespersonId}
                 onChange={(e) => setSalespersonId(e.target.value)}
+                disabled={!canChangeSalesperson}
               >
-                <option value="">— Pick staff —</option>
-                {staffList.map((s) => (
+                {!canChangeSalesperson && currentStaff && (
+                  <option value={currentStaff.id}>
+                    {currentStaff.name} ({currentStaff.staffCode})
+                  </option>
+                )}
+                {canChangeSalesperson && <option value="">— Pick staff —</option>}
+                {canChangeSalesperson && staffList.map((s) => (
                   <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
                 ))}
               </select>
@@ -630,18 +699,24 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Venue</span>
-              {/* Commander 2026-05-27: Venue moved from free-text → picklist.
-                  Managed in SO Maintenance > Venue. */}
-              <select
-                className={styles.fieldSelect}
-                value={venue}
-                onChange={(e) => setVenue(e.target.value)}
-              >
-                <option value="">—</option>
-                {venueOpts.map((v) => (
-                  <option key={v.id} value={v.value}>{v.label}</option>
-                ))}
-              </select>
+              {/* Commander 2026-05-27: "venue就不能换 自动跳出来". The venue
+                  is locked to the picked salesperson's staff.venue_id —
+                  rendered as a disabled input. Helper text under the
+                  field explains the lock to the user. */}
+              <input
+                className={styles.fieldInput}
+                value={resolvedVenueName || (resolvedVenueId ? 'Loading…' : '—')}
+                disabled
+                readOnly
+                aria-label="Venue (auto-set from salesperson)"
+              />
+              <span style={{
+                fontSize: 'var(--fs-11)',
+                color: 'var(--fg-muted)',
+                marginTop: 2,
+              }}>
+                Auto-set from the salesperson's assigned venue. Contact admin to change.
+              </span>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
