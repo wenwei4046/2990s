@@ -51,7 +51,10 @@ app.use('*', async (c, next) => {
   const handler = cors({
     origin: (origin) => (origins.includes(origin) ? origin : null),
     credentials: true,
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    /* PUT added 2026-05-27 — state_warehouse_mappings upsert uses PUT,
+       and PUT missing from the allowMethods list caused the CORS preflight
+       to reject the call ("Save failed: Failed to fetch" toast). */
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['authorization', 'content-type', 'x-client-info'],
     maxAge: 600,
   });
