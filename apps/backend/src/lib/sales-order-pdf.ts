@@ -1,3 +1,5 @@
+import { formatPhone } from '@2990s/shared/phone';
+
 // ----------------------------------------------------------------------------
 // Sales Order PDF generator — dynamic jspdf import so it doesn't bloat the
 // main bundle. ~430 kB on its own (gzipped 143 kB); rendered into a vendor
@@ -122,7 +124,8 @@ export async function generateSalesOrderPdf(header: SoHeader, items: SoItem[]): 
     header.address2,
     header.address3,
     header.address4,
-    header.phone ? `Tel: ${header.phone}` : null,
+    /* Task #91 — pretty Malaysian format on customer-facing PDF. */
+    header.phone ? `Tel: ${formatPhone(header.phone)}` : null,
   ].filter(Boolean) as string[];
 
   const rightLines = [

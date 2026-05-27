@@ -13,6 +13,8 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Search, Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { formatPhone } from '@2990s/shared/phone';
+import { PhoneInput } from '../components/PhoneInput';
 import {
   useSuppliers,
   useCreateSupplier,
@@ -125,7 +127,7 @@ export const Suppliers = () => {
                 <td><span className={styles.codeChip}>{r.code}</span></td>
                 <td>{r.name}</td>
                 <td>{r.contact_person ?? '—'}</td>
-                <td>{r.phone ?? r.whatsapp_number ?? '—'}</td>
+                <td>{formatPhone(r.phone ?? r.whatsapp_number) || '—'}</td>
                 <td>{r.state ?? '—'}</td>
                 <td>{r.payment_terms ?? '—'}</td>
                 <td>
@@ -275,9 +277,10 @@ const SupplierFields = ({
     <div className={styles.formGrid}>
       <Field label="Contact Person" value={(form.contactPerson as string) ?? ''} onChange={(v) => onChange('contactPerson', v)} />
       <Field label="Attention" value={(form.attention as string) ?? ''} onChange={(v) => onChange('attention', v)} />
-      <Field label="Phone" value={(form.phone as string) ?? ''} onChange={(v) => onChange('phone', v)} />
-      <Field label="Mobile" value={(form.mobile as string) ?? ''} onChange={(v) => onChange('mobile', v)} />
-      <Field label="WhatsApp" value={(form.whatsappNumber as string) ?? ''} onChange={(v) => onChange('whatsappNumber', v)} />
+      {/* Task #91 — phone fields normalize to E.164 on blur via PhoneInput. */}
+      <PhoneField label="Phone" value={(form.phone as string) ?? ''} onChange={(v) => onChange('phone', v)} />
+      <PhoneField label="Mobile" value={(form.mobile as string) ?? ''} onChange={(v) => onChange('mobile', v)} />
+      <PhoneField label="WhatsApp" value={(form.whatsappNumber as string) ?? ''} onChange={(v) => onChange('whatsappNumber', v)} />
       <Field label="Fax" value={(form.fax as string) ?? ''} onChange={(v) => onChange('fax', v)} />
       <Field label="Email" value={(form.email as string) ?? ''} onChange={(v) => onChange('email', v)} />
       <Field label="Website" value={(form.website as string) ?? ''} onChange={(v) => onChange('website', v)} />
@@ -338,6 +341,19 @@ const Field = ({
         onChange={(e) => onChange(e.target.value)}
       />
     )}
+  </label>
+);
+
+/* Task #91 — Phone variant of Field. Same label/layout, but the input runs
+   through PhoneInput so its value is normalized to E.164 on blur. */
+const PhoneField = ({
+  label, value, onChange,
+}: {
+  label: string; value: string; onChange: (v: string) => void;
+}) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <PhoneInput className={styles.fieldInput} value={value} onChange={onChange} />
   </label>
 );
 

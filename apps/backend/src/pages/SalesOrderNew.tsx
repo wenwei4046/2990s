@@ -28,6 +28,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { PhoneInput } from '../components/PhoneInput';
 import { useCreateMfgSalesOrder, useDebtorSearch } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { useWarehouses } from '../lib/inventory-queries';
@@ -422,11 +423,10 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Phone</span>
-              <input
-                type="tel"
+              {/* Task #91 — unified phone format via PhoneInput. */}
+              <PhoneInput
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+60 12 345 6789"
+                onChange={setPhone}
                 className={styles.fieldInput}
               />
             </label>
@@ -612,11 +612,9 @@ export const SalesOrderNew = () => {
             </label>
             <label className={`${styles.field} ${styles.fieldFull}`}>
               <span className={styles.fieldLabel}>Phone</span>
-              <input
-                type="tel"
+              <PhoneInput
                 value={emergencyPhone}
-                onChange={(e) => setEmergencyPhone(e.target.value)}
-                placeholder="+60 12 345 6789"
+                onChange={setEmergencyPhone}
                 className={styles.fieldInput}
               />
             </label>
