@@ -406,23 +406,36 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L1 — Add Country form */}
+      {/* L1 — Add Country form. Commander 2026-05-27: "add a country
+          should be only country dont need state and code and city". One
+          input. Backend seeds a placeholder locality (state/city/postcode
+          all '—') so the country shows up in L1; commander drills into
+          L2 to add real states. */}
       {geoView === 'country' && canEdit && (
         <div className={styles.addRowCard}>
-          <div className={styles.addRowEyebrow}>Add a country (also seeds first state · city · postcode)</div>
+          <div className={styles.addRowEyebrow}>Add a country</div>
           <div className={styles.addRowGrid}
-            style={{ gridTemplateColumns: '1fr 1fr 100px 1fr 110px auto' }}>
+            style={{ gridTemplateColumns: '1fr auto' }}>
             <input className={styles.input} placeholder="Country (Singapore)"
               value={newCountry} onChange={(e) => setNewCountry(e.target.value)} />
-            <input className={styles.input} placeholder="State (Central)"
-              value={newState} onChange={(e) => setNewState(e.target.value)} />
-            <input className={styles.input} placeholder="Code (SGC)" maxLength={5}
-              value={newStateCode} onChange={(e) => setNewStateCode(e.target.value)} />
-            <input className={styles.input} placeholder="City (Bugis)"
-              value={newCity} onChange={(e) => setNewCity(e.target.value)} />
-            <input className={styles.input} placeholder="Postcode (188022)" maxLength={10}
-              value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
-            <Button variant="primary" size="md" onClick={addLocality} disabled={createLoc.isPending}>
+            <Button
+              variant="primary" size="md"
+              disabled={createLoc.isPending}
+              onClick={async () => {
+                const country = newCountry.trim();
+                if (!country) { window.alert('Country name is required.'); return; }
+                try {
+                  await createLoc.mutateAsync({
+                    state: '—', stateCode: '—', city: '—', postcode: '—',
+                    country,
+                  });
+                  setNewCountry('');
+                  toast.success(`Added ${country}. Drill in to add states.`);
+                } catch (err) {
+                  toast.error(`Add failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
+              }}
+            >
               <Plus size={14} strokeWidth={1.75} /> Add
             </Button>
           </div>
