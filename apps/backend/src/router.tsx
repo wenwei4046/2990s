@@ -23,6 +23,7 @@ import {
 import { SalesOrderDetail } from './pages/SalesOrderDetail';
 import { SalesOrderNew } from './pages/SalesOrderNew';
 import { Inventory } from './pages/Inventory';
+import { StockCard } from './pages/StockCard';
 import { Drivers } from './pages/Drivers';
 import { Accounting } from './pages/Accounting';
 import { Warehouses } from './pages/Warehouses';
@@ -55,6 +56,7 @@ export const router = createBrowserRouter([
       { path: 'product-models/:id', element: <ProductModelDetail /> },
       { path: 'fabric-tracking', element: <FabricTracking /> },
       { path: 'inventory', element: <Inventory /> },
+      { path: 'inventory/stock-card/:productCode', element: <StockCard /> },
       { path: 'warehouses', element: <Warehouses /> },
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
