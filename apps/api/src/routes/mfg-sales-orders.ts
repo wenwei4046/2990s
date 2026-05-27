@@ -16,6 +16,10 @@ const HEADER =
   'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, ' +
   'address1, address2, address3, address4, phone, ' +
   'mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi, local_total_centi, balance_centi, ' +
+  /* Task #114 — per-category cost columns (migration 0078). Mirrors the
+     four category revenue columns above so the SO list grid + Totals card
+     can show category-level margins without per-item rollups. */
+  'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, ' +
   'total_cost_centi, total_revenue_centi, total_margin_centi, margin_pct_basis, line_count, ' +
   'currency, status, remark2, remark3, remark4, note, processing_date, sales_exemption_expiry, ' +
   /* PR #35 + #46 — extended PO + POS handover fields */
@@ -42,6 +46,32 @@ const nextDocNo = async (sb: any): Promise<string> => {
   // HOUZS pattern: SO-NNNNNN (6-digit zero-padded counter across all time)
   const { count } = await sb.from('mfg_sales_orders').select('doc_no', { head: true, count: 'exact' });
   return `SO-${String((count ?? 0) + 1 + 9000).padStart(6, '0')}`; // start at SO-009001
+};
+
+/* ─────────────────────────── Cost snapshot ────────────────────────────
+   Task #114 — Pull cost_price_sen off mfg_products on line create so the
+   header's total_cost_centi / category cost columns get populated even
+   when the client doesn't snapshot the cost themselves. Falls through in
+   order: explicit client value (when > 0) → mfg_products.cost_price_sen
+   → 0. Returns sen (integer). itemCode is matched on mfg_products.code
+   which is the canonical lookup key (sku_code is denormalized text).
+
+   Note: Houzs builds cost from a live skusMaster store + variant
+   surcharges. We use a server snapshot instead (simpler + tamper-proof)
+   per Task #114 spec. ─────────────────────────────────────────────────── */
+const snapshotUnitCostSen = async (
+  sb: any,
+  itemCode: string,
+  explicit: number,
+): Promise<number> => {
+  if (explicit > 0) return explicit;
+  if (!itemCode) return 0;
+  const { data } = await sb
+    .from('mfg_products')
+    .select('cost_price_sen')
+    .eq('code', itemCode)
+    .maybeSingle();
+  return Number((data as { cost_price_sen?: number } | null)?.cost_price_sen ?? 0);
 };
 
 mfgSalesOrders.get('/', async (c) => {
@@ -87,24 +117,45 @@ mfgSalesOrders.post('/', async (c) => {
 
   // Compute totals + category breakdown
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
+  // Task #114 — also accumulate per-category COST so the four cost columns
+  // on the header (migration 0078) get populated on insert. Mirrors the
+  // revenue accumulators above.
+  let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
   /* PR-E — Per-item delivery date inherits the SO header's
      customer_delivery_date on create unless the client explicitly
      supplies a per-line lineDeliveryDate. Override flag mirrors the
      client's choice (defaults false → cascade-tracked). */
   const headerDeliveryDate = (body.customerDeliveryDate as string | null | undefined) ?? null;
-  const itemRows = items.map((it) => {
+  /* Task #114 — snapshot unit cost from mfg_products when client didn't.
+     Build itemRows sequentially with Promise.all so the cost lookup runs
+     in parallel across lines but each row still has its own awaited cost. */
+  const itemRows = await Promise.all(items.map(async (it) => {
     const qty = Number(it.qty ?? 1);
     const unit = Number(it.unitPriceCenti ?? 0);
     const discount = Number(it.discountCenti ?? 0);
     const lineTotal = (qty * unit) - discount;
-    const lineCost = Number(it.unitCostCenti ?? 0) * qty;
+    // Task #114 — fall back to mfg_products.cost_price_sen when the client
+    // didn't snapshot a cost. Keeps line_cost_centi accurate even when the
+    // POS hands the SO off with cost=0.
+    const itemCode = String(it.itemCode ?? '');
+    const unitCost = await snapshotUnitCostSen(sb, itemCode, Number(it.unitCostCenti ?? 0));
+    const lineCost = unitCost * qty;
     const group = String(it.itemGroup ?? '').toLowerCase();
     total += lineTotal;
     totalCost += lineCost;
-    if (group.includes('mattress') || group.includes('sofa')) mattressSofa += lineTotal;
-    else if (group.includes('bedframe')) bedframe += lineTotal;
-    else if (group.includes('accessor')) accessories += lineTotal;
-    else others += lineTotal;
+    if (group.includes('mattress') || group.includes('sofa')) {
+      mattressSofa += lineTotal;
+      mattressSofaCost += lineCost;
+    } else if (group.includes('bedframe')) {
+      bedframe += lineTotal;
+      bedframeCost += lineCost;
+    } else if (group.includes('accessor')) {
+      accessories += lineTotal;
+      accessoriesCost += lineCost;
+    } else {
+      others += lineTotal;
+      othersCost += lineCost;
+    }
     /* PR-E — Per-line cascade defaults. If the client sent a
        lineDeliveryDate it wins (and overridden=true unless explicitly
        false). Otherwise inherit the header date with overridden=false. */
@@ -131,13 +182,13 @@ mfgSalesOrders.post('/', async (c) => {
       total_inc_centi: lineTotal,
       balance_centi: lineTotal,
       variants: (it.variants as unknown) ?? null,
-      unit_cost_centi: Number(it.unitCostCenti ?? 0),
+      unit_cost_centi: unitCost,
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
       line_delivery_date: lineDeliveryDate,
       line_delivery_date_overridden: lineDeliveryDateOverridden,
     };
-  });
+  }));
 
   const margin = total - totalCost;
   const marginPctBasis = total > 0 ? Math.round((margin / total) * 10000) : 0;
@@ -168,6 +219,11 @@ mfgSalesOrders.post('/', async (c) => {
     bedframe_centi: bedframe,
     accessories_centi: accessories,
     others_centi: others,
+    // Task #114 — per-category cost (migration 0078).
+    mattress_sofa_cost_centi: mattressSofaCost,
+    bedframe_cost_centi:      bedframeCost,
+    accessories_cost_centi:   accessoriesCost,
+    others_cost_centi:        othersCost,
     local_total_centi: total,
     balance_centi: total,
     total_cost_centi: totalCost,
@@ -520,14 +576,26 @@ mfgSalesOrders.post('/:docNo/items/:itemId/override', async (c) => {
   });
 
   const newLineTotal = (i.qty * newPrice) - i.discount_centi;
+  /* Task #114 — pull current line_cost_centi so the price override
+     recomputes line_margin_centi correctly. Previous code used `- 0`
+     which silently broke margin tracking on every override. */
+  const { data: costRow } = await sb.from('mfg_sales_order_items')
+    .select('line_cost_centi')
+    .eq('id', itemId)
+    .maybeSingle();
+  const currentLineCost = Number((costRow as { line_cost_centi?: number } | null)?.line_cost_centi ?? 0);
   const { error } = await sb.from('mfg_sales_order_items').update({
     unit_price_centi: newPrice,
     total_centi: newLineTotal,
     total_inc_centi: newLineTotal,
     balance_centi: newLineTotal,
-    line_margin_centi: newLineTotal - 0,  // line_cost_centi stays; margin recomputed by item PATCH path
+    line_margin_centi: newLineTotal - currentLineCost,
   }).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  /* Task #114 — also refresh the header totals after the override so
+     total_cost_centi / total_margin_centi / category cost columns stay
+     consistent with the new line revenue + margin. */
+  await recomputeTotals(sb, docNo);
 
   // PR-D — also emit a unified audit-log entry so the History drawer
   // shows this price override alongside other UPDATE_LINE actions.
@@ -659,14 +727,30 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
 async function recomputeTotals(sb: any, docNo: string) {
   const { data: items } = await sb.from('mfg_sales_order_items').select('item_group, total_centi, line_cost_centi').eq('doc_no', docNo).eq('cancelled', false);
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
+  // Task #114 — per-category cost mirrors the revenue accumulators. Each
+  // bucket below tracks both revenue (total_centi) and cost (line_cost_centi)
+  // so the SO header's 4 new cost columns (migration 0078) stay in sync
+  // with the existing 4 revenue columns.
+  let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
   for (const it of (items ?? []) as Array<{ item_group: string; total_centi: number; line_cost_centi: number }>) {
-    total += it.total_centi || 0;
-    totalCost += it.line_cost_centi || 0;
+    const lineTotal = it.total_centi || 0;
+    const lineCost  = it.line_cost_centi || 0;
+    total += lineTotal;
+    totalCost += lineCost;
     const g = (it.item_group ?? '').toLowerCase();
-    if (g.includes('mattress') || g.includes('sofa')) mattressSofa += it.total_centi;
-    else if (g.includes('bedframe')) bedframe += it.total_centi;
-    else if (g.includes('accessor')) accessories += it.total_centi;
-    else others += it.total_centi;
+    if (g.includes('mattress') || g.includes('sofa')) {
+      mattressSofa += lineTotal;
+      mattressSofaCost += lineCost;
+    } else if (g.includes('bedframe')) {
+      bedframe += lineTotal;
+      bedframeCost += lineCost;
+    } else if (g.includes('accessor')) {
+      accessories += lineTotal;
+      accessoriesCost += lineCost;
+    } else {
+      others += lineTotal;
+      othersCost += lineCost;
+    }
   }
   const margin = total - totalCost;
   await sb.from('mfg_sales_orders').update({
@@ -674,6 +758,11 @@ async function recomputeTotals(sb: any, docNo: string) {
     bedframe_centi: bedframe,
     accessories_centi: accessories,
     others_centi: others,
+    // Task #114 — per-category cost (migration 0078).
+    mattress_sofa_cost_centi: mattressSofaCost,
+    bedframe_cost_centi:      bedframeCost,
+    accessories_cost_centi:   accessoriesCost,
+    others_cost_centi:        othersCost,
     local_total_centi: total,
     balance_centi: total,
     total_cost_centi: totalCost,
@@ -701,7 +790,14 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   const unit = Number(it.unitPriceCenti ?? 0);
   const discount = Number(it.discountCenti ?? 0);
   const lineTotal = (qty * unit) - discount;
-  const lineCost = Number(it.unitCostCenti ?? 0) * qty;
+  // Task #114 — snapshot unit cost from mfg_products when client didn't
+  // pass one. Same fallback chain as POST / and PATCH /:itemId.
+  const unitCost = await snapshotUnitCostSen(
+    sb,
+    String(it.itemCode ?? ''),
+    Number(it.unitCostCenti ?? 0),
+  );
+  const lineCost = unitCost * qty;
   /* PR-E — same inheritance rule as POST /. Explicit per-line value wins
      (and flips overridden=true unless the client says otherwise);
      otherwise fall back to header.customer_delivery_date with
@@ -733,7 +829,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     venue: header.venue,
     branding: header.branding,
     variants: (it.variants as unknown) ?? null,
-    unit_cost_centi: Number(it.unitCostCenti ?? 0),
+    unit_cost_centi: unitCost,
     line_cost_centi: lineCost,
     line_margin_centi: lineTotal - lineCost,
     line_delivery_date: lineDeliveryDate,
@@ -776,7 +872,22 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
-  const unitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : prev.unit_cost_centi;
+  /* Task #114 — cost snapshot fallback on PATCH. Three cases:
+       1. Client sent unitCostCenti > 0 → use it.
+       2. Client changed itemCode (no cost in body) → re-snapshot from
+          mfg_products under the new code. Otherwise the line keeps the
+          previous SKU's cost which is almost certainly wrong.
+       3. Otherwise keep the prior unit_cost_centi unchanged. */
+  let unitCost: number;
+  const explicitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : 0;
+  const itemCodeChanged = it.itemCode !== undefined && it.itemCode !== prev.item_code;
+  if (explicitCost > 0) {
+    unitCost = explicitCost;
+  } else if (itemCodeChanged) {
+    unitCost = await snapshotUnitCostSen(sb, String(it.itemCode ?? ''), 0);
+  } else {
+    unitCost = prev.unit_cost_centi;
+  }
   const lineTotal = (qty * unit) - discount;
   const lineCost = unitCost * qty;
 
