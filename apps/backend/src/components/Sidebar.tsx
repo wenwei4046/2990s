@@ -28,8 +28,6 @@ import {
   FileBarChart,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
-import { useNotificationStore } from '../lib/notifications';
-import { useOrders } from '../lib/queries';
 import styles from './Sidebar.module.css';
 
 type NavRow =
@@ -59,15 +57,13 @@ const formatRole = (role?: string | null): string => {
 
 export const Sidebar = () => {
   const { staff, signOut } = useAuth();
-  const { data: orders } = useOrders();
-  const ordersReadAt = useNotificationStore((s) => s.ordersReadAt);
 
-  const ordersBadge =
-    orders?.filter((o) => {
-      if (o.lane !== 'received' && o.lane !== 'proceed') return false;
-      if (ordersReadAt && o.placedAt <= ordersReadAt) return false;
-      return true;
-    }).length ?? 0;
+  // Orders badge count dropped (perf-router-realtime-sidebar). The previous
+  // useOrders() call here fetched every order's full payload on every shell
+  // mount just to compute a single unread count — orders of magnitude more
+  // data than a badge needs. If we want the badge back later, expose a
+  // /orders/counts aggregate endpoint (or a Supabase head/exact count query)
+  // and call that instead.
   const items: NavRow[] = [
     { kind: 'group', label: 'Workspace' },
     { kind: 'link', to: '/dashboard', icon: <LayoutDashboard {...ICON_PROPS} />, label: 'Dashboard' },
@@ -76,7 +72,6 @@ export const Sidebar = () => {
       to: '/orders',
       icon: <Inbox {...ICON_PROPS} />,
       label: 'Orders',
-      badge: ordersBadge,
     },
     ...(staff && ['finance', 'coordinator', 'admin'].includes(staff.role)
       ? [{

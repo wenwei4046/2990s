@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import {
-  useAuditLog, useAuditLogRealtime,
+  useAuditLog,
   type AuditLogFilters, type AuditLogRow,
 } from '../lib/audit-log-queries';
 import {
@@ -64,7 +64,10 @@ export const AuditLog = () => {
   const [drawerOrderId, setDrawerOrderId] = useState<string | null>(null);
 
   const query = useAuditLog(filters);
-  useAuditLogRealtime();
+  // Audit-log realtime channel removed (perf-router-realtime-sidebar) — it
+  // duplicated useOrdersRealtime's `orders` subscription. Page falls back to
+  // staleTime-driven refetch on focus / manual refresh; opening Orders or
+  // Dashboard already keeps the cache fresh via the surviving channel.
   const showrooms = useShowrooms();
   const staff = useStaff();
 

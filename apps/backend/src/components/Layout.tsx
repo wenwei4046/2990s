@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router';
 import { useAuth } from '../lib/auth';
 import { Sidebar } from './Sidebar';
@@ -69,7 +70,13 @@ export const Layout = () => {
             searchPlaceholder={meta.searchPlaceholder}
           />
           <main className={styles.main}>
-            <Outlet />
+            {/* Single Suspense boundary for all lazy-loaded route pages.
+                See router.tsx — per-route code splitting means each page
+                module is fetched on demand, with this fallback shown while
+                its chunk downloads. */}
+            <Suspense fallback={<div style={{ padding: 'var(--space-4)' }}>Loading…</div>}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
       </div>

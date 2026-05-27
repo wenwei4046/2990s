@@ -1,55 +1,73 @@
+import { lazy } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router';
 import { Layout, NoAccess } from './components/Layout';
 import { Login } from './pages/Login';
 import { SetPassword } from './pages/SetPassword';
 import { Dashboard } from './pages/Dashboard';
-import { SkuMaster } from './pages/SkuMaster';
-import { Orders } from './pages/Orders';
-import { AuditLog } from './pages/AuditLog';
-import { Addons } from './pages/Addons';
-import { Settings } from './pages/Settings';
-import { Customers } from './pages/Customers';
-import { Products } from './pages/Products';
-import { ProductModels } from './pages/ProductModels';
-import { ProductModelDetail } from './pages/ProductModelDetail';
-import { FabricTracking } from './pages/FabricTracking';
-import { Suppliers } from './pages/Suppliers';
-import { SupplierDetail } from './pages/SupplierDetail';
-import { PurchaseOrders } from './pages/PurchaseOrders';
-import {
-  Grns, PurchaseInvoicesPage, MfgSalesOrdersPage, MfgDeliveryOrdersPage,
-  SalesInvoicesPage, ConsignmentPage, DeliveryReturnsPage, PurchaseReturnsPage,
-} from './pages/FlowPages';
-import { SalesOrderDetail } from './pages/SalesOrderDetail';
-import { SalesOrderNew } from './pages/SalesOrderNew';
-import { Inventory } from './pages/Inventory';
-import { StockCard } from './pages/StockCard';
-import { StockAdjustments } from './pages/StockAdjustments';
-import { StockAdjustmentNew } from './pages/StockAdjustmentNew';
-import { StockTransfers } from './pages/StockTransfers';
-import { StockTransferNew } from './pages/StockTransferNew';
-import { StockTransferDetail } from './pages/StockTransferDetail';
-import { StockTakes } from './pages/StockTakes';
-import { StockTakeNew } from './pages/StockTakeNew';
-import { StockTakeDetail } from './pages/StockTakeDetail';
-import { Drivers } from './pages/Drivers';
-import { Accounting } from './pages/Accounting';
-import { Warehouses } from './pages/Warehouses';
-import { PurchaseOrderDetail } from './pages/PurchaseOrderDetail';
-import { PurchaseOrderNew } from './pages/PurchaseOrderNew';
-import { PurchaseOrderFromSo } from './pages/PurchaseOrderFromSo';
-import { GrnNew } from './pages/GrnNew';
-import { GrnFromPo } from './pages/GrnFromPo';
-import { PurchaseInvoiceNew } from './pages/PurchaseInvoiceNew';
-import { PurchaseInvoiceFromGrn } from './pages/PurchaseInvoiceFromGrn';
-import { PurchaseReturnNew } from './pages/PurchaseReturnNew';
-import { Outstanding } from './pages/Outstanding';
-import { Placeholder } from './pages/Placeholder';
-import { SalesOrderDetailListing } from './pages/SalesOrderDetailListing';
-import {
-  GrnDetail, PurchaseInvoiceDetail, DeliveryOrderDetail, SalesInvoiceDetail,
-  ConsignmentDetail, PurchaseReturnDetail,
-} from './pages/DocDetailPages';
+
+// Per-route code splitting. Above-the-fold pages (Login, SetPassword, Layout
+// shell, Dashboard) stay eager — everything else is lazy-loaded so the initial
+// bundle drops from ~1.5 MB to just the landing page. A single <Suspense>
+// boundary in Layout.tsx wraps <Outlet /> so each lazy page reuses the same
+// fallback while it loads.
+//
+// Every page module exports NAMED components, so each lazy() call uses the
+// .then(m => ({ default: m.X })) adapter to satisfy React.lazy's "default
+// export" contract.
+
+const SkuMaster = lazy(() => import('./pages/SkuMaster').then(m => ({ default: m.SkuMaster })));
+const Orders = lazy(() => import('./pages/Orders').then(m => ({ default: m.Orders })));
+const AuditLog = lazy(() => import('./pages/AuditLog').then(m => ({ default: m.AuditLog })));
+const Addons = lazy(() => import('./pages/Addons').then(m => ({ default: m.Addons })));
+const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })));
+const Customers = lazy(() => import('./pages/Customers').then(m => ({ default: m.Customers })));
+const Products = lazy(() => import('./pages/Products').then(m => ({ default: m.Products })));
+const ProductModels = lazy(() => import('./pages/ProductModels').then(m => ({ default: m.ProductModels })));
+const ProductModelDetail = lazy(() => import('./pages/ProductModelDetail').then(m => ({ default: m.ProductModelDetail })));
+const FabricTracking = lazy(() => import('./pages/FabricTracking').then(m => ({ default: m.FabricTracking })));
+const Suppliers = lazy(() => import('./pages/Suppliers').then(m => ({ default: m.Suppliers })));
+const SupplierDetail = lazy(() => import('./pages/SupplierDetail').then(m => ({ default: m.SupplierDetail })));
+const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders').then(m => ({ default: m.PurchaseOrders })));
+const Grns = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.Grns })));
+const PurchaseInvoicesPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseInvoicesPage })));
+const MfgSalesOrdersPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.MfgSalesOrdersPage })));
+const MfgDeliveryOrdersPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.MfgDeliveryOrdersPage })));
+const SalesInvoicesPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.SalesInvoicesPage })));
+const ConsignmentPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
+const DeliveryReturnsPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.DeliveryReturnsPage })));
+const PurchaseReturnsPage = lazy(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseReturnsPage })));
+const SalesOrderDetail = lazy(() => import('./pages/SalesOrderDetail').then(m => ({ default: m.SalesOrderDetail })));
+const SalesOrderNew = lazy(() => import('./pages/SalesOrderNew').then(m => ({ default: m.SalesOrderNew })));
+const Inventory = lazy(() => import('./pages/Inventory').then(m => ({ default: m.Inventory })));
+const StockCard = lazy(() => import('./pages/StockCard').then(m => ({ default: m.StockCard })));
+const StockAdjustments = lazy(() => import('./pages/StockAdjustments').then(m => ({ default: m.StockAdjustments })));
+const StockAdjustmentNew = lazy(() => import('./pages/StockAdjustmentNew').then(m => ({ default: m.StockAdjustmentNew })));
+const StockTransfers = lazy(() => import('./pages/StockTransfers').then(m => ({ default: m.StockTransfers })));
+const StockTransferNew = lazy(() => import('./pages/StockTransferNew').then(m => ({ default: m.StockTransferNew })));
+const StockTransferDetail = lazy(() => import('./pages/StockTransferDetail').then(m => ({ default: m.StockTransferDetail })));
+const StockTakes = lazy(() => import('./pages/StockTakes').then(m => ({ default: m.StockTakes })));
+const StockTakeNew = lazy(() => import('./pages/StockTakeNew').then(m => ({ default: m.StockTakeNew })));
+const StockTakeDetail = lazy(() => import('./pages/StockTakeDetail').then(m => ({ default: m.StockTakeDetail })));
+const Drivers = lazy(() => import('./pages/Drivers').then(m => ({ default: m.Drivers })));
+const Accounting = lazy(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
+const Warehouses = lazy(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
+const PurchaseOrderDetail = lazy(() => import('./pages/PurchaseOrderDetail').then(m => ({ default: m.PurchaseOrderDetail })));
+const PurchaseOrderNew = lazy(() => import('./pages/PurchaseOrderNew').then(m => ({ default: m.PurchaseOrderNew })));
+const PurchaseOrderFromSo = lazy(() => import('./pages/PurchaseOrderFromSo').then(m => ({ default: m.PurchaseOrderFromSo })));
+const GrnNew = lazy(() => import('./pages/GrnNew').then(m => ({ default: m.GrnNew })));
+const GrnFromPo = lazy(() => import('./pages/GrnFromPo').then(m => ({ default: m.GrnFromPo })));
+const PurchaseInvoiceNew = lazy(() => import('./pages/PurchaseInvoiceNew').then(m => ({ default: m.PurchaseInvoiceNew })));
+const PurchaseInvoiceFromGrn = lazy(() => import('./pages/PurchaseInvoiceFromGrn').then(m => ({ default: m.PurchaseInvoiceFromGrn })));
+const PurchaseReturnNew = lazy(() => import('./pages/PurchaseReturnNew').then(m => ({ default: m.PurchaseReturnNew })));
+const Outstanding = lazy(() => import('./pages/Outstanding').then(m => ({ default: m.Outstanding })));
+const Placeholder = lazy(() => import('./pages/Placeholder').then(m => ({ default: m.Placeholder })));
+const SalesOrderDetailListing = lazy(() => import('./pages/SalesOrderDetailListing').then(m => ({ default: m.SalesOrderDetailListing })));
+const GrnDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.GrnDetail })));
+const PurchaseInvoiceDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.PurchaseInvoiceDetail })));
+const DeliveryOrderDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.DeliveryOrderDetail })));
+const SalesInvoiceDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.SalesInvoiceDetail })));
+const ConsignmentDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.ConsignmentDetail })));
+const PurchaseReturnDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.PurchaseReturnDetail })));
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
