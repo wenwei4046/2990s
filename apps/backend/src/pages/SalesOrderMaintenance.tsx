@@ -16,11 +16,12 @@
 //   - Direct URL /mfg-sales-orders/maintenance
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
+import { useToast } from '../components/Toast';
 import {
   useStateWarehouseMappings,
   useUpsertStateWarehouseMapping,
@@ -95,6 +96,7 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
   const createLoc = useCreateLocality();
   const updateLoc = useUpdateLocality();
   const deleteLoc = useDeleteLocality();
+  const toast = useToast();
 
   const states = useMemo(() => distinctStates(localities.data ?? []), [localities.data]);
   const mappedByState = useMemo(() => {
@@ -104,6 +106,31 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
     }
     return m;
   }, [mappings.data]);
+
+  /* Task #120 — Optimistic mirror of the warehouse-per-state selection.
+     Root cause of the "我选了 warehouse 可是没有反应" bug: the <select> was
+     fully controlled by mappings.data, which only refreshes after the
+     mutation's onSuccess invalidates the query. During the in-flight
+     window the select snapped back to the prior value, so commander
+     perceived no reaction. The local override below applies the new
+     value immediately on change, then falls back to the persisted value
+     once the query refetches. The pendingState set guards each state
+     row so notes saves don't reset other rows' visible selections. */
+  const [pendingByState, setPendingByState] = useState<Map<string, string | null>>(new Map());
+  useEffect(() => {
+    // Once the persisted mapping matches our optimistic value, drop the override.
+    if (pendingByState.size === 0) return;
+    const next = new Map(pendingByState);
+    let changed = false;
+    for (const [state, optimistic] of pendingByState) {
+      const persisted = mappedByState.get(state)?.warehouseId ?? null;
+      if (persisted === optimistic) {
+        next.delete(state);
+        changed = true;
+      }
+    }
+    if (changed) setPendingByState(next);
+  }, [mappedByState, pendingByState]);
 
   // Localities table state — filter + add-row form
   const [filterState, setFilterState] = useState<string>('');
@@ -165,17 +192,46 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
             <tbody>
               {states.map((state) => {
                 const current = mappedByState.get(state);
+                /* Task #120 — Display the optimistic value when a mutation is
+                   in flight for THIS state; otherwise fall back to the
+                   persisted mapping. This eliminates the "snapped back to
+                   old value" perception bug. */
+                const displayWarehouseId = pendingByState.has(state)
+                  ? pendingByState.get(state) ?? ''
+                  : current?.warehouseId ?? '';
                 return (
                   <tr key={state}>
                     <td><strong>{state}</strong></td>
                     <td>
                       <select
                         className={styles.input}
-                        value={current?.warehouseId ?? ''}
-                        disabled={!canEdit || upsert.isPending}
+                        value={displayWarehouseId}
+                        disabled={!canEdit}
                         onChange={(e) => {
                           const warehouseId = e.target.value || null;
-                          upsert.mutate({ state, warehouseId, notes: current?.notes ?? null });
+                          // Optimistic UI flip so commander sees the change immediately.
+                          setPendingByState((m) => {
+                            const next = new Map(m);
+                            next.set(state, warehouseId);
+                            return next;
+                          });
+                          const wh = (warehouses.data ?? []).find((w) => w.id === warehouseId);
+                          const wlabel = wh ? `${wh.code} · ${wh.name}` : 'Unassigned';
+                          upsert.mutate(
+                            { state, warehouseId, notes: current?.notes ?? null },
+                            {
+                              onSuccess: () => toast.success(`${state} → ${wlabel}`),
+                              onError: (err) => {
+                                // Roll back optimistic value if save failed.
+                                setPendingByState((m) => {
+                                  const next = new Map(m);
+                                  next.delete(state);
+                                  return next;
+                                });
+                                toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+                              },
+                            },
+                          );
                         }}
                       >
                         <option value="">— Unassigned —</option>
@@ -183,17 +239,29 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                           <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
                         ))}
                       </select>
+                      {warehouses.data && warehouses.data.filter((w) => w.is_active).length === 0 && (
+                        <div className={styles.muted} style={{ fontSize: 'var(--fs-11)', marginTop: 4 }}>
+                          No active warehouses — add one in <Link to="/warehouses">Warehouses</Link>.
+                        </div>
+                      )}
                     </td>
                     <td>
                       <input
                         className={styles.input}
-                        value={current?.notes ?? ''}
-                        disabled={!canEdit || upsert.isPending}
+                        defaultValue={current?.notes ?? ''}
+                        key={`${state}-${current?.notes ?? ''}`}
+                        disabled={!canEdit}
                         placeholder="Optional"
                         onBlur={(e) => {
                           const notes = e.target.value.trim() || null;
                           if ((current?.notes ?? null) === notes) return;
-                          upsert.mutate({ state, warehouseId: current?.warehouseId ?? null, notes });
+                          upsert.mutate(
+                            { state, warehouseId: current?.warehouseId ?? null, notes },
+                            {
+                              onSuccess: () => toast.success(`Notes saved for ${state}`),
+                              onError: (err) => toast.error(`Notes save failed: ${err instanceof Error ? err.message : String(err)}`),
+                            },
+                          );
                         }}
                       />
                     </td>
@@ -204,7 +272,20 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
                             type="button"
                             className={styles.editBtn}
                             disabled={remove.isPending}
-                            onClick={() => remove.mutate({ state })}
+                            onClick={() => remove.mutate(
+                              { state },
+                              {
+                                onSuccess: () => {
+                                  toast.success(`Cleared mapping for ${state}`);
+                                  setPendingByState((m) => {
+                                    const next = new Map(m);
+                                    next.delete(state);
+                                    return next;
+                                  });
+                                },
+                                onError: (err) => toast.error(`Clear failed: ${err instanceof Error ? err.message : String(err)}`),
+                              },
+                            )}
                             aria-label={`Clear mapping for ${state}`}
                           >
                             Clear

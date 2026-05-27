@@ -995,6 +995,95 @@ export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {
   });
 };
 
+/* ── Task #120 — L2 Detail Listings for DO / SI / Consignment / DR ────
+   Mirrors the SO Detail Listing pattern (one row per line item, header
+   denormalised onto each row). Server-side endpoints in
+   apps/api/src/routes/reports.ts. */
+
+export type DetailListingFilters = {
+  dateFrom?: string;
+  dateTo?: string;
+  docNo?: string;
+  debtorCode?: string;
+  itemCode?: string;
+};
+
+/* Each module emits a Record<string, unknown> — the column accessor reads
+   fields by name. Common fields produced by the server flatten step are
+   typed here; module-specific fields stay loose for column accessors. */
+export type DetailListingRow = Record<string, unknown> & {
+  id: string;
+  doc_no: string;
+  line_date: string | null;
+  debtor_code?: string | null;
+  debtor_name?: string | null;
+  item_code: string;
+  description?: string | null;
+  qty?: number;
+  unit_price_centi?: number;
+  total_centi?: number;
+  balance_centi?: number;
+  status?: string | null;
+};
+
+const buildDetailListingQs = (filters: DetailListingFilters): string => {
+  const params = new URLSearchParams();
+  if (filters.dateFrom)   params.set('dateFrom',   filters.dateFrom);
+  if (filters.dateTo)     params.set('dateTo',     filters.dateTo);
+  if (filters.docNo)      params.set('docNo',      filters.docNo);
+  if (filters.debtorCode) params.set('debtorCode', filters.debtorCode);
+  if (filters.itemCode)   params.set('itemCode',   filters.itemCode);
+  return params.toString();
+};
+
+export const useDeliveryOrderDetailListing = (filters: DetailListingFilters) => {
+  const qs = buildDetailListingQs(filters);
+  return useQuery({
+    queryKey: ['reports', 'delivery-order-detail-listing', qs],
+    queryFn: () => authedFetch<{ rows: DetailListingRow[] }>(
+      `/reports/delivery-order-detail-listing${qs ? `?${qs}` : ''}`,
+    ),
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+};
+
+export const useSalesInvoiceDetailListing = (filters: DetailListingFilters) => {
+  const qs = buildDetailListingQs(filters);
+  return useQuery({
+    queryKey: ['reports', 'sales-invoice-detail-listing', qs],
+    queryFn: () => authedFetch<{ rows: DetailListingRow[] }>(
+      `/reports/sales-invoice-detail-listing${qs ? `?${qs}` : ''}`,
+    ),
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+};
+
+export const useConsignmentDetailListing = (filters: DetailListingFilters) => {
+  const qs = buildDetailListingQs(filters);
+  return useQuery({
+    queryKey: ['reports', 'consignment-detail-listing', qs],
+    queryFn: () => authedFetch<{ rows: DetailListingRow[] }>(
+      `/reports/consignment-detail-listing${qs ? `?${qs}` : ''}`,
+    ),
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+};
+
+export const useDeliveryReturnDetailListing = (filters: DetailListingFilters) => {
+  const qs = buildDetailListingQs(filters);
+  return useQuery({
+    queryKey: ['reports', 'delivery-return-detail-listing', qs],
+    queryFn: () => authedFetch<{ rows: DetailListingRow[] }>(
+      `/reports/delivery-return-detail-listing${qs ? `?${qs}` : ''}`,
+    ),
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+};
+
 /* ════════════════════════════════════════════════════════════════════════
    Outstanding (PR #45) — unified outstanding filter across all 8 modules
    ════════════════════════════════════════════════════════════════════════ */

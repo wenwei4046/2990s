@@ -6,12 +6,13 @@
 // Refresh) and the DataGrid owns the search + column UX.
 
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Pencil, Eye, Search, FileText, Printer, ListChecks, Trash2, RefreshCw, Wrench,
+  Plus, Pencil, Eye, Search, FileText, Printer, Trash2, RefreshCw, Wrench, X,
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { ListingPickerDialog, ListingPickerTrigger, type ListingChoice } from '../components/ListingPickerDialog';
 import { formatPhone } from '@2990s/shared/phone';
 import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -112,8 +113,39 @@ const StatusPill = ({ status }: { status: string }) => (
 export const MfgSalesOrdersList = () => {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  /* Task #120 — Outstanding filter overlay. `?outstanding=1` narrows the
+     list to rows with live balance > 0; clear-chip restores. Same param
+     name used on every SO-family L1 and on the L2 listings. */
+  const outstandingOnly = searchParams.get('outstanding') === '1';
   const { data, isLoading, error, refetch } = useMfgSalesOrders(undefined);
-  const rows = useMemo<SoRow[]>(() => (data?.salesOrders ?? []) as SoRow[], [data]);
+  const allRows = useMemo<SoRow[]>(() => (data?.salesOrders ?? []) as SoRow[], [data]);
+  const rows = useMemo<SoRow[]>(
+    () => outstandingOnly ? allRows.filter((r) => liveBalance(r) > 0) : allRows,
+    [allRows, outstandingOnly],
+  );
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const clearOutstanding = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('outstanding');
+    setSearchParams(next, { replace: true });
+  };
+
+  const onPickListing = (choice: ListingChoice) => {
+    const next = new URLSearchParams(searchParams);
+    if (choice === 'listing') {
+      next.delete('outstanding');
+      setSearchParams(next, { replace: true });
+    } else if (choice === 'outstanding-listing') {
+      next.set('outstanding', '1');
+      setSearchParams(next, { replace: true });
+    } else if (choice === 'detail-listing') {
+      navigate('/reports/sales-order-detail-listing');
+    } else if (choice === 'outstanding-detail-listing') {
+      navigate('/reports/sales-order-detail-listing?outstanding=1');
+    }
+  };
 
   /* Salesperson column → look up staff name from salesperson_id. Stable
      map memoized off the staff list so DataGrid's column memo only
@@ -303,7 +335,11 @@ export const MfgSalesOrdersList = () => {
       <button className={styles.tbarBtn} onClick={onFind}><Search {...ICON} /> Find</button>
       <button className={styles.tbarBtn} onClick={onPreview} disabled={!selectedRow}><FileText {...ICON} /> Preview</button>
       <button className={styles.tbarBtn} onClick={onPrint} disabled={!selectedRow}><Printer {...ICON} /> Print</button>
-      <button className={styles.tbarBtn} onClick={onPrintListing}><ListChecks {...ICON} /> Print Listing</button>
+      {/* Task #120 — "Listing" picker replaces the old standalone Print Listing
+          button. The PDF export still exists below as "Print Listing PDF" so
+          the existing capability isn't removed (per commander's spec #5). */}
+      <ListingPickerTrigger onClick={() => setPickerOpen(true)} />
+      <button className={styles.tbarBtn} onClick={onPrintListing}><Printer {...ICON} /> Print Listing PDF</button>
       <button
         className={`${styles.tbarBtn} ${styles.tbarBtnDanger}`}
         onClick={onDelete}
@@ -331,19 +367,49 @@ export const MfgSalesOrdersList = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Sales Orders</h1>
+          <h1 className={styles.title}>Sales Orders {outstandingOnly && <span style={{ color: 'var(--c-burnt)' }}>· Outstanding only</span>}</h1>
           <p className={styles.subtitle}>
             Sales orders — AutoCount-style ledger view.
-            {' '}{isLoading ? 'Loading…' : `${rows.length} total`}
+            {' '}{isLoading ? 'Loading…' : `${rows.length}${outstandingOnly ? ` of ${allRows.length}` : ''} total`}
           </p>
         </div>
       </div>
+      {outstandingOnly && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)',
+          padding: 'var(--space-1) var(--space-3)',
+          background: 'rgba(232, 107, 58, 0.10)',
+          border: '1px solid var(--c-burnt)',
+          borderRadius: 'var(--radius-pill)',
+          color: 'var(--c-burnt)',
+          fontFamily: 'var(--font-button)',
+          fontSize: 'var(--fs-12)',
+          fontWeight: 600,
+          width: 'fit-content',
+        }}>
+          <span>Outstanding only · balance &gt; 0</span>
+          <button type="button" onClick={clearOutstanding} aria-label="Clear outstanding filter"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 18, height: 18, padding: 0, background: 'transparent', border: 'none',
+              color: 'var(--c-burnt)', cursor: 'pointer', borderRadius: '50%' }}>
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </div>
+      )}
       {error && !isLoading && (
         <div className={styles.bannerWarn}>
           <strong>Failed to load.</strong>{' '}
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      <ListingPickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onChoose={onPickListing}
+        detailListingAvailable={true}
+        initial={outstandingOnly ? 'outstanding-listing' : 'listing'}
+      />
 
       <DataGrid<SoRow>
         rows={rows}

@@ -64,6 +64,10 @@ const PurchaseReturnNew = lazy(() => import('./pages/PurchaseReturnNew').then(m 
 const Outstanding = lazy(() => import('./pages/Outstanding').then(m => ({ default: m.Outstanding })));
 const Placeholder = lazy(() => import('./pages/Placeholder').then(m => ({ default: m.Placeholder })));
 const SalesOrderDetailListing = lazy(() => import('./pages/SalesOrderDetailListing').then(m => ({ default: m.SalesOrderDetailListing })));
+const DeliveryOrderDetailListing = lazy(() => import('./pages/DeliveryOrderDetailListing').then(m => ({ default: m.DeliveryOrderDetailListing })));
+const SalesInvoiceDetailListing = lazy(() => import('./pages/SalesInvoiceDetailListing').then(m => ({ default: m.SalesInvoiceDetailListing })));
+const ConsignmentDetailListing = lazy(() => import('./pages/ConsignmentDetailListing').then(m => ({ default: m.ConsignmentDetailListing })));
+const DeliveryReturnDetailListing = lazy(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
 const GrnDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.GrnDetail })));
 const PurchaseInvoiceDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.PurchaseInvoiceDetail })));
 const DeliveryOrderDetail = lazy(() => import('./pages/DocDetailPages').then(m => ({ default: m.DeliveryOrderDetail })));
@@ -138,6 +142,12 @@ export const router = createBrowserRouter([
       { path: 'outstanding', element: <Outstanding /> },
       { path: 'reports/sales-order-listing', element: <Placeholder title="Sales Order Listing" phase="a follow-up PR" hint="One row per SO header. Use Sales Order Detail Listing for line-item view." /> },
       { path: 'reports/sales-order-detail-listing', element: <SalesOrderDetailListing /> },
+      /* Task #120 — L2 Detail Listing routes for the 4 other SO-family modules.
+         Reached from the L1 toolbar's "Listing" picker; no sidebar entry. */
+      { path: 'reports/delivery-order-detail-listing', element: <DeliveryOrderDetailListing /> },
+      { path: 'reports/sales-invoice-detail-listing', element: <SalesInvoiceDetailListing /> },
+      { path: 'reports/consignment-detail-listing', element: <ConsignmentDetailListing /> },
+      { path: 'reports/delivery-return-detail-listing', element: <DeliveryReturnDetailListing /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },

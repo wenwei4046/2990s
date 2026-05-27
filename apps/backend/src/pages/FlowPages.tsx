@@ -19,7 +19,71 @@ import {
   CreateDeliveryOrderDrawer, CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
   CreateDeliveryReturnDrawer,
 } from './FlowDrawers';
+import {
+  ListingPickerDialog, ListingPickerTrigger, type ListingChoice,
+} from '../components/ListingPickerDialog';
 import styles from './FlowPages.module.css';
+
+/* ────────────────────────────────────────────────────────────────────────
+   Task #120 — Shared helper that wires the "Listing" toolbar picker to
+   navigation + the ?outstanding=1 URL param. Each module just provides
+   the L2 route and reuses the same flow.
+   ──────────────────────────────────────────────────────────────────────── */
+function useListingPicker(detailRoute: string | null) {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [open, setOpen] = useState(false);
+  const outstandingOnly = searchParams.get('outstanding') === '1';
+
+  const onPick = (choice: ListingChoice) => {
+    const next = new URLSearchParams(searchParams);
+    if (choice === 'listing') {
+      next.delete('outstanding');
+      setSearchParams(next, { replace: true });
+    } else if (choice === 'outstanding-listing') {
+      next.set('outstanding', '1');
+      setSearchParams(next, { replace: true });
+    } else if (choice === 'detail-listing' && detailRoute) {
+      navigate(detailRoute);
+    } else if (choice === 'outstanding-detail-listing' && detailRoute) {
+      navigate(`${detailRoute}?outstanding=1`);
+    }
+  };
+
+  const clearOutstanding = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('outstanding');
+    setSearchParams(next, { replace: true });
+  };
+
+  return {
+    open, setOpen, onPick, outstandingOnly, clearOutstanding,
+    initial: outstandingOnly ? ('outstanding-listing' as const) : ('listing' as const),
+  };
+}
+
+const OutstandingChip = ({ label, onClear }: { label: string; onClear: () => void }) => (
+  <div style={{
+    display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)',
+    padding: 'var(--space-1) var(--space-3)',
+    background: 'rgba(232, 107, 58, 0.10)',
+    border: '1px solid var(--c-burnt)',
+    borderRadius: 'var(--radius-pill)',
+    color: 'var(--c-burnt)',
+    fontFamily: 'var(--font-button)',
+    fontSize: 'var(--fs-12)',
+    fontWeight: 600,
+    width: 'fit-content',
+  }}>
+    <span>{label}</span>
+    <button type="button" onClick={onClear} aria-label="Clear outstanding filter"
+      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 18, height: 18, padding: 0, background: 'transparent', border: 'none',
+        color: 'var(--c-burnt)', cursor: 'pointer', borderRadius: '50%' }}>
+      <X size={14} strokeWidth={1.75} />
+    </button>
+  </div>
+);
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -349,17 +413,40 @@ export const MfgDeliveryOrdersPage = () => {
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useMfgDeliveryOrders(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.deliveryOrders ?? [], [data]);
+  const allRows = useMemo(() => data?.deliveryOrders ?? [], [data]);
+  const picker = useListingPicker('/reports/delivery-order-detail-listing');
+  /* Task #120 — Outstanding filter for DO L1: a DO is "outstanding" if its
+     status hasn't reached DELIVERED / INVOICED / CANCELLED. */
+  const rows = useMemo(() => {
+    if (!picker.outstandingOnly) return allRows;
+    return allRows.filter((r: any) => {
+      const s = String(r.status ?? '');
+      return s !== 'DELIVERED' && s !== 'INVOICED' && s !== 'CANCELLED';
+    });
+  }, [allRows, picker.outstandingOnly]);
 
   return (
     <div className={styles.page}>
       <Header
-        title="Delivery Orders"
+        title={`Delivery Orders${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
         subtitle="DO — deliveries to customer"
         newLabel="New DO"
         onNew={() => setOpen(true)}
       />
-      <StatusChips chips={DO_CHIPS} active={status} onPick={setStatus} />
+      <ListingPickerDialog
+        open={picker.open}
+        onClose={() => picker.setOpen(false)}
+        onChoose={picker.onPick}
+        detailListingAvailable={true}
+        initial={picker.initial}
+      />
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
+        <StatusChips chips={DO_CHIPS} active={status} onPick={setStatus} />
+      </div>
+      {picker.outstandingOnly && (
+        <OutstandingChip label={`Outstanding only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
+      )}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} delivery orders`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
       <div className={styles.tableCard}>
@@ -407,17 +494,36 @@ export const SalesInvoicesPage = () => {
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useSalesInvoices(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.salesInvoices ?? [], [data]);
+  const allRows = useMemo(() => data?.salesInvoices ?? [], [data]);
+  const picker = useListingPicker('/reports/sales-invoice-detail-listing');
+  /* Task #120 — SI outstanding = balance > 0 (total − paid). */
+  const rows = useMemo(() => {
+    if (!picker.outstandingOnly) return allRows;
+    return allRows.filter((r: any) => Number(r.total_centi ?? 0) - Number(r.paid_centi ?? 0) > 0);
+  }, [allRows, picker.outstandingOnly]);
 
   return (
     <div className={styles.page}>
       <Header
-        title="Sales Invoices"
+        title={`Sales Invoices${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
         subtitle="Customer invoices from us"
         newLabel="New Invoice"
         onNew={() => setOpen(true)}
       />
-      <StatusChips chips={SI_CHIPS} active={status} onPick={setStatus} />
+      <ListingPickerDialog
+        open={picker.open}
+        onClose={() => picker.setOpen(false)}
+        onChoose={picker.onPick}
+        detailListingAvailable={true}
+        initial={picker.initial}
+      />
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
+        <StatusChips chips={SI_CHIPS} active={status} onPick={setStatus} />
+      </div>
+      {picker.outstandingOnly && (
+        <OutstandingChip label={`Outstanding only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
+      )}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} invoices`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
       <div className={styles.tableCard}>
@@ -466,17 +572,36 @@ export const ConsignmentPage = () => {
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useConsignments(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.consignments ?? [], [data]);
+  const allRows = useMemo(() => data?.consignments ?? [], [data]);
+  const picker = useListingPicker('/reports/consignment-detail-listing');
+  /* Task #120 — Consignment outstanding = still at branch (status === 'AT_BRANCH'). */
+  const rows = useMemo(() => {
+    if (!picker.outstandingOnly) return allRows;
+    return allRows.filter((r: any) => String(r.status ?? '') === 'AT_BRANCH');
+  }, [allRows, picker.outstandingOnly]);
 
   return (
     <div className={styles.page}>
       <Header
-        title="Consignment"
+        title={`Consignment${picker.outstandingOnly ? ' · At-branch only' : ''}`}
         subtitle="Stock placed at customer branches — sells through / returns / damaged"
         newLabel="New Consignment"
         onNew={() => setOpen(true)}
       />
-      <StatusChips chips={CO_CHIPS} active={status} onPick={setStatus} />
+      <ListingPickerDialog
+        open={picker.open}
+        onClose={() => picker.setOpen(false)}
+        onChoose={picker.onPick}
+        detailListingAvailable={true}
+        initial={picker.initial}
+      />
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
+        <StatusChips chips={CO_CHIPS} active={status} onPick={setStatus} />
+      </div>
+      {picker.outstandingOnly && (
+        <OutstandingChip label={`At-branch only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
+      )}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} consignments`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
       <div className={styles.tableCard}>
@@ -520,17 +645,39 @@ export const DeliveryReturnsPage = () => {
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = useDeliveryReturns(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.deliveryReturns ?? [], [data]);
+  const allRows = useMemo(() => data?.deliveryReturns ?? [], [data]);
+  const picker = useListingPicker('/reports/delivery-return-detail-listing');
+  /* Task #120 — DR outstanding = not yet settled (REFUNDED/CREDIT_NOTED/REJECTED end states). */
+  const rows = useMemo(() => {
+    if (!picker.outstandingOnly) return allRows;
+    return allRows.filter((r: any) => {
+      const s = String(r.status ?? '');
+      return s !== 'REFUNDED' && s !== 'CREDIT_NOTED' && s !== 'REJECTED';
+    });
+  }, [allRows, picker.outstandingOnly]);
 
   return (
     <div className={styles.page}>
       <Header
-        title="Delivery Returns"
+        title={`Delivery Returns${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
         subtitle="Customer returning previously-delivered goods"
         newLabel="New Return"
         onNew={() => setOpen(true)}
       />
-      <StatusChips chips={DR_CHIPS} active={status} onPick={setStatus} />
+      <ListingPickerDialog
+        open={picker.open}
+        onClose={() => picker.setOpen(false)}
+        onChoose={picker.onPick}
+        detailListingAvailable={true}
+        initial={picker.initial}
+      />
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
+        <StatusChips chips={DR_CHIPS} active={status} onPick={setStatus} />
+      </div>
+      {picker.outstandingOnly && (
+        <OutstandingChip label={`Outstanding only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
+      )}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} returns`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
       <div className={styles.tableCard}>
