@@ -25,6 +25,7 @@ import {
   type DragEvent,
   type ReactNode,
   type MouseEvent,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -111,7 +112,12 @@ const coerceSearchString = (v: ReactNode): string => {
   return '';
 };
 
-export function DataGrid<T>({
+/* Task #99 (UI perf) — Inner implementation, kept generic. Exported
+   `DataGrid` below is the same function wrapped in React.memo so a parent
+   re-render with unchanged props (rows, columns, etc.) skips the whole
+   sort/filter/group recompute pipeline. Each list page now memoizes its
+   `columns` array + handlers so the memo actually hits. */
+function DataGridInner<T>({
   rows,
   columns,
   storageKey,
@@ -554,3 +560,11 @@ export function DataGrid<T>({
     </div>
   );
 }
+
+/* Task #99 (UI perf) — `memo` strips the generic parameter from the function
+   type, so we cast back to the original signature. Behaviour identical;
+   the only difference is the default shallow-prop bail out. Pages calling
+   <DataGrid> MUST pass a stable `columns` reference (define at module
+   scope or wrap in useMemo) for the memo to actually hit — see the
+   listing pages where columns are already memoized. */
+export const DataGrid = memo(DataGridInner) as typeof DataGridInner;
