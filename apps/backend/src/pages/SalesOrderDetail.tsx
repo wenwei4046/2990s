@@ -18,6 +18,7 @@
 
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  type CSSProperties,
 } from 'react';
 import { Link, useParams } from 'react-router';
 import {
@@ -58,6 +59,65 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Module-level style constants (micro-perf: hoisted out of render so React
+   keeps stable referential identity on host elements between renders).
+   ────────────────────────────────────────────────────────────────────────── */
+const TITLE_ICON_STYLE: CSSProperties = { color: 'var(--c-burnt)' };
+const TITLE_TOTAL_STYLE: CSSProperties = {
+  marginLeft: 'var(--space-2)',
+  fontFamily: 'var(--font-mark)',
+  fontSize: 'var(--fs-18)',
+  fontWeight: 800,
+  fontStretch: '80%',
+  color: 'var(--c-burnt)',
+};
+const LOCK_BANNER_INNER_STYLE: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 8,
+};
+const VARIANT_WARN_BANNER_STYLE: CSSProperties = {
+  background: 'rgba(184, 51, 31, 0.08)',
+  border: '1px solid var(--c-festive-b, #B8331F)',
+  color: 'var(--c-festive-b, #B8331F)',
+  padding: 'var(--space-3) var(--space-4)',
+  borderRadius: 'var(--radius-md)',
+  fontSize: 'var(--fs-13)',
+};
+const VARIANT_WARN_LIST_STYLE: CSSProperties = { marginTop: 4, fontSize: 'var(--fs-12)' };
+const DATES_XOR_WARN_STYLE: CSSProperties = {
+  background: 'rgba(184, 51, 31, 0.08)',
+  border: '1px solid var(--c-festive-b, #B8331F)',
+  color: 'var(--c-festive-b, #B8331F)',
+  padding: '4px var(--space-2)',
+  borderRadius: 'var(--radius-sm)',
+  fontSize: 'var(--fs-11)',
+  fontWeight: 600,
+  marginTop: 'var(--space-2)',
+};
+const EMERGENCY_HEADER_NOTE_STYLE: CSSProperties = {
+  fontSize: 'var(--fs-12)', color: 'var(--fg-muted)',
+};
+const TOTALS_KPI_GRID_STYLE: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: 'var(--space-3)',
+  marginBottom: 'var(--space-3)',
+  paddingBottom: 'var(--space-3)',
+  borderBottom: '1px solid var(--line)',
+};
+const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-18)' };
+const HISTORY_NOTE_STYLE: CSSProperties = { fontStyle: 'italic' };
+
+/* Fix 2 — Lifted out of the render-time IIFE so the object literal isn't
+   reallocated each render. Read-only category → required-variant-keys map. */
+const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
+  bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
+  sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
+};
+const formatGroupRequirements = (g: string): string =>
+  g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
+  g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
 
 // PR-DRAFT-removal — DRAFT dropped from mfg_so_status (migration 0078).
 // SOs are CONFIRMED on create (PR #154); no DRAFT staging step.
@@ -206,6 +266,26 @@ export const SalesOrderDetail = () => {
 
   const header = (detail.data?.salesOrder as SoHeader | undefined) ?? null;
   const items = (detail.data?.items as SoItem[] | undefined) ?? [];
+
+  /* Fix 2 (micro-perf) — Variant-completeness check memoized. Was an inline
+     IIFE that re-ran (and re-allocated the REQUIRED_BY_CATEGORY object) on
+     every render. Now derives only when items or the processing-date toggle
+     changes. The REQUIRED_BY_CATEGORY map is hoisted to module scope. */
+  const requireVariants = !!header?.internal_expected_dd;
+  const incompleteVariantLines = useMemo(() => {
+    if (!requireVariants) return [];
+    return items
+      .filter((it) => REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()])
+      .filter((it) => {
+        const keys = REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()] ?? [];
+        const v = (it.variants ?? {}) as Record<string, unknown>;
+        return keys.some((k) => {
+          const val = v[k];
+          return val === undefined || val === null || val === '';
+        });
+      })
+      .map((it) => ({ code: it.item_code, group: (it.item_group ?? '').toLowerCase() }));
+  }, [items, requireVariants]);
 
   /* Followup #81 — Print PDF reads payments from the ledger now. PaymentCard
      also calls this hook (with the same docNo), so TanStack Query dedupes
@@ -494,19 +574,12 @@ export const SalesOrderDetail = () => {
           </Link>
           <div>
             <h1 className={styles.title}>
-              <FileText size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
+              <FileText size={20} strokeWidth={1.75} style={TITLE_ICON_STYLE} />
               {header.doc_no} — {header.debtor_name}
               {/* PR #163 — Total badge in title row so commander sees the SO
                   value the moment the page loads (was previously buried
                   inside the Payment card). */}
-              <span style={{
-                marginLeft: 'var(--space-2)',
-                fontFamily: 'var(--font-mark)',
-                fontSize: 'var(--fs-18)',
-                fontWeight: 800,
-                fontStretch: '80%',
-                color: 'var(--c-burnt)',
-              }}>
+              <span style={TITLE_TOTAL_STYLE}>
                 {fmtRm(header.local_total_centi, header.currency)}
               </span>
             </h1>
@@ -577,7 +650,7 @@ export const SalesOrderDetail = () => {
           borderRadius: 'var(--radius-md)',
           fontSize: 'var(--fs-13)',
         }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={LOCK_BANNER_INNER_STYLE}>
             <Lock {...ICON} />
             {unlockOverride
               ? <strong>Edit-lock overridden — changes are tracked in the status timeline below.</strong>
@@ -912,49 +985,18 @@ export const SalesOrderDetail = () => {
           so the Order Coordinator still sees which lines are incomplete
           when a Processing Date is set. updateStatus is still wired for
           the lock-override flow above. */}
-      {(() => {
-        const requireVariants = !!header.internal_expected_dd;
-        const REQUIRED_BY_CATEGORY: Record<string, readonly string[]> = {
-          bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
-          sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
-        };
-        const incompleteLines = requireVariants
-          ? items
-              .filter((it) => REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()])
-              .filter((it) => {
-                const keys = REQUIRED_BY_CATEGORY[(it.item_group ?? '').toLowerCase()] ?? [];
-                const v = (it.variants ?? {}) as Record<string, unknown>;
-                return keys.some((k) => {
-                  const val = v[k];
-                  return val === undefined || val === null || val === '';
-                });
-              })
-              .map((it) => ({ code: it.item_code, group: (it.item_group ?? '').toLowerCase() }))
-          : [];
-        if (incompleteLines.length === 0) return null;
-        const formatGroupRequirements = (g: string) =>
-          g === 'bedframe' ? 'Divan · Leg · Gap · Fabric' :
-          g === 'sofa'     ? 'Seat · Leg · Fabric' : '';
-        return (
-          <div style={{
-            background: 'rgba(184, 51, 31, 0.08)',
-            border: '1px solid var(--c-festive-b, #B8331F)',
-            color: 'var(--c-festive-b, #B8331F)',
-            padding: 'var(--space-3) var(--space-4)',
-            borderRadius: 'var(--radius-md)',
-            fontSize: 'var(--fs-13)',
-          }}>
-            <strong>Processing Date is set — line variants must be filled before next stage.</strong>
-            <div style={{ marginTop: 4, fontSize: 'var(--fs-12)' }}>
-              {incompleteLines.map((l, i) => (
-                <div key={i}>
-                  • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
-                </div>
-              ))}
-            </div>
+      {incompleteVariantLines.length > 0 && (
+        <div style={VARIANT_WARN_BANNER_STYLE}>
+          <strong>Processing Date is set — line variants must be filled before next stage.</strong>
+          <div style={VARIANT_WARN_LIST_STYLE}>
+            {incompleteVariantLines.map((l, i) => (
+              <div key={i}>
+                • <code>{l.code}</code> ({l.group}): {formatGroupRequirements(l.group)}
+              </div>
+            ))}
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* Followup #85 — the standalone StatusTimeline + PriceOverridePanel
           audit cards were superseded by the PR-D History drawer, which
@@ -1348,18 +1390,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
           </div>
           {datesXor && (
-            <div
-              style={{
-                background: 'rgba(184, 51, 31, 0.08)',
-                border: '1px solid var(--c-festive-b, #B8331F)',
-                color: 'var(--c-festive-b, #B8331F)',
-                padding: '4px var(--space-2)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: 'var(--fs-11)',
-                fontWeight: 600,
-                marginTop: 'var(--space-2)',
-              }}
-            >
+            <div style={DATES_XOR_WARN_STYLE}>
               ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
             </div>
           )}
@@ -1370,7 +1401,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Emergency Contact</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          <span style={EMERGENCY_HEADER_NOTE_STYLE}>
             Used only if we cannot reach the customer on delivery day
           </span>
         </header>
@@ -1563,35 +1594,28 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
       </header>
       <div className={styles.cardBody}>
         {/* Top row — Revenue / Cost / Margin / Margin % as 4 KPI tiles */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          gap: 'var(--space-3)',
-          marginBottom: 'var(--space-3)',
-          paddingBottom: 'var(--space-3)',
-          borderBottom: '1px solid var(--line)',
-        }}>
+        <div style={TOTALS_KPI_GRID_STYLE}>
           <div>
             <div className={styles.totalLabel}>Revenue</div>
-            <div className={styles.grandTotal} style={{ fontSize: 'var(--fs-18)' }}>
+            <div className={styles.grandTotal} style={TOTALS_KPI_VALUE_STYLE}>
               {fmtRm(header.local_total_centi, header.currency)}
             </div>
           </div>
           <div>
             <div className={styles.totalLabel}>Cost</div>
-            <div className={styles.totalValue} style={{ fontSize: 'var(--fs-18)' }}>
+            <div className={styles.totalValue} style={TOTALS_KPI_VALUE_STYLE}>
               {fmtRm(header.total_cost_centi, header.currency)}
             </div>
           </div>
           <div>
             <div className={styles.totalLabel}>Margin</div>
-            <div className={`${styles.totalValue} ${marginCls}`} style={{ fontSize: 'var(--fs-18)' }}>
+            <div className={`${styles.totalValue} ${marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
               {fmtRm(header.total_margin_centi, header.currency)}
             </div>
           </div>
           <div>
             <div className={styles.totalLabel}>Margin %</div>
-            <div className={`${styles.totalValue} ${marginCls}`} style={{ fontSize: 'var(--fs-18)' }}>
+            <div className={`${styles.totalValue} ${marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
               {header.local_total_centi > 0 ? `${marginPct.toFixed(1)}%` : '—'}
             </div>
           </div>
@@ -1928,7 +1952,7 @@ const HistoryPanel = memo(({
                       {e.source ? ` · via ${e.source}` : ''}
                     </div>
                     {e.note && (
-                      <div className={styles.historyMeta} style={{ fontStyle: 'italic' }}>
+                      <div className={styles.historyMeta} style={HISTORY_NOTE_STYLE}>
                         “{e.note}”
                       </div>
                     )}
