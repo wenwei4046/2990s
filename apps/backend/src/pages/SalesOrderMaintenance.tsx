@@ -279,184 +279,51 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
 
   return (
     <>
+      {/* ── Unified Geo + Warehouse drill-down (Commander 2026-05-27) ──
+          Commander folded the separate State→Warehouse table and the Geo
+          registry into ONE table: "添加多一个 column 给我选择 country 然后
+          可以 assign 这个 state under 什么 warehouse 然后双击点进去可以
+          看到全部 cities 再双击点进去可以看到全部 postcode 同时这每个
+          layer 都有 create 的功能".
+
+          L1 default — Country list (with state/city/postcode counts)
+                 double-click → drill
+          L2  — States in country, columns: State / Country / Warehouse /
+                 Notes / Cities / Postcodes
+                 double-click row → drill into cities
+          L3  — Cities in state, columns: City / Postcodes count
+                 double-click row → drill into postcodes
+          L4  — Postcodes in city, columns: Postcode / delete
+
+          Each level also has its own Add form at the bottom. */}
       <div className={styles.banner}>
-        <strong>State → Warehouse mapping.</strong> Pick the dispatch warehouse
-        for each state. When a customer's delivery address is in that state, the
-        SO Detail page suggests this warehouse as the Sales Location automatically.
+        <strong>
+          {geoView === 'country'  && 'Countries.'}
+          {geoView === 'state'    && `States in ${selectedCountry}.`}
+          {geoView === 'city'     && `Cities in ${selectedState}, ${selectedCountry}.`}
+          {geoView === 'postcode' && `Postcodes in ${selectedCity}, ${selectedState}.`}
+        </strong>{' '}
+        {geoView === 'country'  && 'Double-click a country to drill into its states + warehouse mapping.'}
+        {geoView === 'state'    && 'Assign a warehouse + notes per state. Double-click a state to drill into its cities.'}
+        {geoView === 'city'     && 'Double-click a city to drill into its postcodes.'}
+        {geoView === 'postcode' && 'Leaf level — edit / delete + add new postcodes here.'}
       </div>
 
-      <div className={styles.tableCard}>
-        {mappings.isLoading || warehouses.isLoading || localities.isLoading ? (
-          <div className={styles.empty}>Loading…</div>
-        ) : states.length === 0 ? (
-          <div className={styles.empty}>No states found in my_localities.</div>
-        ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>State</th>
-                <th>Warehouse</th>
-                <th>Notes</th>
-                {canEdit && <th aria-label="actions" />}
-              </tr>
-            </thead>
-            <tbody>
-              {states.map((state) => {
-                const current = mappedByState.get(state);
-                /* Task #120 — Display the optimistic value when a mutation is
-                   in flight for THIS state; otherwise fall back to the
-                   persisted mapping. This eliminates the "snapped back to
-                   old value" perception bug. */
-                const displayWarehouseId = pendingByState.has(state)
-                  ? pendingByState.get(state) ?? ''
-                  : current?.warehouseId ?? '';
-                return (
-                  <tr key={state}>
-                    <td><strong>{state}</strong></td>
-                    <td>
-                      <select
-                        className={styles.input}
-                        value={displayWarehouseId}
-                        disabled={!canEdit}
-                        onChange={(e) => {
-                          const warehouseId = e.target.value || null;
-                          // Optimistic UI flip so commander sees the change immediately.
-                          setPendingByState((m) => {
-                            const next = new Map(m);
-                            next.set(state, warehouseId);
-                            return next;
-                          });
-                          const wh = (warehouses.data ?? []).find((w) => w.id === warehouseId);
-                          const wlabel = wh ? `${wh.code} · ${wh.name}` : 'Unassigned';
-                          upsert.mutate(
-                            { state, warehouseId, notes: current?.notes ?? null },
-                            {
-                              onSuccess: () => toast.success(`${state} → ${wlabel}`),
-                              onError: (err) => {
-                                // Roll back optimistic value if save failed.
-                                setPendingByState((m) => {
-                                  const next = new Map(m);
-                                  next.delete(state);
-                                  return next;
-                                });
-                                toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
-                              },
-                            },
-                          );
-                        }}
-                      >
-                        <option value="">— Unassigned —</option>
-                        {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
-                          <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                        ))}
-                      </select>
-                      {warehouses.data && warehouses.data.filter((w) => w.is_active).length === 0 && (
-                        <div className={styles.muted} style={{ fontSize: 'var(--fs-11)', marginTop: 4 }}>
-                          No active warehouses — add one in <Link to="/warehouses">Warehouses</Link>.
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <input
-                        className={styles.input}
-                        defaultValue={current?.notes ?? ''}
-                        key={`${state}-${current?.notes ?? ''}`}
-                        disabled={!canEdit}
-                        placeholder="Optional"
-                        onBlur={(e) => {
-                          const notes = e.target.value.trim() || null;
-                          if ((current?.notes ?? null) === notes) return;
-                          upsert.mutate(
-                            { state, warehouseId: current?.warehouseId ?? null, notes },
-                            {
-                              onSuccess: () => toast.success(`Notes saved for ${state}`),
-                              onError: (err) => toast.error(`Notes save failed: ${err instanceof Error ? err.message : String(err)}`),
-                            },
-                          );
-                        }}
-                      />
-                    </td>
-                    {canEdit && (
-                      <td>
-                        {current && (
-                          <button
-                            type="button"
-                            className={styles.editBtn}
-                            disabled={remove.isPending}
-                            onClick={() => remove.mutate(
-                              { state },
-                              {
-                                onSuccess: () => {
-                                  toast.success(`Cleared mapping for ${state}`);
-                                  setPendingByState((m) => {
-                                    const next = new Map(m);
-                                    next.delete(state);
-                                    return next;
-                                  });
-                                },
-                                onError: (err) => toast.error(`Clear failed: ${err instanceof Error ? err.message : String(err)}`),
-                              },
-                            )}
-                            aria-label={`Clear mapping for ${state}`}
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* ── Warehouses inline CRUD (Task #121) ─────────────────────────
-          Commander 2026-05-27: coordinator on SO Maintenance needs to
-          create a new warehouse without bouncing to /warehouses. Order
-          on the page is intentional — warehouses come BEFORE the State →
-          Warehouse mapping so a freshly typed warehouse is immediately
-          pickable in the dropdown above. */}
-      <WarehouseCrudSection canEdit={canEdit} />
-
-      {/* ── Geo registry: Country L1 → State L2 → City L3 → Postcode L4 ──
-          Commander 2026-05-27: 4-level drill-down so each level lists its
-          own concept only — Malaysia isn't repeated 2933 times, cities
-          don't appear once per postcode, etc. State rows expose an
-          inline Country edit cell that bulk-moves every locality under
-          that state to the new country. */}
-      <div className={styles.banner} style={{ marginTop: 'var(--space-4)' }}>
-        <strong>Geo registry.</strong>{' '}
-        {geoView === 'country'  && <>L1 · Countries. Click a country to drill into its states.</>}
-        {geoView === 'state'    && <>L2 · States in {selectedCountry}. Edit Country inline to move a state. Click a state for its cities.</>}
-        {geoView === 'city'     && <>L3 · Cities in {selectedState}, {selectedCountry}. Click a city for its postcodes.</>}
-        {geoView === 'postcode' && <>L4 · Postcodes in {selectedCity}, {selectedState}. Edit / delete leaf rows here.</>}
-      </div>
-
-      {/* Breadcrumb — visible at L2 + L3 + L4 so the user can step back up. */}
+      {/* Breadcrumb */}
       {geoView !== 'country' && (
         <div className={styles.filterBar} style={{ marginBottom: 'var(--space-2)' }}>
           <button type="button" className={styles.editBtn} onClick={goToCountry}>
             ← All countries
           </button>
           {(geoView === 'city' || geoView === 'postcode') && (
-            <button
-              type="button"
-              className={styles.editBtn}
-              onClick={goToState}
-              style={{ marginLeft: 'var(--space-2)' }}
-            >
+            <button type="button" className={styles.editBtn} onClick={goToState}
+              style={{ marginLeft: 'var(--space-2)' }}>
               ← {selectedCountry} (states)
             </button>
           )}
           {geoView === 'postcode' && (
-            <button
-              type="button"
-              className={styles.editBtn}
-              onClick={goToCity}
-              style={{ marginLeft: 'var(--space-2)' }}
-            >
+            <button type="button" className={styles.editBtn} onClick={goToCity}
+              style={{ marginLeft: 'var(--space-2)' }}>
               ← {selectedState} (cities)
             </button>
           )}
@@ -468,22 +335,52 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L1 — Country listing. Add Country form requires seeding one
-          (state, stateCode, city, postcode) row because my_localities is
-          the atomic table — there's no Country row independent of its
-          first state. Commander 2026-05-27: "我需要可以添加 country then
-          in country can add on state then in state i can add on cities
-          then in cities can add on postcode". */}
+      {/* L1 — Country list */}
+      {geoView === 'country' && (
+        <div className={styles.tableCard}>
+          {localities.isLoading ? (
+            <div className={styles.empty}>Loading…</div>
+          ) : localityGroups.countries.length === 0 ? (
+            <div className={styles.empty}>No localities yet — add a country below.</div>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Country</th>
+                  <th style={{ width: 110, textAlign: 'right' }}>States</th>
+                  <th style={{ width: 110, textAlign: 'right' }}>Cities</th>
+                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {localityGroups.countries.map((c) => (
+                  <tr
+                    key={c.country}
+                    onDoubleClick={() => drillIntoCountry(c.country)}
+                    title="Double-click to drill into states"
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td><strong>{c.country}</strong></td>
+                    <td style={{ textAlign: 'right' }}>{c.states.size}</td>
+                    <td style={{ textAlign: 'right' }}>{c.cities.size}</td>
+                    <td style={{ textAlign: 'right' }}>{c.postcodeCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* L1 — Add Country form */}
       {geoView === 'country' && canEdit && (
         <div className={styles.addRowCard}>
-          <div className={styles.addRowEyebrow}>Add a country (seeds one state + city + postcode)</div>
-          <div
-            className={styles.addRowGrid}
-            style={{ gridTemplateColumns: '1fr 1fr 100px 1fr 110px auto' }}
-          >
-            <input className={styles.input} placeholder="Country (e.g. Singapore)"
+          <div className={styles.addRowEyebrow}>Add a country (also seeds first state · city · postcode)</div>
+          <div className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 1fr 100px 1fr 110px auto' }}>
+            <input className={styles.input} placeholder="Country (Singapore)"
               value={newCountry} onChange={(e) => setNewCountry(e.target.value)} />
-            <input className={styles.input} placeholder="State (e.g. Central)"
+            <input className={styles.input} placeholder="State (Central)"
               value={newState} onChange={(e) => setNewState(e.target.value)} />
             <input className={styles.input} placeholder="Code (SGC)" maxLength={5}
               value={newStateCode} onChange={(e) => setNewStateCode(e.target.value)} />
@@ -497,56 +394,161 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
           </div>
         </div>
       )}
-      {geoView === 'country' && (
+
+      {/* L2 — States in selected country, integrated with warehouse + notes */}
+      {geoView === 'state' && (
         <div className={styles.tableCard}>
-          {localities.isLoading ? (
-            <div className={styles.empty}>Loading…</div>
-          ) : localityGroups.countries.length === 0 ? (
-            <div className={styles.empty}>No localities yet.</div>
-          ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>Country</th>
-                  <th style={{ width: 110, textAlign: 'right' }}>States</th>
-                  <th style={{ width: 110, textAlign: 'right' }}>Cities</th>
-                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
-                  <th style={{ width: 90 }} aria-label="drill" />
-                </tr>
-              </thead>
-              <tbody>
-                {localityGroups.countries.map((c) => (
-                  <tr
-                    key={c.country}
-                    onClick={() => drillIntoCountry(c.country)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td><strong>{c.country}</strong></td>
-                    <td style={{ textAlign: 'right' }}>{c.states.size}</td>
-                    <td style={{ textAlign: 'right' }}>{c.cities.size}</td>
-                    <td style={{ textAlign: 'right' }}>{c.postcodeCount}</td>
-                    <td>
-                      <button type="button" className={styles.editBtn}>
-                        Open →
-                      </button>
-                    </td>
+          {(() => {
+            const statesInCountry = Array.from(localityGroups.statesByCountry.values())
+              .filter((s) => s.country === selectedCountry)
+              .sort((a, b) => a.state.localeCompare(b.state));
+            if (statesInCountry.length === 0) {
+              return <div className={styles.empty}>No states under {selectedCountry} — add one below.</div>;
+            }
+            return (
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>State</th>
+                    <th style={{ width: 80 }}>Code</th>
+                    <th style={{ width: 140 }}>Country</th>
+                    <th>Warehouse</th>
+                    <th>Notes</th>
+                    <th style={{ width: 80, textAlign: 'right' }}>Cities</th>
+                    <th style={{ width: 90, textAlign: 'right' }}>Postcodes</th>
+                    {canEdit && <th aria-label="actions" style={{ width: 70 }} />}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                </thead>
+                <tbody>
+                  {statesInCountry.map((s) => {
+                    const current = mappedByState.get(s.state);
+                    const displayWarehouseId = pendingByState.has(s.state)
+                      ? pendingByState.get(s.state) ?? ''
+                      : current?.warehouseId ?? '';
+                    return (
+                      <tr
+                        key={s.state}
+                        onDoubleClick={() => drillIntoState(s.state)}
+                        title="Double-click to drill into cities"
+                      >
+                        <td style={{ cursor: 'pointer' }}><strong>{s.state}</strong></td>
+                        <td style={{ cursor: 'pointer' }}>
+                          <code className={styles.code}>{s.stateCode}</code>
+                        </td>
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          {canEdit ? (
+                            <input
+                              className={styles.input}
+                              defaultValue={s.country}
+                              disabled={updateLoc.isPending}
+                              onBlur={(e) => moveStateToCountry(s.state, s.country, e.target.value)}
+                              aria-label={`Country for ${s.state}`}
+                            />
+                          ) : s.country}
+                        </td>
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          <select
+                            className={styles.input}
+                            value={displayWarehouseId}
+                            disabled={!canEdit}
+                            onChange={(e) => {
+                              const warehouseId = e.target.value || null;
+                              setPendingByState((m) => {
+                                const next = new Map(m);
+                                next.set(s.state, warehouseId);
+                                return next;
+                              });
+                              const wh = (warehouses.data ?? []).find((w) => w.id === warehouseId);
+                              const wlabel = wh ? `${wh.code} · ${wh.name}` : 'Unassigned';
+                              upsert.mutate(
+                                { state: s.state, warehouseId, notes: current?.notes ?? null },
+                                {
+                                  onSuccess: () => toast.success(`${s.state} → ${wlabel}`),
+                                  onError: (err) => {
+                                    setPendingByState((m) => {
+                                      const next = new Map(m);
+                                      next.delete(s.state);
+                                      return next;
+                                    });
+                                    toast.error(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+                                  },
+                                },
+                              );
+                            }}
+                          >
+                            <option value="">— Unassigned —</option>
+                            {(warehouses.data ?? []).filter((w) => w.is_active).map((w) => (
+                              <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td onDoubleClick={(e) => e.stopPropagation()}>
+                          <input
+                            className={styles.input}
+                            defaultValue={current?.notes ?? ''}
+                            key={`${s.state}-${current?.notes ?? ''}`}
+                            disabled={!canEdit}
+                            placeholder="Optional"
+                            onBlur={(e) => {
+                              const notes = e.target.value.trim() || null;
+                              if ((current?.notes ?? null) === notes) return;
+                              upsert.mutate(
+                                { state: s.state, warehouseId: current?.warehouseId ?? null, notes },
+                                {
+                                  onSuccess: () => toast.success(`Notes saved for ${s.state}`),
+                                  onError: (err) => toast.error(`Notes save failed: ${err instanceof Error ? err.message : String(err)}`),
+                                },
+                              );
+                            }}
+                          />
+                        </td>
+                        <td style={{ textAlign: 'right', cursor: 'pointer' }}>{s.cities.size}</td>
+                        <td style={{ textAlign: 'right', cursor: 'pointer' }}>{s.postcodeCount}</td>
+                        {canEdit && (
+                          <td onDoubleClick={(e) => e.stopPropagation()}>
+                            {current && (
+                              <button
+                                type="button"
+                                className={styles.editBtn}
+                                disabled={remove.isPending}
+                                onClick={() => remove.mutate(
+                                  { state: s.state },
+                                  {
+                                    onSuccess: () => {
+                                      toast.success(`Cleared mapping for ${s.state}`);
+                                      setPendingByState((m) => {
+                                        const next = new Map(m);
+                                        next.delete(s.state);
+                                        return next;
+                                      });
+                                    },
+                                    onError: (err) => toast.error(`Clear failed: ${err instanceof Error ? err.message : String(err)}`),
+                                  },
+                                )}
+                                aria-label={`Clear warehouse for ${s.state}`}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       )}
 
-      {/* L2 — Add State form: requires first (city, postcode) too. */}
+      {/* L2 — Add State form */}
       {geoView === 'state' && canEdit && (
         <div className={styles.addRowCard}>
-          <div className={styles.addRowEyebrow}>Add a state in {selectedCountry} (seeds first city + postcode)</div>
-          <div
-            className={styles.addRowGrid}
-            style={{ gridTemplateColumns: '1fr 100px 1fr 130px auto' }}
-          >
-            <input className={styles.input} placeholder="State (e.g. Selangor)"
+          <div className={styles.addRowEyebrow}>Add a state in {selectedCountry} (seeds first city · postcode)</div>
+          <div className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 100px 1fr 130px auto' }}>
+            <input className={styles.input} placeholder="State (Selangor)"
               value={newState} onChange={(e) => setNewState(e.target.value)} />
             <input className={styles.input} placeholder="Code (SGR)" maxLength={5}
               value={newStateCode} onChange={(e) => setNewStateCode(e.target.value)} />
@@ -561,97 +563,44 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L2 — State listing within selectedCountry. Country cell is
-          editable so a state can be moved to a different country (bulk
-          PATCH on every locality under that state). */}
-      {geoView === 'state' && (
+      {/* L3 — Cities */}
+      {geoView === 'city' && (
         <div className={styles.tableCard}>
-          {(() => {
-            const statesInCountry = Array.from(localityGroups.statesByCountry.values())
-              .filter((s) => s.country === selectedCountry)
-              .sort((a, b) => a.state.localeCompare(b.state));
-            if (statesInCountry.length === 0) {
-              return <div className={styles.empty}>No states under {selectedCountry}.</div>;
-            }
-            return (
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>State</th>
-                    <th style={{ width: 100 }}>Code</th>
-                    <th style={{ width: 140 }}>Country</th>
-                    <th style={{ width: 110, textAlign: 'right' }}>Cities</th>
-                    <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
-                    <th style={{ width: 90 }} aria-label="drill" />
+          {citiesInState.length === 0 ? (
+            <div className={styles.empty}>No cities in {selectedState} yet — add one below.</div>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>City</th>
+                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {citiesInState.map((c) => (
+                  <tr
+                    key={c.city}
+                    onDoubleClick={() => drillIntoCity(c.city)}
+                    title="Double-click to drill into postcodes"
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td><strong>{c.city}</strong></td>
+                    <td style={{ textAlign: 'right' }}>{c.postcodeCount}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {statesInCountry.map((s) => (
-                    <tr key={s.state}>
-                      <td
-                        onClick={() => drillIntoState(s.state)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <strong>{s.state}</strong>
-                      </td>
-                      <td
-                        onClick={() => drillIntoState(s.state)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <code className={styles.code}>{s.stateCode}</code>
-                      </td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        {canEdit ? (
-                          <input
-                            className={styles.input}
-                            defaultValue={s.country}
-                            disabled={updateLoc.isPending}
-                            onBlur={(e) => moveStateToCountry(s.state, s.country, e.target.value)}
-                            aria-label={`Country for ${s.state}`}
-                          />
-                        ) : (
-                          s.country
-                        )}
-                      </td>
-                      <td
-                        style={{ textAlign: 'right', cursor: 'pointer' }}
-                        onClick={() => drillIntoState(s.state)}
-                      >
-                        {s.cities.size}
-                      </td>
-                      <td
-                        style={{ textAlign: 'right', cursor: 'pointer' }}
-                        onClick={() => drillIntoState(s.state)}
-                      >
-                        {s.postcodeCount}
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className={styles.editBtn}
-                          onClick={() => drillIntoState(s.state)}
-                        >
-                          Open →
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            );
-          })()}
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
-      {/* L3 — Add City form (within selectedState). */}
+      {/* L3 — Add City form */}
       {geoView === 'city' && canEdit && (
         <div className={styles.addRowCard}>
           <div className={styles.addRowEyebrow}>Add a city in {selectedState}, {selectedCountry} (seeds first postcode)</div>
-          <div
-            className={styles.addRowGrid}
-            style={{ gridTemplateColumns: '1fr 130px auto' }}
-          >
-            <input className={styles.input} placeholder="City (e.g. Subang Jaya)"
+          <div className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '1fr 130px auto' }}>
+            <input className={styles.input} placeholder="City (Subang Jaya)"
               value={newCity} onChange={(e) => setNewCity(e.target.value)} />
             <input className={styles.input} placeholder="Postcode (47600)" maxLength={10}
               value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
@@ -662,34 +611,42 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L3 — Distinct cities under selectedState. */}
-      {geoView === 'city' && (
+      {/* L4 — Postcodes leaf */}
+      {geoView === 'postcode' && (
         <div className={styles.tableCard}>
-          {citiesInState.length === 0 ? (
-            <div className={styles.empty}>No cities in {selectedState} yet.</div>
+          {postcodeRows.length === 0 ? (
+            <div className={styles.empty}>No postcodes in {selectedCity} yet — add one below.</div>
           ) : (
             <table className={styles.table}>
               <thead>
                 <tr>
-                  <th>City</th>
-                  <th style={{ width: 130, textAlign: 'right' }}>Postcodes</th>
-                  <th style={{ width: 90 }} aria-label="drill" />
+                  <th>Postcode</th>
+                  {canEdit && <th aria-label="actions" style={{ width: 70 }} />}
                 </tr>
               </thead>
               <tbody>
-                {citiesInState.map((c) => (
-                  <tr
-                    key={c.city}
-                    onClick={() => drillIntoCity(c.city)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td><strong>{c.city}</strong></td>
-                    <td style={{ textAlign: 'right' }}>{c.postcodeCount}</td>
-                    <td>
-                      <button type="button" className={styles.editBtn}>
-                        Open →
-                      </button>
-                    </td>
+                {postcodeRows.map((r) => (
+                  <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
+                    <td><code className={styles.code}>{r.postcode}</code></td>
+                    {canEdit && (
+                      <td>
+                        {r.id && (
+                          <button
+                            type="button"
+                            className={styles.editBtn}
+                            disabled={deleteLoc.isPending}
+                            onClick={() => {
+                              if (confirm(`Delete ${selectedCity} / ${r.postcode}?`)) {
+                                deleteLoc.mutate(r.id!);
+                              }
+                            }}
+                            aria-label="Delete postcode"
+                          >
+                            <Trash2 size={14} strokeWidth={1.75} />
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -698,81 +655,27 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         </div>
       )}
 
-      {/* L4 — Postcodes under (selectedState, selectedCity). Leaf level —
-          this is where rows are actually added + deleted. */}
-      {geoView === 'postcode' && (
-        <>
-          {canEdit && (
-            <div className={styles.addRowCard}>
-              <div className={styles.addRowEyebrow}>
-                Add a postcode in {selectedCity}, {selectedState}, {selectedCountry}
-              </div>
-              <div
-                className={styles.addRowGrid}
-                style={{ gridTemplateColumns: '180px auto' }}
-              >
-                <input
-                  className={styles.input}
-                  placeholder="Postcode (e.g. 47301)"
-                  value={newPostcode}
-                  onChange={(e) => setNewPostcode(e.target.value)}
-                  maxLength={10}
-                />
-                <Button
-                  variant="primary"
-                  size="md"
-                  onClick={addLocality}
-                  disabled={createLoc.isPending}
-                >
-                  <Plus size={14} strokeWidth={1.75} />
-                  Add
-                </Button>
-              </div>
-            </div>
-          )}
-
-          <div className={styles.tableCard}>
-            {postcodeRows.length === 0 ? (
-              <div className={styles.empty}>No postcodes in {selectedCity} yet — add one above.</div>
-            ) : (
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Postcode</th>
-                    {canEdit && <th aria-label="actions" style={{ width: 70 }} />}
-                  </tr>
-                </thead>
-                <tbody>
-                  {postcodeRows.map((r) => (
-                    <tr key={r.id ?? `${r.state}-${r.city}-${r.postcode}`}>
-                      <td><code className={styles.code}>{r.postcode}</code></td>
-                      {canEdit && (
-                        <td>
-                          {r.id && (
-                            <button
-                              type="button"
-                              className={styles.editBtn}
-                              disabled={deleteLoc.isPending}
-                              onClick={() => {
-                                if (confirm(`Delete ${selectedCity} / ${r.postcode}?`)) {
-                                  deleteLoc.mutate(r.id!);
-                                }
-                              }}
-                              aria-label="Delete postcode"
-                            >
-                              <Trash2 size={14} strokeWidth={1.75} />
-                            </button>
-                          )}
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+      {/* L4 — Add Postcode */}
+      {geoView === 'postcode' && canEdit && (
+        <div className={styles.addRowCard}>
+          <div className={styles.addRowEyebrow}>
+            Add a postcode in {selectedCity}, {selectedState}, {selectedCountry}
           </div>
-        </>
+          <div className={styles.addRowGrid} style={{ gridTemplateColumns: '180px auto' }}>
+            <input className={styles.input} placeholder="Postcode (47301)" maxLength={10}
+              value={newPostcode} onChange={(e) => setNewPostcode(e.target.value)} />
+            <Button variant="primary" size="md" onClick={addLocality} disabled={createLoc.isPending}>
+              <Plus size={14} strokeWidth={1.75} /> Add
+            </Button>
+          </div>
+        </div>
       )}
+
+      {/* ── Warehouses inline CRUD (Task #121) — kept for warehouse master
+          data (Code / Name / Address / Active). State→warehouse assignment
+          now lives inside the L2 view above. */}
+      <WarehouseCrudSection canEdit={canEdit} />
+
 
       {/* ── Dropdowns CRUD (Task #118) ─────────────────────────────────
           One mini-table per category. Backed by so_dropdown_options
