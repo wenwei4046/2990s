@@ -19,7 +19,7 @@
 //       effective-date drawer.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type HTMLAttributes } from 'react';
 import {
   Download,
   Upload,
@@ -1118,6 +1118,47 @@ const MaintenanceList = ({
   const [draftValue, setDraftValue] = useState('');
   const [draftPrice, setDraftPrice] = useState('0.00');
 
+  /* Commander 2026-05-27: "Maintenance 也要有 Sort 的功能" — drag-and-drop
+     row reorder when editMode. Uses native HTML5 drag API (no library).
+     dragIdx tracks the row currently being dragged; on drop we splice it
+     to the new index and emit onChange so the parent's draft sees the
+     new order. Save persists the array order naturally. */
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const moveAt = (from: number, to: number) => {
+    if (from === to) return;
+    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    const arr = (next[listKey] as unknown[] | undefined) ?? [];
+    if (from < 0 || from >= arr.length || to < 0 || to >= arr.length) return;
+    const [moved] = arr.splice(from, 1);
+    arr.splice(to, 0, moved);
+    (next as Record<string, unknown>)[listKey] = arr;
+    onChange(next);
+  };
+  /* Per-row props factory — returns the draggable handlers + visual hint.
+     Only active in edit mode; otherwise rows are static. */
+  const dragRowProps = (i: number): HTMLAttributes<HTMLDivElement> => {
+    if (!editMode) return {};
+    return {
+      draggable: true,
+      onDragStart: (e) => {
+        setDragIdx(i);
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox requires data to start a drag
+        try { e.dataTransfer.setData('text/plain', String(i)); } catch { /* noop */ }
+      },
+      onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; },
+      onDrop: (e) => {
+        e.preventDefault();
+        if (dragIdx === null) return;
+        moveAt(dragIdx, i);
+        setDragIdx(null);
+      },
+      onDragEnd: () => setDragIdx(null),
+      style: dragIdx === i ? { opacity: 0.5 } : undefined,
+      title: 'Drag to reorder',
+    };
+  };
+
   if (listKey === 'fabrics') {
     return <FabricsMaintenancePanel />;
   }
@@ -1194,11 +1235,11 @@ const MaintenanceList = ({
           const labelOv = config.sizeLabels?.[v];
           const resolved = isSizeRow ? resolveSizeInfo(v, config) : null;
           return (
-          <div key={`${v}-${i}`} className={styles.maintRow}>
+          <div key={`${v}-${i}`} className={styles.maintRow} {...dragRowProps(i)}>
             <button type="button" className={styles.maintRowIcon} title="History">
               <History {...ICON_PROPS} />
             </button>
-            <span className={styles.maintRowIdx}>{i + 1}</span>
+            <span className={styles.maintRowIdx} style={editMode ? { cursor: 'grab' } : undefined}>{i + 1}</span>
             <span className={styles.maintRowValue}>
               {editMode ? (
                 isSizeRow ? (
@@ -1370,11 +1411,11 @@ const MaintenanceList = ({
   return (
     <div className={styles.maintList}>
       {items.map((opt, i) => (
-        <div key={`${opt.value}-${i}`} className={styles.maintRow}>
+        <div key={`${opt.value}-${i}`} className={styles.maintRow} {...dragRowProps(i)}>
           <button type="button" className={styles.maintRowIcon} title="History">
             <History {...ICON_PROPS} />
           </button>
-          <span className={styles.maintRowIdx}>{i + 1}</span>
+          <span className={styles.maintRowIdx} style={editMode ? { cursor: 'grab' } : undefined}>{i + 1}</span>
           <span className={styles.maintRowValue}>
             {editMode ? (
               <input
