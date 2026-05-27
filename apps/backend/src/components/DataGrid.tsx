@@ -239,10 +239,10 @@ export function DataGrid<T>({
       node.rows.push(row);
     }
 
-    // Recursively count rows under a node (direct + descendants).
-    const collectRows = (node: Node): T[] => {
-      const acc: T[] = [...node.rows];
-      for (const child of node.children.values()) acc.push(...collectRows(child));
+    // Recursive row count — sum direct rows + all descendants
+    const collectRows = (n: Node): T[] => {
+      const acc: T[] = [...n.rows];
+      for (const c of n.children.values()) acc.push(...collectRows(c));
       return acc;
     };
 
@@ -251,9 +251,7 @@ export function DataGrid<T>({
         const path = parentPath ? `${parentPath} ${child.value}` : child.value;
         const totalRows = collectRows(child).length;
         const collapsed = collapsedGroups.has(path);
-        const groupCol = groupKeys[level];
-        const groupLabel = groupCol ? groupCol.label : '';
-        out.push({ kind: 'group', level, path, label: `${groupLabel}: ${child.value}`, count: totalRows, collapsed });
+        out.push({ kind: 'group', level, path, label: `${groupKeys[level]?.label ?? ''}: ${child.value}`, count: totalRows, collapsed });
         if (!collapsed) {
           if (level + 1 < groupKeys.length) walk(child, level + 1, path);
           else for (const row of child.rows) out.push({ kind: 'row', row });

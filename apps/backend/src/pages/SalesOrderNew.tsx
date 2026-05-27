@@ -982,7 +982,7 @@ export const SalesOrderNew = () => {
             placeholder="Internal notes — visible on the SO detail page only"
             className={styles.fieldInput}
             rows={3}
-            style={{ minHeight: 80, resize: 'vertical', width: '100%' }}
+            style={{ minHeight: 52, resize: 'vertical', width: '100%' }}
           />
         </div>
       </section>
