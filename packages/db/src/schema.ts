@@ -1193,6 +1193,15 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
   lineDeliveryDate:            date('line_delivery_date'),
   lineDeliveryDateOverridden:  boolean('line_delivery_date_overridden').notNull().default(false),
 
+  /* PR-F (migration 0076) — Per-line photos for customisation orders.
+     Commander 2026-05-27: customisation lines often need attached refs
+     (color swatches, sketches, customer-supplied images). Each entry is
+     the R2 object key (e.g. so-items/SO-009123/<uuid>/<uuid>.jpg) — the
+     UI fetches images via GET /:docNo/items/:itemId/photos/:photoKey,
+     which proxies/signs against the SO_ITEM_PHOTOS bucket so the bucket
+     itself does not need public access. */
+  photoUrls:         text('photo_urls').array().notNull().default([]),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),

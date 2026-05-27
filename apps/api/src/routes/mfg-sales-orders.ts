@@ -33,6 +33,8 @@ const ITEM =
   'payment_status, venue, branding, remark, cancelled, variants, unit_cost_centi, line_cost_centi, line_margin_centi, ' +
   /* PR-E — per-item delivery date + cascade override flag (migration 0074) */
   'line_delivery_date, line_delivery_date_overridden, ' +
+  /* PR-F — per-line photo keys (migration 0076) */
+  'photo_urls, ' +
   'created_at';
 
 const nextDocNo = async (sb: any): Promise<string> => {
@@ -723,6 +725,228 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
     });
   }
   return c.body(null, 204);
+});
+
+// ── Per-line photos — PR-F (migration 0076) ──────────────────────────
+//
+// Commander 2026-05-27: customisation orders attach photos per line
+// (color swatches, sketches, customer-supplied refs). HOOKKA's
+// AutoCount-style detail view shows a "Photo" column on each line; we
+// mirror that with an R2-backed photo array on every SO item.
+//
+// Storage: keys live in mfg_sales_order_items.photo_urls (text[]),
+// objects live in the SO_ITEM_PHOTOS R2 bucket (private). The proxy
+// GET endpoint streams bytes back so the bucket itself never needs
+// public access. A custom domain (e.g. r2.2990s.com) can replace the
+// proxy later — until then this is the only read path.
+//
+// Key layout: so-items/<docNo>/<itemId>/<uuid>.<ext>
+//   The docNo + itemId prefix keeps the bucket browseable by SO and
+//   makes lifecycle policies (delete-on-cancel) straightforward.
+
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
+
+const extFromMime = (mime: string): string => {
+  // Conservative whitelist — image/* only. Fallback to 'bin' if a
+  // browser-supplied subtype isn't recognised; the bucket-key suffix
+  // is cosmetic (Content-Type stored as R2 metadata).
+  const m = mime.toLowerCase();
+  if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg';
+  if (m === 'image/png')                       return 'png';
+  if (m === 'image/webp')                      return 'webp';
+  if (m === 'image/gif')                       return 'gif';
+  if (m === 'image/heic')                      return 'heic';
+  if (m === 'image/heif')                      return 'heif';
+  if (m === 'image/avif')                      return 'avif';
+  if (m.startsWith('image/'))                  return 'bin';
+  return '';
+};
+
+mfgSalesOrders.post('/:docNo/items/:itemId/photos', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const itemId = c.req.param('itemId');
+  const user = c.get('user');
+
+  if (!c.env.SO_ITEM_PHOTOS) {
+    return c.json({ error: 'photo_bucket_not_configured' }, 500);
+  }
+
+  // Verify the line exists + belongs to this SO. Cheaper to fail here
+  // than after a multi-MB upload to R2.
+  const { data: item, error: itemErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('id, doc_no, item_code, photo_urls')
+    .eq('id', itemId)
+    .maybeSingle();
+  if (itemErr) return c.json({ error: 'item_lookup_failed', reason: itemErr.message }, 500);
+  if (!item) return c.json({ error: 'item_not_found' }, 404);
+  const i = item as { id: string; doc_no: string; item_code: string; photo_urls: string[] | null };
+  if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
+
+  // Parse multipart body via Hono's c.req.parseBody(). The slip route
+  // uses presigned URLs (out-of-band PUT) — this route is the
+  // simpler proxy path because per-item photo files are small (<10 MB)
+  // and commander wants drag-drop straight from the line card without
+  // a two-step handshake.
+  let form: Record<string, unknown>;
+  try {
+    form = await c.req.parseBody();
+  } catch (e) {
+    return c.json({ error: 'invalid_multipart', reason: e instanceof Error ? e.message : String(e) }, 400);
+  }
+  const file = form.file as File | undefined;
+  if (!file || typeof file === 'string') return c.json({ error: 'file_field_required' }, 400);
+
+  if (!file.type || !file.type.toLowerCase().startsWith('image/')) {
+    return c.json({ error: 'invalid_mime', got: file.type || '(none)' }, 400);
+  }
+  if (file.size > MAX_PHOTO_BYTES) {
+    return c.json({ error: 'file_too_large', maxBytes: MAX_PHOTO_BYTES, got: file.size }, 400);
+  }
+
+  const photoId = crypto.randomUUID();
+  const ext = extFromMime(file.type) || 'bin';
+  const photoKey = `so-items/${docNo}/${itemId}/${photoId}.${ext}`;
+
+  try {
+    await c.env.SO_ITEM_PHOTOS.put(photoKey, file.stream(), {
+      httpMetadata: { contentType: file.type },
+      customMetadata: {
+        docNo,
+        itemId,
+        itemCode: i.item_code,
+        uploadedBy: user.id,
+      },
+    });
+  } catch (e) {
+    return c.json({ error: 'r2_put_failed', reason: e instanceof Error ? e.message : String(e) }, 500);
+  }
+
+  // Append the new key to photo_urls. Pulled-then-pushed (rather than
+  // a Postgres array_append RPC) so the call stays inside the standard
+  // Supabase REST surface — supabase-js doesn't expose array operators.
+  const nextKeys = [...(i.photo_urls ?? []), photoKey];
+  const { error: updErr } = await sb
+    .from('mfg_sales_order_items')
+    .update({ photo_urls: nextKeys })
+    .eq('id', itemId);
+  if (updErr) {
+    // Rollback the R2 object so we don't leak a dangling blob.
+    await c.env.SO_ITEM_PHOTOS.delete(photoKey).catch(() => {});
+    return c.json({ error: 'db_update_failed', reason: updErr.message }, 500);
+  }
+
+  // PR-D — emit an ADD_LINE-style audit row noting the photo addition.
+  // Reuses UPDATE_LINE so the History panel groups it with other line
+  // edits; itemCode prefix gives the timeline a human label.
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', to: i.item_code },
+      { field: 'photoAdded', to: photoKey },
+    ],
+  });
+
+  // TODO(public-url): once the public R2 domain (e.g. r2.2990s.com) is
+  // wired in the Cloudflare dashboard, swap this for a direct CDN URL.
+  // For now we return the proxy URL via this Worker so the bucket can
+  // stay private.
+  const photoUrl = `/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}`;
+  return c.json({ photoKey, photoUrl }, 201);
+});
+
+mfgSalesOrders.get('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const itemId = c.req.param('itemId');
+  const photoKey = decodeURIComponent(c.req.param('photoKey'));
+
+  if (!c.env.SO_ITEM_PHOTOS) {
+    return c.json({ error: 'photo_bucket_not_configured' }, 500);
+  }
+
+  // Authorise: the photo key must belong to this SO+item AND be
+  // currently listed in photo_urls. Prevents enumeration of unrelated
+  // objects via a guessed key.
+  const { data: item } = await sb
+    .from('mfg_sales_order_items')
+    .select('doc_no, photo_urls')
+    .eq('id', itemId)
+    .maybeSingle();
+  if (!item) return c.json({ error: 'item_not_found' }, 404);
+  const i = item as { doc_no: string; photo_urls: string[] | null };
+  if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
+  if (!(i.photo_urls ?? []).includes(photoKey)) {
+    return c.json({ error: 'photo_not_in_item' }, 404);
+  }
+
+  const obj = await c.env.SO_ITEM_PHOTOS.get(photoKey);
+  if (!obj) return c.json({ error: 'photo_not_found_in_r2' }, 404);
+
+  const contentType =
+    obj.httpMetadata?.contentType ?? 'application/octet-stream';
+  return new Response(obj.body, {
+    headers: {
+      'content-type': contentType,
+      // 1-hour browser cache. Photos are immutable per key (new uploads
+      // get a new uuid), so this is safe.
+      'cache-control': 'private, max-age=3600',
+    },
+  });
+});
+
+mfgSalesOrders.delete('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const itemId = c.req.param('itemId');
+  const photoKey = decodeURIComponent(c.req.param('photoKey'));
+  const user = c.get('user');
+
+  if (!c.env.SO_ITEM_PHOTOS) {
+    return c.json({ error: 'photo_bucket_not_configured' }, 500);
+  }
+
+  const { data: item } = await sb
+    .from('mfg_sales_order_items')
+    .select('doc_no, item_code, photo_urls')
+    .eq('id', itemId)
+    .maybeSingle();
+  if (!item) return c.json({ error: 'item_not_found' }, 404);
+  const i = item as { doc_no: string; item_code: string; photo_urls: string[] | null };
+  if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
+  const existing = i.photo_urls ?? [];
+  if (!existing.includes(photoKey)) {
+    return c.json({ error: 'photo_not_in_item' }, 404);
+  }
+
+  const nextKeys = existing.filter((k) => k !== photoKey);
+  const { error: updErr } = await sb
+    .from('mfg_sales_order_items')
+    .update({ photo_urls: nextKeys })
+    .eq('id', itemId);
+  if (updErr) return c.json({ error: 'db_update_failed', reason: updErr.message }, 500);
+
+  // R2 delete best-effort — if it fails we've already removed the key
+  // from the array, so the orphan is invisible to the UI. A future
+  // reaper job could sweep for dangling objects.
+  await c.env.SO_ITEM_PHOTOS.delete(photoKey).catch(() => {});
+
+  await recordSoAudit(sb, {
+    docNo,
+    action: 'UPDATE_LINE',
+    actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [
+      { field: 'itemCode', to: i.item_code },
+      { field: 'photoRemoved', from: photoKey, to: null },
+    ],
+  });
+
+  return c.json({ ok: true });
 });
 
 // ── Payments — PR #163 (migration 0073) ───────────────────────────────
