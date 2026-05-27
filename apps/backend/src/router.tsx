@@ -24,6 +24,8 @@ import { SalesOrderDetail } from './pages/SalesOrderDetail';
 import { SalesOrderNew } from './pages/SalesOrderNew';
 import { Inventory } from './pages/Inventory';
 import { StockCard } from './pages/StockCard';
+import { StockAdjustments } from './pages/StockAdjustments';
+import { StockAdjustmentNew } from './pages/StockAdjustmentNew';
 import { Drivers } from './pages/Drivers';
 import { Accounting } from './pages/Accounting';
 import { Warehouses } from './pages/Warehouses';
@@ -57,6 +59,9 @@ export const router = createBrowserRouter([
       { path: 'fabric-tracking', element: <FabricTracking /> },
       { path: 'inventory', element: <Inventory /> },
       { path: 'inventory/stock-card/:productCode', element: <StockCard /> },
+      // /new must come before any potential :id segment under /adjustments.
+      { path: 'inventory/adjustments', element: <StockAdjustments /> },
+      { path: 'inventory/adjustments/new', element: <StockAdjustmentNew /> },
       { path: 'warehouses', element: <Warehouses /> },
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
