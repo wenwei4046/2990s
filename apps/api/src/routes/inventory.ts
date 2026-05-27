@@ -80,6 +80,26 @@ inventory.patch('/warehouses/:id', async (c) => {
   return c.json({ warehouse: data });
 });
 
+/* Task #121 — Hard DELETE of a warehouse. Used by the inline Warehouses
+   table on /mfg-sales-orders/maintenance so a coordinator can drop a
+   row they just typed by mistake. Postgres FKs from inventory_movements
+   / lots / cogs reject the delete when there's referenced history;
+   commander should toggle is_active=false via PATCH in that case. We
+   surface the FK error so the UI can hint at deactivate instead. */
+inventory.delete('/warehouses/:id', async (c) => {
+  const sb = c.get('supabase');
+  const id = c.req.param('id');
+  const { error } = await sb.from('warehouses').delete().eq('id', id);
+  if (error) {
+    // 23503 = foreign_key_violation — there are movements/lots/etc. tied
+    // to this warehouse. Bubble up so the client can show a friendlier
+    // "deactivate instead" path.
+    if (error.code === '23503') return c.json({ error: 'in_use', reason: error.message }, 409);
+    return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 /* ── Balances ─────────────────────────────────────────────────────────── */
 // When showAll=true, returns one row per (warehouse × SKU) including
 // zero-balance rows — the UI uses this for the "all SKUs" view.

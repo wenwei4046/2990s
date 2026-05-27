@@ -26,7 +26,12 @@ import {
   useUpsertStateWarehouseMapping,
   useDeleteStateWarehouseMapping,
 } from '../lib/state-warehouse-queries';
-import { useWarehouses } from '../lib/inventory-queries';
+import {
+  useWarehouses,
+  useCreateWarehouse,
+  useUpdateWarehouse,
+  useDeleteWarehouse,
+} from '../lib/inventory-queries';
 import {
   useLocalities, distinctStates,
   useCreateLocality, useDeleteLocality,
@@ -200,6 +205,14 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
         )}
       </div>
 
+      {/* ── Warehouses inline CRUD (Task #121) ─────────────────────────
+          Commander 2026-05-27: coordinator on SO Maintenance needs to
+          create a new warehouse without bouncing to /warehouses. Order
+          on the page is intentional — warehouses come BEFORE the State →
+          Warehouse mapping so a freshly typed warehouse is immediately
+          pickable in the dropdown above. */}
+      <WarehouseCrudSection canEdit={canEdit} />
+
       {/* ── States / Cities / Postcodes CRUD (formerly Settings tab) ───── */}
       <div className={styles.banner} style={{ marginTop: 'var(--space-4)' }}>
         <strong>States / Cities / Postcodes.</strong> Editable list of rows in
@@ -315,6 +328,174 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
           <div className={styles.empty} style={{ fontSize: 'var(--fs-12)' }}>
             Showing first 500 of {filteredLocalities.length} — use the filter above to narrow down.
           </div>
+        )}
+      </div>
+    </>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Warehouse CRUD section — inline mini-table + add-row.
+
+   Task #121 / Commander 2026-05-27: "也不能在 sales order maintenance 这边
+   create warehouse". The full /warehouses page (which lives under Inventory)
+   stays untouched — this is just a parallel quick-edit affordance for the
+   coordinator while they're already on SO Maintenance.
+
+   Maps to the warehouses table:
+     - Code     → warehouses.code   (uppercase, unique)
+     - Name     → warehouses.name
+     - Address  → warehouses.location  (free-text, single line on this page;
+                                        /warehouses uses the same column)
+     - Active   → warehouses.is_active toggle
+     - Delete   → DELETE /inventory/warehouses/:id (409 in_use when there
+                  are FK refs from movements/lots, in which case the UI
+                  asks the coordinator to deactivate instead).
+   ────────────────────────────────────────────────────────────────────────── */
+
+const WarehouseCrudSection = ({ canEdit }: { canEdit: boolean }) => {
+  /* Show inactive too — the inline table doubles as the only place a
+     coordinator on SO Maintenance can reactivate a deactivated warehouse
+     without navigating to /warehouses. */
+  const warehouses    = useWarehouses({ includeInactive: true });
+  const createWh      = useCreateWarehouse();
+  const updateWh      = useUpdateWarehouse();
+  const deleteWh      = useDeleteWarehouse();
+
+  const [newCode, setNewCode]       = useState('');
+  const [newName, setNewName]       = useState('');
+  const [newAddress, setNewAddress] = useState('');
+
+  const submitNew = () => {
+    const code = newCode.trim().toUpperCase();
+    const name = newName.trim();
+    if (!code || !name) {
+      window.alert('Code and Name are required.');
+      return;
+    }
+    createWh.mutate(
+      { code, name, location: newAddress.trim() || undefined },
+      {
+        onSuccess: () => { setNewCode(''); setNewName(''); setNewAddress(''); },
+        onError: (err) => window.alert(String((err as Error).message ?? err)),
+      },
+    );
+  };
+
+  const removeWh = (id: string, code: string) => {
+    if (!confirm(`Delete warehouse ${code}? This cannot be undone — toggle Active off instead if the warehouse has any history.`)) return;
+    deleteWh.mutate(id, {
+      onError: (err) => {
+        const msg = String((err as Error).message ?? err);
+        if (msg.includes('409')) {
+          window.alert(
+            `Can't delete ${code} — it's referenced by existing inventory movements / lots. ` +
+            `Toggle the Active checkbox off instead to retire it without losing history.`,
+          );
+        } else {
+          window.alert(msg);
+        }
+      },
+    });
+  };
+
+  return (
+    <>
+      <div className={styles.banner} style={{ marginTop: 'var(--space-4)' }}>
+        <strong>Warehouses.</strong> Quick CRUD for the warehouses available
+        to the State → Warehouse mapping above. Full management
+        (default warehouse, deeper edits) still lives at <code className={styles.code}>/warehouses</code>.
+      </div>
+
+      {canEdit && (
+        <div className={styles.addRowCard}>
+          <div className={styles.addRowEyebrow}>Add a warehouse</div>
+          <div
+            className={styles.addRowGrid}
+            style={{ gridTemplateColumns: '120px 1fr 1fr auto' }}
+          >
+            <input
+              className={styles.input}
+              placeholder="Code (KL / PJ)"
+              value={newCode}
+              onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+              maxLength={10}
+            />
+            <input
+              className={styles.input}
+              placeholder="Name (e.g. KL Warehouse)"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <input
+              className={styles.input}
+              placeholder="Address (optional)"
+              value={newAddress}
+              onChange={(e) => setNewAddress(e.target.value)}
+            />
+            <Button
+              variant="primary"
+              size="md"
+              onClick={submitNew}
+              disabled={createWh.isPending}
+            >
+              <Plus size={14} strokeWidth={1.75} />
+              Add
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className={styles.tableCard}>
+        {warehouses.isLoading ? (
+          <div className={styles.empty}>Loading…</div>
+        ) : (warehouses.data ?? []).length === 0 ? (
+          <div className={styles.empty}>No warehouses yet.</div>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th style={{ width: 110 }}>Code</th>
+                <th>Name</th>
+                <th>Address</th>
+                <th style={{ width: 90 }}>Active</th>
+                {canEdit && <th aria-label="actions" style={{ width: 70 }} />}
+              </tr>
+            </thead>
+            <tbody>
+              {(warehouses.data ?? []).map((w) => (
+                <tr key={w.id}>
+                  <td><code className={styles.code}>{w.code}</code></td>
+                  <td>{w.name}</td>
+                  <td>{w.location ?? '—'}</td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={w.is_active}
+                      disabled={!canEdit || updateWh.isPending}
+                      onChange={(e) =>
+                        updateWh.mutate({ id: w.id, isActive: e.target.checked })
+                      }
+                      aria-label={`Toggle ${w.code} active`}
+                    />
+                  </td>
+                  {canEdit && (
+                    <td>
+                      <button
+                        type="button"
+                        className={styles.editBtn}
+                        disabled={deleteWh.isPending}
+                        onClick={() => removeWh(w.id, w.code)}
+                        aria-label={`Delete warehouse ${w.code}`}
+                      >
+                        <Trash2 size={14} strokeWidth={1.75} />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </>
