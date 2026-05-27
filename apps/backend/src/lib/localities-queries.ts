@@ -2,8 +2,10 @@
 // Localities — Malaysia postcode dataset. Mirrors apps/pos/src/lib useLocalities.
 // Used by the Sales Order Customer Card to drive cascading state → city →
 // postcode dropdowns (matches POS Handover screen, PR #39).
-// PR #160 — write mutations added so the Settings → Localities tab can
-// add/edit/delete states/cities/postcodes (commander 2026-05-27).
+// PR #160 — write mutations added so the (formerly Settings → Localities,
+// now Sales Order Maintenance) page can add/edit/delete states/cities/
+// postcodes (commander 2026-05-27). Task #110 moved the consumer page out
+// of Settings into /mfg-sales-orders/maintenance the same day.
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -79,7 +81,8 @@ export const useLocalities = () =>
     },
   });
 
-/* PR #160 — CRUD mutations for the Localities settings tab. */
+/* PR #160 — CRUD mutations for the Sales Order Maintenance page (was the
+   Settings → Localities tab pre-Task #110). */
 export const useCreateLocality = () => {
   const qc = useQueryClient();
   return useMutation({
