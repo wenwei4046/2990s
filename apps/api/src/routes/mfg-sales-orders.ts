@@ -440,7 +440,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
 
   /* PR-D — Audit log row capturing field-level from→to diff. */
   if (before) {
-    const fieldChanges = diffFields(before as Record<string, unknown>, body, map);
+    // Cast via `unknown` first: Supabase types the joined select result as
+    // `GenericStringError` until proven typed, which doesn't structurally
+    // overlap with our Record. The runtime shape IS a Record though, so the
+    // double-cast is safe.
+    const beforeRow = before as unknown as Record<string, unknown>;
+    const fieldChanges = diffFields(beforeRow, body, map);
     if (fieldChanges.length > 0) {
       await recordSoAudit(sb, {
         docNo,
@@ -448,7 +453,7 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
         actorId: user.id,
         actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
         fieldChanges,
-        statusSnapshot: (before as { status?: string }).status ?? null,
+        statusSnapshot: (beforeRow as { status?: string }).status ?? null,
       });
     }
   }

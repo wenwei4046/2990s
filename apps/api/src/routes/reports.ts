@@ -82,17 +82,26 @@ reports.get('/sales-order-detail-listing', async (c) => {
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
 
   type ItemRow = Record<string, unknown> & {
-    mfg_sales_orders: Record<string, unknown> | null;
+    // Supabase's foreign-table join can return either a single object or an
+    // array — both shapes are normalised in the flatten pass below.
+    mfg_sales_orders: Record<string, unknown> | Record<string, unknown>[] | null;
     line_date: string | null;
     doc_no: string;
   };
-  const itemsRaw = (data ?? []) as ItemRow[];
+  // Cast via `unknown` first — the joined select gives a row type that
+  // doesn't structurally overlap with ItemRow until we narrow it.
+  const itemsRaw = (data ?? []) as unknown as ItemRow[];
 
   // Flatten the join + apply the header-level date range filters in JS
   // (supabase-js can't .gte() across a joined table without rpc).
   const rows = itemsRaw
     .map((r) => {
-      const h = (r.mfg_sales_orders ?? {}) as Record<string, unknown>;
+      // Supabase returns the joined header as either a single object or
+      // a one-element array depending on selection — normalise to single.
+      const rawHeader = r.mfg_sales_orders;
+      const h: Record<string, unknown> = Array.isArray(rawHeader)
+        ? ((rawHeader[0] as Record<string, unknown>) ?? {})
+        : ((rawHeader as Record<string, unknown>) ?? {});
       const flat: Record<string, unknown> = { ...r };
       delete flat.mfg_sales_orders;
       // Prefix header fields with so_ to avoid collisions with line fields
