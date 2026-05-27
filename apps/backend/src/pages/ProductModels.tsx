@@ -25,6 +25,7 @@ import {
 import { resolveSizeInfo } from '../lib/size-info';
 import { SkuPreviewStrip } from './SupplierDetail';
 import { composeSupplierSku } from '../lib/supplier-sku-helpers';
+import { MultiSupplierPicker } from '../components/MultiSupplierPicker';
 import styles from './ProductModels.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -862,35 +863,47 @@ function InlineAllowedOptions({
 
 /* ════════════════════════════════════════════════════════════════════════
    ModularAssignSupplierDialog — Modular-tab parallel of SupplierDetail's
-   ModelSkuPickerDialog (PR #206). Reached from the multi-select toolbar:
-   tick N Models → "Assign to supplier · N selected" CTA → this dialog.
+   ModelSkuPickerDialog (PR #206 / PR #209). Reached from the multi-select
+   toolbar: tick N Models → "Assign to supplier · N selected" CTA → this
+   dialog.
+
+   PR — Commander 2026-05-27 (multi-supplier):
+     > supplier 为什么不可以 multiselect 然后让我填写他们分别的 code
 
    Flow:
-     1. Pick a supplier (dropdown of ACTIVE suppliers).
-     2. One row per Model — supplier_code · description · unit price · lead
-        · MOQ · main toggle. Description fans out into the bindings.notes
-        column shared with the rest of the supplier-mapping flow.
-     3. Each Model row has a "▸ N SKUs" expander so commander can preview
-        the OUR-SKU codes about to be bulk-mapped before pressing Save.
-     4. Save → expand each Model into its ACTIVE SKUs and POST one binding
-        per SKU into /bindings/batch. Uses the same useCreateBindingsBatch
-        mutation as SupplierDetail (server de-dupes against existing rows).
+     1. Pick MULTIPLE suppliers via the chip-row MultiSupplierPicker.
+     2. Table renders one row per (Model × Supplier) pair grouped under a
+        per-Model sub-header — commander types a distinct supplier_code +
+        description + price + lead + MOQ + main toggle for each pair.
+     3. Each (Model × Supplier) row has a "▸ N SKUs" expander showing the
+        per-SKU `supplier_sku` previewed via composeSupplierSku() against
+        THAT row's typed base code.
+     4. Save → for each row with a non-empty supplier_code, expand the
+        Model's ACTIVE SKUs and add one binding per SKU. Bindings are then
+        bucketed BY supplier and dispatched as one /bindings/batch POST per
+        supplier (the API endpoint is per-supplier — see
+        `apps/api/src/routes/suppliers.ts` POST /:supplierId/bindings/batch).
+        Server de-dupes against existing rows.
 
    Reuses SkuPreviewStrip from SupplierDetail so the chip-strip stays in
    sync across both entry points.
    ════════════════════════════════════════════════════════════════════════ */
 
 type AssignDraft = {
+  /** Composite key: `${modelId}::${supplierId}` — used as the React key
+      and Map key for the per-(Model × Supplier) row. */
+  key:            string;
   modelId:        string;
   modelCode:      string;
   modelName:      string;
+  supplierId:     string;
+  supplierCode_s: string; // supplier.code (display)
+  supplierName:   string; // supplier.name (display)
   /** Full SKU rows so the preview / save path can derive a per-SKU
       supplier_sku suffix (compartment for sofa, size_code for bedframe /
       mattress) via composeSupplierSku(). PR — Commander 2026-05-27. */
   skus:           MfgProductRow[];
-  // Per-supplier already-bound subset (computed in supplier-select effect).
-  alreadyBound:   string[];
-  supplierCode:   string;
+  supplierCode:   string; // commander-typed code for this (Model × Supplier)
   description:    string;
   unitPriceCenti: number;
   leadTimeDays:   number;
@@ -913,19 +926,26 @@ function ModularAssignSupplierDialog({
   const productsQ  = useMfgProducts();
   const batchMut   = useCreateBindingsBatch();
 
-  const [supplierId,  setSupplierId]  = useState<string>('');
+  // PR — Commander 2026-05-27: multi-select suppliers. Each row in the table
+  // below is one (Model × Supplier) pair. We key drafts by `modelId::supplierId`.
+  const [supplierIds, setSupplierIds] = useState<string[]>([]);
   const [drafts,      setDrafts]      = useState<Record<string, AssignDraft>>({});
   const [expanded,    setExpanded]    = useState<Set<string>>(new Set());
   const [error,       setError]       = useState<string | null>(null);
+  // Bind-in-flight indicator while we fan out per-supplier batch calls.
+  const [saving, setSaving] = useState(false);
 
   const toggleExpanded = (id: string) => setExpanded((s) => {
     const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n;
   });
 
-  // Seed one draft per picked Model. SKU list is the ACTIVE SKUs under that
-  // model_id; price defaults to the average base_price of those SKUs.
+  // Seed one draft per (Model × Supplier) pair. SKU list comes from the
+  // ACTIVE SKUs under that model_id; price defaults to the average
+  // base_price of those SKUs. Existing drafts are preserved across
+  // supplier add/remove — re-add a supplier and you'll get back to a fresh
+  // row only if it wasn't already present.
   useEffect(() => {
-    if (!modelsQ.data || !productsQ.data) return;
+    if (!modelsQ.data || !productsQ.data || !suppliersQ.data) return;
     const skusByModel = new Map<string, MfgProductRow[]>();
     for (const p of productsQ.data) {
       if (!p.model_id) continue;
@@ -933,58 +953,76 @@ function ModularAssignSupplierDialog({
       arr.push(p);
       skusByModel.set(p.model_id, arr);
     }
-    const seeded: Record<string, AssignDraft> = {};
-    for (const id of modelIds) {
-      const model = modelsQ.data.find((m) => m.id === id);
-      if (!model) continue;
-      const skus = skusByModel.get(id) ?? [];
-      const prices = skus.map((s) => s.base_price_sen ?? 0).filter((v) => v > 0);
-      const avg = prices.length
-        ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length)
-        : 0;
-      seeded[id] = {
-        modelId:        model.id,
-        modelCode:      model.model_code,
-        modelName:      model.name,
-        skus,
-        alreadyBound:   [],
-        supplierCode:   '',
-        description:    '',
-        unitPriceCenti: avg,
-        leadTimeDays:   7,
-        moq:            1,
-        isMainSupplier: false,
-      };
-    }
-    setDrafts(seeded);
-  // Re-seed only when the input Model set changes or upstream data first
-  // arrives — supplier choice does NOT reset the user's typed code/desc.
+    const supplierById = new Map(suppliersQ.data.map((s) => [s.id, s]));
+    setDrafts((prev) => {
+      const seeded: Record<string, AssignDraft> = {};
+      for (const modelId of modelIds) {
+        const model = modelsQ.data!.find((m) => m.id === modelId);
+        if (!model) continue;
+        const skus = skusByModel.get(modelId) ?? [];
+        const prices = skus.map((s) => s.base_price_sen ?? 0).filter((v) => v > 0);
+        const avg = prices.length
+          ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length)
+          : 0;
+        for (const supplierId of supplierIds) {
+          const supplier = supplierById.get(supplierId);
+          if (!supplier) continue;
+          const key = `${modelId}::${supplierId}`;
+          const existing = prev[key];
+          if (existing) {
+            // Preserve any typed values + refresh SKU references in case
+            // upstream catalogue refetched.
+            seeded[key] = { ...existing, skus };
+            continue;
+          }
+          seeded[key] = {
+            key,
+            modelId,
+            modelCode:      model.model_code,
+            modelName:      model.name,
+            supplierId,
+            supplierCode_s: supplier.code,
+            supplierName:   supplier.name,
+            skus,
+            supplierCode:   '',
+            description:    '',
+            unitPriceCenti: avg,
+            leadTimeDays:   7,
+            moq:            1,
+            isMainSupplier: false,
+          };
+        }
+      }
+      return seeded;
+    });
+  // Re-seed when input Models, picked suppliers, or upstream data change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelIds.join('|'), modelsQ.data?.length, productsQ.data?.length]);
+  }, [modelIds.join('|'), supplierIds.join('|'), modelsQ.data?.length, productsQ.data?.length, suppliersQ.data?.length]);
 
-  const setDraft = (id: string, patch: Partial<AssignDraft>) => {
-    setDrafts((s) => ({ ...s, [id]: { ...s[id]!, ...patch } }));
+  const setDraft = (key: string, patch: Partial<AssignDraft>) => {
+    setDrafts((s) => ({ ...s, [key]: { ...s[key]!, ...patch } }));
   };
 
   const loading = suppliersQ.isLoading || modelsQ.isLoading || productsQ.isLoading;
 
   const submit = () => {
     setError(null);
-    if (!supplierId) { setError('Pick a supplier first.'); return; }
-    const list: NewBinding[] = [];
+    if (supplierIds.length === 0) { setError('Pick at least one supplier first.'); return; }
+    // Bucket bindings BY supplier — the API's /bindings/batch endpoint is
+    // scoped to one supplier per call (see apps/api/src/routes/suppliers.ts
+    // line 268). We fan out N parallel batch POSTs.
+    const bySupplier = new Map<string, NewBinding[]>();
     for (const d of Object.values(drafts)) {
       const code = d.supplierCode.trim();
-      // Skip Models with no supplier code typed — commander left this Model
-      // empty on purpose. Same convention as ModelSkuPickerDialog so the
-      // toast counts match expectations.
+      // Skip (Model × Supplier) rows with no supplier code typed —
+      // commander left this pair empty on purpose.
       if (!code) continue;
+      const bucket = bySupplier.get(d.supplierId) ?? [];
       for (const sku of d.skus) {
         // PR — Commander 2026-05-27: per-SKU supplier_sku auto-suffix.
         // composeSupplierSku("5539", sofaSku) → "5539-1A(LHF)" etc.
-        // Previously wrote the literal model-level code into every binding,
-        // producing 16 BOOQIT rows all reading "5539".
         const supplierSku = composeSupplierSku(code, sku);
-        list.push({
+        bucket.push({
           materialKind:   'mfg_product' as MaterialKind,
           materialCode:   sku.code,
           materialName:   sku.name ?? sku.code,
@@ -997,31 +1035,58 @@ function ModularAssignSupplierDialog({
           notes:          d.description.trim() || undefined,
         });
       }
+      bySupplier.set(d.supplierId, bucket);
     }
-    if (list.length === 0) {
-      setError('Type at least one supplier code so we know which Model to map.');
+    const totalPlanned = Array.from(bySupplier.values()).reduce((a, b) => a + b.length, 0);
+    if (totalPlanned === 0) {
+      setError('Type at least one supplier code so we know which (Model × Supplier) to map.');
       return;
     }
-    batchMut.mutate({ supplierId, bindings: list }, {
-      onSuccess: (res) => {
-        if (res.skipped > 0) {
+
+    // Fan out one POST per supplier. We use the same mutation but call it
+    // imperatively so we can await + aggregate results. Errors short-circuit
+    // and surface in the error banner — partial successes are still kept
+    // in the database (the server inserts atomically per call).
+    setSaving(true);
+    let totalInserted = 0;
+    let totalSkipped  = 0;
+    const calls = Array.from(bySupplier.entries()).map(([supplierId, bindings]) =>
+      batchMut.mutateAsync({ supplierId, bindings }),
+    );
+    Promise.all(calls)
+      .then((results) => {
+        for (const res of results) {
+          totalInserted += res.inserted;
+          totalSkipped  += res.skipped;
+        }
+        if (totalSkipped > 0) {
           // eslint-disable-next-line no-alert
           alert(
-            `Inserted ${res.inserted} SKU mapping${res.inserted === 1 ? '' : 's'}; ` +
-            `skipped ${res.skipped} already bound for this supplier.`,
+            `Inserted ${totalInserted} SKU mapping${totalInserted === 1 ? '' : 's'} across ` +
+            `${bySupplier.size} supplier${bySupplier.size === 1 ? '' : 's'}; ` +
+            `skipped ${totalSkipped} already bound.`,
           );
         }
         onSaved();
-      },
-      onError: (e) => setError(e instanceof Error ? e.message : String(e)),
-    });
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSaving(false));
   };
 
   const supplierOptions = suppliersQ.data ?? [];
   const draftRows       = Object.values(drafts);
+  // For the footer + Save button: total bindings that WILL be POSTed.
   const totalSkus       = draftRows.reduce(
     (sum, d) => sum + (d.supplierCode.trim() ? d.skus.length : 0), 0,
   );
+  // For the per-Model sub-header: how many supplier rows are under each Model.
+  const suppliersPerModel = new Map<string, number>();
+  for (const d of draftRows) {
+    suppliersPerModel.set(d.modelId, (suppliersPerModel.get(d.modelId) ?? 0) + 1);
+  }
+  // Stable ordering — group by Model in the order they were picked,
+  // suppliers in the order they were added.
+  const modelOrder = modelIds.filter((id) => suppliersPerModel.has(id));
 
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
@@ -1034,11 +1099,11 @@ function ModularAssignSupplierDialog({
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-4)', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
             <h2 className={styles.modalTitle}>
-              Assign {draftRows.length} Model{draftRows.length === 1 ? '' : 's'} to supplier
+              Assign {modelIds.length} Model{modelIds.length === 1 ? '' : 's'} to suppliers
             </h2>
             <p className={styles.modalSub} style={{ margin: 0 }}>
-              One supplier code + description per Model. Save fans the binding
-              out across every active SKU under each Model.
+              Pick one or more suppliers, then type each supplier's code + description per Model.
+              Save fans bindings out across every active SKU under each Model.
             </p>
           </div>
           <button
@@ -1058,22 +1123,13 @@ function ModularAssignSupplierDialog({
           </button>
         </div>
 
-        <label className={styles.compactField} style={{ maxWidth: 360 }}>
-          <span>Supplier *</span>
-          <select
-            value={supplierId}
-            onChange={(e) => setSupplierId(e.target.value)}
-            disabled={loading}
-            required
-          >
-            <option value="">{loading ? 'Loading suppliers…' : '— Pick supplier —'}</option>
-            {supplierOptions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.code} · {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSupplierPicker
+          suppliers={supplierOptions}
+          selectedIds={supplierIds}
+          onChange={setSupplierIds}
+          loading={loading}
+          disabled={saving || batchMut.isPending}
+        />
 
         <div style={{
           border: '1px solid var(--line)',
@@ -1084,7 +1140,7 @@ function ModularAssignSupplierDialog({
           <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-sans)' }}>
             <thead>
               <tr style={{ background: 'var(--c-cream)', borderBottom: '1px solid var(--line)' }}>
-                <th style={thStyle}>Model · #SKUs</th>
+                <th style={thStyle}>Model · Supplier</th>
                 <th style={thStyle}>Supplier Code</th>
                 <th style={thStyle}>Description</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Unit Price (RM)</th>
@@ -1096,112 +1152,148 @@ function ModularAssignSupplierDialog({
             <tbody>
               {draftRows.length === 0 && (
                 <tr><td colSpan={7} style={{ ...tdStyle, color: 'var(--fg-muted)', textAlign: 'center' }}>
-                  {loading ? 'Loading…' : 'No Models in the selection have any SKUs to map.'}
+                  {loading
+                    ? 'Loading…'
+                    : supplierIds.length === 0
+                      ? 'Pick at least one supplier above to see the (Model × Supplier) rows.'
+                      : 'No Models in the selection have any SKUs to map.'}
                 </td></tr>
               )}
-              {draftRows.map((d) => {
-                const isOpen = expanded.has(d.modelId);
+              {modelOrder.map((modelId) => {
+                // PR — Commander 2026-05-27: render a small per-Model
+                // sub-header so the (Model × Supplier) rows underneath are
+                // visually grouped — "Pantti — 3 suppliers".
+                const rowsForModel = draftRows.filter((d) => d.modelId === modelId);
+                if (rowsForModel.length === 0) return null;
+                const head = rowsForModel[0]!;
                 return (
-                  <Fragment key={d.modelId}>
-                    <tr style={{ borderBottom: '1px solid var(--line)' }}>
-                      <td style={tdStyle}>
-                        <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{d.modelCode}</div>
-                        <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>{d.modelName}</div>
-                        <button
-                          type="button"
-                          onClick={() => toggleExpanded(d.modelId)}
-                          disabled={d.skus.length === 0}
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            padding: 0,
-                            marginTop: 2,
-                            fontSize: 'var(--fs-12)',
-                            cursor: d.skus.length === 0 ? 'default' : 'pointer',
-                            color: isOpen ? 'var(--c-burnt)' : 'var(--fg-muted)',
-                            textDecoration: 'underline',
-                            textUnderlineOffset: 2,
-                          }}
-                          title={isOpen ? 'Hide SKU list' : 'Show SKU list'}
-                        >
-                          {isOpen ? '▾' : '▸'} {d.skus.length} SKU{d.skus.length === 1 ? '' : 's'} will be mapped
-                        </button>
-                      </td>
-                      <td style={tdStyle}>
-                        <input
-                          value={d.supplierCode}
-                          onChange={(e) => setDraft(d.modelId, { supplierCode: e.target.value })}
-                          placeholder="Their code for the whole Model"
-                          style={inputStyle}
-                        />
-                      </td>
-                      <td style={tdStyle}>
-                        <input
-                          value={d.description}
-                          onChange={(e) => setDraft(d.modelId, { description: e.target.value })}
-                          placeholder='e.g. "Foam B grade, 6-week lead"'
-                          style={{ ...inputStyle, minWidth: 180 }}
-                        />
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={(d.unitPriceCenti / 100).toFixed(2)}
-                          onChange={(e) => setDraft(d.modelId, {
-                            unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
-                          })}
-                          style={{ ...inputStyle, width: 100, textAlign: 'right' }}
-                        />
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          value={d.leadTimeDays}
-                          onChange={(e) => setDraft(d.modelId, { leadTimeDays: Number(e.target.value) || 0 })}
-                          style={{ ...inputStyle, width: 60, textAlign: 'right' }}
-                        />
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          value={d.moq}
-                          onChange={(e) => setDraft(d.modelId, { moq: Number(e.target.value) || 0 })}
-                          style={{ ...inputStyle, width: 60, textAlign: 'right' }}
-                        />
-                      </td>
-                      <td style={tdStyle}>
-                        <input
-                          type="checkbox"
-                          checked={d.isMainSupplier}
-                          onChange={(e) => setDraft(d.modelId, { isMainSupplier: e.target.checked })}
-                        />
+                  <Fragment key={modelId}>
+                    <tr style={{ background: 'var(--c-cream)', borderBottom: '1px solid var(--line)' }}>
+                      <td colSpan={7} style={{
+                        padding: '6px 12px',
+                        fontSize: 'var(--fs-12)',
+                        color: 'var(--fg-muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-ink)', fontWeight: 600 }}>
+                          {head.modelCode}
+                        </span>
+                        {' · '}
+                        <span style={{ color: 'var(--c-ink)' }}>{head.modelName}</span>
+                        {' — '}
+                        {rowsForModel.length} supplier{rowsForModel.length === 1 ? '' : 's'}
+                        {' · '}
+                        {head.skus.length} SKU{head.skus.length === 1 ? '' : 's'} each
                       </td>
                     </tr>
-                    {isOpen && d.skus.length > 0 && (
-                      <tr style={{ background: 'var(--c-cream)' }}>
-                        <td colSpan={7} style={{
-                          padding: 'var(--space-2) var(--space-3)',
-                          borderBottom: '1px solid var(--line)',
-                          borderTop: '1px dashed var(--line)',
-                        }}>
-                          {/* PR — Commander 2026-05-27: preview shows COMPUTED
-                              supplier_sku next to each our-SKU so commander sees
-                              "BOOQIT-1A(LHF) → 5539-1A(LHF)" before Save. */}
-                          <SkuPreviewStrip
-                            toMap={d.skus.map((s) => s.code)}
-                            alreadyBound={[]}
-                            previewMap={
-                              d.supplierCode.trim()
-                                ? Object.fromEntries(
-                                    d.skus.map((s) => [s.code, composeSupplierSku(d.supplierCode, s)]),
-                                  )
-                                : undefined
-                            }
-                          />
-                        </td>
-                      </tr>
-                    )}
+                    {rowsForModel.map((d) => {
+                      const isOpen = expanded.has(d.key);
+                      return (
+                        <Fragment key={d.key}>
+                          <tr style={{ borderBottom: '1px solid var(--line)' }}>
+                            <td style={tdStyle}>
+                              <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{d.supplierCode_s}</div>
+                              <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>{d.supplierName}</div>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpanded(d.key)}
+                                disabled={d.skus.length === 0}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  padding: 0,
+                                  marginTop: 2,
+                                  fontSize: 'var(--fs-12)',
+                                  cursor: d.skus.length === 0 ? 'default' : 'pointer',
+                                  color: isOpen ? 'var(--c-burnt)' : 'var(--fg-muted)',
+                                  textDecoration: 'underline',
+                                  textUnderlineOffset: 2,
+                                }}
+                                title={isOpen ? 'Hide SKU list' : 'Show SKU list'}
+                              >
+                                {isOpen ? '▾' : '▸'} {d.skus.length} SKU{d.skus.length === 1 ? '' : 's'} will be mapped
+                              </button>
+                            </td>
+                            <td style={tdStyle}>
+                              <input
+                                value={d.supplierCode}
+                                onChange={(e) => setDraft(d.key, { supplierCode: e.target.value })}
+                                placeholder="Their code for this Model"
+                                style={inputStyle}
+                              />
+                            </td>
+                            <td style={tdStyle}>
+                              <input
+                                value={d.description}
+                                onChange={(e) => setDraft(d.key, { description: e.target.value })}
+                                placeholder='e.g. "Foam B grade, 6-week lead"'
+                                style={{ ...inputStyle, minWidth: 180 }}
+                              />
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: 'right' }}>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={(d.unitPriceCenti / 100).toFixed(2)}
+                                onChange={(e) => setDraft(d.key, {
+                                  unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
+                                })}
+                                style={{ ...inputStyle, width: 100, textAlign: 'right' }}
+                              />
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: 'right' }}>
+                              <input
+                                type="number"
+                                value={d.leadTimeDays}
+                                onChange={(e) => setDraft(d.key, { leadTimeDays: Number(e.target.value) || 0 })}
+                                style={{ ...inputStyle, width: 60, textAlign: 'right' }}
+                              />
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: 'right' }}>
+                              <input
+                                type="number"
+                                value={d.moq}
+                                onChange={(e) => setDraft(d.key, { moq: Number(e.target.value) || 0 })}
+                                style={{ ...inputStyle, width: 60, textAlign: 'right' }}
+                              />
+                            </td>
+                            <td style={tdStyle}>
+                              <input
+                                type="checkbox"
+                                checked={d.isMainSupplier}
+                                onChange={(e) => setDraft(d.key, { isMainSupplier: e.target.checked })}
+                              />
+                            </td>
+                          </tr>
+                          {isOpen && d.skus.length > 0 && (
+                            <tr style={{ background: 'var(--c-cream)' }}>
+                              <td colSpan={7} style={{
+                                padding: 'var(--space-2) var(--space-3)',
+                                borderBottom: '1px solid var(--line)',
+                                borderTop: '1px dashed var(--line)',
+                              }}>
+                                {/* PR — preview uses THIS row's typed base code +
+                                    composeSupplierSku() so commander sees the
+                                    "BOOQIT-1A(LHF) → 5539-1A(LHF)" before Save,
+                                    distinct per (Model × Supplier) row. */}
+                                <SkuPreviewStrip
+                                  toMap={d.skus.map((s) => s.code)}
+                                  alreadyBound={[]}
+                                  previewMap={
+                                    d.supplierCode.trim()
+                                      ? Object.fromEntries(
+                                          d.skus.map((s) => [s.code, composeSupplierSku(d.supplierCode, s)]),
+                                        )
+                                      : undefined
+                                  }
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </Fragment>
                 );
               })}
@@ -1216,8 +1308,11 @@ function ModularAssignSupplierDialog({
         <footer className={styles.modalFooter} style={{ justifyContent: 'space-between' }}>
           <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-12)' }}>
             {totalSkus > 0
-              ? `Will POST ${totalSkus} binding${totalSkus === 1 ? '' : 's'} (server skips ones already bound).`
-              : 'Type a supplier code on at least one Model to enable Save.'}
+              ? `Will POST ${totalSkus} binding${totalSkus === 1 ? '' : 's'} across ` +
+                `${new Set(draftRows.filter((d) => d.supplierCode.trim()).map((d) => d.supplierId)).size} supplier${
+                  new Set(draftRows.filter((d) => d.supplierCode.trim()).map((d) => d.supplierId)).size === 1 ? '' : 's'} ` +
+                `(server skips already-bound rows).`
+              : 'Type a supplier code on at least one (Model × Supplier) row to enable Save.'}
           </span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
             <Button variant="ghost" size="md" type="button" onClick={onClose}>Cancel</Button>
@@ -1225,9 +1320,9 @@ function ModularAssignSupplierDialog({
               variant="primary"
               size="md"
               type="submit"
-              disabled={batchMut.isPending || totalSkus === 0 || !supplierId}
+              disabled={saving || batchMut.isPending || totalSkus === 0 || supplierIds.length === 0}
             >
-              {batchMut.isPending ? 'Saving…' : `Save ${totalSkus} binding${totalSkus === 1 ? '' : 's'}`}
+              {(saving || batchMut.isPending) ? 'Saving…' : `Save ${totalSkus} binding${totalSkus === 1 ? '' : 's'}`}
             </Button>
           </span>
         </footer>
