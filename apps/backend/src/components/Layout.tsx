@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router';
-import { useAuth } from '../lib/auth';
+import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { ToastProvider } from './Toast';
@@ -58,6 +58,12 @@ export const Layout = () => {
   }
 
   if (!staff) return <Navigate to="/no-access" replace />;
+
+  /* Migration 0086 — POS-only roles (sales / sales_executive / outlet_manager)
+     are blocked from the Backend portal at the route guard level. */
+  if (POS_ONLY_ROLES.has(staff.role)) {
+    return <Navigate to="/no-access" replace />;
+  }
 
   const meta: RouteMeta = ROUTE_META[location.pathname] ?? { title: 'Backend', sub: '' };
 

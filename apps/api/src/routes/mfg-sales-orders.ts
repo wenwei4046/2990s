@@ -147,6 +147,24 @@ mfgSalesOrders.post('/', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
   const docNo = await nextDocNo(sb);
 
+  /* Migration 0086 — auto-stamp venue_id from the caller's staff.venue_id
+     when they're a POS-side role (sales / sales_executive / outlet_manager).
+     Backend-only roles leave it NULL. The client may pass an explicit
+     venueId in the body to override (e.g. coordinator entering an SO on
+     behalf of a specific venue). */
+  let venueIdToStamp: string | null = (body.venueId as string | null | undefined) ?? null;
+  if (!venueIdToStamp) {
+    const { data: callerStaff } = await sb
+      .from('staff')
+      .select('role, venue_id')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (callerStaff && callerStaff.venue_id &&
+        ['sales', 'sales_executive', 'outlet_manager'].includes(callerStaff.role)) {
+      venueIdToStamp = callerStaff.venue_id as string;
+    }
+  }
+
   // Compute totals + category breakdown
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
   // Task #114 — also accumulate per-category COST so the four cost columns
@@ -293,6 +311,8 @@ mfgSalesOrders.post('/', async (c) => {
     ref: (body.ref as string) ?? null,
     po_doc_no: (body.poDocNo as string) ?? null,
     venue: (body.venue as string) ?? null,
+    /* Migration 0086 — venue master FK (separate from legacy `venue` text). */
+    venue_id: venueIdToStamp,
     address1: (body.address1 as string) ?? null,
     address2: (body.address2 as string) ?? null,
     address3: (body.address3 as string) ?? null,

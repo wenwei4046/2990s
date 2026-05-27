@@ -16,12 +16,17 @@
 //   - Direct URL /mfg-sales-orders/maintenance
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight, MapPin } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
 import { useToast } from '../components/Toast';
+/* Migration 0086 — Venues CRUD section folded into SO Maintenance. */
+import {
+  useVenues, useCreateVenue, useUpdateVenue, useDeactivateVenue,
+  type VenueRow,
+} from '../lib/venues-queries';
 import {
   useStateWarehouseMappings,
   useUpsertStateWarehouseMapping,
@@ -313,6 +318,12 @@ const MaintenanceBody = ({ canEdit }: { canEdit: boolean }) => {
 
   return (
     <>
+      {/* ── Venues CRUD (Migration 0086) ───────────────────────────────
+          Parallel-to-warehouses master list. Sales-side staff get a
+          venue_id; every POS-created SO is stamped with the salesperson's
+          venue for venue-level reporting. */}
+      <VenuesSection canEdit={canEdit} />
+
       {/* ── Unified Geo + Warehouse drill-down (Commander 2026-05-27) ──
           Commander folded the separate State→Warehouse table and the Geo
           registry into ONE table: "添加多一个 column 给我选择 country 然后
@@ -877,6 +888,16 @@ const DROPDOWN_CARDS: Array<{ category: SoDropdownCategory; title: string; help:
               'installment) / 3 / 6 / 12 / 24 / 36 months. Stored as the term ' +
               'in months on the payment row.',
   },
+  /* Commander 2026-05-27: Venue list — was free-text, now picklist. */
+  {
+    category: 'venue',
+    title:    'Venue',
+    help:     'Shown in the Order Info card on SO Detail / New SO. ' +
+              'Typical entries: roadshow / exhibition venues like ' +
+              'PENANG WATERFRONT CC, PISA SPICE ARENA, SUNWAY PYRAMID CC. ' +
+              'Toggle Active off to hide a venue from new SOs without ' +
+              'breaking SOs that already reference it.',
+  },
 ];
 
 const DropdownsSection = ({ canEdit }: { canEdit: boolean }) => {
@@ -1170,3 +1191,202 @@ const DropdownCategoryCard = ({
   );
 };
 
+/* ════════════════════════════════════════════════════════════════════════
+   VenuesSection — Migration 0086 venues CRUD, lives above the Geo drill.
+   Code/Name/Address/Active pattern (commander spec). Soft-delete only;
+   historical SO.venue_id keeps resolving when the venue is reactivated.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const VenuesSection = ({ canEdit }: { canEdit: boolean }) => {
+  const venues = useVenues({ includeInactive: true });
+  const create = useCreateVenue();
+  const update = useUpdateVenue();
+  const deactivate = useDeactivateVenue();
+  const toast = useToast();
+
+  const [newName, setNewName] = useState('');
+  const [newAddress, setNewAddress] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', address: '', active: true });
+
+  const startEdit = (v: VenueRow) => {
+    setEditingId(v.id);
+    setEditForm({ name: v.name, address: v.address ?? '', active: v.active });
+  };
+
+  const saveEdit = () => {
+    if (!editingId) return;
+    if (!editForm.name.trim()) { toast.error('Name required.'); return; }
+    update.mutate(
+      { id: editingId, name: editForm.name.trim(), address: editForm.address.trim() || null, active: editForm.active },
+      {
+        onSuccess: () => { toast.success('Venue updated'); setEditingId(null); },
+        onError: (e) => toast.error(`Update failed: ${(e as Error).message}`),
+      },
+    );
+  };
+
+  const addVenue = () => {
+    if (!newName.trim()) { toast.error('Name required.'); return; }
+    create.mutate(
+      { name: newName.trim(), address: newAddress.trim() || null },
+      {
+        onSuccess: () => { toast.success('Venue added'); setNewName(''); setNewAddress(''); },
+        onError: (e) => toast.error(`Create failed: ${(e as Error).message}`),
+      },
+    );
+  };
+
+  const removeVenue = (v: VenueRow) => {
+    if (!confirm(`Deactivate venue "${v.name}"? Existing SOs that reference it are kept; the venue just hides from pickers.`)) return;
+    deactivate.mutate(v.id, {
+      onSuccess: () => toast.success(`${v.name} deactivated`),
+      onError: (e) => toast.error(`Deactivate failed: ${(e as Error).message}`),
+    });
+  };
+
+  return (
+    <section style={{ marginBottom: 'var(--space-6)' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
+        <MapPin size={20} strokeWidth={1.75} />
+        <h2 style={{ margin: 0, fontFamily: 'var(--font-title)', fontSize: 'var(--fs-20)', fontWeight: 700 }}>
+          Venues
+        </h2>
+        <span style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--fg-muted)' }}>
+          ({venues.data?.length ?? 0})
+        </span>
+      </header>
+      <p style={{
+        fontSize: 'var(--fs-13)', color: 'var(--fg-muted)',
+        marginBottom: 'var(--space-3)',
+      }}>
+        Where the sales force operates from. Sales executives / outlet managers
+        sign in to POS scoped to a venue; every POS-created SO carries the venue
+        for reporting.
+      </p>
+
+      <div style={{
+        background: 'var(--c-paper)', border: '1px solid var(--line)',
+        borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-2)', overflow: 'hidden',
+      }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Name</th>
+              <th style={thStyle}>Address</th>
+              <th style={thStyle}>Status</th>
+              {canEdit && <th style={thStyle} />}
+            </tr>
+          </thead>
+          <tbody>
+            {venues.isLoading && (
+              <tr><td colSpan={4} style={emptyStyle}>Loading…</td></tr>
+            )}
+            {!venues.isLoading && (venues.data ?? []).length === 0 && (
+              <tr><td colSpan={4} style={emptyStyle}>No venues yet — add one below.</td></tr>
+            )}
+            {(venues.data ?? []).map((v) => {
+              const isEditing = editingId === v.id;
+              return (
+                <tr key={v.id} style={{ borderTop: '1px solid var(--line)' }}>
+                  <td style={tdStyle}>
+                    {isEditing ? (
+                      <input value={editForm.name}
+                        onChange={(e) => setEditForm((s) => ({ ...s, name: e.target.value }))}
+                        style={inputStyle} />
+                    ) : (
+                      <strong style={{ color: 'var(--c-ink)' }}>{v.name}</strong>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    {isEditing ? (
+                      <input value={editForm.address}
+                        onChange={(e) => setEditForm((s) => ({ ...s, address: e.target.value }))}
+                        style={inputStyle} placeholder="Optional address" />
+                    ) : (v.address ?? '—')}
+                  </td>
+                  <td style={tdStyle}>
+                    {isEditing ? (
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <input type="checkbox" checked={editForm.active}
+                          onChange={(e) => setEditForm((s) => ({ ...s, active: e.target.checked }))} />
+                        <span>{editForm.active ? 'Active' : 'Inactive'}</span>
+                      </label>
+                    ) : (
+                      <span style={{
+                        display: 'inline-block', padding: '3px 10px',
+                        borderRadius: 999, fontSize: 'var(--fs-11)', fontWeight: 600,
+                        letterSpacing: '0.08em', textTransform: 'uppercase',
+                        background: v.active ? 'rgba(47, 93, 79, 0.12)' : 'rgba(34, 31, 32, 0.06)',
+                        color: v.active ? 'var(--c-secondary-a)' : 'var(--fg-muted)',
+                      }}>
+                        {v.active ? 'Active' : 'Inactive'}
+                      </span>
+                    )}
+                  </td>
+                  {canEdit && (
+                    <td style={{ ...tdStyle, textAlign: 'right' }}>
+                      {isEditing ? (
+                        <>
+                          <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>Cancel</Button>
+                          <Button variant="primary" size="sm" onClick={saveEdit} disabled={update.isPending}>Save</Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button variant="ghost" size="sm" onClick={() => startEdit(v)}>Edit</Button>
+                          {v.active && (
+                            <Button variant="ghost" size="sm" onClick={() => removeVenue(v)}>
+                              <Trash2 size={14} strokeWidth={1.75} />
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {canEdit && (
+          <div style={{
+            display: 'flex', gap: 'var(--space-3)', alignItems: 'center',
+            padding: 'var(--space-3) var(--space-4)',
+            borderTop: '1px solid var(--line)', background: 'var(--c-cream)',
+          }}>
+            <input value={newName} placeholder="New venue name"
+              onChange={(e) => setNewName(e.target.value)}
+              style={{ ...inputStyle, flex: '0 0 220px' }} />
+            <input value={newAddress} placeholder="Address (optional)"
+              onChange={(e) => setNewAddress(e.target.value)}
+              style={{ ...inputStyle, flex: 1 }} />
+            <Button variant="primary" size="sm" onClick={addVenue} disabled={create.isPending}>
+              <Plus size={14} strokeWidth={1.75} />
+              <span>{create.isPending ? 'Adding…' : 'Add venue'}</span>
+            </Button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+};
+
+const thStyle: CSSProperties = {
+  fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
+  letterSpacing: '0.18em', textTransform: 'uppercase',
+  color: 'var(--fg-muted)', textAlign: 'left',
+  padding: 'var(--space-3) var(--space-4)', borderBottom: '1px solid var(--line)',
+};
+const tdStyle: CSSProperties = {
+  padding: 'var(--space-3) var(--space-4)',
+  fontSize: 'var(--fs-14)', color: 'var(--c-ink)',
+};
+const emptyStyle: CSSProperties = {
+  ...tdStyle, textAlign: 'center', color: 'var(--fg-muted)', padding: 'var(--space-5)',
+};
+const inputStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-14)',
+  background: 'var(--c-paper)', border: '1px solid var(--line)',
+  borderRadius: 'var(--radius-md)', padding: 'var(--space-2) var(--space-3)',
+  color: 'var(--c-ink)', outline: 'none',
+};

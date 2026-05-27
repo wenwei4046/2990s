@@ -53,6 +53,8 @@ const StockTakeDetail = lazy(() => import('./pages/StockTakeDetail').then(m => (
 const Drivers = lazy(() => import('./pages/Drivers').then(m => ({ default: m.Drivers })));
 const Accounting = lazy(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
 const Warehouses = lazy(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
+// Migration 0086 — Users management page (admin / sales_director / coordinator).
+const Users = lazy(() => import('./pages/Users').then(m => ({ default: m.Users })));
 const PurchaseOrderDetail = lazy(() => import('./pages/PurchaseOrderDetail').then(m => ({ default: m.PurchaseOrderDetail })));
 const PurchaseOrderNew = lazy(() => import('./pages/PurchaseOrderNew').then(m => ({ default: m.PurchaseOrderNew })));
 const PurchaseOrderFromSo = lazy(() => import('./pages/PurchaseOrderFromSo').then(m => ({ default: m.PurchaseOrderFromSo })));
@@ -152,6 +154,8 @@ export const router = createBrowserRouter([
       { path: 'addons', element: <Addons /> },
       { path: 'customers', element: <Customers /> },
       { path: 'settings', element: <Settings /> },
+      // Migration 0086 — Users management (invite + edit + deactivate).
+      { path: 'users', element: <Users /> },
     ],
   },
   { path: '*', element: <Navigate to="/dashboard" replace /> },

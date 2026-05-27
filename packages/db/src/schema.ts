@@ -21,11 +21,17 @@ import { sql } from 'drizzle-orm';
 /* ─────────────────────────── Enums ──────────────────────────────────── */
 
 export const staffRole = pgEnum('staff_role', [
-  'sales',          // POS users — PIN login on shared device
-  'showroom_lead',  // Senior sales, can override staff
-  'coordinator',    // Backend portal — order coordinator (Mei Lin)
-  'finance',        // Slip reconciliation, payment approval
-  'admin',          // Owner — full SKU + pricing edit
+  'sales',            // POS users — PIN login on shared device
+  'showroom_lead',    // Senior sales, can override staff
+  'coordinator',      // Backend portal — order coordinator (Mei Lin)
+  'finance',          // Slip reconciliation, payment approval
+  'admin',            // Owner — full SKU + pricing edit
+  /* Migration 0086 (2026-05-27) — sales-force expansion. Sales executives
+     and outlet managers are POS-only (blocked from Backend). Sales
+     directors get POS + Backend access and operate across all venues. */
+  'sales_executive',
+  'outlet_manager',
+  'sales_director',
 ]);
 
 export const compGroup = pgEnum('comp_group', [
@@ -116,6 +122,20 @@ export const deliveryFeeConfig = pgTable('delivery_fee_config', {
   updatedBy:                uuid('updated_by'),                        // references staff(id)
 });
 
+/* ─────────────────────────── Venues ─────────────────────────────────── */
+// Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
+// where the sales force (sales / sales_executive / outlet_manager) actually
+// operates from. Sales staff get a venue_id; every SO created via POS is
+// stamped with the salesperson's venue_id for venue-level reporting.
+
+export const venues = pgTable('venues', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  name:       text('name').notNull(),
+  address:    text('address'),
+  active:     boolean('active').notNull().default(true),
+  createdAt:  timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /* ─────────────────────────── Showrooms ──────────────────────────────── */
 // Every order is placed AT a specific showroom. Staff have a primary
 // affiliation. Coordinators with showroom_id = NULL oversee all showrooms.
@@ -141,6 +161,9 @@ export const staff = pgTable('staff', {
   name:        text('name').notNull(),
   role:        staffRole('role').notNull(),
   showroomId:  uuid('showroom_id').references(() => showrooms.id),  // NULL = oversees all
+  // Migration 0086 — venue the staff member operates from (sales-side
+  // roles). NULL for admin / coordinator / finance / sales_director.
+  venueId:     uuid('venue_id').references(() => venues.id, { onDelete: 'set null' }),
   pinHash:     text('pin_hash'),                  // bcrypt; only sales need this
   email:       text('email').unique(),
   phone:       text('phone'),
@@ -1038,6 +1061,10 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   ref:               text('ref'),
   poDocNo:           text('po_doc_no'),                            // customer's PO
   venue:             text('venue'),
+  // Migration 0086 — FK to the venues master. Stamped from the salesperson's
+  // staff.venue_id on POST /mfg-sales-orders when the caller is a POS-side
+  // role. Separate from the legacy `venue` text column.
+  venueId:           uuid('venue_id').references(() => venues.id, { onDelete: 'set null' }),
 
   // Address fields (HOUZS pattern — 4 address lines + phone)
   address1:          text('address1'),

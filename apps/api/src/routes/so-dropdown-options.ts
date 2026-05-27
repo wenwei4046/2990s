@@ -40,6 +40,10 @@ const CATEGORIES = [
   'payment_merchant',
   'online_type',
   'installment_plan',
+  // Commander 2026-05-27: SO Venue list (Houzs has ~30 venues like
+  // 'PENANG WATERFRONT CONVENTION CENTRE', 'PISA SPICE ARENA').
+  // Previously free-text on SO; now picklist-driven for consistency.
+  'venue',
 ] as const;
 type Category = (typeof CATEGORIES)[number];
 const categoryEnum = z.enum(CATEGORIES);
@@ -118,6 +122,7 @@ soDropdownOptions.get('/', async (c) => {
     payment_merchant: [],
     online_type:      [],
     installment_plan: [],
+    venue:            [],
   };
   for (const r of (data ?? []) as DbRow[]) {
     if ((CATEGORIES as readonly string[]).includes(r.category)) {
