@@ -53,14 +53,29 @@ export type SoLineDraft = {
   variants:       Record<string, unknown>;
   remark:         string;
   overriddenKeys?: string[];
+  /* PR-E — Per-item delivery date + cascade override flag.
+     - lineDeliveryDate: string | null — ISO date for THIS line's expected
+       delivery. Inherits from SO header.customer_delivery_date by default
+       (parent seeds this when constructing a fresh draft).
+     - lineDeliveryDateOverridden: boolean — once the user edits the field
+       in this card, this flips to true so the server-side cascade
+       (PATCH /mfg-sales-orders/:docNo) stops re-stamping this line when
+       the header date changes. Same master-follower contract as variants. */
+  lineDeliveryDate?:           string | null;
+  lineDeliveryDateOverridden?: boolean;
 };
 
 /** Factory for a fresh empty SO line draft. Used by the parent page to
- *  seed the initial card + on every "+ Add another item" click. */
+ *  seed the initial card + on every "+ Add another item" click.
+ *  PR-E — Per-item delivery date starts null + non-overridden; the parent
+ *  page is expected to immediately patch in the SO header's
+ *  customer_delivery_date so the card displays a default. */
 export const emptySoLine = (): SoLineDraft => ({
   itemCode: '', itemGroup: 'others', description: '', uom: 'UNIT',
   qty: 1, unitPriceCenti: 0, discountCenti: 0, unitCostCenti: 0,
   variants: {}, remark: '',
+  lineDeliveryDate: null,
+  lineDeliveryDateOverridden: false,
 });
 
 const CATEGORY_BADGES: Record<string, { bg: string; fg: string; label: string }> = {
@@ -466,8 +481,14 @@ export const SoLineCard = ({
         </div>
       )}
 
-      {/* ── Row 3: pricing inputs + inline breakdown + notes ─────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '80px 140px 140px 1fr', gap: 'var(--space-2)', alignItems: 'end' }}>
+      {/* ── Row 3: pricing inputs + delivery date + notes ─────────────
+          PR-E — Delivery Date sits between Discount and Line Notes.
+          Inherits from the SO header's customer_delivery_date until
+          the user types into it; once edited, the line is flagged as
+          overridden so the header-date cascade leaves it alone (same
+          master-follower pattern as the variants cascade). The "· auto"
+          hint shows when the value is currently the cascaded default. */}
+      <div style={{ display: 'grid', gridTemplateColumns: '80px 130px 130px 130px 1fr', gap: 'var(--space-2)', alignItems: 'end' }}>
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Qty</span>
           <input
@@ -494,6 +515,23 @@ export const SoLineCard = ({
             type="number" step="0.01" className={styles.fieldInput}
             value={(draft.discountCenti / 100).toFixed(2)}
             onChange={(e) => onChange({ discountCenti: Math.round(Number(e.target.value) * 100) || 0 })}
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>
+            Delivery Date
+            {!draft.lineDeliveryDateOverridden && draft.lineDeliveryDate && (
+              <span style={{ marginLeft: 4, color: 'var(--c-orange)' }}>· auto</span>
+            )}
+          </span>
+          <input
+            type="date"
+            className={styles.fieldInput}
+            value={draft.lineDeliveryDate ?? ''}
+            onChange={(e) => onChange({
+              lineDeliveryDate: e.target.value || null,
+              lineDeliveryDateOverridden: true,
+            })}
           />
         </label>
         <label className={styles.field}>

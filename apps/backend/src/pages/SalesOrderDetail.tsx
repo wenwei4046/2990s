@@ -167,6 +167,13 @@ type SoItem = {
   variants: Record<string, unknown> | null;
   remark: string | null;
   cancelled: boolean;
+  /* PR-E — Per-item delivery date with cascade override flag.
+     line_delivery_date null + overridden=false → display falls back to
+     header.customer_delivery_date. Once the user types in the SoLineCard
+     date input, overridden=true and the line keeps its own value even
+     when the header date changes. */
+  line_delivery_date: string | null;
+  line_delivery_date_overridden: boolean;
 };
 
 export const SalesOrderDetail = () => {
@@ -343,12 +350,26 @@ export const SalesOrderDetail = () => {
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
+                {/* PR-E — Per-line delivery date. Falls back to the SO
+                    header date when the line hasn't been overridden. */}
+                <th className={styles.tableRight}>Delivery</th>
                 <th className={styles.tableRight}>Total</th>
                 <th className={styles.tableRight}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
+              {items.map((it) => {
+                /* PR-E — Display fallback: a line whose own date is null
+                   AND that hasn't been overridden displays the SO header's
+                   customer_delivery_date with a small "· auto" marker. The
+                   API cascade keeps line_delivery_date populated for
+                   non-overridden lines after each header save, so this
+                   fallback mostly serves rows from before migration 0074
+                   landed. */
+                const displayDate = it.line_delivery_date
+                  ?? (!it.line_delivery_date_overridden ? header.customer_delivery_date : null);
+                const isAuto = !it.line_delivery_date_overridden;
+                return (
                 <tr key={it.id}>
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
@@ -358,6 +379,16 @@ export const SalesOrderDetail = () => {
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
+                  <td className={styles.tableRight}>
+                    {displayDate ? (
+                      <span style={isAuto ? { color: 'var(--fg-muted)' } : undefined}>
+                        {displayDate}
+                        {isAuto && (
+                          <span style={{ marginLeft: 4, color: 'var(--c-orange)', fontSize: 'var(--fs-11)' }}>· auto</span>
+                        )}
+                      </span>
+                    ) : '—'}
+                  </td>
                   <td className={styles.priceCell}>{fmtRm(it.total_centi, header.currency)}</td>
                   <td>
                     <span className={styles.actionsCell}>
@@ -387,7 +418,8 @@ export const SalesOrderDetail = () => {
                     </span>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
