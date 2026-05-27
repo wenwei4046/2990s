@@ -1264,17 +1264,14 @@ const seedCompartmentMeta = (code: string): CompartmentMeta => {
   const norm = normalizeCompartmentCode(code);
   const mod  = SOFA_MODULE_BY_NORM_ID.get(norm);
   if (!mod) return {};
-  // 1B + 2B + CNR got bespoke SVG redesigns (commander 2026-05-27):
-  // - 1B/2B: POS PNGs didn't differentiate from 1A/2A; new SVG shows the
-  //   wider "Seat Bench Cushion" in place of a hard armrest.
-  // - CNR: new SVG shows the L-shaped backrest (two adjacent sides) +
-  //   "CORNER" label so commander sees it's the 90° connector, not a
-  //   chaise or console.
-  // Other modules still load POS-canonical PNGs.
-  const REDESIGNED_AS_SVG = new Set(['1B-LHF', '1B-RHF', '2B-LHF', '2B-RHF', 'CNR']);
-  const ext = REDESIGNED_AS_SVG.has(mod.id) ? 'svg' : 'png';
+  // Every sofa module now has a unified hand-drawn SVG plan view
+  // (commander 2026-05-27 "你没有统一怎么行呢"). The previous mix of POS PNGs
+  // + bespoke SVGs for 1B/2B/CNR was visually inconsistent at the size the
+  // Maintenance list renders them — all module + preset designs were
+  // redrawn to the same 3-tone flat style (cream body / medium-tan
+  // backrest / darkest-tan armrest, dashed seat seams, no labels).
   return {
-    imageKey:    `sofa-modules/${mod.id}.${ext}`,
+    imageKey:    `sofa-modules/${mod.id}.svg`,
     description: COMPARTMENT_DESCRIPTION_OVERRIDE[mod.id] ?? mod.label,
     // SOFA_MODULES carries no base price — POS reads pricing from
     // product_compartments per Model. Default to 0 here; commander can
