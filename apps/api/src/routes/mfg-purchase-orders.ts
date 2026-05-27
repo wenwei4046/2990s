@@ -794,3 +794,31 @@ mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
   if (!data) return c.json({ error: 'cannot_cancel', message: 'PO already received' }, 409);
   return c.json({ purchaseOrder: data });
 });
+
+// ── Delete ────────────────────────────────────────────────────────────
+// Hard-delete a PO + its line items. Only allowed when status is DRAFT or
+// CANCELLED — once SUBMITTED/PARTIALLY_RECEIVED/RECEIVED there are
+// downstream docs (GRN/PI) that reference it. Use Cancel instead for those.
+mfgPurchaseOrders.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+  // Status guard first — get current row.
+  const { data: cur, error: readErr } = await supabase
+    .from('purchase_orders')
+    .select('id, status, po_number')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return c.json({ error: 'read_failed', reason: readErr.message }, 500);
+  if (!cur)    return c.json({ error: 'not_found' }, 404);
+  const row = cur as { id: string; status: string; po_number: string };
+  if (row.status !== 'DRAFT' && row.status !== 'CANCELLED') {
+    return c.json({
+      error: 'cannot_delete',
+      message: `PO ${row.po_number} is ${row.status}. Only DRAFT or CANCELLED POs can be deleted. Use Cancel instead.`,
+    }, 409);
+  }
+  // Items cascade via FK ON DELETE CASCADE.
+  const { error: delErr } = await supabase.from('purchase_orders').delete().eq('id', id);
+  if (delErr) return c.json({ error: 'delete_failed', reason: delErr.message }, 500);
+  return c.json({ ok: true, deleted: row.po_number });
+});

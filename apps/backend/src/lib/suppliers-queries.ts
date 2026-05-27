@@ -573,6 +573,19 @@ export function useCancelPurchaseOrder() {
   });
 }
 
+/** Hard-delete PO. Only allowed when status is DRAFT or CANCELLED. */
+export function useDeletePurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ ok: true; deleted: string }>(
+        `/mfg-purchase-orders/${id}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+  });
+}
+
 /* ── Smart Buttons / Document linkage (Odoo-style fan-out) ───────────
    Each procurement-document detail page renders a row of pill buttons
    ("2 GRNs", "1 Invoice", "0 Returns") that point at child docs. The
