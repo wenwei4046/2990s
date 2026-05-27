@@ -6,6 +6,20 @@ import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 import { hashPin } from '../lib/bcrypt';
 
+/* 2026-05-27 — Unified invite flow. ALL roles now go through
+   `inviteUserByEmail` (magic link). The legacy PIN-on-shared-device path
+   for POS roles (sales / sales_executive / outlet_manager) was dropped per
+   commander: "不需要给 6digit pin 让他们自己 set". When the POS app ships
+   (Phase 2) it will use Supabase Auth like the Backend — each staff person
+   logs in with their own email + password.
+
+   The `staff.pin_hash` column is intentionally left in place (migration
+   0086) — no rows will populate it going forward, but dropping the column
+   is deferred to a later cleanup PR. The PATCH /staff/:id/pin endpoint
+   below is therefore unreachable in practice (no one is created as a
+   PIN-only user any more) but kept compiling so existing tests still pass
+   until that cleanup PR lands. */
+
 export const admin = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 admin.use('*', supabaseAuth);
@@ -18,10 +32,10 @@ const STAFF_ROLES = [
   'sales_executive', 'outlet_manager', 'sales_director',
 ] as const;
 
-/* POS-PIN roles take the createUser + bcrypt(pin) path (no magic link).
-   sales_executive and outlet_manager join the existing `sales` role
-   because they sign in to POS exactly the same way (shared device + PIN).
-   sales_director uses the standard invite path so they can reach Backend. */
+/* Roles that still hold a `pin_hash` column for the PATCH /pin endpoint
+   below — kept only so that endpoint's role guard still has something to
+   compare against. The invite flow itself no longer cares: every role now
+   takes the magic-link path. */
 const POS_PIN_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager']);
 
 /* Roles allowed to invite + update + deactivate other staff. coordinator
@@ -29,24 +43,20 @@ const POS_PIN_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manag
 const STAFF_WRITE_ROLES = new Set<string>(['admin', 'sales_director']);
 const STAFF_LIST_ROLES  = new Set<string>(['admin', 'sales_director', 'coordinator']);
 
+/* Email is REQUIRED for every invite — the magic link is the only sign-in
+   path. Venue is required for the POS-side roles only; admin / coordinator
+   / finance / sales_director are cross-venue. */
 const CreateStaffBodySchema = z.object({
   staffCode:  z.string().trim().min(1).max(16),
   name:       z.string().trim().min(1).max(80),
   role:       z.enum(STAFF_ROLES),
-  email:      z.string().trim().toLowerCase().email().optional(),
+  email:      z.string().trim().toLowerCase().email(),
   initials:   z.string().trim().min(1).max(4),
   color:      z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be 6-digit hex like #FF7733'),
   showroomId: z.string().uuid().nullable().optional(),
   venueId:    z.string().uuid().nullable().optional(),
   phone:      z.string().trim().min(1).nullable().optional(),
-  pin:        z.string().regex(/^\d{6}$/, 'pin must be 6 digits').optional(),
-}).refine(
-  (v) => !POS_PIN_ROLES.has(v.role) || v.pin !== undefined,
-  { message: 'pin_required_for_pos_role', path: ['pin'] },
-).refine(
-  (v) => POS_PIN_ROLES.has(v.role) || v.pin === undefined,
-  { message: 'pin_forbidden_for_backend_role', path: ['pin'] },
-);
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadStaffRole(c: any): Promise<string | null> {
@@ -92,51 +102,30 @@ admin.post('/staff', async (c) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // POS-PIN path (sales / sales_executive / outlet_manager):
-  //   createUser (no magic link) + bcrypt(pin) → pin_hash.
-  // Backend-invite path (showroom_lead / coordinator / finance / admin /
-  //   sales_director): inviteUserByEmail (magic link to backend portal).
-  const isPosPin = POS_PIN_ROLES.has(input.role);
-  const email = input.email ?? `${input.staffCode.toLowerCase()}+pos@2990s.local`;
-
-  let userId: string;
-  if (isPosPin) {
-    const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
-      email,
-      password: crypto.randomUUID(),
-      email_confirm: true,
-      user_metadata: { staff_code: input.staffCode, name: input.name, role: input.role },
-    });
-    if (createErr || !created?.user) {
-      return c.json({ error: 'auth_user_create_failed', detail: createErr?.message }, 422);
-    }
-    userId = created.user.id;
-  } else {
-    // PR #48 — invited user starts with `password_set: false` so the backend
-    // Layout auto-redirects them to /set-password on first sign-in (see
-    // apps/backend/src/components/Layout.tsx). `redirectTo` anchors the magic
-    // link to the production portal so the email link is not blank / not
-    // localhost when Supabase's Site URL defaults are wrong.
-    const portal = c.env.BACKEND_PORTAL_URL;
-    const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
-      email,
-      {
-        data: {
-          staff_code:   input.staffCode,
-          name:         input.name,
-          role:         input.role,
-          password_set: false,
-        },
-        ...(portal ? { redirectTo: `${portal}/set-password` } : {}),
+  // Unified invite path — every role, POS or Backend, gets a magic-link
+  // email. The invited user starts with `password_set: false` so the
+  // Backend Layout auto-redirects them to /set-password on first sign-in
+  // (see apps/backend/src/components/Layout.tsx). `redirectTo` anchors the
+  // magic link to the production portal so the email link is not blank /
+  // not localhost when Supabase's Site URL defaults are wrong.
+  const email = input.email;
+  const portal = c.env.BACKEND_PORTAL_URL;
+  const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
+    email,
+    {
+      data: {
+        staff_code:   input.staffCode,
+        name:         input.name,
+        role:         input.role,
+        password_set: false,
       },
-    );
-    if (inviteErr || !invited?.user) {
-      return c.json({ error: 'invite_failed', detail: inviteErr?.message ?? 'no user returned' }, 422);
-    }
-    userId = invited.user.id;
+      ...(portal ? { redirectTo: `${portal}/set-password` } : {}),
+    },
+  );
+  if (inviteErr || !invited?.user) {
+    return c.json({ error: 'invite_failed', detail: inviteErr?.message ?? 'no user returned' }, 422);
   }
-
-  const pinHash = isPosPin && input.pin ? await hashPin(input.pin) : null;
+  const userId = invited.user.id;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let newStaff: any = null;
@@ -160,7 +149,10 @@ admin.post('/staff', async (c) => {
         initials:     input.initials,
         color:        input.color,
         active:       true,
-        pin_hash:     pinHash,
+        /* pin_hash intentionally NOT set — unified invite flow drops the
+           PIN model entirely (commander 2026-05-27). Column still exists
+           from migration 0086; will be dropped in a follow-up cleanup PR. */
+        pin_hash:     null,
       })
       .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
       .maybeSingle();

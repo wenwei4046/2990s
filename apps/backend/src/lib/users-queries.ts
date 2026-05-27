@@ -1,10 +1,11 @@
 // ----------------------------------------------------------------------------
 // Users page hooks (migration 0085).
 //
-// Backed by /admin/staff in the API Worker. Uses the service-role-side
-// invite flow for non-POS roles, and a createUser + PIN flow for POS-PIN
-// roles (sales / sales_executive / outlet_manager). The Worker is the
-// only place the SUPABASE_SERVICE_ROLE_KEY ever lives.
+// Backed by /admin/staff in the API Worker. Every role takes the
+// service-role inviteUserByEmail path — the legacy createUser + PIN flow
+// for POS roles was dropped 2026-05-27 (commander: "不需要给 6digit pin
+// 让他们自己 set"). The Worker is the only place the
+// SUPABASE_SERVICE_ROLE_KEY ever lives.
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -56,13 +57,12 @@ export type InviteUserBody = {
   staffCode: string;
   name: string;
   role: StaffRole;
-  email?: string;
+  email: string;
   initials: string;
   color: string;
   showroomId?: string | null;
   venueId?: string | null;
   phone?: string | null;
-  pin?: string;
 };
 
 export type UpdateUserBody = {

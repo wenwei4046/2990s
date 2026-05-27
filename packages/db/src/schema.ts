@@ -21,7 +21,7 @@ import { sql } from 'drizzle-orm';
 /* ─────────────────────────── Enums ──────────────────────────────────── */
 
 export const staffRole = pgEnum('staff_role', [
-  'sales',            // POS users — PIN login on shared device
+  'sales',            // POS users — email + password via Supabase Auth, same as Backend (2026-05-27, unified invite flow)
   'showroom_lead',    // Senior sales, can override staff
   'coordinator',      // Backend portal — order coordinator (Mei Lin)
   'finance',          // Slip reconciliation, payment approval
