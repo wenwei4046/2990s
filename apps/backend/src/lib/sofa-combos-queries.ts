@@ -156,38 +156,6 @@ export function useDeleteSofaCombo() {
   });
 }
 
-// Lightweight customer list for the customer-scope dropdown. Reads
-// directly from Supabase (RLS gates it) — kept here because no shared
-// useCustomers hook existed at the time this module was added.
-export type CustomerLite = { id: string; name: string };
-
-export function useCustomersLite() {
-  return useQuery({
-    queryKey: ['customers-lite'],
-    queryFn: async (): Promise<CustomerLite[]> => {
-      const { data, error } = await supabase
-        .from('customers')
-        .select('id, name')
-        .order('name', { ascending: true });
-      if (error) throw new Error(error.message);
-      return (data ?? []) as CustomerLite[];
-    },
-    staleTime: 60_000,
-  });
-}
-
-export function useCopyCombosToCustomer() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: {
-      fromCustomerId: string | null;
-      toCustomerId: string;
-      baseModel?: string;
-    }) =>
-      authedFetch<{ copied: number }>('/sofa-combos/copy-to-customer', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sofa-combos'] }),
-  });
-}
+// Customer hooks removed 2026-05-28 — commander dropped customer scoping
+// for 2990's B2C model. The DB column stays but the UI no longer writes
+// to it; useCopyCombosToCustomer + useCustomersLite were used only here.
