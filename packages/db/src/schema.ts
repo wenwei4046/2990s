@@ -1181,6 +1181,18 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
   // more POs (cumulative). Remaining convertible = qty - po_qty_picked.
   poQtyPicked:       integer('po_qty_picked').notNull().default(0),
 
+  /* PR-E (migration 0074) — Per-item delivery date with master-follower
+     cascade. Commander 2026-05-27: each line carries its own delivery
+     date, defaulting to the SO header's customer_delivery_date but
+     editable per line. The `overridden` flag freezes a line against
+     header-date cascade: when the header's customer_delivery_date
+     changes, all lines with overridden=false get re-stamped server-side
+     (see PATCH /:docNo in apps/api/src/routes/mfg-sales-orders.ts); lines
+     with overridden=true keep their manual value. Same master-follower
+     pattern as the variants cascade in SoLineCard (PR #141 / #147). */
+  lineDeliveryDate:            date('line_delivery_date'),
+  lineDeliveryDateOverridden:  boolean('line_delivery_date_overridden').notNull().default(false),
+
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxDoc:       index('idx_mso_items_doc').on(t.docNo),
