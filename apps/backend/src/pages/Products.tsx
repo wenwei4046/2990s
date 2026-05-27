@@ -1236,12 +1236,25 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
 
   // ── 1-Seater Recliners ────────────────────────────────────────────
   // (P) = Power Recliner (electric) · (R) = Manual Recliner
-  '1A(P)-LHF': '1 seat + ONE arm (left) — Power Recliner (electric)',
-  '1A(P)-RHF': '1 seat + ONE arm (right) — Power Recliner (electric)',
-  '1A(R)-LHF': '1 seat + ONE arm (left) — Manual Recliner',
-  '1A(R)-RHF': '1 seat + ONE arm (right) — Manual Recliner',
-  '1NA(P)':    '1 seat, NO arms — Power Recliner (electric)',
-  '1NA(R)':    '1 seat, NO arms — Manual Recliner',
+  // Commander pool stores these as double-parens (e.g. 1A(P)(LHF)); we
+  // also accept the dash-collapsed and single-parens forms.
+  '1A(P)(LHF)': '1 seat + ONE arm (left) — Power Recliner (electric)',
+  '1A(P)(RHF)': '1 seat + ONE arm (right) — Power Recliner (electric)',
+  '1A(R)(LHF)': '1 seat + ONE arm (left) — Manual Recliner',
+  '1A(R)(RHF)': '1 seat + ONE arm (right) — Manual Recliner',
+  '1A(P)-LHF':  '1 seat + ONE arm (left) — Power Recliner (electric)',
+  '1A(P)-RHF':  '1 seat + ONE arm (right) — Power Recliner (electric)',
+  '1A(R)-LHF':  '1 seat + ONE arm (left) — Manual Recliner',
+  '1A(R)-RHF':  '1 seat + ONE arm (right) — Manual Recliner',
+  '1A-P-LHF':   '1 seat + ONE arm (left) — Power Recliner (electric)',
+  '1A-P-RHF':   '1 seat + ONE arm (right) — Power Recliner (electric)',
+  '1A-R-LHF':   '1 seat + ONE arm (left) — Manual Recliner',
+  '1A-R-RHF':   '1 seat + ONE arm (right) — Manual Recliner',
+  '1NA(P)':     '1 seat, NO arms — Power Recliner (electric)',
+  '1NA(R)':     '1 seat, NO arms — Manual Recliner',
+  '1NA-P':      '1 seat, NO arms — Power Recliner (electric)',
+  '1NA-R':      '1 seat, NO arms — Manual Recliner',
+  Console:      'Console — wood divider/storage between two seats',
 
   // ── 2-Seaters ──────────────────────────────────────────────────────
   '2S':     '2 seats, arms on BOTH sides',
@@ -1257,27 +1270,62 @@ const COMPARTMENT_DESCRIPTION_OVERRIDE: Record<string, string> = {
   STOOL:   'Ottoman / stool',
 };
 
+// Extra modules NOT in SOFA_MODULES (commander pool includes recliner
+// variants + a Console alias that the POS shared lib doesn't model
+// directly). Hand-mapped here so the Maintenance UI gets full coverage.
+// Keys are the NORMALIZED code (parens collapsed to dashes); the value
+// is the SVG filename stem under apps/backend/public/sofa-modules/.
+const EXTRA_MODULE_IMAGE_BY_NORM: Record<string, string> = {
+  '1A-P-LHF': '1A-P-LHF',
+  '1A-P-RHF': '1A-P-RHF',
+  '1A-R-LHF': '1A-R-LHF',
+  '1A-R-RHF': '1A-R-RHF',
+  '1NA-P':    '1NA-P',
+  '1NA-R':    '1NA-R',
+  Console:    'Console',
+};
+
 // Resolve the seeded default for one compartment code. UI surfaces this
 // when the stored meta has no value of its own — commander overrides
 // land in sofaCompartmentMeta on Save.
 const seedCompartmentMeta = (code: string): CompartmentMeta => {
   const norm = normalizeCompartmentCode(code);
   const mod  = SOFA_MODULE_BY_NORM_ID.get(norm);
-  if (!mod) return {};
   // Every sofa module now has a unified hand-drawn SVG plan view
   // (commander 2026-05-27 "你没有统一怎么行呢"). The previous mix of POS PNGs
   // + bespoke SVGs for 1B/2B/CNR was visually inconsistent at the size the
   // Maintenance list renders them — all module + preset designs were
   // redrawn to the same 3-tone flat style (cream body / medium-tan
   // backrest / darkest-tan armrest, dashed seat seams, no labels).
-  return {
-    imageKey:    `sofa-modules/${mod.id}.svg`,
-    description: COMPARTMENT_DESCRIPTION_OVERRIDE[mod.id] ?? mod.label,
-    // SOFA_MODULES carries no base price — POS reads pricing from
-    // product_compartments per Model. Default to 0 here; commander can
-    // type the back-office default into the input.
-    defaultPriceCenti: 0,
-  };
+  if (mod) {
+    return {
+      imageKey:    `sofa-modules/${mod.id}.svg`,
+      description: COMPARTMENT_DESCRIPTION_OVERRIDE[mod.id] ?? mod.label,
+      // SOFA_MODULES carries no base price — POS reads pricing from
+      // product_compartments per Model. Default to 0 here; commander can
+      // type the back-office default into the input.
+      defaultPriceCenti: 0,
+    };
+  }
+  // Fallback for codes NOT in SOFA_MODULES (recliner variants, Console
+  // alias). These have bespoke SVGs hand-drawn to the same style.
+  const extraStem = EXTRA_MODULE_IMAGE_BY_NORM[norm];
+  if (extraStem) {
+    // The COMPARTMENT_DESCRIPTION_OVERRIDE is keyed by the raw code
+    // commander typed (e.g. '1A(P)-LHF'). Look up via both the raw input
+    // and the normalized form to be tolerant.
+    const desc =
+      COMPARTMENT_DESCRIPTION_OVERRIDE[code] ??
+      COMPARTMENT_DESCRIPTION_OVERRIDE[norm] ??
+      COMPARTMENT_DESCRIPTION_OVERRIDE[code.replace(/\)\(/g, ')-').replace(/[()]/g, '')] ??
+      undefined;
+    return {
+      imageKey:    `sofa-modules/${extraStem}.svg`,
+      description: desc,
+      defaultPriceCenti: 0,
+    };
+  }
+  return {};
 };
 
 // Merge stored override on top of the seed. Empty/undefined fields on

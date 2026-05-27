@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 110" width="60" height="110">
+  <title>2990s Sofa Module — Console — Wood divider between two seats</title>
+  <desc>Narrow vertical divider that slots between two sofa modules. No seat, no backrest, no armrest — just a wood storage console (e.g., for drinks/charging).</desc>
+  <g transform="translate(20,20)">
+    <!-- Narrow body, no backrest, no arms — just a wood divider -->
+    <rect x="0" y="0" width="20" height="70" rx="2" fill="#B89972" stroke="#2C2C2A" stroke-width="1.4"/>
+    <!-- Top inset to suggest the storage opening -->
+    <rect x="3" y="3" width="14" height="20" rx="1" fill="#F0E6D6" stroke="#2C2C2A" stroke-width="0.6"/>
+  </g>
+</svg>
