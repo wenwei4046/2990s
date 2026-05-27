@@ -956,6 +956,12 @@ export type SoDetailListingRow = Record<string, unknown> & {
   customer_delivery_date: string | null;
   /** Live paid total summed from mfg_sales_order_payments (replaces legacy paid_centi). */
   paid_total_centi: number;
+  /* Task #114 — per-line cost snapshot (from mfg_products.cost_price_sen
+     server-side) + derived line cost + margin. Used by the listing
+     report's cost columns + 6-tile KPI bar. */
+  unit_cost_centi: number;
+  line_cost_centi: number;
+  line_margin_centi: number;
 };
 
 export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {
