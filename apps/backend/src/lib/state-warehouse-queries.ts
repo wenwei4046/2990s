@@ -52,7 +52,39 @@ export function useUpsertStateWarehouseMapping() {
         method: 'PUT',
         body: JSON.stringify({ warehouseId, notes }),
       }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['state-warehouse-mappings'] }); },
+    /* Commander 2026-05-27: "我选了 warehouse 可是没有反应". Without optimistic
+       update, the controlled <select value={current?.warehouseId ?? ''}>
+       re-renders to the OLD value the instant onChange dispatches (because
+       the cached mappings haven't refetched yet) — the dropdown visibly
+       snaps back to "— Unassigned —" mid-pending and looks unresponsive.
+       Fix: patch the cache optimistically so the select immediately
+       reflects the user's choice; invalidate on settled to reconcile with
+       the server. */
+    onMutate: async ({ state, warehouseId, notes }) => {
+      await qc.cancelQueries({ queryKey: ['state-warehouse-mappings'] });
+      const previous = qc.getQueryData<{ mappings: StateWarehouseMapping[] }>(['state-warehouse-mappings']);
+      qc.setQueryData<{ mappings: StateWarehouseMapping[] }>(['state-warehouse-mappings'], (old) => {
+        const list = old?.mappings ?? [];
+        const idx = list.findIndex((m) => m.state === state);
+        const nextRow: StateWarehouseMapping = {
+          id:          idx >= 0 ? list[idx]!.id : `pending-${state}`,
+          state,
+          warehouseId,
+          notes,
+          warehouse:   idx >= 0 ? list[idx]!.warehouse : null,
+          updatedAt:   new Date().toISOString(),
+        };
+        const next = idx >= 0
+          ? list.map((m, i) => (i === idx ? nextRow : m))
+          : [...list, nextRow];
+        return { mappings: next };
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previous) qc.setQueryData(['state-warehouse-mappings'], ctx.previous);
+    },
+    onSettled: () => { qc.invalidateQueries({ queryKey: ['state-warehouse-mappings'] }); },
   });
 }
 
