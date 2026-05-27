@@ -417,10 +417,16 @@ export const myLocalities = pgTable('my_localities', {
   /* Task #121 — country auto-derived to the SO snapshot when a state is
      picked. Defaults to Malaysia; SG/TH/etc states declare their own. */
   country:   text('country').notNull().default('Malaysia'),
+  /* Commander 2026-05-27 — city-level warehouse OVERRIDE. NULL means
+     follow the state-level mapping (state_warehouse_mappings). When set,
+     this row's warehouse beats the state default. Bulk-stamped on all
+     postcodes under the same city when commander edits at L3. */
+  warehouseId: uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
 }, (t) => ({
-  postcodeIdx: index('idx_my_localities_postcode').on(t.postcode),
-  stateIdx:    index('idx_my_localities_state').on(t.state),
-  countryIdx:  index('idx_my_localities_country').on(t.country),
+  postcodeIdx:  index('idx_my_localities_postcode').on(t.postcode),
+  stateIdx:     index('idx_my_localities_state').on(t.state),
+  countryIdx:   index('idx_my_localities_country').on(t.country),
+  warehouseIdx: index('idx_my_localities_warehouse_id').on(t.warehouseId),
 }));
 
 /* ─────────────────────────── Orders ─────────────────────────────────── */
