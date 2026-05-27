@@ -4,13 +4,19 @@
 //
 // Ported from HOOKKA src/api/routes/maintenance-config.ts. Conventions
 // kept identical so the UI (also ported) can drop in:
-//   GET    /maintenance-config/resolved?scope=master|customer:<id>&asOf=YYYY-MM-DD
+//   GET    /maintenance-config/resolved?scope=master|customer:<id>|supplier:<id>&asOf=YYYY-MM-DD
 //   GET    /maintenance-config/history?scope=...
 //   POST   /maintenance-config/changes  body: { scope, config, effectiveFrom, notes? }
 //   DELETE /maintenance-config/changes/:id
 //
-// scope encoding: 'master' OR 'customer:<uuid>'. Stored as TEXT so we can
-// LIKE-match customer:% without schema rework when customer overrides arrive.
+// scope encoding: 'master', 'customer:<uuid>', or 'supplier:<uuid>'. Stored
+// as TEXT so adding new scope prefixes (e.g. 'showroom:<id>') is an
+// application-layer change only — no migration needed.
+//
+// PR #208 (Commander 2026-05-27) — adds the supplier:<uuid> scope so PO
+// line pricing can resolve surcharges from the supplier's own config
+// instead of the master/selling config. See apps/api/src/lib/po-pricing.ts
+// for the resolver that falls back to 'master' when a supplier has no row.
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
@@ -41,6 +47,13 @@ function parseScope(raw: string | null | undefined): string | null {
   if (s.startsWith('customer:')) {
     const id = s.slice('customer:'.length).trim();
     return id ? `customer:${id}` : null;
+  }
+  if (s.startsWith('supplier:')) {
+    // PR #208 (Commander 2026-05-27) — supplier-scoped pricing config drives
+    // PO line surcharges. Any non-empty suffix is accepted; the resolver
+    // (see lib/po-pricing.ts) falls back to 'master' when no row exists.
+    const id = s.slice('supplier:'.length).trim();
+    return id ? `supplier:${id}` : null;
   }
   return null;
 }
