@@ -42,6 +42,7 @@ import {
   type NewBinding,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgCategory, type MfgProductRow } from '../lib/mfg-products-queries';
+import { useProductModels, type ProductModelRow } from '../lib/product-models-queries';
 import {
   useLocalities,
   distinctStates,
@@ -257,7 +258,7 @@ export const SupplierDetail = () => {
 
       {/* ── SKU dialogs (modals) ──────────────────────────────────── */}
       {skuDialog.mode === 'multi' && (
-        <MultiSkuPickerDialog
+        <ModelSkuPickerDialog
           supplierId={id!}
           existingBindings={bindings}
           onClose={() => setSkuDialog({ mode: 'closed' })}
@@ -861,8 +862,500 @@ const PhoneEditField = ({
 );
 
 /* ════════════════════════════════════════════════════════════════════════
+   ModelSkuPickerDialog — supplier-mapping-by-model (Commander 2026-05-27).
+
+   The original per-SKU multi-select picker (kept below as the legacy
+   MultiSkuPickerDialog and reachable via "Advanced (per-SKU)") made commander
+   tick every size + handedness variant under a Model one by one
+   (BOOQIT-1A(LHF), -1A(RHF), -1B(LHF) …) and type a supplier code N times.
+   New default flow:
+
+     Step 1  Pick Model(s)  ─ filter by category, multi-select Models. Each
+                              row shows: model_code · name · #SKUs · binding
+                              status ("not mapped" / "mixed N/T" / "all").
+     Step 2  Fill code      ─ ONE row per Model. Supplier code, unit price,
+                              lead time, MOQ, main toggle. Same values fan
+                              out across every ACTIVE SKU under that Model.
+     Save                   ─ Per Model, expand the picked supplier-code
+                              over every ACTIVE SKU under that model_id and
+                              POST them via the existing /bindings/batch
+                              endpoint (which de-dupes against bindings
+                              already present for this supplier).
+
+   No schema change. supplier_material_bindings stays per-SKU; this is purely
+   a write-path convenience over the existing storage. The retreat hatch is
+   the Advanced toggle which restores the per-SKU picker for the rare case
+   where one Model genuinely needs different supplier codes per size variant.
+   ════════════════════════════════════════════════════════════════════════ */
+
+const MODEL_CATEGORY_CHIPS: { value: 'all' | MfgCategory; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'BEDFRAME', label: 'Bedframe' },
+  { value: 'SOFA', label: 'Sofa' },
+  { value: 'MATTRESS', label: 'Mattress' },
+  { value: 'ACCESSORY', label: 'Accessory' },
+  { value: 'SERVICE', label: 'Service' },
+];
+
+type ModelDraft = {
+  modelId: string;
+  modelCode: string;
+  modelName: string;
+  category: MfgCategory;
+  skuCodes: string[];          // ACTIVE SKU codes under this Model
+  alreadyBoundCodes: string[]; // subset of skuCodes already bound for this supplier
+  supplierCode: string;
+  unitPriceCenti: number;
+  leadTimeDays: number;
+  moq: number;
+  isMainSupplier: boolean;
+};
+
+/** Build the "status" badge text for a Model: not mapped / mixed N/T / all. */
+function bindingStatus(skuCount: number, boundCount: number): {
+  tone: 'none' | 'mixed' | 'all';
+  label: string;
+} {
+  if (boundCount === 0) return { tone: 'none', label: 'not mapped' };
+  if (boundCount >= skuCount) return { tone: 'all', label: `all ${skuCount} mapped` };
+  return { tone: 'mixed', label: `mixed ${boundCount}/${skuCount}` };
+}
+
+const ModelSkuPickerDialog = ({
+  supplierId,
+  existingBindings,
+  onClose,
+}: {
+  supplierId: string;
+  existingBindings: BindingRow[];
+  onClose: () => void;
+}) => {
+  const batch = useCreateBindingsBatch();
+  const [step, setStep] = useState<1 | 2>(1);
+  const [category, setCategory] = useState<'all' | MfgCategory>('all');
+  const [search, setSearch] = useState('');
+  const [advanced, setAdvanced] = useState(false);
+
+  // We fetch BOTH Models (for the picker) and ALL active SKUs (so we can
+  // group SKUs by model_id client-side and compute "already bound" status
+  // per Model without N round-trips). Both queries are short-listed —
+  // 2990's catalogue has < a few hundred Models / SKUs.
+  const modelsQ = useProductModels(
+    category === 'all' ? undefined : { category },
+  );
+  const productsQ = useMfgProducts(
+    category === 'all' ? undefined : { category },
+  );
+
+  /* Index SKUs by model_id so we can compute count + already-bound per Model
+     in a single pass. Orphan SKUs (model_id NULL) are intentionally ignored
+     here — they're only reachable via the Advanced (per-SKU) toggle. */
+  const skusByModel = useMemo(() => {
+    const map = new Map<string, MfgProductRow[]>();
+    for (const p of productsQ.data ?? []) {
+      if (!p.model_id) continue;
+      const arr = map.get(p.model_id) ?? [];
+      arr.push(p);
+      map.set(p.model_id, arr);
+    }
+    return map;
+  }, [productsQ.data]);
+
+  const boundCodes = useMemo(
+    () => new Set(existingBindings.map((b) => `${b.material_kind}|${b.material_code}`)),
+    [existingBindings],
+  );
+
+  /* Filtered Model rows with their pre-computed counts + binding status. */
+  const modelRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = (modelsQ.data ?? []).filter((m) => {
+      if (!m.active) return false;
+      if (!q) return true;
+      return (
+        m.model_code.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        (m.branding ?? '').toLowerCase().includes(q)
+      );
+    });
+    return list.map((m) => {
+      const skus = skusByModel.get(m.id) ?? [];
+      const bound = skus.filter((s) => boundCodes.has(`mfg_product|${s.code}`));
+      return { model: m, skus, boundCount: bound.length };
+    });
+  }, [modelsQ.data, skusByModel, search, boundCodes]);
+
+  const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
+  const [drafts, setDrafts] = useState<Record<string, ModelDraft>>({});
+
+  const togglePick = (m: ProductModelRow, skus: MfgProductRow[]) => {
+    setPickedIds((s) => {
+      const next = new Set(s);
+      if (next.has(m.id)) next.delete(m.id);
+      else if (skus.length > 0) next.add(m.id);
+      return next;
+    });
+  };
+
+  const pickedCount = pickedIds.size;
+
+  const goNext = () => {
+    const seeded: Record<string, ModelDraft> = {};
+    for (const id of pickedIds) {
+      const row = modelRows.find((r) => r.model.id === id);
+      if (!row) continue;
+      const existing = drafts[id];
+      // Seed unitPrice from the average base_price_sen of the Model's SKUs
+      // (decent default for commander; he can edit it).
+      const prices = row.skus
+        .map((s) => s.base_price_sen ?? 0)
+        .filter((v) => v > 0);
+      const avgPrice = prices.length
+        ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length)
+        : 0;
+      seeded[id] = existing ?? {
+        modelId: row.model.id,
+        modelCode: row.model.model_code,
+        modelName: row.model.name,
+        category: row.model.category,
+        skuCodes: row.skus.map((s) => s.code),
+        alreadyBoundCodes: row.skus
+          .filter((s) => boundCodes.has(`mfg_product|${s.code}`))
+          .map((s) => s.code),
+        supplierCode: '',
+        unitPriceCenti: avgPrice,
+        leadTimeDays: 7,
+        moq: 1,
+        isMainSupplier: false,
+      };
+    }
+    setDrafts(seeded);
+    setStep(2);
+  };
+
+  const setDraft = (id: string, patch: Partial<ModelDraft>) => {
+    setDrafts((s) => ({ ...s, [id]: { ...s[id]!, ...patch } }));
+  };
+
+  const submit = () => {
+    const list: NewBinding[] = [];
+    for (const d of Object.values(drafts)) {
+      const code = d.supplierCode.trim();
+      // Skip Models with no supplier code (commander left the field empty —
+      // safer than auto-defaulting to the internal code which produces N
+      // misleading rows).
+      if (!code) continue;
+      for (const skuCode of d.skuCodes) {
+        // Skip SKUs already bound for this supplier; the batch endpoint also
+        // de-dupes server-side but pre-filtering keeps the inserted/skipped
+        // counts accurate for the toast.
+        if (d.alreadyBoundCodes.includes(skuCode)) continue;
+        // Find the SKU row to grab name for material_name.
+        const sku = (productsQ.data ?? []).find((p) => p.code === skuCode);
+        list.push({
+          materialKind: 'mfg_product' as MaterialKind,
+          materialCode: skuCode,
+          materialName: sku?.name ?? skuCode,
+          supplierSku: code,
+          unitPriceCenti: d.unitPriceCenti,
+          currency: 'MYR' as Currency,
+          leadTimeDays: d.leadTimeDays,
+          moq: d.moq,
+          isMainSupplier: d.isMainSupplier,
+        });
+      }
+    }
+    if (list.length === 0) { onClose(); return; }
+    batch.mutate({ supplierId, bindings: list }, {
+      onSuccess: (res) => {
+        if (res.skipped > 0) {
+          alert(
+            `Inserted ${res.inserted} SKU mapping${res.inserted === 1 ? '' : 's'}; ` +
+            `skipped ${res.skipped} already bound.`,
+          );
+        }
+        onClose();
+      },
+    });
+  };
+
+  // The Advanced toggle swaps in the legacy per-SKU picker, kept verbatim
+  // below so it's still available when one Model needs different supplier
+  // codes per size variant.
+  if (advanced) {
+    return (
+      <MultiSkuPickerDialog
+        supplierId={supplierId}
+        existingBindings={existingBindings}
+        onClose={onClose}
+      />
+    );
+  }
+
+  const loading = modelsQ.isLoading || productsQ.isLoading;
+
+  return (
+    <div className={styles.modalBackdrop} onClick={onClose}>
+      <div
+        className={styles.modal}
+        style={{ width: 'min(900px, 95vw)', maxHeight: '90vh' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className={styles.modalHeader}>
+          <h3 className={styles.modalTitle}>
+            {step === 1
+              ? `Pick Model(s) to map · ${pickedCount} selected`
+              : `Supplier codes by Model · ${pickedCount} Model${pickedCount === 1 ? '' : 's'}`}
+          </h3>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <label
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', cursor: 'pointer',
+              }}
+              title="Switch to per-SKU picker (for Models needing different codes per size)"
+            >
+              <input
+                type="checkbox"
+                checked={false}
+                onChange={() => setAdvanced(true)}
+              />
+              Advanced (per-SKU)
+            </label>
+            <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
+              <X {...ICON} />
+            </button>
+          </span>
+        </header>
+
+        {step === 1 ? (
+          <>
+            <div className={styles.modalBody} style={{ paddingBottom: 'var(--space-3)' }}>
+              <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+                {MODEL_CATEGORY_CHIPS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setCategory(c.value)}
+                    style={{
+                      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-13)', fontWeight: 600,
+                      padding: 'var(--space-2) var(--space-3)',
+                      borderRadius: 'var(--radius-pill)',
+                      border: category === c.value ? '1px solid var(--c-ink)' : '1px solid var(--line)',
+                      background: category === c.value ? 'var(--c-ink)' : 'var(--c-paper)',
+                      color: category === c.value ? 'var(--c-cream)' : 'var(--c-ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+                <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+                  <Search {...ICON} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
+                  <input
+                    type="search"
+                    placeholder="Search Model code / name / branding…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    style={{
+                      width: '100%', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-14)',
+                      background: 'var(--c-paper)', border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: 'var(--space-2) var(--space-3) var(--space-2) var(--space-7)',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+              </div>
+              <div style={{ maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 36 }}></th>
+                      <th>Model Code</th>
+                      <th>Name</th>
+                      <th>Category</th>
+                      <th className={styles.tableRight}>SKUs</th>
+                      <th>Mapping status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading && (
+                      <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>
+                    )}
+                    {!loading && modelRows.length === 0 && (
+                      <tr><td colSpan={6} className={styles.emptyRow}>No Models match.</td></tr>
+                    )}
+                    {!loading && modelRows.map(({ model, skus, boundCount }) => {
+                      const isPicked = pickedIds.has(model.id);
+                      const noSkus = skus.length === 0;
+                      const fullyBound = boundCount >= skus.length && skus.length > 0;
+                      const disabled = noSkus || fullyBound;
+                      const status = bindingStatus(skus.length, boundCount);
+                      return (
+                        <tr
+                          key={model.id}
+                          onClick={() => !disabled && togglePick(model, skus)}
+                          style={{
+                            cursor: disabled ? 'not-allowed' : 'pointer',
+                            opacity: disabled ? 0.4 : 1,
+                            background: isPicked ? 'rgba(232, 107, 58, 0.06)' : undefined,
+                          }}
+                          title={
+                            noSkus
+                              ? 'No active SKUs under this Model'
+                              : fullyBound
+                                ? 'All SKUs under this Model already mapped'
+                                : ''
+                          }
+                        >
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={isPicked}
+                              disabled={disabled}
+                              onChange={() => togglePick(model, skus)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </td>
+                          <td className={styles.codeCell}>{model.model_code}</td>
+                          <td>{model.name}</td>
+                          <td className={styles.muted}>{model.category}</td>
+                          <td className={`${styles.tableRight} ${styles.muted}`}>{skus.length}</td>
+                          <td>
+                            <span
+                              style={{
+                                fontSize: 'var(--fs-12)',
+                                fontWeight: 600,
+                                color:
+                                  status.tone === 'all'
+                                    ? 'var(--c-secondary-a, #2F5D4F)'
+                                    : status.tone === 'mixed'
+                                      ? 'var(--c-burnt)'
+                                      : 'var(--fg-muted)',
+                              }}
+                            >
+                              {status.label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <footer className={styles.modalFooter}>
+              <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+              <Button variant="primary" size="md" onClick={goNext} disabled={pickedCount === 0}>
+                <span>Next · Fill supplier codes ({pickedCount})</span>
+              </Button>
+            </footer>
+          </>
+        ) : (
+          <>
+            <div className={styles.modalBody} style={{ paddingBottom: 'var(--space-3)' }}>
+              <p className={styles.infoLabel} style={{ marginBottom: 'var(--space-3)' }}>
+                One supplier code per Model. Save will create a binding for every
+                ACTIVE SKU under each Model with the SAME supplier code + price.
+                Already-mapped SKUs are skipped.
+              </p>
+              <div style={{ maxHeight: '50vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)' }}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Model · #SKUs</th>
+                      <th>Supplier Code</th>
+                      <th className={styles.tableRight}>Unit Price (RM)</th>
+                      <th className={styles.tableRight}>Lead (d)</th>
+                      <th className={styles.tableRight}>MOQ</th>
+                      <th>Main</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.values(drafts).map((d) => {
+                      const remaining = d.skuCodes.length - d.alreadyBoundCodes.length;
+                      return (
+                        <tr key={d.modelId}>
+                          <td>
+                            <div className={styles.codeCell}>{d.modelCode}</div>
+                            <div className={styles.muted}>{d.modelName}</div>
+                            <div className={styles.muted} style={{ fontSize: 'var(--fs-12)' }}>
+                              {remaining} of {d.skuCodes.length} SKUs to map
+                              {d.alreadyBoundCodes.length > 0 ? ` (${d.alreadyBoundCodes.length} already)` : ''}
+                            </div>
+                          </td>
+                          <td>
+                            <input
+                              value={d.supplierCode}
+                              onChange={(e) => setDraft(d.modelId, { supplierCode: e.target.value })}
+                              placeholder="Their code for the whole Model"
+                              style={smallInputStyle}
+                            />
+                          </td>
+                          <td className={styles.tableRight}>
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={(d.unitPriceCenti / 100).toFixed(2)}
+                              onChange={(e) => setDraft(d.modelId, {
+                                unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0,
+                              })}
+                              style={{ ...smallInputStyle, width: 100, textAlign: 'right' }}
+                            />
+                          </td>
+                          <td className={styles.tableRight}>
+                            <input
+                              type="number"
+                              value={d.leadTimeDays}
+                              onChange={(e) => setDraft(d.modelId, { leadTimeDays: Number(e.target.value) || 0 })}
+                              style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
+                            />
+                          </td>
+                          <td className={styles.tableRight}>
+                            <input
+                              type="number"
+                              value={d.moq}
+                              onChange={(e) => setDraft(d.modelId, { moq: Number(e.target.value) || 0 })}
+                              style={{ ...smallInputStyle, width: 60, textAlign: 'right' }}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={d.isMainSupplier}
+                              onChange={(e) => setDraft(d.modelId, { isMainSupplier: e.target.checked })}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <footer className={styles.modalFooter}>
+              <Button variant="ghost" size="md" onClick={() => setStep(1)}>← Back</Button>
+              <Button variant="primary" size="md" onClick={submit} disabled={batch.isPending}>
+                {batch.isPending
+                  ? 'Saving…'
+                  : `Save ${pickedCount} Model${pickedCount === 1 ? '' : 's'}`}
+              </Button>
+            </footer>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
    Multi-SKU Picker — pick N products from mfg_products, then fill in
    supplier_sku / price / lead time / moq for each, batch-create.
+
+   Legacy: kept available via "Advanced (per-SKU)" toggle in
+   ModelSkuPickerDialog. Use when one Model needs different supplier codes
+   per size variant. Default flow is the Model-first picker above.
    ════════════════════════════════════════════════════════════════════════ */
 
 type MultiDraft = {

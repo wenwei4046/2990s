@@ -74,6 +74,10 @@ export type MfgProductRow = {
   unit_m3_milli: number;
   status: 'ACTIVE' | 'INACTIVE';
   sku_code: string | null;
+  /** PR — supplier-mapping-by-model: optional FK to product_models.id so the
+      supplier mapping picker can group SKUs by Model client-side. NULL for
+      orphan SKUs that haven't been folded into a Model yet. */
+  model_id: string | null;
   /* PR #104 — fabric_usage_centi / production_time_minutes / fabric_color
      dropped from the API response (2990's retail catalogue doesn't track
      them). Columns still exist on the DB; UI / CSV no longer expose. */
