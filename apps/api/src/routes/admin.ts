@@ -10,7 +10,24 @@ export const admin = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 admin.use('*', supabaseAuth);
 
-const STAFF_ROLES = ['sales', 'showroom_lead', 'coordinator', 'finance', 'admin'] as const;
+/* Migration 0086 (2026-05-27) — sales_executive / outlet_manager /
+   sales_director added. Existing values stay where they were; the order
+   in this Zod enum doesn't matter, but matches the pg enum declaration. */
+const STAFF_ROLES = [
+  'sales', 'showroom_lead', 'coordinator', 'finance', 'admin',
+  'sales_executive', 'outlet_manager', 'sales_director',
+] as const;
+
+/* POS-PIN roles take the createUser + bcrypt(pin) path (no magic link).
+   sales_executive and outlet_manager join the existing `sales` role
+   because they sign in to POS exactly the same way (shared device + PIN).
+   sales_director uses the standard invite path so they can reach Backend. */
+const POS_PIN_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager']);
+
+/* Roles allowed to invite + update + deactivate other staff. coordinator
+   listed in the GET list (see STAFF_LIST_ROLES) but cannot mutate. */
+const STAFF_WRITE_ROLES = new Set<string>(['admin', 'sales_director']);
+const STAFF_LIST_ROLES  = new Set<string>(['admin', 'sales_director', 'coordinator']);
 
 const CreateStaffBodySchema = z.object({
   staffCode:  z.string().trim().min(1).max(16),
@@ -20,14 +37,15 @@ const CreateStaffBodySchema = z.object({
   initials:   z.string().trim().min(1).max(4),
   color:      z.string().regex(/^#[0-9a-fA-F]{6}$/, 'must be 6-digit hex like #FF7733'),
   showroomId: z.string().uuid().nullable().optional(),
+  venueId:    z.string().uuid().nullable().optional(),
   phone:      z.string().trim().min(1).nullable().optional(),
   pin:        z.string().regex(/^\d{6}$/, 'pin must be 6 digits').optional(),
 }).refine(
-  (v) => v.role !== 'sales' || v.pin !== undefined,
-  { message: 'pin_required_for_sales', path: ['pin'] },
+  (v) => !POS_PIN_ROLES.has(v.role) || v.pin !== undefined,
+  { message: 'pin_required_for_pos_role', path: ['pin'] },
 ).refine(
-  (v) => v.role === 'sales' || v.pin === undefined,
-  { message: 'pin_forbidden_for_non_sales', path: ['pin'] },
+  (v) => POS_PIN_ROLES.has(v.role) || v.pin === undefined,
+  { message: 'pin_forbidden_for_backend_role', path: ['pin'] },
 );
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -45,7 +63,7 @@ async function loadStaffRole(c: any): Promise<string | null> {
 
 admin.post('/staff', async (c) => {
   const callerRole = await loadStaffRole(c);
-  if (callerRole !== 'admin') {
+  if (!callerRole || !STAFF_WRITE_ROLES.has(callerRole)) {
     return c.json({ error: 'not_authorized_role' }, 403);
   }
 
@@ -74,13 +92,15 @@ admin.post('/staff', async (c) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Sales path: createUser (no magic link) + bcrypt(pin) → pin_hash.
-  // Non-sales path: inviteUserByEmail (magic link to backend portal).
-  const isSales = input.role === 'sales';
+  // POS-PIN path (sales / sales_executive / outlet_manager):
+  //   createUser (no magic link) + bcrypt(pin) → pin_hash.
+  // Backend-invite path (showroom_lead / coordinator / finance / admin /
+  //   sales_director): inviteUserByEmail (magic link to backend portal).
+  const isPosPin = POS_PIN_ROLES.has(input.role);
   const email = input.email ?? `${input.staffCode.toLowerCase()}+pos@2990s.local`;
 
   let userId: string;
-  if (isSales) {
+  if (isPosPin) {
     const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
       email,
       password: crypto.randomUUID(),
@@ -116,7 +136,7 @@ admin.post('/staff', async (c) => {
     userId = invited.user.id;
   }
 
-  const pinHash = isSales && input.pin ? await hashPin(input.pin) : null;
+  const pinHash = isPosPin && input.pin ? await hashPin(input.pin) : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let newStaff: any = null;
@@ -131,6 +151,9 @@ admin.post('/staff', async (c) => {
         name:         input.name,
         role:         input.role,
         showroom_id:  input.showroomId ?? null,
+        /* Migration 0086 — venue_id for sales-side roles. NULL is fine for
+           admin / coordinator / finance and for sales_director (cross-venue). */
+        venue_id:     input.venueId ?? null,
         email,
         /* Task #91 — staff phone normalized to E.164 storage form. */
         phone:        input.phone ? (normalizePhone(input.phone) ?? input.phone) : null,
@@ -139,7 +162,7 @@ admin.post('/staff', async (c) => {
         active:       true,
         pin_hash:     pinHash,
       })
-      .select('id, staff_code, name, role, showroom_id, email, phone, initials, color, active')
+      .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
       .maybeSingle();
     newStaff = result.data;
     insertErr = result.error;
@@ -164,13 +187,140 @@ admin.post('/staff', async (c) => {
   return c.json({ staff: newStaff }, 201);
 });
 
+/* GET /admin/staff — list all staff for the Users page. Visible to
+   admin / sales_director / coordinator. Enriched with last_sign_in_at
+   from auth.users via the service-role admin client (best-effort). */
+admin.get('/staff', async (c) => {
+  const callerRole = await loadStaffRole(c);
+  if (!callerRole || !STAFF_LIST_ROLES.has(callerRole)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const sb = c.get('supabase');
+  const { data, error } = await sb
+    .from('staff')
+    .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
+    .order('staff_code');
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  let signInById: Map<string, string | null> = new Map();
+  try {
+    const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: usersPage } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 200 });
+    signInById = new Map(
+      (usersPage?.users ?? []).map((u) => [u.id, u.last_sign_in_at ?? null]),
+    );
+  } catch {
+    /* Non-fatal — page still renders without last-sign-in column. */
+  }
+
+  const staffRows = (data ?? []).map((r) => ({
+    ...r,
+    last_sign_in_at: signInById.get(r.id) ?? null,
+  }));
+  return c.json({ staff: staffRows });
+});
+
+/* PATCH /admin/staff/:id — update name / role / venue_id / showroom_id /
+   phone / initials / color / active. PIN updates remain on the dedicated
+   /pin endpoint. */
+const PatchStaffBodySchema = z.object({
+  name:       z.string().trim().min(1).max(80).optional(),
+  role:       z.enum(STAFF_ROLES).optional(),
+  showroomId: z.string().uuid().nullable().optional(),
+  venueId:    z.string().uuid().nullable().optional(),
+  phone:      z.string().trim().min(1).nullable().optional(),
+  initials:   z.string().trim().min(1).max(4).optional(),
+  color:      z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  active:     z.boolean().optional(),
+});
+
+admin.patch('/staff/:id', async (c) => {
+  const callerRole = await loadStaffRole(c);
+  if (!callerRole || !STAFF_WRITE_ROLES.has(callerRole)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const idParse = z.string().uuid().safeParse(c.req.param('id'));
+  if (!idParse.success) return c.json({ error: 'invalid_request' }, 400);
+  const id = idParse.data;
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = PatchStaffBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
+  }
+  const input = parsed.data;
+
+  const updates: Record<string, unknown> = {};
+  if (input.name       !== undefined) updates.name        = input.name;
+  if (input.role       !== undefined) updates.role        = input.role;
+  if (input.showroomId !== undefined) updates.showroom_id = input.showroomId;
+  if (input.venueId    !== undefined) updates.venue_id    = input.venueId;
+  if (input.phone      !== undefined) {
+    updates.phone = input.phone ? (normalizePhone(input.phone) ?? input.phone) : null;
+  }
+  if (input.initials   !== undefined) updates.initials = input.initials;
+  if (input.color      !== undefined) updates.color    = input.color;
+  if (input.active     !== undefined) updates.active   = input.active;
+
+  if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: updated, error: updateErr } = await adminClient
+    .from('staff')
+    .update(updates)
+    .eq('id', id)
+    .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
+    .maybeSingle();
+
+  if (updateErr || !updated) {
+    return c.json({ error: 'staff_update_failed', detail: updateErr?.message }, 422);
+  }
+  return c.json({ staff: updated });
+});
+
+/* DELETE /admin/staff/:id — soft delete (active=false). Keeps the
+   auth.users row intact so historical orders.staff_id keeps resolving
+   to a real name in the UI. Use PATCH active=true to reactivate. */
+admin.delete('/staff/:id', async (c) => {
+  const callerRole = await loadStaffRole(c);
+  if (!callerRole || !STAFF_WRITE_ROLES.has(callerRole)) {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const idParse = z.string().uuid().safeParse(c.req.param('id'));
+  if (!idParse.success) return c.json({ error: 'invalid_request' }, 400);
+  const id = idParse.data;
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: updated, error: updateErr } = await adminClient
+    .from('staff')
+    .update({ active: false })
+    .eq('id', id)
+    .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
+    .maybeSingle();
+
+  if (updateErr || !updated) {
+    return c.json({ error: 'staff_deactivate_failed', detail: updateErr?.message }, 422);
+  }
+  return c.json({ staff: updated });
+});
+
 const PatchPinBodySchema = z.object({
   pin: z.union([z.string().regex(/^\d{6}$/), z.null()]),
 });
 
 admin.patch('/staff/:id/pin', async (c) => {
   const callerRole = await loadStaffRole(c);
-  if (callerRole !== 'admin') {
+  if (!callerRole || !STAFF_WRITE_ROLES.has(callerRole)) {
     return c.json({ error: 'not_authorized_role' }, 403);
   }
 
@@ -194,7 +344,9 @@ admin.patch('/staff/:id/pin', async (c) => {
     .eq('id', id)
     .maybeSingle();
   if (!target) return c.json({ error: 'staff_not_found' }, 404);
-  if (target.role !== 'sales') return c.json({ error: 'not_a_sales_staff' }, 422);
+  if (!POS_PIN_ROLES.has(target.role)) {
+    return c.json({ error: 'not_a_pos_staff', role: target.role }, 422);
+  }
 
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -206,7 +358,7 @@ admin.patch('/staff/:id/pin', async (c) => {
     .from('staff')
     .update({ pin_hash: pinHash })
     .eq('id', id)
-    .select('id, staff_code, name, role, showroom_id, email, phone, initials, color, active')
+    .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
     .maybeSingle();
 
   if (updateErr || !updated) {
