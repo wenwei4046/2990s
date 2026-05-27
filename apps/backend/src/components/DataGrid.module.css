@@ -105,9 +105,37 @@
 .groupChipRemove:hover { color: var(--c-festive-b, #B8331F); }
 
 /* ── Table ───────────────────────────────────────────────────────── */
+/* Issue #2 fix (so-list-pixel-perfect-houzs) — force the horizontal
+   scrollbar to be always visible (overflow-x: scroll vs auto) and make
+   the WebKit scrollbar track thicker so commander can grab it. The grid
+   sits inside <section> wrappers with their own overflow rules; forcing
+   our own scroll wins because this is the inner-most scrollable
+   container. */
 .scroll {
-  overflow: auto;
+  overflow-x: scroll;
+  overflow-y: auto;
   max-height: calc(100vh - 220px);
+}
+.scroll::-webkit-scrollbar {
+  height: 12px;
+  width: 12px;
+}
+.scroll::-webkit-scrollbar-track {
+  background: var(--c-cream);
+  border-top: 1px solid var(--line);
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: rgba(34, 31, 32, 0.32);
+  border-radius: 6px;
+  border: 2px solid var(--c-cream);
+}
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--c-burnt);
+}
+.scroll {
+  /* Firefox */
+  scrollbar-width: auto;
+  scrollbar-color: rgba(34, 31, 32, 0.32) var(--c-cream);
 }
 .table {
   border-collapse: collapse;
