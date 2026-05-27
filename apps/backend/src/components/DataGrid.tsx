@@ -540,6 +540,17 @@ function DataGridInner<T>({
       <div className={styles.toolbar}>
         {toolbar}
         <div className={styles.toolbarSpacer} />
+        <div className={styles.searchWrap}>
+          <Search {...ICON} aria-hidden />
+          <input
+            ref={searchRef}
+            className={styles.searchInput}
+            type="search"
+            placeholder={searchPlaceholder}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
         <div className={styles.columnsAnchor}>
           <button
             type="button"
@@ -553,47 +564,42 @@ function DataGridInner<T>({
             </span>
           </button>
           {columnsMenuOpen && (
-            <div className={styles.columnsMenu} onClick={(e) => e.stopPropagation()}>
-              <header className={styles.columnsMenuHeader}>
-                <span>Columns ({visibleColumns.length - (expandable ? 1 : 0)})</span>
-                <button
-                  type="button"
-                  className={styles.columnsMenuReset}
-                  onClick={resetColumns}
-                  title="Reset to defaults"
-                >
-                  <RotateCcw size={12} strokeWidth={1.75} aria-hidden />
-                  <span>Reset</span>
-                </button>
-              </header>
-              <div className={styles.columnsMenuBody}>
-                {columns.map((c) => {
-                  const isHidden = effectiveHidden.has(c.key);
-                  return (
-                    <label key={c.key} className={styles.columnsMenuItem}>
-                      <input
-                        type="checkbox"
-                        checked={!isHidden}
-                        onChange={() => toggleColumn(c.key)}
-                      />
-                      <span>{c.label || c.key}</span>
-                    </label>
-                  );
-                })}
+            <>
+              <div
+                className={styles.columnsMenuBackdrop}
+                onClick={() => setColumnsMenuOpen(false)}
+              />
+              <div className={styles.columnsMenu} onClick={(e) => e.stopPropagation()}>
+                <header className={styles.columnsMenuHeader}>
+                  <span>Columns ({visibleColumns.length - (expandable ? 1 : 0)})</span>
+                  <button
+                    type="button"
+                    className={styles.columnsMenuReset}
+                    onClick={resetColumns}
+                    title="Reset to defaults"
+                  >
+                    <RotateCcw size={12} strokeWidth={1.75} aria-hidden />
+                    <span>Reset</span>
+                  </button>
+                </header>
+                <div className={styles.columnsMenuBody}>
+                  {columns.map((c) => {
+                    const isHidden = effectiveHidden.has(c.key);
+                    return (
+                      <label key={c.key} className={styles.columnsMenuItem}>
+                        <input
+                          type="checkbox"
+                          checked={!isHidden}
+                          onChange={() => toggleColumn(c.key)}
+                        />
+                        <span>{c.label || c.key}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            </>
           )}
-        </div>
-        <div className={styles.searchWrap}>
-          <Search {...ICON} aria-hidden />
-          <input
-            ref={searchRef}
-            className={styles.searchInput}
-            type="search"
-            placeholder={searchPlaceholder}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
         </div>
       </div>
 
