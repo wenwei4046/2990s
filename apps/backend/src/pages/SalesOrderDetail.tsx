@@ -16,7 +16,9 @@
 // PATCH /:docNo/status, GET /debtors/search.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import {
+  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
@@ -187,6 +189,33 @@ export const SalesOrderDetail = () => {
   const [overriding, setOverriding] = useState<SoItem | null>(null);
   const [unlockOverride, setUnlockOverride] = useState(false);
 
+  /* PR-A — Page-level Edit/Save framework. Default is read-only: all inputs
+     are disabled, the "+ Add Line Item" button + per-line trash icons are
+     hidden, and CustomerCard's own Save button is suppressed. Click Edit in
+     the page header → entire page enters edit mode (CustomerCard inputs
+     unlock, line-item actions appear, Edit button is replaced with Save +
+     Cancel). Save commits via updateHeader; Cancel resets the local form.
+     Status transitions remain accessible outside edit mode. */
+  const [isEditing, setIsEditing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const customerCardRef = useRef<CustomerCardHandle | null>(null);
+
+  const enterEdit  = () => { setSaveError(null); setIsEditing(true); };
+  const cancelEdit = () => {
+    customerCardRef.current?.reset();
+    setSaveError(null);
+    setIsEditing(false);
+  };
+  const saveEdit = () => {
+    const handle = customerCardRef.current;
+    if (!handle) return;
+    setSaveError(null);
+    handle.save({
+      onSuccess: () => setIsEditing(false),
+      onError:   (msg) => setSaveError(msg),
+    });
+  };
+
   // Lock mechanism — once SO leaves DRAFT, edits require explicit override.
   // CANCELLED + CLOSED + INVOICED are also locked (terminal-ish states).
   // PR #145 + #146 — IN_PRODUCTION + READY_TO_SHIP removed from forward
@@ -264,8 +293,40 @@ export const SalesOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* PR-A — Page-level Edit/Save/Cancel. Default view is read-only
+              (Edit shown). In edit mode, Edit is replaced by Save + Cancel.
+              Edit is disabled while the SO is locked (e.g. SHIPPED+) unless
+              the override is in effect. */}
+          {!isEditing ? (
+            <Button variant="primary" size="md"
+              onClick={enterEdit} disabled={isLocked}>
+              <Pencil {...ICON} />
+              <span>Edit</span>
+            </Button>
+          ) : (
+            <>
+              <Button variant="ghost" size="md"
+                onClick={cancelEdit} disabled={updateHeader.isPending}>
+                <span>Cancel</span>
+              </Button>
+              <Button variant="primary" size="md"
+                onClick={saveEdit} disabled={updateHeader.isPending}>
+                <Save {...ICON} />
+                <span>{updateHeader.isPending ? 'Saving…' : 'Save'}</span>
+              </Button>
+            </>
+          )}
         </div>
       </div>
+
+      {/* PR-A — Inline error from the page-level Save. Cleared on Edit /
+          Cancel / next successful Save. */}
+      {saveError && (
+        <div className={styles.bannerWarn}>
+          <strong>Save failed.</strong>
+          <span>{saveError}</span>
+        </div>
+      )}
 
       {/* ── Lock banner ─────────────────────────────────────────── */}
       {lockedStatuses.includes(header.status) && (
@@ -306,10 +367,18 @@ export const SalesOrderDetail = () => {
 
       {/* ── Customer info ───────────────────────────────────────── */}
       <CustomerCard
+        ref={customerCardRef}
         header={header}
-        onSave={(patch) => updateHeader.mutate({ docNo: header.doc_no, ...patch })}
+        onSave={(patch, cb) => updateHeader.mutate(
+          { docNo: header.doc_no, ...patch },
+          {
+            onSuccess: () => cb?.onSuccess?.(),
+            onError:   (e) => cb?.onError?.(e instanceof Error ? e.message : String(e)),
+          },
+        )}
         saving={updateHeader.isPending}
         locked={isLocked}
+        isEditing={isEditing}
       />
 
       {/* PR #140 — Commander 2026-05-26: "这个 multi address、customer PO
@@ -323,10 +392,13 @@ export const SalesOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
-            <Plus {...ICON} />
-            <span>Add Line Item</span>
-          </Button>
+          {/* PR-A — Add Line Item is only shown in edit mode. */}
+          {isEditing && (
+            <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
+              <Plus {...ICON} />
+              <span>Add Line Item</span>
+            </Button>
+          )}
         </header>
 
         {items.length === 0 ? (
@@ -360,31 +432,38 @@ export const SalesOrderDetail = () => {
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.total_centi, header.currency)}</td>
                   <td>
-                    <span className={styles.actionsCell}>
-                      <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
-                        onClick={() => !isLocked && setEditing(it)}>
-                        <Pencil {...SM_ICON} />
-                      </button>
-                      <button type="button" className={styles.iconBtn} title="Override price"
-                        disabled={isLocked}
-                        onClick={() => !isLocked && setOverriding(it)}>
-                        <DollarSign {...SM_ICON} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        title="Delete"
-                        disabled={isLocked}
-                        onClick={() => {
-                          if (isLocked) return;
-                          if (confirm(`Remove ${it.item_code} from this SO?`)) {
-                            deleteItem.mutate({ docNo: header.doc_no, itemId: it.id });
-                          }
-                        }}
-                      >
-                        <Trash2 {...SM_ICON} />
-                      </button>
-                    </span>
+                    {/* PR-A — Line-item Edit / Override / Delete actions are
+                        only rendered in edit mode. Read-only view shows an
+                        em-dash placeholder so the column doesn't collapse. */}
+                    {isEditing ? (
+                      <span className={styles.actionsCell}>
+                        <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
+                          onClick={() => !isLocked && setEditing(it)}>
+                          <Pencil {...SM_ICON} />
+                        </button>
+                        <button type="button" className={styles.iconBtn} title="Override price"
+                          disabled={isLocked}
+                          onClick={() => !isLocked && setOverriding(it)}>
+                          <DollarSign {...SM_ICON} />
+                        </button>
+                        <button
+                          type="button"
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          title="Delete"
+                          disabled={isLocked}
+                          onClick={() => {
+                            if (isLocked) return;
+                            if (confirm(`Remove ${it.item_code} from this SO?`)) {
+                              deleteItem.mutate({ docNo: header.doc_no, itemId: it.id });
+                            }
+                          }}
+                        >
+                          <Trash2 {...SM_ICON} />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -527,19 +606,45 @@ export const SalesOrderDetail = () => {
    Customer info card — editable, with debtor autocomplete
    ════════════════════════════════════════════════════════════════════════ */
 
-const CustomerCard = ({
-  header,
-  onSave,
-  saving,
-}: {
+/* PR-A — Imperative handle for the page-level Edit/Save framework.
+   The parent calls save() with onSuccess/onError callbacks; reset() reverts
+   the local form to the current header snapshot (used by Cancel). */
+type CustomerCardHandle = {
+  save: (cb: { onSuccess: () => void; onError: (msg: string) => void }) => void;
+  reset: () => void;
+};
+
+type CustomerCardProps = {
   header: SoHeader;
-  onSave: (patch: Record<string, unknown>) => void;
+  /** PR-A — Optional callbacks let the parent's page-level Save flow know
+      when the mutation succeeded or failed, so it can return to read-only /
+      surface an inline error. The per-card Save button (legacy) still works
+      without callbacks. */
+  onSave: (
+    patch: Record<string, unknown>,
+    cb?: { onSuccess?: () => void; onError?: (msg: string) => void },
+  ) => void;
   saving: boolean;
   /** When true, disable input editing — accepted but consumer must show
       the visual lock. We keep the prop optional so existing call sites
       compile. */
   locked?: boolean;
-}) => {
+  /** PR-A — Page-level edit mode. When false (default), every input in this
+      card is disabled and the per-card Save button is hidden — the parent
+      page renders Edit/Save/Cancel in its own header. */
+  isEditing?: boolean;
+};
+
+const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
+  header,
+  onSave,
+  /* PR-A — `saving` prop kept on the type for compatibility but the
+     per-card Save button it drove was removed. The page-level Save in
+     SalesOrderDetail's header now surfaces the in-flight spinner. */
+  saving: _saving,
+  locked = false,
+  isEditing = false,
+}, ref) => {
   // PR #39 — POS-aligned customer + address form. Maps:
   //   • address1, address2 → free-text lines (POS "Address line 1/2")
   //   • address3           → city (cascade from localities)
@@ -563,29 +668,41 @@ const CustomerCard = ({
   //   - processingDate (= internal_expected_dd column, just renamed for UI)
   //   - customerDeliveryDate
   // The DB column `internal_expected_dd` stays — only the label changes.
-  const [form, setForm] = useState({
-    customerCode: header.debtor_code ?? '',
-    customerName: header.debtor_name ?? '',
-    email: header.email ?? '',
-    customerType: header.customer_type ?? '',
-    salespersonId: header.salesperson_id ?? '',
-    buildingType: header.building_type ?? '',
+  /* PR-A — initialFormFor() is the single source-of-truth for what the
+     local form looks like when reset (Cancel) or when the header reloads
+     after a successful Save. Keeps the snapshot + reset paths consistent. */
+  const initialFormFor = (h: SoHeader) => ({
+    /* customerCode kept in state but the UI no longer renders an input
+       (commander 2026-05-27: "customer code 不需要"). Payload still sends
+       debtorCode so the server-side mapping is unchanged. */
+    customerCode: h.debtor_code ?? '',
+    customerName: h.debtor_name ?? '',
+    /* PR-A — customer's own SO reference number (their ERP doc no). The
+       column has existed since PR #121; this exposes it as an editable
+       field inside the Customer sub-section. */
+    customerSoNo: h.customer_so_no ?? '',
+    email: h.email ?? '',
+    customerType: h.customer_type ?? '',
+    salespersonId: h.salesperson_id ?? '',
+    buildingType: h.building_type ?? '',
     /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Reinstate
        venue as a free-text field separate from Building Type. */
-    venue: header.venue ?? '',
-    phone: header.phone ?? '',
-    address1: header.address1 ?? '',
-    address2: header.address2 ?? '',
-    city: header.city ?? header.address3 ?? '',
-    postcode: header.postcode ?? header.address4 ?? '',
-    state: header.customer_state ?? '',
-    emergencyContactName: header.emergency_contact_name ?? '',
-    emergencyContactPhone: header.emergency_contact_phone ?? '',
-    emergencyContactRelationship: header.emergency_contact_relationship ?? '',
-    processingDate: header.internal_expected_dd ?? '',
-    customerDeliveryDate: header.customer_delivery_date ?? '',
-    note: header.note ?? '',
+    venue: h.venue ?? '',
+    phone: h.phone ?? '',
+    address1: h.address1 ?? '',
+    address2: h.address2 ?? '',
+    city: h.city ?? h.address3 ?? '',
+    postcode: h.postcode ?? h.address4 ?? '',
+    state: h.customer_state ?? '',
+    emergencyContactName: h.emergency_contact_name ?? '',
+    emergencyContactPhone: h.emergency_contact_phone ?? '',
+    emergencyContactRelationship: h.emergency_contact_relationship ?? '',
+    processingDate: h.internal_expected_dd ?? '',
+    customerDeliveryDate: h.customer_delivery_date ?? '',
+    note: h.note ?? '',
   });
+
+  const [form, setForm] = useState(() => initialFormFor(header));
   const [showSuggest, setShowSuggest] = useState(false);
   const debtorQuery = useDebtorSearch(form.customerName);
   const suggestions = (debtorQuery.data?.debtors ?? []).filter(
@@ -593,27 +710,8 @@ const CustomerCard = ({
   );
 
   useEffect(() => {
-    setForm({
-      customerCode: header.debtor_code ?? '',
-      customerName: header.debtor_name ?? '',
-      email: header.email ?? '',
-      customerType: header.customer_type ?? '',
-      salespersonId: header.salesperson_id ?? '',
-      buildingType: header.building_type ?? '',
-      venue: header.venue ?? '',
-      phone: header.phone ?? '',
-      address1: header.address1 ?? '',
-      address2: header.address2 ?? '',
-      city: header.city ?? header.address3 ?? '',
-      postcode: header.postcode ?? header.address4 ?? '',
-      state: header.customer_state ?? '',
-      emergencyContactName: header.emergency_contact_name ?? '',
-      emergencyContactPhone: header.emergency_contact_phone ?? '',
-      emergencyContactRelationship: header.emergency_contact_relationship ?? '',
-      processingDate: header.internal_expected_dd ?? '',
-      customerDeliveryDate: header.customer_delivery_date ?? '',
-      note: header.note ?? '',
-    });
+    setForm(initialFormFor(header));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [header]);
 
   const set = <K extends keyof typeof form>(k: K, v: string) =>
@@ -651,6 +749,9 @@ const CustomerCard = ({
   const buildPayload = () => ({
     debtorCode: form.customerCode,
     debtorName: form.customerName,
+    /* PR-A — Persist customer's own SO ref. Empty string → null so we
+       clear the column when the field is blanked. */
+    customerSoNo: form.customerSoNo || null,
     email: form.email,
     customerType: form.customerType,
     salespersonId: form.salespersonId || null,
@@ -680,25 +781,38 @@ const CustomerCard = ({
   const datesXor =
     (form.processingDate.trim() !== '') !== (form.customerDeliveryDate.trim() !== '');
 
-  const trySave = () => {
+  const trySave = (cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
     if (datesXor) {
-      window.alert(
+      const msg =
         'Processing Date and Delivery Date must be set together.\n\n' +
-        'Either fill in BOTH dates, or leave BOTH empty.',
-      );
+        'Either fill in BOTH dates, or leave BOTH empty.';
+      if (cb?.onError) cb.onError(msg);
+      else window.alert(msg);
       return;
     }
-    onSave(buildPayload());
+    onSave(buildPayload(), cb);
   };
+
+  /* PR-A — Expose imperative save()/reset() so the page-level Edit/Save/
+     Cancel buttons can drive this card without lifting all of its form
+     state to the parent. No deps array → handle re-binds every render so
+     `save` always closes over the latest form snapshot. */
+  useImperativeHandle(ref, () => ({
+    save: (cb) => trySave(cb),
+    reset: () => setForm(initialFormFor(header)),
+  }));
+
+  /* PR-A — Inputs are read-only when the page isn't in edit mode OR the
+     SO is locked (post-SHIPPED). Combining both keeps the existing lock
+     semantics intact. */
+  const inputsDisabled = !isEditing || locked;
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Customer · Addresses</h2>
-        <Button variant="primary" size="sm" onClick={trySave} disabled={saving || datesXor}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
+        {/* PR-A — Per-card Save removed. The page-level Save in the page
+            header is now the single commit point for header edits. */}
       </header>
       <div className={styles.cardBody}>
         {/* ── 1. Customer ───────────────────────────────────────────── */}
@@ -709,22 +823,22 @@ const CustomerCard = ({
             from order scheduling. */}
         <div className={styles.subSection}>
           <p className={styles.subHead}>Customer</p>
+          {/* PR-A — Customer Code input removed (commander 2026-05-27:
+              "customer code 不需要"). Field still flows through state +
+              payload so the server-side mapping is untouched.
+              Customer SO Ref added next to Customer Name. */}
           <div className={styles.formGrid4}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Customer Code</span>
-              <input className={styles.fieldInput} value={form.customerCode}
-                onChange={(e) => set('customerCode', e.target.value)} />
-            </label>
             <label className={styles.field} style={{ gridColumn: 'span 3' }}>
               <span className={styles.fieldLabel}>Customer Name *</span>
               <input
                 className={styles.fieldInput}
                 value={form.customerName}
+                disabled={inputsDisabled}
                 onChange={(e) => { set('customerName', e.target.value); setShowSuggest(true); }}
                 onFocus={() => setShowSuggest(true)}
                 onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
               />
-              {showSuggest && suggestions.length > 0 && (
+              {showSuggest && suggestions.length > 0 && !inputsDisabled && (
                 <ul className={styles.suggestList}>
                   {suggestions.slice(0, 8).map((d, i) => (
                     <li
@@ -744,18 +858,28 @@ const CustomerCard = ({
               )}
             </label>
             <label className={styles.field}>
+              <span className={styles.fieldLabel}>Customer SO Ref</span>
+              <input className={styles.fieldInput} value={form.customerSoNo}
+                placeholder="Their PO / SO number"
+                disabled={inputsDisabled}
+                onChange={(e) => set('customerSoNo', e.target.value)} />
+            </label>
+            <label className={styles.field}>
               <span className={styles.fieldLabel}>Phone *</span>
               <input className={styles.fieldInput} value={form.phone}
+                disabled={inputsDisabled}
                 onChange={(e) => set('phone', e.target.value)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Email *</span>
               <input type="email" className={styles.fieldInput} value={form.email}
+                disabled={inputsDisabled}
                 onChange={(e) => set('email', e.target.value)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Type</span>
               <select className={styles.fieldSelect} value={form.customerType}
+                disabled={inputsDisabled}
                 onChange={(e) => set('customerType', e.target.value)}>
                 <option value="">—</option>
                 <option value="NEW">New</option>
@@ -765,6 +889,7 @@ const CustomerCard = ({
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Salesperson</span>
               <select className={styles.fieldSelect} value={form.salespersonId}
+                disabled={inputsDisabled}
                 onChange={(e) => set('salespersonId', e.target.value)}>
                 <option value="">— Pick staff —</option>
                 {staffList.map((s) => (
@@ -782,6 +907,7 @@ const CustomerCard = ({
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Building Type</span>
               <select className={styles.fieldSelect} value={form.buildingType}
+                disabled={inputsDisabled}
                 onChange={(e) => set('buildingType', e.target.value)}>
                 <option value="">—</option>
                 {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
@@ -791,23 +917,27 @@ const CustomerCard = ({
               <span className={styles.fieldLabel}>Venue</span>
               <input className={styles.fieldInput} value={form.venue}
                 placeholder="e.g. KL Showroom, Penang Branch"
+                disabled={inputsDisabled}
                 onChange={(e) => set('venue', e.target.value)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
               <input type="date" className={styles.fieldInput} value={form.processingDate}
+                disabled={inputsDisabled}
                 onChange={(e) => set('processingDate', e.target.value)}
                 style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date</span>
               <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
+                disabled={inputsDisabled}
                 onChange={(e) => set('customerDeliveryDate', e.target.value)}
                 style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Note</span>
               <input className={styles.fieldInput} value={form.note}
+                disabled={inputsDisabled}
                 onChange={(e) => set('note', e.target.value)} />
             </label>
           </div>
@@ -842,18 +972,21 @@ const CustomerCard = ({
               <span className={styles.fieldLabel}>Contact Name</span>
               <input className={styles.fieldInput} value={form.emergencyContactName}
                 placeholder="e.g. Lim Mei Hua"
+                disabled={inputsDisabled}
                 onChange={(e) => set('emergencyContactName', e.target.value)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Relationship</span>
               <input className={styles.fieldInput} value={form.emergencyContactRelationship}
                 placeholder="Spouse / Parent / Sibling …"
+                disabled={inputsDisabled}
                 onChange={(e) => set('emergencyContactRelationship', e.target.value)} />
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Phone</span>
               <input className={styles.fieldInput} value={form.emergencyContactPhone}
                 placeholder="+60 12 345 6789"
+                disabled={inputsDisabled}
                 onChange={(e) => set('emergencyContactPhone', e.target.value)} />
             </label>
           </div>
@@ -867,19 +1000,21 @@ const CustomerCard = ({
               <span className={styles.fieldLabel}>Address Line 1</span>
               <input className={styles.fieldInput} value={form.address1}
                 placeholder="Unit, street, area"
+                disabled={inputsDisabled}
                 onChange={(e) => set('address1', e.target.value)} />
             </label>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Address Line 2</span>
               <input className={styles.fieldInput} value={form.address2}
                 placeholder="Apt, floor, building (optional)"
+                disabled={inputsDisabled}
                 onChange={(e) => set('address2', e.target.value)} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>State</span>
               <select className={styles.fieldSelect} value={form.state}
                 onChange={(e) => setForm((s) => ({ ...s, state: e.target.value, city: '', postcode: '' }))}
-                disabled={localities.isLoading}>
+                disabled={inputsDisabled || localities.isLoading}>
                 <option value="">{localities.isLoading ? 'Loading…' : 'Pick state'}</option>
                 {states.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
@@ -888,7 +1023,7 @@ const CustomerCard = ({
               <span className={styles.fieldLabel}>City</span>
               <select className={styles.fieldSelect} value={form.city}
                 onChange={(e) => setForm((s) => ({ ...s, city: e.target.value, postcode: '' }))}
-                disabled={!form.state}>
+                disabled={inputsDisabled || !form.state}>
                 <option value="">{form.state ? 'Pick city' : '— pick state first'}</option>
                 {cities.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -897,7 +1032,7 @@ const CustomerCard = ({
               <span className={styles.fieldLabel}>Postcode</span>
               <select className={styles.fieldSelect} value={form.postcode}
                 onChange={(e) => set('postcode', e.target.value)}
-                disabled={!form.city}>
+                disabled={inputsDisabled || !form.city}>
                 <option value="">{form.city ? 'Pick postcode' : '— pick city first'}</option>
                 {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
@@ -916,7 +1051,8 @@ const CustomerCard = ({
       </div>
     </section>
   );
-};
+});
+CustomerCard.displayName = 'CustomerCard';
 
 /* ════════════════════════════════════════════════════════════════════════
    Variants summary pills (for line items table)
