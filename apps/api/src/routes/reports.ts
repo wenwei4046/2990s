@@ -43,6 +43,15 @@ reports.get('/sales-order-detail-listing', async (c) => {
   // Pull SO header + items as nested join. supabase-js renders the nested
   // table as a property on the item row — we flatten it back out below so
   // the client doesn't need to traverse mfg_sales_orders.*.
+  //
+  // Task #63 (Houzs port gap closure) — also surface:
+  //   * Line-level variants extraction: fabric, divan_height_inches,
+  //     leg_height_inches, custom_specials (jsonb array) — so the Detail
+  //     Listing's Fabric / Divan Height / Leg Height / Specials columns
+  //     render real values instead of dashes.
+  //   * Header-level: approval_code, remark2 (already in select).
+  //   * Payment ledger (separate query below): account_sheet, approval_code,
+  //     collected_by (resolved to staff.name), last paid_at.
   let q = sb
     .from('mfg_sales_order_items')
     .select(`
@@ -51,11 +60,12 @@ reports.get('/sales-order-detail-listing', async (c) => {
       total_centi, tax_centi, total_inc_centi, balance_centi, payment_status, venue,
       branding, remark, cancelled, variants, created_at,
       unit_cost_centi, line_cost_centi, line_margin_centi,
+      divan_height_inches, leg_height_inches, custom_specials,
       mfg_sales_orders!inner (
         doc_no, so_date, debtor_code, debtor_name, agent, branding, venue, ref,
         po_doc_no, phone, address1, address2, address3, address4,
         currency, status, remark2, remark3, remark4, note,
-        processing_date, sales_exemption_expiry,
+        processing_date, sales_exemption_expiry, approval_code,
         local_total_centi, balance_centi, paid_centi, deposit_centi,
         mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi,
         mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi,
@@ -90,6 +100,12 @@ reports.get('/sales-order-detail-listing', async (c) => {
     mfg_sales_orders: Record<string, unknown> | Record<string, unknown>[] | null;
     line_date: string | null;
     doc_no: string;
+    /* Task #63 — line-level fields surfaced for the Houzs Detail Listing
+       Fabric / Divan Height / Leg Height / Specials columns. */
+    variants:             Record<string, unknown> | null;
+    divan_height_inches:  number | null;
+    leg_height_inches:    number | null;
+    custom_specials:      unknown;
   };
   // Cast via `unknown` first — the joined select gives a row type that
   // doesn't structurally overlap with ItemRow until we narrow it.
@@ -98,18 +114,67 @@ reports.get('/sales-order-detail-listing', async (c) => {
   // PR-C deprecated the `paid_centi` column on mfg_sales_orders — paid totals
   // are now derived live from the mfg_sales_order_payments ledger. Aggregate
   // once for all docs in this result and attach as `paid_total_centi`.
+  //
+  // Task #63 — also capture per-doc: last_payment_at (MAX paid_at), and the
+  // most-recent payment's account_sheet / approval_code / collected_by.
+  // collected_by is a staff.id uuid, so resolve once via a second batch
+  // query to staff to surface the human-readable name.
   const docNos = Array.from(new Set(itemsRaw.map((i) => i.doc_no))).filter(Boolean);
   const paidByDoc = new Map<string, number>();
+  type PaymentMeta = {
+    lastPaidAt: string | null;
+    accountSheet: string | null;
+    approvalCode: string | null;
+    collectedById: string | null;
+  };
+  const paymentMetaByDoc = new Map<string, PaymentMeta>();
   if (docNos.length > 0) {
     const { data: paymentTotals, error: payErr } = await sb
       .from('mfg_sales_order_payments')
-      .select('so_doc_no, amount_centi')
+      .select('so_doc_no, amount_centi, paid_at, account_sheet, approval_code, collected_by')
       .in('so_doc_no', docNos);
     if (payErr) return c.json({ error: 'load_failed', reason: payErr.message }, 500);
     for (const p of paymentTotals ?? []) {
-      const key = (p as { so_doc_no: string }).so_doc_no;
-      const amt = Number((p as { amount_centi: number }).amount_centi ?? 0);
-      paidByDoc.set(key, (paidByDoc.get(key) ?? 0) + amt);
+      const row = p as {
+        so_doc_no: string;
+        amount_centi: number | null;
+        paid_at: string | null;
+        account_sheet: string | null;
+        approval_code: string | null;
+        collected_by: string | null;
+      };
+      const key = row.so_doc_no;
+      paidByDoc.set(key, (paidByDoc.get(key) ?? 0) + Number(row.amount_centi ?? 0));
+      const prev = paymentMetaByDoc.get(key);
+      // "Most recent" = max paid_at; on tie keep first seen. Null paid_at
+      // sorts older than any real date.
+      const isNewer = !prev || !prev.lastPaidAt || (row.paid_at && row.paid_at > prev.lastPaidAt);
+      if (isNewer) {
+        paymentMetaByDoc.set(key, {
+          lastPaidAt:    row.paid_at ?? prev?.lastPaidAt ?? null,
+          accountSheet:  row.account_sheet  ?? prev?.accountSheet  ?? null,
+          approvalCode:  row.approval_code  ?? prev?.approvalCode  ?? null,
+          collectedById: row.collected_by   ?? prev?.collectedById ?? null,
+        });
+      }
+    }
+  }
+
+  // Resolve collected_by uuids → staff.name in a single batch query so
+  // each row can display a human-readable collector name.
+  const collectorIds = Array.from(new Set(
+    [...paymentMetaByDoc.values()].map((m) => m.collectedById).filter((v): v is string => Boolean(v))
+  ));
+  const staffNameById = new Map<string, string>();
+  if (collectorIds.length > 0) {
+    const { data: staffRows, error: staffErr } = await sb
+      .from('staff')
+      .select('id, name')
+      .in('id', collectorIds);
+    if (staffErr) return c.json({ error: 'load_failed', reason: staffErr.message }, 500);
+    for (const s of staffRows ?? []) {
+      const row = s as { id: string; name: string | null };
+      if (row.id && row.name) staffNameById.set(row.id, row.name);
     }
   }
 
@@ -139,6 +204,26 @@ reports.get('/sales-order-detail-listing', async (c) => {
       flat.customer_delivery_date = h.customer_delivery_date ?? null;
       // Per-doc paid total from the payments ledger (replaces legacy paid_centi).
       flat.paid_total_centi = paidByDoc.get(r.doc_no) ?? 0;
+      // Task #63 — extract `fabricColor` from the variants jsonb so the
+      // Detail Listing's Fabric column has a typed string to render.
+      // Keep `divan_height` / `leg_height` aliases (without `_inches`) so
+      // the frontend reads them under the canonical column key.
+      const variantsObj = (r.variants ?? null) as Record<string, unknown> | null;
+      flat.fabric        = variantsObj && typeof variantsObj.fabricColor === 'string'
+        ? (variantsObj.fabricColor as string)
+        : null;
+      flat.divan_height  = r.divan_height_inches ?? null;
+      flat.leg_height    = r.leg_height_inches  ?? null;
+      // Per-doc payment meta (last receipt only — Houzs surfaces the most
+      // recent receipt's metadata, not an aggregate).
+      const pm = paymentMetaByDoc.get(r.doc_no);
+      flat.last_payment_at = pm?.lastPaidAt   ?? null;
+      flat.account_sheet   = pm?.accountSheet ?? null;
+      // approval_code: prefer the payment ledger value; fall back to the
+      // header-level approval_code (legacy single-shot SOs predating the
+      // payments ledger still carry it on the header).
+      flat.approval_code   = pm?.approvalCode ?? (h.approval_code as string | null) ?? null;
+      flat.collected_by    = pm?.collectedById ? (staffNameById.get(pm.collectedById) ?? null) : null;
       return flat;
     })
     .filter((r) => {
