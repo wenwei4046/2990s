@@ -12,6 +12,7 @@ import {
   Plus, Pencil, Eye, Search, FileText, Printer, ListChecks, Trash2, RefreshCw,
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { formatPhone } from '@2990s/shared/phone';
 import { useMfgSalesOrders, useUpdateMfgSalesOrderStatus } from '../lib/flow-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
@@ -367,9 +368,11 @@ const COLUMNS: DataGridColumn<SoRow>[] = [
     searchValue: (r) => r.address4 ?? '',
   },
   {
+    /* Task #91 — display the pretty Malaysian format. searchValue keeps the
+       raw stored value so a user can paste either form into Find and match. */
     key: 'phone', label: 'Phone', width: 130, sortable: true,
-    accessor: (r) => r.phone ?? '',
-    searchValue: (r) => r.phone ?? '',
+    accessor: (r) => formatPhone(r.phone) || '',
+    searchValue: (r) => `${r.phone ?? ''} ${formatPhone(r.phone) ?? ''}`,
   },
   {
     key: 'venue', label: 'Venue', width: 130, sortable: true, groupable: true,

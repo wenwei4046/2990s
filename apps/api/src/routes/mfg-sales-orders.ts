@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import type { Env, Variables } from '../env';
@@ -149,7 +150,12 @@ mfgSalesOrders.post('/', async (c) => {
     address2: (body.address2 as string) ?? null,
     address3: (body.address3 as string) ?? null,
     address4: (body.address4 as string) ?? null,
-    phone: (body.phone as string) ?? null,
+    /* Task #91 — defensively normalize to E.164 storage form. The UI does this
+       on blur via <PhoneInput>, but a misbehaving client could still POST a
+       raw "+60 12 345 6789" — normalize once on the server so the DB never
+       holds a half-typed format. Falls back to the raw value if normalize
+       returns null (e.g. non-MY international numbers we don't recognise). */
+    phone: typeof body.phone === 'string' ? (normalizePhone(body.phone) ?? body.phone) : null,
     mattress_sofa_centi: mattressSofa,
     bedframe_centi: bedframe,
     accessories_centi: accessories,
@@ -171,7 +177,10 @@ mfgSalesOrders.post('/', async (c) => {
     postcode: (body.postcode as string) ?? null,
     building_type: (body.buildingType as string) ?? null,
     emergency_contact_name: (body.emergencyContactName as string) ?? null,
-    emergency_contact_phone: (body.emergencyContactPhone as string) ?? null,
+    /* Task #91 — also normalize the emergency contact phone. */
+    emergency_contact_phone: typeof body.emergencyContactPhone === 'string'
+      ? (normalizePhone(body.emergencyContactPhone) ?? body.emergencyContactPhone)
+      : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
     target_date: (body.targetDate as string) ?? null,
     customer_id: (body.customerId as string) ?? null,
@@ -422,9 +431,19 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     ['depositCenti', 'deposit_centi'],
     ['paidCenti', 'paid_centi'],
   ];
+  /* Task #91 — phone columns get normalized to E.164 storage form before any
+     UPDATE. UI sends the storage form already (PhoneInput blur), but a
+     misbehaving client could still PATCH a raw "+60 12 345 6789". */
+  const PHONE_FIELDS = new Set(['phone', 'emergencyContactPhone']);
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const [from, to] of map) {
-    if (body[from] !== undefined) updates[to] = body[from];
+    if (body[from] === undefined) continue;
+    if (PHONE_FIELDS.has(from) && typeof body[from] === 'string') {
+      const raw = body[from] as string;
+      updates[to] = normalizePhone(raw) ?? raw;
+    } else {
+      updates[to] = body[from];
+    }
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 

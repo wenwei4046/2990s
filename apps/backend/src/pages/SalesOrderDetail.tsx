@@ -26,6 +26,8 @@ import {
   DollarSign, Lock, History, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { formatPhone } from '@2990s/shared/phone';
+import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
@@ -906,7 +908,7 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                       <div>{d.debtor_name}</div>
                       {(d.debtor_code || d.phone) && (
                         <div className={styles.suggestCode}>
-                          {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{d.phone ?? ''}
+                          {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{formatPhone(d.phone) || ''}
                         </div>
                       )}
                     </li>
@@ -923,9 +925,14 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Phone *</span>
-              <input className={styles.fieldInput} value={form.phone}
+              {/* Task #91 — PhoneInput normalizes to E.164 on blur and shows
+                  the pretty Malaysian format when unfocused. */}
+              <PhoneInput
+                className={styles.fieldInput}
+                value={form.phone}
                 disabled={inputsDisabled}
-                onChange={(e) => set('phone', e.target.value)} />
+                onChange={(v) => set('phone', v)}
+              />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Email *</span>
@@ -1041,10 +1048,12 @@ const CustomerCard = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             </label>
             <label className={styles.field} style={{ gridColumn: 'span 2' }}>
               <span className={styles.fieldLabel}>Phone</span>
-              <input className={styles.fieldInput} value={form.emergencyContactPhone}
-                placeholder="+60 12 345 6789"
+              <PhoneInput
+                className={styles.fieldInput}
+                value={form.emergencyContactPhone}
                 disabled={inputsDisabled}
-                onChange={(e) => set('emergencyContactPhone', e.target.value)} />
+                onChange={(v) => set('emergencyContactPhone', v)}
+              />
             </label>
           </div>
         </div>

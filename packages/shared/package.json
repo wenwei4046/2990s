@@ -9,6 +9,7 @@
     "./sofa-build": "./src/sofa-build.ts",
     "./order-rules": "./src/order-rules.ts",
     "./format": "./src/format.ts",
+    "./phone": "./src/phone.ts",
     "./schemas": "./src/schemas/index.ts"
   },
   "scripts": {
