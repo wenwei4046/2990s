@@ -50,6 +50,7 @@ reports.get('/sales-order-detail-listing', async (c) => {
       description, description2, uom, location, qty, unit_price_centi, discount_centi,
       total_centi, tax_centi, total_inc_centi, balance_centi, payment_status, venue,
       branding, remark, cancelled, variants, created_at,
+      unit_cost_centi, line_cost_centi, line_margin_centi,
       mfg_sales_orders!inner (
         doc_no, so_date, debtor_code, debtor_name, agent, branding, venue, ref,
         po_doc_no, phone, address1, address2, address3, address4,
@@ -57,6 +58,8 @@ reports.get('/sales-order-detail-listing', async (c) => {
         processing_date, sales_exemption_expiry,
         local_total_centi, balance_centi, paid_centi, deposit_centi,
         mattress_sofa_centi, bedframe_centi, accessories_centi, others_centi,
+        mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi,
+        total_cost_centi, total_margin_centi, margin_pct_basis,
         customer_delivery_date, internal_expected_dd, target_date,
         customer_state, customer_po, customer_po_id, customer_po_date, customer_so_no,
         hub_name

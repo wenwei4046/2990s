@@ -241,6 +241,61 @@ const buildColumns = (
     searchValue: (r) => fmtRm(r.total_centi, r.currency),
     sortFn: (a, b) => (a.total_centi ?? 0) - (b.total_centi ?? 0),
   },
+  /* Task #114 — Cost / Margin trio. Server snapshots cost from
+     mfg_products on insert; the report joins line_cost_centi + line_margin
+     so the listing matches the Houzs SO Details report. Margin %
+     pill color matches the Houzs ladder (≥50% emerald, ≥30% amber,
+     >0 orange, ≤0 red). */
+  {
+    key: 'unit_cost', label: 'Unit Cost', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => (r.unit_cost_centi ?? 0) > 0 ? fmtRm(r.unit_cost_centi, r.currency) : '—',
+    searchValue: (r) => fmtRm(r.unit_cost_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.unit_cost_centi ?? 0) - (b.unit_cost_centi ?? 0),
+  },
+  {
+    key: 'line_cost', label: 'Line Cost', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => (r.line_cost_centi ?? 0) > 0 ? fmtRm(r.line_cost_centi, r.currency) : '—',
+    searchValue: (r) => fmtRm(r.line_cost_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.line_cost_centi ?? 0) - (b.line_cost_centi ?? 0),
+  },
+  {
+    key: 'line_margin', label: 'Margin', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => {
+      const m = r.line_margin_centi ?? 0;
+      if ((r.total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const color = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+      return <span style={{ color, fontWeight: 600 }}>{fmtRm(m, r.currency)}</span>;
+    },
+    searchValue: (r) => fmtRm(r.line_margin_centi ?? 0, r.currency),
+    sortFn: (a, b) => (a.line_margin_centi ?? 0) - (b.line_margin_centi ?? 0),
+  },
+  {
+    key: 'margin_pct', label: 'Margin %', width: 110, align: 'right', sortable: true, groupable: false,
+    accessor: (r) => {
+      const rev = r.total_centi ?? 0;
+      if (rev <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const pct = ((r.line_margin_centi ?? 0) / rev) * 100;
+      const color = pct >= 50 ? 'var(--c-secondary-a, #2F5D4F)'
+        : pct >= 30 ? 'var(--c-festive-a, #C77F3E)'
+        : pct > 0   ? 'var(--c-burnt)'
+        : 'var(--c-festive-b, #B8331F)';
+      return <span style={{
+        color,
+        fontWeight: 700,
+        fontVariantNumeric: 'tabular-nums',
+      }}>{pct.toFixed(1)}%</span>;
+    },
+    searchValue: (r) => {
+      const rev = r.total_centi ?? 0;
+      if (rev <= 0) return '';
+      return `${(((r.line_margin_centi ?? 0) / rev) * 100).toFixed(1)}%`;
+    },
+    sortFn: (a, b) => {
+      const aPct = (a.total_centi ?? 0) > 0 ? (a.line_margin_centi ?? 0) / a.total_centi! : 0;
+      const bPct = (b.total_centi ?? 0) > 0 ? (b.line_margin_centi ?? 0) / b.total_centi! : 0;
+      return aPct - bPct;
+    },
+  },
   // Tax (line) — constant 0.00 while no-SST regime is in effect.
   {
     key: 'line_tax', label: 'Tax', width: 90, align: 'right', sortable: false, groupable: false,
@@ -380,6 +435,34 @@ export const SalesOrderDetailListing = () => {
     if (!hideUnchecked) return rawRows;
     return rawRows.filter((r) => checked[r.id]);
   }, [rawRows, checked, hideUnchecked]);
+
+  /* Task #114 — Page-level KPI bar mirroring the Houzs SO Details
+     report header. 6 tiles computed from the same filtered row set the
+     grid renders: Total Lines, Unique Orders, Revenue, Cost, Margin
+     (with %), Outstanding (deduped per docNo). */
+  const kpis = useMemo(() => {
+    const totalLines = rows.length;
+    const uniqueDocs = new Set<string>();
+    let revenue = 0;
+    let cost = 0;
+    /* Outstanding is a per-doc value (local_total − paid). The line-flat
+       report repeats it per line, so dedupe by docNo before summing. */
+    const outstandingByDoc = new Map<string, number>();
+    for (const r of rows) {
+      uniqueDocs.add(r.doc_no);
+      revenue += r.total_centi ?? 0;
+      cost    += r.line_cost_centi ?? 0;
+      if (!outstandingByDoc.has(r.doc_no)) {
+        const ltc = r.local_total_centi ?? 0;
+        const ptc = r.paid_total_centi ?? 0;
+        outstandingByDoc.set(r.doc_no, Math.max(ltc - ptc, 0));
+      }
+    }
+    const outstanding = [...outstandingByDoc.values()].reduce((s, v) => s + v, 0);
+    const margin = revenue - cost;
+    const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0;
+    return { totalLines, uniqueOrders: uniqueDocs.size, revenue, cost, margin, marginPct, outstanding };
+  }, [rows]);
 
   // ── Sync page-level Group By dropdown → DataGrid layout ─────────
   // The DataGrid reads its layout from localStorage on mount; once the user
@@ -527,6 +610,47 @@ export const SalesOrderDetailListing = () => {
           </div>
         </div>
       </div>
+
+      {/* Task #114 — 6 KPI tiles at the top mirroring the Houzs SO Details
+          report header. Always rendered (zeros before Inquiry runs).
+          Values recompute from the same filtered row set the grid sees. */}
+      {hasRunQuery && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(6, 1fr)',
+          gap: 'var(--space-2)',
+        }}>
+          {([
+            { label: 'Total Lines',    value: kpis.totalLines.toString() },
+            { label: 'Unique Orders',  value: kpis.uniqueOrders.toString() },
+            { label: 'Revenue',        value: fmtRm(kpis.revenue) },
+            { label: 'Cost',           value: fmtRm(kpis.cost) },
+            { label: 'Margin',         value: `${fmtRm(kpis.margin)}${kpis.revenue > 0 ? ` (${kpis.marginPct.toFixed(1)}%)` : ''}`,
+              accent: kpis.margin > 0 ? 'good' as const : kpis.margin < 0 ? 'bad' as const : null },
+            { label: 'Outstanding',    value: fmtRm(kpis.outstanding),
+              accent: kpis.outstanding > 0 ? 'bad' as const : null },
+          ]).map(({ label, value, accent }) => (
+            <div key={label} className={styles.card} style={{
+              padding: 'var(--space-2) var(--space-3)',
+            }}>
+              <div className={styles.cardTitle} style={{ borderBottom: 'none', padding: 0, fontSize: 'var(--fs-10)' }}>
+                {label}
+              </div>
+              <div style={{
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 700,
+                fontSize: 'var(--fs-14)',
+                fontVariantNumeric: 'tabular-nums',
+                color: accent === 'good' ? 'var(--c-secondary-a, #2F5D4F)'
+                  : accent === 'bad' ? 'var(--c-festive-b, #B8331F)'
+                  : 'var(--c-ink)',
+              }}>
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Filter cards (top) ──────────────────────────────────── */}
       {optionsVisible && (
@@ -795,7 +919,10 @@ export const COL_KEYS: string[] = [
   'inclusive', 'subtotal_ex', 'tax_header', 'header_total', 'local_total',
   'cancelled', 'remark4', 'sales_exemption_expiry', 'processing_date',
   'item_group', 'item_code', 'description', 'uom', 'location', 'description2',
-  'qty', 'unit_price', 'discount', 'detail_tax_code', 'line_total', 'line_tax',
+  'qty', 'unit_price', 'discount', 'detail_tax_code', 'line_total',
+  /* Task #114 — cost trio inserted right after line_total. */
+  'unit_cost', 'line_cost', 'line_margin', 'margin_pct',
+  'line_tax',
   'total_ex', 'total_inc', 'creditor_code', 'post_to_po', 'balance', 'payment',
   'remark5', 'remark6',
 ];

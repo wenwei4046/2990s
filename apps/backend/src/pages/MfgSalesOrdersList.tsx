@@ -61,6 +61,21 @@ type SoRow = {
   deposit_centi: number | null;
   status: string;
   currency: string;
+  /* Task #114 — Per-category REVENUE + COST + overall cost/margin from the
+     SO header. All four cost columns added in migration 0079; pre-existing
+     rows backfill on next item mutation (recomputeTotals). Optional on the
+     row type so the list still renders if the API hasn't been redeployed. */
+  mattress_sofa_centi?: number;
+  bedframe_centi?: number;
+  accessories_centi?: number;
+  others_centi?: number;
+  mattress_sofa_cost_centi?: number;
+  bedframe_cost_centi?: number;
+  accessories_cost_centi?: number;
+  others_cost_centi?: number;
+  total_cost_centi?: number;
+  total_margin_centi?: number;
+  margin_pct_basis?: number;
 };
 
 const fmtRm = (centi: number): string =>
@@ -477,6 +492,95 @@ const buildColumns = (
     accessor: (r) => <span className={styles.money}>{fmtRm(r.local_total_centi)}</span>,
     searchValue: (r) => fmtRm(r.local_total_centi),
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+  },
+  /* Task #114 — Category revenue + cost pairs. The grid is wide enough
+     that not every user will want these visible, but they exist on the
+     header (migration 0079) so the right-click "Show column" affordance
+     can surface them. Listed in revenue/cost pairs so they sort naturally
+     in the column menu. */
+  {
+    key: 'mattress_sofa_centi', label: 'Mattress/Sofa', width: 130, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.mattress_sofa_centi ?? 0),
+    sortFn: (a, b) => (a.mattress_sofa_centi ?? 0) - (b.mattress_sofa_centi ?? 0),
+  },
+  {
+    key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
+    sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+  },
+  {
+    key: 'bedframe_centi', label: 'Bedframe', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.bedframe_centi ?? 0),
+    sortFn: (a, b) => (a.bedframe_centi ?? 0) - (b.bedframe_centi ?? 0),
+  },
+  {
+    key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
+    sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
+  },
+  {
+    key: 'accessories_centi', label: 'Accessories', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.accessories_centi ?? 0),
+    sortFn: (a, b) => (a.accessories_centi ?? 0) - (b.accessories_centi ?? 0),
+  },
+  {
+    key: 'accessories_cost_centi', label: 'Accessories Cost', width: 140, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.accessories_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.accessories_cost_centi ?? 0),
+    sortFn: (a, b) => (a.accessories_cost_centi ?? 0) - (b.accessories_cost_centi ?? 0),
+  },
+  {
+    key: 'others_centi', label: 'Others', width: 110, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.others_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.others_centi ?? 0),
+    sortFn: (a, b) => (a.others_centi ?? 0) - (b.others_centi ?? 0),
+  },
+  {
+    key: 'others_cost_centi', label: 'Others Cost', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.others_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.others_cost_centi ?? 0),
+    sortFn: (a, b) => (a.others_cost_centi ?? 0) - (b.others_cost_centi ?? 0),
+  },
+  /* Task #114 — Overall cost / margin / margin% on the SO header. Wired
+     through recomputeTotals on every line mutation. Margin column color
+     follows the same Houzs ladder used on the detail page. */
+  {
+    key: 'total_cost_centi', label: 'Cost Total', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.total_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.total_cost_centi ?? 0),
+    sortFn: (a, b) => (a.total_cost_centi ?? 0) - (b.total_cost_centi ?? 0),
+  },
+  {
+    key: 'total_margin_centi', label: 'Margin', width: 120, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => {
+      const m = r.total_margin_centi ?? 0;
+      if ((r.local_total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const color = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+      return <span className={styles.money} style={{ color, fontWeight: 600 }}>{fmtRm(m)}</span>;
+    },
+    searchValue: (r) => fmtRm(r.total_margin_centi ?? 0),
+    sortFn: (a, b) => (a.total_margin_centi ?? 0) - (b.total_margin_centi ?? 0),
+  },
+  {
+    key: 'margin_pct_basis', label: 'Margin %', width: 100, sortable: true, align: 'right', groupable: false,
+    accessor: (r) => {
+      if ((r.local_total_centi ?? 0) <= 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const pct = (r.margin_pct_basis ?? 0) / 100;
+      const color = pct >= 50 ? 'var(--c-secondary-a, #2F5D4F)'
+        : pct >= 30 ? 'var(--c-festive-a, #C77F3E)'
+        : pct > 0   ? 'var(--c-burnt)'
+        : 'var(--c-festive-b, #B8331F)';
+      return <span style={{
+        color, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+      }}>{pct.toFixed(1)}%</span>;
+    },
+    searchValue: (r) => `${((r.margin_pct_basis ?? 0) / 100).toFixed(1)}%`,
+    sortFn: (a, b) => (a.margin_pct_basis ?? 0) - (b.margin_pct_basis ?? 0),
   },
   {
     key: 'deposit_centi', label: 'Deposit', width: 110, sortable: true, align: 'right', groupable: false,
