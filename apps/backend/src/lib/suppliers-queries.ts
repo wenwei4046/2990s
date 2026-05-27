@@ -30,7 +30,8 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export type SupplierStatus = 'ACTIVE' | 'INACTIVE' | 'BLOCKED';
 export type Currency = 'MYR' | 'RMB' | 'USD' | 'SGD';
 export type MaterialKind = 'mfg_product' | 'fabric' | 'raw';
-export type PoStatus = 'DRAFT' | 'SUBMITTED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
+// PR-DRAFT-removal — DRAFT dropped from po_status (migration 0078).
+export type PoStatus = 'SUBMITTED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
 
 export type StatementType = 'OPEN_ITEM' | 'BALANCE_FORWARD' | 'NO_STATEMENT';
 export type AgingBasis    = 'INVOICE_DATE' | 'DUE_DATE';
@@ -697,7 +698,7 @@ export function useCancelPurchaseOrder() {
   });
 }
 
-/** Hard-delete PO. Only allowed when status is DRAFT or CANCELLED. */
+/** Hard-delete PO. Only allowed when status is CANCELLED (post-0078). */
 export function useDeletePurchaseOrder() {
   const qc = useQueryClient();
   return useMutation({

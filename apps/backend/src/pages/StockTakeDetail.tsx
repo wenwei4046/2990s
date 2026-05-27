@@ -1,9 +1,12 @@
 // ----------------------------------------------------------------------------
 // StockTakeDetail — at /inventory/stock-takes/:id (PR — Inv PR5).
 //
-// DRAFT: edit counted_qty per line, Save → PATCH /lines, Post → flips to
+// OPEN: edit counted_qty per line, Save → PATCH /lines, Post → flips to
 // POSTED and writes one ADJUSTMENT movement per non-zero-variance line.
 // POSTED/CANCELLED: read-only with variance summary.
+// PR-DRAFT-removal (2026-05-27): DRAFT renamed to OPEN. Stock takes keep
+// an editable working state because the commander has to enter counted_qty
+// per line BEFORE posting; "OPEN" makes the intent clearer.
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
@@ -26,7 +29,7 @@ import styles from './SalesOrderDetail.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 const STATUS_TONE: Record<StockTakeStatus, { bg: string; fg: string; label: string }> = {
-  DRAFT:     { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)',                label: 'Draft' },
+  OPEN:      { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)',                label: 'Open' },
   POSTED:    { bg: 'rgba(47, 93, 79, 0.16)',  fg: 'var(--c-secondary-a, #2F5D4F)',  label: 'Posted' },
   CANCELLED: { bg: 'rgba(184, 51, 31, 0.10)', fg: 'var(--c-festive-b, #B8331F)',    label: 'Cancelled' },
 };
@@ -105,7 +108,7 @@ export const StockTakeDetail = () => {
   }, [detail.data]);
 
   const status: StockTakeStatus | undefined = detail.data?.take.status;
-  const isDraft = status === 'DRAFT';
+  const isDraft = status === 'OPEN';      // local var name kept for diff minimization; refers to OPEN state
   const tone    = status ? STATUS_TONE[status] : null;
 
   const filteredLines = useMemo(() => {
@@ -213,7 +216,7 @@ export const StockTakeDetail = () => {
 
   const onCancel = () => {
     if (!id) return;
-    if (!window.confirm('Cancel this DRAFT stock take? It will be marked cancelled and locked.')) return;
+    if (!window.confirm('Cancel this OPEN stock take? It will be marked cancelled and locked.')) return;
     cancel.mutate(id, {
       onSuccess: () => detail.refetch(),
       onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
@@ -222,7 +225,7 @@ export const StockTakeDetail = () => {
 
   const onDelete = () => {
     if (!id) return;
-    if (!window.confirm('Delete this DRAFT stock take permanently? The count sheet will be lost.')) return;
+    if (!window.confirm('Delete this OPEN stock take permanently? The count sheet will be lost.')) return;
     del.mutate(id, {
       onSuccess: () => navigate('/inventory/stock-takes'),
       onError: (err) => window.alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`),

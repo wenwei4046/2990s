@@ -310,7 +310,7 @@ export const PurchaseOrderNew = () => {
             disabled={create.isPending || !supplierId || !expectedAt || !purchaseLocationId}
           >
             <Save {...ICON} />
-            {/* PR #131 — Commander: PO 不需要进入 DRAFT. POST creates SUBMITTED. */}
+            {/* PR #131 + 0078 — POST creates SUBMITTED; DRAFT removed entirely. */}
             {create.isPending ? 'Creating…' : 'Create PO'}
           </Button>
         </div>

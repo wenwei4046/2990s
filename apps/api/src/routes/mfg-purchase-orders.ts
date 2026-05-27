@@ -23,7 +23,7 @@ export const mfgPurchaseOrders = new Hono<{ Bindings: Env; Variables: Variables 
 
 mfgPurchaseOrders.use('*', supabaseAuth);
 
-const VALID_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED']);
+const VALID_STATUSES = new Set(['SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED']);
 const VALID_CURRENCIES = new Set(['MYR', 'RMB', 'USD', 'SGD']);
 const VALID_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
 
@@ -205,9 +205,9 @@ mfgPurchaseOrders.post('/', async (c) => {
   });
 
   /* PR #131 — Commander 2026-05-26: "PO 是直接 create 的，不需要进入 DRAFT".
-     Skip the DRAFT staging step — POST creates SUBMITTED directly with
-     submitted_at = now(). DRAFT remains a valid state for legacy rows +
-     PATCH /submit still works for any callers that want piecewise authoring. */
+     POST creates SUBMITTED directly. Migration 0078 (2026-05-27) removed
+     DRAFT from po_status entirely. PATCH /submit is kept as an idempotent
+     no-op for any legacy callers. */
   const headerInsert: Record<string, unknown> = {
     po_number: poNumber,
     supplier_id: supplierId,
@@ -687,8 +687,11 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
     .maybeSingle();
   if (poErr) return c.json({ error: 'load_failed', reason: poErr.message }, 500);
   if (!po) return c.json({ error: 'po_not_found' }, 404);
-  if (po.status !== 'DRAFT') {
-    return c.json({ error: 'po_not_draft', reason: `Cannot convert into a ${po.status} PO.` }, 409);
+  // PR-DRAFT-removal — DRAFT no longer exists. SUBMITTED + PARTIALLY_RECEIVED
+  // are both editable for convert-from-so (commander can keep adding lines
+  // until the PO is fully received or cancelled).
+  if (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED') {
+    return c.json({ error: 'po_not_editable', reason: `Cannot convert into a ${po.status} PO.` }, 409);
   }
 
   // Read SO items (non-cancelled only).
@@ -772,19 +775,20 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
 });
 
 // ── Submit / cancel ──────────────────────────────────────────────────
+// PR-DRAFT-removal — POST creates SUBMITTED directly. This endpoint is kept
+// as an idempotent no-op so legacy callers still work.
 mfgPurchaseOrders.patch('/:id/submit', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('purchase_orders')
-    .update({ status: 'SUBMITTED', submitted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .eq('status', 'DRAFT')
     .select('id, status, submitted_at')
-    .single();
-  if (error) return c.json({ error: 'submit_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'not_draft', message: 'PO must be DRAFT to submit' }, 409);
-  return c.json({ purchaseOrder: data });
+    .eq('id', id)
+    .maybeSingle();
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  const row = data as { id: string; status: string; submitted_at: string | null };
+  if (row.status === 'SUBMITTED') return c.json({ purchaseOrder: row });
+  return c.json({ error: 'cannot_submit', message: `PO is ${row.status}` }, 409);
 });
 
 mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
@@ -803,9 +807,9 @@ mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
 });
 
 // ── Delete ────────────────────────────────────────────────────────────
-// Hard-delete a PO + its line items. Only allowed when status is DRAFT or
-// CANCELLED — once SUBMITTED/PARTIALLY_RECEIVED/RECEIVED there are
-// downstream docs (GRN/PI) that reference it. Use Cancel instead for those.
+// Hard-delete a PO + its line items. PR-DRAFT-removal: DRAFT no longer
+// exists. Only CANCELLED POs may be deleted (SUBMITTED+ have downstream
+// docs that reference them — use Cancel first).
 mfgPurchaseOrders.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
@@ -818,10 +822,10 @@ mfgPurchaseOrders.delete('/:id', async (c) => {
   if (readErr) return c.json({ error: 'read_failed', reason: readErr.message }, 500);
   if (!cur)    return c.json({ error: 'not_found' }, 404);
   const row = cur as { id: string; status: string; po_number: string };
-  if (row.status !== 'DRAFT' && row.status !== 'CANCELLED') {
+  if (row.status !== 'CANCELLED') {
     return c.json({
       error: 'cannot_delete',
-      message: `PO ${row.po_number} is ${row.status}. Only DRAFT or CANCELLED POs can be deleted. Use Cancel instead.`,
+      message: `PO ${row.po_number} is ${row.status}. Only CANCELLED POs can be deleted. Use Cancel first.`,
     }, 409);
   }
   // Items cascade via FK ON DELETE CASCADE.

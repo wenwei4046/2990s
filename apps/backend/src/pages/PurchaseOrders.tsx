@@ -12,14 +12,12 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, X, Send, Ban, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
+import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   usePurchaseOrders,
   usePurchaseOrderDetail,
   useCreatePurchaseOrder,
-  useSubmitPurchaseOrder,
-  useCancelPurchaseOrder,
   useSuppliers,
   useSupplierDetail,
   useSuppliersForMaterial,
@@ -48,7 +46,7 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
 ];
 
 const STATUS_COLOR: Record<PoStatus, string> = {
-  DRAFT: 'rgba(34, 31, 32, 0.06)',
+  // DRAFT removed in migration 0078.
   SUBMITTED: 'rgba(31, 58, 138, 0.10)',
   PARTIALLY_RECEIVED: 'rgba(232, 107, 58, 0.10)',
   RECEIVED: 'rgba(47, 93, 79, 0.12)',
@@ -720,8 +718,8 @@ const ModeChip = ({
 
 const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }) => {
   const detail = usePurchaseOrderDetail(poId);
-  const submit = useSubmitPurchaseOrder();
-  const cancel = useCancelPurchaseOrder();
+  // PR-DRAFT-removal — Submit/Cancel removed from the list drawer. Use
+  // /purchase-orders/:id detail for cancel + delete actions.
 
   const po = detail.data?.purchaseOrder;
   const items = detail.data?.items ?? [];
@@ -803,27 +801,9 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
               <Printer {...ICON} />
               <span>Print PDF</span>
             </Button>
-            {po.status === 'DRAFT' && (
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => {
-                  if (confirm(`Cancel PO ${po.po_number}?`)) cancel.mutate(po.id, { onSuccess: onClose });
-                }}
-              >
-                <Ban {...ICON} />
-                <span>Cancel</span>
-              </Button>
-            )}
-            {po.status === 'DRAFT' && (
-              <Button variant="primary" size="md" onClick={() => submit.mutate(po.id, { onSuccess: onClose })}>
-                <Send {...ICON} />
-                <span>{submit.isPending ? 'Submitting…' : 'Submit'}</span>
-              </Button>
-            )}
-            {po.status !== 'DRAFT' && (
-              <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
-            )}
+            {/* PR-DRAFT-removal — Submit/Cancel-from-Draft removed. POs are
+                SUBMITTED on create, and cancellation lives on the detail page. */}
+            <Button variant="ghost" size="md" onClick={onClose}>Close</Button>
           </footer>
         )}
       </aside>

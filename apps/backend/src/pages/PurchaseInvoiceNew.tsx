@@ -7,13 +7,12 @@
 // Invoice" and lands here with ?grnId={uuid} pre-loaded. The page shows
 // the GRN header (supplier + dates as read-only context) and the GRN
 // accepted items as PI lines. Commander enters the supplier's invoice
-// reference + due date, hits Save. We:
+// reference + due date, hits Save.
 //
-//   1. POST /purchase-invoices       → creates DRAFT PI + items
-//   2. PATCH /purchase-invoices/:id/post → flips to POSTED
-//
-// PI does NOT touch inventory (already done at GRN time per AutoCount
-// standard). It establishes the AP liability for paying the supplier.
+// PR-DRAFT-removal (2026-05-27, migration 0078): POST /purchase-invoices
+// now creates the PI as POSTED directly. PI does NOT touch inventory
+// (already done at GRN time per AutoCount standard) — it just establishes
+// the AP liability for paying the supplier.
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';

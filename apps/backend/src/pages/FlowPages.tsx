@@ -125,7 +125,6 @@ const FilterPill = ({ label, onClear }: { label: string; onClear: () => void }) 
    ════════════════════════════════════════════════════════════════════════ */
 const GRN_CHIPS: Chip[] = [
   { value: 'all', label: 'All' },
-  { value: 'DRAFT', label: 'Draft' },
   { value: 'POSTED', label: 'Posted' },
   { value: 'CLOSED', label: 'Closed' },
 ];
@@ -257,7 +256,7 @@ export const Grns = () => {
    Purchase Invoices
    ════════════════════════════════════════════════════════════════════════ */
 const PI_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'DRAFT', label: 'Draft' },
+  { value: 'all', label: 'All' },
   { value: 'POSTED', label: 'Posted' }, { value: 'PAID', label: 'Paid' }, { value: 'CANCELLED', label: 'Cancelled' },
 ];
 
@@ -339,7 +338,7 @@ export { MfgSalesOrdersList as MfgSalesOrdersPage } from './MfgSalesOrdersList';
    Delivery Orders (mfg)
    ════════════════════════════════════════════════════════════════════════ */
 const DO_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'DRAFT', label: 'Draft' }, { value: 'LOADED', label: 'Loaded' },
+  { value: 'all', label: 'All' }, { value: 'LOADED', label: 'Loaded' },
   { value: 'DISPATCHED', label: 'Dispatched' }, { value: 'IN_TRANSIT', label: 'In transit' },
   { value: 'SIGNED', label: 'Signed' }, { value: 'DELIVERED', label: 'Delivered' },
   { value: 'INVOICED', label: 'Invoiced' }, { value: 'CANCELLED', label: 'Cancelled' },
@@ -398,7 +397,7 @@ export const MfgDeliveryOrdersPage = () => {
    Sales Invoices
    ════════════════════════════════════════════════════════════════════════ */
 const SI_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'DRAFT', label: 'Draft' }, { value: 'SENT', label: 'Sent' },
+  { value: 'all', label: 'All' }, { value: 'SENT', label: 'Sent' },
   { value: 'PARTIALLY_PAID', label: 'Partial' }, { value: 'PAID', label: 'Paid' },
   { value: 'OVERDUE', label: 'Overdue' }, { value: 'CANCELLED', label: 'Cancelled' },
 ];
@@ -568,7 +567,7 @@ export const DeliveryReturnsPage = () => {
    Purchase Returns — we return goods to the supplier
    ════════════════════════════════════════════════════════════════════════ */
 const PRT_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'DRAFT', label: 'Draft' },
+  { value: 'all', label: 'All' },
   { value: 'POSTED', label: 'Posted' }, { value: 'COMPLETED', label: 'Completed' },
   { value: 'CANCELLED', label: 'Cancelled' },
 ];

@@ -27,7 +27,8 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export type StockTransferStatus = 'DRAFT' | 'POSTED' | 'CANCELLED';
+// PR-DRAFT-removal — DRAFT dropped (migration 0078). Transfers post on create.
+export type StockTransferStatus = 'POSTED' | 'CANCELLED';
 
 export type StockTransferWarehouse = {
   id: string;

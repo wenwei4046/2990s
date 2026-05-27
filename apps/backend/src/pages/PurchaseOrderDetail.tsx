@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Send, Ban, ArrowRightLeft,
+  ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Ban, ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -27,7 +27,6 @@ import {
   useAddPurchaseOrderItem,
   useUpdatePurchaseOrderItem,
   useDeletePurchaseOrderItem,
-  useSubmitPurchaseOrder,
   useCancelPurchaseOrder,
   useDeletePurchaseOrder,
   useSuppliers,
@@ -46,11 +45,11 @@ import styles from './SalesOrderDetail.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-const STATUS_LIST = ['DRAFT', 'SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED'] as const;
+// PR-DRAFT-removal — DRAFT dropped from po_status (migration 0078).
+const STATUS_LIST = ['SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED'] as const;
 type PoStatus = typeof STATUS_LIST[number];
 
 const STATUS_CLASS: Record<PoStatus, string> = {
-  DRAFT:              styles.statusDraft ?? '',
   SUBMITTED:          styles.statusConfirmed ?? '',
   PARTIALLY_RECEIVED: styles.statusInProd ?? '',
   RECEIVED:           styles.statusDelivered ?? '',
@@ -73,7 +72,7 @@ export const PurchaseOrderDetail = () => {
   // PR #78 — Convert from SO mutation. Pop a prompt for SO doc_no, the
   // server copies non-cancelled items into this PO (skipping dupes).
   const convertFromSo = useConvertPoFromSo();
-  const submit = useSubmitPurchaseOrder();
+  // PR-DRAFT-removal — Submit button removed (POs are SUBMITTED on create).
   const cancel = useCancelPurchaseOrder();
   const deletePo = useDeletePurchaseOrder();
   const addItem = useAddPurchaseOrderItem();
@@ -91,8 +90,9 @@ export const PurchaseOrderDetail = () => {
   const [editing, setEditing] = useState<PoItemRow | null>(null);
   const [adding, setAdding] = useState(false);
 
-  // PO is locked once submitted (or received / cancelled). DRAFT-only edits.
-  const isLocked = po ? po.status !== 'DRAFT' : true;
+  // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
+  // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
+  const isLocked = po ? !(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') : true;
 
   if (detail.isLoading) {
     return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
@@ -172,10 +172,9 @@ export const PurchaseOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* PR #78 — Convert from Sales Order. Only shown while DRAFT.
-              Server copies non-cancelled SO items into this PO; existing
-              line items with the same material_code are left alone. */}
-          {po.status === 'DRAFT' && (
+          {/* PR #78 — Convert from Sales Order. PR-DRAFT-removal: shown while
+              the PO is still editable (SUBMITTED or PARTIALLY_RECEIVED). */}
+          {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button
               variant="ghost"
               size="md"
@@ -207,19 +206,10 @@ export const PurchaseOrderDetail = () => {
               <span>{convertFromSo.isPending ? 'Converting…' : 'Convert from SO'}</span>
             </Button>
           )}
-          {po.status === 'DRAFT' && (
-            <Button variant="primary" size="md"
-              onClick={() => submit.mutate(po.id)} disabled={submit.isPending}>
-              <Send {...ICON} />
-              <span>{submit.isPending ? 'Submitting…' : 'Submit'}</span>
-            </Button>
-          )}
           {/* PR — Commander 2026-05-27: "Cancel/Delete PO 没反应".
-              Cancel: extended to any pre-receipt status. API guards: blocked
-              when status = RECEIVED.
-              Delete: hard-delete only for DRAFT or CANCELLED (no downstream
-              GRN/PI). API rejects otherwise with a friendly message. */}
-          {(po.status === 'DRAFT' || po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
+              Cancel: any pre-receipt status. API blocks RECEIVED.
+              Delete: only CANCELLED (after migration 0078; DRAFT no longer exists). */}
+          {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="ghost" size="md"
               onClick={() => {
                 if (!confirm(`Cancel PO ${po.po_number}? This sets status to CANCELLED — line items + linked docs stay for audit.`)) return;
@@ -232,7 +222,7 @@ export const PurchaseOrderDetail = () => {
               <span>{cancel.isPending ? 'Cancelling…' : 'Cancel'}</span>
             </Button>
           )}
-          {(po.status === 'DRAFT' || po.status === 'CANCELLED') && (
+          {po.status === 'CANCELLED' && (
             <Button variant="ghost" size="md"
               onClick={() => {
                 if (!confirm(`Permanently delete PO ${po.po_number}? This removes the header + all line items and cannot be undone.`)) return;
@@ -246,9 +236,7 @@ export const PurchaseOrderDetail = () => {
               <span>{deletePo.isPending ? 'Deleting…' : 'Delete'}</span>
             </Button>
           )}
-          {/* PR — Phase 2: "Receive Goods" → /grns/new?poId=X. Only shown
-              once the PO is SUBMITTED or PARTIALLY_RECEIVED so DRAFT POs
-              don't trigger inventory writes prematurely. */}
+          {/* PR — Phase 2: "Receive Goods" → /grns/new?poId=X. */}
           {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button variant="primary" size="md"
               onClick={() => navigate(`/grns/new?poId=${po.id}`)}>

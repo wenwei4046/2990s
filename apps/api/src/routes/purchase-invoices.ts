@@ -69,6 +69,7 @@ purchaseInvoices.get('/:id/linked', async (c) => {
 purchaseInvoices.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (body.status === 'DRAFT') return c.json({ error: 'draft_status_not_supported', message: 'DRAFT was removed in migration 0078 — PIs post immediately on create.' }, 400);
   if (!body.supplierId) return c.json({ error: 'supplier_required' }, 400);
   const items = body.items as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
@@ -88,6 +89,9 @@ purchaseInvoices.post('/', async (c) => {
     };
   });
 
+  /* PR-DRAFT-removal — PIs are now created as POSTED directly. PI is
+     AP-only (no inventory impact — that landed at GRN time), so there's
+     no side-effect helper to call after insert. */
   const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
     invoice_number: invoiceNumber,
     supplier_invoice_ref: (body.supplierInvoiceRef as string) ?? null,
@@ -100,6 +104,8 @@ purchaseInvoices.post('/', async (c) => {
     subtotal_centi: subtotal,
     total_centi: subtotal,
     notes: (body.notes as string) ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
     created_by: user.id,
   }).select(HEADER).single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
@@ -112,12 +118,17 @@ purchaseInvoices.post('/', async (c) => {
 });
 
 purchaseInvoices.patch('/:id/post', async (c) => {
+  /* PR-DRAFT-removal — kept for backward compat; idempotent. POST now
+     creates PIs as POSTED directly. */
   const sb = c.get('supabase'); const id = c.req.param('id');
+  const { data: cur } = await sb.from('purchase_invoices').select('id, status').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  if ((cur as { status: string }).status === 'POSTED') return c.json({ purchaseInvoice: cur });
   const { data, error } = await sb.from('purchase_invoices').update({
     status: 'POSTED', posted_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-  }).eq('id', id).eq('status', 'DRAFT').select('id, status').single();
+  }).eq('id', id).neq('status', 'CANCELLED').select('id, status').single();
   if (error) return c.json({ error: 'post_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'not_draft' }, 409);
+  if (!data) return c.json({ error: 'cannot_post' }, 409);
   return c.json({ purchaseInvoice: data });
 });
 
@@ -133,7 +144,8 @@ purchaseInvoices.patch('/:id/payment', async (c) => {
   const { data: cur } = await sb.from('purchase_invoices').select('paid_centi, total_centi, status').eq('id', id).maybeSingle();
   if (!cur) return c.json({ error: 'not_found' }, 404);
   const c0 = cur as { paid_centi: number; total_centi: number; status: string };
-  if (c0.status === 'CANCELLED' || c0.status === 'DRAFT') return c.json({ error: 'not_payable', message: 'PI must be posted before payment' }, 409);
+  // DRAFT removed in migration 0078 — only block CANCELLED now.
+  if (c0.status === 'CANCELLED') return c.json({ error: 'not_payable', message: 'PI is cancelled' }, 409);
 
   const newPaid = c0.paid_centi + amount;
   const newStatus = newPaid >= c0.total_centi ? 'PAID' : 'PARTIALLY_PAID';

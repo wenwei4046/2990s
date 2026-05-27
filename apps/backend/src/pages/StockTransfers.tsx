@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------------
 // StockTransfers — list at /inventory/transfers.
 //
-// Doc-style list of all stock transfers (DRAFT / POSTED / CANCELLED). Each
+// Doc-style list of all stock transfers (POSTED / CANCELLED). Each
 // transfer moves qty between two warehouses with a paired OUT+IN movement
 // posted via the API. + New Transfer routes to /inventory/transfers/new.
 // ----------------------------------------------------------------------------
@@ -20,10 +20,10 @@ import styles from './Inventory.module.css';
 const ICON    = { size: 14, strokeWidth: 1.75 } as const;
 const ICON_MD = { size: 16, strokeWidth: 1.75 } as const;
 
-const STATUS_OPTIONS: Array<StockTransferStatus | 'ALL'> = ['ALL', 'DRAFT', 'POSTED', 'CANCELLED'];
+// PR-DRAFT-removal — DRAFT dropped (migration 0078). Transfers post on create.
+const STATUS_OPTIONS: Array<StockTransferStatus | 'ALL'> = ['ALL', 'POSTED', 'CANCELLED'];
 
 const STATUS_TONE: Record<StockTransferStatus, { bg: string; fg: string; label: string }> = {
-  DRAFT:     { bg: 'rgba(34, 31, 32, 0.08)',  fg: 'var(--fg-muted)',          label: 'Draft' },
   POSTED:    { bg: 'rgba(47, 93, 79, 0.16)',  fg: 'var(--c-secondary-a, #2F5D4F)', label: 'Posted' },
   CANCELLED: { bg: 'rgba(184, 51, 31, 0.10)', fg: 'var(--c-festive-b, #B8331F)',   label: 'Cancelled' },
 };

@@ -4,7 +4,8 @@
 // Mirrors PurchaseOrderNew chrome: back link + title + Cancel/Save in the
 // headerRow, header card with From/To/Date/Notes, items grid below with
 // SKU picker + live current-balance lookup against the From warehouse.
-// Saves as DRAFT and routes to /inventory/transfers/:id.
+// PR-DRAFT-removal (2026-05-27): Save creates as POSTED directly + writes
+// inventory_movements inline; routes to /inventory/transfers/:id afterward.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
@@ -122,7 +123,7 @@ export const StockTransferNew = () => {
       const proceed = window.confirm(
         `Some lines exceed available stock at the source warehouse:\n` +
         overdrawn.map((l) => `  ${l.productCode}: want ${l.qty}, have ${balanceMap.get(l.productCode) ?? 0}`).join('\n') +
-        `\n\nSaving as DRAFT is fine — but posting will push the source balance negative. Continue?`,
+        `\n\nSaving will post immediately and push the source balance negative. Continue?`,
       );
       if (!proceed) return;
     }
@@ -369,7 +370,7 @@ export const StockTransferNew = () => {
               <AlertTriangle size={16} strokeWidth={1.75} style={{ flexShrink: 0, marginTop: 2 }} />
               <span>
                 <strong>{overdrawn.length} line{overdrawn.length === 1 ? '' : 's'} exceed available stock.</strong>
-                {' '}Saving as DRAFT is fine — but posting will push the source balance negative.
+                {' '}Saving will post immediately and push the source balance negative.
                 You'll be asked to confirm on Save.
               </span>
             </div>

@@ -2,8 +2,9 @@
 // StockTakeNew — at /inventory/stock-takes/new (PR — Inv PR5).
 //
 // Step 1: pick Warehouse + Scope + Date + Notes. On Submit the server
-// snapshots system_qty for every in-scope SKU and creates a DRAFT stock
+// snapshots system_qty for every in-scope SKU and creates an OPEN stock
 // take. We navigate to the detail page where commander enters counts.
+// (PR-DRAFT-removal 2026-05-27: renamed DRAFT→OPEN per migration 0078.)
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
