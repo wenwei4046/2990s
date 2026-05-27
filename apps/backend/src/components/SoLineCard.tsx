@@ -24,15 +24,17 @@
 // this in without touching the parent.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, ImagePlus, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
-import { useUploadSoItemPhoto, useDeleteSoItemPhoto } from '../lib/flow-queries';
-import { supabase } from '../lib/supabase';
+import {
+  useUploadSoItemPhoto,
+  useDeleteSoItemPhoto,
+  fetchSoItemPhotoSignedUrl,
+} from '../lib/flow-queries';
+import { useDebouncedValue } from '../lib/hooks';
 import styles from './SoLineCard.module.css';
-
-const API_URL = import.meta.env.VITE_API_URL;
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -92,7 +94,14 @@ const CATEGORY_BADGE: Record<string, { bg: string; fg: string; label: string }> 
    SoLineCard
    ────────────────────────────────────────────────────────────────────── */
 
-export const SoLineCard = ({
+/* Task #103 — Wrap in React.memo at module bottom. The parent (SO Detail)
+   now passes stable per-row callbacks via a useMemo'd Map keyed off
+   editingLineIds, so the memo comparator can rely on shallow-equal props.
+   `inheritVariantsByCategory` from SalesOrderNew is a fresh object on every
+   render but the only state it captures is LINE 1's variants, which change
+   exactly when the user is interacting with LINE 1 anyway — i.e. exactly
+   when we DO want the follower rows to re-render. */
+const SoLineCardInner = ({
   index,
   draft,
   onChange,
@@ -119,13 +128,23 @@ export const SoLineCard = ({
   const fabrics  = fabricsQ.data ?? [];
 
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
-  const productsQuery = useMfgProducts({ search: search.trim() || undefined });
-  const candidates = productsQuery.data ?? [];
-
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
   const [manualPrice, setManualPrice] = useState(false);
   const [showPicker, setShowPicker]   = useState(false);
   const [specialsOpen, setSpecialsOpen] = useState(false);
+  /* Task #102 — Same gate the debtor autocomplete got in PR #99. Without
+     this the product picker fired one /mfg-products?search=… request per
+     keystroke even when the picker wasn't open (every render of an
+     already-saved line re-issued the query for the description text). The
+     200 ms debounce smooths fast typists; the length>=2 + showPicker
+     enabled-flag guards the closed-picker + single-character cases. */
+  const debouncedSearch = useDebouncedValue(search, 200);
+  const trimmedSearch   = debouncedSearch.trim();
+  const productsQuery = useMfgProducts({
+    search:  trimmedSearch || undefined,
+    enabled: showPicker && trimmedSearch.length >= 2,
+  });
+  const candidates = productsQuery.data ?? [];
 
   /* PR-F (Task #79) — Per-line photo state. */
   const uploadPhoto = useUploadSoItemPhoto();
@@ -329,7 +348,14 @@ export const SoLineCard = ({
           {showPicker && isEditing && candidates.length === 0 && (
             <ul className={styles.suggestList}>
               <li className={styles.suggestItem} style={{ color: 'var(--fg-muted)', cursor: 'default' }}>
-                No products match{search.trim() ? ` "${search}"` : ''}.
+                {/* Task #102 — Distinguish "type more" (gate hasn't tripped)
+                    from "no matches" (server returned []) so the user knows
+                    why nothing is showing. */}
+                {trimmedSearch.length < 2
+                  ? 'Type at least 2 characters to search…'
+                  : productsQuery.isFetching
+                    ? 'Searching…'
+                    : `No products match "${trimmedSearch}".`}
               </li>
             </ul>
           )}
@@ -564,6 +590,16 @@ export const SoLineCard = ({
                       try {
                         const res = await uploadPhoto.mutateAsync({ docNo, itemId, file: f });
                         newKeys.push(res.photoKey);
+                        // Task #92 — seed the signed-URL cache with the
+                        // URL the API just minted so PhotoThumb doesn't
+                        // do a redundant /signed round-trip on first
+                        // render of the just-uploaded photo.
+                        if (res.expiresAt && res.photoUrl?.startsWith('http')) {
+                          signedUrlCache.set(res.photoKey, {
+                            signedUrl: res.photoUrl,
+                            expiresAt: new Date(res.expiresAt).getTime(),
+                          });
+                        }
                       } catch (err) {
                         // eslint-disable-next-line no-console
                         console.error('[so-line-photo] upload failed:', err);
@@ -613,6 +649,15 @@ export const SoLineCard = ({
     </div>
   );
 };
+SoLineCardInner.displayName = 'SoLineCard';
+
+/* Task #103 — Wrapped in React.memo with the default shallow comparator.
+   With the SO Detail page now passing stable per-row callbacks
+   (rowCallbacks Map + patchAddingDraft useCallback), the memo skips
+   re-renders when an unrelated row's draft state, an unrelated parent
+   state (History drawer toggle, Edit-mode flip, payment table activity),
+   or the routinely-stable header useQuery cache result changes. */
+export const SoLineCard = memo(SoLineCardInner);
 
 /* ──────────────────────────────────────────────────────────────────────
    VariantSelect — uniform <select> with label + optional "+RM x.xx" suffix
@@ -711,9 +756,30 @@ const SpecialsAccordion = ({
 };
 
 /* ──────────────────────────────────────────────────────────────────────
-   PhotoThumb — auth'd image fetch via Supabase Bearer token
-   (verbatim from previous SoLineCard, just retargeted to its own CSS module)
+   PhotoThumb — Task #92 signed-URL flow
+   ──────────────────────────────────────────────────────────────────────
+   Previously this fetched bytes through an authed Worker proxy on every
+   thumbnail render (N photos × N renders = N² Worker invocations). Now
+   each photoKey has a short-lived signed R2 GET URL we use directly as
+   <img src>. Cache layout:
+     - Module-level Map<photoKey, { signedUrl, expiresAt }> — survives
+       component unmounts (e.g. drawer open/close) within a single page
+       load, so reopening a SO doesn't re-sign every thumb.
+     - SKEW_BUFFER_MS — treat URLs within 30s of expiry as already
+       expired. Avoids the race where a URL passes our check, then 401s
+       at the browser because the clock drifted or R2's check fires
+       slightly later.
+     - On <img onError>, retry once with a fresh URL. The signed URL
+       MIGHT have expired between cache check and HTTP fetch, or the
+       cached entry pre-dated some R2 token-rotation event. One retry
+       is enough; a second failure means the photo is genuinely gone.
    ────────────────────────────────────────────────────────────────────── */
+
+const SIGNED_URL_SKEW_BUFFER_MS = 30_000;
+const signedUrlCache = new Map<string, { signedUrl: string; expiresAt: number }>();
+
+const isCachedUrlFresh = (entry: { expiresAt: number } | undefined): boolean =>
+  !!entry && entry.expiresAt - SIGNED_URL_SKEW_BUFFER_MS > Date.now();
 
 const PhotoThumb = ({
   photoKey, docNo, itemId, canDelete, onDelete,
@@ -724,41 +790,69 @@ const PhotoThumb = ({
   canDelete: boolean;
   onDelete:  () => void;
 }) => {
-  const [src, setSrc]     = useState<string | null>(null);
+  const [src, setSrc]     = useState<string | null>(() => {
+    const cached = signedUrlCache.get(photoKey);
+    return isCachedUrlFresh(cached) ? cached!.signedUrl : null;
+  });
   const [error, setError] = useState<string | null>(null);
+  // Tracks whether we've already retried after a 403/error. Prevents
+  // a permanently-broken key from looping forever.
+  const retriedRef = useRef(false);
+
+  const loadSignedUrl = async (cancelled: () => boolean) => {
+    if (!docNo || !itemId) return;
+    try {
+      const { signedUrl, expiresAt } = await fetchSoItemPhotoSignedUrl(docNo, itemId, photoKey);
+      if (cancelled()) return;
+      signedUrlCache.set(photoKey, {
+        signedUrl,
+        expiresAt: new Date(expiresAt).getTime(),
+      });
+      setSrc(signedUrl);
+      setError(null);
+    } catch (e) {
+      if (!cancelled()) setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
-    if (!docNo || !itemId) return;
-    let revoke: string | null = null;
     let cancelled = false;
-    (async () => {
-      try {
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
-        if (!token) throw new Error('not_authenticated');
-        const res = await fetch(
-          `${API_URL}/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}`,
-          { headers: { authorization: `Bearer ${token}` } },
-        );
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-        const blob = await res.blob();
-        if (cancelled) return;
-        revoke = URL.createObjectURL(blob);
-        setSrc(revoke);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (revoke) URL.revokeObjectURL(revoke);
-    };
+    const cached = signedUrlCache.get(photoKey);
+    if (isCachedUrlFresh(cached)) {
+      setSrc(cached!.signedUrl);
+      return;
+    }
+    // Cache miss or stale entry — fetch a fresh signed URL.
+    loadSignedUrl(() => cancelled);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docNo, itemId, photoKey]);
+
+  const handleImgError = () => {
+    // The signed URL we handed to <img src> didn't load. Most likely
+    // it expired (cache survived a tab being suspended for >1 hour);
+    // could also be an R2 transient. Drop the cache entry and refetch
+    // once. retriedRef prevents an infinite onError → setState loop
+    // if the new URL also fails.
+    if (retriedRef.current) {
+      setError('image_load_failed');
+      return;
+    }
+    retriedRef.current = true;
+    signedUrlCache.delete(photoKey);
+    setSrc(null);
+    let cancelled = false;
+    loadSignedUrl(() => cancelled);
+    // No cleanup return — this isn't an effect; the cancelled flag
+    // is only meaningful if the component unmounts mid-fetch, which
+    // would also blow away the setState calls harmlessly.
+    void cancelled;
+  };
 
   return (
     <div className={styles.photoTile}>
       {src ? (
-        <img src={src} alt="Line photo" />
+        <img src={src} alt="Line photo" onError={handleImgError} />
       ) : error ? (
         <span className={styles.photoError} title={error}>err</span>
       ) : (

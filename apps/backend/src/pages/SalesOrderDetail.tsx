@@ -1,4 +1,4 @@
-// ----------------------------------------------------------------------------
+﻿// ----------------------------------------------------------------------------
 // SalesOrderDetail — full-page route at /mfg-sales-orders/:docNo.
 //
 // HOUZS-pattern B2B sales order:
@@ -18,18 +18,15 @@
 
 import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
-  type CSSProperties,
 } from 'react';
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
   DollarSign, Lock, History, ChevronDown, ChevronRight,
-  Calendar as CalIcon, User as UserIcon, Tag,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
-import { useAuth } from '../lib/auth';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
@@ -41,14 +38,12 @@ import {
   useOverrideMfgSoLinePrice,
   useSalesOrderAuditLog,
   useSalesOrderPayments,
-  useAddSalesOrderPayment,
-  useDeleteSalesOrderPayment,
   type DebtorSuggestion,
   type SoAuditEntry,
   type SoAuditFieldChange,
-  type SoPayment,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { PaymentsTable } from '../components/PaymentsTable';
 import {
   useLocalities,
   distinctStates,
@@ -57,9 +52,9 @@ import {
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { useStaff } from '../lib/admin-queries';
+import { useDebouncedValue } from '../lib/hooks';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import styles from './SalesOrderDetail.module.css';
-import paymentsStyles from './Payments.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -87,16 +82,9 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
-/* Task #99 (UI perf) — Tiny local debounce hook for inputs that drive a
-   server query (debtor autocomplete). Not worth a separate file. */
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = window.setTimeout(() => setV(value), delayMs);
-    return () => window.clearTimeout(t);
-  }, [value, delayMs]);
-  return v;
-}
+/* Task #99 (UI perf) — Local debounce hook lifted to ../lib/hooks.ts as
+   useDebouncedValue so SoLineCard's product picker (Task #102) can reuse
+   it without duplicating the implementation. */
 
 type SoHeader = {
   doc_no: string;
@@ -289,7 +277,14 @@ export const SalesOrderDetail = () => {
 
   /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
      except startAdd which seeds a brand-new SoLineDraft. The mutation payload
-     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side). */
+     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side).
+
+     Task #103 — startEditLine doesn't need to be stable (it only fires from
+     the table-row Pencil button, never as a child prop), but stopEditLine +
+     patchEditingDraft DO — they're closed over by the per-row callbacks the
+     memoized SoLineCard receives. useCallback with no deps keeps them
+     reference-stable across renders; both rely entirely on setState callbacks
+     so there's no stale-closure risk. */
   const startEditLine = (it: SoItem) => {
     setEditingLineIds((prev) => {
       const next = new Set(prev);
@@ -315,7 +310,7 @@ export const SalesOrderDetail = () => {
     }));
   };
 
-  const stopEditLine = (id: string) => {
+  const stopEditLine = useCallback((id: string) => {
     setEditingLineIds((prev) => {
       if (!prev.has(id)) return prev;
       const next = new Set(prev);
@@ -327,15 +322,39 @@ export const SalesOrderDetail = () => {
       const { [id]: _drop, ...rest } = prev;
       return rest;
     });
-  };
+  }, []);
 
-  const patchEditingDraft = (id: string, patch: Partial<SoLineDraft>) => {
+  const patchEditingDraft = useCallback((id: string, patch: Partial<SoLineDraft>) => {
     setEditingDrafts((prev) => {
       const cur = prev[id];
       if (!cur) return prev;
       return { ...prev, [id]: { ...cur, ...patch } };
     });
-  };
+  }, []);
+
+  /* Task #103 — Per-row callback map. SoLineCard is now React.memo'd, but a
+     fresh `(patch) => patchEditingDraft(it.id, patch)` arrow on every parent
+     render still busts shallow-equality on the props and forces a re-render
+     of the heaviest child component on the page (which carries its own
+     useMfgProducts + useMaintenanceConfig + useFabricTrackings sub-trees).
+     The map is keyed on the editing-row id; the Map identity changes only
+     when the set of editing rows changes — which is exactly when a row's
+     callbacks need to rebind anyway. patchEditingDraft + stopEditLine are
+     themselves stable via useCallback above, so the bound arrows here are
+     the only churn. */
+  const rowCallbacks = useMemo(() => {
+    const map = new Map<string, {
+      onChange: (patch: Partial<SoLineDraft>) => void;
+      onRemove: () => void;
+    }>();
+    for (const id of editingLineIds) {
+      map.set(id, {
+        onChange: (patch) => patchEditingDraft(id, patch),
+        onRemove: () => stopEditLine(id),
+      });
+    }
+    return map;
+  }, [editingLineIds, patchEditingDraft, stopEditLine]);
 
   const submitEditingDraft = (id: string) => {
     const d = editingDrafts[id];
@@ -376,7 +395,16 @@ export const SalesOrderDetail = () => {
     });
   };
 
-  const cancelAddLine = () => setAddingDraft(null);
+  const cancelAddLine = useCallback(() => setAddingDraft(null), []);
+
+  /* Task #103 — Stable onChange for the lone "+ Add Line Item" SoLineCard at
+     the bottom of the table. Mirrors rowCallbacks above but kept as a
+     standalone useCallback because there is at most one add-draft at a time. */
+  const patchAddingDraft = useCallback(
+    (patch: Partial<SoLineDraft>) =>
+      setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev),
+    [],
+  );
 
   const submitAddLine = () => {
     if (!addingDraft) return;
@@ -610,7 +638,7 @@ export const SalesOrderDetail = () => {
             <SoLineCard
               index={0}
               draft={addingDraft}
-              onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+              onChange={patchAddingDraft}
               onRemove={cancelAddLine}
               canRemove={true}
             />
@@ -671,14 +699,18 @@ export const SalesOrderDetail = () => {
                 const inlineEditing = editingLineIds.has(it.id);
                 const editDraft = editingDrafts[it.id];
                 if (inlineEditing && editDraft) {
+                  /* Task #103 — Pull the stable per-row callbacks built once
+                     above. The Map entry exists for every id in
+                     editingLineIds, so the !cb branch is theoretical. */
+                  const cb = rowCallbacks.get(it.id);
                   return (
                     <tr key={it.id}>
                       <td colSpan={7} style={{ padding: 'var(--space-3)' }}>
                         <SoLineCard
                           index={items.indexOf(it)}
                           draft={editDraft}
-                          onChange={(patch) => patchEditingDraft(it.id, patch)}
-                          onRemove={() => stopEditLine(it.id)}
+                          onChange={cb?.onChange ?? ((patch) => patchEditingDraft(it.id, patch))}
+                          onRemove={cb?.onRemove ?? (() => stopEditLine(it.id))}
                           canRemove={true}
                           /* PR-F (#79) wiring — enable photo upload on
                              already-saved lines. New lines (addingDraft)
@@ -778,7 +810,7 @@ export const SalesOrderDetail = () => {
                     <SoLineCard
                       index={items.length}
                       draft={addingDraft}
-                      onChange={(patch) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev)}
+                      onChange={patchAddingDraft}
                       onRemove={cancelAddLine}
                       canRemove={true}
                     />
@@ -820,9 +852,13 @@ export const SalesOrderDetail = () => {
           port of houzs-erp/src/components/NewSalesOrderForm.tsx Payments
           block (lines 1047-1126). Subtotal / Expected Deposit dropped —
           Houzs doesn't have them, and commander wants the ledger view
-          (transactions + Deposit Paid + Balance) only. */}
-      <PaymentCard
-        header={header}
+          (transactions + Deposit Paid + Balance) only.
+          Task #105 — PaymentCard was extracted into <PaymentsTable> so
+          New SO and Edit SO render the same ledger from one source. */}
+      <PaymentsTable
+        docNo={header.doc_no}
+        grandTotalCenti={header.local_total_centi}
+        currency={header.currency}
         locked={isLocked || !isEditing}
       />
 
@@ -1500,642 +1536,26 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Status transition bar
+   Task #101 — dead code removal (2026-05-27)
+   ────────────────────────────────────────────────────────────────────────
+   The following exports/components were removed because PR #171 (Houzs
+   rollout) replaced their callers:
+     • StatusBar + NEXT — status transition strip; the Edit/Save framework
+       now drives status changes via updateStatus.mutate() directly from
+       the page header (commander 2026-05-27: "这个不需要")
+     • AddressCard — multi-address (ship-to / bill-to / install-to) card;
+       PR #168 replaced it with the 4-section CustomerCard split below.
+   The DB columns the deleted components read from (ship_to_address /
+   bill_to_address / install_to_address / customer_po / customer_po_id /
+   customer_po_date / hub_name / overdue) remain in the schema so existing
+   rows stay queryable — only the UI rendering is gone.
    ════════════════════════════════════════════════════════════════════════ */
-
-/* PR #145 + #146 — Commander 2026-05-26: trading company flow.
-   - "2990 整套系统是 trading 公司来的，不需要 in production" → drop IN_PRODUCTION
-   - "ready to ship 和 in production 整个删掉" → drop READY_TO_SHIP too.
-     Goods sit in our warehouse, no "ready to ship" intermediate stage;
-     SHIPPED captures the moment they leave.
-   Final flow:
-     DRAFT → CONFIRMED → SHIPPED → DELIVERED → INVOICED → CLOSED
-   The DB enum still carries IN_PRODUCTION / READY_TO_SHIP rows from
-   pre-#146 records; the fallback rows below let the UI forward those
-   directly to SHIPPED instead of crashing. */
-const NEXT: Record<SoStatus, SoStatus[]> = {
-  DRAFT:          ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED:      ['SHIPPED', 'CANCELLED'],
-  IN_PRODUCTION:  ['SHIPPED', 'CANCELLED'], // legacy
-  READY_TO_SHIP:  ['SHIPPED'],              // legacy
-  SHIPPED:        ['DELIVERED'],
-  DELIVERED:      ['INVOICED'],
-  INVOICED:       ['CLOSED'],
-  CLOSED:         [],
-  CANCELLED:      [],
-};
-
-const StatusBar = ({
-  status,
-  onTransition,
-  pending,
-}: {
-  status: SoStatus;
-  onTransition: (s: SoStatus) => void;
-  pending: boolean;
-}) => {
-  const opts = NEXT[status];
-  if (opts.length === 0) {
-    return (
-      <section className={styles.card}>
-        <div className={styles.cardBody}>
-          <p className={styles.fieldLabel}>This SO is {status.replace(/_/g, ' ').toLowerCase()} — no further transitions available.</p>
-        </div>
-      </section>
-    );
-  }
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Move to next stage</h2>
-      </header>
-      <div className={styles.cardBody}>
-        <div className={styles.statusBar}>
-          {opts.map((s, i) => (
-            <Button
-              key={s}
-              variant={i === 0 ? 'primary' : 'ghost'}
-              size="sm"
-              onClick={() => onTransition(s)}
-              disabled={pending}
-            >
-              <span>{s.replace(/_/g, ' ')}</span>
-            </Button>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-};
 
 /* ════════════════════════════════════════════════════════════════════════
-   AddressCard — PR #35 multi-address (ship-to / bill-to / install-to)
+   PaymentCard moved → components/PaymentsTable (task #105).
+   AddressCard + StatusBar + NEXT deleted as dead code (task #101).
    ════════════════════════════════════════════════════════════════════════ */
 
-const AddressCard = ({
-  header,
-  onSave,
-  saving,
-  locked = false,
-}: {
-  header: SoHeader;
-  onSave: (patch: Record<string, unknown>) => void;
-  saving: boolean;
-  locked?: boolean;
-}) => {
-  const [form, setForm] = useState({
-    shipToAddress: header.ship_to_address ?? '',
-    billToAddress: header.bill_to_address ?? '',
-    installToAddress: header.install_to_address ?? '',
-    customerPo: header.customer_po ?? '',
-    customerPoId: header.customer_po_id ?? '',
-    customerPoDate: header.customer_po_date ?? '',
-    customerDeliveryDate: header.customer_delivery_date ?? '',
-    internalExpectedDd: header.internal_expected_dd ?? '',
-    hubName: header.hub_name ?? '',
-    customerState: header.customer_state ?? '',
-  });
-
-  useEffect(() => {
-    setForm({
-      shipToAddress: header.ship_to_address ?? '',
-      billToAddress: header.bill_to_address ?? '',
-      installToAddress: header.install_to_address ?? '',
-      customerPo: header.customer_po ?? '',
-      customerPoId: header.customer_po_id ?? '',
-      customerPoDate: header.customer_po_date ?? '',
-      customerDeliveryDate: header.customer_delivery_date ?? '',
-      internalExpectedDd: header.internal_expected_dd ?? '',
-      hubName: header.hub_name ?? '',
-      customerState: header.customer_state ?? '',
-    });
-  }, [header]);
-
-  const set = (k: keyof typeof form, v: string) =>
-    setForm((s) => ({ ...s, [k]: v }));
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>Multi-Address · Customer PO · Schedule</h2>
-        <Button variant="primary" size="sm"
-          onClick={() => onSave(form)} disabled={saving || locked}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
-      </header>
-      <div className={styles.cardBody}>
-        {/* Customer PO row */}
-        <p className={styles.subHead}>Customer Purchase Order</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer PO No</span>
-            <input className={styles.fieldInput} value={form.customerPo} disabled={locked}
-              onChange={(e) => set('customerPo', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer PO ID</span>
-            <input className={styles.fieldInput} value={form.customerPoId} disabled={locked}
-              onChange={(e) => set('customerPoId', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>PO Date</span>
-            <input type="date" className={styles.fieldInput} value={form.customerPoDate} disabled={locked}
-              onChange={(e) => set('customerPoDate', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>State</span>
-            <input className={styles.fieldInput} value={form.customerState} disabled={locked}
-              onChange={(e) => set('customerState', e.target.value)} />
-          </label>
-        </div>
-
-        {/* Schedule row */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Delivery Schedule</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Customer Delivery Date</span>
-            <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate} disabled={locked}
-              onChange={(e) => set('customerDeliveryDate', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Internal Expected DD</span>
-            <input type="date" className={styles.fieldInput} value={form.internalExpectedDd} disabled={locked}
-              onChange={(e) => set('internalExpectedDd', e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Hub / Branch</span>
-            <input className={styles.fieldInput} value={form.hubName} disabled={locked}
-              onChange={(e) => set('hubName', e.target.value)} />
-          </label>
-          <div className={styles.field}>
-            <span className={styles.fieldLabel}>Overdue Flag</span>
-            <span className={styles.fieldInput} style={{ display: 'inline-flex', alignItems: 'center', height: 32 }}>
-              {header.overdue ? (
-                <strong style={{
-                  color: header.overdue === 'OVERDUE' ? 'var(--c-festive-b, #B8331F)' : 'var(--c-orange)',
-                }}>
-                  {header.overdue}
-                </strong>
-              ) : <span className={styles.muted}>—</span>}
-            </span>
-          </div>
-        </div>
-
-        {/* 3 address blocks */}
-        <p className={styles.subHead} style={{ marginTop: 'var(--space-3)' }}>Addresses</p>
-        <div className={styles.formGrid4}>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Ship-To Address</span>
-            <textarea className={styles.fieldInput} rows={3} value={form.shipToAddress} disabled={locked}
-              onChange={(e) => set('shipToAddress', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 2' }}>
-            <span className={styles.fieldLabel}>Bill-To Address</span>
-            <textarea className={styles.fieldInput} rows={3} value={form.billToAddress} disabled={locked}
-              onChange={(e) => set('billToAddress', e.target.value)} />
-          </label>
-          <label className={styles.field} style={{ gridColumn: 'span 4' }}>
-            <span className={styles.fieldLabel}>Install-To Address</span>
-            <textarea className={styles.fieldInput} rows={2} value={form.installToAddress} disabled={locked}
-              onChange={(e) => set('installToAddress', e.target.value)} />
-          </label>
-        </div>
-
-        {header.linked_do_doc_no && (
-          <p className={styles.muted} style={{ marginTop: 'var(--space-2)' }}>
-            Linked DO: <Link to={`/mfg-delivery-orders/${header.linked_do_doc_no}`}>{header.linked_do_doc_no}</Link>
-          </p>
-        )}
-      </div>
-    </section>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   PaymentCard — Houzs-pattern transactions ledger.
-
-   Commander 2026-05-27: "Payment 也 follow Hookka 那个排版". Verbatim port
-   of houzs-erp/src/components/NewSalesOrderForm.tsx Payments block (lines
-   1047-1126). The previous Subtotal / Expected Deposit (50% rule) section
-   is dropped — Houzs doesn't have it, and commander wants only the
-   transactions table + Deposit Paid + Balance summary.
-
-   Each row in the table = one row in mfg_sales_order_payments (migration
-   0073). Sum of amount_centi = "Deposit Paid"; balance = local_total_centi
-   − paid. Legacy header columns (payment_method, merchant_provider,
-   installment_months, approval_code, payment_date, paid_centi) still exist
-   in the schema but the UI no longer reads or writes them.
-
-   Houzs has a flat list of "method" strings (CASH/MBB/VISA/EPP/...). The
-   2990 API uses a typed enum: 'merchant' | 'transfer' | 'cash' + optional
-   merchantProvider/installmentMonths. We map Houzs string → API enum at
-   submit time:
-     - CASH                            → method=cash
-     - MBB / ONLINE / TNG / DUITNOW    → method=transfer, merchant_provider=null
-     - VISA / MASTER / CREDIT / EPP    → method=merchant, merchant_provider derived
-   Reverse mapping for display: rebuild the friendly label from method +
-   merchant_provider + installment_months so legacy ledger rows still show
-   sensibly.
-   ════════════════════════════════════════════════════════════════════════ */
-
-type PaymentMethod = 'merchant' | 'transfer' | 'cash';
-type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
-
-/** Friendly Houzs-style method labels. Top of the list = sensible default. */
-const PAYMENT_METHOD_OPTIONS = [
-  'CASH', 'MBB', 'VISA', 'MASTER', 'CREDIT CARD', 'EPP',
-  'ONLINE', 'TNG', 'DUITNOW', 'OTHER',
-] as const;
-type PaymentMethodLabel = typeof PAYMENT_METHOD_OPTIONS[number];
-
-/** Houzs string → API enum (method, optional merchant provider). */
-const labelToApi = (label: PaymentMethodLabel): {
-  method: PaymentMethod;
-  merchantProvider: MerchantProvider | null;
-} => {
-  switch (label) {
-    case 'CASH':
-      return { method: 'cash', merchantProvider: null };
-    case 'MBB':
-    case 'ONLINE':
-    case 'TNG':
-    case 'DUITNOW':
-      // Bank transfer family — provider field stays null on the API.
-      return { method: 'transfer', merchantProvider: null };
-    case 'VISA':
-    case 'MASTER':
-    case 'CREDIT CARD':
-    case 'EPP':
-    case 'OTHER':
-      // Merchant rails. Provider isn't intrinsic to the user's label here
-      // (cardholder doesn't know which acquirer settles); leave null so
-      // commander can pick it in a follow-up edit if needed.
-      return { method: 'merchant', merchantProvider: null };
-  }
-};
-
-/** API row → friendly label (best-effort, falls back to METHOD). */
-const apiToLabel = (p: SoPayment): string => {
-  if (p.method === 'cash') return 'CASH';
-  if (p.method === 'transfer') return p.merchant_provider ?? 'MBB';
-  // merchant
-  if (p.merchant_provider) return p.merchant_provider;
-  return 'CREDIT CARD';
-};
-
-/** Per-method pill swatch (Houzs uses category-coloured chip tags). */
-const methodPillStyle = (m: PaymentMethod): CSSProperties => {
-  const bg =
-    m === 'merchant' ? 'rgba(232, 107, 58, 0.12)' :
-    m === 'transfer' ? 'rgba(47, 93, 79, 0.12)'   :
-                       'rgba(0, 0, 0, 0.06)';
-  const fg =
-    m === 'merchant' ? 'var(--c-burnt)' :
-    m === 'transfer' ? 'var(--c-secondary-a, #2F5D4F)' :
-                       'var(--fg-muted)';
-  return {
-    display: 'inline-block',
-    fontFamily: 'var(--font-sans)',
-    fontSize: 'var(--fs-11)',
-    fontWeight: 600,
-    padding: '1px 8px',
-    borderRadius: 'var(--radius-pill)',
-    background: bg,
-    color: fg,
-    letterSpacing: '0.02em',
-  };
-};
-
-/* Task #99 (UI perf) — Wrap in React.memo so the inline-add / +Payment /
-   delete state inside PaymentCard doesn't cascade re-renders from the
-   parent page's unrelated state changes (e.g. opening the History
-   drawer, toggling Edit mode, typing in the search box). `header` is
-   the only object prop and it comes from useQuery cache so its
-   reference is stable across renders. `onSave` is recreated on each
-   parent render — see SalesOrderDetail for the useCallback wrapping. */
-const PaymentCard = memo(({
-  header,
-  locked = false,
-}: {
-  header: SoHeader;
-  locked?: boolean;
-}) => {
-  const grandTotal = header.local_total_centi ?? 0;
-
-  const paymentsQ    = useSalesOrderPayments(header.doc_no);
-  const payments     = paymentsQ.data ?? [];
-  const addPayment   = useAddSalesOrderPayment();
-  const deletePayment = useDeleteSalesOrderPayment();
-  const staffQ       = useStaff();
-  const staff        = staffQ.data ?? [];
-  const auth         = useAuth();
-
-  /* In-flight "draft" rows. Houzs lets commander Add Payment which appends
-     a blank row inline; the same model is used here so a row is fully
-     editable as soon as it appears. We store local drafts keyed by a uid
-     and POST them when commander tabs/blurs out (after at least one
-     non-trivial change). */
-  type DraftRow = {
-    uid:          string;
-    paidAt:       string;
-    methodLabel:  PaymentMethodLabel;
-    amountCenti:  number;
-    accountSheet: string;
-    approvalCode: string;
-    collectedBy:  string;        // staff.id (uuid) | ''
-  };
-
-  const newDraft = (): DraftRow => ({
-    uid: Math.random().toString(36).slice(2, 10),
-    paidAt: new Date().toISOString().slice(0, 10),
-    methodLabel: 'CASH',
-    amountCenti: 0,
-    accountSheet: '',
-    approvalCode: '',
-    // Default Collected By = current logged-in staff (commander screenshot).
-    collectedBy: auth.staff?.id ?? '',
-  });
-
-  const [drafts, setDrafts] = useState<DraftRow[]>([]);
-
-  const addDraft = () => setDrafts((prev) => [...prev, newDraft()]);
-  const patchDraft = (uid: string, patch: Partial<DraftRow>) =>
-    setDrafts((prev) => prev.map((d) => d.uid === uid ? { ...d, ...patch } : d));
-  const removeDraft = (uid: string) =>
-    setDrafts((prev) => prev.filter((d) => d.uid !== uid));
-
-  /* Commit a draft to the API. Trips on:
-     - amountCenti > 0
-     - method present (always true since CASH is the default) */
-  const commitDraft = (d: DraftRow) => {
-    if (d.amountCenti <= 0) return;
-    const { method, merchantProvider } = labelToApi(d.methodLabel);
-    const body: Record<string, unknown> = {
-      docNo:        header.doc_no,
-      paidAt:       d.paidAt,
-      method,
-      amountCenti:  d.amountCenti,
-      accountSheet: d.accountSheet || null,
-      approvalCode: d.approvalCode || null,
-      collectedBy:  d.collectedBy  || null,
-    };
-    if (method === 'merchant') {
-      body.merchantProvider = merchantProvider;
-    }
-    addPayment.mutate(body as { docNo: string } & Record<string, unknown>, {
-      onSuccess: () => removeDraft(d.uid),
-      onError: (e) => {
-        // eslint-disable-next-line no-console
-        console.error('[payment] add failed:', e);
-        window.alert(`Failed to save payment: ${e instanceof Error ? e.message : String(e)}`);
-      },
-    });
-  };
-
-  /* Summary maths — same as Houzs (paid = Σ amount_centi; balance =
-     grandTotal − paid, clamped at 0). */
-  const paidCenti    = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
-  const balanceCenti = Math.max(0, grandTotal - paidCenti);
-
-  const staffNameById = (id: string | null): string | null => {
-    if (!id) return null;
-    return staff.find((s) => s.id === id)?.name ?? null;
-  };
-
-  return (
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>
-          <DollarSign size={14} strokeWidth={1.75} /> Payments
-        </h2>
-      </header>
-      <div className={styles.cardBody}>
-        <div className={paymentsStyles.section}>
-          {/* Top bar with + Add Payment trigger ─────────────────────── */}
-          <div className={paymentsStyles.head}>
-            <span className={paymentsStyles.headLabel}>
-              {payments.length + drafts.length} transaction{payments.length + drafts.length === 1 ? '' : 's'}
-            </span>
-            {!locked && (
-              <button
-                type="button"
-                className={paymentsStyles.addBtn}
-                onClick={addDraft}
-                disabled={addPayment.isPending}
-              >
-                <Plus size={14} strokeWidth={1.75} />
-                Add Payment
-              </button>
-            )}
-          </div>
-
-          {/* Transactions table ──────────────────────────────────────── */}
-          <div className={paymentsStyles.grid}>
-            {/* Header row */}
-            <span className={paymentsStyles.headerCell}>
-              Date <CalIcon size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Payment Method <Tag size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCellRight}>
-              Amount <DollarSign size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Account Sheet <FileText size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Approval Code <FileText size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell}>
-              Collected By <UserIcon size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.headerCell} />
-
-            {/* Empty state */}
-            {paymentsQ.isLoading && (
-              <span className={paymentsStyles.emptyRow} style={{ gridColumn: '1 / -1' }}>
-                Loading…
-              </span>
-            )}
-            {!paymentsQ.isLoading && payments.length === 0 && drafts.length === 0 && (
-              <span className={paymentsStyles.emptyRow} style={{ gridColumn: '1 / -1' }}>
-                No payments recorded yet · click "Add Payment" to log a deposit
-              </span>
-            )}
-
-            {/* Persisted payment rows */}
-            {payments.map((p: SoPayment) => (
-              <div className={paymentsStyles.row} key={p.id}>
-                <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {p.paid_at}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <span className={paymentsStyles.methodPill} style={methodPillStyle(p.method)}>
-                    {apiToLabel(p)}
-                  </span>
-                  {p.installment_months ? (
-                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
-                      · {p.installment_months}m
-                    </span>
-                  ) : null}
-                </span>
-                <span className={paymentsStyles.cellRight}
-                      style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-                  {fmtRm(p.amount_centi, header.currency)}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  {p.account_sheet ?? <span className={styles.muted}>—</span>}
-                </span>
-                <span className={paymentsStyles.cell} style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {p.approval_code ?? <span className={styles.muted}>—</span>}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  {p.collected_by_name ?? staffNameById(p.collected_by) ?? <span className={styles.muted}>—</span>}
-                </span>
-                <span className={paymentsStyles.cell}>
-                  {!locked && (
-                    <button
-                      type="button"
-                      className={paymentsStyles.trashBtn}
-                      disabled={deletePayment.isPending}
-                      onClick={() => {
-                        if (confirm(`Delete this ${apiToLabel(p)} payment of ${fmtRm(p.amount_centi, header.currency)}?`)) {
-                          deletePayment.mutate({ docNo: header.doc_no, id: p.id });
-                        }
-                      }}
-                      title="Remove payment"
-                    >
-                      <Trash2 size={14} strokeWidth={1.75} />
-                    </button>
-                  )}
-                </span>
-              </div>
-            ))}
-
-            {/* In-flight draft rows (commander typing) */}
-            {drafts.map((d) => (
-              <div className={paymentsStyles.row} key={d.uid}>
-                <span className={paymentsStyles.cell}>
-                  <input
-                    type="date"
-                    className={paymentsStyles.inlineInput}
-                    value={d.paidAt}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { paidAt: e.target.value })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <select
-                    className={paymentsStyles.inlineSelect}
-                    value={d.methodLabel}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { methodLabel: e.target.value as PaymentMethodLabel })}
-                  >
-                    {PAYMENT_METHOD_OPTIONS.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </span>
-                <span className={paymentsStyles.cellRight}>
-                  <input
-                    type="number" min={0} step="0.01"
-                    className={paymentsStyles.inlineInputRight}
-                    value={d.amountCenti === 0 ? '' : (d.amountCenti / 100).toFixed(2)}
-                    placeholder="0"
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, {
-                      amountCenti: Math.round(Number(e.target.value) * 100) || 0,
-                    })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <input
-                    type="text"
-                    className={`${paymentsStyles.inlineInput} ${paymentsStyles.placeholderHint}`}
-                    placeholder="e.g. AKHC 3809"
-                    value={d.accountSheet}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { accountSheet: e.target.value })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <input
-                    type="text"
-                    className={paymentsStyles.inlineInput}
-                    value={d.approvalCode}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { approvalCode: e.target.value })}
-                  />
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <select
-                    className={paymentsStyles.inlineInputUser}
-                    value={d.collectedBy}
-                    disabled={locked}
-                    onChange={(e) => patchDraft(d.uid, { collectedBy: e.target.value })}
-                  >
-                    <option value="">—</option>
-                    {staff.filter((s) => s.active).map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </span>
-                <span className={paymentsStyles.cell}>
-                  <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
-                    <button
-                      type="button"
-                      onClick={() => commitDraft(d)}
-                      disabled={locked || addPayment.isPending || d.amountCenti <= 0}
-                      title={d.amountCenti <= 0 ? 'Enter an amount > 0 first' : 'Save payment'}
-                      style={{
-                        background: 'transparent', border: 'none', padding: 4,
-                        cursor: d.amountCenti <= 0 ? 'not-allowed' : 'pointer',
-                        color: d.amountCenti <= 0 ? 'var(--fg-muted)' : 'var(--c-secondary-a, #2F5D4F)',
-                      }}
-                    >
-                      <Save size={14} strokeWidth={1.75} />
-                    </button>
-                    <button
-                      type="button"
-                      className={paymentsStyles.trashBtn}
-                      onClick={() => removeDraft(d.uid)}
-                      title="Discard"
-                      disabled={locked}
-                    >
-                      <Trash2 size={14} strokeWidth={1.75} />
-                    </button>
-                  </div>
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* ── Summary (Deposit Paid + Balance) ────────────────────── */}
-          <div className={paymentsStyles.summary}>
-            <span className={paymentsStyles.summaryLabel}>
-              Deposit Paid <DollarSign size={12} strokeWidth={1.75} />
-            </span>
-            <span className={paymentsStyles.summaryValueAccent}>
-              {fmtRm(paidCenti, header.currency)}
-            </span>
-            <span className={paymentsStyles.summaryLabel}>
-              Balance <DollarSign size={12} strokeWidth={1.75} />
-            </span>
-            <span className={balanceCenti > 0 ? paymentsStyles.balanceOutstanding : paymentsStyles.balanceClear}>
-              {fmtRm(balanceCenti, header.currency)}
-              {grandTotal > 0 && paidCenti >= grandTotal && (
-                <span style={{ marginLeft: 8, fontSize: 'var(--fs-11)' }}>· PAID</span>
-              )}
-            </span>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-});
-PaymentCard.displayName = 'PaymentCard';
 
 
 /* ════════════════════════════════════════════════════════════════════════

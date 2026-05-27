@@ -265,13 +265,23 @@ export const useDeleteMfgSalesOrderItem = () => {
 /* PR-F (Task #79) — Per-line photo upload/delete mutations.
    Upload uses multipart/form-data so authedFetch's JSON wrapper is
    bypassed; we hand-roll the fetch with the auth header and the
-   browser's FormData boundary. */
+   browser's FormData boundary.
+
+   Task #92 — POST response now includes a signed R2 GET URL +
+   expiry. Old clients (before this PR) only read photoKey, so the
+   shape is additive. */
+export type UploadSoItemPhotoResult = {
+  photoKey: string;
+  photoUrl: string;     // either a signed R2 URL (new) or the legacy proxy URL
+  expiresAt?: string;   // set when photoUrl is a signed URL
+};
+
 export const useUploadSoItemPhoto = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ docNo, itemId, file }: {
       docNo: string; itemId: string; file: File;
-    }): Promise<{ photoKey: string; photoUrl: string }> => {
+    }): Promise<UploadSoItemPhotoResult> => {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) throw new Error('not_authenticated');
@@ -286,7 +296,7 @@ export const useUploadSoItemPhoto = () => {
         try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
         throw new Error(`${res.status} ${res.statusText}: ${detail}`);
       }
-      return (await res.json()) as { photoKey: string; photoUrl: string };
+      return (await res.json()) as UploadSoItemPhotoResult;
     },
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders', vars.docNo] });
@@ -295,6 +305,23 @@ export const useUploadSoItemPhoto = () => {
     },
   });
 };
+
+/* Task #92 — Fetch a fresh signed GET URL for an existing photo key.
+   Called by PhotoThumb on mount (when no cache hit) and on 403 retry
+   (signed URL expired between cache and render). The browser caches
+   the signed-URL response naturally — no react-query needed because
+   we want per-key TTL invalidation, not query-level invalidation. */
+export type SignedPhotoUrlResponse = { signedUrl: string; expiresAt: string };
+
+export async function fetchSoItemPhotoSignedUrl(
+  docNo: string,
+  itemId: string,
+  photoKey: string,
+): Promise<SignedPhotoUrlResponse> {
+  return authedFetch<SignedPhotoUrlResponse>(
+    `/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}/signed`,
+  );
+}
 
 export const useDeleteSoItemPhoto = () => {
   const qc = useQueryClient();

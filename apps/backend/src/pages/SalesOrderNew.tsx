@@ -1,27 +1,25 @@
 // ----------------------------------------------------------------------------
 // SalesOrderNew — full-page Create SO at /mfg-sales-orders/new.
 //
-// PR #113 — POS-aligned customer fields. Commander 2026-05-26 compared this
-// page with the POS handover screen (Customer / Address / Emergency / Target
-// date) and pointed out the backend form was missing every field beyond a
-// debtor name + 4 generic address lines. The schema (migration 0060_so_pos_
-// alignment) already carries email, customer_type, salesperson_id, city,
-// postcode, building_type, emergency_contact_*, target_date — they just
-// weren't exposed in this form.
+// Task #105 — Commander 2026-05-27: "Edit SO 和 New SO 界面一定要一样的啊
+// 为什么一直不一样 sales 怎么会习惯呢 payment 你只改了 edit SO 没有改 new SO".
+// This page is now restructured to render the SAME 4 customer cards + the
+// SAME Houzs PaymentsTable as SalesOrderDetail.tsx, so the Create flow and
+// the Edit flow are visually identical (only the page title differs).
 //
-// Layout:
-//   CUSTOMER card        — Debtor Name * · Phone · Email · Salesperson · Customer Type
-//   DELIVERY ADDRESS     — Address 1 · Address 2 · State (cascade) · City (cascade)
-//                          · Postcode · Building Type · "fill later" checkbox
-//   EMERGENCY CONTACT    — Name · Relationship · Phone
-//   TARGET DATE          — single date picker (POS calls it "target install date")
-//   LINES                — existing inline line-item table (PR 3 will swap the
-//                          plain-text item code for a Product picker + per-
-//                          category variant fields)
-//   NOTE                 — internal notes
-//
-// Saves a single POST to /mfg-sales-orders with all fields filled in camelCase
-// (API §POST handler maps each to its snake_case column).
+// Card order (matches Detail):
+//   1. CUSTOMER         — Name * / Phone * / Email * / Customer Type /
+//                         Salesperson / Customer SO Ref
+//   2. ORDER INFO       — Building Type / Venue / Processing Date /
+//                         Delivery Date (XOR validation) / Note
+//   3. EMERGENCY        — Contact Name / Relationship / Phone
+//   4. DELIVERY ADDRESS — "Fill in address later" affordance (New-SO only) /
+//                         Address Line 1 / Address Line 2 / State / City /
+//                         Postcode  (Sales Location is Detail-only)
+//   5. LINE ITEMS       — SoLineCard list (already shared with Detail)
+//   6. PAYMENTS         — <PaymentsTable docNo={null} /> draft mode. After
+//                         POST /mfg-sales-orders succeeds, batch POST every
+//                         draft to /:docNo/payments before navigating.
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
@@ -29,24 +27,28 @@ import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
-import { useCreateMfgSalesOrder, useDebtorSearch } from '../lib/flow-queries';
+import {
+  useCreateMfgSalesOrder, useDebtorSearch, useAddSalesOrderPayment,
+  type DebtorSuggestion,
+} from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
-import { useWarehouses } from '../lib/inventory-queries';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
   BUILDING_TYPES,
 } from '../lib/localities-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import {
+  PaymentsTable, labelToApi, type PaymentDraft,
+} from '../components/PaymentsTable';
+import { formatPhone } from '@2990s/shared/phone';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-/* PR #113 — Customer type matches the POS handover dropdown. The column is
-   free-text on the schema, but we constrain to two values here so the SO
-   list filters stay clean. */
+/* Customer type matches the POS handover dropdown. */
 const CUSTOMER_TYPES = ['NEW', 'EXISTING'] as const;
 
-/* PR #113 — Relationship dropdown for emergency contact. Mirrors POS list. */
+/* Emergency-contact relationship dropdown — mirrors POS. */
 const RELATIONSHIP_OPTIONS = [
   'Spouse', 'Parent', 'Child', 'Sibling', 'Relative', 'Friend', 'Colleague', 'Other',
 ] as const;
@@ -74,7 +76,8 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 export const SalesOrderNew = () => {
   const navigate = useNavigate();
   const create   = useCreateMfgSalesOrder();
-  const staff    = useStaff();
+  const addPayment = useAddSalesOrderPayment();
+  const staffQ   = useStaff();
   const loc      = useLocalities();
 
   // ── Customer fields ────────────────────────────────────────────────
@@ -84,68 +87,65 @@ export const SalesOrderNew = () => {
   const [email,         setEmail]         = useState('');
   const [salespersonId, setSalespersonId] = useState('');
   const [customerType,  setCustomerType]  = useState<'NEW' | 'EXISTING' | ''>('');
+  /* PR-A on Detail exposed Customer SO Ref inside the Customer card —
+     mirror that here so the two pages line up. */
+  const [customerSoNo,  setCustomerSoNo]  = useState('');
 
-  // ── PR #121 — POS-aligned Order Details fields ─────────────────────
-  // Drawing from the POS handover layout (Customer · Delivery Hub ·
-  // Customer PO No · Customer SO No · Reference · Company SO Date ·
-  // Customer Delivery Date · Notes). soDate defaults to today.
-  const [soDate,             setSoDate]             = useState(() => new Date().toISOString().slice(0, 10));
-  // PR #121 owns `deliveryDate` state (below) — Order Details card binds to
-  // that same state so both UIs stay in sync.
-  const [customerPo,         setCustomerPo]         = useState('');
-  const [customerSoNo,       setCustomerSoNo]       = useState('');
-  const [ref,                setRef]                = useState('');
-  const [hubId,              setHubId]              = useState('');
-  const debtors = useDebtorSearch(debtorName.trim().length >= 2 ? debtorName.trim() : '');
-  const warehouses = useWarehouses();
-  const hubName = useMemo(() => (warehouses.data ?? []).find((w) => w.id === hubId)?.name ?? '', [warehouses.data, hubId]);
+  // ── Order Info fields (Building Type / Venue / Dates / Note) ───────
+  const [buildingType,   setBuildingType] = useState<typeof BUILDING_TYPES[number] | ''>('');
+  /* PR #156 — Commander 2026-05-27: "开单的 venue 呢也没有". Detail page
+     keeps Venue as a free-text field separate from Building Type — match
+     that here so the two layouts line up. */
+  const [venue,          setVenue]         = useState('');
+  const [processingDate, setProcessingDate] = useState('');
+  const [deliveryDate,   setDeliveryDate]   = useState('');
+  const [note,           setNote]           = useState('');
 
   // ── Delivery address ───────────────────────────────────────────────
+  /* "Fill in address later" affordance: New-SO only (the address can be
+     unknown at quote time). Detail doesn't need it because by the time
+     someone is editing a saved SO, the address can be left blank without
+     a special toggle. */
   const [fillAddressLater, setFillAddressLater] = useState(false);
   const [address1,    setAddress1]    = useState('');
   const [address2,    setAddress2]    = useState('');
   const [state,       setState]       = useState('');
   const [city,        setCity]        = useState('');
   const [postcode,    setPostcode]    = useState('');
-  const [buildingType, setBuildingType] = useState<typeof BUILDING_TYPES[number] | ''>('');
 
   // ── Emergency contact ──────────────────────────────────────────────
   const [emergencyName,  setEmergencyName]   = useState('');
   const [emergencyRel,   setEmergencyRel]    = useState<typeof RELATIONSHIP_OPTIONS[number] | ''>('');
   const [emergencyPhone, setEmergencyPhone]  = useState('');
 
-  // ── Dates ──────────────────────────────────────────────────────────
-  // PR #121 — Commander 2026-05-26: "应该是 processing date 和 delivery
-  // date，而不是 target date". HOOKKA pattern (SO create page L703-707):
-  //   Processing Date → when manufacturing starts (maps to internal_expected_dd)
-  //   Delivery Date   → when customer expects delivery (maps to customer_delivery_date)
-  // The target_date column stays on the schema for POS handover compatibility
-  // but isn't surfaced here anymore.
-  const [processingDate, setProcessingDate] = useState('');
-  const [deliveryDate,   setDeliveryDate]   = useState('');
-
-  // ── Payment (PR #148 / #150) ──────────────────────────────────────
-  // Commander 2026-05-26: "event installment 也是 under merchant 的".
-  // 3 top-level methods (merchant / transfer / cash); when merchant is
-  // picked we further capture: provider, normal-vs-installment, term
-  // (6/12 if installment), and an approval_code from the auth slip.
-  type PaymentMethod = 'cash' | 'transfer' | 'merchant' | '';
-  const [paymentMethod,     setPaymentMethod]     = useState<PaymentMethod>('');
-  const [installmentMonths, setInstallmentMonths] = useState<number | null>(null);
-  const [merchantProvider,  setMerchantProvider]  = useState<string>('');
-  const [approvalCode,      setApprovalCode]      = useState<string>('');
-  const [paymentDate,       setPaymentDate]       = useState<string>('');
-  const [depositCenti,      setDepositCenti]      = useState<number>(0);
-  const [paidCenti,         setPaidCenti]         = useState<number>(0);
-
-  // ── Notes ──────────────────────────────────────────────────────────
-  const [note, setNote] = useState('');
-
   // ── Items state ────────────────────────────────────────────────────
-  // PR #125 — Each line is an inline editable card (HOOKKA pattern). First
-  // card is seeded on mount so commander immediately sees the variant
-  // editor instead of needing to click "+ Add line item" first.
+  /* HOOKKA pattern — each line is an inline editable card. First card is
+     seeded on mount so commander immediately sees the variant editor
+     instead of needing to click "+ Add line item" first. */
   const [lines, setLines] = useState<DraftLine[]>(() => [newLine()]);
+
+  // ── Payments draft state ───────────────────────────────────────────
+  /* Task #105 — Same Houzs PaymentsTable used on Detail, but in DRAFT mode
+     since the SO doesn't have a docNo yet. We hold the rows here, then
+     batch POST them to /:docNo/payments after create succeeds. */
+  const [paymentDrafts, setPaymentDrafts] = useState<PaymentDraft[]>([]);
+
+  // ── Debtor autocomplete + warehouse lookup ─────────────────────────
+  const debtors = useDebtorSearch(debtorName.trim().length >= 2 ? debtorName.trim() : '');
+  const [showDebtorSuggest, setShowDebtorSuggest] = useState(false);
+  const debtorSuggestions: DebtorSuggestion[] = (debtors.data?.debtors ?? []).filter(
+    (d) => (d.debtor_name ?? '').toLowerCase() !== debtorName.trim().toLowerCase(),
+  );
+  const applyDebtorSuggestion = (d: DebtorSuggestion) => {
+    setDebtorCode(d.debtor_code ?? '');
+    setDebtorName(d.debtor_name ?? '');
+    setPhone(d.phone ?? '');
+    setAddress1(d.address1 ?? '');
+    setAddress2(d.address2 ?? '');
+    setCity(d.address3 ?? '');
+    setPostcode(d.address4 ?? '');
+    setShowDebtorSuggest(false);
+  };
 
   const updateLine = (rid: string, patch: Partial<SoLineDraft>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
@@ -157,12 +157,8 @@ export const SalesOrderNew = () => {
   const addLine  = () => setLines((prev) => [...prev, newLine(deliveryDate || null)]);
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
 
-  /* PR-E — Client-side master-follower cascade for delivery date.
-     Mirrors the server-side cascade in PATCH /mfg-sales-orders/:docNo —
-     except the SO doesn't exist yet here, so we do it locally. When
-     header `deliveryDate` changes, every line that hasn't been manually
-     overridden picks up the new value. Lines with
-     `lineDeliveryDateOverridden=true` keep whatever the user typed. */
+  /* PR-E — Client-side master-follower cascade for delivery date. Mirrors
+     the server-side cascade in PATCH /mfg-sales-orders/:docNo. */
   useEffect(() => {
     setLines((prev) => {
       let didUpdate = false;
@@ -177,29 +173,10 @@ export const SalesOrderNew = () => {
     });
   }, [deliveryDate]);
 
-  /* PR #148 — Commander 2026-05-26: "Hookka 是随着我选的第一个东西，自动
-     detect 是不是 sofa、bed frame 还是 mattress". The standalone Sofa Set
-     inline bar (PR #142 / #145) was a separate widget that didn't match
-     HOOKKA — commander wants the line cards themselves to be the only
-     entry point. Each SoLineCard already auto-detects category from the
-     picked SKU, and the master-follower cascade (PR #147) keeps variants
-     in sync, so the explicit Sofa Set picker was extra clutter. Removed. */
-
-  /* PR #142 / #145 / #147 — Master-follower cascade.
-     Commander 2026-05-26:
-       "line1 改下面跟着改"
-       "可是下面如果改动就会跟着最新改动"
-     Behavior:
-       - LINE 1 of each category is the MASTER. Its variants drive
-         everything else in that category.
-       - When master's variant key changes, every follower's same key
-         tracks the new value — UNLESS the follower has manually
-         overridden that key (tracked by `overriddenKeys`).
-       - Once a follower clicks/types into a variant, that key is added
-         to its overriddenKeys and never gets cascaded again.
-       - Picking a fresh SKU on a line wipes overriddenKeys (clean slate). */
+  /* PR #142 / #145 / #147 — Master-follower cascade for line variants.
+     LINE 1 of each category drives variant changes on subsequent lines,
+     unless a follower has manually overridden a key. */
   useEffect(() => {
-    // Find master line (and its variants) per category.
     const masterByCategory: Record<string, Record<string, unknown>> = {};
     const masterIdx: Record<string, number> = {};
     lines.forEach((l, idx) => {
@@ -212,7 +189,7 @@ export const SalesOrderNew = () => {
     let didUpdate = false;
     const next = lines.map((l, idx) => {
       if (!l.itemGroup) return l;
-      if (masterIdx[l.itemGroup] === idx) return l; // skip the master line itself
+      if (masterIdx[l.itemGroup] === idx) return l;
       const masterVariants = masterByCategory[l.itemGroup];
       if (!masterVariants) return l;
       const cur = (l.variants ?? {}) as Record<string, unknown>;
@@ -220,7 +197,7 @@ export const SalesOrderNew = () => {
       const patch: Record<string, unknown> = {};
       let hasChange = false;
       for (const k of Object.keys(masterVariants)) {
-        if (overridden.has(k)) continue; // follower owns this key
+        if (overridden.has(k)) continue;
         const masterVal = masterVariants[k];
         if (masterVal === undefined || masterVal === null || masterVal === '') continue;
         if (cur[k] !== masterVal) {
@@ -244,9 +221,7 @@ export const SalesOrderNew = () => {
   );
 
   /* PR #141 — Per-category variants captured from the FIRST line of that
-     category that has any variants set. Passed to every SoLineCard so when
-     a subsequent line picks an SKU of the same category, it inherits the
-     variants (commander: "正常我的沙发是一整套… 根据第一个 item 带下来"). */
+     category that has any variants set. */
   const inheritVariantsByCategory = useMemo(() => {
     const out: Record<string, Record<string, unknown>> = {};
     for (const l of lines) {
@@ -270,11 +245,43 @@ export const SalesOrderNew = () => {
 
   const canSave = debtorName.trim().length > 0;
 
-  /* PR #125 — Commander 2026-05-26: "Processing Date 跟 Delivery Date 可以
-     两个都没有，或者两个都有，但不能一个有一个没有". XOR is rejected — a
-     processing date with no delivery date (or vice versa) is incomplete data
-     that breaks downstream production scheduling + customer comms. */
+  /* Mirror Detail's XOR rule (PR #156): Processing Date and Delivery Date
+     must both be filled in or both empty. */
   const datesXor = (processingDate.trim() !== '') !== (deliveryDate.trim() !== '');
+
+  /* Task #105 — After POST /mfg-sales-orders succeeds, replay every payment
+     draft through POST /:docNo/payments in parallel via the existing mutation
+     hook (useAddSalesOrderPayment.mutateAsync). Failures don't roll the SO
+     back (the SO is already created), but we surface them so commander can
+     re-enter the affected rows on the Detail page. */
+  const flushPaymentDrafts = async (docNo: string): Promise<{ failed: number }> => {
+    if (paymentDrafts.length === 0) return { failed: 0 };
+    const tasks = paymentDrafts
+      .filter((d) => d.amountCenti > 0)
+      .map(async (d) => {
+        const { method, merchantProvider } = labelToApi(d.methodLabel);
+        const body: { docNo: string } & Record<string, unknown> = {
+          docNo,
+          paidAt:       d.paidAt,
+          method,
+          amountCenti:  d.amountCenti,
+          accountSheet: d.accountSheet || null,
+          approvalCode: d.approvalCode || null,
+          collectedBy:  d.collectedBy  || null,
+        };
+        if (method === 'merchant') body.merchantProvider = merchantProvider;
+        try {
+          await addPayment.mutateAsync(body);
+          return true;
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('[payment] post failed for new SO:', e);
+          return false;
+        }
+      });
+    const results = await Promise.all(tasks);
+    return { failed: results.filter((ok) => !ok).length };
+  };
 
   const onSave = () => {
     if (!canSave) {
@@ -303,19 +310,10 @@ export const SalesOrderNew = () => {
         email: email || undefined,
         salespersonId: salespersonId || undefined,
         customerType: customerType || undefined,
-        // PR #121 — POS-aligned Order Details fields. customerDeliveryDate
-        // is sent below from the existing PR #121 `deliveryDate` state, so
-        // it's intentionally omitted here.
-        soDate: soDate || undefined,
-        customerPo: customerPo || undefined,
         customerSoNo: customerSoNo || undefined,
-        ref: ref || undefined,
-        hubId: hubId || undefined,
-        hubName: hubName || undefined,
-        /* PR #148 — Address handling: address1/2 skipped when fill-later
-           is on, but State/City/Postcode/BuildingType always submit.
-           Commander: "Fill in Address Later 也只是 Address 1 跟 2 不需要
-           填写而已. State, City, Postcode 还是需要填写的". */
+        venue: venue || undefined,
+        /* Address handling: address1/2 skipped when fill-later is on, but
+           State/City/Postcode/BuildingType always submit. */
         address1: fillAddressLater ? undefined : (address1 || undefined),
         address2: fillAddressLater ? undefined : (address2 || undefined),
         customerState: state || undefined,
@@ -325,24 +323,12 @@ export const SalesOrderNew = () => {
         emergencyContactName:         emergencyName  || undefined,
         emergencyContactRelationship: emergencyRel   || undefined,
         emergencyContactPhone:        emergencyPhone || undefined,
-        /* PR #148 + #150 — Payment fields. Mirror POS handover + Detail-page card. */
-        paymentMethod:     paymentMethod || undefined,
-        installmentMonths: installmentMonths ?? undefined,
-        merchantProvider:  merchantProvider || undefined,
-        approvalCode:      approvalCode || undefined,
-        paymentDate:       paymentDate || undefined,
-        depositCenti:      depositCenti || undefined,
-        paidCenti:         paidCenti || undefined,
         /* PR #121 — Processing Date → internal_expected_dd, Delivery Date →
-           customer_delivery_date. The API maps these snake-case columns
-           directly. */
+           customer_delivery_date. */
         internalExpectedDd:   processingDate || undefined,
         customerDeliveryDate: deliveryDate   || undefined,
         note: note || undefined,
-        /* PR #114 — full variant payload preserved end-to-end. The API
-           handler maps every key (divanHeight / legHeight / gap / fabric
-           code / color code / seat height / special / size) into the
-           variants JSONB column on mfg_sales_order_items. */
+        /* PR #114 — full variant payload preserved end-to-end. */
         items: validLines.map((l) => ({
           itemGroup:      l.itemGroup,
           itemCode:       l.itemCode,
@@ -360,11 +346,27 @@ export const SalesOrderNew = () => {
         })),
       },
       {
-        onSuccess: (res: { docNo: string }) => navigate(`/mfg-sales-orders/${res.docNo}`),
+        onSuccess: async (res: { docNo: string }) => {
+          /* Task #105 — Fire the queued payment drafts as follow-up POSTs.
+             We don't gate navigation on success — if a payment fails the
+             SO still exists, so we navigate to the Detail page where
+             commander can re-enter the affected row. */
+          const { failed } = await flushPaymentDrafts(res.docNo);
+          if (failed > 0) {
+            window.alert(
+              `Sales order ${res.docNo} was created, but ${failed} ` +
+              `payment row${failed === 1 ? '' : 's'} failed to save. ` +
+              `Please re-enter ${failed === 1 ? 'it' : 'them'} on the Detail page.`,
+            );
+          }
+          navigate(`/mfg-sales-orders/${res.docNo}`);
+        },
         onError:   (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
     );
   };
+
+  const staffList = (staffQ.data ?? []).filter((s) => s.active);
 
   return (
     <div className={styles.page}>
@@ -391,88 +393,231 @@ export const SalesOrderNew = () => {
         </div>
       </div>
 
-      {/* PR #129 — Commander 2026-05-26: "order details 不需要 删掉".
-          Dropped the PR #121 "Order Details" card entirely. State vars
-          (debtorCode / customerPo / customerSoNo / ref / hubId / soDate)
-          stay declared and are still sent on submit — the existing
-          Customer / Address / Emergency / Dates cards below cover the
-          common-case flow. Notes lives in its own card at the bottom
-          again (restored). */}
-
-      {/* ── Customer ────────────────────────────────────────────────── */}
-      {/* PR #155 — Commander 2026-05-27: "这整个排版很乱 旧的ok一点 分开".
-          Reverted PR #154's single combined card back to 4 separate cards
-          (Customer / Delivery Address / Emergency Contact / Dates) — the
-          density of putting everything in one card felt cluttered. */}
+      {/* ── CUSTOMER ──────────────────────────────────────────────────
+          Matches SalesOrderDetail's Customer card: Name * / Phone * /
+          Email * / Customer Type / Salesperson / Customer SO Ref.
+          Same .formGrid4 column layout (1 wide + 1 + 1 + 1 + 1 + 1) so
+          fields line up visually between the two pages. */}
       <section className={styles.card}>
-        <div className={styles.cardHeader}>
+        <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Customer</h2>
-        </div>
+        </header>
         <div className={styles.cardBody}>
-          <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Full Name *</span>
+          <div className={styles.formGrid4}>
+            <label className={styles.field} style={{ gridColumn: 'span 3' }}>
+              <span className={styles.fieldLabel}>Customer Name *</span>
               <input
-                type="text"
-                value={debtorName}
-                onChange={(e) => setDebtorName(e.target.value)}
                 className={styles.fieldInput}
+                value={debtorName}
+                onChange={(e) => { setDebtorName(e.target.value); setShowDebtorSuggest(true); }}
+                onFocus={() => setShowDebtorSuggest(true)}
+                onBlur={() => setTimeout(() => setShowDebtorSuggest(false), 150)}
                 placeholder="e.g. Lim Mei Hua"
                 required
               />
+              {showDebtorSuggest && debtorSuggestions.length > 0 && (
+                <ul className={styles.suggestList}>
+                  {debtorSuggestions.slice(0, 8).map((d, i) => (
+                    <li
+                      key={`${d.debtor_code ?? ''}-${i}`}
+                      className={styles.suggestItem}
+                      onMouseDown={() => applyDebtorSuggestion(d)}
+                    >
+                      <div>{d.debtor_name}</div>
+                      {(d.debtor_code || d.phone) && (
+                        <div className={styles.suggestCode}>
+                          {d.debtor_code ?? ''}{d.debtor_code && d.phone ? ' · ' : ''}{formatPhone(d.phone) || ''}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Phone</span>
-              {/* Task #91 — unified phone format via PhoneInput. */}
+              <span className={styles.fieldLabel}>Customer SO Ref</span>
+              <input
+                className={styles.fieldInput}
+                value={customerSoNo}
+                placeholder="Their PO / SO number"
+                onChange={(e) => setCustomerSoNo(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Phone *</span>
               <PhoneInput
+                className={styles.fieldInput}
                 value={phone}
                 onChange={setPhone}
-                className={styles.fieldInput}
-              />
-            </label>
-            <label className={`${styles.field} ${styles.fieldFull}`}>
-              <span className={styles.fieldLabel}>Email</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="customer@example.com — for receipt & order updates"
-                className={styles.fieldInput}
               />
             </label>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Salesperson</span>
-              <select
-                value={salespersonId}
-                onChange={(e) => setSalespersonId(e.target.value)}
+              <span className={styles.fieldLabel}>Email *</span>
+              <input
+                type="email"
                 className={styles.fieldInput}
-              >
-                <option value="">—</option>
-                {(staff.data ?? []).filter((s) => s.active).map((s) => (
-                  <option key={s.id} value={s.id}>{s.staffCode} · {s.name}</option>
-                ))}
-              </select>
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="customer@example.com"
+              />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Customer Type</span>
               <select
+                className={styles.fieldSelect}
                 value={customerType}
                 onChange={(e) => setCustomerType(e.target.value as typeof customerType)}
-                className={styles.fieldInput}
               >
                 <option value="">—</option>
                 {CUSTOMER_TYPES.map((t) => <option key={t} value={t}>{t === 'NEW' ? 'New' : 'Existing'}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Salesperson</span>
+              <select
+                className={styles.fieldSelect}
+                value={salespersonId}
+                onChange={(e) => setSalespersonId(e.target.value)}
+              >
+                <option value="">— Pick staff —</option>
+                {staffList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.staffCode})</option>
+                ))}
               </select>
             </label>
           </div>
         </div>
       </section>
 
-      {/* ── Delivery Address ────────────────────────────────────────── */}
+      {/* ── ORDER INFO (Building Type / Venue / Dates / Note) ────────
+          Same card + same field layout as Detail's Order Info. */}
       <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Delivery Address</h2>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Order Info</h2>
+        </header>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Building Type</span>
+              <select
+                className={styles.fieldSelect}
+                value={buildingType}
+                onChange={(e) => setBuildingType(e.target.value as typeof buildingType)}
+              >
+                <option value="">—</option>
+                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Venue</span>
+              <input
+                className={styles.fieldInput}
+                value={venue}
+                placeholder="e.g. KL Showroom, Penang Branch"
+                onChange={(e) => setVenue(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Processing Date</span>
+              <input
+                type="date"
+                className={styles.fieldInput}
+                value={processingDate}
+                onChange={(e) => setProcessingDate(e.target.value)}
+                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Delivery Date</span>
+              <input
+                type="date"
+                className={styles.fieldInput}
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+              />
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 4' }}>
+              <span className={styles.fieldLabel}>Note</span>
+              <input
+                className={styles.fieldInput}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Internal notes — visible on the SO detail page only"
+              />
+            </label>
+          </div>
+          {datesXor && (
+            <div
+              style={{
+                background: 'rgba(184, 51, 31, 0.08)',
+                border: '1px solid var(--c-festive-b, #B8331F)',
+                color: 'var(--c-festive-b, #B8331F)',
+                padding: '4px var(--space-2)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 'var(--fs-11)',
+                fontWeight: 600,
+                marginTop: 'var(--space-2)',
+              }}
+            >
+              ⚠ Processing Date and Delivery Date must be set together — Save is blocked.
+            </div>
+          )}
         </div>
+      </section>
+
+      {/* ── EMERGENCY CONTACT ─────────────────────────────────────────
+          Mirrors Detail's Emergency Contact card field-for-field. */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Emergency Contact</h2>
+          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+            Used only if we cannot reach the customer on delivery day
+          </span>
+        </header>
+        <div className={styles.cardBody}>
+          <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Contact Name</span>
+              <input
+                className={styles.fieldInput}
+                value={emergencyName}
+                placeholder="e.g. Lim Mei Hua"
+                onChange={(e) => setEmergencyName(e.target.value)}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Relationship</span>
+              <select
+                className={styles.fieldSelect}
+                value={emergencyRel}
+                onChange={(e) => setEmergencyRel(e.target.value as typeof emergencyRel)}
+              >
+                <option value="">—</option>
+                {RELATIONSHIP_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </label>
+            <label className={styles.field} style={{ gridColumn: 'span 2' }}>
+              <span className={styles.fieldLabel}>Phone</span>
+              <PhoneInput
+                className={styles.fieldInput}
+                value={emergencyPhone}
+                onChange={setEmergencyPhone}
+              />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      {/* ── DELIVERY ADDRESS ──────────────────────────────────────────
+          Matches Detail's Delivery Address card. The one Detail-only
+          field (Sales Location, read from auth) is omitted here. The
+          one New-SO-only affordance ("Fill in address later") sits at
+          the top of the card so commander can defer the address. */}
+      <section className={styles.card}>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Delivery Address</h2>
+        </header>
         <div className={styles.cardBody}>
           <label
             style={{
@@ -499,195 +644,90 @@ export const SalesOrderNew = () => {
             </div>
           </label>
 
-          {/* PR #148 — Only Address 1/2 dim out when fill-later is on. */}
-          <div className={styles.formGrid2}>
+          {/* Address fields — only Address 1/2 dim when fill-later is on. */}
+          <div className={styles.formGrid4}>
             <label
-              className={`${styles.field} ${styles.fieldFull}`}
-              style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
+              className={styles.field}
+              style={{
+                gridColumn: 'span 4',
+                opacity: fillAddressLater ? 0.4 : 1,
+                pointerEvents: fillAddressLater ? 'none' : 'auto',
+              }}
             >
               <span className={styles.fieldLabel}>Address Line 1</span>
               <input
-                type="text"
+                className={styles.fieldInput}
                 value={address1}
                 onChange={(e) => setAddress1(e.target.value)}
                 placeholder="Unit, street, area"
-                className={styles.fieldInput}
               />
             </label>
             <label
-              className={`${styles.field} ${styles.fieldFull}`}
-              style={{ opacity: fillAddressLater ? 0.4 : 1, pointerEvents: fillAddressLater ? 'none' : 'auto' }}
+              className={styles.field}
+              style={{
+                gridColumn: 'span 4',
+                opacity: fillAddressLater ? 0.4 : 1,
+                pointerEvents: fillAddressLater ? 'none' : 'auto',
+              }}
             >
               <span className={styles.fieldLabel}>Address Line 2</span>
               <input
-                type="text"
+                className={styles.fieldInput}
                 value={address2}
                 onChange={(e) => setAddress2(e.target.value)}
                 placeholder="Apt, floor, building (optional)"
-                className={styles.fieldInput}
               />
             </label>
-
             <label className={styles.field}>
               <span className={styles.fieldLabel}>State</span>
               <select
+                className={styles.fieldSelect}
                 value={state}
                 onChange={(e) => { setState(e.target.value); setCity(''); setPostcode(''); }}
-                className={styles.fieldInput}
+                disabled={loc.isLoading}
               >
-                <option value="">—</option>
+                <option value="">{loc.isLoading ? 'Loading…' : 'Pick state'}</option>
                 {states.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>City</span>
               <select
+                className={styles.fieldSelect}
                 value={city}
                 onChange={(e) => { setCity(e.target.value); setPostcode(''); }}
-                className={styles.fieldInput}
                 disabled={!state}
               >
-                <option value="">{state ? '—' : '(Pick state first)'}</option>
+                <option value="">{state ? 'Pick city' : '— pick state first'}</option>
                 {cities.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
-
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Postcode</span>
               <select
+                className={styles.fieldSelect}
                 value={postcode}
                 onChange={(e) => setPostcode(e.target.value)}
-                className={styles.fieldInput}
                 disabled={!state || !city}
               >
-                <option value="">{(state && city) ? '—' : '(Pick city first)'}</option>
+                <option value="">{(state && city) ? 'Pick postcode' : '— pick city first'}</option>
                 {postcodes.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Building Type</span>
-              <select
-                value={buildingType}
-                onChange={(e) => setBuildingType(e.target.value as typeof buildingType)}
-                className={styles.fieldInput}
-              >
-                <option value="">—</option>
-                {BUILDING_TYPES.map((b) => <option key={b} value={b}>{b}</option>)}
-              </select>
-            </label>
           </div>
         </div>
       </section>
 
-      {/* ── Emergency Contact ───────────────────────────────────────── */}
+      {/* ── LINE ITEMS ──────────────────────────────────────────────
+          Same SoLineCard component Edit SO uses inline. Each line on
+          New SO is already in inline-edit mode (no saved row exists
+          yet), and "+ Add Line Item" appends a fresh card. Card header
+          mirrors Detail — "Line Items ({n})" with no subtitle. */}
       <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Emergency Contact</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            Used only if we cannot reach the customer on delivery day
-          </span>
-        </div>
-        <div className={styles.cardBody}>
-          <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Contact Name</span>
-              <input
-                type="text"
-                value={emergencyName}
-                onChange={(e) => setEmergencyName(e.target.value)}
-                placeholder="e.g. Lim Mei Hua"
-                className={styles.fieldInput}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Relationship</span>
-              <select
-                value={emergencyRel}
-                onChange={(e) => setEmergencyRel(e.target.value as typeof emergencyRel)}
-                className={styles.fieldInput}
-              >
-                <option value="">—</option>
-                {RELATIONSHIP_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </label>
-            <label className={`${styles.field} ${styles.fieldFull}`}>
-              <span className={styles.fieldLabel}>Phone</span>
-              <PhoneInput
-                value={emergencyPhone}
-                onChange={setEmergencyPhone}
-                className={styles.fieldInput}
-              />
-            </label>
-          </div>
-        </div>
-      </section>
-
-      {/* ── Processing + Delivery Dates ────────────────────────────── */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Dates</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            Processing Date = when we begin processing the order · Delivery Date = customer's expected delivery
-          </span>
-        </div>
-        <div className={styles.cardBody}>
-          {datesXor && (
-            <div
-              style={{
-                background: 'rgba(184, 51, 31, 0.08)',
-                border: '1px solid var(--c-festive-b, #B8331F)',
-                color: 'var(--c-festive-b, #B8331F)',
-                padding: 'var(--space-2) var(--space-3)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--fs-12)',
-                fontWeight: 600,
-                marginBottom: 'var(--space-3)',
-              }}
-            >
-              ⚠ Fill in BOTH dates or leave BOTH empty — partial dates aren't allowed.
-            </div>
-          )}
-          <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Processing Date</span>
-              <input
-                type="date"
-                value={processingDate}
-                onChange={(e) => setProcessingDate(e.target.value)}
-                className={styles.fieldInput}
-                style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Delivery Date</span>
-              <input
-                type="date"
-                value={deliveryDate}
-                onChange={(e) => setDeliveryDate(e.target.value)}
-                className={styles.fieldInput}
-                style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
-              />
-            </label>
-          </div>
-        </div>
-      </section>
-
-      {/* ── Items / Lines (PR #125: HOOKKA-pattern inline cards) ─────
-           Commander 2026-05-26: "为什么我的 add line 需要这样子，而不是跟
-           Hookka 一样". Each line is an inline editable card with product
-           picker + per-category variants + pricing visible at once. The
-           "+ Add another item" button below appends a fresh empty card. */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Lines</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {lines.length} line{lines.length === 1 ? '' : 's'} · subtotal {fmtRm(subtotalCenti)}
-          </span>
-        </div>
+        <header className={styles.cardHeader}>
+          <h2 className={styles.cardTitle}>Line Items ({lines.length})</h2>
+        </header>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          {/* PR #148 — Sofa Set bar removed. Each SoLineCard's product
-              picker already auto-detects category from the picked SKU,
-              and the master-follower cascade keeps variants in sync. */}
           {lines.map((line, idx) => (
             <SoLineCard
               key={line.rid}
@@ -700,7 +740,6 @@ export const SalesOrderNew = () => {
             />
           ))}
 
-          {/* "+ Add another item" stays as the generic single-line add */}
           <button
             type="button"
             onClick={addLine}
@@ -721,7 +760,7 @@ export const SalesOrderNew = () => {
               cursor: 'pointer',
             }}
           >
-            <Plus {...ICON} /> Add another item
+            <Plus {...ICON} /> Add Line Item
           </button>
 
           <div style={{
@@ -740,250 +779,18 @@ export const SalesOrderNew = () => {
         </div>
       </section>
 
-      {/* PR #148 — Payment card on the New SO form (mirrors POS handover +
-          SO Detail). Commander 2026-05-26: "为什么我的 POS 里面的 Payment
-          那个 Module 还没搬进来呢". */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Payment</h2>
-        </div>
-        <div className={styles.cardBody}>
-          {/* Method buttons — 3 top-level methods. Installment lives under
-              Merchant (PR #150). */}
-          <p className={styles.subHead}>Method</p>
-          <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 'var(--space-2)' }}>
-            {([
-              ['merchant', 'Merchant',                  'Card via GHL / HLB / MBB / PBB'],
-              ['transfer', 'Bank transfer / DuitNow',   'Slip required'],
-              ['cash',     'Cash',                      'Cash received at counter'],
-            ] as const).map(([m, label, hint]) => {
-              const active = paymentMethod === m;
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => {
-                    setPaymentMethod(m);
-                    if (m !== 'merchant') {
-                      setMerchantProvider('');
-                      setInstallmentMonths(null);
-                      // PR #157 — keep approvalCode + paymentDate across
-                      // method switches; both are general payment metadata
-                      // (not merchant-only) per commander 2026-05-27.
-                    } else if (!merchantProvider) {
-                      setMerchantProvider('GHL');
-                    }
-                  }}
-                  style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-                    gap: 2, padding: 'var(--space-3)', textAlign: 'left',
-                    background: active ? 'rgba(232, 107, 58, 0.10)' : 'var(--c-paper)',
-                    border: '1px solid ' + (active ? 'var(--c-orange)' : 'var(--line)'),
-                    borderRadius: 'var(--radius-md)',
-                    color: active ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: 'pointer', fontFamily: 'var(--font-sans)',
-                  }}
-                >
-                  <strong style={{ fontSize: 'var(--fs-13)' }}>{label}</strong>
-                  <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{hint}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Merchant sub-section: provider + type (normal/installment) +
-              term + approval code. All nested under merchant per PR #150. */}
-          {paymentMethod === 'merchant' && (
-            <div style={{
-              marginTop: 'var(--space-3)',
-              padding: 'var(--space-3)',
-              background: 'var(--c-cream)',
-              border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 'var(--space-3)',
-            }}>
-              {/* Provider pills */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                <span className={styles.fieldLabel}>Merchant</span>
-                {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => setMerchantProvider(p)}
-                    style={{
-                      fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                      padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                      border: '1px solid ' + (merchantProvider === p ? 'var(--c-orange)' : 'var(--line)'),
-                      background: merchantProvider === p ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                      color: merchantProvider === p ? 'var(--c-burnt)' : 'var(--c-ink)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-
-              {/* Type: Normal vs Installment */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                <span className={styles.fieldLabel}>Type</span>
-                <button
-                  type="button"
-                  onClick={() => setInstallmentMonths(null)}
-                  style={{
-                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                    padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                    border: '1px solid ' + (installmentMonths === null ? 'var(--c-orange)' : 'var(--line)'),
-                    background: installmentMonths === null ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                    color: installmentMonths === null ? 'var(--c-burnt)' : 'var(--c-ink)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Normal Swipe
-                </button>
-                {([6, 12] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setInstallmentMonths(m)}
-                    style={{
-                      fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', fontWeight: 600,
-                      padding: '4px 12px', borderRadius: 'var(--radius-pill)',
-                      border: '1px solid ' + (installmentMonths === m ? 'var(--c-orange)' : 'var(--line)'),
-                      background: installmentMonths === m ? 'rgba(232, 107, 58, 0.12)' : 'var(--c-paper)',
-                      color: installmentMonths === m ? 'var(--c-burnt)' : 'var(--c-ink)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Installment · {m} months
-                  </button>
-                ))}
-              </div>
-
-            </div>
-          )}
-
-          {/* PR #157 — Approval Code + Payment Date for ALL methods.
-              Commander: "Bank Transfer、Cash 也是需要 Approval Code 的，
-              还需要一个日期填写收钱的日期". */}
-          {paymentMethod && (
-            <div style={{ marginTop: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-3)' }}>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>
-                  {paymentMethod === 'merchant' ? 'Approval Code' :
-                   paymentMethod === 'transfer' ? 'Slip / Reference No' :
-                                                  'Receipt / Reference'}
-                </span>
-                <input
-                  type="text"
-                  value={approvalCode}
-                  onChange={(e) => setApprovalCode(e.target.value)}
-                  placeholder={
-                    paymentMethod === 'merchant' ? 'Auth code from terminal receipt' :
-                    paymentMethod === 'transfer' ? 'Bank slip reference number' :
-                                                   'Optional cash receipt reference'
-                  }
-                  className={styles.fieldInput}
-                  style={{ fontFamily: 'var(--font-mono)' }}
-                />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Payment Date</span>
-                <input
-                  type="date"
-                  value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
-                  className={styles.fieldInput}
-                />
-              </label>
-            </div>
-          )}
-
-          {/* Amounts row */}
-          <p className={styles.subHead} style={{ marginTop: 'var(--space-4)' }}>Amounts</p>
-          <div className={styles.formGrid4}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Subtotal</span>
-              <span className={styles.fieldInput} style={{
-                display: 'inline-flex', alignItems: 'center', height: 32,
-                fontFamily: 'var(--font-mono)', color: 'var(--c-ink)', fontWeight: 600,
-              }}>
-                {fmtRm(subtotalCenti)}
-              </span>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>
-                Deposit (RM)
-                {depositCenti > 0 && depositCenti === Math.round(subtotalCenti / 2) && (
-                  <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>· 50%</span>
-                )}
-              </span>
-              <input
-                type="number" step="0.01" min={0}
-                className={styles.fieldInput}
-                value={(depositCenti / 100).toFixed(2)}
-                onChange={(e) => setDepositCenti(Math.round(Number(e.target.value) * 100) || 0)}
-              />
-              <button
-                type="button"
-                onClick={() => setDepositCenti(Math.round(subtotalCenti / 2))}
-                disabled={subtotalCenti === 0}
-                style={{
-                  marginTop: 4,
-                  background: 'transparent', border: 'none',
-                  color: subtotalCenti === 0 ? 'var(--fg-muted)' : 'var(--c-orange)',
-                  cursor: subtotalCenti === 0 ? 'not-allowed' : 'pointer',
-                  fontSize: 'var(--fs-11)', fontWeight: 600, padding: 0, textAlign: 'left',
-                }}
-              >
-                Set 50% deposit ({fmtRm(Math.round(subtotalCenti / 2))})
-              </button>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Paid (RM)</span>
-              <input
-                type="number" step="0.01" min={0}
-                className={styles.fieldInput}
-                value={(paidCenti / 100).toFixed(2)}
-                onChange={(e) => setPaidCenti(Math.round(Number(e.target.value) * 100) || 0)}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Balance</span>
-              <span className={styles.fieldInput} style={{
-                display: 'inline-flex', alignItems: 'center', height: 32,
-                fontFamily: 'var(--font-mono)',
-                color: paidCenti >= subtotalCenti && subtotalCenti > 0
-                  ? 'var(--c-secondary-a, #2F5D4F)'
-                  : 'var(--c-ink)',
-                fontWeight: 600,
-              }}>
-                {fmtRm(Math.max(0, subtotalCenti - paidCenti))}
-              </span>
-            </label>
-          </div>
-        </div>
-      </section>
-
-      {/* PR #155 — Notes restored as its own bottom card (revert of PR #154
-          consolidation; commander prefers the separated layout). */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Notes</h2>
-        </div>
-        <div className={styles.cardBody}>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Internal notes — visible on the SO detail page only"
-            className={styles.fieldInput}
-            rows={3}
-            style={{ minHeight: 52, resize: 'vertical', width: '100%' }}
-          />
-        </div>
-      </section>
+      {/* ── PAYMENTS (shared with Detail) ─────────────────────────────
+          Task #105 — Same Houzs PaymentsTable rendered on Detail. In
+          DRAFT mode it holds rows in local state; onSave (above) batches
+          POST /:docNo/payments calls in parallel after the SO has been
+          created and before navigating to the Detail page. */}
+      <PaymentsTable
+        docNo={null}
+        payments={paymentDrafts}
+        onChange={setPaymentDrafts}
+        grandTotalCenti={subtotalCenti}
+        currency="MYR"
+      />
 
     </div>
   );

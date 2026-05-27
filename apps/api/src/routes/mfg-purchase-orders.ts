@@ -616,9 +616,9 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
-  const qty = it.qty !== undefined ? Number(it.qty) : (prev as any).qty;
-  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as any).unit_price_centi;
-  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : (prev as any).discount_centi;
+  const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
+  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
   const lineTotal = (qty * unit) - discount;
 
   const updates: Record<string, unknown> = {

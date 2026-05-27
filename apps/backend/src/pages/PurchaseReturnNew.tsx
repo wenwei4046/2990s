@@ -84,8 +84,8 @@ export const PurchaseReturnNew = () => {
   // Pre-fill lines + supplier from GRN.
   useEffect(() => {
     if (!grnQ.data) return;
-    const grn = grnQ.data.grn as any;
-    setSupplierId(grn.supplier_id ?? '');
+    const grn = grnQ.data.grn as { supplier_id?: string } | null;
+    setSupplierId(grn?.supplier_id ?? '');
     const items: DraftLine[] = (grnQ.data.items ?? [])
       .filter((it: any) => (it.qty_accepted ?? 0) > 0)
       .map((it: any) => ({
@@ -105,8 +105,8 @@ export const PurchaseReturnNew = () => {
   // Pre-fill lines + supplier from PO (no grnItemId linkage).
   useEffect(() => {
     if (!poQ.data) return;
-    const po = poQ.data.purchaseOrder as any;
-    setSupplierId(po.supplier_id ?? '');
+    const po = poQ.data.purchaseOrder;
+    setSupplierId(po?.supplier_id ?? '');
     const items: DraftLine[] = (poQ.data.items ?? []).map((it: any) => ({
       rid:            `r${it.id}`,
       grnItemId:      null,
@@ -133,8 +133,16 @@ export const PurchaseReturnNew = () => {
     [lines],
   );
 
-  const grn = grnQ.data?.grn as any;
-  const po  = poQ.data?.purchaseOrder as any;
+  // Narrow the loose `any` from flow-queries.ts to the fields touched in
+  // this page. Avoids `as any` on every property access.
+  type GrnDetail = {
+    grn_number?: string;
+    purchase_order_id?: string | null;
+    supplier?: { name?: string } | null;
+    purchase_order?: { po_number?: string } | null;
+  };
+  const grn = grnQ.data?.grn as GrnDetail | undefined;
+  const po  = poQ.data?.purchaseOrder;
   const supplierName = useMemo(() => {
     if (grn?.supplier?.name) return grn.supplier.name;
     if (po?.supplier?.name)  return po.supplier.name;

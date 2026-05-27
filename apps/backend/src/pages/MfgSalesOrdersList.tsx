@@ -9,7 +9,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Pencil, Eye, Search, FileText, Printer, ListChecks, Trash2, RefreshCw,
+  Plus, Pencil, Eye, Search, FileText, Printer, ListChecks, Trash2, RefreshCw, Wrench,
 } from 'lucide-react';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
@@ -274,6 +274,16 @@ export const MfgSalesOrdersList = () => {
       </button>
       <button className={styles.tbarBtn} onClick={onRefresh} title="Refetch from server">
         <RefreshCw {...ICON} /> Refresh
+      </button>
+      {/* Task #110 — Localities moved out of Settings into a dedicated SO
+          Maintenance page. Toolbar button is the primary entry; sidebar
+          also gets a direct link. */}
+      <button
+        className={styles.tbarBtn}
+        onClick={() => navigate('/mfg-sales-orders/maintenance')}
+        title="State → warehouse mapping + cascading address dropdowns"
+      >
+        <Wrench {...ICON} /> Maintenance
       </button>
     </>
   );

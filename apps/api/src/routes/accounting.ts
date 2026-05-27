@@ -295,22 +295,33 @@ accounting.post('/post/pi/:invoiceNumber', async (c) => {
     return c.json({ error: 'already_posted', existingJe: existing[0] }, 409);
   }
 
-  const { data: pi, error } = await sb
+  const { data: piRaw, error } = await sb
     .from('purchase_invoices')
     .select('id, invoice_number, invoice_date, supplier_id, total_centi, suppliers(code, name)')
     .eq('invoice_number', invoiceNumber)
     .single();
-  if (error || !pi) return c.json({ error: 'invoice_not_found' }, 404);
+  if (error || !piRaw) return c.json({ error: 'invoice_not_found' }, 404);
+  // Cast through `unknown` — Supabase JS without generated types returns
+  // `GenericStringError` from `.select(string).single()` even when data is
+  // populated. Project-wide pattern; see routes/admin.ts L97.
+  const pi = piRaw as unknown as {
+    id: string;
+    invoice_number: string;
+    invoice_date: string;
+    supplier_id: string | null;
+    total_centi: number;
+    suppliers: { code: string | null; name: string | null } | null;
+  };
 
-  const totalSen = Number((pi as any).total_centi);
+  const totalSen = Number(pi.total_centi);
   if (totalSen <= 0) return c.json({ error: 'zero_total' }, 400);
 
-  const supplier = (pi as any).suppliers ?? {};
+  const supplier = pi.suppliers ?? { code: null, name: null };
   const lines: JeLineIn[] = [
     {
       accountCode: '1200',                                   // Inventory (simplification: all PI → Inventory)
       debitSen: totalSen,
-      notes: `Inventory from ${(pi as any).invoice_number}`,
+      notes: `Inventory from ${pi.invoice_number}`,
     },
     {
       accountCode: '2000',                                   // Accounts Payable
@@ -318,19 +329,19 @@ accounting.post('/post/pi/:invoiceNumber', async (c) => {
       partyType: 'SUPPLIER',
       partyCode: supplier.code ?? null,
       partyName: supplier.name ?? null,
-      notes: `AP for ${(pi as any).invoice_number}`,
+      notes: `AP for ${pi.invoice_number}`,
     },
   ];
 
-  const jeNo = await nextJeNo(sb, new Date((pi as any).invoice_date));
+  const jeNo = await nextJeNo(sb, new Date(pi.invoice_date));
   const { data: je, error: jeErr } = await sb
     .from('journal_entries')
     .insert({
       je_no: jeNo,
-      entry_date: (pi as any).invoice_date,
+      entry_date: pi.invoice_date,
       source_type: 'PI',
-      source_doc_no: (pi as any).invoice_number,
-      narration: `Purchase invoice ${(pi as any).invoice_number} — ${supplier.name ?? ''}`,
+      source_doc_no: pi.invoice_number,
+      narration: `Purchase invoice ${pi.invoice_number} — ${supplier.name ?? ''}`,
       total_debit_sen: totalSen,
       total_credit_sen: totalSen,
     })

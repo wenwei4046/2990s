@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
+import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -851,25 +852,55 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
 
   // PR-D — capture the line snapshot before delete so the timeline can
   // show what was removed (item code + qty + unit price).
+  // Task #93 — also fetch photo_urls so we can clean up R2 orphans
+  // after the DB row is gone. We grab them BEFORE the delete because
+  // the row is the source of truth for which keys belong to this line.
   const { data: prev } = await sb.from('mfg_sales_order_items')
-    .select('item_code, qty, unit_price_centi, total_centi')
+    .select('item_code, qty, unit_price_centi, total_centi, photo_urls')
     .eq('id', itemId).maybeSingle();
+  const prevTyped = prev as
+    | { item_code: string; qty: number; unit_price_centi: number; total_centi: number; photo_urls: string[] | null }
+    | null;
 
   const { error } = await sb.from('mfg_sales_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, docNo);
 
-  if (prev) {
+  // Task #93 — orphan cleanup. Loop over the photo keys and best-effort
+  // delete each from R2. Failures are swallowed (logged) so a flaky R2
+  // op doesn't leave the user with a "delete failed" toast on top of a
+  // DB delete that already succeeded — rolling back the row to recover
+  // a few KB of blob is worse than the orphan.
+  let photosCleaned = 0;
+  const photoKeys = prevTyped?.photo_urls ?? [];
+  if (photoKeys.length > 0 && c.env.SO_ITEM_PHOTOS) {
+    for (const key of photoKeys) {
+      try {
+        await c.env.SO_ITEM_PHOTOS.delete(key);
+        photosCleaned += 1;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[so-item-photo] orphan cleanup failed for', key, e);
+      }
+    }
+  }
+
+  if (prevTyped) {
     await recordSoAudit(sb, {
       docNo,
       action: 'DELETE_LINE',
       actorId: user.id,
       actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
       fieldChanges: [
-        { field: 'itemCode', from: prev.item_code },
-        { field: 'qty', from: prev.qty },
-        { field: 'unitPriceCenti', from: prev.unit_price_centi },
-        { field: 'totalCenti', from: prev.total_centi },
+        { field: 'itemCode', from: prevTyped.item_code },
+        { field: 'qty', from: prevTyped.qty },
+        { field: 'unitPriceCenti', from: prevTyped.unit_price_centi },
+        { field: 'totalCenti', from: prevTyped.total_centi },
+        // Task #93 — note the photo cleanup so the timeline shows
+        // "deleted N photos" alongside the line removal.
+        ...(photoKeys.length > 0
+          ? [{ field: 'photosCleaned', from: photoKeys.length, to: photosCleaned } satisfies FieldChange]
+          : []),
       ],
     });
   }
@@ -1000,14 +1031,66 @@ mfgSalesOrders.post('/:docNo/items/:itemId/photos', async (c) => {
     ],
   });
 
-  // TODO(public-url): once the public R2 domain (e.g. r2.2990s.com) is
-  // wired in the Cloudflare dashboard, swap this for a direct CDN URL.
-  // For now we return the proxy URL via this Worker so the bucket can
-  // stay private.
-  const photoUrl = `/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}`;
-  return c.json({ photoKey, photoUrl }, 201);
+  // Task #92 — return a short-lived signed GET URL alongside the key.
+  // Frontend uses this directly as <img src> (no Worker proxy roundtrip
+  // on first render). When the URL expires the frontend re-fetches via
+  // GET /photos/:photoKey/signed. Falling back to the legacy proxy path
+  // here keeps existing callers (and stale clients) working until a
+  // post-deploy cleanup removes the proxy entirely.
+  try {
+    const bindings = soItemPhotoBindings(c.env);
+    const { signedUrl, expiresAt } = await signSoItemPhotoUrl(bindings, photoKey);
+    return c.json({ photoKey, photoUrl: signedUrl, expiresAt }, 201);
+  } catch (e) {
+    // Signing should never fail in production (creds + endpoint validated
+    // at boot), but if it does we fall back to the proxy URL rather than
+    // losing the upload — the row is already inserted.
+    const photoUrl = `/mfg-sales-orders/${docNo}/items/${itemId}/photos/${encodeURIComponent(photoKey)}`;
+    // eslint-disable-next-line no-console
+    console.warn('[so-item-photo] signing failed, falling back to proxy:', e);
+    return c.json({ photoKey, photoUrl }, 201);
+  }
 });
 
+// Task #92 — refresh a signed GET URL for an existing key. Frontend
+// hits this on mount when no cached URL exists for a key, and on a
+// 403 (URL expired). Auth-checked the same way as the proxy: the key
+// must belong to this SO+item and currently be in photo_urls.
+mfgSalesOrders.get('/:docNo/items/:itemId/photos/:photoKey/signed', async (c) => {
+  const sb = c.get('supabase');
+  const docNo = c.req.param('docNo');
+  const itemId = c.req.param('itemId');
+  const photoKey = decodeURIComponent(c.req.param('photoKey'));
+
+  const { data: item } = await sb
+    .from('mfg_sales_order_items')
+    .select('doc_no, photo_urls')
+    .eq('id', itemId)
+    .maybeSingle();
+  if (!item) return c.json({ error: 'item_not_found' }, 404);
+  const i = item as { doc_no: string; photo_urls: string[] | null };
+  if (i.doc_no !== docNo) return c.json({ error: 'item_doc_mismatch' }, 400);
+  if (!(i.photo_urls ?? []).includes(photoKey)) {
+    return c.json({ error: 'photo_not_in_item' }, 404);
+  }
+
+  try {
+    const bindings = soItemPhotoBindings(c.env);
+    const { signedUrl, expiresAt } = await signSoItemPhotoUrl(bindings, photoKey);
+    return c.json({ signedUrl, expiresAt });
+  } catch (e) {
+    return c.json({ error: 'signing_failed', reason: e instanceof Error ? e.message : String(e) }, 500);
+  }
+});
+
+/**
+ * @deprecated Task #92 — superseded by signed-URL flow. The frontend
+ * now reads photos directly from R2 via short-lived signed URLs minted
+ * by `GET /photos/:photoKey/signed`. This proxy endpoint is retained
+ * as a fallback for legacy clients holding old proxy URLs in the wild;
+ * remove after the post-deploy cooldown (~7 days, longer than any
+ * signed-URL TTL or cached page load).
+ */
 mfgSalesOrders.get('/:docNo/items/:itemId/photos/:photoKey', async (c) => {
   const sb = c.get('supabase');
   const docNo = c.req.param('docNo');
