@@ -10,8 +10,13 @@ import { formatPhone } from '@2990s/shared/phone';
 //   2. Customer block: debtor info + 4 addresses
 //   3. Line items table (autotable): item / variants / qty / unit / total
 //   4. Totals block: per-category + grand total
-//   5. Signature box (customer + company) — dashed boxes, matches POS PDFs
-//   6. Footer: T&C, page n of m
+//   5. Payments block (PR #163 / Followup #81): payments-ledger transactions
+//      table + paid/balance summary. Replaces the legacy single-row header
+//      payment fields (paid_centi, payment_method, merchant_provider,
+//      approval_code, payment_date) which were deprecated in PR-C when the
+//      payments ledger went live.
+//   6. Signature box (customer + company) — dashed boxes, matches POS PDFs
+//   7. Footer: T&C, page n of m
 // ----------------------------------------------------------------------------
 
 type SoHeader = {
@@ -35,6 +40,9 @@ type SoHeader = {
   accessories_centi: number;
   others_centi: number;
   local_total_centi: number;
+  /* Expected deposit target the commander sets on the SO. Distinct from
+     amounts actually collected — those live in the payments ledger below. */
+  deposit_centi?: number;
   line_count: number;
   currency: string;
   note: string | null;
@@ -53,6 +61,23 @@ type SoItem = {
   variants: Record<string, unknown> | null;
 };
 
+/* Mirrors flow-queries.ts `SoPayment`. Re-declared here to keep the PDF
+   helper free of TanStack/Supabase imports — it's called from both the
+   detail page (where the hook supplies the data) and the list page (where
+   a one-shot fetch supplies it). Fields the PDF doesn't render are still
+   accepted so callers can pass the row verbatim. */
+type SoPayment = {
+  paid_at: string;
+  method: 'merchant' | 'transfer' | 'cash';
+  merchant_provider: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
+  installment_months: 6 | 12 | null;
+  approval_code: string | null;
+  amount_centi: number;
+  account_sheet: string | null;
+  collected_by_name: string | null;
+  note: string | null;
+};
+
 const fmtRm = (centi: number, currency: string): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -66,7 +91,26 @@ const variantSummary = (v: Record<string, unknown> | null): string => {
     .join(', ');
 };
 
-export async function generateSalesOrderPdf(header: SoHeader, items: SoItem[]): Promise<void> {
+/* Human-readable method label for the PDF Payments table.
+   - merchant → "Card (GHL)" or "Card (GHL) · 6m installment"
+   - transfer → "Bank Transfer"
+   - cash     → "Cash"
+   Mirrors the on-screen METHOD_LABEL + provider/installment pill in
+   SalesOrderDetail's PaymentCard but flattened to a single cell. */
+const methodLabel = (p: SoPayment): string => {
+  if (p.method === 'merchant') {
+    const base = p.merchant_provider ? `Card (${p.merchant_provider})` : 'Card';
+    return p.installment_months ? `${base} · ${p.installment_months}m installment` : base;
+  }
+  if (p.method === 'transfer') return 'Bank Transfer';
+  return 'Cash';
+};
+
+export async function generateSalesOrderPdf(
+  header: SoHeader,
+  items: SoItem[],
+  payments: SoPayment[] = [],
+): Promise<void> {
   // Dynamic import — code-split into a vendor chunk.
   const { jsPDF } = await import('jspdf');
   const autoTable = (await import('jspdf-autotable')).default;
@@ -203,6 +247,84 @@ export async function generateSalesOrderPdf(header: SoHeader, items: SoItem[]): 
   doc.setFontSize(11);
   drawRow('GRAND TOTAL', fmtRm(header.local_total_centi, header.currency), ty + 2, true);
   ty += 12;
+
+  // ── Payments block (PR #163 / Followup #81) ──────────────────────
+  // Sources transactions from the payments ledger (mfg_sales_order_payments)
+  // instead of the legacy single-row header columns.
+  //
+  // Layout:
+  //   - "Payments" sub-heading
+  //   - Either a transactions table (Date · Method · Amount · Approval Code
+  //     · Collected By) or an empty-state line
+  //   - Summary line: Subtotal · Paid · Balance, plus the expected deposit
+  //     target on the header when set.
+  if (ty > 255) { doc.addPage(); ty = margin; }
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Payments', margin, ty);
+  ty += 4;
+
+  if (payments.length === 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(110);
+    doc.text('No payments recorded.', margin, ty);
+    doc.setTextColor(0);
+    ty += 6;
+  } else {
+    const payRows = payments.map((p) => [
+      p.paid_at,
+      methodLabel(p),
+      fmtRm(p.amount_centi, header.currency),
+      p.approval_code ?? '—',
+      p.collected_by_name ?? '—',
+    ]);
+    autoTable(doc, {
+      startY: ty,
+      head: [['Date', 'Method', 'Amount', 'Approval Code', 'Collected By']],
+      body: payRows,
+      theme: 'striped',
+      styles: { fontSize: 8.5, cellPadding: 2, valign: 'top' },
+      headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 24 },
+        1: { cellWidth: 55 },
+        2: { cellWidth: 28, halign: 'right' },
+        3: { cellWidth: 32 },
+        4: { cellWidth: 'auto' },
+      },
+      margin: { left: margin, right: margin },
+    });
+    ty = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? ty) + 4;
+  }
+
+  // Summary line: Subtotal · Paid · Balance.
+  const paidCenti = payments.reduce((sum, p) => sum + (p.amount_centi || 0), 0);
+  const subtotalCenti = header.local_total_centi;
+  const balanceCenti = Math.max(0, subtotalCenti - paidCenti);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  const summaryParts = [
+    `Subtotal: ${fmtRm(subtotalCenti, header.currency)}`,
+    `Paid: ${fmtRm(paidCenti, header.currency)}`,
+    `Balance: ${fmtRm(balanceCenti, header.currency)}`,
+  ];
+  doc.text(summaryParts.join('  ·  '), margin, ty);
+  ty += 4;
+
+  // Expected-deposit line — only shown when the commander has set one
+  // on the header. Keeps the "target vs. collected" distinction visible.
+  if ((header.deposit_centi ?? 0) > 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(110);
+    doc.text(
+      `Expected deposit: ${fmtRm(header.deposit_centi ?? 0, header.currency)}`,
+      margin, ty,
+    );
+    doc.setTextColor(0);
+    ty += 4;
+  }
+  ty += 4;
 
   // ── Signature boxes ──────────────────────────────────────────────
   if (ty > 240) { doc.addPage(); ty = margin; }
