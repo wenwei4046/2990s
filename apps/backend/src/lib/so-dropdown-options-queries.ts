@@ -43,7 +43,8 @@ export type SoDropdownCategory =
   | 'payment_method'
   | 'payment_merchant'
   | 'online_type'
-  | 'installment_plan';
+  | 'installment_plan'
+  | 'venue';
 
 export type SoDropdownOption = {
   id:        string;
@@ -197,6 +198,11 @@ export const FALLBACK_OPTIONS: Record<SoDropdownCategory, SoDropdownOption[]> = 
     { id: 'fallback-ip-24m',    category: 'installment_plan', value: '24 months',  label: '24 months',  sortOrder: 5, active: true },
     { id: 'fallback-ip-36m',    category: 'installment_plan', value: '36 months',  label: '36 months',  sortOrder: 6, active: true },
   ],
+  /* Commander 2026-05-27: SO Venue picklist. Was free-text on SO; now
+     managed in SO Maintenance. Empty fallback — commander seeds via UI
+     (typical Houzs catalog: PENANG WATERFRONT CC, PISA SPICE ARENA,
+     SUNWAY PYRAMID CC, MIDVALLEY EXHIBITION CENTRE, etc). */
+  venue: [],
 };
 
 /* Helper: pick the data list or the fallback. Loading + empty both fall

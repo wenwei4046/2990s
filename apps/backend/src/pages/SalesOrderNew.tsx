@@ -85,9 +85,11 @@ export const SalesOrderNew = () => {
   const customerTypeOptsQ  = useSoDropdownOptions('customer_type');
   const buildingTypeOptsQ  = useSoDropdownOptions('building_type');
   const relationshipOptsQ  = useSoDropdownOptions('relationship');
+  const venueOptsQ         = useSoDropdownOptions('venue');
   const customerTypeOpts = optionsOrFallback('customer_type', customerTypeOptsQ.data);
   const buildingTypeOpts = optionsOrFallback('building_type', buildingTypeOptsQ.data);
   const relationshipOpts = optionsOrFallback('relationship',  relationshipOptsQ.data);
+  const venueOpts        = optionsOrFallback('venue',         venueOptsQ.data);
 
   // ── Customer fields ────────────────────────────────────────────────
   const [debtorCode,    setDebtorCode]    = useState('');
@@ -628,12 +630,18 @@ export const SalesOrderNew = () => {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Venue</span>
-              <input
-                className={styles.fieldInput}
+              {/* Commander 2026-05-27: Venue moved from free-text → picklist.
+                  Managed in SO Maintenance > Venue. */}
+              <select
+                className={styles.fieldSelect}
                 value={venue}
-                placeholder="e.g. KL Showroom, Penang Branch"
                 onChange={(e) => setVenue(e.target.value)}
-              />
+              >
+                <option value="">—</option>
+                {venueOpts.map((v) => (
+                  <option key={v.id} value={v.value}>{v.label}</option>
+                ))}
+              </select>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>

@@ -877,6 +877,16 @@ const DROPDOWN_CARDS: Array<{ category: SoDropdownCategory; title: string; help:
               'installment) / 3 / 6 / 12 / 24 / 36 months. Stored as the term ' +
               'in months on the payment row.',
   },
+  /* Commander 2026-05-27: Venue list — was free-text, now picklist. */
+  {
+    category: 'venue',
+    title:    'Venue',
+    help:     'Shown in the Order Info card on SO Detail / New SO. ' +
+              'Typical entries: roadshow / exhibition venues like ' +
+              'PENANG WATERFRONT CC, PISA SPICE ARENA, SUNWAY PYRAMID CC. ' +
+              'Toggle Active off to hide a venue from new SOs without ' +
+              'breaking SOs that already reference it.',
+  },
 ];
 
 const DropdownsSection = ({ canEdit }: { canEdit: boolean }) => {
