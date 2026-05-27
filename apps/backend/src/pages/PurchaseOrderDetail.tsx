@@ -22,6 +22,7 @@ import {
 import { Button } from '@2990s/design-system';
 import {
   usePurchaseOrderDetail,
+  usePurchaseOrderLinked,
   useUpdatePurchaseOrderHeader,
   useAddPurchaseOrderItem,
   useUpdatePurchaseOrderItem,
@@ -38,6 +39,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
+import { SmartButtons } from '../components/SmartButtons';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -65,6 +67,7 @@ export const PurchaseOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const detail = usePurchaseOrderDetail(id ?? null);
+  const linked = usePurchaseOrderLinked(id ?? null);
   const updateHeader = useUpdatePurchaseOrderHeader();
   // PR #78 — Convert from SO mutation. Pop a prompt for SO doc_no, the
   // server copies non-cancelled items into this PO (skipping dupes).
@@ -123,8 +126,24 @@ export const PurchaseOrderDetail = () => {
     ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
+  const linkedCounts = {
+    grns:     linked.data?.grns.length     ?? 0,
+    invoices: linked.data?.invoices.length ?? 0,
+    returns:  linked.data?.returns.length  ?? 0,
+  };
+
   return (
     <div className={styles.page}>
+      {/* ── Smart Buttons (document linkage fan-out) ────────────── */}
+      <SmartButtons
+        loading={linked.isLoading}
+        buttons={[
+          { count: linkedCounts.grns,     label: 'GRNs',    to: `/grns?poId=${po.id}` },
+          { count: linkedCounts.invoices, label: 'Invoice', to: `/purchase-invoices?poId=${po.id}` },
+          { count: linkedCounts.returns,  label: 'Returns', to: `/purchase-returns?poId=${po.id}` },
+        ]}
+      />
+
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>

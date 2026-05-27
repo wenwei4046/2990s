@@ -42,6 +42,12 @@ import {
   useCompletePurchaseReturn,
   useCancelPurchaseReturn,
 } from '../lib/flow-queries';
+import {
+  useGrnLinked,
+  usePurchaseInvoiceLinked,
+  usePurchaseReturnLinked,
+} from '../lib/suppliers-queries';
+import { SmartButtons } from '../components/SmartButtons';
 import styles from './DocDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -81,6 +87,7 @@ export const GrnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const detail = useGrnDetail(id ?? null);
+  const linked = useGrnLinked(id ?? null);
   const post = usePostGrn();
   const createPr = useCreatePurchaseReturn();
 
@@ -132,8 +139,25 @@ export const GrnDetail = () => {
     });
   };
 
+  const linkedPo = linked.data?.purchaseOrder ?? null;
+  const linkedInvoices = linked.data?.invoices ?? [];
+  const linkedReturns  = linked.data?.returns  ?? [];
+
   return (
     <div className={styles.page}>
+      {/* ── Smart Buttons (document linkage fan-out) ────────────── */}
+      <SmartButtons
+        loading={linked.isLoading}
+        buttons={[
+          {
+            count: linkedPo ? 1 : 0,
+            label: 'PO',
+            to: linkedPo ? `/purchase-orders/${linkedPo.id}` : '#',
+          },
+          { count: linkedInvoices.length, label: 'Invoice', to: `/purchase-invoices?grnId=${grn.id}` },
+          { count: linkedReturns.length,  label: 'Returns', to: `/purchase-returns?grnId=${grn.id}` },
+        ]}
+      />
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
           <Link to="/grns" className={styles.backBtn}><ArrowLeft {...ICON} /><span>Back</span></Link>
@@ -281,6 +305,7 @@ const PI_STATUS_CLASS: Record<string, string> = {
 export const PurchaseInvoiceDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseInvoiceDetail(id ?? null);
+  const linked = usePurchaseInvoiceLinked(id ?? null);
   const post = usePostPurchaseInvoice();
   const cancel = useCancelPurchaseInvoice();
   const pay = useRecordPiPayment();
@@ -306,8 +331,19 @@ export const PurchaseInvoiceDetail = () => {
   const isPayable = (pi.status === 'POSTED' || pi.status === 'PARTIALLY_PAID') && outstanding > 0;
   const isOverdue = pi.due_date && new Date(pi.due_date).getTime() < Date.now() && outstanding > 0;
 
+  const linkedGrn = linked.data?.grn ?? null;
+  const linkedPo  = linked.data?.purchaseOrder ?? null;
+
   return (
     <div className={styles.page}>
+      {/* ── Smart Buttons (document linkage fan-out) ────────────── */}
+      <SmartButtons
+        loading={linked.isLoading}
+        buttons={[
+          { count: linkedGrn ? 1 : 0, label: 'GRN', to: linkedGrn ? `/grns/${linkedGrn.id}` : '#' },
+          { count: linkedPo  ? 1 : 0, label: 'PO',  to: linkedPo  ? `/purchase-orders/${linkedPo.id}` : '#' },
+        ]}
+      />
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
           <Link to="/purchase-invoices" className={styles.backBtn}><ArrowLeft {...ICON} /><span>Back</span></Link>
@@ -1165,6 +1201,7 @@ const PR_STATUS_CLASS: Record<string, string> = {
 export const PurchaseReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseReturnDetail(id ?? null);
+  const linked = usePurchaseReturnLinked(id ?? null);
   const post = usePostPurchaseReturn();
   const complete = useCompletePurchaseReturn();
   const cancel = useCancelPurchaseReturn();
@@ -1189,8 +1226,19 @@ export const PurchaseReturnDetail = () => {
   const isDraft = pr.status === 'DRAFT';
   const isPosted = pr.status === 'POSTED';
 
+  const linkedGrn = linked.data?.grn ?? null;
+  const linkedPo  = linked.data?.purchaseOrder ?? null;
+
   return (
     <div className={styles.page}>
+      {/* ── Smart Buttons (document linkage fan-out) ────────────── */}
+      <SmartButtons
+        loading={linked.isLoading}
+        buttons={[
+          { count: linkedGrn ? 1 : 0, label: 'GRN', to: linkedGrn ? `/grns/${linkedGrn.id}` : '#' },
+          { count: linkedPo  ? 1 : 0, label: 'PO',  to: linkedPo  ? `/purchase-orders/${linkedPo.id}` : '#' },
+        ]}
+      />
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
           <Link to="/purchase-returns" className={styles.backBtn}><ArrowLeft {...ICON} /><span>Back</span></Link>

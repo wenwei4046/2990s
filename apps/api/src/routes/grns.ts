@@ -42,6 +42,47 @@ grns.get('/:id', async (c) => {
   return c.json({ grn: h.data, items: i.data ?? [] });
 });
 
+// ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
+// For a GRN: the parent PO + downstream PIs + PRs.
+grns.get('/:id/linked', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+
+  const [grnRes, piRes, prRes] = await Promise.all([
+    sb.from('grns')
+      .select('id, purchase_order_id, purchase_order:purchase_orders(id, po_number)')
+      .eq('id', id)
+      .maybeSingle(),
+    sb.from('purchase_invoices')
+      .select('id, invoice_number, status, invoice_date')
+      .eq('grn_id', id)
+      .order('invoice_date', { ascending: false }),
+    sb.from('purchase_returns')
+      .select('id, return_number, status, return_date')
+      .eq('grn_id', id)
+      .order('return_date', { ascending: false }),
+  ]);
+
+  if (grnRes.error) return c.json({ error: 'load_failed', reason: grnRes.error.message }, 500);
+  if (!grnRes.data) return c.json({ error: 'not_found' }, 404);
+  if (piRes.error)  return c.json({ error: 'load_failed', reason: piRes.error.message  }, 500);
+  if (prRes.error)  return c.json({ error: 'load_failed', reason: prRes.error.message  }, 500);
+
+  // Supabase typegen returns joined rows as arrays even for to-one FKs.
+  // Normalise to a single object (or null).
+  const raw = grnRes.data as unknown as {
+    purchase_order?: { id: string; po_number: string } | Array<{ id: string; po_number: string }> | null;
+  };
+  const poJoin = raw.purchase_order;
+  const po: { id: string; po_number: string } | null =
+    Array.isArray(poJoin) ? (poJoin[0] ?? null) : (poJoin ?? null);
+
+  return c.json({
+    purchaseOrder: po,
+    invoices:      piRes.data ?? [],
+    returns:       prRes.data ?? [],
+  });
+});
+
 grns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }

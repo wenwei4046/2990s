@@ -572,3 +572,78 @@ export function useCancelPurchaseOrder() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
   });
 }
+
+/* ── Smart Buttons / Document linkage (Odoo-style fan-out) ───────────
+   Each procurement-document detail page renders a row of pill buttons
+   ("2 GRNs", "1 Invoice", "0 Returns") that point at child docs. The
+   /linked endpoint per module returns the minimal shape needed to count
+   and link. Counters are NOT live — they refetch on mount with the
+   30s staleTime. Add invalidation hooks downstream when needed. */
+
+export type LinkedGrnSummary     = { id: string; grn_number: string;    status: string; received_at: string };
+export type LinkedInvoiceSummary = { id: string; invoice_number: string; status: string; invoice_date: string };
+export type LinkedReturnSummary  = { id: string; return_number: string;  status: string; return_date: string };
+export type LinkedPoRef          = { id: string; po_number: string } | null;
+export type LinkedGrnRef         = { id: string; grn_number: string } | null;
+
+export type PoLinkedDocs = {
+  grns:     LinkedGrnSummary[];
+  invoices: LinkedInvoiceSummary[];
+  returns:  LinkedReturnSummary[];
+};
+export function usePurchaseOrderLinked(poId: string | null) {
+  return useQuery({
+    queryKey: ['mfg-purchase-orders', poId, 'linked'],
+    queryFn: () => authedFetch<PoLinkedDocs>(`/mfg-purchase-orders/${poId}/linked`),
+    enabled: Boolean(poId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type GrnLinkedDocs = {
+  purchaseOrder: LinkedPoRef;
+  invoices:      LinkedInvoiceSummary[];
+  returns:       LinkedReturnSummary[];
+};
+export function useGrnLinked(grnId: string | null) {
+  return useQuery({
+    queryKey: ['grns', grnId, 'linked'],
+    queryFn: () => authedFetch<GrnLinkedDocs>(`/grns/${grnId}/linked`),
+    enabled: Boolean(grnId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type PiLinkedDocs = {
+  grn:           LinkedGrnRef;
+  purchaseOrder: LinkedPoRef;
+};
+export function usePurchaseInvoiceLinked(piId: string | null) {
+  return useQuery({
+    queryKey: ['purchase-invoices', piId, 'linked'],
+    queryFn: () => authedFetch<PiLinkedDocs>(`/purchase-invoices/${piId}/linked`),
+    enabled: Boolean(piId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type PrLinkedDocs = {
+  grn:           LinkedGrnRef;
+  purchaseOrder: LinkedPoRef;
+};
+export function usePurchaseReturnLinked(prId: string | null) {
+  return useQuery({
+    queryKey: ['purchase-returns', prId, 'linked'],
+    queryFn: () => authedFetch<PrLinkedDocs>(`/purchase-returns/${prId}/linked`),
+    enabled: Boolean(prId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}

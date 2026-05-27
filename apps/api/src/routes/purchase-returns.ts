@@ -64,6 +64,33 @@ purchaseReturns.get('/:id', async (c) => {
   return c.json({ purchaseReturn: h.data, items: i.data ?? [] });
 });
 
+// ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
+// For a PR: the parent GRN + parent PO (both nullable on purchase_returns).
+purchaseReturns.get('/:id/linked', async (c) => {
+  const sb = c.get('supabase'); const id = c.req.param('id');
+  const { data, error } = await sb
+    .from('purchase_returns')
+    .select(`
+      id,
+      grn:grns(id, grn_number),
+      purchase_order:purchase_orders(id, po_number)
+    `)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  // Supabase typegen returns joined rows as arrays even for to-one FKs.
+  const raw = data as unknown as {
+    grn?: { id: string; grn_number: string } | Array<{ id: string; grn_number: string }> | null;
+    purchase_order?: { id: string; po_number: string } | Array<{ id: string; po_number: string }> | null;
+  };
+  const grn: { id: string; grn_number: string } | null =
+    Array.isArray(raw.grn) ? (raw.grn[0] ?? null) : (raw.grn ?? null);
+  const po: { id: string; po_number: string } | null =
+    Array.isArray(raw.purchase_order) ? (raw.purchase_order[0] ?? null) : (raw.purchase_order ?? null);
+  return c.json({ grn, purchaseOrder: po });
+});
+
 purchaseReturns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }

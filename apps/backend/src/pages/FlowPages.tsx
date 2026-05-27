@@ -6,8 +6,8 @@
 // create drawers come in follow-up). 2990s tokens, no Tailwind.
 
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Plus } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrns, usePurchaseInvoices, useMfgSalesOrders, useMfgDeliveryOrders,
@@ -70,6 +70,37 @@ const ErrorBanner = ({ error, hint }: { error: unknown; hint: string }) => (
   </div>
 );
 
+/** Pill shown when the list is narrowed by a Smart Buttons fan-out link
+ *  (e.g. /grns?poId=xxx). One-click to clear. */
+const FilterPill = ({ label, onClear }: { label: string; onClear: () => void }) => (
+  <div style={{
+    display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)',
+    padding: 'var(--space-1) var(--space-3)',
+    background: 'rgba(232, 107, 58, 0.10)',
+    border: '1px solid var(--c-orange)',
+    borderRadius: 'var(--radius-pill)',
+    color: 'var(--c-burnt)',
+    fontFamily: 'var(--font-button)',
+    fontSize: 'var(--fs-12)',
+    fontWeight: 600,
+  }}>
+    <span>Filtered by {label}</span>
+    <button
+      type="button"
+      onClick={onClear}
+      aria-label="Clear filter"
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 18, height: 18, padding: 0,
+        background: 'transparent', border: 'none', color: 'var(--c-burnt)',
+        cursor: 'pointer', borderRadius: '50%',
+      }}
+    >
+      <X size={14} strokeWidth={1.75} />
+    </button>
+  </div>
+);
+
 /* ════════════════════════════════════════════════════════════════════════
    GRN
    ════════════════════════════════════════════════════════════════════════ */
@@ -82,12 +113,25 @@ const GRN_CHIPS: Chip[] = [
 
 export const Grns = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // PR — Smart Buttons fan-out: /grns?poId=xxx narrows the list to GRNs
+  // descended from that PO. One-click clear restores the full list.
+  const poIdFilter = searchParams.get('poId');
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { data, isLoading, error } = useGrns(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.grns ?? [], [data]);
+  const rows = useMemo(() => {
+    const all = data?.grns ?? [];
+    if (!poIdFilter) return all;
+    return all.filter((r: any) => r.purchase_order_id === poIdFilter || r.purchase_order?.id === poIdFilter);
+  }, [data, poIdFilter]);
   const prFromGrns = usePurchaseReturnFromGrns();
+  const clearFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('poId');
+    setSearchParams(next, { replace: true });
+  };
 
   const toggle = (id: string) => {
     setSelectedIds((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -123,6 +167,9 @@ export const Grns = () => {
         onNew={() => navigate('/purchase-orders')}
       />
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
+      {poIdFilter && (
+        <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`} onClear={clearFilter} />
+      )}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} GRN`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="If first deploy: apply migration 0042 against Supabase." />}
 
@@ -196,10 +243,23 @@ const PI_CHIPS: Chip[] = [
 
 export const PurchaseInvoicesPage = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const poIdFilter  = searchParams.get('poId');
+  const grnIdFilter = searchParams.get('grnId');
   const [status, setStatus] = useState('all');
   const [open, setOpen] = useState(false);
   const { data, isLoading, error } = usePurchaseInvoices(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.purchaseInvoices ?? [], [data]);
+  const rows = useMemo(() => {
+    let all = data?.purchaseInvoices ?? [];
+    if (poIdFilter)  all = all.filter((r: any) => r.purchase_order_id === poIdFilter);
+    if (grnIdFilter) all = all.filter((r: any) => r.grn_id === grnIdFilter);
+    return all;
+  }, [data, poIdFilter, grnIdFilter]);
+  const clearFilter = (key: 'poId' | 'grnId') => {
+    const next = new URLSearchParams(searchParams);
+    next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <div className={styles.page}>
@@ -212,6 +272,8 @@ export const PurchaseInvoicesPage = () => {
         onNew={() => navigate('/grns')}
       />
       <StatusChips chips={PI_CHIPS} active={status} onPick={setStatus} />
+      {poIdFilter  && <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`}    onClear={() => clearFilter('poId')} />}
+      {grnIdFilter && <FilterPill label={`GRN ${grnIdFilter.slice(0, 8)}…`}  onClear={() => clearFilter('grnId')} />}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} invoices`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
       <div className={styles.tableCard}>
@@ -543,9 +605,22 @@ const PRT_CHIPS: Chip[] = [
 
 export const PurchaseReturnsPage = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const poIdFilter  = searchParams.get('poId');
+  const grnIdFilter = searchParams.get('grnId');
   const [status, setStatus] = useState('all');
   const { data, isLoading, error } = usePurchaseReturns(status === 'all' ? undefined : status);
-  const rows = useMemo(() => data?.purchaseReturns ?? [], [data]);
+  const rows = useMemo(() => {
+    let all = data?.purchaseReturns ?? [];
+    if (poIdFilter)  all = all.filter((r: any) => r.purchase_order_id === poIdFilter || r.purchase_order?.id === poIdFilter);
+    if (grnIdFilter) all = all.filter((r: any) => r.grn_id === grnIdFilter || r.grn?.id === grnIdFilter);
+    return all;
+  }, [data, poIdFilter, grnIdFilter]);
+  const clearFilter = (key: 'poId' | 'grnId') => {
+    const next = new URLSearchParams(searchParams);
+    next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <div className={styles.page}>
@@ -559,6 +634,8 @@ export const PurchaseReturnsPage = () => {
         onNew={() => navigate('/purchase-returns/new')}
       />
       <StatusChips chips={PRT_CHIPS} active={status} onPick={setStatus} />
+      {poIdFilter  && <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`}    onClear={() => clearFilter('poId')} />}
+      {grnIdFilter && <FilterPill label={`GRN ${grnIdFilter.slice(0, 8)}…`}  onClear={() => clearFilter('grnId')} />}
       <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} returns`}</p>
       {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0048." />}
       <div className={styles.tableCard}>
