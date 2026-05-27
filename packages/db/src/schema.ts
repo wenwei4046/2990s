@@ -1968,6 +1968,52 @@ export const stockTransferLines = pgTable('stock_transfer_lines', {
   qtyPos:  check('stock_transfer_lines_qty_pos', sql`qty > 0`),
 }));
 
+/* PR — Inv PR5. Migration 0073. Stock takes are AutoCount-style cycle
+   counts. Commander picks a warehouse + scope (ALL / CATEGORY / CODE_PREFIX),
+   the API snapshots system_qty for every in-scope SKU at create time, the
+   commander types counted_qty per line, and Post writes ADJUSTMENT movements
+   (one per non-zero variance line) with source_doc_type='STOCK_TAKE'.
+   The DB variance column is a stored generated column so the UI never has
+   to compute it server-side after a Save. */
+export const stockTakes = pgTable('stock_takes', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  takeNo:          text('take_no').notNull().unique(),              // STK-YYMM-NNN
+  status:          text('status').notNull().default('DRAFT'),       // DRAFT|POSTED|CANCELLED
+  warehouseId:     uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
+  scopeType:       text('scope_type').notNull().default('ALL'),     // ALL|CATEGORY|CODE_PREFIX
+  scopeValue:      text('scope_value'),
+  takeDate:        date('take_date').notNull().defaultNow(),
+  notes:           text('notes'),
+  postedAt:        timestamp('posted_at', { withTimezone: true }),
+  cancelledAt:     timestamp('cancelled_at', { withTimezone: true }),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:       uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
+}, (t) => ({
+  idxStatus:    index('idx_stock_takes_status').on(t.status, t.takeDate),
+  idxWarehouse: index('idx_stock_takes_warehouse').on(t.warehouseId),
+  statusEnum:   check('stock_takes_status_chk',     sql`status IN ('DRAFT','POSTED','CANCELLED')`),
+  scopeEnum:    check('stock_takes_scope_type_chk', sql`scope_type IN ('ALL','CATEGORY','CODE_PREFIX')`),
+}));
+
+export const stockTakeLines = pgTable('stock_take_lines', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  stockTakeId:     uuid('stock_take_id').notNull().references(() => stockTakes.id, { onDelete: 'cascade' }),
+  productCode:     text('product_code').notNull(),
+  productName:     text('product_name'),
+  systemQty:       integer('system_qty').notNull().default(0),  // snapshot at create time
+  countedQty:      integer('counted_qty'),                      // nullable until commander enters it
+  // variance is a generated column in the DB — we model it as a plain
+  // integer here so Drizzle .select() reads it as a normal column. Writes
+  // to this column are blocked by Postgres (GENERATED ALWAYS), which is
+  // exactly what we want.
+  variance:        integer('variance'),
+  notes:           text('notes'),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxTake:    index('idx_stock_take_lines_take').on(t.stockTakeId),
+  uniqLine:   uniqueIndex('stock_take_lines_take_product_unique').on(t.stockTakeId, t.productCode),
+}));
+
 export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {
   id:             uuid('id').primaryKey().defaultRandom(),
   lotId:          uuid('lot_id').notNull().references(() => inventoryLots.id, { onDelete: 'cascade' }),

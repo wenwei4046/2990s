@@ -22,6 +22,7 @@ import {
   Undo2,
   SlidersHorizontal,
   ArrowLeftRight,
+  ClipboardCheck,
   Settings,
   LogOut,
 } from 'lucide-react';
@@ -97,6 +98,8 @@ export const Sidebar = () => {
     { kind: 'link', to: '/inventory/adjustments', icon: <SlidersHorizontal {...ICON_PROPS} />, label: 'Adjustments' },
     // Stock Transfers — move qty between warehouses with paired OUT+IN movements.
     { kind: 'link', to: '/inventory/transfers', icon: <ArrowLeftRight {...ICON_PROPS} />, label: 'Transfers' },
+    // Stock Takes (Inv PR5) — AutoCount-style cycle count → ADJUSTMENT movements.
+    { kind: 'link', to: '/inventory/stock-takes', icon: <ClipboardCheck {...ICON_PROPS} />, label: 'Stock Take' },
     // Warehouses sidebar entry removed (PR #38) — it's now a sub-tab inside
     // /inventory. Route still exists if someone has it bookmarked.
     // Add-on products page is consolidated into Products & Maintenance — sidebar

@@ -29,6 +29,9 @@ import { StockAdjustmentNew } from './pages/StockAdjustmentNew';
 import { StockTransfers } from './pages/StockTransfers';
 import { StockTransferNew } from './pages/StockTransferNew';
 import { StockTransferDetail } from './pages/StockTransferDetail';
+import { StockTakes } from './pages/StockTakes';
+import { StockTakeNew } from './pages/StockTakeNew';
+import { StockTakeDetail } from './pages/StockTakeDetail';
 import { Drivers } from './pages/Drivers';
 import { Accounting } from './pages/Accounting';
 import { Warehouses } from './pages/Warehouses';
@@ -69,6 +72,10 @@ export const router = createBrowserRouter([
       { path: 'inventory/transfers', element: <StockTransfers /> },
       { path: 'inventory/transfers/new', element: <StockTransferNew /> },
       { path: 'inventory/transfers/:id', element: <StockTransferDetail /> },
+      // Stock Takes (Inv PR5) — /new must precede :id.
+      { path: 'inventory/stock-takes', element: <StockTakes /> },
+      { path: 'inventory/stock-takes/new', element: <StockTakeNew /> },
+      { path: 'inventory/stock-takes/:id', element: <StockTakeDetail /> },
       { path: 'warehouses', element: <Warehouses /> },
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },

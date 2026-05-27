@@ -12,18 +12,25 @@
 // ----------------------------------------------------------------------------
 
 type MovementInput = {
-  movement_type: 'IN' | 'OUT';
+  movement_type: 'IN' | 'OUT' | 'ADJUSTMENT';
   warehouse_id: string;
   product_code: string;
   product_name?: string | null;
-  qty: number;                              // always positive
+  /** For IN / OUT: positive count. For ADJUSTMENT: signed delta
+   *  (positive = found stock / IN-style, negative = write-off / OUT-style).
+   *  The DB column is INTEGER and accepts both. */
+  qty: number;
   /** PR #37 — for IN rows: per-unit cost in sen. Trigger uses this to
    *  create the FIFO lot. OUT rows leave this unset; the trigger computes
    *  the consumed cost from the lots it pulls from. */
   unit_cost_sen?: number;
-  source_doc_type: 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN' | 'STOCK_TRANSFER';
-  source_doc_id: string;
-  source_doc_no: string;
+  /** PR — Inv PR5 (2026-05-27) — added STOCK_TAKE. ADJUSTMENT remains
+   *  for the manual one-off adjustment route. */
+  source_doc_type:
+    | 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN'
+    | 'STOCK_TRANSFER' | 'STOCK_TAKE' | 'ADJUSTMENT';
+  source_doc_id?: string;
+  source_doc_no?: string;
   performed_by?: string | null;
   notes?: string | null;
 };
