@@ -4,6 +4,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
+import { normalizePhone } from '@2990s/shared/phone';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -31,12 +32,14 @@ drivers.post('/', async (c) => {
   if (!driverCode) return c.json({ error: 'code_required' }, 400);
   if (!name)       return c.json({ error: 'name_required' }, 400);
   if (!phone)      return c.json({ error: 'phone_required' }, 400);
+  /* Task #91 — store driver phone in E.164. */
+  const normalizedPhone = normalizePhone(phone) ?? phone;
 
   const sb = c.get('supabase');
   const { data, error } = await sb.from('drivers').insert({
     driver_code: driverCode,
     name,
-    phone,
+    phone: normalizedPhone,
     ic_number: (body.icNumber as string) ?? null,
     vehicle: (body.vehicle as string) ?? null,
     active: body.active === false ? false : true,
@@ -59,7 +62,16 @@ drivers.patch('/:id', async (c) => {
     ['driverCode', 'driver_code'], ['name', 'name'], ['phone', 'phone'],
     ['icNumber', 'ic_number'], ['vehicle', 'vehicle'],
   ];
-  for (const [from, to] of map) if (body[from] !== undefined) updates[to] = body[from];
+  for (const [from, to] of map) {
+    if (body[from] === undefined) continue;
+    /* Task #91 — normalize phone to E.164 on PATCH. */
+    if (from === 'phone' && typeof body[from] === 'string') {
+      const raw = body[from] as string;
+      updates[to] = normalizePhone(raw) ?? raw;
+    } else {
+      updates[to] = body[from];
+    }
+  }
   if (body.active !== undefined) updates.active = Boolean(body.active);
 
   if (Object.keys(updates).length === 0) return c.json({ error: 'no_changes' }, 400);
