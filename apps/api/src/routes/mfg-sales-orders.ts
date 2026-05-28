@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
+import { pickComboPrice, type SofaComboRow, type SofaPriceTier } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
@@ -27,6 +28,56 @@ import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
 mfgSalesOrders.use('*', supabaseAuth);
+
+/* PR — Commander 2026-05-28 — Server-side combo recompute.
+   Fetches all active sofa_combo_pricing rows once (small table; ~64 rows
+   in steady state) and returns them as SofaComboRow[] for the pure
+   pickComboPrice() picker. Called by POST / and PATCH /:docNo/items/:itemId
+   before the line is persisted; if a sofa line's variants.cells match a
+   combo's modules at the line's seat-height tier, the combo price OVERRIDES
+   the client-submitted unit_price (anti-tamper). */
+async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
+  const { data } = await sb
+    .from('sofa_combo_pricing')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, label, effective_from, deleted_at')
+    .is('deleted_at', null)
+    .is('customer_id', null);  // 2990 B2C — default-scope rows only
+  return ((data ?? []) as Array<{
+    id: string; base_model: string; modules: string[]; tier: SofaPriceTier | null;
+    customer_id: string | null; prices_by_height: Record<string, number | null>;
+    label: string | null; effective_from: string; deleted_at: string | null;
+  }>).map((r) => ({
+    id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
+    tier: r.tier, customerId: r.customer_id,
+    pricesByHeight: r.prices_by_height ?? {},
+    label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
+  }));
+}
+
+/* Extract module ids + seat-height from a sofa line's `variants` blob.
+   POS handover writes variants.cells = [{ moduleId, x, y, rot }] and
+   variants.depth = '24' | '28' | '30' | ... so the picker has everything
+   it needs to match a combo. Returns null when the line isn't a sofa
+   custom build (e.g. quick-pick bundle = `bundleId` only; price already
+   matches the bundle row). */
+function extractSofaComboLookupArgs(
+  itemGroup: string | undefined | null,
+  variants: unknown,
+): { modules: string[]; height: string; tier: SofaPriceTier } | null {
+  if ((itemGroup ?? '').toLowerCase() !== 'sofa') return null;
+  if (!variants || typeof variants !== 'object') return null;
+  const v = variants as Record<string, unknown>;
+  const cells = v.cells as Array<{ moduleId?: string }> | undefined;
+  if (!Array.isArray(cells) || cells.length === 0) return null;
+  const modules = cells.map((c) => String(c.moduleId ?? '')).filter(Boolean);
+  if (modules.length === 0) return null;
+  const height = String(v.depth ?? v.seatHeight ?? '24');
+  /* Tier: prefer an explicit tier on variants; fall back to PRICE_2 (HOOKKA
+     legacy default per the SO rendering code in Products.tsx). When the
+     POS fabric model carries a tier per row, wire it here. */
+  const tier = (v.tier ?? v.fabricTier ?? 'PRICE_2') as SofaPriceTier;
+  return { modules, height, tier };
+}
 
 const HEADER =
   'doc_no, transfer_to, so_date, branding, debtor_code, debtor_name, agent, sales_location, ref, po_doc_no, venue, venue_id, ' +
@@ -273,6 +324,51 @@ mfgSalesOrders.post('/', async (c) => {
     };
     return recomputeFromSnapshot(draft, product, fabric, cachedConfig);
   }));
+  /* PR — Commander 2026-05-28 — Server-side combo recompute.
+     For each sofa line, if variants.cells matches a sofa_combo_pricing
+     row's modules at the line's seat-height + fabric tier, override the
+     recomputed unit_price_sen with the combo's pricesByHeight[height].
+     Runs AFTER the per-line à la carte recompute so combo wins. The
+     drift check below uses the post-override server price, so a client
+     that sent the combo price passes; a tampering client that sent a
+     lower number gets rejected. */
+  let combos: SofaComboRow[] = [];
+  const hasSofaCustomBuild = items.some((it) =>
+    !!extractSofaComboLookupArgs(it.itemGroup as string | undefined, it.variants)
+  );
+  if (hasSofaCustomBuild) {
+    combos = await loadActiveSofaCombos(sb);
+  }
+  if (combos.length > 0) {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]; if (!it) continue;
+      const args = extractSofaComboLookupArgs(it.itemGroup as string | undefined, it.variants);
+      if (!args) continue;
+      const comboPrice = pickComboPrice(
+        { baseModel: '', modules: args.modules, customerId: null,
+          tier: args.tier, height: args.height },
+        combos,
+      );
+      if (comboPrice != null) {
+        const r = recomputes[i];
+        if (r) {
+          r.unit_price_sen = comboPrice;
+          // Re-derive line total in the recomputed breakdown so the drift
+          // check below compares apples-to-apples.
+          const qty = Math.max(0, Math.floor(Number(it.qty || 0)));
+          r.total_centi = qty * comboPrice;
+          // Re-evaluate drift with the new server price; mark non-drift when
+          // the client submitted the same combo price (or close to it).
+          const clientCenti = Number(it.unitPriceCenti ?? 0);
+          const drift = comboPrice > 0
+            ? Math.abs(clientCenti - comboPrice) / comboPrice > 0.005
+            : clientCenti !== 0;
+          r.drift = drift;
+        }
+      }
+    }
+  }
+
   // Reject the whole request on first drift — keeps the SO atomic.
   for (let i = 0; i < recomputes.length; i++) {
     const r = recomputes[i];
