@@ -172,6 +172,10 @@ export const Configurator = () => {
   useSofaCustomizerRealtime(productId);
 
   const [picked, setPicked] = useState<string | null>(null);
+  // Saved combo selection — mutually exclusive with `picked` (bundle).
+  // When non-null, the Quick Pick hero shows the combo's cells and
+  // "Add to Cart" builds from combo.modules instead of bundle presets.
+  const [pickedCombo, setPickedCombo] = useState<SofaComboRow | null>(null);
   const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
   const [pillowExtras, setPillowExtras] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<'quick' | 'custom'>('quick');
@@ -546,15 +550,28 @@ export const Configurator = () => {
     return { bundle: b, price: row?.price ?? null, active: row?.active ?? false };
   });
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
-  // Fabric surcharge folds onto the bundle price (caller-applied; see spec §3.2).
-  const sofaTotal = (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? (fabricSel?.surcharge ?? 0) : 0);
-  // Sofas require a fabric + colour before Add-to-Cart (G6).
-  const canAddSofa = pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null && fabricSel != null;
 
+  // Combo selection price: pricesByHeight[activeDepth] in centi → RM.
+  const comboPickPrice = pickedCombo
+    ? (() => { const c = pickedCombo.pricesByHeight?.[activeDepth]; return typeof c === 'number' ? Math.round(c / 100) : 0; })()
+    : 0;
+
+  // Fabric surcharge folds onto the bundle/combo price (spec §3.2).
+  const sofaTotal = pickedCombo
+    ? comboPickPrice + (fabricSel?.surcharge ?? 0)
+    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? (fabricSel?.surcharge ?? 0) : 0);
+
+  // Sofas require a fabric + colour before Add-to-Cart (G6).
+  const canAddSofa =
+    fabricSel != null &&
+    ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
+     (pickedCombo != null && comboPickPrice > 0));
+
+  // Bundle Quick Pick → Add to Cart.
   const handleAddSofa = () => {
-    if (!canAddSofa || pickedSofaRow == null || pickedSofaRow.price == null) return;
+    if (pickedSofaRow == null || pickedSofaRow.price == null || fabricSel == null) return;
     const lShape = isLShapeBundle(pickedSofaRow.bundle.id);
-    const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
+    const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
       productId: p.id,
@@ -566,15 +583,42 @@ export const Configurator = () => {
       seatUpgradeLabel: p.seat_upgrade_label ?? null,
       seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
       // Fabric + colour (spec 2026-05-24) — surcharge folded into total.
-      fabricId: fabricSel?.fabricId,
-      colourId: fabricSel?.colourId,
-      fabricLabel: fabricSel?.fabricLabel,
-      colourLabel: fabricSel?.colourLabel,
-      colourHex: fabricSel?.colourHex ?? undefined,
-      total: pickedSofaRow.price + (fabricSel?.surcharge ?? 0),
+      fabricId: fabricSel.fabricId,
+      colourId: fabricSel.colourId,
+      fabricLabel: fabricSel.fabricLabel,
+      colourLabel: fabricSel.colourLabel,
+      colourHex: fabricSel.colourHex ?? undefined,
+      total: pickedSofaRow.price + (fabricSel.surcharge ?? 0),
       summary: lShape
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
+    };
+    addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
+    navigate(isEditing ? '/cart' : '/catalog');
+  };
+
+  // Saved Quick Pick (combo) → Add to Cart. Builds cells from combo.modules
+  // so the order line carries the exact modular arrangement the staff picked.
+  const handleAddCombo = () => {
+    if (pickedCombo == null || fabricSel == null) return;
+    const cells = cellsFromComboModules(pickedCombo.modules, activeDepth);
+    const label = pickedCombo.label || buildComboLabel(pickedCombo.modules);
+    const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
+    const snapshot: SofaConfigSnapshot = {
+      kind: 'sofa',
+      productId: p.id,
+      productName: p.name,
+      cells,
+      depth: activeDepth,
+      seatUpgradeLabel: p.seat_upgrade_label ?? null,
+      seatUpgradeFootrest: p.seat_upgrade_footrest ?? true,
+      fabricId: fabricSel.fabricId,
+      colourId: fabricSel.colourId,
+      fabricLabel: fabricSel.fabricLabel,
+      colourLabel: fabricSel.colourLabel,
+      colourHex: fabricSel.colourHex ?? undefined,
+      total: comboPickPrice + (fabricSel.surcharge ?? 0),
+      summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
     navigate(isEditing ? '/cart' : '/catalog');
@@ -683,13 +727,17 @@ export const Configurator = () => {
           {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
         </span>
         <span className={styles.topbarChipName}>
-          {pickedSofaRow
-            ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
-            : p.name}
+          {pickedCombo
+            ? `${pickedCombo.label || buildComboLabel(pickedCombo.modules)} · ${activeDepth}"`
+            : pickedSofaRow
+              ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
+              : p.name}
         </span>
-        {pickedSofaRow && (
+        {(pickedCombo || pickedSofaRow) && (
           <span className={styles.topbarChipSub}>
-            Quick Pick{isLShapeBundle(pickedSofaRow.bundle.id) ? ` · ${quickFlip}-facing` : ''}
+            {pickedCombo
+              ? 'Saved Quick Pick'
+              : `Quick Pick${isLShapeBundle(pickedSofaRow!.bundle.id) ? ` · ${quickFlip}-facing` : ''}`}
           </span>
         )}
       </span>
@@ -713,7 +761,7 @@ export const Configurator = () => {
         type="button"
         className={styles.topbarBtnPrimary}
         disabled={!canAddSofa}
-        onClick={handleAddSofa}
+        onClick={pickedCombo ? handleAddCombo : handleAddSofa}
       >
         {isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
@@ -827,16 +875,20 @@ export const Configurator = () => {
             isLoading={bundles.isLoading}
             rows={sofaBundleRows}
             picked={picked}
-            onPick={setPicked}
+            onPick={(id) => { setPicked(id); setPickedCombo(null); }}
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
             depth={activeDepth}
             combos={sofaCombosQ.data ?? []}
-            onComboPick={(combo) => {
-              /* Switch to Customize with the combo's modules pre-populated.
-                 Pricing override (combo price wins vs à la carte) lands in
-                 a follow-up PR — for now the user can manually verify the
-                 layout matches and add to cart at the live total. */
+            pickedComboId={pickedCombo?.id ?? null}
+            onComboSelect={(combo) => {
+              // Select the saved Quick Pick — stay in Quick Pick mode.
+              // Topbar shows its price + "Add to Cart" just like a bundle.
+              setPickedCombo(combo);
+              setPicked(null);
+            }}
+            onComboEdit={(combo) => {
+              // Load into Customize for further adjustment.
               setSofaCells(cellsFromComboModules(combo.modules, activeDepth));
               setMode('custom');
             }}
@@ -860,6 +912,7 @@ export const Configurator = () => {
             editingKey={isEditing && editKey ? editKey : undefined}
             initialFabric={isEditing ? fabricSel : null}
             modelCustomizer={sofaCustomizer.data ?? null}
+            baseModel={p.base_model ?? undefined}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />
         )
@@ -1308,14 +1361,14 @@ interface SofaQuickPickProps {
   depth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
-  /** Sofa Combo Pricing rows from Backend (Commander 2026-05-28).
-      Each row renders as an additional Quick Pick card below the bundle
-      grid; click switches to Customize mode with the combo's modules
-      pre-populated. Price = combo.pricesByHeight[depth]. */
+  /** Saved Quick Pick / Sofa Combo rows from Backend. */
   combos?: SofaComboRow[];
-  /** Click handler for a combo card. Caller switches mode='custom' and
-      replaces sofaCells with cells built from combo.modules. */
-  onComboPick?: (combo: SofaComboRow) => void;
+  /** Currently selected saved combo id (highlights the card + drives hero). */
+  pickedComboId?: string | null;
+  /** Select a saved combo — stay in Quick Pick mode, topbar shows price + Add to Cart. */
+  onComboSelect?: (combo: SofaComboRow) => void;
+  /** Load a saved combo into Customize mode for further editing. */
+  onComboEdit?: (combo: SofaComboRow) => void;
 }
 
 // Maps a bundle id (+ flip orientation for L-shape variants) to the public
@@ -1432,7 +1485,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, combos, onComboPick }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, combos, pickedComboId, onComboSelect, onComboEdit }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1443,17 +1496,20 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
   // Auto-pick the first active bundle on first paint so the hero always
   // has something to render. Staff can change it after.
   useEffect(() => {
-    if (picked == null && activeRows.length > 0) {
+    if (picked == null && pickedComboId == null && activeRows.length > 0) {
       onPick(activeRows[0]!.bundle.id);
     }
-  }, [picked, activeRows, onPick]);
+  }, [picked, pickedComboId, activeRows, onPick]);
 
   // Resolve hero pick up front so the silhouette-bounds hook is called on
   // every render path. Hooks must not sit behind the loading/empty early
   // returns — that'd violate the rules-of-hooks (see "rendered more hooks
   // than during the previous render").
   const pickedRow = activeRows.find((r) => r.bundle.id === picked) ?? activeRows[0] ?? null;
-  const heroSrc = pickedRow ? bundleArtSrc(pickedRow.bundle.id, quickFlip) : '';
+  // When a saved combo is selected, its cells drive the hero; otherwise use
+  // the picked bundle's preset cells / PNG.
+  const pickedComboRow = (combos ?? []).find((c) => c.id === pickedComboId) ?? null;
+  const heroSrc = (!pickedComboRow && pickedRow) ? bundleArtSrc(pickedRow.bundle.id, quickFlip) : '';
   const heroBounds = useSilhouetteBounds(heroSrc);
 
   if (isLoading) return <p className={styles.empty}>Loading bundles…</p>;
@@ -1530,43 +1586,52 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             );
           })}
         </div>
-        {/* Sofa Combo Pricing rows from Backend — Commander 2026-05-28.
-            Click a combo card → switch to Customize with the combo's
-            modules pre-populated. Price = combo.pricesByHeight[depth]. */}
+        {/* Saved Quick Picks — combos saved from POS Customize or Backend
+            Sofa Combos. Click a card to SELECT it (stay in Quick Pick,
+            topbar shows price + Add to Cart). "Edit" on the selected card
+            loads the cells into Customize for further adjustment. */}
         {combos && combos.length > 0 && (
           <>
             <header className={styles.qpRailHead} style={{ marginTop: 12 }}>
-              <span className={styles.qpRailEyebrow}>Combo Pricing</span>
-              <span className={styles.qpRailDetail}>{depth}″ seat · from Backend</span>
+              <span className={styles.qpRailEyebrow}>Saved Quick Picks</span>
+              <span className={styles.qpRailDetail}>{depth}″ seat · tap to select</span>
             </header>
             <div className={styles.qpGrid}>
               {combos.map((combo) => {
                 const priceCenti = combo.pricesByHeight?.[depth];
-                const priceRm = typeof priceCenti === 'number' ? priceCenti / 100 : null;
+                const priceRm = typeof priceCenti === 'number' ? Math.round(priceCenti / 100) : null;
                 const label = combo.label || buildComboLabel(combo.modules);
+                const isPickedCombo = combo.id === pickedComboId;
                 return (
                   <button
                     key={combo.id}
                     type="button"
-                    className={styles.qpCard}
-                    onClick={() => onComboPick?.(combo)}
-                    title={`${combo.baseModel} · ${combo.modules.join(' + ')}`}
+                    className={`${styles.qpCard} ${isPickedCombo ? styles.qpCardPicked : ''}`}
+                    onClick={() => onComboSelect?.(combo)}
+                    title={combo.modules.join(' + ')}
                   >
                     <div className={styles.qpCardArt}>
-                      {/* Reuse the SofaCellsPreview for combo's modules.
-                          Build cells inline so we don't need a special
-                          per-combo PNG. */}
                       <SofaCellsPreview cells={cellsFromComboModules(combo.modules, depth)} depth={depth} />
                     </div>
                     <div className={styles.qpCardBody}>
                       <span className={styles.qpCardLabel}>{label}</span>
                       <span className={styles.qpCardSub}>
-                        Base {combo.baseModel}{combo.tier ? ` · ${combo.tier}` : ''}
+                        {combo.modules.length} compartment{combo.modules.length !== 1 ? 's' : ''}
                       </span>
                       <span className={styles.qpCardPrice}>
-                        {priceRm == null ? '— (no price at this height)' : `RM${priceRm.toLocaleString('en-MY')}`}
+                        {priceRm == null ? '— (no price)' : `RM${priceRm.toLocaleString('en-MY')}`}
                       </span>
                     </div>
+                    {isPickedCombo && (
+                      <button
+                        type="button"
+                        className={styles.qpEditCombo}
+                        onClick={(e) => { e.stopPropagation(); onComboEdit?.(combo); }}
+                        title="Load into Customize to adjust"
+                      >
+                        Edit in Customize →
+                      </button>
+                    )}
                   </button>
                 );
               })}
@@ -1578,7 +1643,16 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
 
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
-          {heroCells ? (
+          {pickedComboRow ? (
+            // Saved Quick Pick selected — show its cells in the hero.
+            <div className={styles.qpHeroCells}>
+              <SofaCellsPreview
+                cells={cellsFromComboModules(pickedComboRow.modules, depth)}
+                depth={depth}
+                showDims
+              />
+            </div>
+          ) : heroCells ? (
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview cells={heroCells} depth={depth} showDims />
             </div>
