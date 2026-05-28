@@ -1,0 +1,437 @@
+/* Warehouse rack/bin page — reuses the 2990s tokens, shares the visual
+   language of Inventory.module.css (stat cards, tabs, tables). */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6) var(--space-7);
+  background: var(--c-cream);
+  min-height: 100%;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.title {
+  font-family: var(--font-title);
+  font-weight: 700;
+  color: var(--c-ink);
+  margin: 0;
+}
+
+.subtitle {
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  margin: 4px 0 0;
+}
+
+.tabRow {
+  display: inline-flex;
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  gap: 2px;
+}
+
+.tab {
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tab:hover { color: var(--c-ink); }
+.tab[data-active='true'] {
+  background: var(--c-ink);
+  color: var(--c-cream);
+  box-shadow: var(--shadow-1);
+}
+
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.chipRow {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.chip {
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--c-paper);
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.chip[data-active='true'] {
+  border-color: var(--c-ink);
+  background: var(--c-ink);
+  color: var(--c-cream);
+}
+
+/* ── KPI stat cards (Total / Occupied / Empty / Reserved / Occupancy) ──── */
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+}
+
+.statCard {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+  box-shadow: var(--shadow-1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.statValue {
+  font-family: var(--font-mark);
+  font-size: var(--fs-24);
+  font-weight: 800;
+  font-stretch: 80%;
+  color: var(--c-ink);
+}
+.statCaption {
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+}
+
+.eyebrow {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+/* ── Rack grid ────────────────────────────────────────────────────────── */
+.sectionCard {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-5);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--fs-12);
+  color: var(--fg-muted);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legendSwatch {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-sm, 4px);
+}
+.swatchOccupied { background: var(--c-ink); }
+.swatchEmpty {
+  background: rgba(47, 93, 79, 0.12);
+  border: 1px solid var(--c-secondary-a);
+}
+.swatchReserved {
+  background: rgba(166, 71, 30, 0.12);
+  border: 1px solid var(--c-burnt);
+}
+
+.rackGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.rackTile {
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  min-height: 76px;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+  font-family: var(--font-sans);
+}
+.rackTile:hover { opacity: 0.85; }
+
+.rackTileOccupied {
+  background: var(--c-ink);
+  color: var(--c-cream);
+}
+.rackTileEmpty {
+  background: rgba(47, 93, 79, 0.10);
+  border: 1px solid var(--c-secondary-a);
+  color: var(--c-secondary-a);
+}
+.rackTileReserved {
+  background: rgba(166, 71, 30, 0.10);
+  border: 1px solid var(--c-burnt);
+  color: var(--c-burnt);
+}
+
+.rackTileHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.rackName {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: var(--fs-14);
+}
+.rackCount {
+  font-size: var(--fs-11);
+  opacity: 0.8;
+}
+.rackItemLine {
+  margin-top: 4px;
+  line-height: 1.25;
+}
+.rackItemCode {
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rackItemSub {
+  font-size: var(--fs-11);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rackMore {
+  font-size: var(--fs-11);
+  opacity: 0.8;
+  padding-top: 2px;
+}
+.rackEmptyLabel {
+  font-size: var(--fs-12);
+  margin-top: 4px;
+}
+
+/* ── Stock In/Out forms ───────────────────────────────────────────────── */
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.formCard {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.formCardTitle {
+  font-family: var(--font-button);
+  font-weight: 700;
+  font-size: var(--fs-15);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.titleIn  { color: var(--c-secondary-a); }
+.titleOut { color: var(--c-festive-b, #B8331F); }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.label {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.input,
+.select {
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--c-ink);
+  outline: none;
+}
+.input:focus,
+.select:focus { border-color: var(--line-strong); background: var(--c-cream); }
+
+.detailBox {
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── Tables (movement history) ────────────────────────────────────────── */
+.tableCard {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+.tableScroll {
+  overflow: auto;
+  max-height: calc(100vh - 320px);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table thead th {
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: var(--c-paper);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.table tbody td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover { background: var(--c-cream); }
+
+.codeChip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  background: var(--c-cream);
+  color: var(--c-ink);
+  border: 1px solid var(--line);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
+.movementPill {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+.movementIn  { background: rgba(47, 93, 79, 0.12);  color: var(--c-secondary-a); }
+.movementOut { background: rgba(184, 51, 31, 0.10); color: var(--c-festive-b, #B8331F); }
+.movementXfer { background: rgba(166, 71, 30, 0.12); color: var(--c-burnt); }
+
+.emptyRow {
+  text-align: center;
+  color: var(--fg-muted);
+  padding: var(--space-6);
+}
+
+.bannerWarn {
+  background: rgba(232, 107, 58, 0.08);
+  border: 1px solid var(--c-orange);
+  color: var(--c-burnt);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-13);
+}
+
+/* ── Slot detail drawer ───────────────────────────────────────────────── */
+.drawerScrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+}
+.drawer {
+  width: 480px;
+  max-width: 95vw;
+  background: var(--c-cream);
+  padding: var(--space-5);
+  overflow: auto;
+}
+.itemCard {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--space-2);
+}
+.itemCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.itemMeta {
+  font-size: var(--fs-12);
+  color: var(--fg-soft);
+}

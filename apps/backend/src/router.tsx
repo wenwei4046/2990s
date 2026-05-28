@@ -53,6 +53,8 @@ const StockTakeDetail = lazy(() => import('./pages/StockTakeDetail').then(m => (
 const Drivers = lazy(() => import('./pages/Drivers').then(m => ({ default: m.Drivers })));
 const Accounting = lazy(() => import('./pages/Accounting').then(m => ({ default: m.Accounting })));
 const Warehouses = lazy(() => import('./pages/Warehouses').then(m => ({ default: m.Warehouses })));
+// Migration 0094 — Warehouse rack/bin management (ported from Hookka ERP).
+const Warehouse = lazy(() => import('./pages/Warehouse').then(m => ({ default: m.Warehouse })));
 // Migration 0086 — Users management page (admin / sales_director / coordinator).
 const Users = lazy(() => import('./pages/Users').then(m => ({ default: m.Users })));
 const PurchaseOrderDetail = lazy(() => import('./pages/PurchaseOrderDetail').then(m => ({ default: m.PurchaseOrderDetail })));
@@ -108,6 +110,9 @@ export const router = createBrowserRouter([
       { path: 'inventory/stock-takes/new', element: <StockTakeNew /> },
       { path: 'inventory/stock-takes/:id', element: <StockTakeDetail /> },
       { path: 'warehouses', element: <Warehouses /> },
+      // Rack/bin management — distinct from /warehouses (which is the
+      // warehouse master). Sidebar entry added by the parent session.
+      { path: 'warehouse', element: <Warehouse /> },
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
