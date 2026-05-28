@@ -241,6 +241,9 @@ export const useProductBundles = (productId: string | undefined) =>
     queryKey: ['product', productId, 'bundles'],
     queryFn: async (): Promise<ProductBundleRow[]> => {
       if (!productId) throw new Error('no productId');
+      // mfg-{12hex} products have no rows in product_bundles (UUID FK).
+      // Their bundles are sourced from sofa_combos via useSofaCombos().
+      if (productId.startsWith('mfg-')) return [];
       const { data, error } = await supabase
         .from('product_bundles')
         .select('bundle_id, active, price')
@@ -260,6 +263,9 @@ export const useProductCompartments = (productId: string | undefined) =>
     queryKey: ['product', productId, 'compartments'],
     queryFn: async (): Promise<ProductCompartmentRow[]> => {
       if (!productId) throw new Error('no productId');
+      // mfg-{12hex} products have no rows in product_compartments (UUID FK).
+      // Their compartments are sourced from useSofaCustomizerData() → allowed_options.
+      if (productId.startsWith('mfg-')) return [];
       const { data, error } = await supabase
         .from('product_compartments')
         .select('compartment_id, active, price')
@@ -334,12 +340,17 @@ export const useFabricColours = () =>
   });
 
 // Per-Model fabric availability + surcharge.
+// mfg-{12hex} products have no rows in product_fabrics (UUID FK). Their
+// fabrics are configured via product_models.allowed_options.fabrics and
+// surfaced through useSofaCustomizerData() → the Configurator builds
+// the ProductFabricRow[] from sofaCustomizer.data.fabricIds + useFabricLibrary.
 export const useProductFabrics = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'fabrics'],
     queryFn: async (): Promise<ProductFabricRow[]> => {
       if (!productId) throw new Error('no productId');
+      if (productId.startsWith('mfg-')) return [];   // mfg path uses sofaCustomizer
       const { data, error } = await supabase
         .from('product_fabrics')
         .select('fabric_id, active, surcharge')
@@ -387,14 +398,27 @@ export const useBedframeColours = (productId: string | undefined) =>
           .select('id, label, swatch_hex, surcharge, active, sort_order')
           .eq('active', true)
           .order('sort_order'),
-        supabase
-          .from('product_bedframe_colours')
-          .select('colour_id, active')
-          .eq('product_id', productId)
-          .eq('active', true),
+        // product_bedframe_colours.product_id is a UUID FK. mfg-{12hex} ids
+        // have no tick rows → we skip and accept all active global colours
+        // for mfg bedframe products (no per-model colour gating at pilot).
+        productId.startsWith('mfg-')
+          ? Promise.resolve({ data: null as null, error: null })
+          : supabase
+              .from('product_bedframe_colours')
+              .select('colour_id, active')
+              .eq('product_id', productId)
+              .eq('active', true),
       ]);
       if (globalRes.error) throw globalRes.error;
       if (tickRes.error) throw tickRes.error;
+      // mfg products: all active global colours available (tickRes.data = null)
+      // legacy UUID products: intersect with the per-model ticked colours
+      if (tickRes.data === null) {
+        return (globalRes.data ?? []).map((r) => ({
+          id: r.id, label: r.label, swatchHex: r.swatch_hex,
+          surcharge: r.surcharge, sortOrder: r.sort_order,
+        }));
+      }
       const ticked = new Set((tickRes.data ?? []).map((r) => r.colour_id));
       return (globalRes.data ?? [])
         .filter((r) => ticked.has(r.id))
@@ -770,6 +794,10 @@ export interface SofaCustomizerData {
   legHeights:   string[];
   /** Special options ticked. */
   specials:     string[];
+  /** Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
+   *  Empty = no fabrics configured → POS hides the fabric picker. Caller
+   *  joins against useFabricLibrary() to resolve label + surcharge. */
+  fabricIds:    string[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
   modelName:    string;
@@ -887,6 +915,9 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         sizes:      allowed.sizes ?? [],
         legHeights: allowed.leg_heights ?? [],
         specials:   allowed.specials ?? [],
+        // Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
+        // Empty array = no fabrics configured → Configurator hides fabric picker.
+        fabricIds:  (allowed as { fabrics?: string[] }).fabrics ?? [],
         modelId:    model.id,
         modelName:  model.name,
         modelCode:  model.model_code,

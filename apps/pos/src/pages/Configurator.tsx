@@ -12,6 +12,7 @@ import {
   useSizeLibrary,
   useProductPricingRealtime,
   useProductFabrics,
+  useFabricLibrary,
   useAddons,
   useBedframeColours,
   useBedframeOptions,
@@ -19,6 +20,7 @@ import {
   useSofaCustomizerRealtime,
   useSofaCombos,
   type AddonRow,
+  type ProductFabricRow,
 } from '../lib/queries';
 import {
   useCart,
@@ -156,6 +158,10 @@ export const Configurator = () => {
   const bundles = useProductBundles(productId);
   const compartments = useProductCompartments(productId);
   const productFabrics = useProductFabrics(productId);
+  // Global fabric library — used to derive ProductFabricRow[] for mfg sofa
+  // products whose fabric list comes from sofaCustomizer.fabricIds rather than
+  // the product_fabrics UUID-FK table.
+  const fabricLib = useFabricLibrary();
   useProductPricingRealtime(productId);
   /* PR — Commander 2026-05-28: Sofa Customize wires to Model.allowed_options.
    * The query resolves to null for non-sofa SKUs / orphan SKUs (no model_id),
@@ -226,6 +232,26 @@ export const Configurator = () => {
   const bedframeColours = useBedframeColours(productId);
   const bedframeOptions = useBedframeOptions();
 
+  // Fabric availability for the sofa configurator.
+  // • mfg-{12hex} products: derive from sofaCustomizer.fabricIds (allowed_options)
+  //   joined against the global fabric_library. Only active entries pass.
+  //   product_fabrics has a UUID FK so querying it with mfg IDs would crash.
+  // • Legacy UUID products: use useProductFabrics as before (product_fabrics rows).
+  // Declared here (before the edit-hydration useEffect) so it's in scope for both
+  // the hydration logic and the FabricColourPicker render below.
+  const derivedFabricRows = useMemo<ProductFabricRow[]>(() => {
+    if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
+    const ids = sofaCustomizer.data?.fabricIds ?? [];
+    const byId = new Map((fabricLib.data ?? []).map((f) => [f.id, f]));
+    return ids
+      .filter((id) => byId.has(id) && byId.get(id)!.active)
+      .map((id) => ({
+        fabricId: id,
+        active: true,
+        surcharge: byId.get(id)!.defaultSurcharge,
+      }));
+  }, [productId, productFabrics.data, sofaCustomizer.data, fabricLib.data]);
+
   // One-shot hydration from the edited cart line. Waits for the per-kind query
   // data so re-derived surcharges/labels are accurate, not stale 0s.
   useEffect(() => {
@@ -268,10 +294,16 @@ export const Configurator = () => {
       });
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
-      if (productFabrics.data == null) return;
+      // Wait for fabric data to be ready — for mfg products this means both
+      // sofaCustomizer + fabricLib must have loaded (derivedFabricRows depends
+      // on both). For legacy UUID products productFabrics.data must be ready.
+      const fabricsReady = productId?.startsWith('mfg-')
+        ? sofaCustomizer.data != null && fabricLib.data != null
+        : productFabrics.data != null;
+      if (!fabricsReady) return;
       setActiveDepth(cfg.depth ?? '24');
       if (cfg.fabricId && cfg.colourId) {
-        const pf = productFabrics.data.find((f) => f.fabricId === cfg.fabricId);
+        const pf = derivedFabricRows.find((f) => f.fabricId === cfg.fabricId);
         setFabricSel({
           fabricId: cfg.fabricId,
           colourId: cfg.colourId,
@@ -292,7 +324,8 @@ export const Configurator = () => {
       }
       hydratedRef.current = true;
     }
-  }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data, productFabrics.data]);
+  }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
+      productFabrics.data, sofaCustomizer.data, fabricLib.data, productId, derivedFabricRows]);
 
   // Build the SofaProductPricing struct that the shared pure functions expect.
   // Commander 2026-05-28 — added combos + fabricTier + comboHeight so groupPrice
@@ -809,7 +842,7 @@ export const Configurator = () => {
             }}
             fabricBlock={
               <FabricColourPicker
-                productFabrics={productFabrics.data ?? []}
+                productFabrics={derivedFabricRows}
                 fabricId={fabricSel?.fabricId ?? null}
                 colourId={fabricSel?.colourId ?? null}
                 onChange={setFabricSel}

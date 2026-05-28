@@ -27,6 +27,7 @@ import {
   type AllowedOptions, type AllowedOptions as AOpts,
 } from '../lib/product-models-queries';
 import { useMaintenanceConfig, useUpdateMfgProductStatus } from '../lib/mfg-products-queries';
+import { useFabricLibrary } from '../lib/queries';
 import { resolveSizeInfo } from '../lib/size-info';
 import { supabase } from '../lib/supabase';
 import styles from './ProductModelDetail.module.css';
@@ -71,6 +72,9 @@ export const ProductModelDetail = ({
   const generateMut = useGenerateModelSkus();
   const statusMut = useUpdateMfgProductStatus();
   const maintenance = useMaintenanceConfig('master');
+  // Fabric library — pool of active fabric slugs displayed in the FABRICS
+  // option group for SOFA Models. TanStack Query dedupes with PricingEditor.
+  const fabricLibQ = useFabricLibrary();
 
   const [branding, setBranding] = useState('');
   const [modelCode, setModelCode] = useState('');
@@ -423,6 +427,7 @@ export const ProductModelDetail = ({
             sofaSizes={maintenance.data?.data?.sofaSizes ?? ['24', '26', '28', '30', '32', '35']}
             sofaLegHeights={(maintenance.data?.data?.sofaLegHeights ?? []).map((o) => o.value)}
             sofaSpecials={(maintenance.data?.data?.sofaSpecials ?? []).map((o) => o.value)}
+            sofaFabrics={(fabricLibQ.data ?? []).filter((f) => f.active).map((f) => f.id)}
           />
         )}
 
@@ -974,11 +979,13 @@ function BulkChipToggle({
 }
 
 function SofaAllowedOptions({
-  allowed, onChange, sofaCompartments, sofaSizes, sofaLegHeights, sofaSpecials,
+  allowed, onChange, sofaCompartments, sofaSizes, sofaLegHeights, sofaSpecials, sofaFabrics,
 }: {
   allowed: AllowedOptions; onChange: (next: AllowedOptions) => void;
   sofaCompartments: string[]; sofaSizes: string[];
   sofaLegHeights: string[]; sofaSpecials: string[];
+  /** Active fabric_library.id slugs available to tick for this sofa Model. */
+  sofaFabrics: string[];
 }) {
   return (
     <>
@@ -1051,6 +1058,25 @@ function SofaAllowedOptions({
             options={sofaSpecials}
             selected={allowed.specials ?? []}
             onChange={(next) => onChange({ ...allowed, specials: next })}
+          />
+        </OptionGroup>
+      )}
+      {sofaFabrics.length > 0 && (
+        <OptionGroup
+          label="Fabrics (colours)"
+          hint="Which fabric options surface in the POS colour picker for this Model · pool managed in Fabric Library"
+          bulk={(
+            <BulkChipToggle
+              options={sofaFabrics}
+              selected={allowed.fabrics ?? []}
+              onChange={(next) => onChange({ ...allowed, fabrics: next })}
+            />
+          )}
+        >
+          <ChipToggle
+            options={sofaFabrics}
+            selected={allowed.fabrics ?? []}
+            onChange={(next) => onChange({ ...allowed, fabrics: next })}
           />
         </OptionGroup>
       )}
