@@ -950,6 +950,63 @@ export const useSalesStats = (enabled = true) =>
     },
   });
 
+/* ─── Sofa Combo Pricing ──────────────────────────────────────────────
+   Commander 2026-05-28: Sofa Combos defined in Backend = COSTING; the same
+   rows surfaced in POS = SELLING PRICE. POS Quick Pick auto-renders one
+   card per combo (combo.label + the price for the active seat height).
+   ────────────────────────────────────────────────────────────────────── */
+
+export type SofaPriceTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
+
+export interface SofaComboRow {
+  id: string;
+  baseModel: string;
+  modules: string[];
+  tier: SofaPriceTier | null;
+  customerId: string | null;
+  pricesByHeight: Record<string, number | null>;
+  label: string | null;
+  effectiveFrom: string;
+  deletedAt: string | null;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string | null;
+}
+
+/**
+ * Fetch active sofa-combo rows. Pass `baseModel` to filter; omit for ALL.
+ * Returns [] when the API is unreachable (combos are optional — Quick Pick
+ * still works with the legacy BUNDLES path).
+ *
+ * 2026-05-28: POS doesn't yet have a clean POS-product → mfg_products.base_model
+ * link, so the Configurator fetches ALL combos and shows them as a separate
+ * "Combo Pricing" row. Each card carries the base_model chip so commander can
+ * see at a glance which Model the combo applies to. Filtering by current Model
+ * lands once the retail↔mfg bridge surfaces base_model on CatalogProduct.
+ */
+export const useSofaCombos = (baseModel?: string | null) =>
+  useQuery({
+    queryKey: ['sofa-combos', baseModel ?? 'all'],
+    queryFn: async (): Promise<SofaComboRow[]> => {
+      if (!API_URL) return [];
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) return [];  // POS may render anonymously; quietly skip
+      const params = new URLSearchParams();
+      if (baseModel) params.set('baseModel', baseModel);
+      params.set('customerId', '__all__');  // 2990 is B2C — only default-scope rows
+      const res = await fetch(
+        `${API_URL}/sofa-combos?${params.toString()}`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) return [];
+      const body = (await res.json()) as { rules: SofaComboRow[] };
+      return body.rules ?? [];
+    },
+    staleTime: 30_000,
+  });
+
 export const useShowroomSalesStaff = () =>
   useQuery({
     queryKey: ['pos', 'sales-staff', SHOWROOM_ID ?? 'all'],

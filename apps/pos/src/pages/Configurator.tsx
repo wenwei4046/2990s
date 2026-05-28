@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import type { SofaComboRow } from '../lib/queries';
 import {
   useProduct,
   useProductBundles,
@@ -16,6 +17,7 @@ import {
   useBedframeOptions,
   useSofaCustomizerData,
   useSofaCustomizerRealtime,
+  useSofaCombos,
   type AddonRow,
 } from '../lib/queries';
 import {
@@ -107,6 +109,24 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
   return cells;
 };
 
+/* Build cells from a Backend Sofa Combo's modules array. Commander
+   2026-05-28 — placed left-to-right in array order, all rot=0. Combos
+   from the maintenance UI are typically sequential (e.g. 1A-LHF +
+   WC-45 + 1A-RHF), so a simple linear lay-out matches commander's intent.
+   For L-shape combos the user-saved order should already have the chaise
+   at the appropriate end. */
+const cellsFromComboModules = (modules: readonly string[], depth: Depth): Cell[] => {
+  const cells: Cell[] = [];
+  let x = 0;
+  modules.forEach((moduleId, idx) => {
+    const m = findModule(moduleId);
+    const w = m ? moduleFootprint(m, 0, depth).w : 0;
+    cells.push({ id: `combo-${idx}`, moduleId, x, y: 0, rot: 0 });
+    x += w;
+  });
+  return cells;
+};
+
 const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number } => {
   const m = QUICK_PRESET_META[bundleId];
   if (!m) return { w: 0, d: 0 };
@@ -162,6 +182,11 @@ export const Configurator = () => {
   const sizes = useProductSizes(productId);
   const sizeLib = useSizeLibrary();
   const addons = useAddons();
+  /* Commander 2026-05-28 — Sofa Combo Pricing from Backend surfaces in
+     POS Quick Pick. Fetches ALL combos for now (POS product → mfg
+     base_model bridge lands later). Each combo renders as a card with
+     price = pricesByHeight[activeDepth]; click switches to Customize. */
+  const sofaCombosQ = useSofaCombos();
   const addConfigured = useCart((s) => s.addConfigured);
   const cartLines = useCart((s) => s.lines);
 
@@ -745,6 +770,15 @@ export const Configurator = () => {
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
             depth={activeDepth}
+            combos={sofaCombosQ.data ?? []}
+            onComboPick={(combo) => {
+              /* Switch to Customize with the combo's modules pre-populated.
+                 Pricing override (combo price wins vs à la carte) lands in
+                 a follow-up PR — for now the user can manually verify the
+                 layout matches and add to cart at the live total. */
+              setSofaCells(cellsFromComboModules(combo.modules, activeDepth));
+              setMode('custom');
+            }}
             fabricBlock={
               <FabricColourPicker
                 productFabrics={productFabrics.data ?? []}
@@ -1213,6 +1247,14 @@ interface SofaQuickPickProps {
   depth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
+  /** Sofa Combo Pricing rows from Backend (Commander 2026-05-28).
+      Each row renders as an additional Quick Pick card below the bundle
+      grid; click switches to Customize mode with the combo's modules
+      pre-populated. Price = combo.pricesByHeight[depth]. */
+  combos?: SofaComboRow[];
+  /** Click handler for a combo card. Caller switches mode='custom' and
+      replaces sofaCells with cells built from combo.modules. */
+  onComboPick?: (combo: SofaComboRow) => void;
 }
 
 // Maps a bundle id (+ flip orientation for L-shape variants) to the public
@@ -1329,7 +1371,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, combos, onComboPick }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1427,6 +1469,49 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             );
           })}
         </div>
+        {/* Sofa Combo Pricing rows from Backend — Commander 2026-05-28.
+            Click a combo card → switch to Customize with the combo's
+            modules pre-populated. Price = combo.pricesByHeight[depth]. */}
+        {combos && combos.length > 0 && (
+          <>
+            <header className={styles.qpRailHead} style={{ marginTop: 12 }}>
+              <span className={styles.qpRailEyebrow}>Combo Pricing</span>
+              <span className={styles.qpRailDetail}>{depth}″ seat · from Backend</span>
+            </header>
+            <div className={styles.qpGrid}>
+              {combos.map((combo) => {
+                const priceCenti = combo.pricesByHeight?.[depth];
+                const priceRm = typeof priceCenti === 'number' ? priceCenti / 100 : null;
+                const label = combo.label || buildComboLabel(combo.modules);
+                return (
+                  <button
+                    key={combo.id}
+                    type="button"
+                    className={styles.qpCard}
+                    onClick={() => onComboPick?.(combo)}
+                    title={`${combo.baseModel} · ${combo.modules.join(' + ')}`}
+                  >
+                    <div className={styles.qpCardArt}>
+                      {/* Reuse the SofaCellsPreview for combo's modules.
+                          Build cells inline so we don't need a special
+                          per-combo PNG. */}
+                      <SofaCellsPreview cells={cellsFromComboModules(combo.modules, depth)} depth={depth} />
+                    </div>
+                    <div className={styles.qpCardBody}>
+                      <span className={styles.qpCardLabel}>{label}</span>
+                      <span className={styles.qpCardSub}>
+                        Base {combo.baseModel}{combo.tier ? ` · ${combo.tier}` : ''}
+                      </span>
+                      <span className={styles.qpCardPrice}>
+                        {priceRm == null ? '— (no price at this height)' : `RM${priceRm.toLocaleString('en-MY')}`}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
         {fabricBlock}
       </aside>
 
