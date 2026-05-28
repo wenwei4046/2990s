@@ -529,19 +529,35 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     .eq('material_kind', 'mfg_product')
     .order('is_main_supplier', { ascending: false });
 
-  // Group by material_code → first row (main supplier or lowest price).
-  const mainByCode = new Map<string, { supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>();
-  for (const b of (bindings ?? []) as Array<{ material_code: string; supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>) {
-    if (!mainByCode.has(b.material_code)) mainByCode.set(b.material_code, b);
+  /* Commander 2026-05-29 — drop ORPHANED bindings (supplier was deleted but the
+     binding row survived, e.g. after a supplier reset). An orphan would slip a
+     dead supplier_id into the PO insert → FK violation → silent 0-PO "success".
+     Resolve which referenced suppliers actually exist and skip the rest, so the
+     SKU is reported as "needs a supplier" via missing_bindings below. */
+  const supplierIds = [...new Set(((bindings ?? []) as Array<{ supplier_id: string }>).map((b) => b.supplier_id))];
+  const liveSupplierIds = new Set<string>();
+  if (supplierIds.length > 0) {
+    const { data: liveSuppliers } = await supabase
+      .from('suppliers').select('id').in('id', supplierIds);
+    for (const s of (liveSuppliers ?? []) as Array<{ id: string }>) liveSupplierIds.add(s.id);
   }
 
-  // Items without a binding can't be PO'd.
+  // Group by material_code → first row whose supplier still exists (prefer
+  // is_main_supplier via the query's ORDER BY).
+  const mainByCode = new Map<string, { supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>();
+  for (const b of (bindings ?? []) as Array<{ material_code: string; supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>) {
+    if (mainByCode.has(b.material_code)) continue;
+    if (!liveSupplierIds.has(b.supplier_id)) continue; // orphaned binding — skip
+    mainByCode.set(b.material_code, b);
+  }
+
+  // Items with no LIVE supplier binding can't be PO'd.
   const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
   if (noBinding.length > 0) {
     return c.json({
       error: 'missing_bindings',
       message: 'Some items have no main supplier binding',
-      itemCodes: noBinding.map((it) => it.itemCode),
+      itemCodes: [...new Set(noBinding.map((it) => it.itemCode))],
     }, 400);
   }
 
