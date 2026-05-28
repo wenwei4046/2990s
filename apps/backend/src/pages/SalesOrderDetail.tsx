@@ -941,13 +941,14 @@ export const SalesOrderDetail = () => {
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
                     {it.description && <div className={styles.muted}>{it.description}</div>}
-                    {/* Commander 2026-05-28 — HOOKKA-style one-line variant
-                        summary beneath the description. Pills kept below. */}
+                    {/* Commander 2026-05-28 — "Description 2": the HOOKKA-style
+                        one-line variant summary beneath the description. This
+                        REPLACES the old per-variant pills (which duplicated the
+                        same info). */}
                     {(() => {
                       const summary = buildVariantSummary(it.item_group, it.variants);
                       return summary ? <div className={styles.muted}>{summary}</div> : null;
                     })()}
-                    <VariantsPills variants={it.variants} />
                   </td>
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
