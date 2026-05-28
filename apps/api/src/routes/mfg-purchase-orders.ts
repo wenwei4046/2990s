@@ -16,6 +16,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
+import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -300,6 +301,13 @@ mfgPurchaseOrders.post('/', async (c) => {
       discount_centi: discountCenti,
       delivery_date: (it.deliveryDate as string | undefined) ?? null,
       warehouse_id:  (it.warehouseId  as string | undefined) ?? null,
+      /* Commander 2026-05-28 — persist the per-line category + variants the PO
+         form now collects (mirroring SO), and auto-generate Description 2 from
+         them (server-owned, like the SO route). */
+      item_group:   (it.itemGroup as string | undefined) ?? null,
+      variants:     (it.variants as unknown) ?? null,
+      description:  (it.description as string | undefined) ?? null,
+      description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     };
   });
 
@@ -720,7 +728,8 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
     variants: (it.variants as unknown) ?? null,
     item_group: (it.itemGroup as string) ?? null,
     description: (it.description as string) ?? null,
-    description2: (it.description2 as string) ?? null,
+    /* Commander 2026-05-28 — Description 2 auto-generated from variants. */
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     uom: (it.uom as string) ?? 'UNIT',
     discount_centi: discountCenti,
     unit_cost_centi: Number(it.unitCostCenti ?? 0),
@@ -742,7 +751,7 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase');
 
   const { data: prev } = await sb.from('purchase_order_items')
-    .select('qty, unit_price_centi, discount_centi, unit_cost_centi')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_group, variants')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
@@ -768,6 +777,13 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
     ['deliveryDate', 'delivery_date'], ['warehouseId', 'warehouse_id'],
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* Commander 2026-05-28 — Description 2 is server-owned: recompute from the
+     effective itemGroup + variants (incoming patch, else stored row). */
+  {
+    const effGroup = (it.itemGroup ?? (prev as { item_group?: string }).item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
   const { error } = await sb.from('purchase_order_items').update(updates).eq('id', itemId);
