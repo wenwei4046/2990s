@@ -12,6 +12,7 @@ import { Quotes } from './pages/Quotes';
 import { SalesOrderPrint } from './pages/SalesOrderPrint';
 import { Products } from './pages/Products';
 import { SalesOrderMaintenance } from './pages/SalesOrderMaintenance';
+import { NewOrder } from './pages/NewOrder';
 import { AuthGate } from './components/AuthGate';
 
 export const router = createBrowserRouter([
@@ -48,6 +49,12 @@ export const router = createBrowserRouter([
      Hits the SAME /venues, /localities, /state-warehouse-mappings,
      /so-dropdown-options API endpoints as Backend — bidirectional sync. */
   { path: '/sales-order-maintenance', element: <AuthGate><SalesOrderMaintenance /></AuthGate> },
+  /* PR — Commander 2026-05-28 ("就直接添加一个 New Order 的 button, 点了
+     之后就可以开了。不要跳 Backend，永远在 POS 系统里"). Topic 4 path 2:
+     customer-first SO creation. Captures customer details, POSTs an empty
+     SO header to /mfg-sales-orders, lands on the existing POS-native
+     /handover-confirmed thank-you screen. */
+  { path: '/new-order', element: <AuthGate><NewOrder /></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
 ]);
