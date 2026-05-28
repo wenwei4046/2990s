@@ -29,7 +29,6 @@ import {
   SOFA_MODULES,
   type SofaPriceTier,
   buildComboLabel,
-  resolveSofaQuickPresets,
 } from '@2990s/shared';
 import {
   useSofaCombos,
@@ -39,7 +38,7 @@ import {
   useSofaComboHistory,
   type SofaComboRule,
 } from '../lib/sofa-combos-queries';
-import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useMfgProducts } from '../lib/mfg-products-queries';
 
 const HEIGHTS = ['24', '28', '30', '32', '35'] as const;
 const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
@@ -64,16 +63,6 @@ const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const ALL_MODULE_CODES = SOFA_MODULES.map((m) => m.id).sort();
 
-/* Quick-pick presets — commander-editable from Maintenance → SOFA → Quick
-   Presets (PR Commander 2026-05-28: "Modular 为什么不是像 Hookka 这样 …
-   Quick Pick、Quick Preset 就是我们设定给它的那个名字来的"). The composer
-   reads the list from maintenance_config.sofaQuickPresets via the master
-   scope. Click on a chip → REPLACES the current module selection with the
-   stored modules array. Falls back to DEFAULT_SOFA_QUICK_PRESETS when the
-   maintenance row hasn't been migrated yet so the 11 historical presets
-   (1S / 2S / 3S-L / 3S-R / 2+L-L / 2+L-R / 3+L-L / 3+L-R / 2WC / CORNER-L
-   / CORNER-R) keep showing on day 1. */
-
 type ComboTabProps = { /* no props for now */ };
 
 export const SofaComboTab = (_props: ComboTabProps) => {
@@ -88,15 +77,6 @@ export const SofaComboTab = (_props: ComboTabProps) => {
     customerId: null,
   });
   const productsQ = useMfgProducts({ category: 'SOFA' });
-
-  // Commander-editable Quick Presets — falls back to DEFAULT_SOFA_QUICK_PRESETS
-  // when the maintenance row doesn't carry the new field yet, so the New
-  // Combo dialog keeps offering the historical 11-entry list on day 1.
-  const maintQ = useMaintenanceConfig('master');
-  const presets = useMemo(
-    () => resolveSofaQuickPresets(maintQ.data?.data?.sofaQuickPresets),
-    [maintQ.data],
-  );
 
   const baseModels = useMemo(() => {
     const set = new Set<string>();
@@ -226,7 +206,6 @@ export const SofaComboTab = (_props: ComboTabProps) => {
         <ComposerModal
           editing={composer.editing}
           baseModels={baseModels}
-          presets={presets}
           onClose={() => setComposer({ open: false })}
         />
       )}
@@ -332,14 +311,10 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, baseModels, presets, onClose,
+  editing, baseModels, onClose,
 }: {
   editing?: SofaComboRule;
   baseModels: string[];
-  /* Commander-editable Quick Presets, resolved upstream from
-     MaintenanceConfig.sofaQuickPresets (falls back to defaults when the
-     maintenance row hasn't been migrated yet). */
-  presets: { id: string; label: string; modules: string[]; defaultTier?: SofaPriceTier }[];
   onClose: () => void;
 }) {
   const create = useCreateSofaCombo();
@@ -425,35 +400,6 @@ function ComposerModal({
             {baseModels.map((m) => <option key={m} value={m} />)}
           </datalist>
         </Field>
-
-        {!editing && presets.length > 0 && (
-          <Field label="Quick presets (click to fill modules)">
-            <div style={{
-              display: 'flex', flexWrap: 'wrap', gap: 4,
-              padding: 8, border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)',
-            }}>
-              {presets.map((p) => (
-                <button
-                  type="button"
-                  key={p.id}
-                  onClick={() => {
-                    setModules(p.modules);
-                    /* Commander 2026-05-28: a preset can carry a default
-                       tier (e.g. all PRICE_2 promos are tagged as such).
-                       Apply it so operation doesn't have to remember per
-                       preset. Empty = leave the current tier alone. */
-                    if (p.defaultTier) setTier(p.defaultTier);
-                  }}
-                  title={p.modules.join(' + ')}
-                  style={presetChipStyle}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </Field>
-        )}
 
         <Field label={`Modules (${modules.length} selected)`}>
           {editing ? (
@@ -744,18 +690,6 @@ const ghostBtnStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-};
-
-const presetChipStyle: CSSProperties = {
-  fontFamily: 'var(--font-sans)',
-  fontSize: 'var(--fs-12)',
-  fontWeight: 600,
-  background: 'var(--c-paper)',
-  color: 'var(--c-ink)',
-  border: '1px solid var(--line-strong)',
-  borderRadius: 'var(--radius-sm)',
-  padding: '4px 10px',
-  cursor: 'pointer',
 };
 
 const moduleChipOn: CSSProperties = {
