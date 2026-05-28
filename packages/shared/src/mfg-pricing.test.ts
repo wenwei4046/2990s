@@ -283,14 +283,17 @@ describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () 
     expect(r.unitPriceSen).toBe(52000 + 7000);
   });
 
-  it('cost compute still reads priceSen for the SAME options (cost ≠ sell)', () => {
+  it('cost compute reads priceSen (the backend cost) for the SAME options (cost ≠ sell)', () => {
+    // Commander 2026-05-28 definitive model: backend `priceSen` IS the cost.
+    // So cost-side surcharges read `priceSen`, NOT `sellingPriceSen` (selling)
+    // and NOT `costSen` (the abandoned PR #216 field, now fallback-only).
     const product: MfgPricingProduct = {
       category: 'BEDFRAME', basePriceSen: 52000, costPriceSen: 18000,
     };
     const cfg: MaintenanceConfig = {
       ...costOnlyConfig,
-      // costSen drives cost compute; priceSen is benchmark; sellingPriceSen
-      // drives selling. Set all three distinctly to prove independence.
+      // priceSen drives cost compute; sellingPriceSen drives selling; costSen
+      // is fallback-only. Set all three distinctly to prove independence.
       specials: [{ value: 'HB Fully Cover', priceSen: 5500, costSen: 1200, sellingPriceSen: 7000 }],
     };
     const sell = computeMfgLinePrice(
@@ -300,7 +303,7 @@ describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () 
       { product, qty: 1, specials: ['HB Fully Cover'] }, cfg,
     );
     expect(sell.specialsSurchargeSen).toBe(7000); // sellingPriceSen
-    expect(cost.specialsSurchargeSen).toBe(1200); // costSen
+    expect(cost.specialsSurchargeSen).toBe(5500); // priceSen (the backend cost)
   });
 });
 
@@ -375,49 +378,99 @@ describe('mfgPricingDriftExceeds', () => {
   });
 });
 
-/* ───────────────── Cost-side parallel (smoke test) ───────────────── */
+/* ───── Cost-side: base + priceSen surcharges (Commander 2026-05-28) ─────
+   The definitive model: backend maintenance price tables (`priceSen`) ARE
+   the cost. So computeMfgLineCost = product base price + Σ priceSen variant
+   surcharges — exactly what computeMfgLinePrice did before PR #265. */
 
-describe('computeMfgLineCost — parallel to price compute', () => {
-  it('uses costPriceSen as the cost base for a bedframe', () => {
+describe('computeMfgLineCost — base + priceSen surcharges', () => {
+  it('uses the product base price as the cost base for a bedframe', () => {
+    // Commander: on backend, basePriceSen / price1Sen ARE the cost. We do NOT
+    // read costPriceSen / cost1Sen for the base anymore (PR #216 abandoned).
     const product: MfgPricingProduct = {
       category:     'BEDFRAME',
-      basePriceSen: 52000,
-      price1Sen:    46000,
-      costPriceSen: 18000,
+      basePriceSen: 52000,    // PRICE_2 — the cost on backend
+      price1Sen:    46000,    // PRICE_1 — the cheaper-tier cost
+      costPriceSen: 18000,    // legacy field — must be IGNORED for base now
       cost1Sen:     16000,
     };
     const c2 = computeMfgLineCost({ product, qty: 1, fabric: { tier: 'PRICE_2' } }, config);
-    expect(c2.basePriceSen).toBe(18000);
+    expect(c2.basePriceSen).toBe(52000);
     const c1 = computeMfgLineCost({ product, qty: 1, fabric: { tier: 'PRICE_1' } }, config);
-    expect(c1.basePriceSen).toBe(16000);
+    expect(c1.basePriceSen).toBe(46000);
   });
 
-  it('returns 0 surcharge cost when maintenance config carries no costSen', () => {
-    const product: MfgPricingProduct = { category: 'BEDFRAME', basePriceSen: 52000, costPriceSen: 18000 };
+  it('falls back to costPriceSen for the base only when basePriceSen is absent', () => {
+    const product: MfgPricingProduct = {
+      category: 'BEDFRAME', basePriceSen: null, costPriceSen: 18000,
+    };
+    const r = computeMfgLineCost({ product, qty: 1 }, config);
+    expect(r.basePriceSen).toBe(18000);
+  });
+
+  it('sums Base + all 4 priceSen surcharges for a bedframe', () => {
+    // priceSen is the backend cost: divan 5000 + leg 16000 + totalHeight 14000
+    // + specials (5000 + 15000) on top of base 52000.
+    const product: MfgPricingProduct = { category: 'BEDFRAME', basePriceSen: 52000 };
     const r = computeMfgLineCost(
-      { product, qty: 1, divanHeight: '10"', legHeight: '7"', totalHeight: '24"', specials: ['HB Fully Cover'] },
+      {
+        product, qty: 2,
+        divanHeight: '10"',                              // priceSen 5000
+        legHeight:   '7"',                               // priceSen 16000
+        totalHeight: '24"',                              // priceSen 14000
+        specials:    ['HB Fully Cover', 'Left Drawer'],  // 5000 + 15000
+      },
       config,
     );
-    expect(r.divanSurchargeSen).toBe(0);
-    expect(r.legSurchargeSen).toBe(0);
-    expect(r.totalHeightSurchargeSen).toBe(0);
-    expect(r.specialsSurchargeSen).toBe(0);
-    expect(r.unitPriceSen).toBe(18000);
+    expect(r.basePriceSen).toBe(52000);
+    expect(r.divanSurchargeSen).toBe(5000);
+    expect(r.legSurchargeSen).toBe(16000);
+    expect(r.totalHeightSurchargeSen).toBe(14000);
+    expect(r.specialsSurchargeSen).toBe(20000);
+    expect(r.unitPriceSen).toBe(52000 + 5000 + 16000 + 14000 + 20000);
+    expect(r.unitPriceSen).toBe(107000);
+    expect(r.lineTotalSen).toBe(107000 * 2);
   });
 
-  it('honours costSen on a priced option when present', () => {
-    const cfgWithCost: MaintenanceConfig = {
+  it('reads seat-height priceSen as the sofa base cost (per fabric tier)', () => {
+    const c2 = computeMfgLineCost(
+      { product: sofaWithSeatTiers, qty: 1, fabric: { tier: 'PRICE_2' }, seatSize: '28', sofaLegHeight: '6"', specials: ['5537 Backrest'] },
+      config,
+    );
+    expect(c2.basePriceSen).toBe(57200);   // PRICE_2 seat row priceSen
+    expect(c2.legSurchargeSen).toBe(5000); // sofa leg priceSen
+    expect(c2.specialsSurchargeSen).toBe(8000);
+    expect(c2.unitPriceSen).toBe(57200 + 5000 + 8000);
+    const c1 = computeMfgLineCost(
+      { product: sofaWithSeatTiers, qty: 1, fabric: { tier: 'PRICE_1' }, seatSize: '28' },
+      config,
+    );
+    expect(c1.basePriceSen).toBe(50000);   // PRICE_1 seat row priceSen
+  });
+
+  it('mattress cost = base priceSen, no surcharges', () => {
+    const r = computeMfgLineCost(
+      { product: mattress, qty: 1, divanHeight: '10"', specials: ['Left Drawer'] },
+      config,
+    );
+    expect(r.basePriceSen).toBe(89000);
+    expect(r.divanSurchargeSen).toBe(0);
+    expect(r.specialsSurchargeSen).toBe(0);
+    expect(r.unitPriceSen).toBe(89000);
+  });
+
+  it('falls back to costSen on a priced option only when priceSen is absent', () => {
+    const product: MfgPricingProduct = { category: 'BEDFRAME', basePriceSen: 52000 };
+    const cfgCostFallback: MaintenanceConfig = {
       ...config,
-      specials: [
-        { value: 'HB Fully Cover', priceSen: 5000, costSen: 1200 },
-      ],
+      // priceSen omitted on this option → cost lookup falls back to costSen.
+      specials: [{ value: 'HB Fully Cover', priceSen: undefined as unknown as number, costSen: 1200 }],
     };
-    const product: MfgPricingProduct = { category: 'BEDFRAME', basePriceSen: 52000, costPriceSen: 18000 };
     const r = computeMfgLineCost(
       { product, qty: 1, specials: ['HB Fully Cover'] },
-      cfgWithCost,
+      cfgCostFallback,
     );
     expect(r.specialsSurchargeSen).toBe(1200);
-    expect(r.unitPriceSen).toBe(18000 + 1200);
+    expect(r.unitPriceSen).toBe(52000 + 1200);
   });
 });

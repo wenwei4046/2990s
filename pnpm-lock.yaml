@@ -219,6 +219,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@2990s/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.18

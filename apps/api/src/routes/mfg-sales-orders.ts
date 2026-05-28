@@ -196,6 +196,23 @@ mfgSalesOrders.get('/', async (c) => {
       .in('doc_no', docNos)
       .eq('cancelled', false);
     const agg = new Map<string, Map<string, { total: number; ready: number }>>();
+    /* Branding auto-derive (Commander 2026-05-28): the SO list grid derives
+       its Branding pill from WHICH product categories the SO carries. The
+       header revenue columns merge mattress + sofa into one bucket
+       (mattress_sofa_centi), so the grid can't tell SOFA from MATTRESS at the
+       header level. We collect the DISTINCT normalized item categories per SO
+       here — from the same per-line fetch already running for stock status —
+       and hand them back as `item_categories` so the UI can pick the exact
+       brand ("2990 Sofa" vs "2990 Mattress" vs "Bedframe" vs "Mixed"). */
+    const cats = new Map<string, Set<string>>();
+    const normCategory = (raw: string): string => {
+      const g = (raw ?? '').trim().toUpperCase();
+      if (g.includes('BEDFRAME')) return 'BEDFRAME';
+      if (g.includes('SOFA'))     return 'SOFA';
+      if (g.includes('MATTRESS')) return 'MATTRESS';
+      if (g.includes('ACCESSOR')) return 'ACCESSORY';
+      return 'OTHERS';
+    };
     for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean }>) {
       let perGroup = agg.get(it.doc_no);
       if (!perGroup) { perGroup = new Map(); agg.set(it.doc_no, perGroup); }
@@ -204,9 +221,14 @@ mfgSalesOrders.get('/', async (c) => {
       if (!cell) { cell = { total: 0, ready: 0 }; perGroup.set(g, cell); }
       cell.total += 1;
       if (it.stock_status === 'READY') cell.ready += 1;
+
+      let catSet = cats.get(it.doc_no);
+      if (!catSet) { catSet = new Set(); cats.set(it.doc_no, catSet); }
+      catSet.add(normCategory(it.item_group));
     }
     for (const r of rows) {
       const perGroup = agg.get(r.doc_no ?? '');
+      (r as Record<string, unknown>).item_categories = [...(cats.get(r.doc_no ?? '') ?? [])].sort();
       if (!perGroup) {
         (r as Record<string, unknown>).ready_categories = [];
         (r as Record<string, unknown>).is_fully_ready = false;
@@ -395,11 +417,14 @@ mfgSalesOrders.post('/', async (c) => {
     const unit = recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0);
     const discount = Number(it.discountCenti ?? 0);
     const lineTotal = (qty * unit) - discount;
-    // Task #114 — fall back to mfg_products.cost_price_sen when the client
-    // didn't snapshot a cost. Keeps line_cost_centi accurate even when the
-    // POS hands the SO off with cost=0.
+    // Commander 2026-05-28 — the server-computed cost (base + Σ backend
+    // priceSen surcharges via computeMfgLineCost) is the source of truth.
+    // Fall back to mfg_products.cost_price_sen / explicit client cost only
+    // when the recompute didn't produce a cost (e.g. product not found).
     const itemCode = String(it.itemCode ?? '');
-    const unitCost = await snapshotUnitCostSen(sb, itemCode, Number(it.unitCostCenti ?? 0));
+    const unitCost = recomputed && recomputed.unit_cost_sen > 0
+      ? recomputed.unit_cost_sen
+      : await snapshotUnitCostSen(sb, itemCode, Number(it.unitCostCenti ?? 0));
     const lineCost = unitCost * qty;
     const group = String(it.itemGroup ?? '').toLowerCase();
     total += lineTotal;
@@ -1165,13 +1190,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   }
   const unit = recomputed.unit_price_sen;
   const lineTotal = (qty * unit) - discount;
-  // Task #114 — snapshot unit cost from mfg_products when client didn't
-  // pass one. Same fallback chain as POST / and PATCH /:itemId.
-  const unitCost = await snapshotUnitCostSen(
-    sb,
-    itemCodeStr,
-    Number(it.unitCostCenti ?? 0),
-  );
+  // Commander 2026-05-28 — server-computed cost (base + Σ backend priceSen
+  // surcharges) wins. Fall back to mfg_products.cost_price_sen / explicit
+  // client cost only when the recompute produced no cost.
+  const unitCost = recomputed.unit_cost_sen > 0
+    ? recomputed.unit_cost_sen
+    : await snapshotUnitCostSen(sb, itemCodeStr, Number(it.unitCostCenti ?? 0));
   const lineCost = unitCost * qty;
   /* PR-E — same inheritance rule as POST /. Explicit per-line value wins
      (and flips overridden=true unless the client says otherwise);
@@ -1311,17 +1335,21 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     }
   }
   const unit = recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit;
-  /* Task #114 — cost snapshot fallback on PATCH. Three cases:
-       1. Client sent unitCostCenti > 0 → use it.
-       2. Client changed itemCode (no cost in body) → re-snapshot from
-          mfg_products under the new code. Otherwise the line keeps the
-          previous SKU's cost which is almost certainly wrong.
-       3. Otherwise keep the prior unit_cost_centi unchanged. */
+  /* Commander 2026-05-28 — cost snapshot on PATCH. Order of precedence:
+       1. Client sent unitCostCenti > 0 → use it (explicit override).
+       2. A recompute ran (variants/itemCode/price touched) AND produced a
+          cost > 0 → use the server-computed cost (base + Σ backend priceSen
+          surcharges via computeMfgLineCost). This is the source of truth.
+       3. Client changed itemCode but recompute had no cost → re-snapshot
+          mfg_products under the new code.
+       4. Otherwise keep the prior unit_cost_centi unchanged. */
   let unitCost: number;
   const explicitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : 0;
   const itemCodeChanged = it.itemCode !== undefined && it.itemCode !== prev.item_code;
   if (explicitCost > 0) {
     unitCost = explicitCost;
+  } else if (recomputedPatch && recomputedPatch.unit_cost_sen > 0) {
+    unitCost = recomputedPatch.unit_cost_sen;
   } else if (itemCodeChanged) {
     unitCost = await snapshotUnitCostSen(sb, String(it.itemCode ?? ''), 0);
   } else {
