@@ -39,7 +39,7 @@
   outline: 0;
   background: transparent;
   font-family: var(--font-sans);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink);
   width: 100%;
 }
@@ -61,17 +61,17 @@
   align-items: center;
   gap: 6px;
   font-family: var(--font-button);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--c-ink);
   background: var(--c-paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm, 6px);
-  padding: 4px 10px;
+  padding: 5px 12px;
   cursor: pointer;
   white-space: nowrap;
-  height: 28px;
+  height: 32px;
 }
 .toolbarPill:hover { background: var(--c-cream); }
 .toolbarPillOn {
@@ -161,9 +161,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 12px;
+  padding: 7px 12px;
   font-family: var(--font-sans);
-  font-size: var(--fs-12);
+  font-size: var(--fs-13);
   color: var(--c-ink);
   cursor: pointer;
 }
@@ -181,14 +181,14 @@
   align-items: center;
   gap: 4px;
   font-family: var(--font-button);
-  font-size: var(--fs-11);
+  font-size: var(--fs-13);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--c-ink);
   background: var(--c-paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm, 4px);
-  padding: 4px 10px;
+  padding: 5px 12px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -272,7 +272,10 @@
   border-collapse: collapse;
   width: max-content;
   min-width: 100%;
-  font-size: var(--fs-12);
+  /* Commander 2026-05-28: "整个 Sales Order 界面太小，写大一点" — bumped the
+     ledger body from fs-12 → fs-14 (+ taller rows below) so the list reads
+     comfortably without losing the AutoCount density feel. */
+  font-size: var(--fs-14, 14px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -284,13 +287,13 @@
 }
 .th {
   font-family: var(--font-button);
-  font-size: var(--fs-10, 10px);
+  font-size: var(--fs-12, 12px);
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-muted);
   text-align: left;
-  padding: 6px 8px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   background: var(--c-cream);
@@ -340,13 +343,13 @@
 .tr:last-child { border-bottom: 0; }
 
 .td {
-  padding: 4px 8px;
+  padding: 8px 12px;
   border-right: 1px solid rgba(34, 31, 32, 0.04);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--c-ink);
-  height: 28px;
+  height: 38px;
   vertical-align: middle;
 }
 .td:last-child { border-right: 0; }
@@ -362,9 +365,9 @@
 }
 .groupRow:hover { background: rgba(34, 31, 32, 0.10); }
 .groupRowCell {
-  padding: 4px 8px;
+  padding: 7px 12px;
   font-family: var(--font-button);
-  font-size: var(--fs-11);
+  font-size: var(--fs-13);
   letter-spacing: 0.04em;
   color: var(--c-ink);
 }
@@ -465,9 +468,9 @@
   border-top: 1px solid var(--line);
   background: var(--c-cream);
   font-family: var(--font-button);
-  font-size: var(--fs-10, 10px);
+  font-size: var(--fs-11, 11px);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-muted);
-  min-height: 22px;
+  min-height: 26px;
 }
