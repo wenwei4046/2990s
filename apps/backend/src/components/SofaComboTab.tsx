@@ -321,7 +321,9 @@ function ComposerModal({
   const update = useUpdateSofaCombo();
 
   const [baseModel, setBaseModel] = useState(editing?.baseModel ?? '');
-  const [modules, setModules] = useState<string[]>(editing?.modules ?? []);
+  // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
+  // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
+  const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
   const [tier, setTier] = useState<SofaPriceTier | ''>(editing?.tier ?? 'PRICE_2');
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
@@ -335,21 +337,33 @@ function ComposerModal({
   });
   const [notes, setNotes] = useState(editing?.notes ?? '');
 
-  // Ordered positional slots (Hookka-style). Each slot picks ONE module; the
-  // same code may repeat across slots (a combo can have 2× the same piece).
-  // Order = position = array index. Empty slots are filtered out on save.
-  const setSlot = (idx: number, code: string) => {
-    setModules((cur) => cur.map((c, i) => (i === idx ? code : c)));
+  // Ordered positional slots (Hookka-style), each an OR-set of codes. A slot
+  // toggles codes on/off — the built sofa matches if each module fills a
+  // DISTINCT slot whose set contains it (set-cover, exact count). The same
+  // code may appear in multiple slots (a combo can have 2× the same piece).
+  // Order = position = array index; matching is order-independent. Empty slots
+  // are filtered out on save.
+  const toggleSlotCode = (idx: number, code: string) => {
+    setModules((cur) =>
+      cur.map((slot, i) =>
+        i === idx
+          ? (slot.includes(code) ? slot.filter((c) => c !== code) : [...slot, code])
+          : slot,
+      ),
+    );
   };
-  const addSlot = () => setModules((cur) => [...cur, '']);
+  const addSlot = () => setModules((cur) => [...cur, []]);
   const removeSlot = (idx: number) => {
     setModules((cur) => cur.filter((_, i) => i !== idx));
   };
 
   const submit = async () => {
     if (!baseModel) return alert('Base model is required.');
-    const orderedModules = modules.map((c) => c.trim()).filter(Boolean);
-    if (orderedModules.length === 0) return alert('Add at least one module.');
+    // Drop empty slots + de-dupe codes within each slot.
+    const orderedModules = modules
+      .map((slot) => [...new Set(slot.map((c) => c.trim()).filter(Boolean))])
+      .filter((slot) => slot.length > 0);
+    if (orderedModules.length === 0) return alert('Add at least one module slot.');
 
     const pricesByHeight: Record<string, number | null> = {};
     for (const h of HEIGHTS) {
@@ -409,42 +423,68 @@ function ComposerModal({
           </datalist>
         </Field>
 
-        <Field label={`Modules (${modules.filter((c) => c.trim()).length})`}>
+        <Field label={`Modules (${modules.filter((s) => s.some((c) => c.trim())).length} slot${modules.length === 1 ? '' : 's'})`}>
           {editing ? (
             <div style={{ ...readonlyInputStyle, padding: 8 }}>
-              {modules.join(' · ') || '—'}
+              {buildComboLabel(modules) || '—'}
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+                color: 'var(--fg-muted)', padding: '2px 0',
+              }}>
+                Each slot is an OR-set — tick every module that may fill it
+                (e.g. <strong>1A-LHF</strong> OR <strong>1A-RHF</strong>). A built
+                sofa matches when each piece fills a distinct slot and the piece
+                count equals the slot count.
+              </div>
               {modules.length === 0 ? (
                 <div style={{
                   fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
                   color: 'var(--fg-muted)', padding: '2px 0',
                 }}>
-                  No modules yet — add the first one.
+                  No slots yet — add the first one.
                 </div>
               ) : (
-                modules.map((code, idx) => (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={slotNumberStyle}>Module {idx + 1}</span>
-                    <select
-                      value={code}
-                      onChange={(e) => setSlot(idx, e.target.value)}
-                      style={{ ...selectStyle, flex: 1 }}
-                    >
-                      <option value="">— Select module —</option>
-                      {ALL_MODULE_CODES.map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => removeSlot(idx)}
-                      title={`Remove Module ${idx + 1}`}
-                      style={iconBtnStyle}
-                    >
-                      <X size={14} strokeWidth={1.75} />
-                    </button>
+                modules.map((slot, idx) => (
+                  <div key={idx} style={{
+                    display: 'flex', flexDirection: 'column', gap: 4,
+                    padding: 8, border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={slotNumberStyle}>Module {idx + 1}</span>
+                      <span style={{
+                        flex: 1, fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
+                        color: slot.length ? 'var(--c-ink)' : 'var(--fg-muted)',
+                      }}>
+                        {slot.length ? slot.join(' / ') : 'pick one or more (OR)'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeSlot(idx)}
+                        title={`Remove Module ${idx + 1}`}
+                        style={iconBtnStyle}
+                      >
+                        <X size={14} strokeWidth={1.75} />
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {ALL_MODULE_CODES.map((c) => {
+                        const on = slot.includes(c);
+                        return (
+                          <button
+                            type="button"
+                            key={c}
+                            onClick={() => toggleSlotCode(idx, c)}
+                            style={on ? moduleChipOn : moduleChipOff}
+                          >
+                            {c}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 ))
               )}
@@ -728,4 +768,23 @@ const slotNumberStyle: CSSProperties = {
   color: 'var(--fg-soft)',
   minWidth: 72,
   flexShrink: 0,
+};
+
+const moduleChipOn: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 'var(--fs-11)',
+  fontWeight: 600,
+  background: 'var(--c-orange, #c47b2f)',
+  color: 'var(--c-paper, #fff)',
+  border: '1px solid var(--c-orange, #c47b2f)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '2px 8px',
+  cursor: 'pointer',
+};
+
+const moduleChipOff: CSSProperties = {
+  ...moduleChipOn,
+  background: 'var(--c-paper)',
+  color: 'var(--c-ink)',
+  border: '1px solid var(--line-strong)',
 };

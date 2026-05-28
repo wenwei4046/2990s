@@ -1052,7 +1052,8 @@ export type SofaPriceTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
 export interface SofaComboRow {
   id: string;
   baseModel: string;
-  modules: string[];
+  /** OR-set per slot: ordered slots, each an array of alternative codes. */
+  modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
@@ -1107,7 +1108,7 @@ export const useCreateSofaCombo = () => {
   return useMutation({
     mutationFn: async (body: {
       baseModel: string;       // '' allowed (wildcard)
-      modules: string[];
+      modules: string[][];     // OR-set per slot
       tier: SofaPriceTier | null;
       pricesByHeight: Record<string, number | null>;  // centi
       label?: string | null;

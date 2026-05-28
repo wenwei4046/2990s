@@ -1448,7 +1448,10 @@ function SaveComboModal({
     try {
       await create.mutateAsync({
         baseModel: '',                          // wildcard for now
-        modules,
+        // OR-set per slot: a saved POS layout is exact, so each built module
+        // becomes its own singleton slot. Commander can widen a slot to
+        // OR-alternatives later in Backend Maintenance.
+        modules: modules.map((code) => [code]),
         tier,
         pricesByHeight: { [String(depth)]: Math.round(n * 100) },
         label: label.trim() || null,

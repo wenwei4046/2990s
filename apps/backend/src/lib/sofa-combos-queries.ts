@@ -36,7 +36,8 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export type SofaComboRule = {
   id: string;
   baseModel: string;
-  modules: string[];
+  /** OR-set per slot: ordered slots, each an array of alternative codes. */
+  modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
@@ -51,7 +52,8 @@ export type SofaComboRule = {
 
 export type NewSofaCombo = {
   baseModel: string;
-  modules: string[];
+  /** OR-set per slot: ordered slots, each an array of alternative codes. */
+  modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
@@ -84,7 +86,7 @@ export function useSofaCombos(filters: ComboFilters = {}) {
 
 export function useSofaComboHistory(args: {
   baseModel: string;
-  modules: string[];
+  modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
 } | null) {
@@ -95,7 +97,8 @@ export function useSofaComboHistory(args: {
       if (!args) return Promise.resolve([] as SofaComboRule[]);
       const params = new URLSearchParams();
       params.set('baseModel', args.baseModel);
-      params.set('modules', args.modules.join(','));
+      // OR-set slots are JSON-encoded; the API matches by canonical slot key.
+      params.set('modules', JSON.stringify(args.modules));
       if (args.tier) params.set('tier', args.tier);
       if (args.customerId) params.set('customerId', args.customerId);
       return authedFetch<{ rules: SofaComboRule[] }>(

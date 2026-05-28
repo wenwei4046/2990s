@@ -120,16 +120,23 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
   return cells;
 };
 
-/* Build cells from a Backend Sofa Combo's modules array. Commander
-   2026-05-28 — placed left-to-right in array order, all rot=0. Combos
-   from the maintenance UI are typically sequential (e.g. 1A-LHF +
-   WC-45 + 1A-RHF), so a simple linear lay-out matches commander's intent.
-   For L-shape combos the user-saved order should already have the chaise
-   at the appropriate end. */
-const cellsFromComboModules = (modules: readonly string[], depth: Depth): Cell[] => {
+/* Build cells from a Backend Sofa Combo's slot-set. Commander 2026-05-28 —
+   placed left-to-right in slot order, all rot=0. Combos from the maintenance
+   UI are typically sequential (e.g. 1A-LHF + WC-45 + 1A-RHF), so a simple
+   linear lay-out matches commander's intent. For L-shape combos the
+   user-saved order should already have the chaise at the appropriate end.
+
+   OR-set per slot (PR combo-or-per-slot): each slot may hold multiple
+   alternative codes. The preview / pre-populated layout picks the FIRST code
+   in each slot as the representative — the user can swap to any OR-alternative
+   in Customize and the combo price still matches (set-cover match is
+   order-independent). */
+const cellsFromComboModules = (modules: readonly string[][], depth: Depth): Cell[] => {
   const cells: Cell[] = [];
   let x = 0;
-  modules.forEach((moduleId, idx) => {
+  modules.forEach((slot, idx) => {
+    const moduleId = slot[0] ?? '';
+    if (!moduleId) return;
     const m = findModule(moduleId);
     const w = m ? moduleFootprint(m, 0, depth).w : 0;
     cells.push({ id: `combo-${idx}`, moduleId, x, y: 0, rot: 0 });
@@ -1515,7 +1522,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                     type="button"
                     className={styles.qpCard}
                     onClick={() => onComboPick?.(combo)}
-                    title={`${combo.baseModel} · ${combo.modules.join(' + ')}`}
+                    title={`${combo.baseModel} · ${buildComboLabel(combo.modules)}`}
                   >
                     <div className={styles.qpCardArt}>
                       {/* Reuse the SofaCellsPreview for combo's modules.

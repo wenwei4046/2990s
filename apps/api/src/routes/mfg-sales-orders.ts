@@ -43,7 +43,7 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     .is('deleted_at', null)
     .is('customer_id', null);  // 2990 B2C — default-scope rows only
   return ((data ?? []) as Array<{
-    id: string; base_model: string; modules: string[]; tier: SofaPriceTier | null;
+    id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
     customer_id: string | null; prices_by_height: Record<string, number | null>;
     label: string | null; effective_from: string; deleted_at: string | null;
   }>).map((r) => ({

@@ -26,7 +26,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { normalizeComboModules } from '@2990s/shared';
+import { canonicalizeComboModulesForStorage, comboSlotsKey, type ComboSlots } from '@2990s/shared';
 
 export const sofaCombos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -41,7 +41,7 @@ type Tier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3' | null;
 type Row = {
   id: string;
   base_model: string;
-  modules: string[];
+  modules: ComboSlots;   // jsonb string[][] — OR-set per slot
   tier: Tier;
   customer_id: string | null;
   prices_by_height: Record<string, number | null>;
@@ -70,6 +70,31 @@ function rowToWire(r: Row) {
     updatedAt: r.updated_at,
     createdBy: r.created_by,
   };
+}
+
+/**
+ * Validate + CANONICALIZE incoming combo `modules` into the OR-set slot shape
+ * (string[][]). Mirrors HOOKKA's `canonicalSizes` (src/api/routes/sofa-combos.ts)
+ * so equivalent combos persist byte-identical JSON and hash to the same scope:
+ *   · string[][] — slots, each an OR-set of codes (the new shape).
+ *   · string[]   — legacy flat list; each code becomes a singleton slot.
+ *   · trims + de-dupes within each slot, drops empty slots,
+ *   · sorts codes within each slot, then sorts the slots by their first code.
+ * Returns null on a malformed payload (non-array, empty after trim, or a
+ * slot with no codes).
+ */
+function validateComboModules(v: unknown): ComboSlots | null {
+  if (!Array.isArray(v) || v.length === 0) return null;
+  // Reject mixed/garbage entries up front; the canonicalizer handles the
+  // string vs string[] coercion + trimming + intra-slot/slot sort.
+  for (const entry of v) {
+    if (Array.isArray(entry)) {
+      if (entry.some((c) => typeof c !== 'string')) return null;
+    } else if (typeof entry !== 'string') {
+      return null;
+    }
+  }
+  return canonicalizeComboModulesForStorage(v);
 }
 
 function validatePricesByHeight(v: unknown): Record<string, number | null> | null {
@@ -143,7 +168,7 @@ sofaCombos.get('/', async (c) => {
     if (r.effective_from > today) continue;
     const key = JSON.stringify([
       r.base_model,
-      normalizeComboModules(r.modules),
+      comboSlotsKey(r.modules ?? []),
       r.tier,
       r.customer_id,
     ]);
@@ -168,7 +193,18 @@ sofaCombos.get('/history', async (c) => {
   if (!baseModel) return c.json({ error: 'base_model_required' }, 400);
   if (!modulesRaw) return c.json({ error: 'modules_required' }, 400);
 
-  const modules = normalizeComboModules(modulesRaw.split(','));
+  // `modules` arrives as a JSON-encoded slot-set (string[][]). Fall back to
+  // the legacy CSV flat form (`a,b,c`) so older callers keep working — each
+  // code becomes a singleton slot via normalizeComboModules.
+  let parsedModules: unknown;
+  try {
+    parsedModules = JSON.parse(modulesRaw);
+  } catch {
+    parsedModules = modulesRaw.split(',');
+  }
+  const wantedKey = comboSlotsKey(
+    Array.isArray(parsedModules) ? (parsedModules as (string | string[])[]) : modulesRaw.split(','),
+  );
   const tier = TIERS.has(tierRaw) ? (tierRaw as Tier) : null;
 
   let q = supabase
@@ -194,10 +230,7 @@ sofaCombos.get('/history', async (c) => {
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
 
   const matching = ((data ?? []) as unknown as Row[]).filter((r) => {
-    const sorted = normalizeComboModules(r.modules);
-    if (sorted.length !== modules.length) return false;
-    for (let i = 0; i < sorted.length; i++) if (sorted[i] !== modules[i]) return false;
-    return true;
+    return comboSlotsKey(r.modules ?? []) === wantedKey;
   });
 
   return c.json({ rules: matching.map(rowToWire) });
@@ -205,16 +238,18 @@ sofaCombos.get('/history', async (c) => {
 
 // ── POST / ─────────────────────────────────────────────────────────────
 // Create a new combo row. body: {
-//   baseModel, modules: string[], tier?: SofaPriceTier | null,
+//   baseModel, modules: string[][], tier?: SofaPriceTier | null,
 //   customerId?: uuid | null, pricesByHeight: { '<inch>': centi | null },
 //   label?: string, effectiveFrom: 'YYYY-MM-DD', notes?: string
 // }
+// `modules` is the OR-set slot-set (string[][]); a flat string[] is also
+// accepted for back-compat (each code → a singleton slot).
 // Always INSERTs (append-only). To "edit" an existing combo, POST a new
 // row with the same scope tuple + a fresher effectiveFrom.
 sofaCombos.post('/', async (c) => {
   let body: {
     baseModel?: string;
-    modules?: string[];
+    modules?: unknown;
     tier?: string | null;
     customerId?: string | null;
     pricesByHeight?: unknown;
@@ -231,10 +266,10 @@ sofaCombos.post('/', async (c) => {
   const baseModel = (body.baseModel ?? '').trim();
   if (!baseModel) return c.json({ error: 'base_model_required' }, 400);
 
-  if (!Array.isArray(body.modules) || body.modules.length === 0) {
+  const modules = validateComboModules(body.modules);
+  if (!modules) {
     return c.json({ error: 'modules_required' }, 400);
   }
-  const modules = normalizeComboModules(body.modules);
 
   const tier =
     body.tier === null || body.tier === '' || body.tier === undefined
@@ -329,7 +364,7 @@ sofaCombos.put('/:id', async (c) => {
     .from('sofa_combo_pricing')
     .insert({
       base_model: (orig as { base_model: string }).base_model,
-      modules:    (orig as { modules: string[] }).modules,
+      modules:    (orig as { modules: ComboSlots }).modules,
       tier:       (orig as { tier: Tier }).tier,
       customer_id: (orig as { customer_id: string | null }).customer_id,
       prices_by_height: prices,
