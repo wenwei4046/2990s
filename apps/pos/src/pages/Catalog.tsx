@@ -13,6 +13,7 @@ import {
   Sparkles,
   ImageOff,
   Settings,
+  Plus,
   type LucideIcon,
 } from 'lucide-react';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
@@ -288,6 +289,14 @@ export const Catalog = () => {
                 Pricing footer so they're the last thing in the rail —
                 away from the per-session category browsing flow above. */}
             <div className={styles.sideHeading}>Maintain</div>
+            {/* Commander 2026-05-28 ("就直接添加一个 New Order 的 button…
+                不要跳 Backend, 永远在 POS 系统里"): customer-first SO creation
+                path. Click → POS-native customer form → POSTs empty SO,
+                lands on the existing handover-confirmed thank-you screen. */}
+            <Link to="/new-order" className={styles.sideItem}>
+              <Plus size={16} strokeWidth={1.75} />
+              <span className={styles.sideLabel}>New Order</span>
+            </Link>
             <Link to="/products" className={styles.sideItem}>
               <Package size={16} strokeWidth={1.75} />
               <span className={styles.sideLabel}>Products</span>
