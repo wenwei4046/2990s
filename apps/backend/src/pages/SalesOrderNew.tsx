@@ -93,7 +93,9 @@ export const SalesOrderNew = () => {
      behalf of someone else. Everyone else gets a read-only salesperson
      pinned to themselves. */
   const canChangeSalesperson =
-    currentStaff?.role === 'admin' || currentStaff?.role === 'sales_director';
+    currentStaff?.role === 'admin' ||
+    currentStaff?.role === 'sales_director' ||
+    currentStaff?.role === 'super_admin';
 
   /* Task #118 — these 3 dropdowns used to be `as const` arrays in this
      file. Now sourced from so_dropdown_options via TanStack. Each call

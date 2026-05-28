@@ -1151,7 +1151,9 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      exists for that state) or manually override on Maintenance. */
   const stateWarehousesQ = useStateWarehouseMappings();
   const canChangeSalesperson =
-    currentStaff?.role === 'admin' || currentStaff?.role === 'sales_director';
+    currentStaff?.role === 'admin' ||
+    currentStaff?.role === 'sales_director' ||
+    currentStaff?.role === 'super_admin';
 
   /* Task #118 — DB-backed dropdowns (was hardcoded). Falls back to the
      migration 0081 seed list when loading or when the DB has zero rows

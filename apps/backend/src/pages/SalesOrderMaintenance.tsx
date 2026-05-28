@@ -55,7 +55,7 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 export const SalesOrderMaintenance = () => {
   const { staff } = useAuth();
-  const canEdit = staff?.role === 'admin' || staff?.role === 'coordinator';
+  const canEdit = staff?.role === 'admin' || staff?.role === 'coordinator' || staff?.role === 'super_admin';
 
   return (
     <div className={styles.page}>

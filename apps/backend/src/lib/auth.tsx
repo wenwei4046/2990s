@@ -11,13 +11,22 @@ import { supabase } from './supabase';
 // Migration 0086 (2026-05-27) — 3 new sales-side roles.
 export type StaffRole =
   | 'sales' | 'showroom_lead' | 'coordinator' | 'finance' | 'admin'
-  | 'sales_executive' | 'outlet_manager' | 'sales_director';
+  | 'sales_executive' | 'outlet_manager' | 'sales_director'
+  // Migration 0092 — owner role, FULL access to BOTH portals.
+  | 'super_admin';
 
 /* Roles that may NOT access the Backend portal. They land on POS only.
-   Layout.tsx redirects them to /no-access. */
+   Layout.tsx redirects them to /no-access. super_admin is NOT here — it
+   accesses both portals. */
 export const POS_ONLY_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
   'sales', 'sales_executive', 'outlet_manager',
 ]);
+
+/* Admin-level roles — anywhere the UI gated on role === 'admin', it should
+   ALSO accept super_admin. Use isAdminLevel() so the widening is in one
+   place. (super_admin is a strict superset of admin.) */
+export const isAdminLevel = (role: StaffRole | null | undefined): boolean =>
+  role === 'admin' || role === 'super_admin';
 
 export interface StaffProfile {
   id: string;
