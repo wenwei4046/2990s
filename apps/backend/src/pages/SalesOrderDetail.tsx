@@ -22,7 +22,7 @@ import {
 } from 'react';
 import { Link, useParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save,
+  ArrowLeft, FileText, Pencil, Plus, X, Printer, Save,
   DollarSign, Lock, History, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -267,6 +267,25 @@ type SoItem = {
   line_delivery_date_overridden: boolean;
 };
 
+/* Whole-order inline edit — build a SoLineDraft from a persisted SoItem.
+   Hoisted to module scope so the edit-mode seed effect can map every line
+   without re-allocating the function each render. Mirrors the snake_case →
+   camelCase field mapping the per-row editor used before. */
+const draftFromItem = (it: SoItem): SoLineDraft => ({
+  itemCode:       it.item_code ?? '',
+  itemGroup:      it.item_group ?? 'others',
+  description:    it.description ?? '',
+  uom:            it.uom ?? 'UNIT',
+  qty:            it.qty ?? 1,
+  unitPriceCenti: it.unit_price_centi ?? 0,
+  discountCenti:  it.discount_centi ?? 0,
+  unitCostCenti:  it.unit_cost_centi ?? 0,
+  variants:       (it.variants as Record<string, unknown>) ?? {},
+  remark:         it.remark ?? '',
+  lineDeliveryDate:           it.line_delivery_date ?? null,
+  lineDeliveryDateOverridden: it.line_delivery_date_overridden ?? false,
+});
+
 export const SalesOrderDetail = () => {
   const { docNo } = useParams<{ docNo: string }>();
   const detail = useMfgSalesOrderDetail(docNo ?? null);
@@ -305,16 +324,17 @@ export const SalesOrderDetail = () => {
      and shares the cache entry — no double fetch. */
   const printPaymentsQ = useSalesOrderPayments(docNo ?? null);
 
-  /* Task #80 — Inline edit replaces the LineItemModal. Pencil on a row
-     toggles that row into an inline SoLineCard editor pre-populated with
-     the row's current values. The draft lives in editingDrafts keyed by
-     item id; the editingLineIds set drives the table-row swap. On submit
-     (updateItem) → success removes the id from the set + drops the draft.
-     The "+ Add Line Item" button seeds addingDraft with emptySoLine() +
-     the SO header's customer_delivery_date so the new row renders an
+  /* Whole-order inline edit (commander 2026-05-28) — There is no longer a
+     per-row "pencil" that toggles a single line into edit mode. Instead,
+     when the page enters edit mode EVERY line is seeded into editingDrafts
+     and rendered as an inline SoLineCard simultaneously. The whole order
+     (header + every line draft + an optional pending add-draft) is then
+     committed by the ONE page-level Save in the header. editingDrafts is
+     keyed by item id; the seed/clear effect below mirrors isEditing.
+     The "+ Add Line Item" button still seeds addingDraft with emptySoLine()
+     + the SO header's customer_delivery_date so a brand-new line renders an
      inline SoLineCard at the bottom of the table (same component, same
-     behavior as the New SO page — there is no longer a modal flow at all). */
-  const [editingLineIds, setEditingLineIds] = useState<Set<string>>(new Set());
+     behavior as the New SO page — there is no modal flow at all). */
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
   const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
   const [overriding, setOverriding] = useState<SoItem | null>(null);
@@ -338,15 +358,64 @@ export const SalesOrderDetail = () => {
   const cancelEdit = () => {
     customerCardRef.current?.reset();
     setSaveError(null);
+    // The seed/clear effect wipes editingDrafts + addingDraft when isEditing
+    // flips to false, discarding any uncommitted line edits.
     setIsEditing(false);
   };
+
+  /* Whole-order Save — persists the order in one shot:
+       1. validate the header (CustomerCard's own Save runs its date-XOR gate)
+       2. commit every dirty line draft via updateItem (parallel)
+       3. commit the pending add-draft via addItem (+ drain staged photos)
+     The header save is sequenced first so its validation can short-circuit
+     before any line writes go out. We only leave edit mode after ALL writes
+     resolve; any failure surfaces inline and keeps the user in edit mode so
+     nothing is silently lost. */
+  const [savingOrder, setSavingOrder] = useState(false);
   const saveEdit = () => {
     const handle = customerCardRef.current;
-    if (!handle) return;
+    if (!handle || !header) return;
+    if (savingOrder) return;
     setSaveError(null);
+
+    // Guard: an open add-draft must have a product picked before Save.
+    if (addingDraft && !addingDraft.itemCode.trim()) {
+      setSaveError('Pick a product for the new line, or remove it before saving.');
+      return;
+    }
+    // Guard: every existing line must still reference a product.
+    const blankLine = Object.values(editingDrafts).find((d) => !d.itemCode.trim());
+    if (blankLine) {
+      setSaveError('Every line must have a product selected before saving.');
+      return;
+    }
+
+    setSavingOrder(true);
+    // Snapshot drafts up front so concurrent re-seeds don't shift the set.
+    const lineEntries = Object.entries(editingDrafts);
+    const pendingAdd = addingDraft;
+
     handle.save({
-      onSuccess: () => setIsEditing(false),
-      onError:   (msg) => setSaveError(msg),
+      onSuccess: () => {
+        // Header committed — now fan out the line writes in parallel, then
+        // the add-line (sequenced last so its photo drain has a stable id).
+        Promise.all(lineEntries.map(([id, d]) => commitEditingDraft(id, d)))
+          .then(() => (pendingAdd ? commitAddLine(pendingAdd) : Promise.resolve()))
+          .then(() => {
+            setSavingOrder(false);
+            setIsEditing(false);
+          })
+          .catch((e) => {
+            setSavingOrder(false);
+            setSaveError(
+              `Line items failed to save: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          });
+      },
+      onError: (msg) => {
+        setSavingOrder(false);
+        setSaveError(msg);
+      },
     });
   };
 
@@ -377,55 +446,17 @@ export const SalesOrderDetail = () => {
   );
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
 
-  /* Task #80 — Inline line-item edit helpers. Each is keyed on the SoItem.id
-     except startAdd which seeds a brand-new SoLineDraft. The mutation payload
-     mirrors what SalesOrderNew.tsx posts (snake_case happens server-side).
+  /* Whole-order inline edit — line-item helpers.
 
-     Task #103 — startEditLine doesn't need to be stable (it only fires from
-     the table-row Pencil button, never as a child prop), but stopEditLine +
-     patchEditingDraft DO — they're closed over by the per-row callbacks the
-     memoized SoLineCard receives. useCallback with no deps keeps them
-     reference-stable across renders; both rely entirely on setState callbacks
-     so there's no stale-closure risk. */
-  const startEditLine = (it: SoItem) => {
-    setEditingLineIds((prev) => {
-      const next = new Set(prev);
-      next.add(it.id);
-      return next;
-    });
-    setEditingDrafts((prev) => ({
-      ...prev,
-      [it.id]: {
-        itemCode:       it.item_code ?? '',
-        itemGroup:      it.item_group ?? 'others',
-        description:    it.description ?? '',
-        uom:            it.uom ?? 'UNIT',
-        qty:            it.qty ?? 1,
-        unitPriceCenti: it.unit_price_centi ?? 0,
-        discountCenti:  it.discount_centi ?? 0,
-        unitCostCenti:  it.unit_cost_centi ?? 0,
-        variants:       (it.variants as Record<string, unknown>) ?? {},
-        remark:         it.remark ?? '',
-        lineDeliveryDate:           it.line_delivery_date ?? null,
-        lineDeliveryDateOverridden: it.line_delivery_date_overridden ?? false,
-      },
-    }));
-  };
+     There is no longer a per-row "start editing this line" action: every
+     persisted line is seeded into editingDrafts the moment the page enters
+     edit mode (see the seed/clear effect below) and stays editable until the
+     user clicks the page-level Save or Cancel. Drafts are keyed by item id.
 
-  const stopEditLine = useCallback((id: string) => {
-    setEditingLineIds((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    setEditingDrafts((prev) => {
-      if (!(id in prev)) return prev;
-      const { [id]: _drop, ...rest } = prev;
-      return rest;
-    });
-  }, []);
-
+     patchEditingDraft mutates one row's draft in place. It's stable
+     (useCallback, no deps) because it's closed over by the per-row callbacks
+     the memoized SoLineCard receives — a fresh arrow each render would bust
+     SoLineCard's React.memo and re-render the heaviest tree on the page. */
   const patchEditingDraft = useCallback((id: string, patch: Partial<SoLineDraft>) => {
     setEditingDrafts((prev) => {
       const cur = prev[id];
@@ -434,58 +465,71 @@ export const SalesOrderDetail = () => {
     });
   }, []);
 
-  /* Task #103 — Per-row callback map. SoLineCard is now React.memo'd, but a
-     fresh `(patch) => patchEditingDraft(it.id, patch)` arrow on every parent
-     render still busts shallow-equality on the props and forces a re-render
-     of the heaviest child component on the page (which carries its own
-     useMfgProducts + useMaintenanceConfig + useFabricTrackings sub-trees).
-     The map is keyed on the editing-row id; the Map identity changes only
-     when the set of editing rows changes — which is exactly when a row's
-     callbacks need to rebind anyway. patchEditingDraft + stopEditLine are
-     themselves stable via useCallback above, so the bound arrows here are
-     the only churn. */
+  /* Per-row delete. On a persisted line this fires the delete mutation
+     immediately (and drops the row's draft on success) — deletes are not
+     deferred to the page-level Save because there's no "undo a removed line"
+     affordance and batching a destructive op behind Save is surprising. The
+     remaining line edits are still committed together by Save. */
+  const removeEditingLine = useCallback((id: string) => {
+    setEditingDrafts((prev) => {
+      if (!(id in prev)) return prev;
+      const { [id]: _drop, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  /* Edit-mode seed/clear effect — whole-order inline edit. Entering edit
+     mode populates a draft for EVERY current line so they all render as
+     inline SoLineCard editors at once; leaving edit mode wipes the drafts
+     (and any half-typed add-draft). Re-seeds whenever the underlying items
+     change (e.g. after a delete or a successful Save re-fetch) so the
+     inline editors stay in sync with the server snapshot. Lines the user
+     is mid-deleting via removeEditingLine are intentionally dropped from
+     the draft map and won't be re-seeded until the next items change. */
+  useEffect(() => {
+    if (!isEditing) {
+      setEditingDrafts({});
+      setAddingDraft(null);
+      return;
+    }
+    setEditingDrafts(() => {
+      const next: Record<string, SoLineDraft> = {};
+      for (const it of items) next[it.id] = draftFromItem(it);
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, items]);
+
+  /* Per-row callback map. SoLineCard is React.memo'd, so each row needs a
+     stable onChange / onRemove pair. The Map is keyed on the line id and its
+     identity changes only when the set of lines changes — exactly when a
+     row's callbacks must rebind. patchEditingDraft + removeEditingLine are
+     stable via useCallback above, so the bound arrows here are the only
+     churn. */
   const rowCallbacks = useMemo(() => {
     const map = new Map<string, {
       onChange: (patch: Partial<SoLineDraft>) => void;
       onRemove: () => void;
     }>();
-    for (const id of editingLineIds) {
-      map.set(id, {
-        onChange: (patch) => patchEditingDraft(id, patch),
-        onRemove: () => stopEditLine(id),
+    for (const it of items) {
+      map.set(it.id, {
+        onChange: (patch) => patchEditingDraft(it.id, patch),
+        onRemove: () => {
+          if (confirm(`Remove ${it.item_code} from this SO?`)) {
+            deleteItem.mutate(
+              { docNo: it.doc_no, itemId: it.id },
+              { onSuccess: () => removeEditingLine(it.id) },
+            );
+          }
+        },
       });
     }
     return map;
-  }, [editingLineIds, patchEditingDraft, stopEditLine]);
-
-  const submitEditingDraft = (id: string) => {
-    const d = editingDrafts[id];
-    if (!d) return;
-    if (!d.itemCode.trim()) { window.alert('Pick a product first.'); return; }
-    if (!header) return;
-    updateItem.mutate(
-      {
-        docNo: header.doc_no,
-        itemId: id,
-        itemCode:       d.itemCode,
-        itemGroup:      d.itemGroup,
-        description:    d.description,
-        uom:            d.uom,
-        qty:            d.qty,
-        unitPriceCenti: d.unitPriceCenti,
-        discountCenti:  d.discountCenti,
-        unitCostCenti:  d.unitCostCenti,
-        variants:       d.variants,
-        remark:         d.remark,
-        lineDeliveryDate:           d.lineDeliveryDate ?? null,
-        lineDeliveryDateOverridden: d.lineDeliveryDateOverridden ?? false,
-      },
-      { onSuccess: () => stopEditLine(id) },
-    );
-  };
+  }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
 
   /* Add path — single inline SoLineCard appended below the table when
-     "+ Add Line Item" is clicked. Same submit-payload shape as edit. */
+     "+ Add Line Item" is clicked. The draft is committed together with the
+     header + line edits by the page-level Save (see saveEdit). */
   const startAddLine = () => {
     if (!header) return;
     setAddingDraft({
@@ -499,69 +543,78 @@ export const SalesOrderDetail = () => {
 
   const cancelAddLine = useCallback(() => setAddingDraft(null), []);
 
-  /* Task #103 — Stable onChange for the lone "+ Add Line Item" SoLineCard at
-     the bottom of the table. Mirrors rowCallbacks above but kept as a
-     standalone useCallback because there is at most one add-draft at a time. */
+  /* Stable onChange for the lone "+ Add Line Item" SoLineCard at the bottom
+     of the table. Kept standalone (not in rowCallbacks) because there is at
+     most one add-draft at a time. */
   const patchAddingDraft = useCallback(
     (patch: Partial<SoLineDraft>) =>
       setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev),
     [],
   );
 
-  const submitAddLine = () => {
-    if (!addingDraft) return;
-    if (!addingDraft.itemCode.trim()) { window.alert('Pick a product first.'); return; }
-    if (!header) return;
-    const pendingFiles = addingDraft.pendingPhotoFiles ?? [];
-    addItem.mutate(
-      {
-        docNo: header.doc_no,
-        itemCode:       addingDraft.itemCode,
-        itemGroup:      addingDraft.itemGroup,
-        description:    addingDraft.description,
-        uom:            addingDraft.uom,
-        qty:            addingDraft.qty,
-        unitPriceCenti: addingDraft.unitPriceCenti,
-        discountCenti:  addingDraft.discountCenti,
-        unitCostCenti:  addingDraft.unitCostCenti,
-        variants:       addingDraft.variants,
-        remark:         addingDraft.remark,
-        lineDeliveryDate:           addingDraft.lineDeliveryDate ?? null,
-        lineDeliveryDateOverridden: addingDraft.lineDeliveryDateOverridden ?? false,
-      },
-      {
-        onSuccess: async (res: { item: unknown }) => {
-          /* Line-card-redesign — Drain pendingPhotoFiles staged on the
-             draft. POST /:docNo/items returns the inserted row; we pull
-             its `.id` and upload each File against the new itemId.
-             Failures don't undo the line — we surface a soft warning so
-             commander knows to re-attach on the row. */
-          const newItem = res.item as { id?: string } | null;
-          const newItemId = newItem?.id;
-          if (newItemId && pendingFiles.length > 0) {
-            let failed = 0;
-            for (const f of pendingFiles) {
-              try {
-                await uploadPhoto.mutateAsync({
-                  docNo: header.doc_no, itemId: newItemId, file: f,
-                });
-              } catch (err) {
-                // eslint-disable-next-line no-console
-                console.error('[so-line-photos] add-line upload failed', { file: f.name, err });
-                failed++;
-              }
-            }
-            if (failed > 0) {
-              window.alert(
-                `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
-                `failed to upload. Please re-attach on the row.`,
-              );
-            }
-          }
-          setAddingDraft(null);
-        },
-      },
-    );
+  /* Commit one persisted line via updateItem. Used by the page-level Save to
+     fan every dirty line draft out in parallel. Returns the mutation promise
+     so saveEdit can Promise.all them. */
+  const commitEditingDraft = (id: string, d: SoLineDraft) =>
+    updateItem.mutateAsync({
+      docNo: header!.doc_no,
+      itemId: id,
+      itemCode:       d.itemCode,
+      itemGroup:      d.itemGroup,
+      description:    d.description,
+      uom:            d.uom,
+      qty:            d.qty,
+      unitPriceCenti: d.unitPriceCenti,
+      discountCenti:  d.discountCenti,
+      unitCostCenti:  d.unitCostCenti,
+      variants:       d.variants,
+      remark:         d.remark,
+      lineDeliveryDate:           d.lineDeliveryDate ?? null,
+      lineDeliveryDateOverridden: d.lineDeliveryDateOverridden ?? false,
+    });
+
+  /* Commit the pending add-draft via addItem, then drain any staged photo
+     Files against the freshly-minted itemId. Returns a promise so it can be
+     awaited as part of the page-level Save. */
+  const commitAddLine = async (d: SoLineDraft) => {
+    const pendingFiles = d.pendingPhotoFiles ?? [];
+    const res = await addItem.mutateAsync({
+      docNo: header!.doc_no,
+      itemCode:       d.itemCode,
+      itemGroup:      d.itemGroup,
+      description:    d.description,
+      uom:            d.uom,
+      qty:            d.qty,
+      unitPriceCenti: d.unitPriceCenti,
+      discountCenti:  d.discountCenti,
+      unitCostCenti:  d.unitCostCenti,
+      variants:       d.variants,
+      remark:         d.remark,
+      lineDeliveryDate:           d.lineDeliveryDate ?? null,
+      lineDeliveryDateOverridden: d.lineDeliveryDateOverridden ?? false,
+    });
+    /* POST /:docNo/items returns the inserted row; pull its id and upload
+       each staged File. Upload failures don't undo the line — surface a
+       soft warning so the line can be re-attached. */
+    const newItemId = (res.item as { id?: string } | null)?.id;
+    if (newItemId && pendingFiles.length > 0) {
+      let failed = 0;
+      for (const f of pendingFiles) {
+        try {
+          await uploadPhoto.mutateAsync({ docNo: header!.doc_no, itemId: newItemId, file: f });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('[so-line-photos] add-line upload failed', { file: f.name, err });
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        window.alert(
+          `Line added, but ${failed} staged photo${failed === 1 ? '' : 's'} ` +
+          `failed to upload. Please re-attach on the row.`,
+        );
+      }
+    }
   };
 
   // Lock mechanism — CANCELLED + CLOSED + INVOICED are locked (terminal-ish
@@ -670,13 +723,13 @@ export const SalesOrderDetail = () => {
           ) : (
             <>
               <Button variant="ghost" size="md"
-                onClick={cancelEdit} disabled={updateHeader.isPending}>
+                onClick={cancelEdit} disabled={updateHeader.isPending || savingOrder}>
                 <span>Cancel</span>
               </Button>
               <Button variant="primary" size="md"
-                onClick={saveEdit} disabled={updateHeader.isPending}>
+                onClick={saveEdit} disabled={updateHeader.isPending || savingOrder}>
                 <Save {...ICON} />
-                <span>{updateHeader.isPending ? 'Saving…' : 'Save'}</span>
+                <span>{updateHeader.isPending || savingOrder ? 'Saving…' : 'Save'}</span>
               </Button>
             </>
           )}
@@ -762,37 +815,71 @@ export const SalesOrderDetail = () => {
           )}
         </header>
 
-        {items.length === 0 && !addingDraft ? (
-          <p className={styles.emptyRow}>No items yet — click "Add Line Item" to begin.</p>
-        ) : items.length === 0 && addingDraft ? (
-          // Task #80 — Empty SO + Add clicked: render the SoLineCard without
-          // the surrounding table (no rows to keep the same column grid in
-          // sync with). Mirrors the empty-state add path on the New SO page.
-          <div style={{ padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-            <SoLineCard
-              index={0}
-              draft={addingDraft}
-              onChange={patchAddingDraft}
-              onRemove={cancelAddLine}
-              canRemove={true}
-            />
-            <div style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: 'var(--space-2)',
-            }}>
-              <Button variant="ghost" size="sm"
-                onClick={cancelAddLine}
-                disabled={addItem.isPending}>
-                <span>Cancel</span>
-              </Button>
-              <Button variant="primary" size="sm"
-                onClick={submitAddLine}
-                disabled={addItem.isPending}>
-                <Save {...SM_ICON} />
-                <span>{addItem.isPending ? 'Saving…' : 'Add Line Item'}</span>
-              </Button>
-            </div>
+        {items.length === 0 && !isEditing ? (
+          <p className={styles.emptyRow}>No items yet — click "Edit" then "Add Line Item" to begin.</p>
+        ) : isEditing ? (
+          /* Whole-order inline edit — every line is an inline SoLineCard
+             editor and all are editable at once. There is no per-row Save /
+             Cancel anymore: the ONE page-level Save in the header commits the
+             header + every line draft (+ any new add-draft) together. Each
+             row keeps a small action bar with Override price ($) + Remove,
+             since those operate on a single line. The add-draft (if open)
+             renders as one more card at the bottom. */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3)' }}>
+            {items.map((it, idx) => {
+              const editDraft = editingDrafts[it.id];
+              // A freshly-deleted row drops its draft (removeEditingLine) but
+              // lingers in `items` until the re-fetch — skip rendering it.
+              if (!editDraft) return null;
+              const cb = rowCallbacks.get(it.id);
+              return (
+                <div key={it.id}>
+                  {/* Per-line action — Override price ($). Removal is handled
+                      by the SoLineCard's own trash button (onRemove → delete
+                      mutation), so it isn't duplicated here. Override is a
+                      single-line audited operation that the inline card
+                      doesn't expose, so it stays in this small action bar. */}
+                  <div className={styles.actionsCell} style={{ marginBottom: 'var(--space-2)' }}>
+                    <button type="button" className={styles.iconBtn} title="Override price"
+                      disabled={isLocked}
+                      onClick={() => !isLocked && setOverriding(it)}>
+                      <DollarSign {...SM_ICON} />
+                    </button>
+                  </div>
+                  <SoLineCard
+                    index={idx}
+                    draft={editDraft}
+                    onChange={cb?.onChange ?? ((patch) => patchEditingDraft(it.id, patch))}
+                    onRemove={cb?.onRemove ?? (() => removeEditingLine(it.id))}
+                    canRemove={!isLocked}
+                    /* PR-F (#79) wiring — enable photo upload on already-saved
+                       lines. New lines (addingDraft) have no itemId yet so
+                       their photos defer to after the first save. */
+                    docNo={header.doc_no}
+                    itemId={it.id}
+                    isEditing={!isLocked}
+                  />
+                </div>
+              );
+            })}
+
+            {/* New line — staged as a card and committed by the page-level
+                Save alongside the existing line edits. */}
+            {addingDraft && (
+              <SoLineCard
+                index={items.length}
+                draft={addingDraft}
+                onChange={patchAddingDraft}
+                onRemove={cancelAddLine}
+                canRemove={true}
+              />
+            )}
+
+            {items.length === 0 && !addingDraft && (
+              <p className={styles.emptyRow} style={{ padding: 'var(--space-3)' }}>
+                No items yet — click "Add Line Item" above to begin.
+              </p>
+            )}
           </div>
         ) : (
           <table className={styles.table}>
@@ -817,7 +904,6 @@ export const SalesOrderDetail = () => {
                 <th className={styles.tableRight}>Unit Cost</th>
                 <th className={styles.tableRight}>Line Cost</th>
                 <th className={styles.tableRight}>Margin</th>
-                <th className={styles.tableRight}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -832,57 +918,6 @@ export const SalesOrderDetail = () => {
                 const displayDate = it.line_delivery_date
                   ?? (!it.line_delivery_date_overridden ? header.customer_delivery_date : null);
                 const isAuto = !it.line_delivery_date_overridden;
-                /* Task #80 — When this row is in inline edit mode, replace
-                   the entire row's contents with a full-width SoLineCard.
-                   Save/Cancel buttons render under the card; the action
-                   icons in the right column are suppressed since the inline
-                   form supplies its own commit affordances. */
-                const inlineEditing = editingLineIds.has(it.id);
-                const editDraft = editingDrafts[it.id];
-                if (inlineEditing && editDraft) {
-                  /* Task #103 — Pull the stable per-row callbacks built once
-                     above. The Map entry exists for every id in
-                     editingLineIds, so the !cb branch is theoretical. */
-                  const cb = rowCallbacks.get(it.id);
-                  return (
-                    <tr key={it.id}>
-                      <td colSpan={10} style={{ padding: 'var(--space-3)' }}>
-                        <SoLineCard
-                          index={items.indexOf(it)}
-                          draft={editDraft}
-                          onChange={cb?.onChange ?? ((patch) => patchEditingDraft(it.id, patch))}
-                          onRemove={cb?.onRemove ?? (() => stopEditLine(it.id))}
-                          canRemove={true}
-                          /* PR-F (#79) wiring — enable photo upload on
-                             already-saved lines. New lines (addingDraft)
-                             don't have an itemId yet so photos defer to
-                             after the first save. */
-                          docNo={header.doc_no}
-                          itemId={it.id}
-                          isEditing={isEditing}
-                        />
-                        <div style={{
-                          display: 'flex',
-                          justifyContent: 'flex-end',
-                          gap: 'var(--space-2)',
-                          marginTop: 'var(--space-2)',
-                        }}>
-                          <Button variant="ghost" size="sm"
-                            onClick={() => stopEditLine(it.id)}
-                            disabled={updateItem.isPending}>
-                            <span>Cancel</span>
-                          </Button>
-                          <Button variant="primary" size="sm"
-                            onClick={() => submitEditingDraft(it.id)}
-                            disabled={updateItem.isPending}>
-                            <Save {...SM_ICON} />
-                            <span>{updateItem.isPending ? 'Saving…' : 'Save'}</span>
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                }
                 return (
                 <tr key={it.id}>
                   <td>
@@ -929,78 +964,9 @@ export const SalesOrderDetail = () => {
                       </span>
                     ) : <span className={styles.muted}>—</span>}
                   </td>
-                  <td>
-                    {/* PR-A — Line-item Edit / Override / Delete actions are
-                        only rendered in edit mode. Read-only view shows an
-                        em-dash placeholder so the column doesn't collapse.
-                        Task #80 — Pencil now opens an inline SoLineCard
-                        editor on the same row (replaces the legacy modal). */}
-                    {isEditing ? (
-                      <span className={styles.actionsCell}>
-                        <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
-                          onClick={() => !isLocked && startEditLine(it)}>
-                          <Pencil {...SM_ICON} />
-                        </button>
-                        <button type="button" className={styles.iconBtn} title="Override price"
-                          disabled={isLocked}
-                          onClick={() => !isLocked && setOverriding(it)}>
-                          <DollarSign {...SM_ICON} />
-                        </button>
-                        <button
-                          type="button"
-                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                          title="Delete"
-                          disabled={isLocked}
-                          onClick={() => {
-                            if (isLocked) return;
-                            if (confirm(`Remove ${it.item_code} from this SO?`)) {
-                              deleteItem.mutate({ docNo: header.doc_no, itemId: it.id });
-                            }
-                          }}
-                        >
-                          <Trash2 {...SM_ICON} />
-                        </button>
-                      </span>
-                    ) : (
-                      <span className={styles.muted}>—</span>
-                    )}
-                  </td>
                 </tr>
                 );
               })}
-              {/* Task #80 — Inline "+ Add Line Item" SoLineCard appended at
-                  the bottom of the table when the user clicks the button. */}
-              {addingDraft && (
-                <tr>
-                  <td colSpan={10} style={{ padding: 'var(--space-3)' }}>
-                    <SoLineCard
-                      index={items.length}
-                      draft={addingDraft}
-                      onChange={patchAddingDraft}
-                      onRemove={cancelAddLine}
-                      canRemove={true}
-                    />
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'flex-end',
-                      gap: 'var(--space-2)',
-                      marginTop: 'var(--space-2)',
-                    }}>
-                      <Button variant="ghost" size="sm"
-                        onClick={cancelAddLine}
-                        disabled={addItem.isPending}>
-                        <span>Cancel</span>
-                      </Button>
-                      <Button variant="primary" size="sm"
-                        onClick={submitAddLine}
-                        disabled={addItem.isPending}>
-                        <Save {...SM_ICON} />
-                        <span>{addItem.isPending ? 'Saving…' : 'Add Line Item'}</span>
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         )}
