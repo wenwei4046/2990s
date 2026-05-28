@@ -282,17 +282,32 @@ export const Configurator = () => {
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data, productFabrics.data]);
 
   // Build the SofaProductPricing struct that the shared pure functions expect.
+  // Commander 2026-05-28 — added combos + fabricTier + comboHeight so groupPrice
+  // can apply combo-price OVERRIDE: when the group's modules + tier match a
+  // Backend Sofa Combo, the combo's pricesByHeight[activeDepth] wins over
+  // bundle / à la carte. baseModel left empty for now — pickComboPrice
+  // treats empty as wildcard until POS product ↔ mfg base_model bridges.
   const sofaPricing = useMemo<SofaProductPricing>(() => ({
     compartments: compartments.data ?? [],
     bundles: bundles.data ?? [],
     reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
     seatUpgradeLabel: product.data?.seat_upgrade_label ?? null,
     seatUpgradeFootrest: product.data?.seat_upgrade_footrest ?? true,
+    combos: sofaCombosQ.data ?? [],
+    /* fabricTier reads from the selected fabric's tier when available.
+       Today the POS fabric model doesn't carry a tier per row (combos with
+       tier=null match any tier, so the default is fine). When fabric tier
+       lands on productFabrics, wire it here. */
+    fabricTier: 'PRICE_2',
+    comboHeight: activeDepth,
+    baseModel: '',
   }), [
     compartments.data, bundles.data,
     product.data?.recliner_upgrade_price,
     product.data?.seat_upgrade_label,
     product.data?.seat_upgrade_footrest,
+    sofaCombosQ.data,
+    activeDepth,
   ]);
 
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the

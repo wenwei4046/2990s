@@ -6,6 +6,8 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
+import { pickComboPrice } from './sofa-combo-pricing';
+
 /* ─── Public types ─────────────────────────────────────────────────── */
 
 export type Rot = 0 | 90 | 180 | 270;
@@ -64,6 +66,22 @@ export interface SofaProductPricing {
    *  callers that don't price fabric (e.g. plan-view) can omit it.
    *  `computeSofaPrice` ignores this — surcharge is a caller-applied line add. */
   fabrics?: SofaProductPricingFabric[];
+  /** Sofa Combo Pricing rows (Commander 2026-05-28). When the group's modules
+   *  + tier match a combo row's modules + tier, the combo price OVERRIDES the
+   *  à la carte / bundle pricing. Pass [] to disable; pass a SofaComboRow[]
+   *  fetched per-call to enable. The picker is tolerant of empty baseModel
+   *  (POS doesn't have the retail↔mfg base_model bridge yet — relies on
+   *  modules-match alone). */
+  combos?: import('./sofa-combo-pricing').SofaComboRow[];
+  /** Fabric tier of the currently-selected fabric (PRICE_1 / PRICE_2 / PRICE_3).
+   *  Used when looking up a combo override. Combos with tier=null match any
+   *  tier; combos with a specific tier require an exact match. */
+  fabricTier?: import('./sofa-combo-pricing').SofaPriceTier | null;
+  /** Seat height as combos store it (e.g. '24'). Defaults to the depth param
+   *  cast as string when omitted. */
+  comboHeight?: string;
+  /** Base model code for combo lookup. POS sets to '' for wildcard match. */
+  baseModel?: string;
 }
 
 export interface SofaProductPricingFabric {
@@ -102,7 +120,10 @@ export interface SofaGroupPrice {
   /** What the customer pays for this group. min(bundle, à la carte) + recliners. */
   finalPrice: number;
   /** Where finalPrice came from. */
-  basis: 'bundle' | 'a_la_carte';
+  basis: 'combo' | 'bundle' | 'a_la_carte';
+  /** When basis='combo', the matched combo's price for the current height
+   *  (before recliner extras). null otherwise. */
+  comboPrice?: number | null;
 }
 
 export interface SofaPriceResult {
@@ -643,7 +664,7 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   const candidate = detectBundle(modIds);
   let bundle: BundleDef | null = null;
   let bundlePrice: number | null = null;
-  let basis: 'bundle' | 'a_la_carte' = 'a_la_carte';
+  let basis: 'combo' | 'bundle' | 'a_la_carte' = 'a_la_carte';
 
   if (candidate) {
     const row = bundleRow(pricing, candidate.id);
@@ -659,6 +680,32 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     }
   }
 
+  // Combo override — Commander 2026-05-28. When the group's modules + tier
+  // match a Sofa Combo Pricing row (with a price at the current height),
+  // the combo price wins over both bundle and à la carte. Recliner extras
+  // still add on top.
+  let comboPrice: number | null = null;
+  if (pricing.combos && pricing.combos.length > 0) {
+    const heightStr = pricing.comboHeight ?? String(depth);
+    comboPrice = pickComboPrice(
+      {
+        baseModel: pricing.baseModel ?? '',
+        modules: modIds,
+        customerId: null,        // 2990 B2C — only default-scope rows in play
+        tier: pricing.fabricTier ?? 'PRICE_2',
+        height: heightStr,
+      },
+      pricing.combos,
+    );
+    if (comboPrice != null) {
+      basis = 'combo';
+      // A combo match overrides the bundle path — clear bundle so
+      // SofaGroupPrice.basis reads cleanly as 'combo'.
+      bundle = null;
+      bundlePrice = null;
+    }
+  }
+
   // Recliner extras add on top regardless of basis.
   let reclinerCount = 0;
   for (const cell of group) {
@@ -667,7 +714,11 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   }
   const reclinerExtra = reclinerCount * pricing.reclinerUpgradePrice;
 
-  const basePrice = basis === 'bundle' ? (bundlePrice ?? aLaCarteTotal) : aLaCarteTotal;
+  let basePrice: number;
+  if (basis === 'combo' && comboPrice != null) basePrice = comboPrice;
+  else if (basis === 'bundle' && bundlePrice != null) basePrice = bundlePrice;
+  else basePrice = aLaCarteTotal;
+
   const finalPrice = basePrice + reclinerExtra;
 
   return {
@@ -680,6 +731,7 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     reclinerExtra,
     finalPrice,
     basis,
+    comboPrice,
   };
 };
 

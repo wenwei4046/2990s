@@ -74,11 +74,14 @@ export function pickComboPrice(
   const asOf = args.asOf ?? todayIso();
   const wantedModules = normalizeComboModules(args.modules);
 
-  // 1. Filter to candidate rows: same base model, modules match, tier matches
-  //    (or row tier null), effective on/before asOf, not soft-deleted.
+  // 1. Filter to candidate rows: same base model (empty args.baseModel = wildcard,
+  //    used by POS until the retail↔mfg base_model bridge surfaces), modules
+  //    match, tier matches (or row tier null), effective on/before asOf, not
+  //    soft-deleted.
+  const wildcardBaseModel = !args.baseModel;
   const candidates = rows.filter((r) => {
     if (r.deletedAt) return false;
-    if (r.baseModel !== args.baseModel) return false;
+    if (!wildcardBaseModel && r.baseModel !== args.baseModel) return false;
     if (r.tier !== null && r.tier !== args.tier) return false;
     if (r.effectiveFrom > asOf) return false;
     if (!modulesEqual(normalizeComboModules(r.modules), wantedModules)) return false;
