@@ -46,10 +46,11 @@ export const Mrp = () => {
      Set From–To, then "Order window" creates a PO covering only that window
      (e.g. 29 May–6 Jun → one PO, 7–15 Jun → another). showUndated brings back
      SO lines with no delivery date (excluded by default — not ready to order). */
-  const [deliveryFrom, setDeliveryFrom] = useState<string>('');
-  const [deliveryTo, setDeliveryTo] = useState<string>('');
-  const [processingFrom, setProcessingFrom] = useState<string>('');
-  const [processingTo, setProcessingTo] = useState<string>('');
+  /* Single date window with a switchable basis (like the convert page): filter
+     by Delivery / Processing / SO date. Delivery basis = the turnover window. */
+  const [dateBasis, setDateBasis] = useState<'delivery' | 'processing' | 'soDate'>('delivery');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
   const [showUndated, setShowUndated] = useState<boolean>(false);
   /* Commander 2026-05-29 — switch a SKU to an alternate supplier in-place
      (AutoCount Post-to-PO). { itemCode: supplierId }; wins over main binding. */
@@ -73,19 +74,19 @@ export const Mrp = () => {
      (supply isn't date-bucketed). shortageQty per line already reflects the
      date-priority allocation done server-side, so summing visible lines is
      correct. */
-  const within = (d: string | null, from: string, to: string): boolean => {
+  const hasWindow = Boolean(dateFrom || dateTo);
+  const lineDate = (l: MrpSku['lines'][number]): string | null =>
+    dateBasis === 'processing' ? l.processingDate
+    : dateBasis === 'soDate' ? l.soDate
+    : l.deliveryDate;
+  const lineInWindow = (l: MrpSku['lines'][number]): boolean => {
+    const d = lineDate(l);
     if (!d) return false;
     const x = d.slice(0, 10);
-    if (from && x < from) return false;
-    if (to && x > to) return false;
+    if (dateFrom && x < dateFrom) return false;
+    if (dateTo && x > dateTo) return false;
     return true;
   };
-  const hasDeliveryWindow = Boolean(deliveryFrom || deliveryTo);
-  const hasProcessingWindow = Boolean(processingFrom || processingTo);
-  const hasWindow = hasDeliveryWindow || hasProcessingWindow;
-  const lineInWindow = (l: MrpSku['lines'][number]): boolean =>
-    (!hasDeliveryWindow || within(l.deliveryDate, deliveryFrom, deliveryTo))
-    && (!hasProcessingWindow || within(l.processingDate, processingFrom, processingTo));
   const viewSkus: MrpSku[] = (data?.skus ?? [])
     .map((s) => {
       if (!hasWindow) return s;
@@ -181,8 +182,9 @@ export const Mrp = () => {
   const toggleSelectAll = () =>
     setSelected(allShortSelected ? new Set() : new Set(shortageSkus.map(rowKey)));
   const shortageUnits = shortageSkus.reduce((a, s) => a + s.shortage, 0);
+  const basisLabel = dateBasis === 'processing' ? 'Processing' : dateBasis === 'soDate' ? 'SO Date' : 'Delivery';
   const windowLabel = hasWindow
-    ? `${deliveryFrom || '…'} → ${deliveryTo || '…'}`
+    ? `${basisLabel} ${dateFrom || '…'} → ${dateTo || '…'}`
     : '';
 
   return (
@@ -247,57 +249,59 @@ export const Mrp = () => {
         </div>
       )}
 
-      {/* Filters — Commander 2026-05-29: warehouses got too many to chip; use
-          compact dropdowns. Delivery-date window drives turnover-control
-          ordering (order one window = one PO). */}
+      {/* Filters — Commander 2026-05-29: switchable date basis (Delivery /
+          Processing / SO date) drives the window; Warehouse sits above
+          Category on the right. */}
       <div className={styles.filterRow}>
         <label className={styles.filterField}>
-          <span className={styles.filterLabel}>Delivery from</span>
-          <input type="date" className={styles.filterSelect} value={deliveryFrom}
-            onChange={(e) => setDeliveryFrom(e.target.value)} />
+          <span className={styles.filterLabel}>Date</span>
+          <select className={styles.filterSelect} value={dateBasis}
+            onChange={(e) => setDateBasis(e.target.value as typeof dateBasis)}
+            title="Which date the From–To window filters on">
+            <option value="delivery">Delivery date</option>
+            <option value="processing">Processing date</option>
+            <option value="soDate">SO date</option>
+          </select>
+        </label>
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>from</span>
+          <input type="date" className={styles.filterSelect} value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)} />
         </label>
         <label className={styles.filterField}>
           <span className={styles.filterLabel}>to</span>
-          <input type="date" className={styles.filterSelect} value={deliveryTo}
-            onChange={(e) => setDeliveryTo(e.target.value)} />
-        </label>
-        <label className={styles.filterField} title="Processing date = when the order becomes active to order">
-          <span className={styles.filterLabel}>Processing from</span>
-          <input type="date" className={styles.filterSelect} value={processingFrom}
-            onChange={(e) => setProcessingFrom(e.target.value)} />
-        </label>
-        <label className={styles.filterField}>
-          <span className={styles.filterLabel}>to</span>
-          <input type="date" className={styles.filterSelect} value={processingTo}
-            onChange={(e) => setProcessingTo(e.target.value)} />
+          <input type="date" className={styles.filterSelect} value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)} />
         </label>
         {hasWindow && (
           <button type="button" className={styles.ghostBtn}
-            onClick={() => { setDeliveryFrom(''); setDeliveryTo(''); setProcessingFrom(''); setProcessingTo(''); }}>Clear window</button>
+            onClick={() => { setDateFrom(''); setDateTo(''); }}>Clear window</button>
         )}
         <label className={styles.filterField} title="Show SO lines that have no delivery date (not ready to order)">
           <input type="checkbox" checked={showUndated} onChange={(e) => setShowUndated(e.target.checked)} />
           <span className={styles.filterLabel}>Show no-date</span>
         </label>
         <span className={styles.filterSpacer} />
-        <label className={styles.filterField}>
-          <span className={styles.filterLabel}>Category</span>
-          <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
-            <option value="all">All categories</option>
-            {(data?.categories ?? ['SOFA', 'BEDFRAME', 'MATTRESS']).map((cat) => (
-              <option key={cat} value={cat}>{CAT_LABELS[cat] ?? cat}</option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.filterField}>
-          <span className={styles.filterLabel}>Warehouse</span>
-          <select className={styles.filterSelect} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
-            <option value="all">All warehouses</option>
-            {(data?.warehouses ?? []).map((w) => (
-              <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-            ))}
-          </select>
-        </label>
+        <div className={styles.filterStack}>
+          <label className={styles.filterField}>
+            <span className={styles.filterLabel}>Warehouse</span>
+            <select className={styles.filterSelect} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+              <option value="all">All warehouses</option>
+              {(data?.warehouses ?? []).map((w) => (
+                <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.filterField}>
+            <span className={styles.filterLabel}>Category</span>
+            <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="all">All categories</option>
+              {(data?.categories ?? ['SOFA', 'BEDFRAME', 'MATTRESS']).map((cat) => (
+                <option key={cat} value={cat}>{CAT_LABELS[cat] ?? cat}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* Table */}
