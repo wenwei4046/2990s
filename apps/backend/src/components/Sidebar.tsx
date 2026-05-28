@@ -6,7 +6,6 @@ import {
   FileSpreadsheet,
   Package,
   Package2,
-  Layers,
   UsersRound,
   Truck,
   ScrollText,
@@ -25,7 +24,6 @@ import {
   Settings,
   LogOut,
   FileBarChart,
-  Wrench,
   ShieldCheck,
   ChevronDown,
 } from 'lucide-react';
@@ -110,18 +108,16 @@ export const Sidebar = () => {
         commander's importance ranking (SO → Procurement → Transport →
         Warehouse → Consignment). 2026-05-28. ──
 
-     NOTE (Phase 1b, in progress):
-       · "SO Maintenance" will move to a button on the Sales Orders page
-         (next to "New Sales Order"); kept here for now so it stays reachable.
-       · "Fabric Converter" will move to a tab inside Products & Maintenance
-         (next to Combo Pricing); kept here for now so it stays reachable. */
+     NOTE (Phase 1b, 2026-05-28): "SO Maintenance" now lives as a button on
+     the Sales Orders page (next to "New Sales Order"), and "Fabric Converter"
+     is now a tab inside Products & Maintenance (next to Combo Pricing) — both
+     removed from the sidebar here. */
   const supplyChain: NavSection[] = [
     {
       id: 'so',
       label: 'Sales Order Management',
       items: [
         { to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders' },
-        { to: '/mfg-sales-orders/maintenance', icon: <Wrench {...ICON_PROPS} />, label: 'SO Maintenance' },
         { to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'SO Detail View' },
         { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
       ],
@@ -132,7 +128,6 @@ export const Sidebar = () => {
       items: [
         { to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
-        { to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Converter' },
         { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
         { to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
         { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },

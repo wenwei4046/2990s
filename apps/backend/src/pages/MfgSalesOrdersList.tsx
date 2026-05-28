@@ -30,7 +30,7 @@ import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  Plus, X, Filter, Search,
+  Plus, X, Filter, Search, Wrench,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -882,6 +882,12 @@ export const MfgSalesOrdersList = () => {
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
             <span>New Sales Order</span>
+          </Button>
+          {/* SO Maintenance moved out of the sidebar to live next to New Sales
+              Order (commander 2026-05-28) — it's a SO-only config surface. */}
+          <Button variant="secondary" size="sm" onClick={() => navigate('/mfg-sales-orders/maintenance')}>
+            <Wrench size={14} strokeWidth={1.75} />
+            <span>SO Maintenance</span>
           </Button>
         </div>
       </div>
