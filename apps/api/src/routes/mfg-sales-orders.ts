@@ -867,6 +867,48 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
 
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
+  /* PR — Commander 2026-05-28 — Server-side variant rule enforcement.
+     When the caller sets internalExpectedDd (Processing Date) to a non-null
+     value, EVERY non-cancelled line for this SO must have its category-
+     required variants filled. Mirrors the UI warning in SalesOrderDetail
+     (REQUIRED_BY_CATEGORY: bedframe needs divanHeight+legHeight+gap+fabricCode;
+     sofa needs seatHeight+legHeight+fabricCode). Without this guard, the
+     coordinator can ignore the red banner and still hit the API directly.
+
+     Bedframes + sofas with incomplete variants block the request with HTTP
+     409 + a list of offending lines so the UI can re-render the warning. */
+  if (body['internalExpectedDd'] !== undefined && body['internalExpectedDd'] !== null && body['internalExpectedDd'] !== '') {
+    const REQUIRED: Record<string, string[]> = {
+      bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
+      sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
+    };
+    const { data: liveItems } = await sb
+      .from('mfg_sales_order_items')
+      .select('id, item_code, item_group, variants, cancelled')
+      .eq('doc_no', docNo);
+    const offenders: Array<{ id: string; itemCode: string; group: string; missing: string[] }> = [];
+    for (const it of (liveItems ?? []) as Array<{ id: string; item_code: string; item_group: string; variants: Record<string, unknown> | null; cancelled: boolean }>) {
+      if (it.cancelled) continue;
+      const keys = REQUIRED[(it.item_group ?? '').toLowerCase()];
+      if (!keys) continue;
+      const v = (it.variants ?? {}) as Record<string, unknown>;
+      const missing = keys.filter((k) => {
+        const val = v[k];
+        return val === undefined || val === null || val === '';
+      });
+      if (missing.length > 0) {
+        offenders.push({ id: it.id, itemCode: it.item_code, group: it.item_group, missing });
+      }
+    }
+    if (offenders.length > 0) {
+      return c.json({
+        error: 'variants_incomplete',
+        message: 'Processing Date requires all category-mandatory variants on every line.',
+        offenders,
+      }, 409);
+    }
+  }
+
   // PR-D — snapshot the row before update so we can emit a field-level diff
   // in the audit log. Only fields actually in the patch body are compared.
   const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
