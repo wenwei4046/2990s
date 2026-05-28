@@ -224,7 +224,15 @@ const deriveBranding = (r: SoRow): string => {
   if (!cat) return '';                       // no items → "—"
   if (cat === 'SOFA')     return '2990 Sofa';
   if (cat === 'BEDFRAME') return 'Bedframe';
-  if (cat === 'MATTRESS') return (r.first_item_branding && r.first_item_branding.trim()) || '2990 Mattress';
+  if (cat === 'MATTRESS') {
+    // Mattress brand follows the product's own branding. The 2990 house
+    // brand (stored as "2990" / "2990's") displays as "2990 Mattress";
+    // other brands (HAPPISLEEP, CARRES, MyMattress…) show as-is.
+    // (Commander 2026-05-28: "2990 mattress 而不是 2990".)
+    const b = (r.first_item_branding ?? '').trim();
+    if (!b || /^2990('?s)?$/i.test(b)) return '2990 Mattress';
+    return b;
+  }
   return '';                                 // accessory / others → none ("—")  (Commander 2026-05-28)
 };
 
