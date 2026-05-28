@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Sparkles,
   ImageOff,
+  Settings,
   type LucideIcon,
 } from 'lucide-react';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
@@ -280,6 +281,21 @@ export const Catalog = () => {
               <Sparkles size={16} strokeWidth={1.75} />
               <span className={styles.sideLabel}>Bestsellers</span>
             </button>
+
+            {/* PR — Commander 2026-05-28: moved Products + SO Maintenance
+                out of the top-right toolbar into the bottom-left sidebar.
+                They sit under a "Maintain" heading just above the Honest
+                Pricing footer so they're the last thing in the rail —
+                away from the per-session category browsing flow above. */}
+            <div className={styles.sideHeading}>Maintain</div>
+            <Link to="/products" className={styles.sideItem}>
+              <Package size={16} strokeWidth={1.75} />
+              <span className={styles.sideLabel}>Products</span>
+            </Link>
+            <Link to="/sales-order-maintenance" className={styles.sideItem}>
+              <Settings size={16} strokeWidth={1.75} />
+              <span className={styles.sideLabel}>SO Maintenance</span>
+            </Link>
 
             <div className={styles.sideFooter}>
               <div className={styles.sideBrand}>Honest pricing</div>
