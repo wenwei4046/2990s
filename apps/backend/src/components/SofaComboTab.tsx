@@ -235,7 +235,6 @@ export const SofaComboTab = (_props: ComboTabProps) => {
       {composer.open && (
         <ComposerModal
           editing={composer.editing}
-          baseModels={baseModels}
           modulesByBaseModel={modulesByBaseModel}
           onClose={() => setComposer({ open: false })}
         />
@@ -342,10 +341,9 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, baseModels, modulesByBaseModel, onClose,
+  editing, modulesByBaseModel, onClose,
 }: {
   editing?: SofaComboRule;
-  baseModels: string[];
   modulesByBaseModel: Record<string, string[]>;
   onClose: () => void;
 }) {
@@ -363,6 +361,16 @@ function ComposerModal({
     const own = modulesByBaseModel[baseModel];
     return own && own.length > 0 ? own : ALL_MODULE_CODES;
   }, [modulesByBaseModel, baseModel]);
+  // NEW-combo base-model options. Sourced from the SAME map that drives the
+  // Module-slot chip filter (`modulesByBaseModel`) so every selectable model
+  // reliably re-renders chips on pick — and a chosen value can never be a
+  // free-typed string the chip filter wouldn't recognise (the old
+  // <input list> footgun the commander hit: "选了 model 就不能 drop 掉了吗").
+  // The leading blank option lets the operator clear / re-pick.
+  const baseModelOptions = useMemo(
+    () => Object.keys(modulesByBaseModel).sort(),
+    [modulesByBaseModel],
+  );
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
@@ -452,17 +460,15 @@ function ComposerModal({
           {editing ? (
             <input value={baseModel} readOnly style={readonlyInputStyle} />
           ) : (
-            <input
-              list="base-model-list"
+            <select
               value={baseModel}
               onChange={(e) => setBaseModel(e.target.value)}
-              placeholder="e.g. 5530"
-              style={inputStyle}
-            />
+              style={selectStyle}
+            >
+              <option value="">— Select base model —</option>
+              {baseModelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
           )}
-          <datalist id="base-model-list">
-            {baseModels.map((m) => <option key={m} value={m} />)}
-          </datalist>
         </Field>
 
         <Field label={`Modules (${modules.filter((s) => s.some((c) => c.trim())).length} slot${modules.length === 1 ? '' : 's'})`}>
