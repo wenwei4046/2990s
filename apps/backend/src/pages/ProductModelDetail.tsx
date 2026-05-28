@@ -33,6 +33,20 @@ import styles from './ProductModelDetail.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 
+/* Resolve a Model photo URL for <img src>. Two upload paths coexist:
+   · bulk / API upload (POST /product-models/:id/photo) → R2 proxy path,
+     stored as a RELATIVE url "/product-models/{id}/photo/{key}" → must be
+     prefixed with VITE_API_URL to hit the Worker, not the backend origin.
+   · legacy Supabase-Storage upload → a full https:// public URL → use as-is.
+   (Commander 2026-05-28: Model photo rendered as a broken image because the
+   relative R2 path resolved against the backend origin → 404.) */
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+const resolveModelPhotoUrl = (u: string | null | undefined): string | undefined => {
+  if (!u) return undefined;
+  if (/^https?:\/\//i.test(u) || u.startsWith('data:')) return u;
+  return API_URL ? `${API_URL}${u.startsWith('/') ? '' : '/'}${u}` : u;
+};
+
 // Fallback pools used only when the global Maintenance config doesn't have the
 // pool keys yet (older deployments). Commander manages the real lists from
 // the Maintenance page → Bedframe Sizes / Sofa Compartments / Mattress Sizes
@@ -348,7 +362,7 @@ export const ProductModelDetail = ({
         <div className={styles.photoRow}>
           {model.photo_url ? (
             <div className={styles.photoPreview}>
-              <img src={model.photo_url} alt={`${model.model_code} photo`} />
+              <img src={resolveModelPhotoUrl(model.photo_url)} alt={`${model.model_code} photo`} />
               {photoUploading && <div className={styles.photoUploading}>Uploading…</div>}
             </div>
           ) : (
