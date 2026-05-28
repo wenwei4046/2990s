@@ -29,6 +29,7 @@ import {
   SOFA_MODULES,
   type SofaPriceTier,
   buildComboLabel,
+  normalizeCompartmentCode,
 } from '@2990s/shared';
 import {
   useSofaCombos,
@@ -87,6 +88,35 @@ export const SofaComboTab = (_props: ComboTabProps) => {
     for (const r of combosQ.data ?? []) set.add(r.baseModel);
     return [...set].sort();
   }, [productsQ.data, combosQ.data]);
+
+  // Per-base-model module codes sourced from the real sofa SKUs — mirrors
+  // HOOKKA's `sizesByBaseModel` (src/pages/maintenance/sofa-combos.tsx:336)
+  // which maps each baseModel → the distinct sizeCodes its SKUs carry. 2990's
+  // sofa SKU encodes the compartment in its code suffix (commander's
+  // sofaCodeFormat = '{model_code}-{compartment}'), so we slice the part after
+  // the first '-' (same extraction as allowed-options-check.ts:122-123) and
+  // normalize it to dash form ('1A(LHF)' → '1A-LHF') so the chips read the
+  // SAME code format the combo `modules` are stored/toggled in (SOFA_MODULES
+  // ids are dash-form). The New Combo dialog's slot picker offers exactly the
+  // compartments the chosen base model actually has in SKU master — no more,
+  // no less — instead of the global ALL_MODULE_CODES list.
+  const modulesByBaseModel = useMemo(() => {
+    const m: Record<string, string[]> = {};
+    for (const p of productsQ.data ?? []) {
+      const row = p as unknown as { base_model?: string | null; code?: string | null };
+      const bm = row.base_model;
+      const code = row.code ?? '';
+      if (!bm || !code) continue;
+      const dashAt = code.indexOf('-');
+      if (dashAt <= 0) continue; // orphan SKU with no compartment suffix
+      const compartment = normalizeCompartmentCode(code.slice(dashAt + 1));
+      if (!compartment) continue;
+      const arr = (m[bm] ??= []);
+      if (!arr.includes(compartment)) arr.push(compartment);
+    }
+    for (const arr of Object.values(m)) arr.sort();
+    return m;
+  }, [productsQ.data]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, SofaComboRule[]>();
@@ -206,6 +236,7 @@ export const SofaComboTab = (_props: ComboTabProps) => {
         <ComposerModal
           editing={composer.editing}
           baseModels={baseModels}
+          modulesByBaseModel={modulesByBaseModel}
           onClose={() => setComposer({ open: false })}
         />
       )}
@@ -311,16 +342,27 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, baseModels, onClose,
+  editing, baseModels, modulesByBaseModel, onClose,
 }: {
   editing?: SofaComboRule;
   baseModels: string[];
+  modulesByBaseModel: Record<string, string[]>;
   onClose: () => void;
 }) {
   const create = useCreateSofaCombo();
   const update = useUpdateSofaCombo();
 
   const [baseModel, setBaseModel] = useState(editing?.baseModel ?? '');
+
+  // Slot picker chips follow the SELECTED base model's actual SKU
+  // compartments (HOOKKA parity — combo options = that model's own size codes,
+  // not a global list). Falls back to the global ALL_MODULE_CODES only when
+  // the base model is unknown / has no SKUs, so the dialog never renders an
+  // empty chip set. Recomputes whenever the operator changes BASE MODEL.
+  const slotCodes = useMemo(() => {
+    const own = modulesByBaseModel[baseModel];
+    return own && own.length > 0 ? own : ALL_MODULE_CODES;
+  }, [modulesByBaseModel, baseModel]);
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
@@ -471,7 +513,7 @@ function ComposerModal({
                       </button>
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {ALL_MODULE_CODES.map((c) => {
+                      {slotCodes.map((c) => {
                         const on = slot.includes(c);
                         return (
                           <button
