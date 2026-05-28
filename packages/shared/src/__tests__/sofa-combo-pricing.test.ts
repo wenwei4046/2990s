@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  matchesComboSlots,
+  matchComboSubset,
+  pickComboMatch,
   pickComboPrice,
   normalizeComboModules,
   canonicalizeComboModulesForStorage,
@@ -10,12 +11,15 @@ import {
 } from '../sofa-combo-pricing';
 
 /**
- * PR combo-or-per-slot (Commander 2026-05-28, Hookka-style) — set-cover /
- * exact-count match against OR-set slots (string[][]).
+ * Commander 2026-05-28 (HOOKKA `findComboSubset` + `comboMatches` 1:1) —
+ * SUBSET / group-coverage match against OR-set slots (string[][]).
  *
- * Match rule: a built sofa matches a combo iff there is a perfect bipartite
- * matching assigning each built module to a DISTINCT slot whose OR-set
- * contains it, AND the built module count equals the slot count.
+ * Match rule: every combo SLOT must be covered by a DISTINCT built module
+ * whose code is in that slot's OR-set. The built module count may EXCEED the
+ * slot count — extra modules beyond the matched subset are allowed and stay
+ * at full master price; the combo never folds them in. Pricing applies the
+ * combo to the matched subset ONLY when it is strictly cheaper than that
+ * subset's à-la-carte sum (cheaper-only guard, owned caller-side).
  */
 
 describe('normalizeComboModules', () => {
@@ -83,62 +87,67 @@ describe('comboSlotsKey', () => {
   });
 });
 
-describe('matchesComboSlots', () => {
-  it('exact match — each built module fills its singleton slot', () => {
-    expect(matchesComboSlots(['2A-LHF', 'CNR', '2A-RHF'],
-      [['2A-LHF'], ['CNR'], ['2A-RHF']])).toBe(true);
+describe('matchComboSubset (HOOKKA findComboSubset 1:1)', () => {
+  it('exact cover — each built module fills its singleton slot', () => {
+    expect(matchComboSubset(['2A-LHF', 'CNR', '2A-RHF'],
+      [['2A-LHF'], ['CNR'], ['2A-RHF']])).toEqual([0, 1, 2]);
   });
 
-  it('count mismatch — too few built modules → no match', () => {
-    expect(matchesComboSlots(['2A-LHF', 'CNR'],
-      [['2A-LHF'], ['CNR'], ['2A-RHF']])).toBe(false);
+  it('too few built modules to cover every slot → null', () => {
+    expect(matchComboSubset(['2A-LHF', 'CNR'],
+      [['2A-LHF'], ['CNR'], ['2A-RHF']])).toBeNull();
   });
 
-  it('count mismatch — too many built modules → no match', () => {
-    expect(matchesComboSlots(['2A-LHF', 'CNR', '2A-RHF', '1NA'],
-      [['2A-LHF'], ['CNR'], ['2A-RHF']])).toBe(false);
-  });
-
-  it('OR-alternative match — built code is one of a slot OR-set', () => {
-    // Combo "2+L": slot1 = {2A-LHF, 2A-RHF}, slot2 = {L-LHF, L-RHF}.
+  it('EXTRA built module beyond the slots is allowed — subset = matched only', () => {
+    // Combo "2+L" = [{2A-LHF,2A-RHF},{L-LHF,L-RHF}]; built adds a stray 1NA.
     const slots = [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']];
-    expect(matchesComboSlots(['2A-RHF', 'L-LHF'], slots)).toBe(true);
-    expect(matchesComboSlots(['2A-LHF', 'L-RHF'], slots)).toBe(true);
+    // 2A-LHF→slot0, L-RHF→slot1; the 1NA at index 2 is an extra (not returned).
+    expect(matchComboSubset(['2A-LHF', 'L-RHF', '1NA'], slots)).toEqual([0, 1]);
+    // Even two extras ride free.
+    expect(matchComboSubset(['2A-LHF', 'L-RHF', '1NA', 'WC-45'], slots)).toEqual([0, 1]);
+  });
+
+  it('extra module that ALSO fits a slot still only consumes one per slot', () => {
+    // Three 2A built, combo needs one 2A-slot + one L-slot. One 2A covers the
+    // 2A-slot, the L covers the L-slot, the other two 2A are extras.
+    const slots = [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']];
+    const subset = matchComboSubset(['2A-LHF', '2A-RHF', 'L-LHF'], slots);
+    expect(subset).not.toBeNull();
+    expect(subset!.length).toBe(2); // one per slot, third 2A is an extra
+  });
+
+  it('OR-alternative cover — built code is one of a slot OR-set, order-free', () => {
+    const slots = [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']];
+    expect(matchComboSubset(['2A-RHF', 'L-LHF'], slots)).toEqual([0, 1]);
     // L-shape laid out chaise-first — order independent.
-    expect(matchesComboSlots(['L-RHF', '2A-LHF'], slots)).toBe(true);
+    expect(matchComboSubset(['L-RHF', '2A-LHF'], slots)).toEqual([0, 1]);
   });
 
-  it('OR-alternative miss — a built code in no slot → no match', () => {
-    expect(matchesComboSlots(['2A-LHF', 'CNR'],
-      [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']])).toBe(false);
+  it('a slot no built module can fill → null', () => {
+    expect(matchComboSubset(['2A-LHF', 'CNR'],
+      [['2A-LHF'], ['L-LHF', 'L-RHF']])).toBeNull();
   });
 
-  it('ambiguous overlap resolved by matching (needs backtracking)', () => {
-    // built [X, Y] vs slots [{X,Y}, {X}]: a naive greedy that grabs X→{X,Y}
-    // first would strand Y (it can only fill {X,Y}). Correct matching:
-    // X→{X}, Y→{X,Y}.
-    expect(matchesComboSlots(['X', 'Y'], [['X', 'Y'], ['X']])).toBe(true);
-    // But built [X, X] vs [{X,Y},{X}] — both modules are X, both slots accept
-    // X, distinct assignment exists → match.
-    expect(matchesComboSlots(['X', 'X'], [['X', 'Y'], ['X']])).toBe(true);
-    // built [Y, Y] vs [{X,Y},{X}] — second slot rejects Y, only one slot can
-    // take a Y → no perfect matching.
-    expect(matchesComboSlots(['Y', 'Y'], [['X', 'Y'], ['X']])).toBe(false);
+  it('overlapping OR-sets resolved by matching (needs backtracking)', () => {
+    // slots [{X,Y},{X}], built [X, Y]: grabbing X for slot0 strands slot1;
+    // correct cover X→slot1, Y→slot0. Both consumed → subset [0,1].
+    expect(matchComboSubset(['X', 'Y'], [['X', 'Y'], ['X']])).toEqual([0, 1]);
+    // built [Y, Y] vs [{X,Y},{X}] — only one slot accepts Y → can't cover both.
+    expect(matchComboSubset(['Y', 'Y'], [['X', 'Y'], ['X']])).toBeNull();
   });
 
   it('duplicate modules need distinct slots', () => {
-    // Two 1NA built, two slots each accepting 1NA → match (distinct slots).
-    expect(matchesComboSlots(['1NA', '1NA'], [['1NA'], ['1NA']])).toBe(true);
-    // Two 1NA built, only one slot accepts 1NA → no match.
-    expect(matchesComboSlots(['1NA', '1NA'], [['1NA'], ['CNR']])).toBe(false);
+    expect(matchComboSubset(['1NA', '1NA'], [['1NA'], ['1NA']])).toEqual([0, 1]);
+    expect(matchComboSubset(['1NA', '1NA'], [['1NA'], ['CNR']])).toBeNull();
   });
 
-  it('empty built + empty slots → trivially matches', () => {
-    expect(matchesComboSlots([], [])).toBe(true);
+  it('empty slots never match', () => {
+    expect(matchComboSubset(['2A-LHF'], [])).toBeNull();
+    expect(matchComboSubset([], [])).toBeNull();
   });
 });
 
-describe('pickComboPrice', () => {
+describe('pickComboMatch / pickComboPrice', () => {
   const row = (over: Partial<SofaComboRow> = {}): SofaComboRow => ({
     id: 'r1',
     baseModel: '5530',
@@ -154,28 +163,46 @@ describe('pickComboPrice', () => {
 
   const asOf = '2026-05-28';
 
-  it('returns the height price when slots cover the built modules (OR match)', () => {
-    const price = pickComboPrice(
+  it('matches OR slots and returns the height price + matched subset', () => {
+    const m = pickComboMatch(
       { baseModel: '5530', modules: ['2A-RHF', 'L-LHF'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
       [row()],
     );
-    expect(price).toBe(275000);
+    expect(m).not.toBeNull();
+    expect(m!.comboPriceCenti).toBe(275000);
+    expect(m!.matchedIndices).toEqual([0, 1]);
   });
 
-  it('returns null on count mismatch even if all codes are coverable', () => {
-    const price = pickComboPrice(
+  it('SUBSET match: extra module allowed, matchedIndices excludes the extra', () => {
+    // built = combo subset + a stray 1NA extra.
+    const m = pickComboMatch(
+      { baseModel: '5530', modules: ['2A-RHF', 'L-LHF', '1NA'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
+      [row()],
+    );
+    expect(m).not.toBeNull();
+    expect(m!.comboPriceCenti).toBe(275000);
+    expect(m!.matchedIndices).toEqual([0, 1]); // the 1NA at index 2 is an extra
+  });
+
+  it('all combo slots must be covered — too few built modules → null', () => {
+    expect(pickComboMatch(
       { baseModel: '5530', modules: ['2A-RHF'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
       [row()],
-    );
-    expect(price).toBeNull();
+    )).toBeNull();
   });
 
-  it('returns null when a built module fits no slot', () => {
-    const price = pickComboPrice(
+  it('a slot with no candidate built module → null (combo not applicable)', () => {
+    expect(pickComboMatch(
       { baseModel: '5530', modules: ['2A-RHF', 'CNR'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
       [row()],
-    );
-    expect(price).toBeNull();
+    )).toBeNull();
+  });
+
+  it('pickComboPrice wrapper returns just the combo height price', () => {
+    expect(pickComboPrice(
+      { baseModel: '5530', modules: ['2A-RHF', 'L-LHF', '1NA'], customerId: null, tier: 'PRICE_2', height: '24', asOf },
+      [row()],
+    )).toBe(264000);
   });
 
   it('tier-specific row only matches its tier; null tier matches any', () => {
@@ -189,21 +216,44 @@ describe('pickComboPrice', () => {
     )).toBe(275000);
   });
 
-  it('latest effective_from on/before asOf wins', () => {
+  it('scope priority: customer+tier > customer+ANY > company+tier > company+ANY', () => {
+    const companyAny = row({ id: 'c-any', tier: null, customerId: null, pricesByHeight: { '28': 100 } });
+    const companyTier = row({ id: 'c-tier', tier: 'PRICE_2', customerId: null, pricesByHeight: { '28': 200 } });
+    const custAny = row({ id: 'u-any', tier: null, customerId: 'CUST', pricesByHeight: { '28': 300 } });
+    const custTier = row({ id: 'u-tier', tier: 'PRICE_2', customerId: 'CUST', pricesByHeight: { '28': 400 } });
+    // With a customer + tier, the customer+tier row wins.
+    expect(pickComboMatch(
+      { baseModel: '5530', modules: ['2A-LHF', 'L-RHF'], customerId: 'CUST', tier: 'PRICE_2', height: '28', asOf },
+      [companyAny, companyTier, custAny, custTier],
+    )!.row.id).toBe('u-tier');
+    // Without a customer, the company+tier row wins over company+ANY.
+    expect(pickComboMatch(
+      { baseModel: '5530', modules: ['2A-LHF', 'L-RHF'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
+      [companyAny, companyTier],
+    )!.row.id).toBe('c-tier');
+  });
+
+  it('latest effective_from on/before asOf wins within a scope tier', () => {
     const older = row({ id: 'old', effectiveFrom: '2026-01-01', pricesByHeight: { '28': 275000 } });
     const newer = row({ id: 'new', effectiveFrom: '2026-05-01', pricesByHeight: { '28': 269000 } });
     const future = row({ id: 'fut', effectiveFrom: '2026-12-01', pricesByHeight: { '28': 100000 } });
-    const price = pickComboPrice(
+    expect(pickComboPrice(
       { baseModel: '5530', modules: ['2A-LHF', 'L-RHF'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
       [older, newer, future],
-    );
-    expect(price).toBe(269000);
+    )).toBe(269000);
   });
 
   it('soft-deleted rows never match', () => {
     expect(pickComboPrice(
       { baseModel: '5530', modules: ['2A-LHF', 'L-RHF'], customerId: null, tier: 'PRICE_2', height: '28', asOf },
       [row({ deletedAt: '2026-05-20T00:00:00Z' })],
+    )).toBeNull();
+  });
+
+  it('a row without a price for the height does not win', () => {
+    expect(pickComboMatch(
+      { baseModel: '5530', modules: ['2A-LHF', 'L-RHF'], customerId: null, tier: 'PRICE_2', height: '99', asOf },
+      [row()],
     )).toBeNull();
   });
 
@@ -214,12 +264,12 @@ describe('pickComboPrice', () => {
     )).toBe(264000);
   });
 
-  it('legacy flat string[] row still matches its exact codes', () => {
+  it('legacy flat string[] row still requires its exact codes', () => {
     const legacy = row({ modules: (['2A-LHF', 'L-RHF'] as unknown) as string[][] });
     // normalizeComboModules wraps the flat codes into singleton slots → exact
-    // codes required, no OR widening.
+    // codes required, no OR widening. An extra still rides free.
     expect(pickComboPrice(
-      { baseModel: '5530', modules: ['2A-LHF', 'L-RHF'], customerId: null, tier: 'PRICE_2', height: '24', asOf },
+      { baseModel: '5530', modules: ['2A-LHF', 'L-RHF', '1NA'], customerId: null, tier: 'PRICE_2', height: '24', asOf },
       [legacy],
     )).toBe(264000);
     expect(pickComboPrice(

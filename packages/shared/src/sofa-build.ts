@@ -6,7 +6,7 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
-import { pickComboPrice } from './sofa-combo-pricing';
+import { pickComboMatch } from './sofa-combo-pricing';
 
 /* ─── Public types ─────────────────────────────────────────────────── */
 
@@ -122,8 +122,21 @@ export interface SofaGroupPrice {
   /** Where finalPrice came from. */
   basis: 'combo' | 'bundle' | 'a_la_carte';
   /** When basis='combo', the matched combo's price for the current height
-   *  (before recliner extras). null otherwise. */
+   *  (before recliner extras). This covers ONLY the matched subset of cells.
+   *  null otherwise. */
   comboPrice?: number | null;
+  /** When basis='combo', the à-la-carte sum of the SUBSET the combo replaced
+   *  (HOOKKA's subsetSum). null otherwise. */
+  comboSubsetALaCarte?: number | null;
+  /** When basis='combo', the à-la-carte sum of the EXTRA cells outside the
+   *  matched subset — they stay at full master price and are added on top of
+   *  the combo price. 0 when the combo covered the whole group. null when
+   *  basis !== 'combo'. */
+  comboExtrasALaCarte?: number | null;
+  /** When basis='combo', the cellIds of the matched subset (the cells the
+   *  combo price covers). Extras = cellIds − comboMatchedCellIds. Lets the
+   *  cart show "combo applied + extras separate" like HOOKKA. null otherwise. */
+  comboMatchedCellIds?: string[] | null;
 }
 
 export interface SofaPriceResult {
@@ -680,14 +693,20 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     }
   }
 
-  // Combo override — Commander 2026-05-28. When the group's modules + tier
-  // match a Sofa Combo Pricing row (with a price at the current height),
-  // the combo price wins over both bundle and à la carte. Recliner extras
-  // still add on top.
+  // Combo override — Commander 2026-05-28, HOOKKA `comboMatches` 1:1. When a
+  // SUBSET of the group's cells covers a Sofa Combo Pricing row's slots (with
+  // a price at the current height), the combo price replaces that SUBSET's
+  // à-la-carte total — but ONLY when the combo is strictly cheaper than the
+  // subset's à-la-carte sum (HOOKKA's `subsetSum − comboTotal > 0`). The EXTRA
+  // cells outside the matched subset keep their full master price. Recliner
+  // extras still add on top.
   let comboPrice: number | null = null;
+  let comboSubsetALaCarte: number | null = null;
+  let comboExtrasALaCarte: number | null = null;
+  let comboMatchedCellIds: string[] | null = null;
   if (pricing.combos && pricing.combos.length > 0) {
     const heightStr = pricing.comboHeight ?? String(depth);
-    comboPrice = pickComboPrice(
+    const match = pickComboMatch(
       {
         baseModel: pricing.baseModel ?? '',
         modules: modIds,
@@ -697,12 +716,29 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
       },
       pricing.combos,
     );
-    if (comboPrice != null) {
-      basis = 'combo';
-      // A combo match overrides the bundle path — clear bundle so
-      // SofaGroupPrice.basis reads cleanly as 'combo'.
-      bundle = null;
-      bundlePrice = null;
+    if (match) {
+      // À-la-carte sum of the matched subset (the cells the combo replaces).
+      const matchedSet = new Set(match.matchedIndices);
+      let subsetSum = 0;
+      for (let i = 0; i < group.length; i++) {
+        if (!matchedSet.has(i)) continue;
+        const cell = group[i]!;
+        subsetSum += compRow(pricing, cell.moduleId)?.price ?? 0;
+      }
+      // HOOKKA cheaper-only guard: apply the combo only when it actually saves
+      // money against the matched subset's own à-la-carte sum. Equal / dearer
+      // combos are ignored so a "combo" never inflates the line.
+      if (subsetSum - match.comboPriceCenti > 0) {
+        basis = 'combo';
+        comboPrice = match.comboPriceCenti;
+        comboSubsetALaCarte = subsetSum;
+        comboExtrasALaCarte = Math.max(0, aLaCarteTotal - subsetSum);
+        comboMatchedCellIds = match.matchedIndices.map((i) => cellIds[i]!);
+        // A combo match overrides the bundle path — clear bundle so
+        // SofaGroupPrice.basis reads cleanly as 'combo'.
+        bundle = null;
+        bundlePrice = null;
+      }
     }
   }
 
@@ -714,10 +750,16 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   }
   const reclinerExtra = reclinerCount * pricing.reclinerUpgradePrice;
 
+  // Base price by basis. For 'combo', the subset price + extras-at-full-price
+  // (HOOKKA: comboTotal + Σ extras). For 'bundle' / à la carte, unchanged.
   let basePrice: number;
-  if (basis === 'combo' && comboPrice != null) basePrice = comboPrice;
-  else if (basis === 'bundle' && bundlePrice != null) basePrice = bundlePrice;
-  else basePrice = aLaCarteTotal;
+  if (basis === 'combo' && comboPrice != null) {
+    basePrice = comboPrice + (comboExtrasALaCarte ?? 0);
+  } else if (basis === 'bundle' && bundlePrice != null) {
+    basePrice = bundlePrice;
+  } else {
+    basePrice = aLaCarteTotal;
+  }
 
   const finalPrice = basePrice + reclinerExtra;
 
@@ -732,6 +774,9 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     finalPrice,
     basis,
     comboPrice,
+    comboSubsetALaCarte,
+    comboExtrasALaCarte,
+    comboMatchedCellIds,
   };
 };
 

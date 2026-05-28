@@ -326,6 +326,110 @@ describe('computeSofaPrice basis selection', () => {
   });
 });
 
+/* Case 4b — combo override applies to a SUBSET, extras stay at full price,
+   and only when the combo is strictly cheaper than the matched subset's own
+   à-la-carte sum (HOOKKA `comboMatches` 1:1). Prices in the combo fixture use
+   the same whole-MYR unit as the compartment fixtures so assertions stay
+   coherent. */
+describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
+  // Combo "2+L" = [{2A-LHF,2A-RHF},{L-LHF,L-RHF}]. Subset à-la-carte for a
+  // 2A + L pair = 2400 + 1900 = 4300; combo price 3800 (< 4300 → applies).
+  const comboPricing = (over: Partial<SofaProductPricing> = {}) =>
+    pricing({
+      baseModel: '',
+      fabricTier: 'PRICE_2',
+      comboHeight: '24',
+      combos: [
+        {
+          id: 'cmb',
+          baseModel: '',
+          modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+          tier: 'PRICE_2',
+          customerId: null,
+          pricesByHeight: { '24': 3800 },
+          label: null,
+          effectiveFrom: '2026-01-01',
+          deletedAt: null,
+        },
+      ],
+      ...over,
+    });
+
+  it('applies combo to the matched subset and keeps extras at full price', () => {
+    // 2A + L cover the combo (subset à-la-carte 4300, combo 3800). An extra
+    // 1NA (1200) sits apart so it forms its OWN group at à-la-carte — proving
+    // extras never ride the combo. The combo group base = 3800.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,    y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L-RHF',  x: 158,  y: 0, rot: 0 },
+      // far-away standalone extra (separate group)
+      { id: 'c', moduleId: '1NA',    x: 2000, y: 0, rot: 0 },
+    ];
+    const result = computeSofaPrice(cells, '24', comboPricing());
+    const comboGroup = result.groups.find((g) => g.basis === 'combo')!;
+    expect(comboGroup).toBeTruthy();
+    expect(comboGroup.comboPrice).toBe(3800);
+    expect(comboGroup.comboSubsetALaCarte).toBe(4300);
+    expect(comboGroup.comboExtrasALaCarte).toBe(0); // both cells in the combo group are matched
+    expect(comboGroup.finalPrice).toBe(3800);
+    // standalone 1NA priced à-la-carte (1200), never folded into the combo.
+    const extraGroup = result.groups.find((g) => g.basis === 'a_la_carte')!;
+    expect(extraGroup.finalPrice).toBe(1200);
+  });
+
+  it('extra module WITHIN the same connected group stays at full price', () => {
+    // 2A + L + a touching 1NA all in ONE group. Combo covers {2A, L}; the 1NA
+    // is an extra inside the group → group base = combo 3800 + 1NA full 1200.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',    x: 158, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L-RHF',  x: 233, y: 0, rot: 0 },
+    ];
+    const g = computeSofaPrice(cells, '24', comboPricing()).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(3800);
+    expect(g.comboSubsetALaCarte).toBe(4300); // 2A 2400 + L 1900
+    expect(g.comboExtrasALaCarte).toBe(1200); // the 1NA extra at full price
+    expect(g.finalPrice).toBe(3800 + 1200);
+  });
+
+  it('cheaper-only guard: combo NOT applied when it is dearer than the subset', () => {
+    // Combo price 9999 > subset à-la-carte 4300 → guard refuses; the shape
+    // falls back to its bundle / à-la-carte basis (here 2+L bundle 4000).
+    const g = computeSofaPrice(
+      [
+        { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+      ],
+      '24',
+      comboPricing({
+        combos: [
+          {
+            id: 'cmb', baseModel: '', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+            tier: 'PRICE_2', customerId: null, pricesByHeight: { '24': 9999 },
+            label: null, effectiveFrom: '2026-01-01', deletedAt: null,
+          },
+        ],
+      }),
+    ).groups[0]!;
+    expect(g.basis).not.toBe('combo');
+    expect(g.comboPrice).toBeNull();
+  });
+
+  it('OR-alternative within a slot — RHF variant covers the slot too', () => {
+    const g = computeSofaPrice(
+      [
+        { id: 'a', moduleId: '2A-RHF', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L-LHF',  x: 158, y: 0, rot: 0 },
+      ],
+      '24',
+      comboPricing(),
+    ).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(3800);
+  });
+});
+
 /* Case 5 — recliner extras add on top regardless of basis. */
 describe('computeSofaPrice recliner extras', () => {
   it('adds reclinerUpgradePrice × seatCount on top of bundle base', () => {
