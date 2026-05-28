@@ -1,0 +1,105 @@
+/* System Health — admin observability, 2990s tokens. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-7);
+  background: var(--c-cream);
+  min-height: 100%;
+}
+
+.headerRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.title { font-family: var(--font-title); font-weight: 700; color: var(--c-ink); margin: 0; }
+.subtitle { font-family: var(--font-sans); font-size: var(--fs-12); color: var(--fg-muted); margin: 4px 0 0; }
+
+.ghostBtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-button); font-size: var(--fs-13); font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md); border: 1px solid var(--line);
+  background: var(--c-paper); color: var(--c-ink); cursor: pointer;
+}
+.ghostBtn:hover { border-color: var(--line-strong); }
+
+.demoBanner {
+  font-family: var(--font-sans); font-size: var(--fs-12); line-height: 1.5;
+  color: #8a6d1e;
+  background: rgba(232, 181, 58, 0.10);
+  border: 1px solid rgba(232, 181, 58, 0.4);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* Status strip */
+.statusOk, .statusCrit {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--c-paper);
+  font-family: var(--font-sans); color: var(--c-ink);
+}
+.statusCrit { border-color: rgba(200, 64, 48, 0.4); background: rgba(200, 64, 48, 0.06); }
+.statusSub { font-size: var(--fs-12); color: var(--fg-muted); margin-top: 2px; }
+.statusDot { width: 12px; height: 12px; border-radius: 50%; background: #1f7a52; flex: none; }
+.statusCrit .statusDot { background: #c84030; }
+
+/* KPI cards */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+.kpi {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+.kpiWarn { border-color: var(--c-orange); background: rgba(232, 107, 58, 0.05); }
+.kpiHead { display: flex; align-items: center; justify-content: space-between; }
+.kpiLabel {
+  font-family: var(--font-sans); font-size: var(--fs-11); font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted);
+}
+.kpiIcon { color: var(--c-orange); }
+.kpiValue {
+  font-family: var(--font-title); font-weight: 700; font-size: 30px;
+  color: var(--c-ink); margin-top: var(--space-2);
+}
+.kpiValueWarn { color: var(--c-orange); }
+.kpiUnit { font-size: var(--fs-14); font-weight: 400; color: var(--fg-muted); margin-left: 4px; }
+
+/* Charts */
+.chartCard {
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-5);
+}
+.chartTitle {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-sans); font-size: var(--fs-13); font-weight: 700;
+  color: var(--c-ink); margin: 0 0 var(--space-3);
+}
+.chartTitle svg { color: var(--c-orange); }
+.spark { width: 100%; height: 90px; display: block; }
+.trendWrap { position: relative; }
+.trendWrap .spark { position: absolute; inset: 0; }
+.trendWrap { height: 90px; }
+.axis {
+  display: flex; justify-content: space-between;
+  font-size: var(--fs-11); color: var(--fg-muted); margin-top: var(--space-2);
+}
+.legendP95, .legendP50 {
+  display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 2px;
+}
+.legendP95 { background: var(--c-orange); }
+.legendP50 { background: #2f5fb3; }

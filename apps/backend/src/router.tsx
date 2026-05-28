@@ -67,6 +67,7 @@ const PurchaseInvoiceFromGrn = lazy(() => import('./pages/PurchaseInvoiceFromGrn
 const PurchaseReturnNew = lazy(() => import('./pages/PurchaseReturnNew').then(m => ({ default: m.PurchaseReturnNew })));
 const Outstanding = lazy(() => import('./pages/Outstanding').then(m => ({ default: m.Outstanding })));
 const Mrp = lazy(() => import('./pages/Mrp').then(m => ({ default: m.Mrp })));
+const SystemHealth = lazy(() => import('./pages/SystemHealth').then(m => ({ default: m.SystemHealth })));
 const Placeholder = lazy(() => import('./pages/Placeholder').then(m => ({ default: m.Placeholder })));
 const SalesOrderDetailListing = lazy(() => import('./pages/SalesOrderDetailListing').then(m => ({ default: m.SalesOrderDetailListing })));
 const DeliveryOrderDetailListing = lazy(() => import('./pages/DeliveryOrderDetailListing').then(m => ({ default: m.DeliveryOrderDetailListing })));
@@ -163,6 +164,8 @@ export const router = createBrowserRouter([
       { path: 'settings', element: <Settings /> },
       // Migration 0086 — Users management (invite + edit + deactivate).
       { path: 'users', element: <Users /> },
+      // Admin observability dashboard (ported from HOOKKA, 2026-05-29).
+      { path: 'system-health', element: <SystemHealth /> },
     ],
   },
   { path: '*', element: <Navigate to="/dashboard" replace /> },
