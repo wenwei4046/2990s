@@ -61,14 +61,15 @@ export type MrpResponse = {
 };
 
 /** Stock Status Report / MRP — recomputed server-side on every call. */
-export function useMrp(params: { category: string; warehouseId: string }) {
-  const { category, warehouseId } = params;
+export function useMrp(params: { category: string; warehouseId: string; includeUndated?: boolean }) {
+  const { category, warehouseId, includeUndated } = params;
   return useQuery({
-    queryKey: ['mrp', category, warehouseId],
+    queryKey: ['mrp', category, warehouseId, includeUndated ?? false],
     queryFn: () => {
       const q = new URLSearchParams();
       if (category && category !== 'all') q.set('category', category);
       if (warehouseId && warehouseId !== 'all') q.set('warehouseId', warehouseId);
+      if (includeUndated) q.set('includeUndated', 'true');
       const qs = q.toString();
       return authedFetch<MrpResponse>(`/mrp${qs ? `?${qs}` : ''}`);
     },

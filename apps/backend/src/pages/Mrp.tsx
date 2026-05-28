@@ -15,7 +15,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { ChevronRight, ChevronDown, RefreshCw, AlertTriangle, PackageCheck, Truck, ShoppingCart } from 'lucide-react';
+import { ChevronRight, ChevronDown, RefreshCw, AlertTriangle, PackageCheck, Truck, ShoppingCart, CalendarRange } from 'lucide-react';
 import { useMrp, type MrpSku, type MrpLine, type MrpResponse } from '../lib/mrp-queries';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
 import styles from './Mrp.module.css';
@@ -42,10 +42,40 @@ export const Mrp = () => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [poMode, setPoMode] = useState<'combined' | 'per-so'>('combined');
+  /* Commander 2026-05-29 — turnover control: order by delivery-date window.
+     Set From–To, then "Order window" creates a PO covering only that window
+     (e.g. 29 May–6 Jun → one PO, 7–15 Jun → another). showUndated brings back
+     SO lines with no delivery date (excluded by default — not ready to order). */
+  const [deliveryFrom, setDeliveryFrom] = useState<string>('');
+  const [deliveryTo, setDeliveryTo] = useState<string>('');
+  const [showUndated, setShowUndated] = useState<boolean>(false);
 
-  const q = useMrp({ category, warehouseId });
+  const q = useMrp({ category, warehouseId, includeUndated: showUndated });
   const data = q.data;
   const createPos = useCreatePosFromSoItems();
+
+  /* Delivery-date window: filter child lines + recompute the parent's Qty
+     Needed / Shortage to the window. Stock/PO Outstanding stay SKU-level
+     (supply isn't date-bucketed). shortageQty per line already reflects the
+     date-priority allocation done server-side, so summing visible lines is
+     correct. */
+  const hasWindow = Boolean(deliveryFrom || deliveryTo);
+  const inWindow = (d: string | null): boolean => {
+    if (!d) return false;
+    const x = d.slice(0, 10);
+    if (deliveryFrom && x < deliveryFrom) return false;
+    if (deliveryTo && x > deliveryTo) return false;
+    return true;
+  };
+  const viewSkus: MrpSku[] = (data?.skus ?? [])
+    .map((s) => {
+      if (!hasWindow) return s;
+      const lines = s.lines.filter((l) => inWindow(l.deliveryDate));
+      const qtyNeeded = lines.reduce((a, l) => a + l.qty, 0);
+      const shortage = lines.reduce((a, l) => a + (l.source === 'shortage' ? l.shortageQty : 0), 0);
+      return { ...s, lines, qtyNeeded, shortage };
+    })
+    .filter((s) => !hasWindow || s.lines.length > 0);
 
   /* One SKU can now appear as several rows (one per variant), so the row
      identity is (itemCode + variantKey), not itemCode alone. */
@@ -65,7 +95,7 @@ export const Mrp = () => {
       return next;
     });
 
-  const expandAll = () => setExpanded(new Set((data?.skus ?? []).map(rowKey)));
+  const expandAll = () => setExpanded(new Set(viewSkus.map(rowKey)));
   const collapseAll = () => setExpanded(new Set());
 
   /* Build {soItemId, qty} picks from the SHORT lines of the given SKUs, then
@@ -111,8 +141,12 @@ export const Mrp = () => {
     });
   };
 
-  const shortageSkus = (data?.skus ?? []).filter((s) => s.shortage > 0);
+  const shortageSkus = viewSkus.filter((s) => s.shortage > 0);
   const selectedShortageSkus = shortageSkus.filter((s) => selected.has(rowKey(s)));
+  const shortageUnits = shortageSkus.reduce((a, s) => a + s.shortage, 0);
+  const windowLabel = hasWindow
+    ? `${deliveryFrom || '…'} → ${deliveryTo || '…'}`
+    : '';
 
   return (
     <div className={styles.page}>
@@ -145,31 +179,60 @@ export const Mrp = () => {
             className={styles.primaryBtn}
             disabled={createPos.isPending || shortageSkus.length === 0}
             onClick={() => orderShortages(selectedShortageSkus.length > 0 ? selectedShortageSkus : shortageSkus)}
-            title={selectedShortageSkus.length > 0 ? 'Order the selected shortage SKUs' : 'Order all shortage SKUs'}
+            title={
+              selectedShortageSkus.length > 0 ? 'Order the selected shortage SKUs'
+              : hasWindow ? `Order every shortage delivering in ${windowLabel} as one batch`
+              : 'Order all shortage SKUs'
+            }
           >
             <ShoppingCart {...ICON} />
             {createPos.isPending
               ? 'Ordering…'
               : selectedShortageSkus.length > 0
                 ? `Order ${selectedShortageSkus.length} selected`
-                : `Order all shortages (${shortageSkus.length})`}
+                : hasWindow
+                  ? `Order window (${shortageSkus.length})`
+                  : `Order all shortages (${shortageSkus.length})`}
           </button>
         </div>
       </div>
 
-      {/* Summary badges */}
+      {/* Summary badges — reflect the active delivery-date window. */}
       {data && (
         <div className={styles.summaryRow}>
-          <span className={styles.summaryChip}><PackageCheck {...ICON} /> {data.totals.skuCount} SKUs in demand</span>
-          <span className={`${styles.summaryChip} ${data.totals.shortageSkuCount > 0 ? styles.summaryChipWarn : ''}`}>
-            <AlertTriangle {...ICON} /> {data.totals.shortageSkuCount} SKUs short · {data.totals.shortageUnits} units to order
+          <span className={styles.summaryChip}><PackageCheck {...ICON} /> {viewSkus.length} SKUs in demand</span>
+          <span className={`${styles.summaryChip} ${shortageSkus.length > 0 ? styles.summaryChipWarn : ''}`}>
+            <AlertTriangle {...ICON} /> {shortageSkus.length} SKUs short · {shortageUnits} units to order
           </span>
+          {hasWindow && (
+            <span className={styles.summaryChip}><CalendarRange {...ICON} /> Window {windowLabel}</span>
+          )}
         </div>
       )}
 
       {/* Filters — Commander 2026-05-29: warehouses got too many to chip; use
-          compact dropdowns aligned right instead. */}
+          compact dropdowns. Delivery-date window drives turnover-control
+          ordering (order one window = one PO). */}
       <div className={styles.filterRow}>
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>Delivery from</span>
+          <input type="date" className={styles.filterSelect} value={deliveryFrom}
+            onChange={(e) => setDeliveryFrom(e.target.value)} />
+        </label>
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>to</span>
+          <input type="date" className={styles.filterSelect} value={deliveryTo}
+            onChange={(e) => setDeliveryTo(e.target.value)} />
+        </label>
+        {hasWindow && (
+          <button type="button" className={styles.ghostBtn}
+            onClick={() => { setDeliveryFrom(''); setDeliveryTo(''); }}>Clear window</button>
+        )}
+        <label className={styles.filterField} title="Show SO lines that have no delivery date (not ready to order)">
+          <input type="checkbox" checked={showUndated} onChange={(e) => setShowUndated(e.target.checked)} />
+          <span className={styles.filterLabel}>Show no-date</span>
+        </label>
+        <span className={styles.filterSpacer} />
         <label className={styles.filterField}>
           <span className={styles.filterLabel}>Category</span>
           <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -213,10 +276,12 @@ export const Mrp = () => {
             {q.isError && (
               <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
             )}
-            {data && data.skus.length === 0 && (
-              <tr><td colSpan={9} className={styles.stateCell}>No open Sales-Order demand for this filter.</td></tr>
+            {data && viewSkus.length === 0 && (
+              <tr><td colSpan={9} className={styles.stateCell}>
+                {hasWindow ? 'No demand delivering in this window.' : 'No open Sales-Order demand for this filter.'}
+              </td></tr>
             )}
-            {data?.skus.map((sku) => {
+            {viewSkus.map((sku) => {
               const k = rowKey(sku);
               return (
                 <SkuRows

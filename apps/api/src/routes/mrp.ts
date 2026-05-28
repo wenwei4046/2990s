@@ -124,6 +124,10 @@ mrp.get('/', async (c) => {
   const warehouseId = c.req.query('warehouseId');
   const catFilter = category && category !== 'all' ? category.toUpperCase() : null;
   const whFilter = warehouseId && warehouseId !== 'all' ? warehouseId : null;
+  // Commander 2026-05-29 — an SO line with NO delivery date means the customer
+  // isn't ready for goods yet, so it shouldn't drive ordering. Exclude undated
+  // demand by default; ?includeUndated=true brings it back for a full view.
+  const includeUndated = c.req.query('includeUndated') === 'true';
 
   // ── 1. Demand — outstanding SO lines ──────────────────────────────────
   const { data: demandRaw, error: demandErr } = await sb
@@ -137,7 +141,10 @@ mrp.get('/', async (c) => {
   if (demandErr) return c.json({ error: 'load_failed', reason: demandErr.message }, 500);
 
   const demand = ((demandRaw ?? []) as unknown as DemandRow[]).filter(
-    (r) => r.item_code && r.so && !SO_DONE.has(r.so.status) && r.qty > 0,
+    (r) => r.item_code && r.so && !SO_DONE.has(r.so.status) && r.qty > 0
+      // Undated lines (no line delivery date AND no SO delivery date) are not
+      // ready to order — drop them unless the caller explicitly asks for them.
+      && (includeUndated || Boolean(r.line_delivery_date ?? r.so.customer_delivery_date)),
   );
 
   // ── 2. Product master — category + name + warehouses + categories list ─
