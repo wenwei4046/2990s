@@ -1403,25 +1403,23 @@ const buildColumns = (
     searchValue: (r) => r.postcode ?? '',
   },
   {
+    /* Commander 2026-05-28: the SO form / detail page labels
+       `internal_expected_dd` as "Processing Date" (see PR #144). The list's
+       "Processing Date" column was wrongly bound to the raw `processing_date`
+       field (the production "proceeded" timestamp), so a SO with a Processing
+       Date set showed BLANK here. Bind to `internal_expected_dd` so the column
+       matches the detail page. (The raw proceed-date isn't surfaced in this
+       grid — it's an internal production signal, not part of the SO form.) */
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
     defaultHidden: true,
-    accessor: (r) => r.processing_date ?? '',
-    searchValue: (r) => r.processing_date ?? '',
+    accessor: (r) => r.internal_expected_dd ?? '',
+    searchValue: (r) => r.internal_expected_dd ?? '',
   },
   {
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true,
     defaultHidden: true,
     accessor: (r) => r.customer_delivery_date ?? '',
     searchValue: (r) => r.customer_delivery_date ?? '',
-  },
-  {
-    /* PR-E — Internal expected delivery date (private to ops). Separate
-       from customer_delivery_date so a buffered internal date can sit
-       behind the date Loo promised the customer. */
-    key: 'internal_expected_dd', label: 'Internal DD', width: 130, sortable: true,
-    defaultHidden: true,
-    accessor: (r) => r.internal_expected_dd ?? '',
-    searchValue: (r) => r.internal_expected_dd ?? '',
   },
   {
     /* PR #46 — POS handover "Target Date" (marketing-side commitment). */
