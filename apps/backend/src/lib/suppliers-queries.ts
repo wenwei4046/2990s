@@ -609,6 +609,10 @@ export function useCreatePosFromSoItems() {
          Kept optional for any legacy caller that still wants to force them. */
       expectedAt?: string;
       purchaseLocationId?: string;
+      /* Commander 2026-05-28 — PO generation mode:
+         'combined' = one PO per supplier (mattresses: many SOs → 1 PO);
+         'per-so'   = one PO per (supplier × SO) (sofa/bedframe: 1 SO → 1 PO). */
+      mode?: 'combined' | 'per-so';
     }) =>
       authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
         `/mfg-purchase-orders/from-sos`,

@@ -98,6 +98,11 @@ export const PurchaseOrderFromSo = () => {
   const [dateFrom, setDateFrom]   = useState<string>('');
   const [dateTo, setDateTo]       = useState<string>('');
 
+  /* Commander 2026-05-28 — PO generation mode. 'combined' = one PO per supplier
+     (mattresses: dozens of SOs → 1 PO); 'per-so' = one PO per SO (sofa/bedframe:
+     1 SO → 1 PO). */
+  const [poMode, setPoMode] = useState<'combined' | 'per-so'>('combined');
+
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
   // ── Filtered rows fed to the grid ────────────────────────────────────
@@ -272,6 +277,7 @@ export const PurchaseOrderFromSo = () => {
     // derives both per-line from the source SO.
     const body = {
       picks: picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty })),
+      mode: poMode,
     };
     create.mutate(body, {
       onSuccess: (res) => {
@@ -383,6 +389,29 @@ export const PurchaseOrderFromSo = () => {
           <h1 className={styles.title}>Create PO from Sales Orders</h1>
         </div>
         <div className={styles.actions}>
+          {/* Commander 2026-05-28 — PO generation mode. Combined = one PO per
+              supplier (mattress: many SOs → 1 PO). Per-SO = one PO per SO
+              (sofa/bedframe: 1 SO → 1 PO). */}
+          <div className={styles.modeToggle} role="group" aria-label="PO generation mode">
+            <button
+              type="button"
+              className={styles.modeBtn}
+              data-active={poMode === 'combined'}
+              onClick={() => setPoMode('combined')}
+              title="Merge all picked SOs into one PO per supplier"
+            >
+              Combined (1 PO / supplier)
+            </button>
+            <button
+              type="button"
+              className={styles.modeBtn}
+              data-active={poMode === 'per-so'}
+              onClick={() => setPoMode('per-so')}
+              title="One PO per Sales Order (sofa / bedframe)"
+            >
+              Per SO (1 PO / SO)
+            </button>
+          </div>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
             <X {...ICON} /> Cancel
           </Button>

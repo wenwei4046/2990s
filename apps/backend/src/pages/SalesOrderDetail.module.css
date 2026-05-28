@@ -816,3 +816,29 @@
   z-index: 59;
 }
 
+/* PO-from-SO generation mode toggle (Commander 2026-05-28). */
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--c-paper);
+}
+.modeBtn {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  padding: 6px var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.modeBtn + .modeBtn { border-left: 1px solid var(--line); }
+.modeBtn:hover { color: var(--c-ink); }
+.modeBtn[data-active='true'] {
+  background: var(--c-ink);
+  color: var(--c-cream);
+}
+

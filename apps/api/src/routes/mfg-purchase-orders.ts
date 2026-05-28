@@ -384,8 +384,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     soItems?:  Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }>;
     expectedAt?: string;
     purchaseLocationId?: string;
+    /* Commander 2026-05-28 — PO generation mode:
+         'combined' (default) = one PO per supplier (all picked SOs merged) —
+                                 good for mattresses (dozens of SOs → 1 PO).
+         'per-so'             = one PO per (supplier × SO) — good for sofa /
+                                 bedframe where 1 SO → 1 PO. */
+    mode?: 'combined' | 'per-so';
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
 
   /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
      are NO LONGER asked or required. They are derived per-line from the source
@@ -538,17 +545,23 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     }, 400);
   }
 
-  // Group items by supplier.
+  // Group items into PO buckets.
   // Commander 2026-05-28 — each line carries its own derived warehouse +
   // delivery date (from the source SO), so they ride through to the insert.
+  // Grouping key depends on poMode:
+  //   'combined' → supplier_id            (one PO per supplier)
+  //   'per-so'   → supplier_id :: soDocNo (one PO per supplier × SO)
   type Line = {
     itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
     warehouseId: string | null; deliveryDate: string | null;
   };
-  const bySupplier = new Map<string, { currency: string; lines: Line[] }>();
+  type Bucket = { supplierId: string; currency: string; lines: Line[]; soDocNos: Set<string> };
+  const byGroup = new Map<string, Bucket>();
   for (const it of soItems) {
     const b = mainByCode.get(it.itemCode)!;
-    const bucket = bySupplier.get(b.supplier_id) ?? { currency: b.currency, lines: [] };
+    const groupKey = poMode === 'per-so' ? `${b.supplier_id}::${it.soDocNo}` : b.supplier_id;
+    const bucket = byGroup.get(groupKey)
+      ?? { supplierId: b.supplier_id, currency: b.currency, lines: [], soDocNos: new Set<string>() };
     bucket.lines.push({
       itemCode: it.itemCode,
       itemName: it.itemName,
@@ -558,7 +571,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       warehouseId: it.lineWarehouseId,
       deliveryDate: it.lineDeliveryDate,
     });
-    bySupplier.set(b.supplier_id, bucket);
+    bucket.soDocNos.add(it.soDocNo);
+    byGroup.set(groupKey, bucket);
   }
 
   // Generate PO numbers + create one PO per supplier.
@@ -571,7 +585,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   let counter = monthCount ?? 0;
 
   const created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }> = [];
-  for (const [supplierId, bucket] of bySupplier.entries()) {
+  for (const bucket of byGroup.values()) {
+    const supplierId = bucket.supplierId;
     counter += 1;
     const poNumber = `PO-${yymm}-${String(counter).padStart(3, '0')}`;
     const subtotal = bucket.lines.reduce((s, l) => s + l.qty * l.unitPriceCenti, 0);
@@ -608,7 +623,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
         subtotal_centi: subtotal,
         tax_centi: 0,
         total_centi: subtotal,
-        notes: `From SOs: ${[...new Set(soItems.map((i) => i.soDocNo))].join(', ')}`,
+        notes: `From SOs: ${[...bucket.soDocNos].join(', ')}`,
         created_by: user.id,
         /* Commander 2026-05-28 — derived from the source SO lines, not asked. */
         expected_at: headerExpectedAt,
