@@ -345,6 +345,9 @@ export const SalesOrderNew = () => {
   /* Mirror Detail's XOR rule (PR #156): Processing Date and Delivery Date
      must both be filled in or both empty. */
   const datesXor = (processingDate.trim() !== '') !== (deliveryDate.trim() !== '');
+  /* Commander 2026-05-28 — Processing/Delivery dates may only be today or a
+     future date (input min + Save guard). en-CA = local YYYY-MM-DD. */
+  const today = new Date().toLocaleDateString('en-CA');
 
   /* Task #105 — After POST /mfg-sales-orders succeeds, replay every payment
      draft through POST /:docNo/payments in parallel via the existing mutation
@@ -475,6 +478,15 @@ export const SalesOrderNew = () => {
         'Either fill in BOTH dates, or leave BOTH empty — partial dates ' +
         'cause scheduling issues.',
       );
+      return;
+    }
+    // Commander 2026-05-28 — Processing/Delivery date must be today or future.
+    if (processingDate && processingDate < today) {
+      window.alert('Processing Date cannot be in the past — pick today or a future date.');
+      return;
+    }
+    if (deliveryDate && deliveryDate < today) {
+      window.alert('Delivery Date cannot be in the past — pick today or a future date.');
       return;
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
@@ -774,6 +786,7 @@ export const SalesOrderNew = () => {
                 type="date"
                 className={styles.fieldInput}
                 value={processingDate}
+                min={today}
                 onChange={(e) => setProcessingDate(e.target.value)}
                 style={datesXor && !processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
               />
@@ -784,6 +797,7 @@ export const SalesOrderNew = () => {
                 type="date"
                 className={styles.fieldInput}
                 value={deliveryDate}
+                min={today}
                 onChange={(e) => setDeliveryDate(e.target.value)}
                 style={datesXor && !deliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
               />

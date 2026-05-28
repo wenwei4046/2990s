@@ -220,7 +220,8 @@ export const PurchaseOrderFromSo = () => {
             max={r.remainingQty}
             value={on ? p!.qty : ''}
             placeholder={String(r.remainingQty)}
-            disabled={!on}
+            /* Commander 2026-05-28 — always editable: typing a qty auto-selects
+               the row (no need to tick the checkbox first). */
             onClick={(e) => e.stopPropagation()}
             onChange={(e) =>
               setQty(r.soItemId, Math.min(r.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
