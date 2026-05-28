@@ -176,6 +176,18 @@ export const PurchaseOrderFromSo = () => {
       groupValue: (r) => (r.itemGroup ?? '(none)').toUpperCase(),
     },
     {
+      /* Commander 2026-05-28 — the SKU's main supplier (where this line's PO
+         goes). "— none —" means unbound: it can't be converted until assigned
+         a supplier. */
+      key: 'mainSupplier', label: 'Main Supplier', width: 200, sortable: true, groupable: true,
+      accessor: (r) =>
+        r.mainSupplierCode
+          ? <span>{r.mainSupplierCode}{r.mainSupplierName ? ` · ${r.mainSupplierName}` : ''}</span>
+          : <span className={styles.muted} style={{ color: 'var(--c-festive-b, #B8331F)' }}>— none —</span>,
+      searchValue: (r) => `${r.mainSupplierCode ?? ''} ${r.mainSupplierName ?? ''}`.trim(),
+      groupValue: (r) => r.mainSupplierName ?? r.mainSupplierCode ?? '(none)',
+    },
+    {
       key: 'itemCode', label: 'Item Code', width: 130, sortable: true,
       accessor: (r) => <span style={{ fontWeight: 600 }}>{r.itemCode}</span>,
       searchValue: (r) => r.itemCode ?? '',
@@ -267,7 +279,26 @@ export const PurchaseOrderFromSo = () => {
         window.alert(`Created ${res.total} PO${res.total === 1 ? '' : 's'}: ${summary}`);
         navigate('/purchase-orders');
       },
-      onError: (err) => window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => {
+        /* Commander 2026-05-28 — friendly message when the SKUs aren't bound to
+           a supplier yet (the #1 reason conversion produces no PO). The API
+           returns error:'missing_bindings' with the offending itemCodes; the
+           authedFetch error message embeds that JSON. */
+        const raw = err instanceof Error ? err.message : String(err);
+        let codes: string[] = [];
+        try {
+          const m = raw.match(/\{.*\}/);
+          if (m) { const j = JSON.parse(m[0]); if (j.error === 'missing_bindings' && Array.isArray(j.itemCodes)) codes = j.itemCodes; }
+        } catch { /* fall through to generic */ }
+        if (codes.length > 0) {
+          window.alert(
+            "These SKUs aren't bound to a supplier yet — assign them to a supplier first, then convert:\n\n"
+            + codes.map((c) => `• ${c}`).join('\n'),
+          );
+          return;
+        }
+        window.alert(`Create failed: ${raw}`);
+      },
     });
   };
 
@@ -369,6 +400,9 @@ export const PurchaseOrderFromSo = () => {
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.soItemId}
         searchPlaceholder="Search SO, customer, item…"
+        /* Commander 2026-05-28 — click anywhere on a row to toggle its pick
+           (the checkbox is just a visual). */
+        onRowClick={(r) => togglePick(r.soItemId, r.remainingQty)}
         toolbar={toolbar}
         groupBanner={false}
         isLoading={itemsQ.isLoading}

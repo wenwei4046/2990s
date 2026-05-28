@@ -83,6 +83,10 @@ export type DataGridProps<T> = {
   rowKey: (row: T) => string;
   searchPlaceholder?: string;
   onRowDoubleClick?: (row: T) => void;
+  /** Commander 2026-05-28 — single-click anywhere on a row fires this (in
+      addition to the highlight). Cells that stopPropagation (checkboxes,
+      inline inputs) won't trigger it. Used by PO-from-SO to toggle a pick. */
+  onRowClick?: (row: T) => void;
   onSelectionChange?: (rows: T[]) => void;
   toolbar?: ReactNode;
   /** controlled focus for the "Find" button — bump to focus the search box */
@@ -165,6 +169,7 @@ function DataGridInner<T>({
   rowKey,
   searchPlaceholder = 'Search…',
   onRowDoubleClick,
+  onRowClick,
   onSelectionChange,
   toolbar,
   focusSearchNonce,
@@ -710,7 +715,7 @@ function DataGridInner<T>({
                 <Fragment key={`f-${key}-${idx}`}>
                   <tr
                     className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
-                    onClick={() => setSelectedKey(key)}
+                    onClick={() => { setSelectedKey(key); onRowClick?.(row); }}
                     onDoubleClick={() => onRowDoubleClick?.(row)}
                     onContextMenu={(e) => {
                       if (!contextMenu) return;
