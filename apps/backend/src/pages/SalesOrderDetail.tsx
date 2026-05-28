@@ -44,7 +44,7 @@ import {
   type SoAuditEntry,
   type SoAuditFieldChange,
 } from '../lib/flow-queries';
-import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
 import {
   useLocalities,
@@ -387,6 +387,23 @@ export const SalesOrderDetail = () => {
     const blankLine = Object.values(editingDrafts).find((d) => !d.itemCode.trim());
     if (blankLine) {
       setSaveError('Every line must have a product selected before saving.');
+      return;
+    }
+    // Guard (Commander 2026-05-28): every required variant on a sofa/bedframe
+    // line must be chosen — no proceeding with blanks (purchasing needs the
+    // full spec). Blocks Save listing each line + its missing fields.
+    const variantGaps = [
+      ...Object.values(editingDrafts),
+      ...(addingDraft ? [addingDraft] : []),
+    ]
+      .filter((d) => d.itemCode.trim())
+      .map((d) => ({ code: d.itemCode, miss: missingRequiredVariants(d.itemGroup, d.variants) }))
+      .filter((x) => x.miss.length > 0);
+    if (variantGaps.length > 0) {
+      setSaveError(
+        'Complete all variant selections before saving — '
+        + variantGaps.map((x) => `${x.code}: ${x.miss.join(', ')}`).join('; ') + '.',
+      );
       return;
     }
 
