@@ -2098,6 +2098,9 @@ export const inventoryMovements = pgTable('inventory_movements', {
   warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   productCode:    text('product_code').notNull(),
   productName:    text('product_name'),
+  // Migration 0095 — attribute-composition bucket key (packages/shared
+  // computeVariantKey). '' = unclassified/legacy.
+  variantKey:     text('variant_key').notNull().default(''),
   qty:            integer('qty').notNull(),
   /* PR #37 — per-unit cost in sen. IN: provided by caller (from GRN/PI).
      OUT: computed by the FIFO trigger from consumed lots. */
@@ -2122,6 +2125,7 @@ export const inventoryLots = pgTable('inventory_lots', {
   warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   productCode:    text('product_code').notNull(),
   productName:    text('product_name'),
+  variantKey:     text('variant_key').notNull().default(''),  // migration 0095
   qtyReceived:    integer('qty_received').notNull(),
   qtyRemaining:   integer('qty_remaining').notNull(),
   unitCostSen:    integer('unit_cost_sen').notNull().default(0),
@@ -2227,6 +2231,7 @@ export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {
   lotId:          uuid('lot_id').notNull().references(() => inventoryLots.id, { onDelete: 'cascade' }),
   warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   productCode:    text('product_code').notNull(),
+  variantKey:     text('variant_key').notNull().default(''),  // migration 0095
   qtyConsumed:    integer('qty_consumed').notNull(),
   unitCostSen:    integer('unit_cost_sen').notNull(),
   totalCostSen:   integer('total_cost_sen').notNull(),
