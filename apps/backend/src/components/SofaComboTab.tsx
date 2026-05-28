@@ -335,13 +335,21 @@ function ComposerModal({
   });
   const [notes, setNotes] = useState(editing?.notes ?? '');
 
-  const toggleModule = (code: string) => {
-    setModules((cur) => cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]);
+  // Ordered positional slots (Hookka-style). Each slot picks ONE module; the
+  // same code may repeat across slots (a combo can have 2× the same piece).
+  // Order = position = array index. Empty slots are filtered out on save.
+  const setSlot = (idx: number, code: string) => {
+    setModules((cur) => cur.map((c, i) => (i === idx ? code : c)));
+  };
+  const addSlot = () => setModules((cur) => [...cur, '']);
+  const removeSlot = (idx: number) => {
+    setModules((cur) => cur.filter((_, i) => i !== idx));
   };
 
   const submit = async () => {
     if (!baseModel) return alert('Base model is required.');
-    if (modules.length === 0) return alert('Pick at least one module.');
+    const orderedModules = modules.map((c) => c.trim()).filter(Boolean);
+    if (orderedModules.length === 0) return alert('Add at least one module.');
 
     const pricesByHeight: Record<string, number | null> = {};
     for (const h of HEIGHTS) {
@@ -366,7 +374,7 @@ function ComposerModal({
       } else {
         await create.mutateAsync({
           baseModel,
-          modules,
+          modules: orderedModules,
           tier: tier || null,
           customerId: null,  // B2C: always null = applies to all customers
           pricesByHeight,
@@ -401,31 +409,50 @@ function ComposerModal({
           </datalist>
         </Field>
 
-        <Field label={`Modules (${modules.length} selected)`}>
+        <Field label={`Modules (${modules.filter((c) => c.trim()).length})`}>
           {editing ? (
             <div style={{ ...readonlyInputStyle, padding: 8 }}>
               {modules.join(' · ') || '—'}
             </div>
           ) : (
-            <div style={{
-              display: 'flex', flexWrap: 'wrap', gap: 4,
-              padding: 8, border: '1px solid var(--line)',
-              borderRadius: 'var(--radius-sm)', background: 'var(--c-cream)',
-              maxHeight: 160, overflowY: 'auto',
-            }}>
-              {ALL_MODULE_CODES.map((code) => {
-                const on = modules.includes(code);
-                return (
-                  <button
-                    type="button"
-                    key={code}
-                    onClick={() => toggleModule(code)}
-                    style={on ? moduleChipOn : moduleChipOff}
-                  >
-                    {code}
-                  </button>
-                );
-              })}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {modules.length === 0 ? (
+                <div style={{
+                  fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)',
+                  color: 'var(--fg-muted)', padding: '2px 0',
+                }}>
+                  No modules yet — add the first one.
+                </div>
+              ) : (
+                modules.map((code, idx) => (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={slotNumberStyle}>Module {idx + 1}</span>
+                    <select
+                      value={code}
+                      onChange={(e) => setSlot(idx, e.target.value)}
+                      style={{ ...selectStyle, flex: 1 }}
+                    >
+                      <option value="">— Select module —</option>
+                      {ALL_MODULE_CODES.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => removeSlot(idx)}
+                      title={`Remove Module ${idx + 1}`}
+                      style={iconBtnStyle}
+                    >
+                      <X size={14} strokeWidth={1.75} />
+                    </button>
+                  </div>
+                ))
+              )}
+              <div>
+                <Button variant="ghost" onClick={addSlot}>
+                  <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> Add Module
+                </Button>
+              </div>
             </div>
           )}
         </Field>
@@ -692,21 +719,13 @@ const ghostBtnStyle: CSSProperties = {
   gap: 4,
 };
 
-const moduleChipOn: CSSProperties = {
-  fontFamily: 'var(--font-mono)',
+const slotNumberStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)',
   fontSize: 'var(--fs-11)',
   fontWeight: 600,
-  background: 'var(--c-orange, #c47b2f)',
-  color: 'var(--c-paper, #fff)',
-  border: '1px solid var(--c-orange, #c47b2f)',
-  borderRadius: 'var(--radius-sm)',
-  padding: '2px 8px',
-  cursor: 'pointer',
-};
-
-const moduleChipOff: CSSProperties = {
-  ...moduleChipOn,
-  background: 'var(--c-paper)',
-  color: 'var(--c-ink)',
-  border: '1px solid var(--line-strong)',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  color: 'var(--fg-soft)',
+  minWidth: 72,
+  flexShrink: 0,
 };
