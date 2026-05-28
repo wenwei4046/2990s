@@ -527,7 +527,12 @@ export const PurchaseOrderNew = () => {
           <h2 className={styles.cardTitle}>Items</h2>
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
             {supplierId
-              ? `${bindings.length} item(s) bound to this supplier — picker filters to these`
+              ? (bindings.length > 0
+                  ? `${bindings.length} item(s) bound to this supplier — picker filters to these`
+                  // PR — Commander 2026-05-28: a supplier with no SKU bindings used
+                  // to leave the Item Code picker empty (dead field). Fall back to
+                  // the full catalogue so a one-off purchase is still pickable.
+                  : `No SKUs bound to this supplier yet — picker shows all ${(allSkus.data ?? []).length} SKUs (one-off purchase)`)
               : `Pick any item from ${(allSkus.data ?? []).length} SKUs — supplier auto-narrows`}
           </span>
         </div>
@@ -618,27 +623,34 @@ export const PurchaseOrderNew = () => {
                       value={l.materialCode}
                       onChange={(e) => {
                         const code = e.target.value;
-                        if (supplierId) {
-                          const match = bindings.find((b) => b.material_code === code);
-                          if (match) pickBinding(l.rid, match);
-                          else setLine(l.rid, { materialCode: code, bindingId: undefined, category: categoryForCode(code) });
-                        } else {
-                          const sku = (allSkus.data ?? []).find((p) => p.code === code);
-                          setLine(l.rid, {
-                            materialCode: code,
-                            materialName: sku?.name ?? l.materialName,
-                            bindingId: undefined,
-                            category: sku?.category.toLowerCase(),
-                          });
-                          setPendingItemPick(code ? { rid: l.rid, code } : null);
-                        }
+                        // Bound match wins (autofills supplier SKU + price).
+                        const match = supplierId
+                          ? bindings.find((b) => b.material_code === code)
+                          : undefined;
+                        if (match) { pickBinding(l.rid, match); return; }
+                        // No binding (no supplier yet, OR supplier has no binding
+                        // for this code) → one-off line: pull name + category
+                        // from the master SKU list so the row isn't left blank.
+                        const sku = (allSkus.data ?? []).find((p) => p.code === code);
+                        setLine(l.rid, {
+                          materialCode: code,
+                          materialName: sku?.name ?? l.materialName,
+                          bindingId: undefined,
+                          category: sku?.category.toLowerCase() ?? categoryForCode(code),
+                        });
+                        // Reverse supplier lookup only matters before a supplier
+                        // is chosen; once one is picked we don't re-narrow.
+                        if (!supplierId) setPendingItemPick(code ? { rid: l.rid, code } : null);
                       }}
                       placeholder="Type or pick our internal SKU…"
                       className={styles.fieldInput}
                       style={{ fontFamily: 'var(--font-mono)' }}
                     />
                     <datalist id={`bindings-${l.rid}`}>
-                      {supplierId
+                      {/* PR — Commander 2026-05-28: only show bound SKUs when the
+                          supplier actually HAS bindings; otherwise fall back to
+                          the full catalogue so the picker is never dead. */}
+                      {supplierId && bindings.length > 0
                         ? bindings.map((b) => (
                             <option key={b.id} value={b.material_code}>
                               {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
