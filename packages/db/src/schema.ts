@@ -2324,3 +2324,83 @@ export const journalEntryLines = pgTable('journal_entry_lines', {
   idxAccount: index('idx_jel_account').on(t.accountCode),
   idxParty:   index('idx_jel_party').on(t.partyType, t.partyCode),
 }));
+
+/* ════════════════════════════════════════════════════════════════════════
+   Warehouse rack/bin management (migration 0094 — ported from Hookka ERP)
+
+   A physical-location layer on top of `warehouses`: each warehouse is split
+   into racks, each rack holds zero-to-many stored items, and every stock-in /
+   stock-out / transfer is recorded in an append-only movement ledger.
+
+   Rack status (OCCUPIED / RESERVED / EMPTY) is derived from items + reserved
+   flag but persisted so the rack-grid list query stays a single SELECT.
+
+   Complementary to (not a replacement for) the FIFO ledger
+   (inventory_movements / inventory_lots): that tracks per-warehouse qty + cost
+   basis, these track *where in the warehouse* a finished item physically sits.
+   ════════════════════════════════════════════════════════════════════════ */
+
+// Status + movement-type are TEXT + CHECK in the DB (migration 0094), not real
+// Postgres enums — kept that way so the value set can grow without an enum
+// ALTER. The allowed values are documented on each column below.
+export const warehouseRacks = pgTable('warehouse_racks', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  warehouseId: uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'cascade' }),
+  rack:        text('rack').notNull(),                // 'Rack 1' … 'Rack N' — unique per warehouse
+  position:    text('position'),                      // optional finer position (level/column)
+  // Derived (OCCUPIED when items present, RESERVED when reserved flag set,
+  // else EMPTY) but persisted so the grid list stays a single SELECT.
+  // Allowed values: 'OCCUPIED' | 'EMPTY' | 'RESERVED'.
+  status:      text('status').notNull().default('EMPTY'),
+  reserved:    boolean('reserved').notNull().default(false),
+  notes:       text('notes'),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqWhRack:   uniqueIndex('warehouse_racks_warehouse_rack_key').on(t.warehouseId, t.rack),
+  idxWarehouse: index('idx_warehouse_racks_warehouse').on(t.warehouseId, t.rack),
+  idxStatus:    index('idx_warehouse_racks_status').on(t.status),
+  statusEnum:   check('warehouse_racks_status_chk', sql`status IN ('OCCUPIED','EMPTY','RESERVED')`),
+}));
+
+export const warehouseRackItems = pgTable('warehouse_rack_items', {
+  id:            uuid('id').primaryKey().defaultRandom(),
+  rackId:        uuid('rack_id').notNull().references(() => warehouseRacks.id, { onDelete: 'cascade' }),
+  productCode:   text('product_code').notNull(),
+  productName:   text('product_name'),
+  sizeLabel:     text('size_label'),
+  customerName:  text('customer_name'),
+  sourceDocNo:   text('source_doc_no'),               // optional ref to the SO/doc that stocked it in
+  qty:           integer('qty').notNull().default(1),
+  stockedInDate: date('stocked_in_date').notNull().defaultNow(),
+  notes:         text('notes'),
+  createdAt:     timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxRack:    index('idx_warehouse_rack_items_rack').on(t.rackId),
+  idxProduct: index('idx_warehouse_rack_items_product').on(t.productCode),
+  qtyPos:     check('warehouse_rack_items_qty_pos', sql`qty > 0`),
+}));
+
+export const warehouseRackMovements = pgTable('warehouse_rack_movements', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  // Allowed values: 'STOCK_IN' | 'STOCK_OUT' | 'TRANSFER'.
+  movementType: text('movement_type').notNull(),
+  // Kept loose (no FK) so movement history survives a rack being deleted /
+  // renamed — the rack_label snapshot preserves the display.
+  rackId:       uuid('rack_id'),
+  rackLabel:    text('rack_label'),
+  warehouseId:  uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  productCode:  text('product_code'),
+  productName:  text('product_name'),
+  sourceDocNo:  text('source_doc_no'),
+  quantity:     integer('quantity').notNull().default(1),
+  reason:       text('reason'),
+  performedBy:  uuid('performed_by').references(() => staff.id, { onDelete: 'set null' }),
+  createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxType:    index('idx_warehouse_rack_movements_type').on(t.movementType),
+  idxRack:    index('idx_warehouse_rack_movements_rack').on(t.rackId),
+  idxCreated: index('idx_warehouse_rack_movements_created').on(t.createdAt),
+  typeEnum:   check('warehouse_rack_movements_type_chk',
+    sql`movement_type IN ('STOCK_IN','STOCK_OUT','TRANSFER')`),
+}));
