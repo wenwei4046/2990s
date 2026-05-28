@@ -298,3 +298,43 @@
   color: var(--fg-muted);
   padding: var(--space-6);
 }
+
+/* In-app result dialog (replaces browser alert/confirm). */
+.dialogBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  padding: var(--space-4);
+}
+.dialog {
+  background: var(--c-paper);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-3);
+  width: min(440px, 95vw);
+  padding: var(--space-5);
+}
+.dialogTitle {
+  font-family: var(--font-title);
+  font-weight: 700;
+  font-size: var(--fs-18, 18px);
+  color: var(--c-ink);
+  margin: 0 0 var(--space-2);
+}
+.dialogBody {
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  color: var(--c-ink);
+  margin: 0 0 var(--space-4);
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

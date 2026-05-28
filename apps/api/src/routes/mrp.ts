@@ -53,6 +53,7 @@ type DemandRow = {
     debtor_name: string | null;
     status: string;
     customer_delivery_date: string | null;
+    internal_expected_dd: string | null; // processing date (drives when to order)
   } | null;
 };
 
@@ -88,6 +89,7 @@ type MrpLine = {
   soDocNo: string;
   debtorName: string | null;
   deliveryDate: string | null;
+  processingDate: string | null;
   qty: number;
   source: AllocSource;
   poNumber: string | null;
@@ -134,7 +136,7 @@ mrp.get('/', async (c) => {
     .from('mfg_sales_order_items')
     .select(`
       id, doc_no, item_code, description, item_group, variants, qty, line_delivery_date, cancelled,
-      so:mfg_sales_orders!inner ( debtor_name, status, customer_delivery_date )
+      so:mfg_sales_orders!inner ( debtor_name, status, customer_delivery_date, internal_expected_dd )
     `)
     .eq('cancelled', false)
     .limit(5000);
@@ -244,8 +246,18 @@ mrp.get('/', async (c) => {
 
     let stockLeft = stockByKey.get(k) ?? 0;
     // Clone PO supply so the greedy walk can mutate qtyLeft without touching
-    // the shared map.
-    const poQueue: PoSupply[] = (poByKey.get(k) ?? []).map((p) => ({ ...p }));
+    // the shared map. Commander 2026-05-29 — also fold in the SKU's
+    // EMPTY-variant PO pool (legacy POs created before SO→PO carried variants:
+    // their line has no variant → key ''). Without this, a PO you just raised
+    // for a bedframe wouldn't show as "PO Outstanding" against the variant row.
+    // New POs (post-fix) carry the variant and match exactly, so the legacy
+    // pool is empty for them.
+    const legacyKey = composite(code, '');
+    const useLegacy = bucket.vkey !== '' && legacyKey !== k;
+    const poQueue: PoSupply[] = [
+      ...(poByKey.get(k) ?? []),
+      ...(useLegacy ? (poByKey.get(legacyKey) ?? []) : []),
+    ].map((p) => ({ ...p })).sort((a, b) => byDateAsc(a.eta, b.eta));
 
     const lines: MrpLine[] = [];
     let qtyNeeded = 0;
@@ -274,6 +286,7 @@ mrp.get('/', async (c) => {
         soDocNo: r.doc_no,
         debtorName: r.so?.debtor_name ?? null,
         deliveryDate: r.line_delivery_date ?? r.so?.customer_delivery_date ?? null,
+        processingDate: r.so?.internal_expected_dd ?? null,
         qty: r.qty,
         source,
         poNumber,
@@ -283,7 +296,8 @@ mrp.get('/', async (c) => {
     }
 
     const stock = stockByKey.get(k) ?? 0;
-    const poOutstanding = poOutstandingByKey.get(k) ?? 0;
+    const poOutstanding = (poOutstandingByKey.get(k) ?? 0)
+      + (useLegacy ? (poOutstandingByKey.get(legacyKey) ?? 0) : 0);
     const shortage = Math.max(0, qtyNeeded - stock - poOutstanding);
     const main = mainByCode.get(code);
     skus.push({
