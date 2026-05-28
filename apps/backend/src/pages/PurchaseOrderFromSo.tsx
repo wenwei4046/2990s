@@ -275,6 +275,13 @@ export const PurchaseOrderFromSo = () => {
     };
     create.mutate(body, {
       onSuccess: (res) => {
+        /* Commander 2026-05-28 — a 0-PO "success" means the picked lines had no
+           main supplier to group under. Don't show a hollow "Created 0 POs"; tell
+           the user to assign suppliers (the Main Supplier column flags which). */
+        if (!res.total) {
+          window.alert("No POs created — the selected SKUs aren't bound to a supplier yet. Assign each SKU a supplier (see the Main Supplier column showing “— none —”), then convert again.");
+          return;
+        }
         const summary = res.created.map((p) => p.poNumber).join(', ');
         window.alert(`Created ${res.total} PO${res.total === 1 ? '' : 's'}: ${summary}`);
         navigate('/purchase-orders');
