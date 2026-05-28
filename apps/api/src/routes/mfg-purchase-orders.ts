@@ -16,7 +16,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -431,12 +431,13 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   // + delivery date below.
   type SoItem = {
     id: string; doc_no: string; item_code: string; description: string | null;
+    item_group: string | null; variants: Record<string, unknown> | null;
     qty: number; po_qty_picked: number; unit_price_centi: number;
     line_delivery_date: string | null;
     so: { sales_location: string | null; customer_delivery_date: string | null } | null;
   };
   const SO_ITEM_SELECT =
-    'id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
+    'id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
     'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
   // supabase-js returns the embedded parent as an object OR a 1-element array
   // depending on the relationship — normalise to a single object.
@@ -485,6 +486,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       pickedItems.push({
         row: row ?? {
           id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName,
+          item_group: null, variants: null,
           qty: it.qty, po_qty_picked: 0, unit_price_centi: 0,
           line_delivery_date: null, so: null,
         },
@@ -514,6 +516,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       soDocNo:  row.doc_no,
       itemCode: row.item_code,
       itemName: row.description ?? row.item_code,
+      itemGroup: row.item_group,
+      variants: row.variants,
       qty,
       lineWarehouseId,
       lineDeliveryDate,
@@ -570,6 +574,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   type Line = {
     itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
     warehouseId: string | null; deliveryDate: string | null;
+    itemGroup: string | null; variants: Record<string, unknown> | null;
   };
   type Bucket = { supplierId: string; currency: string; lines: Line[]; soDocNos: Set<string> };
   const byGroup = new Map<string, Bucket>();
@@ -586,10 +591,36 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       unitPriceCenti: b.unit_price_centi,
       warehouseId: it.lineWarehouseId,
       deliveryDate: it.lineDeliveryDate,
+      itemGroup: it.itemGroup,
+      variants: it.variants,
     });
     bucket.soDocNos.add(it.soDocNo);
     byGroup.set(groupKey, bucket);
   }
+
+  /* Commander 2026-05-29 — consolidate lines: the SAME SKU + variant from
+     different SOs merges into ONE PO line with the qty summed (e.g. (K)×2 +
+     (K)×3 → (K)×5), instead of two separate lines. Keep the earliest delivery
+     date (turnover-safe — order to the soonest need) and the most-common
+     warehouse. po_qty_picked tracking is unaffected (it's keyed by SO item id,
+     handled separately below). */
+  const consolidateLines = (lines: Line[]): Line[] => {
+    const merged = new Map<string, Line>();
+    for (const l of lines) {
+      const vkey = computeVariantKey(l.itemGroup, (l.variants ?? null) as VariantAttrs | null);
+      const key = `${l.itemCode}${vkey}`;
+      const cur = merged.get(key);
+      if (!cur) { merged.set(key, { ...l }); continue; }
+      cur.qty += l.qty;
+      // earliest non-null delivery date wins
+      if (l.deliveryDate && (!cur.deliveryDate || l.deliveryDate < cur.deliveryDate)) {
+        cur.deliveryDate = l.deliveryDate;
+      }
+      cur.warehouseId = cur.warehouseId ?? l.warehouseId;
+    }
+    return [...merged.values()];
+  };
+  for (const bucket of byGroup.values()) bucket.lines = consolidateLines(bucket.lines);
 
   // Generate PO numbers + create one PO per supplier.
   const d = new Date();
@@ -664,6 +695,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
          may be null when the SO didn't carry them — that's allowed. */
       delivery_date: l.deliveryDate,
       warehouse_id:  l.warehouseId,
+      /* Commander 2026-05-29 — carry the variant through to the PO so the line
+         shows its config + the MRP can match outstanding PO supply by variant. */
+      item_group: l.itemGroup,
+      variants: l.variants,
+      description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {
