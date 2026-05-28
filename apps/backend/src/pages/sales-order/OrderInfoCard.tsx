@@ -45,6 +45,11 @@ const OrderInfoCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, l
   const set = <K extends keyof typeof form>(k: K, v: string) =>
     setForm((s) => ({ ...s, [k]: v }));
 
+  /* Commander 2026-05-28 — Processing Date + Delivery Date may only be today
+     or a future date (no past dates). Used as the <input min> + validated on
+     Save. en-CA renders the local YYYY-MM-DD. */
+  const today = new Date().toLocaleDateString('en-CA');
+
   /* PR #156 — XOR rule: both dates set together or neither. */
   const datesXor =
     (form.processingDate.trim() !== '') !== (form.customerDeliveryDate.trim() !== '');
@@ -67,6 +72,14 @@ const OrderInfoCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, l
       if (xor) {
         return 'Processing Date and Delivery Date must be set together.\n\n' +
           'Either fill in BOTH dates, or leave BOTH empty.';
+      }
+      // Commander 2026-05-28 — no past dates.
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      if (f.processingDate && f.processingDate < todayStr) {
+        return 'Processing Date cannot be in the past — pick today or a future date.';
+      }
+      if (f.customerDeliveryDate && f.customerDeliveryDate < todayStr) {
+        return 'Delivery Date cannot be in the past — pick today or a future date.';
       }
       return null;
     },
@@ -126,6 +139,7 @@ const OrderInfoCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, l
               className={styles.fieldInput}
               value={form.processingDate}
               disabled={inputsDisabled}
+              min={today}
               onChange={(e) => set('processingDate', e.target.value)}
               style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
             />
@@ -137,6 +151,7 @@ const OrderInfoCardInner = forwardRef<CardHandle, Props>(({ header, isEditing, l
               className={styles.fieldInput}
               value={form.customerDeliveryDate}
               disabled={inputsDisabled}
+              min={today}
               onChange={(e) => set('customerDeliveryDate', e.target.value)}
               style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
             />

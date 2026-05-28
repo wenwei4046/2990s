@@ -359,6 +359,17 @@ mfgSalesOrders.post('/', async (c) => {
         reason: 'Processing Date and Delivery Date must be set together (or both left empty).',
       }, 400);
     }
+    /* Commander 2026-05-28 — Processing Date + Delivery Date can only be today
+       or in the future; a past date is rejected. "Today" is Malaysia time
+       (UTC+8) so an early-UTC request near midnight doesn't wrongly reject a
+       valid MY today. */
+    const todayMY = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    if (procDate && procDate < todayMY) {
+      return c.json({ error: 'processing_date_past', reason: 'Processing Date cannot be in the past — today or a future date only.' }, 400);
+    }
+    if (delivDate && delivDate < todayMY) {
+      return c.json({ error: 'delivery_date_past', reason: 'Delivery Date cannot be in the past — today or a future date only.' }, 400);
+    }
     if (items.length > 0) {
       const lineCodes = items.map((it) => String(it.itemCode ?? '')).filter(Boolean);
       const metaByCode = new Map<string, { category: string; branding: string | null }>();
@@ -1104,6 +1115,20 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Commander 2026-05-28 — Processing Date + Delivery Date can only be today or
+     a future date. Reject a past value on edit too (today = Malaysia UTC+8). */
+  {
+    const todayMY = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const proc = body['internalExpectedDd'];
+    const deliv = body['customerDeliveryDate'];
+    if (typeof proc === 'string' && proc && proc < todayMY) {
+      return c.json({ error: 'processing_date_past', reason: 'Processing Date cannot be in the past — today or a future date only.' }, 400);
+    }
+    if (typeof deliv === 'string' && deliv && deliv < todayMY) {
+      return c.json({ error: 'delivery_date_past', reason: 'Delivery Date cannot be in the past — today or a future date only.' }, 400);
+    }
+  }
 
   const map: Array<[string, string]> = [
     ['debtorCode', 'debtor_code'], ['debtorName', 'debtor_name'], ['agent', 'agent'],
