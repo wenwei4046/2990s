@@ -316,7 +316,8 @@ export const SoLineItemModal = ({
                     onChange={(v) => setVariant('legHeight', v)}
                   />
                   <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Fabric Code</span>
+                    {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricCode unchanged. */}
+                    <span className={styles.fieldLabel}>Fabrics</span>
                     <select
                       className={styles.fieldSelect}
                       value={String(draft.variants.fabricCode ?? '')}
@@ -331,7 +332,11 @@ export const SoLineItemModal = ({
                     </select>
                   </label>
                   <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Color Code</span>
+                    {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
+                        Adjacent "Fabrics" select stays; qualify this one as
+                        "Fabrics (Color)" to avoid a near-duplicate label.
+                        Key colorCode unchanged. */}
+                    <span className={styles.fieldLabel}>Fabrics (Color)</span>
                     <input
                       className={styles.fieldInput}
                       placeholder="e.g. PC151-04"

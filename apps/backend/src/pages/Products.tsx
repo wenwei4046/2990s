@@ -3224,7 +3224,8 @@ const NewSkuDrawer = ({ onClose }: { onClose: () => void }) => {
             <Field label="Size Label" value={form.sizeLabel} onChange={(v) => set('sizeLabel', v)} />
             {isSofa && <Field label="Base Model" value={form.baseModel} onChange={(v) => set('baseModel', v)} />}
             {isMattress && <Field label="Branding" value={form.branding} onChange={(v) => set('branding', v)} placeholder="e.g. Sealy" />}
-            {isSofa && <Field label="Fabric Color" value={form.fabricColor} onChange={(v) => set('fabricColor', v)} />}
+            {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
+            {isSofa && <Field label="Fabrics" value={form.fabricColor} onChange={(v) => set('fabricColor', v)} />}
             <Field label="Description" value={form.description} onChange={(v) => set('description', v)} fullWidth />
 
             <Field label={isMattress ? 'Price (RM)' : 'Base Price / Price 2 (RM)'}

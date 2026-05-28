@@ -868,11 +868,13 @@ export function missingRequiredVariants(
 ): string[] {
   const g = (itemGroup ?? '').toLowerCase();
   const v = variants ?? {};
+  // Commander 2026-05-28 — unify fabric/colour term → "Fabrics" in the
+  // user-facing "missing required" messages. Keys unchanged.
   const need: Array<[string, string]> =
     g === 'bedframe'
-      ? [['fabricCode', 'Fabric'], ['gap', 'Gap'], ['divanHeight', 'Divan Height'], ['legHeight', 'Leg Height']]
+      ? [['fabricCode', 'Fabrics'], ['gap', 'Gap'], ['divanHeight', 'Divan Height'], ['legHeight', 'Leg Height']]
       : g === 'sofa'
-        ? [['fabricCode', 'Fabric'], ['seatHeight', 'Seat Height'], ['legHeight', 'Leg Height']]
+        ? [['fabricCode', 'Fabrics'], ['seatHeight', 'Seat Height'], ['legHeight', 'Leg Height']]
         : [];
   return need
     .filter(([k]) => {

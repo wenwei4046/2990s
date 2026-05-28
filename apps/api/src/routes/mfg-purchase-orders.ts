@@ -90,12 +90,17 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
   const supabase = c.get('supabase');
   // Pull SO items with remaining qty > 0, joining the parent SO so we
   // can filter cancelled SOs + show debtor + branding + dates.
+  /* Commander 2026-05-28 — PO-from-SO redesign. Surface three extra fields
+     so the frontend grid can render Processing Date + derive each PO line's
+     warehouse (from the SO's sales_location) + delivery date (from the SO
+     LINE's own line_delivery_date). internal_expected_dd + sales_location
+     come off the SO header; line_delivery_date off the item. */
   const { data: items, error } = await supabase
     .from('mfg_sales_order_items')
     .select(`
       id, doc_no, item_code, description, item_group, qty, po_qty_picked, unit_price_centi,
-      variants, line_suffix, cancelled,
-      so:mfg_sales_orders!inner ( doc_no, debtor_name, branding, status, so_date, customer_delivery_date )
+      variants, line_suffix, cancelled, line_delivery_date,
+      so:mfg_sales_orders!inner ( doc_no, debtor_name, branding, status, so_date, customer_delivery_date, internal_expected_dd, sales_location )
     `)
     .eq('cancelled', false)
     .order('doc_no', { ascending: false })
@@ -106,7 +111,12 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
     id: string; doc_no: string; item_code: string; description: string | null;
     item_group: string; qty: number; po_qty_picked: number; unit_price_centi: number;
     variants: unknown; line_suffix: string | null; cancelled: boolean;
-    so: { doc_no: string; debtor_name: string | null; branding: string | null; status: string; so_date: string; customer_delivery_date: string | null };
+    line_delivery_date: string | null;
+    so: {
+      doc_no: string; debtor_name: string | null; branding: string | null; status: string;
+      so_date: string; customer_delivery_date: string | null;
+      internal_expected_dd: string | null; sales_location: string | null;
+    };
   };
 
   const outstanding = ((items ?? []) as unknown as Row[])
@@ -129,6 +139,10 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
       unitPriceCenti:  r.unit_price_centi,
       variants:        r.variants,
       lineSuffix:      r.line_suffix,
+      // Commander 2026-05-28 — new fields for the redesigned PO-from-SO grid.
+      processingDate:   r.so.internal_expected_dd,
+      salesLocation:    r.so.sales_location,
+      lineDeliveryDate: r.line_delivery_date,
     }));
 
   return c.json({ items: outstanding });
@@ -343,27 +357,68 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
-  // PR #157 — Commander 2026-05-26: every PO must have Expected Delivery +
-  // Purchase Location. Bulk-convert applies the same defaults to every PO
-  // created from the batch.
-  const expectedAt = body.expectedAt;
-  if (!expectedAt) return c.json({ error: 'expected_at_required' }, 400);
-  const purchaseLocationId = body.purchaseLocationId;
-  if (!purchaseLocationId) return c.json({ error: 'purchase_location_id_required' }, 400);
+  /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
+     are NO LONGER asked or required. They are derived per-line from the source
+     SO instead:
+       - each PO line's warehouse  = the SO header's `sales_location` resolved
+         to a warehouse id (case-insensitive name/code match; null if no match)
+       - each PO line's delivery date = the SO LINE's `line_delivery_date`,
+         falling back to the SO header `customer_delivery_date`
+       - PO header expected_at = earliest non-null line delivery date, else null
+       - PO header purchase_location_id = most-common resolved line warehouse,
+         else null
+     Optional overrides are still honoured if a caller sends them (defense-in-
+     depth for legacy callers), but neither is mandatory. */
+  const expectedAtOverride = body.expectedAt;
+  const purchaseLocationOverride = body.purchaseLocationId;
+
+  // Preload the warehouses list ONCE for the sales_location text → id match.
+  const { data: whRows } = await supabase
+    .from('warehouses')
+    .select('id, code, name');
+  type Wh = { id: string; code: string | null; name: string | null };
+  const warehouses = (whRows ?? []) as Wh[];
+  const resolveWarehouseId = (salesLocation: string | null | undefined): string | null => {
+    const needle = (salesLocation ?? '').trim().toLowerCase();
+    if (!needle) return null;
+    const hit = warehouses.find(
+      (w) => (w.name ?? '').trim().toLowerCase() === needle
+          || (w.code ?? '').trim().toLowerCase() === needle,
+    );
+    return hit?.id ?? null;
+  };
 
   // ── Resolve picks → SO item rows ─────────────────────────────────
-  type SoItem = { id: string; doc_no: string; item_code: string; description: string | null; qty: number; po_qty_picked: number; unit_price_centi: number };
+  // Commander 2026-05-28 — also load line_delivery_date + the parent SO's
+  // sales_location + customer_delivery_date so we can derive per-line warehouse
+  // + delivery date below.
+  type SoItem = {
+    id: string; doc_no: string; item_code: string; description: string | null;
+    qty: number; po_qty_picked: number; unit_price_centi: number;
+    line_delivery_date: string | null;
+    so: { sales_location: string | null; customer_delivery_date: string | null } | null;
+  };
+  const SO_ITEM_SELECT =
+    'id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
+    'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
+  // supabase-js returns the embedded parent as an object OR a 1-element array
+  // depending on the relationship — normalise to a single object.
+  const normSo = (r: { so: unknown }): SoItem['so'] => {
+    const raw = (r as { so: unknown }).so;
+    if (Array.isArray(raw)) return (raw[0] as SoItem['so']) ?? null;
+    return (raw as SoItem['so']) ?? null;
+  };
   let pickedItems: Array<{ row: SoItem; qty: number }> = [];
 
   if (body.picks && body.picks.length > 0) {
     const ids = body.picks.map((p) => p.soItemId);
     const { data: rows, error } = await supabase
       .from('mfg_sales_order_items')
-      .select('id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi')
+      .select(SO_ITEM_SELECT)
       .in('id', ids);
     if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
     const byId = new Map<string, SoItem>();
-    for (const r of (rows ?? []) as SoItem[]) byId.set(r.id, r);
+    for (const r of (rows ?? []) as unknown as SoItem[]) byId.set(r.id, { ...r, so: normSo(r) });
     // Validate qty ≤ (row.qty - row.po_qty_picked)
     for (const p of body.picks) {
       const row = byId.get(p.soItemId);
@@ -382,16 +437,20 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const docNos = [...new Set(soItems.map((it) => it.soDocNo))];
     const { data: rows } = await supabase
       .from('mfg_sales_order_items')
-      .select('id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi')
+      .select(SO_ITEM_SELECT)
       .in('doc_no', docNos)
       .in('item_code', codes);
     const byKey = new Map<string, SoItem>();
-    for (const r of (rows ?? []) as SoItem[]) byKey.set(`${r.doc_no}|${r.item_code}`, r);
+    for (const r of (rows ?? []) as unknown as SoItem[]) byKey.set(`${r.doc_no}|${r.item_code}`, { ...r, so: normSo(r) });
     for (const it of soItems) {
       const row = byKey.get(`${it.soDocNo}|${it.itemCode}`);
       // Even if no SO row found, fabricate a minimal one so PO still gets created.
       pickedItems.push({
-        row: row ?? { id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName, qty: it.qty, po_qty_picked: 0, unit_price_centi: 0 },
+        row: row ?? {
+          id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName,
+          qty: it.qty, po_qty_picked: 0, unit_price_centi: 0,
+          line_delivery_date: null, so: null,
+        },
         qty: it.qty,
       });
     }
@@ -400,12 +459,29 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   if (pickedItems.length === 0) return c.json({ error: 'no_pickable_lines' }, 400);
 
   // Re-project into the legacy soItems shape for the rest of the handler.
-  const soItems = pickedItems.map(({ row, qty }) => ({
-    soDocNo:  row.doc_no,
-    itemCode: row.item_code,
-    itemName: row.description ?? row.item_code,
-    qty,
-  }));
+  // Commander 2026-05-28 — carry the per-line derived warehouse + delivery
+  // date so they survive the supplier grouping below.
+  const soItems = pickedItems.map(({ row, qty }) => {
+    // Per-line warehouse = SO header sales_location resolved to a warehouse id;
+    // a caller-sent purchaseLocationId override wins if present.
+    const lineWarehouseId =
+      (purchaseLocationOverride as string | undefined) ?? resolveWarehouseId(row.so?.sales_location);
+    // Per-line delivery date = SO LINE's own date, falling back to the SO
+    // header customer_delivery_date; an explicit override wins if present.
+    const lineDeliveryDate =
+      (expectedAtOverride as string | undefined)
+      ?? row.line_delivery_date
+      ?? row.so?.customer_delivery_date
+      ?? null;
+    return {
+      soDocNo:  row.doc_no,
+      itemCode: row.item_code,
+      itemName: row.description ?? row.item_code,
+      qty,
+      lineWarehouseId,
+      lineDeliveryDate,
+    };
+  });
 
   // Resolve main supplier per item via supplier_material_bindings.
   const codes = [...new Set(soItems.map((it) => it.itemCode))];
@@ -433,7 +509,12 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   }
 
   // Group items by supplier.
-  type Line = { itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number };
+  // Commander 2026-05-28 — each line carries its own derived warehouse +
+  // delivery date (from the source SO), so they ride through to the insert.
+  type Line = {
+    itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
+    warehouseId: string | null; deliveryDate: string | null;
+  };
   const bySupplier = new Map<string, { currency: string; lines: Line[] }>();
   for (const it of soItems) {
     const b = mainByCode.get(it.itemCode)!;
@@ -444,6 +525,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       qty: it.qty,
       supplierSku: b.supplier_sku,
       unitPriceCenti: b.unit_price_centi,
+      warehouseId: it.lineWarehouseId,
+      deliveryDate: it.lineDeliveryDate,
     });
     bySupplier.set(b.supplier_id, bucket);
   }
@@ -463,6 +546,26 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const poNumber = `PO-${yymm}-${String(counter).padStart(3, '0')}`;
     const subtotal = bucket.lines.reduce((s, l) => s + l.qty * l.unitPriceCenti, 0);
 
+    /* Commander 2026-05-28 — derive the PO HEADER fields from this PO's lines:
+         expected_at          = earliest non-null line delivery date, else null
+         purchase_location_id = most-common resolved line warehouse, else first,
+                                else null */
+    const lineDates = bucket.lines
+      .map((l) => l.deliveryDate)
+      .filter((d): d is string => Boolean(d))
+      .sort();
+    const headerExpectedAt = lineDates[0] ?? null;
+
+    const whCounts = new Map<string, number>();
+    for (const l of bucket.lines) {
+      if (l.warehouseId) whCounts.set(l.warehouseId, (whCounts.get(l.warehouseId) ?? 0) + 1);
+    }
+    let headerPurchaseLocationId: string | null = null;
+    let bestCount = 0;
+    for (const [wid, n] of whCounts.entries()) {
+      if (n > bestCount) { bestCount = n; headerPurchaseLocationId = wid; }
+    }
+
     const { data: headerData, error: hErr } = await supabase
       .from('purchase_orders')
       .insert({
@@ -477,9 +580,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
         total_centi: subtotal,
         notes: `From SOs: ${[...new Set(soItems.map((i) => i.soDocNo))].join(', ')}`,
         created_by: user.id,
-        /* PR #157 — required header fields applied to every PO in this batch. */
-        expected_at: expectedAt,
-        purchase_location_id: purchaseLocationId,
+        /* Commander 2026-05-28 — derived from the source SO lines, not asked. */
+        expected_at: headerExpectedAt,
+        purchase_location_id: headerPurchaseLocationId,
       })
       .select('id, po_number')
       .single();
@@ -495,11 +598,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       qty: l.qty,
       unit_price_centi: l.unitPriceCenti,
       line_total_centi: l.qty * l.unitPriceCenti,
-      /* PR #157 — per-line delivery + warehouse default to the PO header
-         values so GRN downstream knows where to receive. Commander can
-         override on the PO detail page if needed. */
-      delivery_date: expectedAt,
-      warehouse_id:  purchaseLocationId,
+      /* Commander 2026-05-28 — per-line delivery date = the source SO LINE's
+         date; per-line warehouse = the SO's sales_location warehouse. Both
+         may be null when the SO didn't carry them — that's allowed. */
+      delivery_date: l.deliveryDate,
+      warehouse_id:  l.warehouseId,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {

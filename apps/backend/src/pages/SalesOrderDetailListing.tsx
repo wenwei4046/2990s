@@ -40,6 +40,7 @@ import {
   ArrowLeft, ClipboardList, Printer, Eye, Filter, X, Search, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ItemGroupPill, BrandingPill, badgeFor } from '../lib/category-badges';
 import {
@@ -186,7 +187,23 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
     },
     /* 7 */ {
       key: 'description', label: 'Description', width: 220, sortable: true,
-      accessor: (r) => (r.description ?? '—'),
+      /* Commander 2026-05-28 — render the HOOKKA-style merged variant
+         summary as a muted second line beneath the product description.
+         `variants` rides along on the flattened row (Record<string,unknown>)
+         even though it isn't a typed field. */
+      accessor: (r) => {
+        const variants = (r as Record<string, unknown>).variants as
+          Record<string, unknown> | null | undefined;
+        const summary = buildVariantSummary(r.item_group, variants);
+        return (
+          <div>
+            <div>{r.description ?? '—'}</div>
+            {summary && (
+              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
+            )}
+          </div>
+        );
+      },
       searchValue: (r) => r.description ?? '',
     },
     /* 8 */ {
@@ -279,7 +296,9 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
     /* 19 — Task #63: typed read from variants->>'fabricColor' (extracted
        server-side as `fabric` on the row). */
     {
-      key: 'fabric', label: 'Fabric', width: 120, sortable: true,
+      /* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
+         Column key 'fabric' unchanged; only the display label. */
+      key: 'fabric', label: 'Fabrics', width: 120, sortable: true,
       accessor: (r) => r.fabric ?? '—',
       searchValue: (r) => r.fabric ?? '',
     },

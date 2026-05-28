@@ -461,6 +461,12 @@ export type OutstandingSoItem = {
   unitPriceCenti: number;
   variants:       unknown;
   lineSuffix:     string | null;
+  /* Commander 2026-05-28 — PO-from-SO redesign extras. processingDate +
+     salesLocation come off the SO header; lineDeliveryDate is the SO LINE's
+     own delivery date (used to derive the PO line's warehouse + date). */
+  processingDate:   string | null;
+  salesLocation:    string | null;
+  lineDeliveryDate: string | null;
 };
 
 export function useOutstandingSoItems() {
@@ -594,8 +600,11 @@ export function useCreatePosFromSoItems() {
   return useMutation({
     mutationFn: (body: {
       picks: Array<{ soItemId: string; qty: number }>;
-      expectedAt: string;
-      purchaseLocationId: string;
+      /* Commander 2026-05-28 — Expected Delivery + Purchase Location are no
+         longer asked: the server derives them per-line from the source SO.
+         Kept optional for any legacy caller that still wants to force them. */
+      expectedAt?: string;
+      purchaseLocationId?: string;
     }) =>
       authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
         `/mfg-purchase-orders/from-sos`,
