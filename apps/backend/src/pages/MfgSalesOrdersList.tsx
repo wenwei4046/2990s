@@ -169,6 +169,15 @@ type SoRow = {
      per-line fetch that drives Stock Status. Lets the Branding column tell
      SOFA from MATTRESS even though they share one header revenue column. */
   item_categories?: string[];
+  /* Branding refinement (Commander PR #266): the Branding column now follows
+     the SO's FIRST line item rather than collapsing to "Mixed". The API hands
+     back the earliest-created line's normalized category + its own branding:
+       · first_item_category  — 'SOFA' | 'MATTRESS' | 'BEDFRAME' | 'ACCESSORY' | 'OTHERS'
+       · first_item_branding  — the line's branding text (mattress brand, e.g.
+                                "HAPPISLEEP" / "CARRES"); falls back server-side
+                                to mfg_products.branding when the line is blank. */
+  first_item_category?: string;
+  first_item_branding?: string | null;
 };
 
 const fmtRm = (centi: number): string =>
@@ -196,28 +205,27 @@ const liveBalance = (r: SoRow): number => {
   return r.local_total_centi - (r.paid_centi ?? 0);
 };
 
-/* Branding auto-derive (Commander 2026-05-28). The Branding column is no
-   longer a stored free-text field — it's derived per row from the SO's
-   line-item categories (`item_categories`, supplied by the SO list API from
-   the per-line fetch). Rules:
-     · only SOFA              → "2990 Sofa"
-     · only MATTRESS          → "2990 Mattress"
-     · only BEDFRAME          → "Bedframe"
-     · more than one category → "Mixed"
-     · none                   → "" (column renders "—")
-   ACCESSORY-only / OTHERS-only SOs (no furniture brand) fall through to "".
-   Sortable + groupable via the same derived string. */
-const BRAND_CATEGORIES = new Set(['SOFA', 'MATTRESS', 'BEDFRAME']);
+/* Branding auto-derive (Commander 2026-05-28, refined PR #266). The Branding
+   column is derived per row — no longer stored free-text. It now FOLLOWS THE
+   FIRST LINE ITEM rather than collapsing to "Mixed" when categories differ.
+   The SO list API hands back the earliest-created line's normalized category
+   (`first_item_category`) plus that line's own branding (`first_item_branding`,
+   the mattress brand). Rules:
+     · first item SOFA      → "2990 Sofa"
+     · first item BEDFRAME  → "Bedframe"
+     · first item MATTRESS  → the mattress's OWN brand (e.g. "HAPPISLEEP" /
+                              "CARRES" / "2990" / "MyMattress"); falls back to
+                              "2990 Mattress" when the brand is blank
+     · first item ACCESSORY / OTHERS → "2990" (no dedicated furniture brand)
+     · no items             → "" (column renders "—")
+   Sortable + groupable + filterable via the same derived string. */
 const deriveBranding = (r: SoRow): string => {
-  const brandCats = (r.item_categories ?? []).filter((c) => BRAND_CATEGORIES.has(c));
-  if (brandCats.length === 0) return '';   // empty / accessory-only / others-only
-  if (brandCats.length > 1)   return 'Mixed';
-  switch (brandCats[0]) {
-    case 'SOFA':     return '2990 Sofa';
-    case 'MATTRESS': return '2990 Mattress';
-    case 'BEDFRAME': return 'Bedframe';
-    default:         return '';
-  }
+  const cat = r.first_item_category;
+  if (!cat) return '';                       // no items → "—"
+  if (cat === 'SOFA')     return '2990 Sofa';
+  if (cat === 'BEDFRAME') return 'Bedframe';
+  if (cat === 'MATTRESS') return (r.first_item_branding && r.first_item_branding.trim()) || '2990 Mattress';
+  return '2990';                             // accessory / others fallback
 };
 
 const STATUS_CLASS: Record<string, string> = {
@@ -1158,11 +1166,11 @@ const buildColumns = (
         .localeCompare(b.customer_so_no ?? b.po_doc_no ?? b.ref ?? ''),
   },
   {
-    /* Branding — AUTO-DERIVED from the SO's line-item categories
-       (Commander 2026-05-28). See `deriveBranding`: SOFA → "2990 Sofa",
-       MATTRESS → "2990 Mattress", BEDFRAME → "Bedframe", >1 category →
-       "Mixed", none → "—". Rendered as the muted BrandingPill; sortable +
-       groupable on the derived label. */
+    /* Branding — AUTO-DERIVED from the SO's FIRST line item (Commander PR
+       #266). See `deriveBranding`: first SOFA → "2990 Sofa", first BEDFRAME →
+       "Bedframe", first MATTRESS → its own brand (fallback "2990 Mattress"),
+       first accessory/other → "2990", none → "—". Rendered as the muted
+       BrandingPill; sortable + groupable on the derived label. */
     key: 'branding', label: 'Branding', width: 130, sortable: true, groupable: true,
     accessor: (r) => {
       const b = deriveBranding(r);

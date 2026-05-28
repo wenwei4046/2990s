@@ -190,21 +190,35 @@ mfgSalesOrders.get('/', async (c) => {
   const rows = (data ?? []) as Array<{ doc_no?: string } & Record<string, unknown>>;
   const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
   if (docNos.length > 0) {
+    /* Order deterministically so the FIRST line per doc_no is the earliest
+       one created (matches the detail endpoint's `.order('created_at')`). We
+       add `branding`, `item_code` and `created_at` to the select: branding is
+       the mattress brand source for the first-item rule below; item_code lets
+       us fall back to mfg_products.branding when a mattress line's own branding
+       is blank; created_at drives the first-line pick. */
     const { data: itemRows } = await sb
       .from('mfg_sales_order_items')
-      .select('doc_no, item_group, stock_status, cancelled')
+      .select('doc_no, item_group, stock_status, cancelled, branding, item_code, created_at')
       .in('doc_no', docNos)
-      .eq('cancelled', false);
+      .eq('cancelled', false)
+      .order('doc_no')
+      .order('created_at', { ascending: true });
     const agg = new Map<string, Map<string, { total: number; ready: number }>>();
-    /* Branding auto-derive (Commander 2026-05-28): the SO list grid derives
-       its Branding pill from WHICH product categories the SO carries. The
-       header revenue columns merge mattress + sofa into one bucket
-       (mattress_sofa_centi), so the grid can't tell SOFA from MATTRESS at the
-       header level. We collect the DISTINCT normalized item categories per SO
-       here — from the same per-line fetch already running for stock status —
-       and hand them back as `item_categories` so the UI can pick the exact
-       brand ("2990 Sofa" vs "2990 Mattress" vs "Bedframe" vs "Mixed"). */
+    /* Branding auto-derive (Commander 2026-05-28, refined PR #266): the SO list
+       grid derives its Branding pill from the SO's FIRST line item — no longer
+       "Mixed" when categories differ. We track per doc_no:
+         · item_categories     — DISTINCT normalized categories (kept for back-compat)
+         · first_item_category — normalized category of the earliest-created line
+         · first_item_branding — that line's own `branding` text (the mattress brand)
+       The header revenue columns merge mattress + sofa into one bucket, so the
+       grid can't tell SOFA from MATTRESS at the header level — hence this
+       per-line first-item read (from the same fetch already running for stock
+       status). The UI maps SOFA → "2990 Sofa", BEDFRAME → "Bedframe", MATTRESS
+       → first_item_branding (its own brand) ?? "2990 Mattress", else → "2990". */
     const cats = new Map<string, Set<string>>();
+    const firstCat = new Map<string, string>();
+    const firstBranding = new Map<string, string | null>();
+    const firstItemCode = new Map<string, string | null>();
     const normCategory = (raw: string): string => {
       const g = (raw ?? '').trim().toUpperCase();
       if (g.includes('BEDFRAME')) return 'BEDFRAME';
@@ -213,7 +227,7 @@ mfgSalesOrders.get('/', async (c) => {
       if (g.includes('ACCESSOR')) return 'ACCESSORY';
       return 'OTHERS';
     };
-    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean }>) {
+    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean; branding: string | null; item_code: string | null; created_at: string | null }>) {
       let perGroup = agg.get(it.doc_no);
       if (!perGroup) { perGroup = new Map(); agg.set(it.doc_no, perGroup); }
       const g = (it.item_group ?? '').trim().toUpperCase() || 'OTHERS';
@@ -225,10 +239,52 @@ mfgSalesOrders.get('/', async (c) => {
       let catSet = cats.get(it.doc_no);
       if (!catSet) { catSet = new Set(); cats.set(it.doc_no, catSet); }
       catSet.add(normCategory(it.item_group));
+
+      /* Rows arrive ordered by (doc_no, created_at ASC) so the first time we
+         see a doc_no IS its earliest line — record it once. */
+      if (!firstCat.has(it.doc_no)) {
+        firstCat.set(it.doc_no, normCategory(it.item_group));
+        firstBranding.set(it.doc_no, it.branding ?? null);
+        firstItemCode.set(it.doc_no, it.item_code ?? null);
+      }
     }
+
+    /* Mattress brand fallback: when the first line is a MATTRESS but carries no
+       own branding text, look it up from mfg_products.branding via item_code.
+       Batch-fetch only the codes we actually need (first-item mattresses with
+       blank line.branding) so this stays a single cheap query. */
+    const mattressCodesToLookup = new Set<string>();
+    for (const [docNo, cat] of firstCat) {
+      if (cat !== 'MATTRESS') continue;
+      const b = firstBranding.get(docNo);
+      if (b && b.trim()) continue;
+      const code = firstItemCode.get(docNo);
+      if (code) mattressCodesToLookup.add(code);
+    }
+    const productBranding = new Map<string, string>();
+    if (mattressCodesToLookup.size > 0) {
+      const { data: prodRows } = await sb
+        .from('mfg_products')
+        .select('code, branding')
+        .in('code', [...mattressCodesToLookup]);
+      for (const p of (prodRows ?? []) as Array<{ code: string; branding: string | null }>) {
+        if (p.branding && p.branding.trim()) productBranding.set(p.code, p.branding);
+      }
+    }
+
     for (const r of rows) {
-      const perGroup = agg.get(r.doc_no ?? '');
-      (r as Record<string, unknown>).item_categories = [...(cats.get(r.doc_no ?? '') ?? [])].sort();
+      const docNo = r.doc_no ?? '';
+      const perGroup = agg.get(docNo);
+      (r as Record<string, unknown>).item_categories = [...(cats.get(docNo) ?? [])].sort();
+      /* First-item branding source (PR #266). */
+      const fCat = firstCat.get(docNo);
+      (r as Record<string, unknown>).first_item_category = fCat ?? null;
+      let fBranding = firstBranding.get(docNo) ?? null;
+      if (fCat === 'MATTRESS' && (!fBranding || !fBranding.trim())) {
+        const code = firstItemCode.get(docNo);
+        fBranding = (code && productBranding.get(code)) || fBranding;
+      }
+      (r as Record<string, unknown>).first_item_branding = fBranding;
       if (!perGroup) {
         (r as Record<string, unknown>).ready_categories = [];
         (r as Record<string, unknown>).is_fully_ready = false;
