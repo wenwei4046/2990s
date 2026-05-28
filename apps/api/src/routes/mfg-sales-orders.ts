@@ -328,6 +328,75 @@ mfgSalesOrders.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
+     path so the API matches what the SO Detail edit page already blocks.
+     (Bug: the create path let through both "delivery date without a processing
+     date" AND a sofa+mattress mixed cart — the test batch hit both.)
+       1. Processing Date + Delivery Date are all-or-nothing — never one without
+          the other (mirrors the edit page's "must be set together" guard).
+       2. A SOFA Sales Order must be standalone — no mattress / bedframe / other
+          lines mixed in (sofa is its own production line + 2990 branding).
+       3. All MATTRESS lines in one SO must share ONE brand — different mattress
+          brands bill on separate SOs. (Bedframe may ride with a single-brand
+          mattress; that combo stays allowed.) */
+  {
+    const procDate  = (body.internalExpectedDd  as string | null | undefined) || null;
+    const delivDate = (body.customerDeliveryDate as string | null | undefined) || null;
+    if (Boolean(procDate) !== Boolean(delivDate)) {
+      return c.json({
+        error: 'processing_delivery_must_pair',
+        reason: 'Processing Date and Delivery Date must be set together (or both left empty).',
+      }, 400);
+    }
+    if (items.length > 0) {
+      const lineCodes = items.map((it) => String(it.itemCode ?? '')).filter(Boolean);
+      const metaByCode = new Map<string, { category: string; branding: string | null }>();
+      if (lineCodes.length > 0) {
+        const { data: meta } = await sb
+          .from('mfg_products')
+          .select('code, category, branding')
+          .in('code', lineCodes);
+        for (const m of (meta ?? []) as Array<{ code: string; category: string; branding: string | null }>) {
+          metaByCode.set(m.code, { category: m.category, branding: m.branding });
+        }
+      }
+      const normCat = (raw: string): string => {
+        const g = (raw ?? '').trim().toUpperCase();
+        if (g.includes('BEDFRAME')) return 'BEDFRAME';
+        if (g.includes('SOFA'))     return 'SOFA';
+        if (g.includes('MATTRESS')) return 'MATTRESS';
+        if (g.includes('ACCESSOR')) return 'ACCESSORY';
+        return 'OTHERS';
+      };
+      const cats = items.map((it) =>
+        normCat(metaByCode.get(String(it.itemCode ?? ''))?.category ?? (it.itemGroup as string) ?? ''),
+      );
+      // Rule 2 — sofa standalone.
+      if (cats.includes('SOFA') && cats.some((cat) => cat !== 'SOFA')) {
+        return c.json({
+          error: 'so_sofa_must_be_standalone',
+          reason: 'A sofa Sales Order cannot contain non-sofa items. Order the sofa on its own SO.',
+        }, 400);
+      }
+      // Rule 3 — single mattress brand. Null/empty brand → 2990 house brand so
+      // two unbranded 2990 mattresses don't false-trip the guard.
+      const brands = new Set<string>();
+      items.forEach((it, i) => {
+        if (cats[i] !== 'MATTRESS') return;
+        const b = (metaByCode.get(String(it.itemCode ?? ''))?.branding ?? '').trim().toUpperCase() || '2990';
+        brands.add(b);
+      });
+      if (brands.size > 1) {
+        return c.json({
+          error: 'so_mattress_one_brand',
+          reason: 'All mattress lines in one Sales Order must be the same brand. Split different mattress brands into separate SOs.',
+          brands: [...brands],
+        }, 400);
+      }
+    }
+  }
+
   const docNo = await nextDocNo(sb);
 
   /* Migration 0086 — auto-stamp venue_id from the caller's staff.venue_id
