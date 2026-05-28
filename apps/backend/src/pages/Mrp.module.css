@@ -55,6 +55,46 @@
 .ghostBtn:hover { border-color: var(--line-strong); }
 .ghostBtn:disabled { opacity: 0.5; cursor: default; }
 
+.primaryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-button);
+  font-size: var(--fs-13);
+  font-weight: 700;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--c-orange);
+  background: var(--c-orange);
+  color: #fff;
+  cursor: pointer;
+}
+.primaryBtn:hover:not(:disabled) { filter: brightness(0.95); }
+.primaryBtn:disabled { opacity: 0.4; cursor: default; }
+
+/* PO generation mode toggle */
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--c-paper);
+}
+.modeBtn {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  padding: 6px var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.modeBtn + .modeBtn { border-left: 1px solid var(--line); }
+.modeBtn:hover { color: var(--c-ink); }
+.modeBtn[data-active='true'] { background: var(--c-ink); color: var(--c-cream); }
+
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -149,6 +189,7 @@
 }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .colCaret { width: 30px; text-align: center; }
+.colSelect { width: 34px; text-align: center; }
 
 .skuRow {
   cursor: pointer;

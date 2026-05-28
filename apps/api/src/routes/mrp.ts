@@ -68,6 +68,7 @@ type BalanceRow = { product_code: string; warehouse_id: string; qty: number };
 type AllocSource = 'stock' | 'po' | 'shortage';
 
 type MrpLine = {
+  soItemId: string;    // mfg_sales_order_items.id — lets the UI one-click PO this line
   soDocNo: string;
   debtorName: string | null;
   deliveryDate: string | null;
@@ -234,6 +235,7 @@ mrp.get('/', async (c) => {
 
       const source: AllocSource = need > 0 ? 'shortage' : poNumber != null ? 'po' : 'stock';
       lines.push({
+        soItemId: r.id,
         soDocNo: r.doc_no,
         debtorName: r.so?.debtor_name ?? null,
         deliveryDate: r.line_delivery_date ?? r.so?.customer_delivery_date ?? null,

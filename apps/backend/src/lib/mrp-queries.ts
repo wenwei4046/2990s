@@ -24,6 +24,7 @@ async function authedFetch<T>(path: string): Promise<T> {
 export type MrpAllocSource = 'stock' | 'po' | 'shortage';
 
 export type MrpLine = {
+  soItemId: string;
   soDocNo: string;
   debtorName: string | null;
   deliveryDate: string | null;
