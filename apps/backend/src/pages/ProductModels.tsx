@@ -1242,7 +1242,7 @@ function ModularAssignSupplierDialog({
         className={`${styles.modal} ${styles.modalCompact}`}
         onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => { e.preventDefault(); submit(); }}
-        style={{ maxHeight: '90vh', overflowY: 'auto' }}
+        style={{ maxHeight: '90vh', overflow: 'hidden' }}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-4)', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
@@ -1283,7 +1283,12 @@ function ModularAssignSupplierDialog({
           border: '1px solid var(--line)',
           borderRadius: 'var(--radius-md)',
           background: 'var(--c-paper)',
-          overflow: 'hidden',
+          // The table area takes the remaining modal height and scrolls on its
+          // own, so the header + supplier picker + footer (Save) stay put no
+          // matter how many (Model × Supplier) rows there are.
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
         }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-sans)' }}>
             <thead>
@@ -1488,6 +1493,11 @@ const thStyle: React.CSSProperties = {
   color: 'var(--fg-muted)',
   textTransform: 'uppercase',
   letterSpacing: '0.04em',
+  // Keep the column headers visible while the (Model × Supplier) rows scroll.
+  position: 'sticky',
+  top: 0,
+  background: 'var(--c-cream)',
+  zIndex: 1,
 };
 const tdStyle: React.CSSProperties = {
   padding: '8px 12px',
