@@ -34,6 +34,7 @@ type RackItemRow = {
   id: string;
   rack_id: string;
   product_code: string;
+  variant_key?: string;
   product_name: string | null;
   size_label: string | null;
   customer_name: string | null;
@@ -46,9 +47,9 @@ type RackItemRow = {
 const RACK_COLS =
   'id, warehouse_id, rack, position, status, reserved, notes, created_at, updated_at';
 const ITEM_COLS =
-  'id, rack_id, product_code, product_name, size_label, customer_name, source_doc_no, qty, stocked_in_date, notes';
+  'id, rack_id, product_code, variant_key, product_name, size_label, customer_name, source_doc_no, qty, stocked_in_date, notes';
 const MOVE_COLS =
-  'id, movement_type, rack_id, rack_label, warehouse_id, product_code, product_name, source_doc_no, quantity, reason, performed_by, created_at';
+  'id, movement_type, rack_id, rack_label, to_rack_id, to_rack_label, warehouse_id, product_code, variant_key, product_name, source_doc_no, quantity, reason, performed_by, created_at';
 
 // Derive rack status from its items + reserved flag. Items always win:
 // a reserved rack that has items is still OCCUPIED (matches the source system).
@@ -340,6 +341,102 @@ warehouse.post('/stock-out', async (c) => {
   });
 
   return c.json({ ok: true, status });
+});
+
+// ── POST /warehouse/transfer — move qty from one rack to another ───────────
+// Same-warehouse Rack → Rack move (commander 2026-05-28). Inventory totals do
+// NOT change — this only relocates physical placement. Body:
+//   { fromItemId, toRackId, qty? }   (qty defaults to the whole item)
+warehouse.post('/transfer', async (c) => {
+  const sb = c.get('supabase');
+  const user = c.get('user');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const fromItemId = String(body.fromItemId ?? '').trim();
+  const toRackId = String(body.toRackId ?? '').trim();
+  if (!fromItemId) return c.json({ error: 'from_item_required' }, 400);
+  if (!toRackId) return c.json({ error: 'to_rack_required' }, 400);
+
+  // Source item + its rack (for warehouse match + label snapshot).
+  const { data: item, error: itemErr } = await sb
+    .from('warehouse_rack_items')
+    .select(`${ITEM_COLS}, rack:warehouse_racks(id, rack, warehouse_id)`)
+    .eq('id', fromItemId)
+    .single();
+  if (itemErr || !item) return c.json({ error: 'item_not_found' }, 404);
+  const itemRow = item as unknown as RackItemRow & {
+    rack: { id: string; rack: string; warehouse_id: string } | { id: string; rack: string; warehouse_id: string }[] | null;
+  };
+  const fromRack = Array.isArray(itemRow.rack) ? (itemRow.rack[0] ?? null) : itemRow.rack;
+  if (!fromRack) return c.json({ error: 'source_rack_not_found' }, 404);
+  if (fromRack.id === toRackId) return c.json({ error: 'same_rack' }, 400);
+
+  // Destination rack must exist AND be in the same warehouse.
+  const { data: toRack, error: toErr } = await sb
+    .from('warehouse_racks').select('id, rack, warehouse_id').eq('id', toRackId).single();
+  if (toErr || !toRack) return c.json({ error: 'to_rack_not_found' }, 404);
+  if (toRack.warehouse_id !== fromRack.warehouse_id) {
+    return c.json({ error: 'cross_warehouse_not_allowed' }, 400);
+  }
+
+  const moveQty = Math.min(Math.max(1, Number(body.qty ?? itemRow.qty) || itemRow.qty), itemRow.qty);
+  const vk = itemRow.variant_key ?? '';
+
+  // Decrement (or delete) the source item.
+  if (moveQty >= itemRow.qty) {
+    await sb.from('warehouse_rack_items').delete().eq('id', fromItemId);
+  } else {
+    await sb.from('warehouse_rack_items').update({ qty: itemRow.qty - moveQty }).eq('id', fromItemId);
+  }
+
+  // Merge into an existing same (product, variant) item on the destination
+  // rack, else create a new placement row there.
+  const { data: dstExisting } = await sb.from('warehouse_rack_items')
+    .select('id, qty')
+    .eq('rack_id', toRackId)
+    .eq('product_code', itemRow.product_code)
+    .eq('variant_key', vk)
+    .limit(1)
+    .maybeSingle();
+  if (dstExisting) {
+    await sb.from('warehouse_rack_items')
+      .update({ qty: (dstExisting as { qty: number }).qty + moveQty })
+      .eq('id', (dstExisting as { id: string }).id);
+  } else {
+    await sb.from('warehouse_rack_items').insert({
+      rack_id: toRackId,
+      product_code: itemRow.product_code,
+      variant_key: vk,
+      product_name: itemRow.product_name,
+      size_label: itemRow.size_label ?? null,
+      customer_name: itemRow.customer_name ?? null,
+      source_doc_no: itemRow.source_doc_no ?? null,
+      qty: moveQty,
+      stocked_in_date: itemRow.stocked_in_date,
+    });
+  }
+
+  const fromStatus = await refreshRackStatus(sb, fromRack.id);
+  const toStatus = await refreshRackStatus(sb, toRackId);
+
+  await sb.from('warehouse_rack_movements').insert({
+    movement_type: 'TRANSFER',
+    rack_id: fromRack.id,
+    rack_label: fromRack.rack,
+    to_rack_id: toRack.id,
+    to_rack_label: toRack.rack,
+    warehouse_id: fromRack.warehouse_id,
+    product_code: itemRow.product_code,
+    variant_key: vk,
+    product_name: itemRow.product_name,
+    source_doc_no: itemRow.source_doc_no ?? null,
+    quantity: moveQty,
+    reason: (body.reason as string) ?? 'Rack transfer',
+    performed_by: user.id,
+  });
+
+  return c.json({ ok: true, fromStatus, toStatus });
 });
 
 // ── GET /warehouse/movements — append-only ledger ──────────────────────────

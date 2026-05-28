@@ -2372,6 +2372,7 @@ export const warehouseRackItems = pgTable('warehouse_rack_items', {
   id:            uuid('id').primaryKey().defaultRandom(),
   rackId:        uuid('rack_id').notNull().references(() => warehouseRacks.id, { onDelete: 'cascade' }),
   productCode:   text('product_code').notNull(),
+  variantKey:    text('variant_key').notNull().default(''),  // aligns with inventory buckets
   productName:   text('product_name'),
   sizeLabel:     text('size_label'),
   customerName:  text('customer_name'),
@@ -2394,8 +2395,11 @@ export const warehouseRackMovements = pgTable('warehouse_rack_movements', {
   // renamed — the rack_label snapshot preserves the display.
   rackId:       uuid('rack_id'),
   rackLabel:    text('rack_label'),
+  toRackId:     uuid('to_rack_id'),     // TRANSFER destination (rackId = source)
+  toRackLabel:  text('to_rack_label'),
   warehouseId:  uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
   productCode:  text('product_code'),
+  variantKey:   text('variant_key').notNull().default(''),
   productName:  text('product_name'),
   sourceDocNo:  text('source_doc_no'),
   quantity:     integer('quantity').notNull().default(1),

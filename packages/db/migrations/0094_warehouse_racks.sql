@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS warehouse_rack_items (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   rack_id         UUID NOT NULL REFERENCES warehouse_racks(id) ON DELETE CASCADE,
   product_code    TEXT NOT NULL,
+  -- Attribute-composition bucket (packages/shared computeVariantKey), so rack
+  -- contents line up with the inventory variant buckets. '' = unclassified.
+  variant_key     TEXT NOT NULL DEFAULT '',
   product_name    TEXT,
   size_label      TEXT,
   -- Optional human-facing reference to the document/customer that put the item
@@ -82,8 +85,12 @@ CREATE TABLE IF NOT EXISTS warehouse_rack_movements (
   -- being deleted/renamed — the rack_label snapshot preserves the display.
   rack_id       UUID,
   rack_label    TEXT,
+  -- For TRANSFER: the destination rack (rack_id/rack_label = source).
+  to_rack_id    UUID,
+  to_rack_label TEXT,
   warehouse_id  UUID REFERENCES warehouses(id) ON DELETE SET NULL,
   product_code  TEXT,
+  variant_key   TEXT NOT NULL DEFAULT '',
   product_name  TEXT,
   source_doc_no TEXT,
   quantity      INTEGER NOT NULL DEFAULT 1,
