@@ -101,8 +101,24 @@ export type MfgProductRow = {
 /* PR #216 — Commander 2026-05-27: parallel cost-side editor. Operation
  * can input estimated `costSen` next to each `priceSen` on Maintenance
  * surcharge rows. Read by computeMfgLineCost() in @2990s/shared. Opt-in
- * per row — absence keeps cost-side surcharge at 0. */
-export type PricedOption = { value: string; priceSen: number; costSen?: number };
+ * per row — absence keeps cost-side surcharge at 0.
+ *
+ * PR — Commander 2026-05-28: commander's mental model treats the legacy
+ * `priceSen` field as COST (the benchmark / purchase price recorded on
+ * Backend) — it must NEVER surface on POS. POS now writes a parallel
+ * `sellingPriceSen` field that sales_director sets via the POS Maintenance
+ * editor. Backend keeps reading priceSen as before; POS read paths show
+ * sellingPriceSen and fall through to "—" when unset. Both are optional on
+ * the wire so existing rows stay shape-identical until first edit. */
+export type PricedOption = {
+  value: string;
+  priceSen: number;
+  costSen?: number;
+  /** Selling price authored on POS by sales_director. Independent of priceSen
+   *  (which commander on Backend treats as cost benchmark). View-only on POS
+   *  for non-director roles. */
+  sellingPriceSen?: number;
+};
 
 export type MaintenanceConfig = {
   divanHeights:    PricedOption[];

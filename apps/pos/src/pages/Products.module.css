@@ -634,3 +634,53 @@
   text-align: right;
   color: var(--c-ink);
 }
+
+/* ─── VISIBLE toggle (PR — Commander 2026-05-28) ─────────────────────────
+   Pill-shaped green toggle for the per-SKU visibility column on SKU Master.
+   The checkbox sits on top (hidden); the pseudo span renders the pill.
+   Green when checked (visible on catalog), grey when unchecked (hidden).
+   Matches the green toggle in commander's last screenshot. */
+.visibleToggle {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 18px;
+  vertical-align: middle;
+}
+.visibleToggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.visibleToggle > span {
+  position: absolute;
+  inset: 0;
+  background: var(--line-strong, #c4bdb8);
+  border-radius: 999px;
+  transition: background 120ms ease;
+}
+.visibleToggle > span::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--c-paper, #fffaf3);
+  border-radius: 50%;
+  transition: transform 120ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.visibleToggle input:checked + span {
+  /* Brand green — matches commander's screenshot. Falls back to a safe
+     emerald if the brand variable isn't defined. */
+  background: var(--c-leaf, #2f7a3f);
+}
+.visibleToggle input:checked + span::before {
+  transform: translateX(16px);
+}
+.visibleToggle input:disabled + span {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
