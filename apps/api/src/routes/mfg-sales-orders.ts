@@ -132,7 +132,14 @@ const deriveCountryFromState = async (
     .limit(1)
     .maybeSingle();
   const country = (data as { country?: string } | null)?.country;
-  return country ?? null;
+  /* Commander 2026-05-28: a SO with a state set was showing a BLANK Country
+     when the state name didn't match a seeded locality — e.g. my_localities
+     stores "Pulau Pinang" but the form/caller used the common alias "Penang".
+     2990 is Malaysia-only today (every my_localities row is 'Malaysia'), so
+     fall back to 'Malaysia' for any non-empty-but-unmatched state instead of
+     leaving Country empty. The exact match above still wins first, so a future
+     non-MY locality set keeps working. */
+  return country ?? 'Malaysia';
 };
 
 const nextDocNo = async (sb: any): Promise<string> => {
