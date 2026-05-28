@@ -194,10 +194,12 @@ export const Configurator = () => {
   const sizeLib = useSizeLibrary();
   const addons = useAddons();
   /* Commander 2026-05-28 — Sofa Combo Pricing from Backend surfaces in
-     POS Quick Pick. Fetches ALL combos for now (POS product → mfg
-     base_model bridge lands later). Each combo renders as a card with
-     price = pricesByHeight[activeDepth]; click switches to Customize. */
-  const sofaCombosQ = useSofaCombos();
+     POS Quick Pick. Filtered to this Model's base_model so combo cards
+     only show combos the commander configured for this exact sofa Model.
+     base_model comes from the useProduct mfg fallback path (added
+     2026-05-28). Null/undefined → no filter → shows all combos (safe
+     fallback for legacy UUID products that don't have a base_model). */
+  const sofaCombosQ = useSofaCombos(product.data?.base_model);
   const addConfigured = useCart((s) => s.addConfigured);
   const cartLines = useCart((s) => s.lines);
 

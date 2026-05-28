@@ -117,6 +117,9 @@ export const useProduct = (productId: string | undefined) =>
             seat_upgrade_label: string | null;
             seat_upgrade_footrest: boolean;
             depth_options: string | null;
+            // legacy products table has no base_model column — typed optional
+            // so downstream code that checks product.data?.base_model compiles.
+            base_model?: string | null;
           };
         }
       }
@@ -129,7 +132,7 @@ export const useProduct = (productId: string | undefined) =>
       const { data: mfgData, error: mfgErr } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen',
+          'id, code, name, category, description, branding, size_label, base_price_sen, base_model',
         )
         .eq('id', productId)
         .maybeSingle();
@@ -145,6 +148,7 @@ export const useProduct = (productId: string | undefined) =>
         branding: string | null;
         size_label: string | null;
         base_price_sen: number | null;
+        base_model: string | null;
       };
 
       const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
@@ -180,6 +184,9 @@ export const useProduct = (productId: string | undefined) =>
            'toUpperCase')"). Stamp the lowercased mfg category so the chip
            reads e.g. "BOOQIT · SOFA". */
         category_id: mfg.category ? mfg.category.toLowerCase() : null,
+        /* base_model is needed by Configurator so it can pass it to
+           useSofaCombos() and filter Quick Pick combos to this Model. */
+        base_model: mfg.base_model,
         series_id: null,
         included_addons: [] as { addonId: string; qty: number }[],
         updated_at: new Date().toISOString(),
@@ -418,12 +425,91 @@ export const useBedframeOptions = () =>
     },
   });
 
+/** Maps HOOKKA mfg_products.size_code → size_library.id (seeded in seed-libraries.sql).
+ *  Only the 4 standard bed sizes have library entries at MVP; SK/SP/7FT etc. are ignored
+ *  until size_library is extended to include them. */
+const MFG_SIZE_CODE_TO_LIB: Record<string, string> = {
+  K: 'king', Q: 'queen', S: 'single', SS: 'super-single',
+};
+
 export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'sizes'],
     queryFn: async (): Promise<ProductSizeRow[]> => {
       if (!productId) throw new Error('no productId');
+
+      /* ── mfg-* path (new manufacturer SKU system) ──────────────────────────
+         The POS catalog links to `/configure/{mfg.id}` where `mfg.id` is a
+         TEXT key like `mfg-4ea1697f0783`. `product_size_variants.product_id`
+         is a UUID FK to the legacy `products` table — passing a mfg- id
+         directly returns zero rows (Postgres type coercion makes it a no-op,
+         not an error).
+
+         Fix: two-step resolve.
+           1. Fetch `retail_product_id` (nullable UUID bridge) + `model_id`
+              from `mfg_products`.
+           2a. If `retail_product_id` is set → use `product_size_variants` as
+               normal (admin-configured prices from Backend SKU Master).
+           2b. Otherwise → fetch all sibling SKUs that share the same
+               `model_id` and synthesise ProductSizeRow[] from their
+               `size_code` + `base_price_sen`. Works even if `retail_product_id`
+               is never populated — prices come directly from mfg data.
+           2c. Truly orphan SKU (no model, no retail link) → single size entry
+               from its own `size_code`/`base_price_sen`. */
+      if (productId.startsWith('mfg-')) {
+        const { data: mfgRow, error: mfgErr } = await supabase
+          .from('mfg_products')
+          .select('retail_product_id, model_id, size_code, base_price_sen')
+          .eq('id', productId)
+          .maybeSingle();
+        if (mfgErr) throw mfgErr;
+        if (!mfgRow) return [];
+
+        // 2a — retail bridge exists: use admin-configured product_size_variants
+        if (mfgRow.retail_product_id) {
+          const { data, error } = await supabase
+            .from('product_size_variants')
+            .select('size_id, active, price')
+            .eq('product_id', mfgRow.retail_product_id);
+          if (error) throw error;
+          if (data && data.length > 0) {
+            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price }));
+          }
+          // Fall through to mfg siblings if the retail link exists but has no variants yet.
+        }
+
+        // 2b — derive sizes from mfg_products siblings (same model_id)
+        if (mfgRow.model_id) {
+          const { data: siblings, error: sibErr } = await supabase
+            .from('mfg_products')
+            .select('size_code, base_price_sen, status')
+            .eq('model_id', mfgRow.model_id)
+            .eq('status', 'ACTIVE');
+          if (sibErr) throw sibErr;
+          const rows = (siblings ?? [])
+            .filter((s) => s.size_code && s.size_code in MFG_SIZE_CODE_TO_LIB)
+            .map((s) => ({
+              sizeId: MFG_SIZE_CODE_TO_LIB[s.size_code!] as string,
+              active: true,
+              price: s.base_price_sen != null ? Math.round(s.base_price_sen / 100) : 0,
+            }));
+          if (rows.length > 0) return rows;
+        }
+
+        // 2c — orphan SKU: single size from this SKU's own code + price
+        if (mfgRow.size_code && mfgRow.size_code in MFG_SIZE_CODE_TO_LIB) {
+          return [{
+            sizeId: MFG_SIZE_CODE_TO_LIB[mfgRow.size_code] as string,
+            active: true,
+            price: mfgRow.base_price_sen != null ? Math.round(mfgRow.base_price_sen / 100) : 0,
+          }];
+        }
+
+        return [];
+      }
+
+      // ── Legacy UUID path (retail `products` table) ──────────────────────────
       const { data, error } = await supabase
         .from('product_size_variants')
         .select('size_id, active, price')

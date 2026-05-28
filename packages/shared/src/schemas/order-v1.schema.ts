@@ -22,7 +22,10 @@ const cellSchema = z.object({
 
 const sofaLineConfigSchema = z.object({
   kind: z.literal('sofa'),
-  productId: z.string().uuid(),
+  /* Commander 2026-05-28: POS catalog switched to mfg_products (mfg-<12hex>
+     ids). Relaxed from .uuid() to allow both legacy UUID and mfg- text keys.
+     Server re-validates the id exists in products OR mfg_products. */
+  productId: z.string().min(1),
   bundleId: z.string().optional(),
   cells: z.array(cellSchema).optional(),
   // Seat depth in inches (F5: per-Model options, e.g. '24'/'30'/'32'). Widened
@@ -47,7 +50,7 @@ const sofaLineConfigSchema = z.object({
 
 const sizeLineConfigSchema = z.object({
   kind: z.literal('size'),
-  productId: z.string().uuid(),
+  productId: z.string().min(1), // relaxed from .uuid() — mfg-<12hex> ids also valid
   sizeId: z.string(),
   // Paid-extra add-ons attached to this configured line (e.g. extra pillows
   // beyond the included free ones). Server recomputes these against the
@@ -62,7 +65,7 @@ const sizeLineConfigSchema = z.object({
 // canonical amount; client only needs to identify the product. (Bug #2 fix)
 const flatLineConfigSchema = z.object({
   kind: z.literal('flat'),
-  productId: z.string().uuid(),
+  productId: z.string().min(1), // relaxed from .uuid() — mfg-<12hex> ids also valid
 });
 
 // Bedframe configurator (spec 2026-05-25). size + colour + leg are always
@@ -73,7 +76,7 @@ const flatLineConfigSchema = z.object({
 // colourLabel is a display-only snapshot for the invoice (no products join).
 const bedframeLineConfigSchema = z.object({
   kind: z.literal('bedframe'),
-  productId: z.string().uuid(),
+  productId: z.string().min(1), // relaxed from .uuid() — mfg-<12hex> ids also valid
   sizeId: z.string(),
   sizeOther: z.string().max(60).optional(),
   colourId: z.string(),
