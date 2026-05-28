@@ -26,6 +26,20 @@ const STATUS_CLASS: Record<SoStatus, string> = {
   CANCELLED:      styles.statusCancelled ?? '',
 };
 
+/* Commander 2026-05-28 6-stage label mapping (see MfgSalesOrdersList.tsx
+   for the rationale). Enum values stay; only the displayed label changes. */
+const STATUS_LABEL: Record<string, string> = {
+  CONFIRMED:     'Confirmed',
+  IN_PRODUCTION: 'Proceed',
+  READY_TO_SHIP: 'Stock Ready',
+  SHIPPED:       'Arranged',
+  DELIVERED:     'Delivered',
+  INVOICED:      'Invoiced',
+  CLOSED:        'Closed',
+  ON_HOLD:       'On Hold',
+  CANCELLED:     'Cancelled',
+};
+
 const ACTION_LABEL: Record<string, string> = {
   CREATE:         'Created order',
   UPDATE_DETAILS: 'Updated details',
@@ -74,6 +88,13 @@ const fmtField = (field: string, val: unknown): string => {
     return `RM ${(val / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
   if (typeof val === 'object') return JSON.stringify(val);
+  /* Commander 2026-05-28: status field changes display the 6-stage label
+     ("Confirmed → Proceed") instead of the raw enum value
+     ("CONFIRMED → IN_PRODUCTION"). Other text fields fall through to the
+     existing underscore-stripping rule. */
+  if (field === 'status' && typeof val === 'string') {
+    return STATUS_LABEL[val] ?? val.replace(/_/g, ' ');
+  }
   return String(val).replace(/_/g, ' ');
 };
 
@@ -169,7 +190,7 @@ const HistoryPanelInner = ({
                           className={`${styles.statusPill} ${STATUS_CLASS[statusPillStatus as SoStatus] ?? ''}`}
                           style={{ marginLeft: 6, fontSize: 'var(--fs-10)' }}
                         >
-                          {statusPillStatus.replace(/_/g, ' ')}
+                          {STATUS_LABEL[statusPillStatus] ?? statusPillStatus.replace(/_/g, ' ')}
                         </span>
                       )}
                     </div>
