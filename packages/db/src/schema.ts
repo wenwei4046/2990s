@@ -1806,7 +1806,12 @@ export const mfgProducts = pgTable('mfg_products', {
 export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   id:              uuid('id').primaryKey().defaultRandom(),
   baseModel:       text('base_model').notNull(),
-  modules:         text('modules').array().notNull(),                     // sorted text[]
+  // OR-set per slot (PR combo-or-per-slot, Commander 2026-05-28 Hookka-style).
+  // JSONB string[][] — ordered list of SLOTS; each slot = an OR-set of
+  // alternative module codes, e.g. [["2A-LHF","2A-RHF"],["L-LHF","L-RHF"]].
+  // Migration 0093 converted the old single-dim text[] `modules` column into
+  // this JSONB column, wrapping each legacy code as a singleton slot.
+  modules:         jsonb('modules').$type<string[][]>().notNull().default([]),
   tier:            fabricPriceTier('tier'),                               // NULL = applies any tier
   customerId:      uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }),
   pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null }
