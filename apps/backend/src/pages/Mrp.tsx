@@ -51,6 +51,11 @@ export const Mrp = () => {
   const [processingFrom, setProcessingFrom] = useState<string>('');
   const [processingTo, setProcessingTo] = useState<string>('');
   const [showUndated, setShowUndated] = useState<boolean>(false);
+  /* Commander 2026-05-29 — switch a SKU to an alternate supplier in-place
+     (AutoCount Post-to-PO). { itemCode: supplierId }; wins over main binding. */
+  const [supplierOverride, setSupplierOverride] = useState<Record<string, string>>({});
+  const setRowSupplier = (itemCode: string, supplierId: string) =>
+    setSupplierOverride((prev) => ({ ...prev, [itemCode]: supplierId }));
   /* In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
      browser window.confirm/alert). null = closed. */
   const [dialog, setDialog] = useState<
@@ -128,7 +133,14 @@ export const Mrp = () => {
       return;
     }
 
-    createPos.mutate({ picks, mode: poMode }, {
+    // Only send overrides for the SKUs actually being ordered.
+    const orderedCodes = new Set(skus.filter((s) => s.shortage > 0).map((s) => s.itemCode));
+    const supplierByCode: Record<string, string> = {};
+    for (const [code, sup] of Object.entries(supplierOverride)) {
+      if (orderedCodes.has(code) && sup) supplierByCode[code] = sup;
+    }
+
+    createPos.mutate({ picks, mode: poMode, supplierByCode }, {
       onSuccess: (res) => {
         if (!res.total) {
           setDialog({
@@ -336,6 +348,8 @@ export const Mrp = () => {
                   onToggle={() => toggle(k)}
                   selected={selected.has(k)}
                   onSelect={() => toggleSelect(k)}
+                  chosenSupplierId={supplierOverride[sku.itemCode] ?? null}
+                  onSupplierChange={(sid) => setRowSupplier(sku.itemCode, sid)}
                 />
               );
             })}
@@ -369,10 +383,13 @@ export const Mrp = () => {
   );
 };
 
-const SkuRows = ({ sku, open, onToggle, selected, onSelect }: {
+const SkuRows = ({ sku, open, onToggle, selected, onSelect, chosenSupplierId, onSupplierChange }: {
   sku: MrpSku; open: boolean; onToggle: () => void; selected: boolean; onSelect: () => void;
+  chosenSupplierId: string | null; onSupplierChange: (supplierId: string) => void;
 }) => {
   const short = sku.shortage > 0;
+  const defaultSupplierId = sku.suppliers.find((s) => s.isMain)?.supplierId ?? sku.suppliers[0]?.supplierId ?? '';
+  const activeSupplierId = chosenSupplierId ?? defaultSupplierId;
   return (
     <>
       <tr className={`${styles.skuRow} ${short ? styles.skuRowShort : ''}`} onClick={onToggle}>
@@ -398,10 +415,25 @@ const SkuRows = ({ sku, open, onToggle, selected, onSelect }: {
         <td className={styles.num}>{sku.stock}</td>
         <td className={styles.num}>{sku.poOutstanding || '—'}</td>
         <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? sku.shortage : '—'}</td>
-        <td className={styles.supplierCell}>
-          {sku.mainSupplierCode
-            ? <span><Truck {...ICON} /> {sku.mainSupplierCode}</span>
-            : <span className={styles.noSupplier}>— none —</span>}
+        <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
+          {sku.suppliers.length === 0 ? (
+            <span className={styles.noSupplier}>— none —</span>
+          ) : sku.suppliers.length === 1 ? (
+            <span><Truck {...ICON} /> {sku.suppliers[0]!.code}</span>
+          ) : (
+            <select
+              className={styles.supplierSelect}
+              value={activeSupplierId}
+              onChange={(e) => onSupplierChange(e.target.value)}
+              title="Switch supplier for this SKU before posting the PO"
+            >
+              {sku.suppliers.map((s) => (
+                <option key={s.supplierId} value={s.supplierId}>
+                  {s.code}{s.isMain ? ' ★' : ''}
+                </option>
+              ))}
+            </select>
+          )}
         </td>
       </tr>
       {open && (

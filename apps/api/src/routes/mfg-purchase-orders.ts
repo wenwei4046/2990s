@@ -390,9 +390,14 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
          'per-so'             = one PO per (supplier × SO) — good for sofa /
                                  bedframe where 1 SO → 1 PO. */
     mode?: 'combined' | 'per-so';
+    /* Commander 2026-05-29 — per-SKU supplier override. The MRP lets the user
+       switch an item to an alternate supplier in-place; { itemCode: supplierId }
+       wins over the SKU's main-supplier binding. */
+    supplierByCode?: Record<string, string>;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
+  const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
 
   /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
      are NO LONGER asked or required. They are derived per-line from the source
@@ -546,13 +551,22 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     for (const s of (liveSuppliers ?? []) as Array<{ id: string }>) liveSupplierIds.add(s.id);
   }
 
-  // Group by material_code → first row whose supplier still exists (prefer
-  // is_main_supplier via the query's ORDER BY).
-  const mainByCode = new Map<string, { supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>();
-  for (const b of (bindings ?? []) as Array<{ material_code: string; supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>) {
-    if (mainByCode.has(b.material_code)) continue;
+  // Group by material_code → the chosen supplier's binding. Commander
+  // 2026-05-29: an explicit supplierByCode[itemCode] override (picked in the
+  // MRP) wins; otherwise the first LIVE row (is_main_supplier first via ORDER
+  // BY). Orphaned bindings (deleted supplier) are skipped.
+  type Binding = { material_code: string; supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string };
+  const mainByCode = new Map<string, Binding>();
+  for (const b of (bindings ?? []) as Binding[]) {
     if (!liveSupplierIds.has(b.supplier_id)) continue; // orphaned binding — skip
-    mainByCode.set(b.material_code, b);
+    const override = supplierByCode[b.material_code];
+    const existing = mainByCode.get(b.material_code);
+    if (override) {
+      // Only accept the binding that matches the chosen supplier.
+      if (b.supplier_id === override) mainByCode.set(b.material_code, b);
+      continue;
+    }
+    if (!existing) mainByCode.set(b.material_code, b);
   }
 
   // Items with no LIVE supplier binding can't be PO'd.

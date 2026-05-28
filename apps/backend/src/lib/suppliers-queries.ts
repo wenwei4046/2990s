@@ -613,6 +613,9 @@ export function useCreatePosFromSoItems() {
          'combined' = one PO per supplier (mattresses: many SOs → 1 PO);
          'per-so'   = one PO per (supplier × SO) (sofa/bedframe: 1 SO → 1 PO). */
       mode?: 'combined' | 'per-so';
+      /* Commander 2026-05-29 — per-SKU supplier override picked in the MRP
+         ({ itemCode: supplierId }); wins over the main-supplier binding. */
+      supplierByCode?: Record<string, string>;
     }) =>
       authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
         `/mfg-purchase-orders/from-sos`,

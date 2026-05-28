@@ -48,6 +48,7 @@ export type MrpSku = {
   shortage: number;
   mainSupplierCode: string | null;
   mainSupplierName: string | null;
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
   lines: MrpLine[];
 };
 
