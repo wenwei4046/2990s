@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router';
 import { ChevronRight, ChevronDown, RefreshCw, AlertTriangle, PackageCheck, Truck, ShoppingCart, CalendarRange } from 'lucide-react';
 import { useMrp, type MrpSku, type MrpLine, type MrpResponse } from '../lib/mrp-queries';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
+import { fmtDateOrDash, fmtDateTime } from '@2990s/shared';
 import styles from './Mrp.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -27,13 +28,8 @@ const CAT_LABELS: Record<string, string> = {
   ACCESSORY: 'Accessory', SERVICE: 'Service',
 };
 
-const fmtDate = (iso: string | null): string => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return Number.isFinite(d.getTime())
-    ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-    : iso;
-};
+// Canonical date format (Commander 2026-05-29) — shared @2990s/shared helper.
+const fmtDate = (iso: string | null): string => fmtDateOrDash(iso);
 
 export const Mrp = () => {
   const navigate = useNavigate();
@@ -196,7 +192,7 @@ export const Mrp = () => {
             Open Sales-Order demand vs stock + incoming POs. Orange rows still
             need ordering.
             {data && (
-              <> · as of {new Date(data.asOf).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</>
+              <> · as of {fmtDateTime(data.asOf)}</>
             )}
           </p>
         </div>
