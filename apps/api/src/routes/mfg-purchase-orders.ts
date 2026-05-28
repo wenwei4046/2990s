@@ -71,6 +71,69 @@ mfgPurchaseOrders.get('/', async (c) => {
   return c.json({ purchaseOrders: data ?? [] });
 });
 
+/* ── PR — Outstanding SO items (qty > po_qty_picked) for the
+ * "From SO" picker on the New PO page. Returns a flat list grouped by
+ * doc_no so the frontend can render checkboxes per SO + per-line qty
+ * inputs. Filters out:
+ *   - cancelled SO line rows
+ *   - cancelled SO header status (CANCELLED)
+ *   - lines already fully picked (qty - po_qty_picked <= 0)
+ * Caller can filter further by supplierId via ?supplierId= once item
+ * → main supplier binding is known.
+ *
+ * IMPORTANT (route ordering): this STATIC path MUST be registered before
+ * the `/:id` param route below — otherwise Hono matches `/:id` first and
+ * tries to cast "outstanding-so-items" to a uuid → 500. (Bug fix
+ * 2026-05-28: the PO-from-SO page showed "no outstanding lines" because
+ * this endpoint was 500-ing from being shadowed by `/:id`.) */
+mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
+  const supabase = c.get('supabase');
+  // Pull SO items with remaining qty > 0, joining the parent SO so we
+  // can filter cancelled SOs + show debtor + branding + dates.
+  const { data: items, error } = await supabase
+    .from('mfg_sales_order_items')
+    .select(`
+      id, doc_no, item_code, description, item_group, qty, po_qty_picked, unit_price_centi,
+      variants, line_suffix, cancelled,
+      so:mfg_sales_orders!inner ( doc_no, debtor_name, branding, status, so_date, customer_delivery_date )
+    `)
+    .eq('cancelled', false)
+    .order('doc_no', { ascending: false })
+    .limit(500);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  type Row = {
+    id: string; doc_no: string; item_code: string; description: string | null;
+    item_group: string; qty: number; po_qty_picked: number; unit_price_centi: number;
+    variants: unknown; line_suffix: string | null; cancelled: boolean;
+    so: { doc_no: string; debtor_name: string | null; branding: string | null; status: string; so_date: string; customer_delivery_date: string | null };
+  };
+
+  const outstanding = ((items ?? []) as unknown as Row[])
+    .filter((r) => r.so.status !== 'CANCELLED')
+    .filter((r) => r.qty - r.po_qty_picked > 0)
+    .map((r) => ({
+      soItemId:        r.id,
+      soDocNo:         r.doc_no,
+      debtorName:      r.so.debtor_name,
+      branding:        r.so.branding,
+      soStatus:        r.so.status,
+      soDate:          r.so.so_date,
+      deliveryDate:    r.so.customer_delivery_date,
+      itemCode:        r.item_code,
+      description:     r.description,
+      itemGroup:       r.item_group,
+      qty:             r.qty,
+      poQtyPicked:     r.po_qty_picked,
+      remainingQty:    r.qty - r.po_qty_picked,
+      unitPriceCenti:  r.unit_price_centi,
+      variants:        r.variants,
+      lineSuffix:      r.line_suffix,
+    }));
+
+  return c.json({ items: outstanding });
+});
+
 // ── Detail ────────────────────────────────────────────────────────────
 mfgPurchaseOrders.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -462,64 +525,6 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   }
 
   return c.json({ created, total: created.length }, 201);
-});
-
-/* ── PR — Outstanding SO items (qty > po_qty_picked) for the
- * "From SO" picker on the New PO page. Returns a flat list grouped by
- * doc_no so the frontend can render checkboxes per SO + per-line qty
- * inputs. Filters out:
- *   - cancelled SO line rows
- *   - cancelled SO header status (CANCELLED)
- *   - lines already fully picked (qty - po_qty_picked <= 0)
- * Caller can filter further by supplierId via ?supplierId= once item
- * → main supplier binding is known.
- */
-mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
-  const supabase = c.get('supabase');
-  // Pull SO items with remaining qty > 0, joining the parent SO so we
-  // can filter cancelled SOs + show debtor + branding + dates.
-  const { data: items, error } = await supabase
-    .from('mfg_sales_order_items')
-    .select(`
-      id, doc_no, item_code, description, item_group, qty, po_qty_picked, unit_price_centi,
-      variants, line_suffix, cancelled,
-      so:mfg_sales_orders!inner ( doc_no, debtor_name, branding, status, so_date, customer_delivery_date )
-    `)
-    .eq('cancelled', false)
-    .order('doc_no', { ascending: false })
-    .limit(500);
-  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-
-  type Row = {
-    id: string; doc_no: string; item_code: string; description: string | null;
-    item_group: string; qty: number; po_qty_picked: number; unit_price_centi: number;
-    variants: unknown; line_suffix: string | null; cancelled: boolean;
-    so: { doc_no: string; debtor_name: string | null; branding: string | null; status: string; so_date: string; customer_delivery_date: string | null };
-  };
-
-  const outstanding = ((items ?? []) as unknown as Row[])
-    .filter((r) => r.so.status !== 'CANCELLED')
-    .filter((r) => r.qty - r.po_qty_picked > 0)
-    .map((r) => ({
-      soItemId:        r.id,
-      soDocNo:         r.doc_no,
-      debtorName:      r.so.debtor_name,
-      branding:        r.so.branding,
-      soStatus:        r.so.status,
-      soDate:          r.so.so_date,
-      deliveryDate:    r.so.customer_delivery_date,
-      itemCode:        r.item_code,
-      description:     r.description,
-      itemGroup:       r.item_group,
-      qty:             r.qty,
-      poQtyPicked:     r.po_qty_picked,
-      remainingQty:    r.qty - r.po_qty_picked,
-      unitPriceCenti:  r.unit_price_centi,
-      variants:        r.variants,
-      lineSuffix:      r.line_suffix,
-    }));
-
-  return c.json({ items: outstanding });
 });
 
 /* ── PR #41 — PATCH header (po_date, expected_at, currency, notes) ── */
