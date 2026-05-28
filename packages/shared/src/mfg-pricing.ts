@@ -33,8 +33,17 @@
  * for the parallel cost compute below. */
 export type MfgPricedOption = {
   value:    string;
+  /** COST benchmark (commander's mental model: Backend `priceSen` = the
+   *  purchase / cost reference, NOT the customer-facing selling surcharge).
+   *  Read by `computeMfgLineCost`. NEVER summed into the selling total. */
   priceSen: number;
   costSen?: number;
+  /** SELLING surcharge authored by the Sales Director (POS Maintenance,
+   *  PR #257). This — not `priceSen` — is what `computeMfgLinePrice` adds to
+   *  the customer-facing line total. Unset today everywhere, so variant
+   *  surcharges contribute 0 to selling until a director sets a real value
+   *  (Commander 2026-05-28: "这些价钱都是 costing，不是卖价"). */
+  sellingPriceSen?: number;
 };
 export type MaintenanceConfig = {
   divanHeights:   MfgPricedOption[];
@@ -133,17 +142,6 @@ export type MfgPricingBreakdown = {
 
 const sum = (...n: number[]): number => n.reduce((a, b) => a + b, 0);
 
-/** Look up an optional priced option from MaintenanceConfig. Returns 0
- *  when the option list is undefined OR the value isn't matched. */
-const lookupPriced = (
-  pool: MfgPricedOption[] | undefined,
-  value: string | null | undefined,
-): number => {
-  if (!pool || !value) return 0;
-  const hit = pool.find((o) => o.value === value);
-  return hit ? hit.priceSen : 0;
-};
-
 const lookupCost = (
   pool: MfgPricedOption[] | undefined,
   value: string | null | undefined,
@@ -153,9 +151,26 @@ const lookupCost = (
   return hit?.costSen ?? 0;
 };
 
-/** Sum N specials against a single pool. Unknown picks contribute 0
- *  (matches HOOKKA's tolerant behaviour). */
-const sumSpecials = (
+/** Selling-side surcharge lookup. Commander 2026-05-28: variant `priceSen`
+ *  is COST, NOT selling — so the customer-facing line total must read the
+ *  Sales-Director-authored `sellingPriceSen` instead. Falls back to 0 when
+ *  the option carries no selling surcharge (the case today: surcharges
+ *  contribute 0 to selling until a director sets a value). */
+const lookupSelling = (
+  pool: MfgPricedOption[] | undefined,
+  value: string | null | undefined,
+): number => {
+  if (!pool || !value) return 0;
+  const hit = pool.find((o) => o.value === value);
+  return hit?.sellingPriceSen ?? 0;
+};
+
+/** Sum N specials against a single pool on the SELLING side — reads each
+ *  option's `sellingPriceSen` (the Sales-Director-authored selling surcharge,
+ *  NOT the `priceSen` cost benchmark). Unknown picks contribute 0 (matches
+ *  HOOKKA's tolerant behaviour); picks with no selling surcharge set also
+ *  contribute 0, which is the case across the board today. */
+const sumSpecialsSelling = (
   pool: MfgPricedOption[] | undefined,
   picks: string[] | undefined,
 ): number => {
@@ -163,7 +178,7 @@ const sumSpecials = (
   let total = 0;
   for (const p of picks) {
     const hit = pool.find((o) => o.value === p);
-    if (hit) total += hit.priceSen;
+    if (hit) total += hit.sellingPriceSen ?? 0;
   }
   return total;
 };
@@ -254,15 +269,21 @@ export function computeMfgLinePrice(
   let totalHeightSurchargeSen = 0;
   let specialsSurchargeSen    = 0;
 
+  // Commander 2026-05-28: variant surcharges on the SELLING total must come
+  // from `sellingPriceSen` (Sales-Director-authored), NOT `priceSen` — the
+  // latter is the COST benchmark and must never inflate the customer-facing
+  // line. With `sellingPriceSen` unset everywhere today, every surcharge
+  // below resolves to 0, exactly the behaviour the commander wants. Real
+  // selling surcharges appear here only once a director sets them.
   if (maintenanceConfig && product.category === 'BEDFRAME') {
-    divanSurchargeSen       = lookupPriced(maintenanceConfig.divanHeights, input.divanHeight);
-    legSurchargeSen         = lookupPriced(maintenanceConfig.legHeights, input.legHeight);
-    totalHeightSurchargeSen = lookupPriced(maintenanceConfig.totalHeights, input.totalHeight);
-    specialsSurchargeSen    = sumSpecials(maintenanceConfig.specials, input.specials);
+    divanSurchargeSen       = lookupSelling(maintenanceConfig.divanHeights, input.divanHeight);
+    legSurchargeSen         = lookupSelling(maintenanceConfig.legHeights, input.legHeight);
+    totalHeightSurchargeSen = lookupSelling(maintenanceConfig.totalHeights, input.totalHeight);
+    specialsSurchargeSen    = sumSpecialsSelling(maintenanceConfig.specials, input.specials);
   } else if (maintenanceConfig && product.category === 'SOFA') {
     // No divan / total height on sofa. sofaLegHeight is the sofa-side pool.
-    legSurchargeSen      = lookupPriced(maintenanceConfig.sofaLegHeights, input.sofaLegHeight ?? input.legHeight);
-    specialsSurchargeSen = sumSpecials(maintenanceConfig.sofaSpecials, input.specials);
+    legSurchargeSen      = lookupSelling(maintenanceConfig.sofaLegHeights, input.sofaLegHeight ?? input.legHeight);
+    specialsSurchargeSen = sumSpecialsSelling(maintenanceConfig.sofaSpecials, input.specials);
   }
 
   const unitPriceSen = sum(
