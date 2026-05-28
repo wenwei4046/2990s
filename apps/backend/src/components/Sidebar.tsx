@@ -27,6 +27,7 @@ import {
   FileBarChart,
   ShieldCheck,
   ChevronDown,
+  ListTree,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -130,6 +131,7 @@ export const Sidebar = () => {
         { to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
         { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
+        { to: '/mrp', icon: <ListTree {...ICON_PROPS} />, label: 'MRP · Stock Status' },
         { to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
         { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
         { to: '/purchase-invoices', icon: <Receipt {...ICON_PROPS} />, label: 'Purchase Invoices' },
