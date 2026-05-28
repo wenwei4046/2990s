@@ -5,6 +5,15 @@
 //   3. Bedframe PRICE_1 via fabric tier switch
 //   4. Bedframe with all 4 surcharges + fabric add-on
 //   5. Sofa with seat size + fabric tier switch + leg + specials
+//
+// Commander 2026-05-28 update: the maintenance-config option `priceSen` is
+// the COST benchmark, NOT the customer-facing selling surcharge. The SELLING
+// total (computeMfgLinePrice) now reads each option's `sellingPriceSen`; the
+// COST total (computeMfgLineCost) keeps reading `costSen`. So with only
+// `priceSen` populated (today's data), selling-side surcharges are 0. The
+// `sellingConfig` fixture below mirrors the legacy surcharges onto
+// `sellingPriceSen` so the historic selling cases still exercise non-zero
+// surcharge math.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -17,38 +26,72 @@ import {
 
 /* ───────────────── Fixtures ───────────────── */
 
+// `priceSen` here is the COST benchmark (commander's mental model). The
+// SELLING surcharge is carried on `sellingPriceSen`, mirroring the same
+// amounts so the historic selling expectations below remain meaningful.
 const config: MaintenanceConfig = {
   divanHeights: [
-    { value: '8"',  priceSen: 0 },
-    { value: '10"', priceSen: 5000 },
-    { value: '14"', priceSen: 14000 },
+    { value: '8"',  priceSen: 0,     sellingPriceSen: 0 },
+    { value: '10"', priceSen: 5000,  sellingPriceSen: 5000 },
+    { value: '14"', priceSen: 14000, sellingPriceSen: 14000 },
   ],
   legHeights: [
-    { value: 'No Leg', priceSen: 0 },
-    { value: '4"',     priceSen: 0 },
-    { value: '7"',     priceSen: 16000 },
+    { value: 'No Leg', priceSen: 0,     sellingPriceSen: 0 },
+    { value: '4"',     priceSen: 0,     sellingPriceSen: 0 },
+    { value: '7"',     priceSen: 16000, sellingPriceSen: 16000 },
   ],
   totalHeights: [
-    { value: '14"', priceSen: 0 },
-    { value: '20"', priceSen: 10000 },
-    { value: '24"', priceSen: 14000 },
+    { value: '14"', priceSen: 0,     sellingPriceSen: 0 },
+    { value: '20"', priceSen: 10000, sellingPriceSen: 10000 },
+    { value: '24"', priceSen: 14000, sellingPriceSen: 14000 },
   ],
   gaps: ['4"', '6"', '8"', '10"'],
   specials: [
-    { value: 'HB Fully Cover', priceSen: 5000 },
-    { value: 'Left Drawer',    priceSen: 15000 },
-    { value: 'Right Drawer',   priceSen: 15000 },
-    { value: '1 Piece Divan',  priceSen: 25000 },
+    { value: 'HB Fully Cover', priceSen: 5000,  sellingPriceSen: 5000 },
+    { value: 'Left Drawer',    priceSen: 15000, sellingPriceSen: 15000 },
+    { value: 'Right Drawer',   priceSen: 15000, sellingPriceSen: 15000 },
+    { value: '1 Piece Divan',  priceSen: 25000, sellingPriceSen: 25000 },
   ],
   sofaLegHeights: [
-    { value: '4"', priceSen: 0 },
+    { value: '4"', priceSen: 0,    sellingPriceSen: 0 },
+    { value: '6"', priceSen: 5000, sellingPriceSen: 5000 },
+  ],
+  sofaSpecials: [
+    { value: 'Nylon Fabric',  priceSen: 0,    sellingPriceSen: 0 },
+    { value: '5537 Backrest', priceSen: 8000, sellingPriceSen: 8000 },
+  ],
+  sofaSizes: ['24', '28', '30', '32', '35'],
+};
+
+// Cost-only config: `priceSen` populated (the production reality today),
+// `sellingPriceSen` UNSET on every option. Proves variant surcharges
+// contribute 0 to the SELLING total when no director has set a selling
+// surcharge — exactly the commander's 2026-05-28 requirement.
+const costOnlyConfig: MaintenanceConfig = {
+  divanHeights: [
+    { value: '8"',  priceSen: 0 },
+    { value: '10"', priceSen: 5000 },
+    { value: '16"', priceSen: 16000 },
+  ],
+  legHeights: [
+    { value: 'No Leg', priceSen: 0 },
+    { value: '7"',     priceSen: 16000 },
+  ],
+  totalHeights: [
+    { value: '24"', priceSen: 14000 },
+  ],
+  gaps: ['4"', '6"'],
+  specials: [
+    { value: 'HB Fully Cover', priceSen: 5500 },
+    { value: 'Left Drawer',    priceSen: 15000 },
+  ],
+  sofaLegHeights: [
     { value: '6"', priceSen: 5000 },
   ],
   sofaSpecials: [
-    { value: 'Nylon Fabric',  priceSen: 0 },
     { value: '5537 Backrest', priceSen: 8000 },
   ],
-  sofaSizes: ['24', '28', '30', '32', '35'],
+  sofaSizes: ['24', '28', '32'],
 };
 
 const mattress: MfgPricingProduct = {
@@ -184,6 +227,80 @@ describe('computeMfgLinePrice — bedframe with all 4 surcharges + fabric add-on
       config,
     );
     expect(r.specialsSurchargeSen).toBe(5000);
+  });
+});
+
+/* ─────── Commander 2026-05-28: selling uses sellingPriceSen, not cost ─────── */
+
+describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () => {
+  it('contributes 0 selling surcharge when only priceSen (cost) is set', () => {
+    // Production reality today: maintenance options carry priceSen (cost)
+    // but no sellingPriceSen. Selling line must NOT inflate by the cost.
+    const r = computeMfgLinePrice(
+      {
+        product:     bedframeBothTiers,
+        qty:         1,
+        divanHeight: '10"',                       // priceSen 5000, no selling
+        legHeight:   '7"',                        // priceSen 16000, no selling
+        totalHeight: '24"',                       // priceSen 14000, no selling
+        specials:    ['HB Fully Cover', 'Left Drawer'], // 5500 + 15000 cost
+      },
+      costOnlyConfig,
+    );
+    expect(r.basePriceSen).toBe(52000);
+    expect(r.divanSurchargeSen).toBe(0);
+    expect(r.legSurchargeSen).toBe(0);
+    expect(r.totalHeightSurchargeSen).toBe(0);
+    expect(r.specialsSurchargeSen).toBe(0);
+    // Selling total = base only, surcharges drop out entirely.
+    expect(r.unitPriceSen).toBe(52000);
+  });
+
+  it('single option: priceSen=5500 (cost) → selling surcharge 0', () => {
+    const onlyCost: MaintenanceConfig = {
+      ...costOnlyConfig,
+      specials: [{ value: 'HB Fully Cover', priceSen: 5500 }], // cost, no selling
+    };
+    const r = computeMfgLinePrice(
+      { product: bedframeBothTiers, qty: 1, specials: ['HB Fully Cover'] },
+      onlyCost,
+    );
+    expect(r.specialsSurchargeSen).toBe(0);
+    expect(r.unitPriceSen).toBe(52000);
+  });
+
+  it('single option: sellingPriceSen=7000 set → selling surcharge 7000', () => {
+    const withSelling: MaintenanceConfig = {
+      ...costOnlyConfig,
+      specials: [{ value: 'HB Fully Cover', priceSen: 5500, sellingPriceSen: 7000 }],
+    };
+    const r = computeMfgLinePrice(
+      { product: bedframeBothTiers, qty: 1, specials: ['HB Fully Cover'] },
+      withSelling,
+    );
+    // Selling reads the director-set selling surcharge, NOT the 5500 cost.
+    expect(r.specialsSurchargeSen).toBe(7000);
+    expect(r.unitPriceSen).toBe(52000 + 7000);
+  });
+
+  it('cost compute still reads priceSen for the SAME options (cost ≠ sell)', () => {
+    const product: MfgPricingProduct = {
+      category: 'BEDFRAME', basePriceSen: 52000, costPriceSen: 18000,
+    };
+    const cfg: MaintenanceConfig = {
+      ...costOnlyConfig,
+      // costSen drives cost compute; priceSen is benchmark; sellingPriceSen
+      // drives selling. Set all three distinctly to prove independence.
+      specials: [{ value: 'HB Fully Cover', priceSen: 5500, costSen: 1200, sellingPriceSen: 7000 }],
+    };
+    const sell = computeMfgLinePrice(
+      { product, qty: 1, specials: ['HB Fully Cover'] }, cfg,
+    );
+    const cost = computeMfgLineCost(
+      { product, qty: 1, specials: ['HB Fully Cover'] }, cfg,
+    );
+    expect(sell.specialsSurchargeSen).toBe(7000); // sellingPriceSen
+    expect(cost.specialsSurchargeSen).toBe(1200); // costSen
   });
 });
 

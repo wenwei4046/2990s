@@ -160,8 +160,14 @@ export function recomputeFromSnapshot(
   );
 
   // Project specials → custom_specials column. Each pick keeps its label
-  // for the SO print; surchargeSen comes from the maintenance config
-  // (unknown picks ride along at 0, preserving HOOKKA's tolerant behaviour).
+  // for the SO print; surchargeSen comes from the maintenance config.
+  // Commander 2026-05-28: this is the SELLING breakdown persisted on the SO,
+  // so it MUST read `sellingPriceSen` (the Sales-Director-authored selling
+  // surcharge) — NOT `priceSen` (the cost benchmark). This keeps each pick's
+  // persisted surchargeSen consistent with breakdown.specialsSurchargeSen /
+  // special_order_sen (both computed from sellingPriceSen via the shared
+  // computeMfgLinePrice). Unknown / unset picks ride along at 0, preserving
+  // HOOKKA's tolerant behaviour.
   const specialsPool =
     category === 'SOFA'
       ? config?.sofaSpecials ?? []
@@ -171,7 +177,7 @@ export function recomputeFromSnapshot(
   const customSpecials = specials.length
     ? specials.map((s) => {
         const hit = specialsPool.find((o) => o.value === s);
-        return { description: s, surchargeSen: hit?.priceSen ?? 0 };
+        return { description: s, surchargeSen: hit?.sellingPriceSen ?? 0 };
       })
     : null;
 

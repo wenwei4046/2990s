@@ -101,8 +101,17 @@ export type MfgProductRow = {
 /* PR #216 — Commander 2026-05-27: parallel cost-side editor. Operation
  * can input estimated `costSen` next to each `priceSen` on Maintenance
  * surcharge rows. Read by computeMfgLineCost() in @2990s/shared. Opt-in
- * per row — absence keeps cost-side surcharge at 0. */
-export type PricedOption = { value: string; priceSen: number; costSen?: number };
+ * per row — absence keeps cost-side surcharge at 0.
+ *
+ * PR — Commander 2026-05-28: `priceSen` is the COST benchmark (commander's
+ * mental model: Backend prices = cost). The customer-facing SELLING surcharge
+ * lives on `sellingPriceSen` (authored by the Sales Director on POS, PR #257).
+ * computeMfgLinePrice() in @2990s/shared adds `sellingPriceSen` (not priceSen)
+ * to the selling line total, and the SO create/edit variant dropdowns only
+ * show a `(+MYR …)` price suffix when `sellingPriceSen > 0` — so today, with
+ * it unset, the dropdowns stay clean and variant surcharges contribute 0 to
+ * the selling subtotal. Optional on the wire; older rows stay shape-identical. */
+export type PricedOption = { value: string; priceSen: number; costSen?: number; sellingPriceSen?: number };
 
 export type MaintenanceConfig = {
   divanHeights:    PricedOption[];

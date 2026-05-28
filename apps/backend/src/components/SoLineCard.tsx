@@ -814,7 +814,12 @@ const VariantSelect = ({
   label, options, value, onChange, disabled = false,
 }: {
   label:    string;
-  options:  Array<{ value: string; priceSen: number; display?: string }>;
+  /* Commander 2026-05-28: `priceSen` is COST and must NOT surface in the SO
+     create/edit flow. The option label shows the SELLING surcharge only
+     (`sellingPriceSen`), and only when a Sales Director has set one (> 0).
+     Today sellingPriceSen is unset, so dropdowns render clean ("10"`, `16"`)
+     with no MYR cost numbers — exactly what the commander asked for. */
+  options:  Array<{ value: string; priceSen: number; sellingPriceSen?: number; display?: string }>;
   value:    string;
   disabled?: boolean;
   onChange: (v: string) => void;
@@ -828,11 +833,14 @@ const VariantSelect = ({
       onChange={(e) => onChange(e.target.value)}
     >
       <option value="">—</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.display ?? o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
-        </option>
-      ))}
+      {options.map((o) => {
+        const sell = o.sellingPriceSen ?? 0;
+        return (
+          <option key={o.value} value={o.value}>
+            {o.display ?? o.value}{sell > 0 ? ` (+${fmtRm(sell)})` : ''}
+          </option>
+        );
+      })}
     </select>
   </label>
 );
@@ -847,7 +855,9 @@ const SpecialsAccordion = ({
   open:     boolean;
   onToggle: () => void;
   picked:   string[];
-  options:  Array<{ value: string; priceSen: number }>;
+  /* Commander 2026-05-28: show the SELLING surcharge (sellingPriceSen), not
+     the cost priceSen. Unset → render "RM 0" / no surcharge. */
+  options:  Array<{ value: string; priceSen: number; sellingPriceSen?: number }>;
   disabled?: boolean;
   onChange: (next: string[]) => void;
 }) => {
@@ -890,7 +900,7 @@ const SpecialsAccordion = ({
                 <div>
                   <div className={styles.specialsLabel}>{o.value}</div>
                   <div className={styles.specialsSurcharge}>
-                    {o.priceSen > 0 ? `+${fmtRm(o.priceSen)}` : 'RM 0'}
+                    {(o.sellingPriceSen ?? 0) > 0 ? `+${fmtRm(o.sellingPriceSen!)}` : 'RM 0'}
                   </div>
                 </div>
               </label>

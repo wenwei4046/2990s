@@ -137,17 +137,19 @@ export const SoLineItemModal = ({
       }
       const legV  = String(draft.variants.legHeight ?? '');
       const specs = specialsList(draft.variants.specials ?? draft.variants.special);
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      for (const s of specs) extraSen += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
+      // Commander 2026-05-28: variant surcharge for SELLING reads sellingPriceSen
+      // (cost priceSen must NOT inflate the customer-facing line). Unset → 0.
+      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.sellingPriceSen ?? 0;
+      for (const s of specs) extraSen += maint.sofaSpecials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
     } else if (category === 'bedframe') {
       const divanV = String(draft.variants.divanHeight ?? '');
       const totalV = String(draft.variants.totalHeight ?? '');
       const legV   = String(draft.variants.legHeight ?? '');
       const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
-      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
-      extraSen += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
-      extraSen += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
-      for (const s of specs) extraSen += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
+      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.sellingPriceSen ?? 0;
+      extraSen += maint.totalHeights.find((o) => o.value === totalV)?.sellingPriceSen ?? 0;
+      extraSen += maint.legHeights  .find((o) => o.value === legV)?.sellingPriceSen   ?? 0;
+      for (const s of specs) extraSen += maint.specials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
     }
     // Mattress / Accessory / Others: no variant surcharges. Base price as-is.
 
@@ -174,17 +176,18 @@ export const SoLineItemModal = ({
       }
       const legV  = String(draft.variants.legHeight ?? '');
       const specs = specialsList(draft.variants.specials ?? draft.variants.special);
-      extra += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      for (const s of specs) extra += maint.sofaSpecials.find((o) => o.value === s)?.priceSen ?? 0;
+      // Selling-side surcharge = sellingPriceSen (not the cost priceSen).
+      extra += maint.sofaLegHeights.find((o) => o.value === legV)?.sellingPriceSen ?? 0;
+      for (const s of specs) extra += maint.sofaSpecials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
     } else if (category === 'bedframe') {
       const divanV = String(draft.variants.divanHeight ?? '');
       const totalV = String(draft.variants.totalHeight ?? '');
       const legV   = String(draft.variants.legHeight ?? '');
       const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
-      extra += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
-      extra += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
-      extra += maint.legHeights  .find((o) => o.value === legV)?.priceSen   ?? 0;
-      for (const s of specs) extra += maint.specials.find((o) => o.value === s)?.priceSen ?? 0;
+      extra += maint.divanHeights.find((o) => o.value === divanV)?.sellingPriceSen ?? 0;
+      extra += maint.totalHeights.find((o) => o.value === totalV)?.sellingPriceSen ?? 0;
+      extra += maint.legHeights  .find((o) => o.value === legV)?.sellingPriceSen   ?? 0;
+      for (const s of specs) extra += maint.specials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
     }
     return { basePriceSen: base, extraSen: extra };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -493,7 +496,9 @@ const VariantSelect = ({
   label, options, value, onChange,
 }: {
   label:    string;
-  options:  Array<{ value: string; priceSen: number }>;
+  /* Commander 2026-05-28: label shows SELLING surcharge (sellingPriceSen)
+     only — the cost `priceSen` must never surface in the SO create flow. */
+  options:  Array<{ value: string; priceSen: number; sellingPriceSen?: number }>;
   value:    string;
   onChange: (v: string) => void;
 }) => (
@@ -501,11 +506,14 @@ const VariantSelect = ({
     <span className={styles.fieldLabel}>{label}</span>
     <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
       <option value="">—</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
-        </option>
-      ))}
+      {options.map((o) => {
+        const sell = o.sellingPriceSen ?? 0;
+        return (
+          <option key={o.value} value={o.value}>
+            {o.value}{sell > 0 ? ` (+${fmtRm(sell)})` : ''}
+          </option>
+        );
+      })}
     </select>
   </label>
 );
@@ -518,7 +526,9 @@ const SpecialsMultiSelect = ({
   label, options, picked, onChange,
 }: {
   label:    string;
-  options:  Array<{ value: string; priceSen: number }>;
+  /* Commander 2026-05-28: chip shows SELLING surcharge (sellingPriceSen),
+     never the cost priceSen. */
+  options:  Array<{ value: string; priceSen: number; sellingPriceSen?: number }>;
   picked:   string[];
   onChange: (next: string[]) => void;
 }) => {
@@ -567,6 +577,7 @@ const SpecialsMultiSelect = ({
           )}
           {options.map((o) => {
             const on = picked.includes(o.value);
+            const sell = o.sellingPriceSen ?? 0;
             return (
               <button
                 key={o.value}
@@ -583,7 +594,7 @@ const SpecialsMultiSelect = ({
                   cursor: 'pointer',
                 }}
               >
-                {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
+                {o.value}{sell > 0 ? ` (+${fmtRm(sell)})` : ''}
               </button>
             );
           })}
