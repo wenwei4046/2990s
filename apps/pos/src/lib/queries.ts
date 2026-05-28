@@ -174,7 +174,12 @@ export const useProduct = (productId: string | undefined) =>
         stock: 0,
         low_at: 0,
         visible: true,
-        category_id: null,
+        /* BUGFIX 2026-05-28: the Configurator topbar chip does
+           `p.category_id.toUpperCase()` — a null here crashed the whole
+           configure route ("Cannot read properties of null (reading
+           'toUpperCase')"). Stamp the lowercased mfg category so the chip
+           reads e.g. "BOOQIT · SOFA". */
+        category_id: mfg.category ? mfg.category.toLowerCase() : null,
         series_id: null,
         included_addons: [] as { addonId: string; qty: number }[],
         updated_at: new Date().toISOString(),
