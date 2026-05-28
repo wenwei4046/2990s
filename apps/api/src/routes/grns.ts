@@ -113,6 +113,71 @@ grns.get('/', async (c) => {
   return c.json({ grns: data ?? [] });
 });
 
+/* ── GET /outstanding-po-items ──────────────────────────────────────────
+   Returns a flat list of PO line items with remaining qty > 0. Used by
+   the multi-select "GRN from POs (line-level)" picker at /grns/from-po.
+   Filters:
+     - parent PO status must be SUBMITTED or PARTIALLY_RECEIVED
+     - line item must have qty - received_qty > 0
+     - limit 500 so the picker doesn't choke
+   Shape mirrors the GET /outstanding-so-items pattern on mfgPurchaseOrders.
+
+   IMPORTANT (route ordering): this STATIC path MUST be registered before
+   the `/:id` param route below — otherwise Hono matches `/:id` first and
+   tries to cast "outstanding-po-items" to a uuid → 500. (Bug fix
+   2026-05-28, same class as the PO-from-SO shadowing.) */
+grns.get('/outstanding-po-items', async (c) => {
+  const sb = c.get('supabase');
+  const { data: items, error } = await sb
+    .from('purchase_order_items')
+    .select(`
+      id, purchase_order_id, material_kind, material_code, material_name, item_group,
+      description, qty, received_qty, unit_price_centi, warehouse_id, variants,
+      po:purchase_orders!inner ( id, po_number, supplier_id, status, po_date, expected_at,
+        supplier:suppliers ( code, name ) )
+    `)
+    .order('purchase_order_id', { ascending: false })
+    .limit(500);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  type Row = {
+    id: string; purchase_order_id: string; material_kind: string; material_code: string;
+    material_name: string; item_group: string | null; description: string | null;
+    qty: number; received_qty: number; unit_price_centi: number;
+    warehouse_id: string | null; variants: unknown;
+    po: {
+      id: string; po_number: string; supplier_id: string; status: string;
+      po_date: string; expected_at: string | null;
+      supplier: { code: string; name: string } | null;
+    };
+  };
+
+  const outstanding = ((items ?? []) as unknown as Row[])
+    .filter((r) => r.po.status === 'SUBMITTED' || r.po.status === 'PARTIALLY_RECEIVED')
+    .filter((r) => r.qty - (r.received_qty ?? 0) > 0)
+    .map((r) => ({
+      poItemId:        r.id,
+      poId:            r.po.id,
+      poDocNo:         r.po.po_number,
+      itemCode:        r.material_code,
+      description:     r.description ?? r.material_name,
+      itemGroup:       r.item_group ?? '',
+      qty:             r.qty,
+      receivedQty:     r.received_qty ?? 0,
+      remainingQty:    r.qty - (r.received_qty ?? 0),
+      unitPriceCenti:  r.unit_price_centi,
+      warehouseId:     r.warehouse_id,
+      variants:        r.variants,
+      supplierId:      r.po.supplier_id,
+      supplierCode:    r.po.supplier?.code ?? '',
+      supplierName:    r.po.supplier?.name ?? '',
+      poDate:          r.po.po_date,
+      expectedAt:      r.po.expected_at,
+    }));
+
+  return c.json({ items: outstanding });
+});
+
 grns.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
@@ -335,66 +400,6 @@ grns.patch('/:id/post', async (c) => {
   if (!res.ok) return c.json({ error: 'post_failed', reason: res.reason }, 500);
   const { data } = await sb.from('grns').select('id, status, posted_at').eq('id', id).single();
   return c.json({ grn: data });
-});
-
-/* ── GET /outstanding-po-items ──────────────────────────────────────────
-   Returns a flat list of PO line items with remaining qty > 0. Used by
-   the multi-select "GRN from POs (line-level)" picker at /grns/from-po.
-   Filters:
-     - parent PO status must be SUBMITTED or PARTIALLY_RECEIVED
-     - line item must have qty - received_qty > 0
-     - limit 500 so the picker doesn't choke
-   Shape mirrors the GET /outstanding-so-items pattern on mfgPurchaseOrders. */
-grns.get('/outstanding-po-items', async (c) => {
-  const sb = c.get('supabase');
-  const { data: items, error } = await sb
-    .from('purchase_order_items')
-    .select(`
-      id, purchase_order_id, material_kind, material_code, material_name, item_group,
-      description, qty, received_qty, unit_price_centi, warehouse_id, variants,
-      po:purchase_orders!inner ( id, po_number, supplier_id, status, po_date, expected_at,
-        supplier:suppliers ( code, name ) )
-    `)
-    .order('purchase_order_id', { ascending: false })
-    .limit(500);
-  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-
-  type Row = {
-    id: string; purchase_order_id: string; material_kind: string; material_code: string;
-    material_name: string; item_group: string | null; description: string | null;
-    qty: number; received_qty: number; unit_price_centi: number;
-    warehouse_id: string | null; variants: unknown;
-    po: {
-      id: string; po_number: string; supplier_id: string; status: string;
-      po_date: string; expected_at: string | null;
-      supplier: { code: string; name: string } | null;
-    };
-  };
-
-  const outstanding = ((items ?? []) as unknown as Row[])
-    .filter((r) => r.po.status === 'SUBMITTED' || r.po.status === 'PARTIALLY_RECEIVED')
-    .filter((r) => r.qty - (r.received_qty ?? 0) > 0)
-    .map((r) => ({
-      poItemId:        r.id,
-      poId:            r.po.id,
-      poDocNo:         r.po.po_number,
-      itemCode:        r.material_code,
-      description:     r.description ?? r.material_name,
-      itemGroup:       r.item_group ?? '',
-      qty:             r.qty,
-      receivedQty:     r.received_qty ?? 0,
-      remainingQty:    r.qty - (r.received_qty ?? 0),
-      unitPriceCenti:  r.unit_price_centi,
-      warehouseId:     r.warehouse_id,
-      variants:        r.variants,
-      supplierId:      r.po.supplier_id,
-      supplierCode:    r.po.supplier?.code ?? '',
-      supplierName:    r.po.supplier?.name ?? '',
-      poDate:          r.po.po_date,
-      expectedAt:      r.po.expected_at,
-    }));
-
-  return c.json({ items: outstanding });
 });
 
 /* ── POST /from-po-items ────────────────────────────────────────────────
