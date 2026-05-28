@@ -66,9 +66,10 @@ export function buildVariantSummary(
     }
   }
 
-  // Specials always appended last.
+  // Special orders always appended last, labelled so they read clearly in the
+  // combined "Description 2" string (Commander 2026-05-28: "还要加 special order").
   const specials = specialsList(variants.specials ?? variants.special);
-  if (specials.length) segments.push(specials.join(' + '));
+  if (specials.length) segments.push(`SPECIAL: ${specials.join(' + ')}`);
 
   return segments.filter(Boolean).join(' / ');
 }

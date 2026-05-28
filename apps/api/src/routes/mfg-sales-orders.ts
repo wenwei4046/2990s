@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
-import { pickComboMatch, type SofaComboRow, type SofaPriceTier } from '@2990s/shared';
+import { pickComboMatch, buildVariantSummary, type SofaComboRow, type SofaPriceTier } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
@@ -637,6 +637,10 @@ mfgSalesOrders.post('/', async (c) => {
       item_group: it.itemGroup ?? 'others',
       item_code: it.itemCode,
       description: (it.description as string) ?? null,
+      /* Commander 2026-05-28 — "Description 2" is the auto-combined variant
+         summary (the long attribute string). Server-generated from the line's
+         variants so it stays the single source of truth. */
+      description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
       uom: (it.uom as string) ?? 'UNIT',
       qty,
       unit_price_centi: unit,
@@ -1394,7 +1398,8 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     item_group: it.itemGroup ?? 'others',
     item_code: it.itemCode,
     description: (it.description as string) ?? null,
-    description2: (it.description2 as string) ?? null,
+    /* Commander 2026-05-28 — "Description 2" auto-generated from variants. */
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     uom: (it.uom as string) ?? 'UNIT',
     qty,
     unit_price_centi: unit,
@@ -1554,6 +1559,14 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     ['remark', 'remark'], ['cancelled', 'cancelled'],
   ] as const) {
     if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* Commander 2026-05-28 — "Description 2" is ALWAYS the server-generated
+     variant summary; never trust a client-sent value. Recompute from the
+     effective itemGroup + variants (incoming patch, else the stored row). */
+  {
+    const effGroup = (it.itemGroup ?? prev.item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? prev.variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
   /* PR-E — Per-item delivery date PATCH. If the caller sends
