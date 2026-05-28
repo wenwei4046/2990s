@@ -225,7 +225,7 @@ const deriveBranding = (r: SoRow): string => {
   if (cat === 'SOFA')     return '2990 Sofa';
   if (cat === 'BEDFRAME') return 'Bedframe';
   if (cat === 'MATTRESS') return (r.first_item_branding && r.first_item_branding.trim()) || '2990 Mattress';
-  return '2990';                             // accessory / others fallback
+  return '';                                 // accessory / others → none ("—")  (Commander 2026-05-28)
 };
 
 const STATUS_CLASS: Record<string, string> = {
