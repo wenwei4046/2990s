@@ -328,12 +328,18 @@ describe('computeSofaPrice basis selection', () => {
 
 /* Case 4b — combo override applies to a SUBSET, extras stay at full price,
    and only when the combo is strictly cheaper than the matched subset's own
-   à-la-carte sum (HOOKKA `comboMatches` 1:1). Prices in the combo fixture use
-   the same whole-MYR unit as the compartment fixtures so assertions stay
-   coherent. */
+   à-la-carte sum (HOOKKA `comboMatches` 1:1).
+
+   UNIT NOTE (Commander 2026-05-28 unit fix): the combo dialog stores prices
+   in CENTI (`Math.round(rm * 100)`), so `pricesByHeight` here is in CENTI —
+   matching production. The compartment / bundle fixtures are whole-MYR (the
+   POS pricing object divides base_price_sen by 100). groupPrice converts the
+   combo centi → whole-MYR before the cheaper-only guard and before adding
+   extras, so every `comboPrice` / `finalPrice` assertion below is whole-MYR.
+   Combo "2+L" = [{2A-LHF,2A-RHF},{L-LHF,L-RHF}]. Subset à-la-carte for a
+   2A + L pair = 2400 + 1900 = 4300 MYR; combo 380000 centi = RM 3800
+   (< 4300 → applies). */
 describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
-  // Combo "2+L" = [{2A-LHF,2A-RHF},{L-LHF,L-RHF}]. Subset à-la-carte for a
-  // 2A + L pair = 2400 + 1900 = 4300; combo price 3800 (< 4300 → applies).
   const comboPricing = (over: Partial<SofaProductPricing> = {}) =>
     pricing({
       baseModel: '',
@@ -346,7 +352,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
           modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
           tier: 'PRICE_2',
           customerId: null,
-          pricesByHeight: { '24': 3800 },
+          pricesByHeight: { '24': 380000 }, // CENTI — RM 3800
           label: null,
           effectiveFrom: '2026-01-01',
           deletedAt: null,
@@ -356,9 +362,9 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     });
 
   it('applies combo to the matched subset and keeps extras at full price', () => {
-    // 2A + L cover the combo (subset à-la-carte 4300, combo 3800). An extra
-    // 1NA (1200) sits apart so it forms its OWN group at à-la-carte — proving
-    // extras never ride the combo. The combo group base = 3800.
+    // 2A + L cover the combo (subset à-la-carte 4300 MYR, combo RM 3800). An
+    // extra 1NA (1200) sits apart so it forms its OWN group at à-la-carte —
+    // proving extras never ride the combo. The combo group base = RM 3800.
     const cells: Cell[] = [
       { id: 'a', moduleId: '2A-LHF', x: 0,    y: 0, rot: 0 },
       { id: 'b', moduleId: 'L-RHF',  x: 158,  y: 0, rot: 0 },
@@ -368,6 +374,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     const result = computeSofaPrice(cells, '24', comboPricing());
     const comboGroup = result.groups.find((g) => g.basis === 'combo')!;
     expect(comboGroup).toBeTruthy();
+    // Whole-MYR — NOT the raw 380000 centi and NOT 38 (would be a double-÷100).
     expect(comboGroup.comboPrice).toBe(3800);
     expect(comboGroup.comboSubsetALaCarte).toBe(4300);
     expect(comboGroup.comboExtrasALaCarte).toBe(0); // both cells in the combo group are matched
@@ -375,6 +382,54 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     // standalone 1NA priced à-la-carte (1200), never folded into the combo.
     const extraGroup = result.groups.find((g) => g.basis === 'a_la_carte')!;
     expect(extraGroup.finalPrice).toBe(1200);
+  });
+
+  /* Standalone unit-consistency proof (Commander 2026-05-28). Compartments at
+     RM 990 + RM 990 (whole-MYR); combo pricesByHeight['24'] = 180000 centi
+     (= RM 1800). subsetSum = 1980 MYR; 1980 − 1800 = 180 > 0 → combo applies.
+     basePrice must be RM 1800 — never 180000 (raw centi) or 18 (double-÷100).
+     Uses the same 2A-LHF + L-RHF geometry at height '24' the other combo cases
+     prove forms one connected group. */
+  it('converts combo centi → whole-MYR (RM 990 + RM 990 vs RM 1800 combo)', () => {
+    const p = pricing({
+      baseModel: '',
+      fabricTier: 'PRICE_2',
+      comboHeight: '24',
+      compartments: [
+        { compartmentId: '2A-LHF', active: true, price: 990 },
+        { compartmentId: '2A-RHF', active: true, price: 990 },
+        { compartmentId: 'L-LHF',  active: true, price: 990 },
+        { compartmentId: 'L-RHF',  active: true, price: 990 },
+      ],
+      // Drop bundles so the test isolates the combo vs à-la-carte unit path
+      // (a 2+L bundle would otherwise compete for basis selection).
+      bundles: [],
+      combos: [
+        {
+          id: 'cmb-990',
+          baseModel: '',
+          modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+          tier: 'PRICE_2',
+          customerId: null,
+          pricesByHeight: { '24': 180000 }, // CENTI — RM 1800
+          label: null,
+          effectiveFrom: '2026-01-01',
+          deletedAt: null,
+        },
+      ],
+    });
+    const g = computeSofaPrice(
+      [
+        { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+      ],
+      '24',
+      p,
+    ).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboSubsetALaCarte).toBe(1980); // 990 + 990, whole-MYR
+    expect(g.comboPrice).toBe(1800);          // 180000 centi ÷ 100 = RM 1800
+    expect(g.finalPrice).toBe(1800);          // NOT 180000, NOT 18
   });
 
   it('extra module WITHIN the same connected group stays at full price', () => {
@@ -387,15 +442,17 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     ];
     const g = computeSofaPrice(cells, '24', comboPricing()).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboPrice).toBe(3800);
+    expect(g.comboPrice).toBe(3800);          // RM 3800, whole-MYR
     expect(g.comboSubsetALaCarte).toBe(4300); // 2A 2400 + L 1900
     expect(g.comboExtrasALaCarte).toBe(1200); // the 1NA extra at full price
     expect(g.finalPrice).toBe(3800 + 1200);
   });
 
   it('cheaper-only guard: combo NOT applied when it is dearer than the subset', () => {
-    // Combo price 9999 > subset à-la-carte 4300 → guard refuses; the shape
-    // falls back to its bundle / à-la-carte basis (here 2+L bundle 4000).
+    // Combo RM 9999 (999900 centi) > subset à-la-carte 4300 MYR → guard
+    // refuses; the shape falls back to its bundle / à-la-carte basis (here the
+    // 2+L bundle 4000). This is the case the unit bug used to BREAK: comparing
+    // 4300 MYR against a raw centi combo made the guard misfire ~100×.
     const g = computeSofaPrice(
       [
         { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
@@ -406,7 +463,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
         combos: [
           {
             id: 'cmb', baseModel: '', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
-            tier: 'PRICE_2', customerId: null, pricesByHeight: { '24': 9999 },
+            tier: 'PRICE_2', customerId: null, pricesByHeight: { '24': 999900 }, // CENTI — RM 9999
             label: null, effectiveFrom: '2026-01-01', deletedAt: null,
           },
         ],
@@ -426,7 +483,7 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
       comboPricing(),
     ).groups[0]!;
     expect(g.basis).toBe('combo');
-    expect(g.comboPrice).toBe(3800);
+    expect(g.comboPrice).toBe(3800); // RM 3800, whole-MYR
   });
 });
 

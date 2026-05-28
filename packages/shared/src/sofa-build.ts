@@ -717,7 +717,19 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
       pricing.combos,
     );
     if (match) {
+      // UNIT FIX (Commander 2026-05-28): `match.comboPriceCenti` is CENTI (the
+      // combo dialog stores `Math.round(rm * 100)`), but EVERYTHING else in
+      // groupPrice — compartment `.price`, bundle price, recliner upgrade — is
+      // whole-MYR in the POS pricing object (apps/pos/src/lib/queries.ts:169
+      // divides base_price_sen by 100; product_compartments/bundles.price are
+      // whole-MYR). Convert the combo total to whole-MYR ONCE here so the
+      // cheaper-only guard, the stored comboPrice, and basePrice all compare /
+      // sum in the same unit. (The SERVER recompute keeps centi — it works in
+      // unit_price_sen throughout — so the fix lives at the call site, not in
+      // pickComboMatch's returned unit.)
+      const comboPriceMyr = Math.round(match.comboPriceCenti / 100);
       // À-la-carte sum of the matched subset (the cells the combo replaces).
+      // Whole-MYR — sums compartment `.price` which is whole-MYR.
       const matchedSet = new Set(match.matchedIndices);
       let subsetSum = 0;
       for (let i = 0; i < group.length; i++) {
@@ -727,10 +739,11 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
       }
       // HOOKKA cheaper-only guard: apply the combo only when it actually saves
       // money against the matched subset's own à-la-carte sum. Equal / dearer
-      // combos are ignored so a "combo" never inflates the line.
-      if (subsetSum - match.comboPriceCenti > 0) {
+      // combos are ignored so a "combo" never inflates the line. Both operands
+      // are now whole-MYR.
+      if (subsetSum - comboPriceMyr > 0) {
         basis = 'combo';
-        comboPrice = match.comboPriceCenti;
+        comboPrice = comboPriceMyr;
         comboSubsetALaCarte = subsetSum;
         comboExtrasALaCarte = Math.max(0, aLaCarteTotal - subsetSum);
         comboMatchedCellIds = match.matchedIndices.map((i) => cellIds[i]!);
