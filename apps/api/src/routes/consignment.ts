@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const consignment = new Hono<{ Bindings: Env; Variables: Variables }>();
 consignment.use('*', supabaseAuth);
@@ -106,10 +107,11 @@ consignment.patch('/:id/notes/:noteId/post', async (c) => {
   // Load items once — used both for restocking qty_returned and for the
   // inventory movement insert below.
   const { data: items } = await sb.from('consignment_note_items')
-    .select('consignment_item_id, item_code, description, qty')
+    .select('consignment_item_id, item_code, description, qty, item_group, variants')
     .eq('consignment_note_id', noteId);
   const noteItems = (items ?? []) as Array<{
     consignment_item_id: string | null; item_code: string; description: string | null; qty: number;
+    item_group?: string | null; variants?: VariantAttrs | null;
   }>;
 
   if (n.note_type === 'RETURN') {
@@ -143,6 +145,7 @@ consignment.patch('/:id/notes/:noteId/post', async (c) => {
         movement_type: movementType as 'IN' | 'OUT',
         warehouse_id: warehouseId,
         product_code: it.item_code,
+        variant_key: computeVariantKey(it.item_group, it.variants ?? null),
         product_name: it.description,
         qty: it.qty,
         source_doc_type: 'CONSIGNMENT_NOTE' as const,

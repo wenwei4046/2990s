@@ -2098,6 +2098,9 @@ export const inventoryMovements = pgTable('inventory_movements', {
   warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   productCode:    text('product_code').notNull(),
   productName:    text('product_name'),
+  // Migration 0095 — attribute-composition bucket key (packages/shared
+  // computeVariantKey). '' = unclassified/legacy.
+  variantKey:     text('variant_key').notNull().default(''),
   qty:            integer('qty').notNull(),
   /* PR #37 — per-unit cost in sen. IN: provided by caller (from GRN/PI).
      OUT: computed by the FIFO trigger from consumed lots. */
@@ -2122,6 +2125,7 @@ export const inventoryLots = pgTable('inventory_lots', {
   warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   productCode:    text('product_code').notNull(),
   productName:    text('product_name'),
+  variantKey:     text('variant_key').notNull().default(''),  // migration 0095
   qtyReceived:    integer('qty_received').notNull(),
   qtyRemaining:   integer('qty_remaining').notNull(),
   unitCostSen:    integer('unit_cost_sen').notNull().default(0),
@@ -2227,6 +2231,7 @@ export const inventoryLotConsumptions = pgTable('inventory_lot_consumptions', {
   lotId:          uuid('lot_id').notNull().references(() => inventoryLots.id, { onDelete: 'cascade' }),
   warehouseId:    uuid('warehouse_id').notNull().references(() => warehouses.id, { onDelete: 'restrict' }),
   productCode:    text('product_code').notNull(),
+  variantKey:     text('variant_key').notNull().default(''),  // migration 0095
   qtyConsumed:    integer('qty_consumed').notNull(),
   unitCostSen:    integer('unit_cost_sen').notNull(),
   totalCostSen:   integer('total_cost_sen').notNull(),
@@ -2367,6 +2372,7 @@ export const warehouseRackItems = pgTable('warehouse_rack_items', {
   id:            uuid('id').primaryKey().defaultRandom(),
   rackId:        uuid('rack_id').notNull().references(() => warehouseRacks.id, { onDelete: 'cascade' }),
   productCode:   text('product_code').notNull(),
+  variantKey:    text('variant_key').notNull().default(''),  // aligns with inventory buckets
   productName:   text('product_name'),
   sizeLabel:     text('size_label'),
   customerName:  text('customer_name'),
@@ -2389,8 +2395,11 @@ export const warehouseRackMovements = pgTable('warehouse_rack_movements', {
   // renamed — the rack_label snapshot preserves the display.
   rackId:       uuid('rack_id'),
   rackLabel:    text('rack_label'),
+  toRackId:     uuid('to_rack_id'),     // TRANSFER destination (rackId = source)
+  toRackLabel:  text('to_rack_label'),
   warehouseId:  uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
   productCode:  text('product_code'),
+  variantKey:   text('variant_key').notNull().default(''),
   productName:  text('product_name'),
   sourceDocNo:  text('source_doc_no'),
   quantity:     integer('quantity').notNull().default(1),

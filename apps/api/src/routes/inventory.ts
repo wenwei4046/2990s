@@ -112,9 +112,12 @@ inventory.get('/', async (c) => {
   const showAll = c.req.query('showAll') === 'true';
 
   const tableName = showAll ? 'v_inventory_all_skus' : 'inventory_balances';
+  // showAll = catalog rollup (one row per SKU incl. zero, product_code level).
+  // default = live balances, now one row per (warehouse, product_code,
+  // variant_key) so the UI can break a SKU into its attribute-composition rows.
   const cols = showAll
     ? 'warehouse_id, warehouse_code, warehouse_name, product_code, product_name, category, size_label, qty, last_movement_at, value_sen, main_supplier_code, main_supplier_name'
-    : 'warehouse_id, product_code, product_name, qty, last_movement_at';
+    : 'warehouse_id, product_code, variant_key, product_name, qty, last_movement_at';
 
   let q = sb.from(tableName).select(cols);
   if (warehouseId) q = q.eq('warehouse_id', warehouseId);
@@ -154,6 +157,51 @@ inventory.get('/products', async (c) => {
     return c.json({ error: 'load_failed', reason: error.message }, 500);
   }
   return c.json({ products: data ?? [] });
+});
+
+/* ── Per (warehouse × variant) breakdown for one product (drilldown drawer) ─
+   Migration 0095. One row per warehouse + attribute composition, with qty
+   (from balances) + value (from open FIFO lots) + a readable variant label
+   resolved client-side. This is what powers the SKU → attribute-rows view. */
+inventory.get('/breakdown/:productCode', async (c) => {
+  const sb = c.get('supabase');
+  const productCode = c.req.param('productCode');
+
+  const { data: bal, error: balErr } = await sb.from('inventory_balances')
+    .select('warehouse_id, variant_key, qty, last_movement_at')
+    .eq('product_code', productCode);
+  if (balErr) {
+    if (/relation .* does not exist/i.test(balErr.message) || /column .* does not exist/i.test(balErr.message)) {
+      return c.json({ error: 'migration_pending', reason: 'Run migration 0095 against Supabase.' }, 500);
+    }
+    return c.json({ error: 'load_failed', reason: balErr.message }, 500);
+  }
+  const { data: val } = await sb.from('v_inventory_value')
+    .select('warehouse_id, variant_key, value_sen')
+    .eq('product_code', productCode);
+  const { data: whs } = await sb.from('warehouses').select('id, code, name');
+
+  const whMap = new Map((whs ?? []).map((w: { id: string; code: string; name: string }) => [w.id, w]));
+  const valMap = new Map(
+    ((val ?? []) as Array<{ warehouse_id: string; variant_key: string; value_sen: number }>)
+      .map((v) => [`${v.warehouse_id}|${v.variant_key}`, Number(v.value_sen ?? 0)]),
+  );
+  const balances = ((bal ?? []) as Array<{ warehouse_id: string; variant_key: string | null; qty: number; last_movement_at: string | null }>)
+    .map((b) => {
+      const vk = b.variant_key ?? '';
+      const w = whMap.get(b.warehouse_id);
+      return {
+        warehouse_id: b.warehouse_id,
+        warehouse_code: w?.code ?? null,
+        warehouse_name: w?.name ?? null,
+        variant_key: vk,
+        product_code: productCode,
+        qty: Number(b.qty ?? 0),
+        value_sen: valMap.get(`${b.warehouse_id}|${vk}`) ?? 0,
+        last_movement_at: b.last_movement_at ?? null,
+      };
+    });
+  return c.json({ balances });
 });
 
 inventory.get('/movements', async (c) => {
@@ -239,6 +287,9 @@ inventory.post('/adjustments', async (c) => {
     movement_type: 'ADJUSTMENT',
     warehouse_id: body.warehouseId,
     product_code: body.productCode,
+    // Optional attribute-composition bucket (migration 0095). Adjustments
+    // target the '' (unclassified) bucket unless the caller specifies one.
+    variant_key: String(body.variantKey ?? ''),
     product_name: (body.productName as string) ?? null,
     qty: qtyDelta,
     unit_cost_sen: Number(body.unitCostSen ?? 0),

@@ -15,6 +15,10 @@ type MovementInput = {
   movement_type: 'IN' | 'OUT' | 'ADJUSTMENT';
   warehouse_id: string;
   product_code: string;
+  /** Migration 0095 — canonical attribute-composition bucket key
+   *  (packages/shared computeVariantKey). Stock is bucketed by
+   *  (warehouse_id, product_code, variant_key). Omit / '' = unclassified. */
+  variant_key?: string;
   product_name?: string | null;
   /** For IN / OUT: positive count. For ADJUSTMENT: signed delta
    *  (positive = found stock / IN-style, negative = write-off / OUT-style).

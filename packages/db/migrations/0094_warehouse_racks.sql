@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS warehouse_rack_items (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   rack_id         UUID NOT NULL REFERENCES warehouse_racks(id) ON DELETE CASCADE,
   product_code    TEXT NOT NULL,
+  -- Attribute-composition bucket (packages/shared computeVariantKey), so rack
+  -- contents line up with the inventory variant buckets. '' = unclassified.
+  variant_key     TEXT NOT NULL DEFAULT '',
   product_name    TEXT,
   size_label      TEXT,
   -- Optional human-facing reference to the document/customer that put the item
@@ -82,8 +85,12 @@ CREATE TABLE IF NOT EXISTS warehouse_rack_movements (
   -- being deleted/renamed — the rack_label snapshot preserves the display.
   rack_id       UUID,
   rack_label    TEXT,
+  -- For TRANSFER: the destination rack (rack_id/rack_label = source).
+  to_rack_id    UUID,
+  to_rack_label TEXT,
   warehouse_id  UUID REFERENCES warehouses(id) ON DELETE SET NULL,
   product_code  TEXT,
+  variant_key   TEXT NOT NULL DEFAULT '',
   product_name  TEXT,
   source_doc_no TEXT,
   quantity      INTEGER NOT NULL DEFAULT 1,
@@ -106,5 +113,29 @@ COMMENT ON TABLE warehouse_rack_items IS
   'Items physically stored on a rack. No per-rack limit — a rack can hold many items.';
 COMMENT ON TABLE warehouse_rack_movements IS
   'Append-only stock-in/out/transfer ledger per rack, powering the Movement History tab.';
+
+-- ── RLS ─────────────────────────────────────────────────────────────────
+-- The API talks to Postgres as the `authenticated` role (anon key + the
+-- user's JWT), so RLS is enforced. Without these policies the app cannot read
+-- or write the rack tables. Permissive (staff-readable/writable), matching the
+-- convention used by the inventory tables in 0053.
+ALTER TABLE warehouse_racks          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_rack_items     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_rack_movements ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS wr_read  ON warehouse_racks;
+DROP POLICY IF EXISTS wr_write ON warehouse_racks;
+CREATE POLICY wr_read  ON warehouse_racks          FOR SELECT TO authenticated USING (true);
+CREATE POLICY wr_write ON warehouse_racks          FOR ALL    TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS wri_read  ON warehouse_rack_items;
+DROP POLICY IF EXISTS wri_write ON warehouse_rack_items;
+CREATE POLICY wri_read  ON warehouse_rack_items     FOR SELECT TO authenticated USING (true);
+CREATE POLICY wri_write ON warehouse_rack_items     FOR ALL    TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS wrm_read  ON warehouse_rack_movements;
+DROP POLICY IF EXISTS wrm_write ON warehouse_rack_movements;
+CREATE POLICY wrm_read  ON warehouse_rack_movements FOR SELECT TO authenticated USING (true);
+CREATE POLICY wrm_write ON warehouse_rack_movements FOR ALL    TO authenticated USING (true) WITH CHECK (true);
 
 COMMIT;

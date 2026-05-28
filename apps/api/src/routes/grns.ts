@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
@@ -18,7 +19,7 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
     .select('grn_number, warehouse_id')
     .eq('id', grnId).maybeSingle();
   const { data: items } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi')
+    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi, item_group, variants')
     .eq('grn_id', grnId);
 
   // Roll up qty_accepted onto purchase_order_items.received_qty + update PO header status.
@@ -72,12 +73,14 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
   const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
     ?? (await defaultWarehouseId(sb));
   if (warehouseId && items) {
-    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null }>)
+    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)
       .filter((it) => it.qty_accepted > 0)
       .map((it) => ({
         movement_type: 'IN' as const,
         warehouse_id: warehouseId,
         product_code: it.material_code,
+        // Bucket received stock by its attribute composition (migration 0095).
+        variant_key: computeVariantKey(it.item_group, it.variants ?? null),
         product_name: it.material_name,
         qty: it.qty_accepted,
         unit_cost_sen: Number(it.unit_price_centi ?? 0),
