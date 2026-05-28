@@ -552,7 +552,7 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
+          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
         </span>
         <span className={styles.topbarChipName}>
           {p.name}
@@ -598,7 +598,7 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
+          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
         </span>
         <span className={styles.topbarChipName}>
           {p.name}
@@ -645,7 +645,7 @@ export const Configurator = () => {
     <span className={styles.topbarActions}>
       <span className={styles.topbarChip}>
         <span className={styles.topbarChipEyebrow}>
-          {p.name.toUpperCase()} · {p.category_id.toUpperCase()}
+          {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
         </span>
         <span className={styles.topbarChipName}>
           {pickedSofaRow
