@@ -66,6 +66,7 @@ const PurchaseInvoiceNew = lazy(() => import('./pages/PurchaseInvoiceNew').then(
 const PurchaseInvoiceFromGrn = lazy(() => import('./pages/PurchaseInvoiceFromGrn').then(m => ({ default: m.PurchaseInvoiceFromGrn })));
 const PurchaseReturnNew = lazy(() => import('./pages/PurchaseReturnNew').then(m => ({ default: m.PurchaseReturnNew })));
 const Outstanding = lazy(() => import('./pages/Outstanding').then(m => ({ default: m.Outstanding })));
+const Mrp = lazy(() => import('./pages/Mrp').then(m => ({ default: m.Mrp })));
 const Placeholder = lazy(() => import('./pages/Placeholder').then(m => ({ default: m.Placeholder })));
 const SalesOrderDetailListing = lazy(() => import('./pages/SalesOrderDetailListing').then(m => ({ default: m.SalesOrderDetailListing })));
 const DeliveryOrderDetailListing = lazy(() => import('./pages/DeliveryOrderDetailListing').then(m => ({ default: m.DeliveryOrderDetailListing })));
@@ -116,6 +117,7 @@ export const router = createBrowserRouter([
       { path: 'drivers', element: <Drivers /> },
       { path: 'suppliers', element: <Suppliers /> },
       { path: 'suppliers/:id', element: <SupplierDetail /> },
+      { path: 'mrp', element: <Mrp /> },
       { path: 'purchase-orders',      element: <PurchaseOrders /> },
       { path: 'purchase-orders/new',     element: <PurchaseOrderNew /> },
       { path: 'purchase-orders/from-so', element: <PurchaseOrderFromSo /> },
