@@ -114,4 +114,28 @@ COMMENT ON TABLE warehouse_rack_items IS
 COMMENT ON TABLE warehouse_rack_movements IS
   'Append-only stock-in/out/transfer ledger per rack, powering the Movement History tab.';
 
+-- ── RLS ─────────────────────────────────────────────────────────────────
+-- The API talks to Postgres as the `authenticated` role (anon key + the
+-- user's JWT), so RLS is enforced. Without these policies the app cannot read
+-- or write the rack tables. Permissive (staff-readable/writable), matching the
+-- convention used by the inventory tables in 0053.
+ALTER TABLE warehouse_racks          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_rack_items     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouse_rack_movements ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS wr_read  ON warehouse_racks;
+DROP POLICY IF EXISTS wr_write ON warehouse_racks;
+CREATE POLICY wr_read  ON warehouse_racks          FOR SELECT TO authenticated USING (true);
+CREATE POLICY wr_write ON warehouse_racks          FOR ALL    TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS wri_read  ON warehouse_rack_items;
+DROP POLICY IF EXISTS wri_write ON warehouse_rack_items;
+CREATE POLICY wri_read  ON warehouse_rack_items     FOR SELECT TO authenticated USING (true);
+CREATE POLICY wri_write ON warehouse_rack_items     FOR ALL    TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS wrm_read  ON warehouse_rack_movements;
+DROP POLICY IF EXISTS wrm_write ON warehouse_rack_movements;
+CREATE POLICY wrm_read  ON warehouse_rack_movements FOR SELECT TO authenticated USING (true);
+CREATE POLICY wrm_write ON warehouse_rack_movements FOR ALL    TO authenticated USING (true) WITH CHECK (true);
+
 COMMIT;
