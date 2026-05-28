@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { NavLink } from 'react-router';
 import {
   LayoutDashboard,
@@ -6,8 +6,6 @@ import {
   FileSpreadsheet,
   Package,
   Package2,
-  Layers,
-  PlusCircle,
   UsersRound,
   Truck,
   ScrollText,
@@ -23,27 +21,44 @@ import {
   SlidersHorizontal,
   ArrowLeftRight,
   ClipboardCheck,
+  Warehouse,
   Settings,
   LogOut,
   FileBarChart,
-  Wrench,
   ShieldCheck,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import styles from './Sidebar.module.css';
 
-type NavRow =
-  | { kind: 'group'; label: string }
-  | {
-      kind: 'link';
-      to: string;
-      icon: ReactNode;
-      label: string;
-      badge?: number;
-      badgeMuted?: boolean;
-    };
+type NavLinkRow = {
+  to: string;
+  icon: ReactNode;
+  label: string;
+  badge?: number;
+  badgeMuted?: boolean;
+};
+
+/* A collapsible module inside Supply Chain Management. */
+type NavSection = {
+  id: string;
+  label: string;
+  items: NavLinkRow[];
+};
 
 const ICON_PROPS = { size: 20, strokeWidth: 1.75 } as const;
+
+/* Collapse state persists per-section so a user's expand/collapse choices
+   survive reloads + navigation. Default = all expanded (nothing hidden on
+   first load). Keyed by section id under one localStorage entry. */
+const COLLAPSE_KEY = 'sidebar.scm.collapsed.v1';
+const readCollapsed = (): Record<string, boolean> => {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '{}') as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+};
 
 const formatRole = (role?: string | null): string => {
   if (!role) return 'Backend';
@@ -63,90 +78,120 @@ const formatRole = (role?: string | null): string => {
 
 export const Sidebar = () => {
   const { staff, signOut } = useAuth();
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
 
-  // Orders badge count dropped (perf-router-realtime-sidebar). The previous
-  // useOrders() call here fetched every order's full payload on every shell
-  // mount just to compute a single unread count — orders of magnitude more
-  // data than a badge needs. If we want the badge back later, expose a
-  // /orders/counts aggregate endpoint (or a Supabase head/exact count query)
-  // and call that instead.
-  const items: NavRow[] = [
-    { kind: 'group', label: 'Workspace' },
-    { kind: 'link', to: '/dashboard', icon: <LayoutDashboard {...ICON_PROPS} />, label: 'Dashboard' },
-    {
-      kind: 'link',
-      to: '/orders',
-      icon: <Inbox {...ICON_PROPS} />,
-      label: 'Orders',
-    },
-    ...(staff && ['finance', 'coordinator', 'admin', 'super_admin'].includes(staff.role)
-      ? [{
-          kind: 'link' as const,
-          to: '/audit-log',
-          icon: <FileSpreadsheet {...ICON_PROPS} />,
-          label: 'Payment audit log',
-        }]
-      : []),
-    { kind: 'group', label: 'Catalog' },
-    { kind: 'link', to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
-    { kind: 'link', to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
-    // Models entry removed — lives inside Products & Maintenance as a third
-    // tab next to SKU Master and Maintenance. Route /product-models still
-    // works for direct links (Model Detail back-link uses it).
-    { kind: 'link', to: '/fabric-tracking', icon: <Layers {...ICON_PROPS} />, label: 'Fabric Converter' },
-    { kind: 'link', to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
-    // Stock Adjustments sits under Catalog/Inventory — manual corrections
-    // (write-off / found / damage / recount fix) write to inventory_movements.
-    { kind: 'link', to: '/inventory/adjustments', icon: <SlidersHorizontal {...ICON_PROPS} />, label: 'Adjustments' },
-    // Stock Transfers — move qty between warehouses with paired OUT+IN movements.
-    { kind: 'link', to: '/inventory/transfers', icon: <ArrowLeftRight {...ICON_PROPS} />, label: 'Transfers' },
-    // Stock Takes (Inv PR5) — AutoCount-style cycle count → ADJUSTMENT movements.
-    { kind: 'link', to: '/inventory/stock-takes', icon: <ClipboardCheck {...ICON_PROPS} />, label: 'Stock Take' },
-    // Warehouses sidebar entry removed (PR #38) — it's now a sub-tab inside
-    // /inventory. Route still exists if someone has it bookmarked.
-    // Add-on products page is consolidated into Products & Maintenance — sidebar
-    // entry removed per commander 2026-05-25. Route still exists if linked
-    // from elsewhere; just hidden from nav.
-    { kind: 'group', label: 'Procurement' },
-    { kind: 'link', to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
-    { kind: 'link', to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
-    { kind: 'link', to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
-    { kind: 'link', to: '/purchase-invoices', icon: <Receipt {...ICON_PROPS} />, label: 'Purchase Invoices' },
-    { kind: 'link', to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
-    { kind: 'group', label: 'B2B Sales' },
-    { kind: 'link', to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders' },
-    /* Task #110 — SO Maintenance (formerly Settings → Localities tab).
-       State → warehouse mapping + cascading customer-address dropdowns
-       that only the SO module consumes. */
-    { kind: 'link', to: '/mfg-sales-orders/maintenance', icon: <Wrench {...ICON_PROPS} />, label: 'SO Maintenance' },
-    /* Commander 2026-05-27: "Sales Order Detail Listing 也是 under sales order".
-       Detail Listing is the line-item view of the same SOs — belongs under
-       B2B Sales, not a separate Reports group. */
-    { kind: 'link', to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'SO Detail View (line items)' },
-    { kind: 'link', to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
-    { kind: 'link', to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
-    { kind: 'link', to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
-    { kind: 'link', to: '/consignment', icon: <Boxes {...ICON_PROPS} />, label: 'Consignment' },
-    { kind: 'link', to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
-    { kind: 'group', label: 'Finance' },
-    { kind: 'link', to: '/accounting', icon: <BookOpen {...ICON_PROPS} />, label: 'Accounting' },
-    { kind: 'link', to: '/outstanding', icon: <AlertCircle {...ICON_PROPS} />, label: 'Outstanding' },
-    /* Commander 2026-05-27: dropped the Reports group entirely.
-       - "Sales Order Listing" was redundant with /mfg-sales-orders
-       - "Sales Order Detail Listing" moved up under B2B Sales (line-item view)
-       - "Outstanding Listing" was just a filter on /outstanding which already lives under Finance */
-    { kind: 'group', label: 'Reference' },
-    { kind: 'link', to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
-    { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
-    /* Migration 0086 (2026-05-27) — Administration group, gated to admin /
-       sales_director / coordinator. Users page lives here. */
-    ...(staff && ['admin', 'sales_director', 'coordinator', 'super_admin'].includes(staff.role)
-      ? [
-          { kind: 'group' as const, label: 'Administration' },
-          { kind: 'link' as const, to: '/users', icon: <ShieldCheck {...ICON_PROPS} />, label: 'Users' },
-        ]
+  const toggle = (id: string) =>
+    setCollapsed((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      try {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
+      } catch {
+        /* storage disabled — collapse still works for the session */
+      }
+      return next;
+    });
+
+  const canSeeAuditLog =
+    !!staff && ['finance', 'coordinator', 'admin', 'super_admin'].includes(staff.role);
+  const canSeeAdmin =
+    !!staff && ['admin', 'sales_director', 'coordinator', 'super_admin'].includes(staff.role);
+
+  /* ── Top-level workspace links (outside Supply Chain Management) ── */
+  const workspace: NavLinkRow[] = [
+    { to: '/dashboard', icon: <LayoutDashboard {...ICON_PROPS} />, label: 'Dashboard' },
+    { to: '/orders', icon: <Inbox {...ICON_PROPS} />, label: 'Orders' },
+    ...(canSeeAuditLog
+      ? [{ to: '/audit-log', icon: <FileSpreadsheet {...ICON_PROPS} />, label: 'Payment audit log' }]
       : []),
   ];
+
+  /* ── Supply Chain Management — 5 collapsible modules, ordered by the
+        commander's importance ranking (SO → Procurement → Transport →
+        Warehouse → Consignment). 2026-05-28. ──
+
+     NOTE (Phase 1b, 2026-05-28): "SO Maintenance" now lives as a button on
+     the Sales Orders page (next to "New Sales Order"), and "Fabric Converter"
+     is now a tab inside Products & Maintenance (next to Combo Pricing) — both
+     removed from the sidebar here. */
+  const supplyChain: NavSection[] = [
+    {
+      id: 'so',
+      label: 'Sales Order Management',
+      items: [
+        { to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders' },
+        { to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'SO Detail View' },
+        { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
+      ],
+    },
+    {
+      id: 'procurement',
+      label: 'Procurement Management',
+      items: [
+        { to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
+        { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
+        { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
+        { to: '/purchase-orders', icon: <ScrollText {...ICON_PROPS} />, label: 'Purchase Orders' },
+        { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
+        { to: '/purchase-invoices', icon: <Receipt {...ICON_PROPS} />, label: 'Purchase Invoices' },
+        { to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
+      ],
+    },
+    {
+      id: 'transportation',
+      label: 'Transportation Management',
+      items: [
+        { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
+        { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
+        { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
+      ],
+    },
+    {
+      id: 'warehouse',
+      label: 'Warehouse Management',
+      items: [
+        { to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
+        { to: '/inventory/adjustments', icon: <SlidersHorizontal {...ICON_PROPS} />, label: 'Adjustments' },
+        { to: '/inventory/transfers', icon: <ArrowLeftRight {...ICON_PROPS} />, label: 'Transfers' },
+        { to: '/inventory/stock-takes', icon: <ClipboardCheck {...ICON_PROPS} />, label: 'Stock Take' },
+        // Rack/bin Warehouse view (Rack Layout · Stock In-Out · Movement
+        // History) ported from Hookka ERP (Phase 3, 2026-05-28).
+        { to: '/warehouse', icon: <Warehouse {...ICON_PROPS} />, label: 'Warehouse' },
+      ],
+    },
+    {
+      id: 'consignment',
+      label: 'Consignment Management',
+      items: [
+        { to: '/consignment', icon: <Boxes {...ICON_PROPS} />, label: 'Consignment' },
+      ],
+    },
+  ];
+
+  /* ── Plain groups kept outside Supply Chain Management ── */
+  const finance: NavLinkRow[] = [
+    { to: '/accounting', icon: <BookOpen {...ICON_PROPS} />, label: 'Accounting' },
+    { to: '/outstanding', icon: <AlertCircle {...ICON_PROPS} />, label: 'Outstanding' },
+  ];
+  const reference: NavLinkRow[] = [
+    { to: '/customers', icon: <UsersRound {...ICON_PROPS} />, label: 'Customers' },
+    { to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
+  ];
+
+  const renderLink = (it: NavLinkRow) => (
+    <NavLink
+      key={it.to}
+      to={it.to}
+      className={({ isActive }) => (isActive ? `${styles.navItem} ${styles.active}` : styles.navItem)}
+    >
+      {it.icon}
+      <span className={styles.navLabel}>{it.label}</span>
+      {it.badge != null && it.badge > 0 && (
+        <span className={`${styles.navBadge} ${it.badgeMuted ? styles.navBadgeGhost : ''}`}>
+          {it.badge}
+        </span>
+      )}
+    </NavLink>
+  );
 
   return (
     <aside className={styles.sidebar}>
@@ -161,30 +206,50 @@ export const Sidebar = () => {
       </div>
 
       <nav className={styles.nav}>
-        {items.map((it, i) =>
-          it.kind === 'group' ? (
-            <div key={`g-${i}`} className={styles.navGroup}>
-              {it.label}
+        {/* Workspace */}
+        <div className={styles.navGroup}>Workspace</div>
+        {workspace.map(renderLink)}
+
+        {/* Supply Chain Management — collapsible modules */}
+        <div className={styles.scmHeader}>Supply Chain Management</div>
+        {supplyChain.map((sec) => {
+          const isCollapsed = !!collapsed[sec.id];
+          return (
+            <div key={sec.id} className={styles.section}>
+              <button
+                type="button"
+                className={styles.sectionHeader}
+                onClick={() => toggle(sec.id)}
+                aria-expanded={!isCollapsed}
+              >
+                <span>{sec.label}</span>
+                <ChevronDown
+                  size={16}
+                  strokeWidth={2}
+                  className={`${styles.sectionChevron} ${isCollapsed ? styles.sectionChevronClosed : ''}`}
+                />
+              </button>
+              <div className={`${styles.sectionItems} ${isCollapsed ? styles.collapsed : ''}`}>
+                {sec.items.map(renderLink)}
+              </div>
             </div>
-          ) : (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              className={({ isActive }) =>
-                isActive ? `${styles.navItem} ${styles.active}` : styles.navItem
-              }
-            >
-              {it.icon}
-              <span className={styles.navLabel}>{it.label}</span>
-              {it.badge != null && it.badge > 0 && (
-                <span
-                  className={`${styles.navBadge} ${it.badgeMuted ? styles.navBadgeGhost : ''}`}
-                >
-                  {it.badge}
-                </span>
-              )}
-            </NavLink>
-          ),
+          );
+        })}
+
+        {/* Finance */}
+        <div className={styles.navGroup}>Finance</div>
+        {finance.map(renderLink)}
+
+        {/* Reference */}
+        <div className={styles.navGroup}>Reference</div>
+        {reference.map(renderLink)}
+
+        {/* Administration (gated) */}
+        {canSeeAdmin && (
+          <>
+            <div className={styles.navGroup}>Administration</div>
+            {renderLink({ to: '/users', icon: <ShieldCheck {...ICON_PROPS} />, label: 'Users' })}
+          </>
         )}
       </nav>
 

@@ -30,7 +30,7 @@ import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  Plus, X, Filter, Search,
+  Plus, X, Filter, Search, Wrench,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -883,6 +883,12 @@ export const MfgSalesOrdersList = () => {
             <Plus size={14} strokeWidth={1.75} />
             <span>New Sales Order</span>
           </Button>
+          {/* SO Maintenance moved out of the sidebar to live next to New Sales
+              Order (commander 2026-05-28) — it's a SO-only config surface. */}
+          <Button variant="secondary" size="sm" onClick={() => navigate('/mfg-sales-orders/maintenance')}>
+            <Wrench size={14} strokeWidth={1.75} />
+            <span>SO Maintenance</span>
+          </Button>
         </div>
       </div>
 
@@ -1403,13 +1409,13 @@ const buildColumns = (
     searchValue: (r) => r.postcode ?? '',
   },
   {
-    /* Commander 2026-05-28: the SO form / detail page labels
-       `internal_expected_dd` as "Processing Date" (see PR #144). The list's
-       "Processing Date" column was wrongly bound to the raw `processing_date`
-       field (the production "proceeded" timestamp), so a SO with a Processing
-       Date set showed BLANK here. Bind to `internal_expected_dd` so the column
-       matches the detail page. (The raw proceed-date isn't surfaced in this
-       grid — it's an internal production signal, not part of the SO form.) */
+    /* "Processing Date" is the UI label for the internal_expected_dd column.
+       PR #121/#140 renamed it app-wide — SO New / SO Detail / OrderInfoCard
+       all read+write internal_expected_dd under this label. The raw
+       processing_date column is dead (nothing in the API ever writes it), so
+       this column must read internal_expected_dd or it shows permanently
+       blank. Key kept as 'processing_date' to preserve saved column layouts.
+       Duplicate "Internal DD" column removed. Commander 2026-05-28. */
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
     defaultHidden: true,
     accessor: (r) => r.internal_expected_dd ?? '',

@@ -62,6 +62,7 @@ import {
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { FabricsTable } from '../components/FabricsTable';
 import { SofaComboTab } from '../components/SofaComboTab';
+import { FabricTracking } from './FabricTracking';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/size-info';
 import { ProductModels, NewModelDialog } from './ProductModels';
 import { useQueryClient } from '@tanstack/react-query';
@@ -69,7 +70,7 @@ import styles from './Products.module.css';
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
 
-type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos';
+type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos' | 'fabric';
 
 
 export const Products = () => {
@@ -127,6 +128,19 @@ export const Products = () => {
             >
               Combo Pricing
             </button>
+            {/* Fabric Converter — moved out of the sidebar to sit next to
+                Combo Pricing (commander 2026-05-28). Renders the existing
+                FabricTracking page inline; the /fabric-tracking route is kept
+                for back-compat / direct links. */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'fabric'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('fabric')}
+            >
+              Fabric Converter
+            </button>
           </div>
         </div>
       </header>
@@ -135,6 +149,7 @@ export const Products = () => {
       {topTab === 'modular' && <ProductModels />}
       {topTab === 'maintenance' && <MaintenanceTab />}
       {topTab === 'combos' && <SofaComboTab />}
+      {topTab === 'fabric' && <FabricTracking />}
     </div>
   );
 };

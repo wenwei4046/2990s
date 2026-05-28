@@ -70,6 +70,68 @@
   padding-top: 0;
 }
 
+/* Supply Chain Management umbrella header — sits above the 5 collapsible
+   modules. Slightly stronger than a plain group label (brand burnt). */
+.scmHeader {
+  padding: var(--space-4) var(--space-3) var(--space-1);
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Clickable collapsible module header (Sales Order Management, etc.). */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-soft);
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.sectionHeader:hover {
+  background: rgba(34, 31, 32, 0.05);
+  color: var(--fg);
+}
+.sectionChevron {
+  flex-shrink: 0;
+  transition: transform 150ms ease-out;
+}
+.sectionChevronClosed {
+  transform: rotate(-90deg);
+}
+
+/* Items nested under a module — slight indent so the hierarchy reads. */
+.sectionItems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-2);
+}
+.sectionItems.collapsed {
+  display: none;
+}
+
 .nav {
   display: flex;
   flex-direction: column;
@@ -194,6 +256,13 @@
   .brand { display: none; }
   .roleHint { display: none; }
   .navGroup { display: none; }
+  /* Icon-rail mode: collapsing makes no sense without labels — hide the
+     module headers and force every module's items visible so all icons
+     stay reachable. */
+  .scmHeader { display: none; }
+  .sectionHeader { display: none; }
+  .sectionItems { padding-left: 0; }
+  .sectionItems.collapsed { display: flex; }
   .userMeta { display: none; }
   .navItem { justify-content: center; }
   .signOut { justify-content: center; }
