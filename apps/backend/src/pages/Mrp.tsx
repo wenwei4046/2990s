@@ -48,7 +48,16 @@ export const Mrp = () => {
      SO lines with no delivery date (excluded by default — not ready to order). */
   const [deliveryFrom, setDeliveryFrom] = useState<string>('');
   const [deliveryTo, setDeliveryTo] = useState<string>('');
+  const [processingFrom, setProcessingFrom] = useState<string>('');
+  const [processingTo, setProcessingTo] = useState<string>('');
   const [showUndated, setShowUndated] = useState<boolean>(false);
+  /* In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
+     browser window.confirm/alert). null = closed. */
+  const [dialog, setDialog] = useState<
+    | { kind: 'info'; title: string; body: string }
+    | { kind: 'created'; title: string; body: string }
+    | null
+  >(null);
 
   const q = useMrp({ category, warehouseId, includeUndated: showUndated });
   const data = q.data;
@@ -59,18 +68,23 @@ export const Mrp = () => {
      (supply isn't date-bucketed). shortageQty per line already reflects the
      date-priority allocation done server-side, so summing visible lines is
      correct. */
-  const hasWindow = Boolean(deliveryFrom || deliveryTo);
-  const inWindow = (d: string | null): boolean => {
+  const within = (d: string | null, from: string, to: string): boolean => {
     if (!d) return false;
     const x = d.slice(0, 10);
-    if (deliveryFrom && x < deliveryFrom) return false;
-    if (deliveryTo && x > deliveryTo) return false;
+    if (from && x < from) return false;
+    if (to && x > to) return false;
     return true;
   };
+  const hasDeliveryWindow = Boolean(deliveryFrom || deliveryTo);
+  const hasProcessingWindow = Boolean(processingFrom || processingTo);
+  const hasWindow = hasDeliveryWindow || hasProcessingWindow;
+  const lineInWindow = (l: MrpSku['lines'][number]): boolean =>
+    (!hasDeliveryWindow || within(l.deliveryDate, deliveryFrom, deliveryTo))
+    && (!hasProcessingWindow || within(l.processingDate, processingFrom, processingTo));
   const viewSkus: MrpSku[] = (data?.skus ?? [])
     .map((s) => {
       if (!hasWindow) return s;
-      const lines = s.lines.filter((l) => inWindow(l.deliveryDate));
+      const lines = s.lines.filter(lineInWindow);
       const qtyNeeded = lines.reduce((a, l) => a + l.qty, 0);
       const shortage = lines.reduce((a, l) => a + (l.source === 'shortage' ? l.shortageQty : 0), 0);
       return { ...s, lines, qtyNeeded, shortage };
@@ -109,21 +123,30 @@ export const Mrp = () => {
         .map((l) => ({ soItemId: l.soItemId, qty: l.shortageQty })),
       )
       .filter((p) => p.soItemId);
-    if (picks.length === 0) { window.alert('Nothing to order — no uncovered SO lines in the selection.'); return; }
+    if (picks.length === 0) {
+      setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) SO lines in the current selection / window.' });
+      return;
+    }
 
     createPos.mutate({ picks, mode: poMode }, {
       onSuccess: (res) => {
         if (!res.total) {
-          window.alert("No POs created — these SKUs aren't bound to a supplier yet. Assign each shortage SKU a main supplier (the “— none —” rows), then order again.");
+          setDialog({
+            kind: 'info',
+            title: 'No POs created',
+            body: "These SKUs aren't bound to a supplier yet. Assign each shortage SKU a main supplier (the “— none —” rows), then proceed again.",
+          });
           return;
         }
-        const summary = res.created.map((p) => p.poNumber).join(', ');
-        if (window.confirm(`Created ${res.total} PO${res.total === 1 ? '' : 's'}: ${summary}\n\nOpen Purchase Orders now?`)) {
-          navigate('/purchase-orders');
-        } else {
-          setSelected(new Set());
-          void q.refetch();
-        }
+        // Refresh so PO Outstanding updates immediately; keep the result in an
+        // in-app dialog (not a browser alert) per commander.
+        setSelected(new Set());
+        void q.refetch();
+        setDialog({
+          kind: 'created',
+          title: `Created ${res.total} PO${res.total === 1 ? '' : 's'}`,
+          body: res.created.map((p) => p.poNumber).join(', '),
+        });
       },
       onError: (err) => {
         const raw = err instanceof Error ? err.message : String(err);
@@ -132,17 +155,19 @@ export const Mrp = () => {
           const m = raw.match(/\{.*\}/);
           if (m) { const j = JSON.parse(m[0]); if (j.error === 'missing_bindings' && Array.isArray(j.itemCodes)) codes = j.itemCodes; }
         } catch { /* generic */ }
-        if (codes.length > 0) {
-          window.alert("These SKUs aren't bound to a supplier yet — assign them first:\n\n" + codes.map((c) => `• ${c}`).join('\n'));
-          return;
-        }
-        window.alert(`Order failed: ${raw}`);
+        setDialog(codes.length > 0
+          ? { kind: 'info', title: "SKUs not bound to a supplier", body: 'Assign these to a supplier first, then proceed:\n' + codes.map((c) => `• ${c}`).join('\n') }
+          : { kind: 'info', title: 'Order failed', body: raw });
       },
     });
   };
 
   const shortageSkus = viewSkus.filter((s) => s.shortage > 0);
   const selectedShortageSkus = shortageSkus.filter((s) => selected.has(rowKey(s)));
+  const allShortSelected = shortageSkus.length > 0 && selectedShortageSkus.length === shortageSkus.length;
+  const someShortSelected = selectedShortageSkus.length > 0 && !allShortSelected;
+  const toggleSelectAll = () =>
+    setSelected(allShortSelected ? new Set() : new Set(shortageSkus.map(rowKey)));
   const shortageUnits = shortageSkus.reduce((a, s) => a + s.shortage, 0);
   const windowLabel = hasWindow
     ? `${deliveryFrom || '…'} → ${deliveryTo || '…'}`
@@ -187,12 +212,12 @@ export const Mrp = () => {
           >
             <ShoppingCart {...ICON} />
             {createPos.isPending
-              ? 'Ordering…'
+              ? 'Processing…'
               : selectedShortageSkus.length > 0
-                ? `Order ${selectedShortageSkus.length} selected`
+                ? `Proceed PO (${selectedShortageSkus.length})`
                 : hasWindow
-                  ? `Order window (${shortageSkus.length})`
-                  : `Order all shortages (${shortageSkus.length})`}
+                  ? `Proceed PO · window (${shortageSkus.length})`
+                  : `Proceed PO (${shortageSkus.length})`}
           </button>
         </div>
       </div>
@@ -224,9 +249,19 @@ export const Mrp = () => {
           <input type="date" className={styles.filterSelect} value={deliveryTo}
             onChange={(e) => setDeliveryTo(e.target.value)} />
         </label>
+        <label className={styles.filterField} title="Processing date = when the order becomes active to order">
+          <span className={styles.filterLabel}>Processing from</span>
+          <input type="date" className={styles.filterSelect} value={processingFrom}
+            onChange={(e) => setProcessingFrom(e.target.value)} />
+        </label>
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>to</span>
+          <input type="date" className={styles.filterSelect} value={processingTo}
+            onChange={(e) => setProcessingTo(e.target.value)} />
+        </label>
         {hasWindow && (
           <button type="button" className={styles.ghostBtn}
-            onClick={() => { setDeliveryFrom(''); setDeliveryTo(''); }}>Clear window</button>
+            onClick={() => { setDeliveryFrom(''); setDeliveryTo(''); setProcessingFrom(''); setProcessingTo(''); }}>Clear window</button>
         )}
         <label className={styles.filterField} title="Show SO lines that have no delivery date (not ready to order)">
           <input type="checkbox" checked={showUndated} onChange={(e) => setShowUndated(e.target.checked)} />
@@ -258,7 +293,17 @@ export const Mrp = () => {
         <table className={styles.table}>
           <thead>
             <tr>
-              <th className={styles.colSelect} />
+              <th className={styles.colSelect}>
+                <input
+                  type="checkbox"
+                  aria-label="Select all shortage rows"
+                  title="Select all shortage rows"
+                  disabled={shortageSkus.length === 0}
+                  checked={allShortSelected}
+                  ref={(el) => { if (el) el.indeterminate = someShortSelected; }}
+                  onChange={toggleSelectAll}
+                />
+              </th>
               <th className={styles.colCaret} />
               <th>Item Code</th>
               <th>Description</th>
@@ -297,6 +342,29 @@ export const Mrp = () => {
           </tbody>
         </table>
       </div>
+
+      {/* In-app result dialog — Commander 2026-05-29: confirm/result inside the
+          page, not a browser alert. */}
+      {dialog && (
+        <div className={styles.dialogBackdrop} onClick={() => setDialog(null)}>
+          <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h2 className={styles.dialogTitle}>{dialog.title}</h2>
+            <p className={styles.dialogBody}>{dialog.body}</p>
+            <div className={styles.dialogActions}>
+              {dialog.kind === 'created' ? (
+                <>
+                  <button type="button" className={styles.ghostBtn} onClick={() => setDialog(null)}>Stay here</button>
+                  <button type="button" className={styles.primaryBtn} onClick={() => { setDialog(null); navigate('/purchase-orders'); }}>
+                    Open Purchase Orders
+                  </button>
+                </>
+              ) : (
+                <button type="button" className={styles.primaryBtn} onClick={() => setDialog(null)}>OK</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -346,6 +414,7 @@ const SkuRows = ({ sku, open, onToggle, selected, onSelect }: {
                 <tr>
                   <th>SO No</th>
                   <th>Customer</th>
+                  <th>Processing</th>
                   <th>Delivery Date</th>
                   <th className={styles.num}>Qty</th>
                   <th>Coverage</th>
@@ -368,6 +437,7 @@ const ChildLine = ({ ln }: { ln: MrpLine }) => {
     <tr className={short ? styles.childShort : undefined}>
       <td className={styles.codeCell}>{ln.soDocNo}</td>
       <td>{ln.debtorName ?? '—'}</td>
+      <td>{fmtDate(ln.processingDate)}</td>
       <td>{fmtDate(ln.deliveryDate)}</td>
       <td className={styles.num}>{ln.qty}</td>
       <td>

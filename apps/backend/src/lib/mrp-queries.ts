@@ -28,6 +28,7 @@ export type MrpLine = {
   soDocNo: string;
   debtorName: string | null;
   deliveryDate: string | null;
+  processingDate: string | null;
   qty: number;
   source: MrpAllocSource;
   poNumber: string | null;
