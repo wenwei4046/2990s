@@ -21,6 +21,7 @@
 
 import {
   computeMfgLinePrice,
+  computeMfgLineCost,
   type MaintenanceConfig,
   type MfgPricingProduct,
   type MfgPricingFabric,
@@ -63,6 +64,16 @@ export type RecomputedLine = {
   custom_specials:      Array<{ description: string; surchargeSen: number }> | null;
   total_centi:          number;     // qty * unit (minus discount, applied by caller)
   breakdown:            MfgPricingBreakdown;
+  /** COST snapshot from `computeMfgLineCost` (Commander 2026-05-28: backend
+   *  `priceSen` tables ARE the cost). `unit_cost_sen` = base + Σ priceSen
+   *  surcharges; `line_cost_sen` = unit_cost_sen × qty. Caller persists these
+   *  onto mfg_sales_order_items.unit_cost_centi / line_cost_centi. Computed
+   *  from the same (product, fabric, config) snapshot so cost stays in
+   *  lockstep with the selling breakdown. NOT drift-checked (cost is a
+   *  server-only snapshot, separate from the selling-total drift validation). */
+  unit_cost_sen:        number;
+  line_cost_sen:        number;
+  costBreakdown:        MfgPricingBreakdown;
   /** Drift signal — true means client's submission diverged > 0.5% from
    *  server compute. Caller decides HTTP 400 vs warn vs accept. */
   drift:                boolean;
@@ -144,20 +155,27 @@ export function recomputeFromSnapshot(
     costPriceSen:     product?.cost_price_sen ?? null,
   };
 
-  const breakdown = computeMfgLinePrice(
-    {
-      product:       pricingProduct,
-      fabric:        fabricInput,
-      qty:           Math.max(0, Math.floor(item.qty || 0)),
-      divanHeight:   variants.divanHeight ?? null,
-      legHeight:     variants.legHeight ?? null,
-      totalHeight:   variants.totalHeight ?? null,
-      specials,
-      seatSize:      variants.seatHeight ?? null,
-      sofaLegHeight: variants.sofaLegHeight ?? null,
-    },
-    config,
-  );
+  const pricingInput = {
+    product:       pricingProduct,
+    fabric:        fabricInput,
+    qty:           Math.max(0, Math.floor(item.qty || 0)),
+    divanHeight:   variants.divanHeight ?? null,
+    legHeight:     variants.legHeight ?? null,
+    totalHeight:   variants.totalHeight ?? null,
+    specials,
+    seatSize:      variants.seatHeight ?? null,
+    sofaLegHeight: variants.sofaLegHeight ?? null,
+  };
+
+  const breakdown = computeMfgLinePrice(pricingInput, config);
+
+  /* Commander 2026-05-28 — COST snapshot. Same (product, fabric, variants,
+     config) snapshot, but `computeMfgLineCost` reads the backend maintenance
+     `priceSen` tables as the cost (base + Σ priceSen surcharges). This is the
+     SEPARATE cost path — never drift-checked against the client (cost is a
+     server-only snapshot), distinct from the selling-total drift validation
+     done on `breakdown.unitPriceSen` below. */
+  const costBreakdown = computeMfgLineCost(pricingInput, config);
 
   // Project specials → custom_specials column. Each pick keeps its label
   // for the SO print; surchargeSen comes from the maintenance config.
@@ -192,6 +210,9 @@ export function recomputeFromSnapshot(
     custom_specials:   customSpecials,
     total_centi:       breakdown.lineTotalSen,
     breakdown,
+    unit_cost_sen:     costBreakdown.unitPriceSen,
+    line_cost_sen:     costBreakdown.lineTotalSen,
+    costBreakdown,
     drift,
   };
 }

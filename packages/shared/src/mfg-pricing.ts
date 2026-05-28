@@ -19,10 +19,15 @@
 // (apps/backend) both import this — see the "Server-side pricing recompute"
 // non-negotiable in 2990s-readonly/CLAUDE.md.
 //
-// Cost-side: parallel `computeMfgLineCost` exists (same shape, reads
-// `costSen` from the maintenance config priced options when present).
-// Wiring into the API `unit_cost_centi` snapshot path is a follow-up; for
-// now this lets callers dry-run cost breakdowns the same way as price.
+// Cost-side: parallel `computeMfgLineCost` mirrors the SAME additive shape,
+// but Commander 2026-05-28's definitive model says the backend maintenance
+// price tables (`priceSen`) ARE the cost. So cost = product base price
+// (basePriceSen / price1Sen / seatHeightPrices[].priceSen) + Σ option
+// `priceSen` surcharges — exactly what `computeMfgLinePrice` did BEFORE
+// PR #265 split selling onto `sellingPriceSen`. `costSen` is kept only as a
+// per-option fallback (a half-migrated config still yields a cost rather than
+// 0). `computeMfgLineCost` is wired into the API `unit_cost_centi` snapshot on
+// SO create/update (recomputeFromSnapshot → mfg-sales-orders route).
 // ----------------------------------------------------------------------------
 
 /* MaintenanceConfig — same JSON shape that's stored in
@@ -142,13 +147,20 @@ export type MfgPricingBreakdown = {
 
 const sum = (...n: number[]): number => n.reduce((a, b) => a + b, 0);
 
+/** COST surcharge lookup (Commander 2026-05-28 definitive model). Backend
+ *  maintenance `priceSen` IS the cost, so the cost compute reads `priceSen`
+ *  (mirroring what `computeMfgLinePrice` did before PR #265). `costSen` is
+ *  honoured only as a fallback when the option carries no `priceSen` — so a
+ *  half-migrated config still produces a cost rather than 0. Selling-side
+ *  `sellingPriceSen` is never consulted here. */
 const lookupCost = (
   pool: MfgPricedOption[] | undefined,
   value: string | null | undefined,
 ): number => {
   if (!pool || !value) return 0;
   const hit = pool.find((o) => o.value === value);
-  return hit?.costSen ?? 0;
+  if (!hit) return 0;
+  return hit.priceSen ?? hit.costSen ?? 0;
 };
 
 /** Selling-side surcharge lookup. Commander 2026-05-28: variant `priceSen`
@@ -183,6 +195,9 @@ const sumSpecialsSelling = (
   return total;
 };
 
+/** Sum N specials on the COST side. Reads each option's `priceSen` (the
+ *  backend cost), falling back to `costSen` per option when `priceSen` is
+ *  absent. Mirrors `lookupCost`. */
 const sumSpecialsCost = (
   pool: MfgPricedOption[] | undefined,
   picks: string[] | undefined,
@@ -191,7 +206,7 @@ const sumSpecialsCost = (
   let total = 0;
   for (const p of picks) {
     const hit = pool.find((o) => o.value === p);
-    if (hit) total += hit.costSen ?? 0;
+    if (hit) total += hit.priceSen ?? hit.costSen ?? 0;
   }
   return total;
 };
@@ -311,44 +326,57 @@ export function computeMfgLinePrice(
   };
 }
 
-/** Cost-side parallel. Same compute shape; reads the `costSen` extension
- *  on each MaintenanceConfig priced option when present (returns 0 when
- *  absent — i.e. cost-side variant pricing is opt-in, exactly per the
- *  research report §6.3). Base cost comes from `costPriceSen` / `cost1Sen`
- *  on the product. The fabric add-on uses `costAddSen`. */
+/** Cost-side compute. Commander 2026-05-28 definitive model: the backend
+ *  maintenance price tables (`priceSen`) ARE the cost. So this mirrors what
+ *  `computeMfgLinePrice` did BEFORE PR #265 — the product's base price fields
+ *  (`basePriceSen` / `price1Sen` / `seatHeightPrices[].priceSen`) as the base
+ *  cost, plus the sum of each option's `priceSen` surcharge. On backend these
+ *  values ARE the cost the commander entered.
+ *
+ *  `costPriceSen` / `cost1Sen` / `costSen` (the abandoned PR #216 cost fields)
+ *  are consulted only as a per-field fallback when the corresponding
+ *  `basePriceSen` / `price1Sen` / `priceSen` is absent — so a half-migrated
+ *  config still yields a cost rather than a hard 0. The fabric add-on uses
+ *  `costAddSen` when present, else the selling flat `surchargeSen`. */
 export function computeMfgLineCost(
   input: MfgPricingInput,
   maintenanceConfig: MaintenanceConfig | null,
 ): MfgPricingBreakdown {
   const { product, fabric, qty } = input;
   const tier: MfgFabricTier | null = fabric?.tier ?? null;
-  const fabricAddSen = Math.max(0, fabric?.costAddSen ?? 0);
+  // Cost fabric add-on: prefer the cost-specific add, else the selling flat
+  // surcharge (commander's "if you use the Fabric pool" — same pool, cost-side).
+  const fabricAddSen = Math.max(0, fabric?.costAddSen ?? fabric?.surchargeSen ?? 0);
 
   let baseCostSen = 0;
   let source: MfgPricingBreakdown['source'] = 'BASE_ONLY';
 
   if (product.category === 'SOFA') {
-    const seat = resolveSeatHeightSen(product.seatHeightCosts ?? null, input.seatSize, tier);
+    // Base cost = seat-height priceSen per commander's model; fall back to the
+    // cost-side seat rows / flat columns only when no selling seat row exists.
+    const seat = resolveSeatHeightSen(product.seatHeightPrices, input.seatSize, tier)
+      ?? resolveSeatHeightSen(product.seatHeightCosts ?? null, input.seatSize, tier);
     if (seat != null) {
       baseCostSen = seat.priceSen;
       source = seat.matchedTier === 'PRICE_1' ? 'PRICE_1' : 'PRICE_2';
-    } else if (tier === 'PRICE_1' && product.cost1Sen != null && product.cost1Sen > 0) {
-      baseCostSen = product.cost1Sen;
+    } else if (tier === 'PRICE_1' && product.price1Sen != null && product.price1Sen > 0) {
+      baseCostSen = product.price1Sen;
       source = 'PRICE_1';
     } else {
-      baseCostSen = product.costPriceSen ?? 0;
+      baseCostSen = product.basePriceSen ?? product.costPriceSen ?? 0;
       source = 'PRICE_2';
     }
   } else if (product.category === 'BEDFRAME') {
-    if (tier === 'PRICE_1' && product.cost1Sen != null && product.cost1Sen > 0) {
-      baseCostSen = product.cost1Sen;
+    if (tier === 'PRICE_1' && product.price1Sen != null && product.price1Sen > 0) {
+      baseCostSen = product.price1Sen;
       source = 'PRICE_1';
     } else {
-      baseCostSen = product.costPriceSen ?? 0;
+      baseCostSen = product.basePriceSen ?? product.costPriceSen ?? 0;
       source = 'PRICE_2';
     }
   } else {
-    baseCostSen = product.costPriceSen ?? 0;
+    // MATTRESS / ACCESSORY / SERVICE — single base price.
+    baseCostSen = product.basePriceSen ?? product.costPriceSen ?? 0;
     source = 'BASE_ONLY';
   }
 

@@ -162,6 +162,13 @@ type SoRow = {
      is READY (column shows "READY" pill). */
   ready_categories?: string[];
   is_fully_ready?: boolean;
+  /* Branding auto-derive (Commander 2026-05-28): distinct normalized product
+     categories present on the SO's non-cancelled lines — one of
+     'SOFA' | 'MATTRESS' | 'BEDFRAME' | 'ACCESSORY' | 'OTHERS'. Computed
+     server-side in the SO list GET (mfg-sales-orders route) from the same
+     per-line fetch that drives Stock Status. Lets the Branding column tell
+     SOFA from MATTRESS even though they share one header revenue column. */
+  item_categories?: string[];
 };
 
 const fmtRm = (centi: number): string =>
@@ -187,6 +194,30 @@ const liveBalance = (r: SoRow): number => {
   if (typeof r.balance_centi_live === 'number') return r.balance_centi_live;
   if (typeof r.balance_centi === 'number') return r.balance_centi;
   return r.local_total_centi - (r.paid_centi ?? 0);
+};
+
+/* Branding auto-derive (Commander 2026-05-28). The Branding column is no
+   longer a stored free-text field — it's derived per row from the SO's
+   line-item categories (`item_categories`, supplied by the SO list API from
+   the per-line fetch). Rules:
+     · only SOFA              → "2990 Sofa"
+     · only MATTRESS          → "2990 Mattress"
+     · only BEDFRAME          → "Bedframe"
+     · more than one category → "Mixed"
+     · none                   → "" (column renders "—")
+   ACCESSORY-only / OTHERS-only SOs (no furniture brand) fall through to "".
+   Sortable + groupable via the same derived string. */
+const BRAND_CATEGORIES = new Set(['SOFA', 'MATTRESS', 'BEDFRAME']);
+const deriveBranding = (r: SoRow): string => {
+  const brandCats = (r.item_categories ?? []).filter((c) => BRAND_CATEGORIES.has(c));
+  if (brandCats.length === 0) return '';   // empty / accessory-only / others-only
+  if (brandCats.length > 1)   return 'Mixed';
+  switch (brandCats[0]) {
+    case 'SOFA':     return '2990 Sofa';
+    case 'MATTRESS': return '2990 Mattress';
+    case 'BEDFRAME': return 'Bedframe';
+    default:         return '';
+  }
 };
 
 const STATUS_CLASS: Record<string, string> = {
@@ -346,8 +377,8 @@ const HOUZS_INPUT_DATE: CSSProperties = {
 
    The wrapper renders a small `::` grab handle so the affordance is
    visible without inflating the filter footprint. */
-type FilterId = 'search' | 'brand' | 'agent' | 'venue' | 'dateRange';
-const DEFAULT_FILTER_ORDER: FilterId[] = ['search', 'brand', 'agent', 'venue', 'dateRange'];
+type FilterId = 'search' | 'brand' | 'venue' | 'dateRange';
+const DEFAULT_FILTER_ORDER: FilterId[] = ['search', 'brand', 'venue', 'dateRange'];
 const FILTER_ORDER_KEY = 'pr-g.so-list.filter-order.v1';
 
 const readFilterOrder = (): FilterId[] => {
@@ -591,13 +622,14 @@ export const MfgSalesOrdersList = () => {
   const { data, isLoading, error } = useMfgSalesOrders(undefined);
   const allRows = useMemo<SoRow[]>(() => (data?.salesOrders ?? []) as SoRow[], [data]);
 
-  /* Houzs filter row — search + brand + agent + venue + date range.
+  /* Houzs filter row — search + brand + venue + date range.
      Each one narrows the visible rowset client-side. The outstanding-only
      toggle continues to flow through ?outstanding=1 (shared with the
-     detail listing + sibling SO-family pages). */
+     detail listing + sibling SO-family pages). Commander 2026-05-28: the
+     dead "Agent" filter was dropped alongside its dead column — Salesperson
+     grouping (right-click the grid header) is the real grouping axis now. */
   const [search, setSearch] = useState('');
   const [brand,  setBrand]  = useState('');
-  const [agent,  setAgent]  = useState('');
   const [venue,  setVenue]  = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo,   setDateTo]   = useState('');
@@ -621,16 +653,16 @@ export const MfgSalesOrdersList = () => {
      once per refetch. */
   const filterOptions = useMemo(() => {
     const brands = new Set<string>();
-    const agents = new Set<string>();
     const venues = new Set<string>();
     for (const r of allRows) {
-      if (r.branding) brands.add(r.branding);
-      if (r.agent) agents.add(r.agent);
+      // Branding is auto-derived (Commander 2026-05-28) so the brand filter
+      // options match what the Branding column actually shows.
+      const b = deriveBranding(r);
+      if (b) brands.add(b);
       if (r.venue) venues.add(r.venue);
     }
     return {
       brands: [...brands].sort(),
-      agents: [...agents].sort(),
       venues: [...venues].sort(),
     };
   }, [allRows]);
@@ -639,21 +671,20 @@ export const MfgSalesOrdersList = () => {
     const q = search.trim().toLowerCase();
     return allRows.filter((r) => {
       if (outstandingOnly && liveBalance(r) <= 0) return false;
-      if (brand && r.branding !== brand) return false;
-      if (agent && r.agent !== agent) return false;
+      if (brand && deriveBranding(r) !== brand) return false;
       if (venue && r.venue !== venue) return false;
       if (dateFrom && (r.so_date ?? '') < dateFrom) return false;
       if (dateTo   && (r.so_date ?? '') > dateTo)   return false;
       if (q) {
         const blob = [
-          r.doc_no, r.debtor_name, r.debtor_code, r.agent, r.venue,
-          r.branding, r.customer_so_no, r.ref, r.po_doc_no, r.phone,
+          r.doc_no, r.debtor_name, r.debtor_code, r.venue,
+          deriveBranding(r), r.customer_so_no, r.ref, r.po_doc_no, r.phone,
         ].filter(Boolean).join(' ').toLowerCase();
         if (!blob.includes(q)) return false;
       }
       return true;
     });
-  }, [allRows, outstandingOnly, search, brand, agent, venue, dateFrom, dateTo]);
+  }, [allRows, outstandingOnly, search, brand, venue, dateFrom, dateTo]);
 
   /* 4 KPI tiles — scoped to the currently visible rows so narrowing the
      filter re-scopes the headline numbers (matches Houzs interactive feel). */
@@ -669,7 +700,7 @@ export const MfgSalesOrdersList = () => {
   }, [rows]);
 
   const resetFilters = () => {
-    setSearch(''); setBrand(''); setAgent(''); setVenue('');
+    setSearch(''); setBrand(''); setVenue('');
     setDateFrom(''); setDateTo('');
   };
 
@@ -909,7 +940,7 @@ export const MfgSalesOrdersList = () => {
                       type="text"
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Doc No, debtor, agent, venue…"
+                      placeholder="Doc No, debtor, reference, venue…"
                       style={{
                         ...HOUZS_INPUT_DATE,
                         paddingLeft: 30,
@@ -927,15 +958,6 @@ export const MfgSalesOrdersList = () => {
                   <select value={brand} onChange={(e) => setBrand(e.target.value)} style={HOUZS_SELECT}>
                     <option value="">All Brands</option>
                     {filterOptions.brands.map((b) => <option key={b} value={b}>{b}</option>)}
-                  </select>
-                </DraggableFilter>
-              );
-            case 'agent':
-              return (
-                <DraggableFilter key={fid} id={fid} order={filterOrder} setOrder={setFilterOrder}>
-                  <select value={agent} onChange={(e) => setAgent(e.target.value)} style={HOUZS_SELECT}>
-                    <option value="">All Agents</option>
-                    {filterOptions.agents.map((a) => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </DraggableFilter>
               );
@@ -964,7 +986,7 @@ export const MfgSalesOrdersList = () => {
               return null;
           }
         })}
-        {(search || brand || agent || venue || dateFrom || dateTo) && (
+        {(search || brand || venue || dateFrom || dateTo) && (
           <button type="button" onClick={resetFilters}
             style={{ background: 'transparent', border: '1px solid #DDE5E5',
               borderRadius: 6, padding: '0 12px', height: 32,
@@ -1104,12 +1126,15 @@ const buildColumns = (
     searchValue: (r) => r.debtor_name,
   },
   {
-    /* HOUZS Agent — header-level free text. For 2990's POS-origin SOs the
-       text is often empty; fall back to a dash so the cell isn't blank. */
-    key: 'agent', label: 'Agent', width: 110, sortable: true, groupable: true,
-    accessor: (r) => r.agent ?? '—',
-    searchValue: (r) => r.agent ?? '',
-    groupValue: (r) => r.agent ?? '(none)',
+    /* Salesperson — the staff member who created the SO. Resolves the
+       structured `salesperson_id` to staff.name via the injected lookup.
+       Commander 2026-05-28: this replaced the dead free-text `agent` column
+       (which returned "—" for every 2990 POS-origin SO). Visible by default.
+       Falls back to a dash when no salesperson is stamped. */
+    key: 'salesperson_id', label: 'Salesperson', width: 140, sortable: true, groupable: true,
+    accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
+    searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
+    groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '(none)' : '(none)'),
   },
   {
     /* HOUZS Location — warehouse short code (KL / PG / etc). */
@@ -1119,18 +1144,33 @@ const buildColumns = (
     groupValue: (r) => r.sales_location ?? '(none)',
   },
   {
-    /* HOUZS Reference — customer-side SO number (HC10867 etc.). Prefer
-       the structured customer_so_no; fall back to the free-text ref. */
+    /* Reference — the customer's own reference. Commander 2026-05-28:
+       customer_so_ref ?? po_doc_no. The SO header's structured customer SO
+       ref column is `customer_so_no` (HC10867 etc.) — there is no separate
+       `customer_so_ref` column in the 2990 schema, so customer_so_no IS that
+       field. Falls back to the customer's PO doc number, then the legacy
+       free-text ref, then "—" when all are empty. Sortable + searchable. */
     key: 'customer_so_no', label: 'Reference', width: 130, sortable: true,
-    accessor: (r) => r.customer_so_no ?? r.ref ?? '—',
-    searchValue: (r) => `${r.customer_so_no ?? ''} ${r.ref ?? ''}`,
+    accessor: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref ?? '—',
+    searchValue: (r) => `${r.customer_so_no ?? ''} ${r.po_doc_no ?? ''} ${r.ref ?? ''}`,
+    sortFn: (a, b) =>
+      (a.customer_so_no ?? a.po_doc_no ?? a.ref ?? '')
+        .localeCompare(b.customer_so_no ?? b.po_doc_no ?? b.ref ?? ''),
   },
   {
-    /* HOUZS branding pill — purple for AKEMI/ZANOTTI, muted otherwise. */
-    key: 'branding', label: 'Branding', width: 120, sortable: true, groupable: true,
-    accessor: (r) => <BrandingPill branding={r.branding} />,
-    searchValue: (r) => r.branding ?? '',
-    groupValue: (r) => r.branding ?? '(none)',
+    /* Branding — AUTO-DERIVED from the SO's line-item categories
+       (Commander 2026-05-28). See `deriveBranding`: SOFA → "2990 Sofa",
+       MATTRESS → "2990 Mattress", BEDFRAME → "Bedframe", >1 category →
+       "Mixed", none → "—". Rendered as the muted BrandingPill; sortable +
+       groupable on the derived label. */
+    key: 'branding', label: 'Branding', width: 130, sortable: true, groupable: true,
+    accessor: (r) => {
+      const b = deriveBranding(r);
+      return b ? <BrandingPill branding={b} /> : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (r) => deriveBranding(r),
+    groupValue: (r) => deriveBranding(r) || '(none)',
+    sortFn: (a, b) => deriveBranding(a).localeCompare(deriveBranding(b)),
   },
   {
     key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
@@ -1292,14 +1332,6 @@ const buildColumns = (
     defaultHidden: true,
     accessor: (r) => r.debtor_code ?? '',
     searchValue: (r) => r.debtor_code ?? '',
-  },
-  {
-    /* Salesperson display = staff.name lookup. */
-    key: 'salesperson_id', label: 'Salesperson', width: 140, sortable: true, groupable: true,
-    defaultHidden: true,
-    accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
-    searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
-    groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
   },
   {
     key: 'email', label: 'Email', width: 180, sortable: true,
