@@ -7,15 +7,24 @@
 // combo applies (caller should fall through to per-Model compartment
 // pricing).
 //
-// OR-set per slot (Commander 2026-05-28, Hookka-style — PR combo-or-per-slot):
+// OR-set per slot + SUBSET coverage (Commander 2026-05-28, Hookka-style 1:1):
 // A combo is an ORDERED list of SLOTS; each SLOT is a SET of alternative
 // module codes joined by OR. e.g. combo "2+L" =
 //   [ ['2A-LHF','2A-RHF'], ['L-LHF','L-RHF'] ]
-// A built sofa MATCHES the combo iff there is a perfect bipartite matching
-// that assigns each built module to a DISTINCT slot whose OR-set contains
-// it, AND the built module count EQUALS the slot count (exact count — no
-// extra, no missing). Order-independent: the matching ignores the order the
-// modules were laid out.
+// A built sofa MATCHES the combo iff every SLOT can be COVERED by a DISTINCT
+// built module whose code is in that slot's OR-set (one built module consumed
+// per slot). The built module count may EXCEED the slot count — extra modules
+// beyond the matched subset are allowed and stay at full master price; they
+// do NOT get folded into the combo. This mirrors HOOKKA's `findComboSubset`
+// (src/pages/sales/create.tsx ~L1296): greedy first-match per slot, extras
+// ride at à-la-carte. Order-independent: matching ignores layout order.
+//
+// Pricing application (HOOKKA parity): the matched SUBSET's à-la-carte sum
+// (subsetSum) is compared to the combo's pricesByHeight[height] (comboTotal);
+// the combo price replaces the subset's à-la-carte ONLY when it is strictly
+// cheaper (subsetSum − comboTotal > 0). Extras always price at full. The
+// caller owns the à-la-carte numbers, so the cheaper-guard lives caller-side
+// (groupPrice); this module returns the matched subset + comboTotal.
 //
 // Scope precedence (high → low):
 //   1. customer-specific row matching (baseModel, slot-set, tier)
@@ -156,115 +165,172 @@ function slotsEqual(
 }
 
 /**
- * Set-cover / exact-count match: does the BUILT sofa's flat module list
- * cover the combo's slots via a perfect bipartite matching?
+ * SUBSET / group-coverage match (HOOKKA `findComboSubset` 1:1): can every
+ * combo SLOT be covered by a DISTINCT built module whose code is in that
+ * slot's OR-set?
  *
- * Returns true iff:
- *   · built.length === slots.length (exact count), AND
- *   · there is a perfect matching assigning each built module to a DISTINCT
- *     slot whose OR-set contains that module.
+ * Returns the matched SUBSET as the sorted list of BUILT-module indices that
+ * were consumed (one per slot), or `null` when at least one slot can't be
+ * filled. The returned subset has exactly `slots.length` entries; any built
+ * module NOT in the subset is an "extra" that the caller prices at full
+ * master price — the combo never bleeds into extras. The built module count
+ * may exceed the slot count.
  *
- * Implementation: Kuhn's augmenting-path bipartite matching. n ≤ ~8 slots in
- * practice, so the O(V·E) cost is trivial; correctness (not greed) matters
- * because overlapping OR-sets need backtracking — e.g. built [X, Y] against
- * slots [{X,Y}, {X}] must match X→{X}, Y→{X,Y}, which a naive greedy would
- * miss if it grabbed X→{X,Y} first.
+ * Implementation note: HOOKKA's reference uses a simple greedy first-match
+ * (one slot at a time, consuming the first remaining line in the slot's set).
+ * Greedy is correct when slots are processed in increasing order of how many
+ * built modules can fill them, but overlapping OR-sets can defeat a naive
+ * left-to-right greedy (e.g. slots [{X,Y},{X}] against built [X,Y] — grabbing
+ * X for the first slot strands the second). To guarantee the observable
+ * HOOKKA result (a slot is coverable ⇒ it gets covered) we use Kuhn's
+ * augmenting-path bipartite matching, which finds a maximum assignment and
+ * therefore covers every slot whenever any assignment exists. n ≤ ~8 slots in
+ * practice, so the O(V·E) cost is trivial. Allowing extras is the only change
+ * from the old exact-count matcher: we no longer require
+ * built.length === slots.length.
  */
-export function matchesComboSlots(
+export function matchComboSubset(
   built: readonly string[],
   rawSlots: readonly (string | readonly string[])[],
-): boolean {
+): number[] | null {
   const slots = normalizeComboModules(rawSlots);
-  const mods = built.map((m) => m.trim()).filter(Boolean);
-  if (mods.length !== slots.length) return false;
-  if (slots.length === 0) return true;
+  const mods = built.map((m) => m.trim());
+  if (slots.length === 0) return null;            // empty combo never applies
+  if (mods.length < slots.length) return null;    // not enough modules to cover
 
-  // adjacency: for each built module, which slots can hold it.
+  // adjacency: for each SLOT, which built-module indices can fill it.
   const slotSets = slots.map((s) => new Set(s));
-  const canFill: number[][] = mods.map((m) =>
-    slots.map((_, j) => j).filter((j) => slotSets[j]!.has(m)),
+  const slotCanTake: number[][] = slots.map((_, j) =>
+    mods.map((_m, i) => i).filter((i) => mods[i] !== '' && slotSets[j]!.has(mods[i]!)),
   );
 
-  // Quick reject: every built module must fit at least one slot.
-  if (canFill.some((opts) => opts.length === 0)) return false;
+  // Quick reject: every slot must have at least one candidate built module.
+  if (slotCanTake.some((opts) => opts.length === 0)) return null;
 
-  // Kuhn's algorithm: match built module i → some slot.
-  const slotToMod = new Array<number>(slots.length).fill(-1);
-  const tryAssign = (i: number, seen: boolean[]): boolean => {
-    for (const j of canFill[i]!) {
-      if (seen[j]) continue;
-      seen[j] = true;
-      if (slotToMod[j] === -1 || tryAssign(slotToMod[j]!, seen)) {
-        slotToMod[j] = i;
+  // Kuhn's algorithm, oriented slot → built module. modToSlot[i] = slot the
+  // built module at index i is assigned to (-1 = free).
+  const modToSlot = new Array<number>(mods.length).fill(-1);
+  const assignSlot = (j: number, seen: boolean[]): boolean => {
+    for (const i of slotCanTake[j]!) {
+      if (seen[i]) continue;
+      seen[i] = true;
+      if (modToSlot[i] === -1 || assignSlot(modToSlot[i]!, seen)) {
+        modToSlot[i] = j;
         return true;
       }
     }
     return false;
   };
 
-  let matched = 0;
-  for (let i = 0; i < mods.length; i++) {
-    if (tryAssign(i, new Array<boolean>(slots.length).fill(false))) matched++;
+  for (let j = 0; j < slots.length; j++) {
+    if (!assignSlot(j, new Array<boolean>(mods.length).fill(false))) {
+      return null; // a slot couldn't be covered → combo doesn't apply
+    }
   }
-  return matched === slots.length;
+
+  // Collect the built-module indices that ended up assigned to a slot.
+  const subset: number[] = [];
+  for (let i = 0; i < mods.length; i++) if (modToSlot[i] !== -1) subset.push(i);
+  subset.sort((a, b) => a - b);
+  return subset;
 }
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
+/** Result of a successful subset combo match. */
+export interface ComboMatch {
+  /** The winning combo row. */
+  row: SofaComboRow;
+  /** Combo total (centi) for the requested height. Always a finite number. */
+  comboPriceCenti: number;
+  /** Sorted BUILT-module indices the combo consumed (one per slot). Built
+   *  modules NOT in this list are extras priced at full master price. */
+  matchedIndices: number[];
+}
+
 /**
- * Pick the centi price for the given (built modules, baseModel, tier,
- * customer, height) tuple. Returns null when no combo applies (caller falls
- * through to per-Model compartment pricing).
+ * Pick the best-matching combo for the given (built modules, baseModel, tier,
+ * customer, height) tuple AND return the matched subset, mirroring HOOKKA's
+ * `comboMatches` memo + scope ranking (src/pages/sales/create.tsx ~L1328).
+ *
+ * Ranking (high → low), exactly like HOOKKA's `priorityOf`:
+ *   customer+tier > customer+ANY(null) > company+tier > company+ANY(null),
+ *   newest effectiveFrom as the tie-break.
+ *
+ * Returns `null` when no combo's slots can be covered by the built modules or
+ * the winner has no price for `height`. Does NOT apply the cheaper-only guard
+ * (`subsetSum − comboTotal > 0`) — that needs the caller's per-module
+ * à-la-carte prices, so the caller (groupPrice) decides whether to actually
+ * use the combo. Extras (built modules outside `matchedIndices`) always price
+ * at full master price.
  *
  * @param rows  Pre-fetched combo rows. Caller should filter by baseModel
- *              server-side for performance; this function will re-filter
+ *              server-side for performance; this function re-filters
  *              defensively.
+ */
+export function pickComboMatch(
+  args: PickComboArgs,
+  rows: readonly SofaComboRow[],
+): ComboMatch | null {
+  const asOf = args.asOf ?? todayIso();
+  const built = args.modules.map((m) => m.trim());
+
+  // 1. Filter to candidate rows + compute each one's matched subset. Same
+  //    base model (empty args.baseModel = wildcard, used by POS until the
+  //    retail↔mfg base_model bridge surfaces), tier matches (or row tier
+  //    null), effective on/before asOf, not soft-deleted, AND the row's slots
+  //    can be covered by a subset of the built modules (extras allowed).
+  const wildcardBaseModel = !args.baseModel;
+  const candidates: Array<{ row: SofaComboRow; subset: number[] }> = [];
+  for (const r of rows) {
+    if (r.deletedAt) continue;
+    if (!wildcardBaseModel && r.baseModel !== args.baseModel) continue;
+    if (r.tier !== null && r.tier !== args.tier) continue;
+    if (r.effectiveFrom > asOf) continue;
+    const subset = matchComboSubset(built, r.modules);
+    if (!subset) continue;
+    const centi = r.pricesByHeight?.[args.height];
+    if (typeof centi !== 'number') continue;
+    candidates.push({ row: r, subset });
+  }
+  if (candidates.length === 0) return null;
+
+  // 2. Rank by scope priority then newest effectiveFrom (HOOKKA priorityOf).
+  const priorityOf = (r: SofaComboRow): number => {
+    const isCustomer = !!args.customerId && r.customerId === args.customerId;
+    const tierMatch = r.tier === args.tier;
+    if (isCustomer && tierMatch) return 4;
+    if (isCustomer && r.tier === null) return 3;
+    if (r.customerId === null && tierMatch) return 2;
+    if (r.customerId === null && r.tier === null) return 1;
+    return 0; // customer-mismatched rows can't win (shouldn't appear post-filter)
+  };
+  const ranked = candidates
+    .map((c) => ({ ...c, p: priorityOf(c.row) }))
+    .filter((c) => c.p > 0)
+    .sort((a, b) =>
+      b.p - a.p ||
+      (a.row.effectiveFrom < b.row.effectiveFrom ? 1 : a.row.effectiveFrom > b.row.effectiveFrom ? -1 : 0),
+    );
+  const winner = ranked[0];
+  if (!winner) return null;
+
+  const comboPriceCenti = winner.row.pricesByHeight[args.height];
+  if (typeof comboPriceCenti !== 'number') return null;
+  return { row: winner.row, comboPriceCenti, matchedIndices: winner.subset };
+}
+
+/**
+ * Back-compat thin wrapper around {@link pickComboMatch}: returns just the
+ * winning combo's centi price for the height (or null). Subset-unaware callers
+ * (e.g. server anti-tamper decision) use this to learn the combo total; the
+ * cheaper-only guard + extras pricing is applied by the caller.
  */
 export function pickComboPrice(
   args: PickComboArgs,
   rows: readonly SofaComboRow[],
 ): number | null {
-  const asOf = args.asOf ?? todayIso();
-  const built = args.modules.map((m) => m.trim()).filter(Boolean);
-
-  // 1. Filter to candidate rows: same base model (empty args.baseModel = wildcard,
-  //    used by POS until the retail↔mfg base_model bridge surfaces), slots
-  //    cover the built modules (set-cover + exact count), tier matches (or row
-  //    tier null), effective on/before asOf, not soft-deleted.
-  const wildcardBaseModel = !args.baseModel;
-  const candidates = rows.filter((r) => {
-    if (r.deletedAt) return false;
-    if (!wildcardBaseModel && r.baseModel !== args.baseModel) return false;
-    if (r.tier !== null && r.tier !== args.tier) return false;
-    if (r.effectiveFrom > asOf) return false;
-    if (!matchesComboSlots(built, r.modules)) return false;
-    return true;
-  });
-
-  if (candidates.length === 0) return null;
-
-  // 2. Within candidates, split into customer-specific vs default (null).
-  const customerHits = args.customerId
-    ? candidates.filter((r) => r.customerId === args.customerId)
-    : [];
-  const defaultHits  = candidates.filter((r) => r.customerId === null);
-
-  // 3. Pick the scope to use (customer-specific wins).
-  const pool = customerHits.length > 0 ? customerHits : defaultHits;
-  if (pool.length === 0) return null;
-
-  // 4. Latest effective_from wins. Tie-breaker: most recent created_at —
-  //    but we don't carry created_at on this lookup, so the caller's
-  //    fetch order matters as a fallback. Defensive: sort by effectiveFrom
-  //    DESC here.
-  const sorted = [...pool].sort((a, b) =>
-    a.effectiveFrom < b.effectiveFrom ? 1 : a.effectiveFrom > b.effectiveFrom ? -1 : 0,
-  );
-  const winner = sorted[0];
-  if (!winner) return null;
-
-  const centi = winner.pricesByHeight?.[args.height];
-  return typeof centi === 'number' ? centi : null;
+  return pickComboMatch(args, rows)?.comboPriceCenti ?? null;
 }
 
 /** Format a single module code with its LHF/RHF orientation in parens. */

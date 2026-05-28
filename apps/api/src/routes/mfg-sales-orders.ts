@@ -4,7 +4,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
-import { pickComboPrice, type SofaComboRow, type SofaPriceTier } from '@2990s/shared';
+import { pickComboMatch, type SofaComboRow, type SofaPriceTier } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
@@ -402,14 +402,27 @@ mfgSalesOrders.post('/', async (c) => {
     };
     return recomputeFromSnapshot(draft, product, fabric, cachedConfig);
   }));
-  /* PR — Commander 2026-05-28 — Server-side combo recompute.
-     For each sofa line, if variants.cells matches a sofa_combo_pricing
-     row's modules at the line's seat-height + fabric tier, override the
-     recomputed unit_price_sen with the combo's pricesByHeight[height].
-     Runs AFTER the per-line à la carte recompute so combo wins. The
-     drift check below uses the post-override server price, so a client
-     that sent the combo price passes; a tampering client that sent a
-     lower number gets rejected. */
+  /* PR — Commander 2026-05-28 — Server-side combo recompute (HOOKKA subset 1:1).
+     For each sofa line, run the SAME shared `pickComboMatch` the POS cart uses
+     so the match decision + scope ranking + cheaper-only guard stay identical
+     (anti-tamper). A combo now covers a SUBSET of the built cells: every combo
+     slot must be filled by a distinct built module, extras beyond the matched
+     subset are allowed and stay at full master price.
+
+     The mfg pricing model prices a sofa line as ONE seat-height base for the
+     whole build — it has no per-compartment price table to decompose extras —
+     so we apply the override in two cases that preserve anti-tamper:
+       · WHOLE-BUILD match (no extras): the combo replaces the line price
+         outright IFF it's cheaper than the recomputed full-build base
+         (HOOKKA's `subsetSum − comboTotal > 0`). Drift then compares the
+         client unit to `comboTotal`.
+       · SUBSET match WITH extras: the server can't price the extras
+         per-module, so it pins a FLOOR (client must pay ≥ comboTotal — the
+         combo's own price — since extras only add) and a CEILING (client must
+         pay ≤ the recomputed full-build base — extras can't be priced ABOVE
+         their à-la-carte). A client inside [comboTotal, fullBase] passes; one
+         outside drifts. This keeps a tampering POS from dropping below the
+         combo floor while still allowing the legitimate combo+extras total. */
   let combos: SofaComboRow[] = [];
   const hasSofaCustomBuild = items.some((it) =>
     !!extractSofaComboLookupArgs(it.itemGroup as string | undefined, it.variants)
@@ -422,26 +435,50 @@ mfgSalesOrders.post('/', async (c) => {
       const it = items[i]; if (!it) continue;
       const args = extractSofaComboLookupArgs(it.itemGroup as string | undefined, it.variants);
       if (!args) continue;
-      const comboPrice = pickComboPrice(
+      const match = pickComboMatch(
         { baseModel: '', modules: args.modules, customerId: null,
           tier: args.tier, height: args.height },
         combos,
       );
-      if (comboPrice != null) {
-        const r = recomputes[i];
-        if (r) {
-          r.unit_price_sen = comboPrice;
-          // Re-derive line total in the recomputed breakdown so the drift
-          // check below compares apples-to-apples.
-          const qty = Math.max(0, Math.floor(Number(it.qty || 0)));
-          r.total_centi = qty * comboPrice;
-          // Re-evaluate drift with the new server price; mark non-drift when
-          // the client submitted the same combo price (or close to it).
-          const clientCenti = Number(it.unitPriceCenti ?? 0);
-          const drift = comboPrice > 0
-            ? Math.abs(clientCenti - comboPrice) / comboPrice > 0.005
+      if (!match) continue;
+      const r = recomputes[i];
+      if (!r) continue;
+      const comboTotal = match.comboPriceCenti;
+      const fullBase = r.unit_price_sen;            // recomputed whole-build à-la-carte base
+      const qty = Math.max(0, Math.floor(Number(it.qty || 0)));
+      const clientCenti = Number(it.unitPriceCenti ?? 0);
+      const builtCount = args.modules.map((m) => m.trim()).filter(Boolean).length;
+      const hasExtras = match.matchedIndices.length < builtCount;
+
+      if (!hasExtras) {
+        // Whole-build combo. Cheaper-only guard vs the recomputed base.
+        if (comboTotal < fullBase) {
+          r.unit_price_sen = comboTotal;
+          r.total_centi = qty * comboTotal;
+          r.drift = comboTotal > 0
+            ? Math.abs(clientCenti - comboTotal) / comboTotal > 0.005
             : clientCenti !== 0;
-          r.drift = drift;
+        }
+        // else: combo isn't cheaper → leave the à-la-carte recompute as-is.
+      } else {
+        // Subset match WITH extras. Accept any client unit within
+        // [comboTotal, fullBase]; the combo discount on the matched subset
+        // guarantees the legitimate total never exceeds the full à-la-carte
+        // base, and never drops below the combo's own floor.
+        const floor = comboTotal;
+        const ceiling = Math.max(fullBase, comboTotal);
+        const withinBand = clientCenti >= floor && clientCenti <= ceiling;
+        if (withinBand) {
+          // Trust the client's combo+extras total (it's bounded both sides).
+          r.unit_price_sen = clientCenti;
+          r.total_centi = qty * clientCenti;
+          r.drift = false;
+        } else {
+          // Out of band → clamp the server price to the floor and let the
+          // drift check reject the tampered submission.
+          r.unit_price_sen = floor;
+          r.total_centi = qty * floor;
+          r.drift = true;
         }
       }
     }

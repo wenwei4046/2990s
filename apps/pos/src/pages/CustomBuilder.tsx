@@ -1381,6 +1381,29 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             <PriceTag amount={priceResult.total + fabricSurcharge * priceResult.groups.length} size="lg" />
+            {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
+                show the savings the combo gave over the matched subset's own
+                à-la-carte sum. Extra modules outside the combo subset stay at
+                full price and are already folded into the Total above. */}
+            {(() => {
+              const comboSavings = priceResult.groups.reduce(
+                (s, g) =>
+                  g.basis === 'combo' && g.comboSubsetALaCarte != null && g.comboPrice != null
+                    ? s + Math.max(0, g.comboSubsetALaCarte - g.comboPrice)
+                    : s,
+                0,
+              );
+              const hasExtras = priceResult.groups.some(
+                (g) => g.basis === 'combo' && (g.comboExtrasALaCarte ?? 0) > 0,
+              );
+              if (comboSavings <= 0) return null;
+              return (
+                <span className={styles.comboCue}>
+                  Combo applied · saves RM {comboSavings.toLocaleString('en-MY', { maximumFractionDigits: 0 })}
+                  {hasExtras ? ' · extras at full price' : ''}
+                </span>
+              );
+            })()}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {/* Commander 2026-05-28: save the current layout as a Quick Pick

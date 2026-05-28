@@ -656,3 +656,13 @@
   border-radius: var(--radius-md);
   gap: var(--space-3);
 }
+
+/* Combo cue (HOOKKA parity) — surfaces under the Total when a combo priced
+   a matched subset; extras outside the subset stay at full price. */
+.comboCue {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: 0.75rem;
+  color: var(--c-accent, #8a6d3b);
+  letter-spacing: 0.01em;
+}
