@@ -201,9 +201,33 @@ const STATUS_CLASS: Record<string, string> = {
   CANCELLED:      soDetailStyles.statusCancelled ?? '',
 };
 
+/* Commander 2026-05-28: relabel the status enum to the 6-stage flow
+   used in commander's vocabulary. Underlying enum values stay (no schema
+   migration) — only the display label maps. Mapping:
+     CONFIRMED      → Confirmed   (订单已经 Confirm)
+     IN_PRODUCTION  → Proceed     (已经 Proceed — processing_date set)
+     READY_TO_SHIP  → Stock Ready (stock 已经 ready)
+     SHIPPED        → Arranged    (已经安排送货)
+     DELIVERED      → Delivered   (已经 deliver)
+     INVOICED       → Invoiced    (已经 invoice)
+     CLOSED         → Closed
+     ON_HOLD        → On Hold
+     CANCELLED      → Cancelled */
+const STATUS_LABEL: Record<string, string> = {
+  CONFIRMED:     'Confirmed',
+  IN_PRODUCTION: 'Proceed',
+  READY_TO_SHIP: 'Stock Ready',
+  SHIPPED:       'Arranged',
+  DELIVERED:     'Delivered',
+  INVOICED:      'Invoiced',
+  CLOSED:        'Closed',
+  ON_HOLD:       'On Hold',
+  CANCELLED:     'Cancelled',
+};
+
 const StatusPill = ({ status }: { status: string }) => (
   <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[status] ?? ''}`}>
-    {status.replace(/_/g, ' ')}
+    {STATUS_LABEL[status] ?? status.replace(/_/g, ' ')}
   </span>
 );
 
