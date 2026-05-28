@@ -140,7 +140,10 @@ $$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS fn_consume_fifo(UUID, TEXT, INTEGER, TEXT, UUID, TEXT, UUID, UUID);
 
 -- ── 5. Views — split by variant_key ────────────────────────────────────────
--- Drop dependent view first, then rebuild balances + dependents.
+-- Both v_inventory_all_skus and v_inventory_product_totals depend on
+-- inventory_balances, so drop them first, rebuild balances variant-keyed, then
+-- rebuild each dependent (rolled up across variants so totals don't multiply).
+DROP VIEW IF EXISTS v_inventory_product_totals;
 DROP VIEW IF EXISTS v_inventory_all_skus;
 DROP VIEW IF EXISTS inventory_balances;
 
@@ -180,7 +183,10 @@ SELECT
   w.name              AS warehouse_name,
   COALESCE(b.qty, 0)              AS qty,
   b.last_movement_at              AS last_movement_at,
-  COALESCE(v.value_sen, 0)        AS value_sen
+  COALESCE(v.value_sen, 0)        AS value_sen,
+  ms.supplier_code    AS main_supplier_code,
+  ms.supplier_name    AS main_supplier_name,
+  ms.unit_price_centi AS main_supplier_price_centi
 FROM mfg_products p
 CROSS JOIN warehouses w
 LEFT JOIN (
@@ -194,8 +200,54 @@ LEFT JOIN (
    WHERE qty_remaining > 0
    GROUP BY warehouse_id, product_code
 ) v ON v.warehouse_id = w.id AND v.product_code = p.code
+LEFT JOIN LATERAL (
+  SELECT sup.code AS supplier_code, sup.name AS supplier_name, smb.unit_price_centi
+    FROM supplier_material_bindings smb
+    JOIN suppliers sup ON sup.id = smb.supplier_id
+   WHERE smb.material_code = p.code
+   ORDER BY smb.is_main_supplier DESC, smb.unit_price_centi ASC
+   LIMIT 1
+) ms ON TRUE
 WHERE w.is_active = TRUE
   AND p.status = 'ACTIVE';
+
+-- Per-product rollup (one row per SKU) — Balances tab + product-totals API.
+-- b and v are pre-aggregated to product level BEFORE joining so neither qty
+-- nor value multiplies by the number of variant buckets (the bug the old
+-- per-warehouse join would have introduced once balances went variant-keyed).
+CREATE VIEW v_inventory_product_totals AS
+SELECT
+  p.code              AS product_code,
+  p.name              AS product_name,
+  p.category          AS category,
+  p.size_label        AS size_label,
+  p.base_price_sen,
+  p.price1_sen,
+  p.branding,
+  COALESCE(b.qty, 0)                            AS total_qty,
+  COALESCE(v.value_sen, 0)                      AS total_value_sen,
+  b.last_movement_at                            AS last_movement_at,
+  ms.supplier_code    AS main_supplier_code,
+  ms.supplier_name    AS main_supplier_name,
+  ms.unit_price_centi AS main_supplier_price_centi
+FROM mfg_products p
+LEFT JOIN (
+  SELECT product_code, SUM(qty) AS qty, MAX(last_movement_at) AS last_movement_at
+    FROM inventory_balances GROUP BY product_code
+) b ON b.product_code = p.code
+LEFT JOIN (
+  SELECT product_code, SUM(qty_remaining * unit_cost_sen) AS value_sen
+    FROM inventory_lots WHERE qty_remaining > 0 GROUP BY product_code
+) v ON v.product_code = p.code
+LEFT JOIN LATERAL (
+  SELECT sup.code AS supplier_code, sup.name AS supplier_name, smb.unit_price_centi
+    FROM supplier_material_bindings smb
+    JOIN suppliers sup ON sup.id = smb.supplier_id
+   WHERE smb.material_code = p.code
+   ORDER BY smb.is_main_supplier DESC, smb.unit_price_centi ASC
+   LIMIT 1
+) ms ON TRUE
+WHERE p.status = 'ACTIVE';
 
 -- Valuation per (warehouse, product, variant).
 DROP VIEW IF EXISTS v_inventory_value;

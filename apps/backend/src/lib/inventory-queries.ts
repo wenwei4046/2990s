@@ -39,6 +39,9 @@ export type Warehouse = {
 export type InventoryBalance = {
   warehouse_id: string;
   product_code: string;
+  /* Migration 0095 — attribute-composition bucket; '' = unclassified.
+     Present on the default (non-showAll) balances rows. */
+  variant_key?: string;
   product_name: string | null;
   qty: number;
   last_movement_at: string | null;
@@ -181,14 +184,12 @@ export function useInventoryProductTotals(opts?: { search?: string; category?: s
 export function useInventoryProductBreakdown(productCode: string | null) {
   return useQuery({
     queryKey: ['inventory', 'breakdown', productCode],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      params.set('search', productCode ?? '');
-      params.set('showAll', 'true');
-      return authedFetch<{ balances: InventoryBalance[]; warehouses: Warehouse[] }>(
-        `/inventory?${params.toString()}`,
-      );
-    },
+    // Migration 0095 — per (warehouse × attribute-composition) rows so the
+    // drawer can show a SKU broken into its variant buckets, each with qty.
+    queryFn: () =>
+      authedFetch<{ balances: InventoryBalance[] }>(
+        `/inventory/breakdown/${encodeURIComponent(productCode ?? '')}`,
+      ),
     enabled: Boolean(productCode),
     staleTime: 30_000,
   });

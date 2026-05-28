@@ -94,3 +94,34 @@ export function computeVariantKey(
 
   return parts.join('|');
 }
+
+/** Human-readable labels for the canonical key's attribute slugs. */
+const VARIANT_LABELS: Record<string, string> = {
+  fabriccode: 'Fabric',
+  seatheight: 'Seat',
+  gap: 'Gap',
+  divanheight: 'Divan',
+  legheight: 'Leg',
+  totalheight: 'Total H',
+  special: 'Special',
+};
+
+/**
+ * Turn a canonical variant key into a readable label for the UI, e.g.
+ * "fabriccode=bf-16|gap=16|legheight=2" -> "Fabric BF-16 · Gap 16 · Leg 2".
+ * Empty / unclassified -> '' (caller decides how to show it, e.g. "Standard").
+ */
+export function formatVariantKey(key: string | null | undefined): string {
+  if (!key) return '';
+  return key
+    .split('|')
+    .map((part) => {
+      const eq = part.indexOf('=');
+      if (eq < 0) return part;
+      const slug = part.slice(0, eq);
+      const value = part.slice(eq + 1);
+      const label = VARIANT_LABELS[slug] ?? slug;
+      return `${label} ${slug === 'fabriccode' ? value.toUpperCase() : value}`;
+    })
+    .join(' · ');
+}

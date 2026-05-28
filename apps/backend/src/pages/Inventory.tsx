@@ -22,6 +22,7 @@ import {
   Warehouse as WarehouseIcon,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { formatVariantKey } from '@2990s/shared';
 import {
   useWarehouses,
   useInventoryProductTotals,
@@ -350,30 +351,35 @@ const ProductBreakdownDrawer = ({
           </div>
         </div>
 
-        {/* Per-warehouse breakdown — AutoCount's "Up To Date Cost" panel */}
+        {/* Per-warehouse × attribute-composition breakdown. One row per
+            (warehouse, variant); identical attributes are already pooled, so
+            this is the SKU split into its real stock buckets (migration 0095). */}
         <p className={styles.eyebrow} style={{ marginTop: 'var(--space-4)' }}>
-          Per-Warehouse Breakdown
+          Stock by Warehouse &amp; Attributes
         </p>
         <div className={styles.tableCard}>
           <table className={styles.table}>
             <thead>
               <tr>
                 <th>Location</th>
+                <th>Attributes</th>
                 <th style={{ textAlign: 'right' }}>Qty</th>
                 <th style={{ textAlign: 'right' }}>Avg Unit Cost</th>
                 <th style={{ textAlign: 'right' }}>Value</th>
               </tr>
             </thead>
             <tbody>
-              {breakdown.isLoading && <tr><td colSpan={4} className={styles.emptyRow}>Loading…</td></tr>}
+              {breakdown.isLoading && <tr><td colSpan={5} className={styles.emptyRow}>Loading…</td></tr>}
               {!breakdown.isLoading && balances.length === 0 && (
-                <tr><td colSpan={4} className={styles.emptyRow}>No warehouse rows yet.</td></tr>
+                <tr><td colSpan={5} className={styles.emptyRow}>No stock rows yet.</td></tr>
               )}
               {!breakdown.isLoading && balances.map((b) => {
                 const avgCost = b.qty > 0 && b.value_sen ? b.value_sen / b.qty : 0;
+                const attrs = formatVariantKey(b.variant_key);
                 return (
-                  <tr key={b.warehouse_id}>
+                  <tr key={`${b.warehouse_id}|${b.variant_key ?? ''}`}>
                     <td>{b.warehouse_code} · {b.warehouse_name}</td>
+                    <td>{attrs || <span className={styles.numCellZero}>Standard</span>}</td>
                     <td className={`${styles.numCell} ${b.qty > 0 ? styles.numCellPos : styles.numCellZero}`}>
                       {b.qty.toLocaleString('en-MY')}
                     </td>

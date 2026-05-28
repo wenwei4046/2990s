@@ -3,7 +3,7 @@
 // stock bucket); any difference → different key; legacy/empty → ''.
 
 import { describe, it, expect } from 'vitest';
-import { computeVariantKey } from './variant-key';
+import { computeVariantKey, formatVariantKey } from './variant-key';
 
 describe('computeVariantKey', () => {
   it('same sofa attributes produce the same key regardless of object order, case, or whitespace', () => {
@@ -64,5 +64,24 @@ describe('computeVariantKey', () => {
     expect(computeVariantKey('sofa', {})).toBe('');
     expect(computeVariantKey(null, { fabricCode: 'AVANI01' })).toBe('');
     expect(computeVariantKey('sofa', { fabricCode: '', seatHeight: '  ', legHeight: null })).toBe('');
+  });
+});
+
+describe('formatVariantKey', () => {
+  it('turns a canonical key into a readable label', () => {
+    const key = computeVariantKey('bedframe', {
+      fabricCode: 'BF-16', gap: '16', divanHeight: '6', legHeight: '2', totalHeight: '18',
+    });
+    const label = formatVariantKey(key);
+    expect(label).toContain('Fabric BF-16');
+    expect(label).toContain('Gap 16');
+    expect(label).toContain('Total H 18');
+    expect(label).toContain(' · ');
+  });
+
+  it('empty / unclassified key → empty label', () => {
+    expect(formatVariantKey('')).toBe('');
+    expect(formatVariantKey(null)).toBe('');
+    expect(formatVariantKey(undefined)).toBe('');
   });
 });

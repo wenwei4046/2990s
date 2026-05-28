@@ -17,6 +17,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const purchaseReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseReturns.use('*', supabaseAuth);
@@ -103,14 +104,15 @@ async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber:
   if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
   if (!warehouseId) return;
   const { data: items } = await sb.from('purchase_return_items')
-    .select('material_code, material_name, qty_returned')
+    .select('material_code, material_name, qty_returned, item_group, variants')
     .eq('purchase_return_id', prId);
-  const movements = ((items ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number }>)
+  const movements = ((items ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
     .filter((it) => it.qty_returned > 0)
     .map((it) => ({
       movement_type: 'OUT' as const,
       warehouse_id: warehouseId!,
       product_code: it.material_code,
+      variant_key: computeVariantKey(it.item_group, it.variants ?? null),
       product_name: it.material_name,
       qty: it.qty_returned,
       source_doc_type: 'PURCHASE_RETURN' as const,

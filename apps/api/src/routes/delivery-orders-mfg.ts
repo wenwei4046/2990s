@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
@@ -131,18 +132,20 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
   // ── Inventory OUT — only on the first DISPATCHED transition. ─────────
   if (body.status === 'DISPATCHED' && !wasDispatched) {
     const { data: items } = await sb.from('delivery_order_items')
-      .select('item_code, description, qty')
+      .select('item_code, description, qty, item_group, variants')
       .eq('delivery_order_id', id);
     const warehouseId = (prev as { warehouse_id: string | null } | null)?.warehouse_id
       ?? (await defaultWarehouseId(sb));
     const doNo = (prev as { do_number: string } | null)?.do_number ?? id;
     if (warehouseId && items) {
-      const movements = (items as Array<{ item_code: string; description: string | null; qty: number }>)
+      const movements = (items as Array<{ item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)
         .filter((it) => it.qty > 0)
         .map((it) => ({
           movement_type: 'OUT' as const,
           warehouse_id: warehouseId,
           product_code: it.item_code,
+          // Dispatch out of the matching attribute-composition bucket (0095).
+          variant_key: computeVariantKey(it.item_group, it.variants ?? null),
           product_name: it.description,
           qty: it.qty,
           source_doc_type: 'DO' as const,
