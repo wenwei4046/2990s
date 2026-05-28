@@ -83,6 +83,44 @@ const newLine = (): DraftLine => ({
   variants: {},
 });
 
+/* Commander 2026-05-28 — Special Orders multi-select, mirroring the Sales
+   Order variant editor (PO previously had none). Writes variants.specials as
+   a string[] so it flows into Description 2 like SO does. */
+const SpecialsCheckboxes = ({
+  pool, picked, onChange,
+}: {
+  pool: Array<{ value: string }> | undefined;
+  picked: string[];
+  onChange: (arr: string[]) => void;
+}) => {
+  if (!pool || pool.length === 0) return null;
+  return (
+    <div style={{ marginTop: 'var(--space-2)' }}>
+      <div style={{
+        fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.08em',
+        textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4,
+      }}>
+        Special Orders
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px' }}>
+        {pool.map((o) => {
+          const on = picked.includes(o.value);
+          return (
+            <label key={o.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--fs-12)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={on}
+                onChange={() => onChange(on ? picked.filter((x) => x !== o.value) : [...picked, o.value])}
+              />
+              {o.value}
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export const PurchaseOrderNew = () => {
   const navigate = useNavigate();
   const create   = useCreatePurchaseOrder();
@@ -737,122 +775,121 @@ export const PurchaseOrderNew = () => {
                       {l.category} Variants
                     </div>
 
-                    {/* BEDFRAME — Fabric · Color · Design · Total Height */}
+                    {/* BEDFRAME — Commander 2026-05-28: mirror the Sales Order
+                        variant editor exactly — Fabrics · Gaps · Divan · Leg
+                        (dropdowns) + Special Orders. Dropped the free-text
+                        Color + Design fields. */}
                     {l.category === 'bedframe' && (
-                      <div className={styles.formGrid4}>
-                        <label className={styles.field}>
-                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". */}
-                          <span className={styles.fieldLabel}>Fabrics</span>
-                          <select
-                            className={styles.fieldSelect}
-                            value={String(l.variants.fabricCode ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
-                          >
-                            <option value="">—</option>
-                            {fabrics.map((f) => (
-                              <option key={f.id} value={f.fabric_code}>
-                                {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className={styles.field}>
-                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
-                              Adjacent "Fabric" select stays; qualify this one as
-                              "Fabrics (Color)" so two near-identical labels don't
-                              look broken. Key colorCode unchanged. */}
-                          <span className={styles.fieldLabel}>Fabrics (Color)</span>
-                          <input
-                            className={styles.fieldInput}
-                            placeholder="e.g. PC151-04"
-                            value={String(l.variants.colorCode ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'colorCode', e.target.value)}
-                          />
-                        </label>
-                        <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Design</span>
-                          <input
-                            className={styles.fieldInput}
-                            placeholder="Pattern / design"
-                            value={String(l.variants.design ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'design', e.target.value)}
-                          />
-                        </label>
-                        <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Total Height</span>
-                          <select
-                            className={styles.fieldSelect}
-                            value={String(l.variants.totalHeight ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'totalHeight', e.target.value)}
-                          >
-                            <option value="">—</option>
-                            {maint!.totalHeights.map((o) => (
-                              <option key={o.value} value={o.value}>{o.value}</option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
+                      <>
+                        <div className={styles.formGrid4}>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Fabrics</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.fabricCode ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {fabrics.map((f) => (
+                                <option key={f.id} value={f.fabric_code}>
+                                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Gaps</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.gap ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'gap', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {maint!.gaps.map((g) => (<option key={g} value={g}>{g}</option>))}
+                            </select>
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Divan Heights</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.divanHeight ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'divanHeight', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {maint!.divanHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                            </select>
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Leg Heights</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.legHeight ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {maint!.legHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                            </select>
+                          </label>
+                        </div>
+                        <SpecialsCheckboxes
+                          pool={maint!.specials}
+                          picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
+                          onChange={(arr) => setVariant(l.rid, 'specials', arr)}
+                        />
+                      </>
                     )}
 
-                    {/* SOFA — Seat · Leg · Fabric · Color */}
+                    {/* SOFA — Commander 2026-05-28: mirror the SO editor —
+                        Fabrics · Seat · Leg + Special Orders. Dropped free-text
+                        Color. */}
                     {l.category === 'sofa' && (
-                      <div className={styles.formGrid4}>
-                        <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Sofa Seat</span>
-                          <select
-                            className={styles.fieldSelect}
-                            value={String(l.variants.seatHeight ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
-                          >
-                            <option value="">—</option>
-                            {maint!.sofaSizes.map((s) => (
-                              <option key={s} value={s}>{s}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Leg</span>
-                          <select
-                            className={styles.fieldSelect}
-                            value={String(l.variants.legHeight ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
-                          >
-                            <option value="">—</option>
-                            {maint!.sofaLegHeights.map((o) => (
-                              <option key={o.value} value={o.value}>{o.value}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className={styles.field}>
-                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". */}
-                          <span className={styles.fieldLabel}>Fabrics</span>
-                          <select
-                            className={styles.fieldSelect}
-                            value={String(l.variants.fabricCode ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
-                          >
-                            <option value="">—</option>
-                            {fabrics.map((f) => (
-                              <option key={f.id} value={f.fabric_code}>
-                                {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className={styles.field}>
-                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
-                              Adjacent "Fabric" select stays; qualify this one as
-                              "Fabrics (Color)" to avoid a near-duplicate label.
-                              Key colorCode unchanged. */}
-                          <span className={styles.fieldLabel}>Fabrics (Color)</span>
-                          <input
-                            className={styles.fieldInput}
-                            placeholder="e.g. PC151-04"
-                            value={String(l.variants.colorCode ?? '')}
-                            onChange={(e) => setVariant(l.rid, 'colorCode', e.target.value)}
-                          />
-                        </label>
-                      </div>
+                      <>
+                        <div className={styles.formGrid4}>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Fabrics</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.fabricCode ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'fabricCode', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {fabrics.map((f) => (
+                                <option key={f.id} value={f.fabric_code}>
+                                  {f.fabric_code}{f.series ? ` · ${f.series}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Seat Heights</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.seatHeight ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'seatHeight', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {maint!.sofaSizes.map((s) => (<option key={s} value={s}>{s}</option>))}
+                            </select>
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Leg Heights</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.legHeight ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'legHeight', e.target.value)}
+                            >
+                              <option value="">—</option>
+                              {maint!.sofaLegHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                            </select>
+                          </label>
+                          <span />
+                        </div>
+                        <SpecialsCheckboxes
+                          pool={maint!.sofaSpecials}
+                          picked={Array.isArray(l.variants.specials) ? (l.variants.specials as string[]) : []}
+                          onChange={(arr) => setVariant(l.rid, 'specials', arr)}
+                        />
+                      </>
                     )}
 
                     {/* PR #135 — mattress block removed: size + branding are

@@ -21,6 +21,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   usePurchaseOrderDetail,
   usePurchaseOrderLinked,
@@ -319,7 +320,14 @@ export const PurchaseOrderDetail = () => {
                     <div className={styles.codeCell}>{it.material_code}</div>
                     {(it.description || it.material_name) && <div className={styles.muted}>{it.description ?? it.material_name}</div>}
                     {it.supplier_sku && <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>Sup SKU: {it.supplier_sku}</div>}
-                    <VariantsPills variants={it.variants ?? null} />
+                    {/* Commander 2026-05-28 — "Description 2": single combined
+                        variant line (like SO), replacing the per-variant pills.
+                        Falls back to computing it for legacy rows that predate
+                        the stored column. */}
+                    {(() => {
+                      const summary = it.description2 || buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null);
+                      return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
+                    })()}
                   </td>
                   <td className={styles.muted}>{it.item_group ?? it.material_kind}</td>
                   <td className={styles.tableRight}>{it.qty}</td>
