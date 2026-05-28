@@ -131,6 +131,24 @@ export type MaintenanceConfig = {
     description?: string;       // free-text label commander may override
     defaultPriceCenti?: number; // cents (1 RM = 100). 0/absent = no default.
   }>;
+  // PR (Commander 2026-05-28): commander-editable Quick Presets. Replaces
+  // the hardcoded COMBO_PRESETS array in SofaComboTab.tsx and the
+  // QUICK_PRESET_META mirror in POS Configurator. Each entry names a
+  // canonical module composition (e.g. "1-Seater" = 1A-LHF + 1A-RHF) so
+  // operation can compose Sofa Combo Rules without manually toggling
+  // compartments every time. When this field is absent, both readers
+  // fall back to DEFAULT_SOFA_QUICK_PRESETS in @2990s/shared so existing
+  // deployments keep working until commander overrides via Maintenance.
+  // The id is the stable preset_id Sofa Combo Rules reference — never
+  // rename after a combo has been saved with it.
+  sofaQuickPresets?: {
+    id: string;
+    label: string;
+    modules: string[];
+    sortOrder?: number;
+    active?: boolean;
+    defaultTier?: SofaPriceTier;
+  }[];
   // PR #92 — Commander 2026-05-26: "King, 6FT, 183 那些，如果我要改的话，怎
   // 么样去改呢？" The size code alone (K/Q/S/...) used to be the only thing
   // editable in Maintenance; label ("6FT") + dimensions ("183X190CM") were

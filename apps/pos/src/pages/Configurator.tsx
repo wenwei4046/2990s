@@ -52,6 +52,17 @@ interface SizeRow {
 // Width grows 10cm per cushion at 28" depth; depth stays constant.
 // Mirrors prototype/pos-sofa-config.jsx → QUICK_PRESETS, kept Configurator-local
 // because it's purely UI sizing for the hero plan-view canvas.
+//
+// NOTE (Commander 2026-05-28): commander-editable Quick Presets now live on
+// MaintenanceConfig.sofaQuickPresets (see Backend Maintenance → SOFA → Quick
+// Presets). This map remains the geometry source — it's keyed by Quick Pick
+// BUNDLE id (1S/2S/3S/2+L/3+L/2WC/2PS/CORNER from packages/shared BUNDLES),
+// not the maintenance preset_id (1S/2S/3S-L/3S-R/2+L-L/2+L-R/...). The two
+// coincidentally overlap on ids like '1S' and '2WC' but are otherwise
+// disjoint domains. Wiring the Quick Pick screen to read from
+// sofaQuickPresets directly is deferred — would require unifying bundle
+// pricing (product_bundles) with preset pricing (sofa_combos), which is
+// out of scope for this PR.
 const QUICK_PRESET_META: Record<string, { sub: string; cushions: number; baseW: number; baseD: number }> = {
   '1S':  { sub: 'Single seat',           cushions: 2, baseW: 190, baseD: 95 },
   '2S':  { sub: 'Two seats',             cushions: 3, baseW: 265, baseD: 95 },

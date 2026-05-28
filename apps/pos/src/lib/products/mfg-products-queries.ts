@@ -131,6 +131,21 @@ export type MaintenanceConfig = {
     description?: string;       // free-text label commander may override
     defaultPriceCenti?: number; // cents (1 RM = 100). 0/absent = no default.
   }>;
+  // PR (Commander 2026-05-28): commander-editable Quick Presets. Mirror of
+  // the field on the Backend MaintenanceConfig — POS reads the same blob
+  // via /maintenance-config/resolved?scope=master so the New Combo dialog,
+  // POS Configurator Quick Pick, and POS Customize sidebar all stay in
+  // sync. Falls back to DEFAULT_SOFA_QUICK_PRESETS when absent. The id is
+  // the stable preset_id Sofa Combo Rules reference — never rename after
+  // a combo has been saved with it.
+  sofaQuickPresets?: {
+    id: string;
+    label: string;
+    modules: string[];
+    sortOrder?: number;
+    active?: boolean;
+    defaultTier?: SofaPriceTier;
+  }[];
   // PR #92 — Commander 2026-05-26: "King, 6FT, 183 那些，如果我要改的话，怎
   // 么样去改呢？" The size code alone (K/Q/S/...) used to be the only thing
   // editable in Maintenance; label ("6FT") + dimensions ("183X190CM") were

@@ -56,7 +56,11 @@ import {
   ImageOff,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { SOFA_MODULES } from '@2990s/shared';
+import {
+  SOFA_MODULES,
+  resolveSofaQuickPresets,
+  type SofaQuickPreset,
+} from '@2990s/shared';
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
@@ -1554,6 +1558,7 @@ type MaintenanceListKey =
   | 'sofaSizes'
   | 'sofaLegHeights'
   | 'sofaSpecials'
+  | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
   | 'fabrics';
 
@@ -1579,6 +1584,12 @@ const MAINTENANCE_TABS: {
   { key: 'sofaSizes', label: 'Sizes', description: 'Available sofa seat height sizes (inches)', priced: false, section: 'Sofa' },
   { key: 'sofaLegHeights', label: 'Leg Heights', description: 'Sofa leg height options with surcharge pricing', priced: true, section: 'Sofa' },
   { key: 'sofaSpecials', label: 'Specials', description: 'Sofa special order options with surcharge pricing', priced: true, section: 'Sofa' },
+  // PR (Commander 2026-05-28) — Quick Presets: module-composition shortcuts
+  // (e.g. "1-Seater" = 1A-LHF + 1A-RHF). Drives the New Combo dialog's
+  // quick-pick chip rail + the POS Configurator's Quick Pick screen. POS
+  // sales_director can ADD presets here but only admin can edit/delete
+  // (matches the role gate on other POS Maintenance sub-tabs).
+  { key: 'sofaQuickPresets', label: 'Quick Presets', description: 'Module-composition shortcuts (e.g. 1-Seater = 1A-LHF + 1A-RHF). Used by the New Combo dialog and POS Quick Pick.', priced: false, section: 'Sofa' },
 
   // ── Common (cross-category single pool) ─────────────────────────────────
   { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
@@ -1887,6 +1898,12 @@ export const MaintenanceTab = ({
 
 const countItems = (cfg: MaintenanceConfig, key: MaintenanceListKey): number => {
   if (key === 'fabrics') return 0; // populated from fabric_trackings, not the JSON blob
+  // Quick Presets falls back to DEFAULT_SOFA_QUICK_PRESETS when the
+  // maintenance row hasn't been migrated yet — show the resolved count
+  // so the left-rail badge isn't misleadingly "0".
+  if (key === 'sofaQuickPresets') {
+    return resolveSofaQuickPresets(cfg.sofaQuickPresets).length;
+  }
   // PR #74 — Code Format tabs removed (Commander 2026-05-26: preset only,
   // not commander-editable). The cfg.{category}CodeFormat / NameFormat
   // columns still exist on the JSONB blob but no longer surface in the UI;
@@ -2482,6 +2499,321 @@ const SofaCompartmentsList = ({
   );
 };
 
+/* ─── Sofa Quick Presets — module-composition shortcuts (Commander 2026-05-28)
+ *
+ * POS mirror of the Backend editor. Three-tier role gate matches the rest of
+ * POS Maintenance:
+ *   - admin (editMode=true): full edit (label, modules, tier, active, delete)
+ *   - sales_director (addOnly=true): can append a new preset row; existing
+ *     rows render readonly (no edit, no delete)
+ *   - everyone else: pure readonly display (label · modules · tier)
+ *
+ * Add-only mutations post immediately via onQuickAdd (same posture as the
+ * other addOnly sub-tabs — no draft-Save dance for sales_director). */
+const SofaQuickPresetsList = ({
+  config,
+  editMode,
+  addOnly = false,
+  onChange,
+  onQuickAdd,
+  dragRowProps,
+}: {
+  config: MaintenanceConfig;
+  editMode: boolean;
+  addOnly?: boolean;
+  onChange: (next: MaintenanceConfig) => void;
+  onQuickAdd?: (next: MaintenanceConfig) => void;
+  dragRowProps: (i: number) => HTMLAttributes<HTMLDivElement>;
+}) => {
+  const stored = config.sofaQuickPresets;
+  const items: SofaQuickPreset[] = stored && stored.length > 0
+    ? stored
+    : resolveSofaQuickPresets(undefined);
+  const isUsingFallback = !stored || stored.length === 0;
+
+  const compartmentPool: string[] = (config.sofaCompartments && config.sofaCompartments.length > 0)
+    ? config.sofaCompartments
+    : SOFA_MODULES.map((m) => m.id);
+
+  const writeAll = (next: SofaQuickPreset[]) => {
+    const cfg = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+    cfg.sofaQuickPresets = next;
+    onChange(cfg);
+  };
+
+  const updateAt = (idx: number, patch: Partial<SofaQuickPreset>) => {
+    const next = items.map((p, i) => i === idx ? { ...p, ...patch } : p);
+    writeAll(next);
+  };
+
+  const removeAt = (idx: number) => {
+    if (!confirm(`Remove preset "${items[idx]?.label ?? '?'}"? (Existing combos with this preset_id keep working.)`)) return;
+    writeAll(items.filter((_, i) => i !== idx));
+  };
+
+  const toggleModule = (idx: number, code: string) => {
+    const cur = items[idx]?.modules ?? [];
+    const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
+    updateAt(idx, { modules: next });
+  };
+
+  const addPreset = () => {
+    const usedIds = new Set(items.map((p) => p.id));
+    let n = items.length + 1;
+    while (usedIds.has(`P${n}`)) n += 1;
+    const newRow: SofaQuickPreset = {
+      id: `P${n}`,
+      label: 'New preset',
+      modules: [],
+      active: true,
+    };
+    /* add-only path (sales_director): when the maintenance row hasn't been
+       lifted off the fallback yet, snapshot the resolved defaults so the
+       POST carries the full canonical list + the new entry. Otherwise the
+       quick-add would persist ONLY the new row, dropping the historical 11. */
+    const base = isUsingFallback ? resolveSofaQuickPresets(undefined) : items;
+    const next = [...base, newRow];
+    if (addOnly && onQuickAdd) {
+      const cfg = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+      cfg.sofaQuickPresets = next;
+      onQuickAdd(cfg);
+    } else {
+      writeAll(next);
+    }
+  };
+
+  const showAddRow = editMode || addOnly;
+
+  return (
+    <div className={styles.maintList}>
+      {isUsingFallback && (editMode || addOnly) && (
+        <div className={styles.bannerWarn} style={{ marginBottom: 8 }}>
+          Showing the default 11-entry list. {editMode
+            ? 'Hit Save to lift these into the stored config and start customising'
+            : 'Adding a new preset will lift the defaults into the stored config'}
+          {' '}— existing combos that reference preset_id keep resolving against the same ids.
+        </div>
+      )}
+      {items.map((p, i) => (
+        <div
+          key={`${p.id}-${i}`}
+          className={styles.maintRow}
+          {...dragRowProps(i)}
+          style={{
+            ...(dragRowProps(i).style ?? {}),
+            gridTemplateColumns: '32px 32px 100px 1fr 110px auto auto',
+            gap: 'var(--space-3)',
+            alignItems: 'center',
+          }}
+        >
+          <button type="button" className={styles.maintRowIcon} title="History">
+            <History {...ICON_PROPS} />
+          </button>
+          <span className={styles.maintRowIdx} style={editMode ? { cursor: 'grab' } : undefined}>
+            {i + 1}
+          </span>
+          {editMode ? (
+            <input
+              type="text"
+              value={p.id}
+              onChange={(e) => updateAt(i, { id: e.target.value })}
+              placeholder="ID"
+              title="Stable key — referenced by combo rules. Don't rename after combos exist."
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-12)',
+                fontWeight: 600,
+                background: 'var(--c-cream)',
+                border: '1px solid var(--c-orange)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 6px',
+                outline: 'none',
+                width: '100%',
+              }}
+            />
+          ) : (
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-12)',
+              color: 'var(--fg-soft)',
+            }}>
+              {p.id}
+            </span>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+            {editMode ? (
+              <input
+                type="text"
+                value={p.label}
+                onChange={(e) => updateAt(i, { label: e.target.value })}
+                placeholder="Label (e.g. 1-Seater)"
+                style={{
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: 'var(--fs-14)',
+                  fontWeight: 600,
+                  background: 'var(--c-cream)',
+                  border: '1px solid var(--c-orange)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '4px 8px',
+                  outline: 'none',
+                  width: '100%',
+                  maxWidth: 280,
+                }}
+              />
+            ) : (
+              <span style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-14)',
+                fontWeight: 600,
+                color: 'var(--c-ink)',
+              }}>
+                {p.label}
+              </span>
+            )}
+            <div style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-11)',
+              color: 'var(--fg-soft)',
+            }}>
+              {p.modules.length === 0 ? (
+                <span style={{ color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+                  No modules selected
+                </span>
+              ) : (
+                p.modules.join(' + ')
+              )}
+            </div>
+            {editMode && (
+              <div style={{
+                display: 'flex', flexWrap: 'wrap', gap: 4,
+                padding: 6,
+                background: 'var(--c-paper)',
+                border: '1px dashed var(--line)',
+                borderRadius: 'var(--radius-sm)',
+              }}>
+                {compartmentPool.map((code) => {
+                  const on = p.modules.includes(code);
+                  return (
+                    <button
+                      type="button"
+                      key={code}
+                      onClick={() => toggleModule(i, code)}
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 'var(--fs-11)',
+                        fontWeight: 600,
+                        background: on ? 'var(--c-orange, #c47b2f)' : 'var(--c-paper)',
+                        color: on ? 'var(--c-paper, #fff)' : 'var(--c-ink)',
+                        border: `1px solid ${on ? 'var(--c-orange, #c47b2f)' : 'var(--line-strong)'}`,
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '2px 8px',
+                        cursor: 'pointer',
+                      }}
+                      title={on ? 'Click to remove' : 'Click to add'}
+                    >
+                      {code}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {editMode ? (
+            <select
+              value={p.defaultTier ?? ''}
+              onChange={(e) => updateAt(i, { defaultTier: (e.target.value || undefined) as SofaPriceTier | undefined })}
+              style={{
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-12)',
+                background: 'var(--c-cream)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 6px',
+                outline: 'none',
+              }}
+              title="Default tier applied when this preset is used in the New Combo dialog"
+            >
+              <option value="">— Any tier —</option>
+              <option value="PRICE_1">PRICE_1</option>
+              <option value="PRICE_2">PRICE_2</option>
+              <option value="PRICE_3">PRICE_3</option>
+            </select>
+          ) : (
+            <span style={{
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-11)',
+              color: 'var(--fg-soft)',
+            }}>
+              {p.defaultTier ?? '—'}
+            </span>
+          )}
+          {editMode ? (
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+              color: 'var(--fg-soft)', cursor: 'pointer',
+            }}>
+              <input
+                type="checkbox"
+                checked={p.active !== false}
+                onChange={(e) => updateAt(i, { active: e.target.checked })}
+                title="Inactive presets stay in history but don't show in pickers"
+              />
+              Active
+            </label>
+          ) : (
+            <span style={{
+              fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-11)',
+              color: p.active === false ? 'var(--fg-muted)' : 'var(--c-green, #1a7a3a)',
+            }}>
+              {p.active === false ? 'Inactive' : 'Active'}
+            </span>
+          )}
+          {editMode ? (
+            <button
+              type="button"
+              className={styles.maintRowIcon}
+              title="Remove preset"
+              onClick={() => removeAt(i)}
+              style={{ color: 'var(--c-festive-b, #B8331F)' }}
+            >
+              <Trash2 {...ICON_PROPS} />
+            </button>
+          ) : (
+            <span />
+          )}
+        </div>
+      ))}
+
+      {showAddRow && (
+        <div
+          className={styles.maintRow}
+          style={{
+            background: 'var(--c-paper)',
+            borderColor: 'var(--c-orange)',
+            gridTemplateColumns: '32px 32px 1fr auto',
+          }}
+        >
+          <span className={styles.maintRowIcon}><Plus {...ICON_PROPS} /></span>
+          <span className={styles.maintRowIdx}>+</span>
+          <span style={{
+            fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
+            color: 'var(--fg-soft)',
+          }}>
+            {addOnly
+              ? 'Append a blank preset (sales_director: add-only — admin edits modules + tier).'
+              : 'Append a blank preset row — fill in ID, label, and pick modules from the chip rail.'}
+          </span>
+          <Button variant="primary" size="sm" onClick={addPreset}>
+            <Plus {...ICON_PROPS} />
+            <span>Add preset</span>
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MaintenanceList = ({
   listKey,
   config,
@@ -2586,6 +2918,19 @@ const MaintenanceList = ({
         dragRowProps={dragRowProps}
         draftValue={draftValue}
         setDraftValue={setDraftValue}
+      />
+    );
+  }
+
+  if (listKey === 'sofaQuickPresets') {
+    return (
+      <SofaQuickPresetsList
+        config={config}
+        editMode={editMode}
+        addOnly={addOnly}
+        onChange={onChange}
+        onQuickAdd={onQuickAdd}
+        dragRowProps={dragRowProps}
       />
     );
   }
