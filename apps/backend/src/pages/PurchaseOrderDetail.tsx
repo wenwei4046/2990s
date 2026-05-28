@@ -907,7 +907,8 @@ const PoLineItemModal = ({
                     value={String(draft.variants?.special ?? '')}
                     onChange={(v) => setVariant('special', v)} />
                   <label className={styles.field}>
-                    <span className={styles.fieldLabel}>Fabric Color (free text)</span>
+                    {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
+                    <span className={styles.fieldLabel}>Fabrics (free text)</span>
                     <input className={styles.fieldInput}
                       value={String(draft.variants?.fabricColor ?? '')}
                       onChange={(e) => setVariant('fabricColor', e.target.value)} />

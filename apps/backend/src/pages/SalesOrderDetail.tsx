@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
+import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
@@ -940,6 +941,12 @@ export const SalesOrderDetail = () => {
                   <td>
                     <div className={styles.codeCell}>{it.item_code}</div>
                     {it.description && <div className={styles.muted}>{it.description}</div>}
+                    {/* Commander 2026-05-28 — HOOKKA-style one-line variant
+                        summary beneath the description. Pills kept below. */}
+                    {(() => {
+                      const summary = buildVariantSummary(it.item_group, it.variants);
+                      return summary ? <div className={styles.muted}>{summary}</div> : null;
+                    })()}
                     <VariantsPills variants={it.variants} />
                   </td>
                   <td className={styles.tableRight}>{it.qty}</td>
@@ -1727,7 +1734,10 @@ const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
 const VARIANT_KEY_LABELS: Record<string, string> = {
   gap:          'Gap',
   legHeight:    'Leg Height',
-  fabricCode:   'Fabric Code',
+  /* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
+     Keys (fabricCode/colorCode) unchanged; only the displayed label. */
+  fabricCode:   'Fabrics',
+  colorCode:    'Fabrics',
   divanHeight:  'Divan Height',
   totalHeight:  'Total Height',
   seatHeight:   'Seat Height',

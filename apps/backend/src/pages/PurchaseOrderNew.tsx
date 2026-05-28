@@ -741,7 +741,8 @@ export const PurchaseOrderNew = () => {
                     {l.category === 'bedframe' && (
                       <div className={styles.formGrid4}>
                         <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Fabric</span>
+                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". */}
+                          <span className={styles.fieldLabel}>Fabrics</span>
                           <select
                             className={styles.fieldSelect}
                             value={String(l.variants.fabricCode ?? '')}
@@ -756,7 +757,11 @@ export const PurchaseOrderNew = () => {
                           </select>
                         </label>
                         <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Color</span>
+                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
+                              Adjacent "Fabric" select stays; qualify this one as
+                              "Fabrics (Color)" so two near-identical labels don't
+                              look broken. Key colorCode unchanged. */}
+                          <span className={styles.fieldLabel}>Fabrics (Color)</span>
                           <input
                             className={styles.fieldInput}
                             placeholder="e.g. PC151-04"
@@ -819,7 +824,8 @@ export const PurchaseOrderNew = () => {
                           </select>
                         </label>
                         <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Fabric</span>
+                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". */}
+                          <span className={styles.fieldLabel}>Fabrics</span>
                           <select
                             className={styles.fieldSelect}
                             value={String(l.variants.fabricCode ?? '')}
@@ -834,7 +840,11 @@ export const PurchaseOrderNew = () => {
                           </select>
                         </label>
                         <label className={styles.field}>
-                          <span className={styles.fieldLabel}>Color</span>
+                          {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
+                              Adjacent "Fabric" select stays; qualify this one as
+                              "Fabrics (Color)" to avoid a near-duplicate label.
+                              Key colorCode unchanged. */}
+                          <span className={styles.fieldLabel}>Fabrics (Color)</span>
                           <input
                             className={styles.fieldInput}
                             placeholder="e.g. PC151-04"

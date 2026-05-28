@@ -1,27 +1,36 @@
 // ----------------------------------------------------------------------------
-// PurchaseOrderFromSo — multi-select SO → PO picker (PR — Commander
-// 2026-05-26).
+// PurchaseOrderFromSo — multi-select SO → PO picker.
 //
-// Commander: "1 个 SO 部分转 + 多 SO 合并 — 两者都要". Lists every SO line
-// with qty - po_qty_picked > 0; commander toggles checkboxes per line,
-// optionally edits the qty to convert (defaults to remaining), then hits
-// "Create POs". Server groups by main supplier and emits one PO per
-// supplier.
+// Commander 2026-05-28 redesign:
+//   - REMOVED the "PO Defaults" card (Expected Delivery + Purchase Location).
+//     Those are NOT asked anymore — the server derives each PO line's
+//     warehouse from the source SO's Sales Location, and each line's delivery
+//     date from the SO line's own delivery date (header expected_at / purchase
+//     location are rolled up from the lines server-side).
+//   - SWAPPED the bespoke card list for the shared <DataGrid> primitive
+//     (same dense ledger look as MfgSalesOrdersList / SalesOrderDetailListing).
+//   - ADDED toolbar filters: a date-range filter that targets SO Date /
+//     Processing Date / Delivery Date, plus a Category filter.
 //
-// Routing: /purchase-orders/from-so — modelled after PurchaseOrderNew so
-// the chrome (back link, Save button, cards) is consistent.
+// Original multi-select + partial-qty behaviour (Commander 2026-05-26) is
+// preserved: tick lines, optionally edit the pick qty, hit "Create POs".
+// Server groups by main supplier and emits one PO per supplier.
+//
+// Routing: /purchase-orders/from-so.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, X, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import {
   useOutstandingSoItems,
   useCreatePosFromSoItems,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
-import { useWarehouses } from '../lib/inventory-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -31,35 +40,81 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
+/* DataGrid localStorage layout key (commander 2026-05-28). */
+const STORAGE_KEY = 'po-from-so.layout.v1';
+
+/* Houzs-style compact pill controls for the toolbar filters — mirrors the
+   inputs used on the SO list page so the density matches. */
+const FILTER_INPUT: CSSProperties = {
+  height: 28,
+  border: '1px solid var(--line)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '0 8px',
+  fontSize: 'var(--fs-12)',
+  background: 'var(--c-paper)',
+  color: 'var(--c-ink)',
+};
+
+/** Category filter options. 'all' shows everything; the rest match item_group. */
+const CATEGORY_OPTIONS = [
+  { value: 'all',       label: 'All categories' },
+  { value: 'sofa',      label: 'Sofa' },
+  { value: 'bedframe',  label: 'Bedframe' },
+  { value: 'mattress',  label: 'Mattress' },
+  { value: 'accessory', label: 'Accessory' },
+  { value: 'service',   label: 'Service' },
+] as const;
+
+/** Which date field the range filter targets. */
+const DATE_FIELD_OPTIONS = [
+  { value: 'soDate',       label: 'SO Date' },
+  { value: 'processing',   label: 'Processing Date' },
+  { value: 'delivery',     label: 'Delivery Date' },
+] as const;
+type DateField = typeof DATE_FIELD_OPTIONS[number]['value'];
+
+/** Resolve the date string for a row given the active date-field selector. */
+const rowDateFor = (r: OutstandingSoItem, field: DateField): string | null => {
+  if (field === 'soDate')     return r.soDate ?? null;
+  if (field === 'processing') return r.processingDate ?? null;
+  // delivery — prefer the SO line's own date, fall back to the SO header date.
+  return r.lineDeliveryDate ?? r.deliveryDate ?? null;
+};
+
+type Pick = { picked: boolean; qty: number };
+
 export const PurchaseOrderFromSo = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingSoItems();
   const create   = useCreatePosFromSoItems();
-  const warehouses = useWarehouses();
 
-  // Map<soItemId, { picked: boolean, qty: number }>
-  // Defaults: picked = false. When commander ticks, qty = remainingQty.
-  const [picks, setPicks] = useState<Record<string, { picked: boolean; qty: number }>>({});
+  // Map<soItemId, { picked, qty }>. Defaults: picked = false; when ticked,
+  // qty defaults to remainingQty.
+  const [picks, setPicks] = useState<Record<string, Pick>>({});
 
-  // PR #157 — Commander 2026-05-26: Expected Delivery + Purchase Location are
-  // required on every PO. Bulk-convert path creates N POs in one click, so
-  // these defaults apply to every PO created.
-  const [expectedAt, setExpectedAt] = useState<string>('');
-  const [purchaseLocationId, setPurchaseLocationId] = useState<string>('');
+  // Toolbar filters (commander 2026-05-28).
+  const [category, setCategory]   = useState<string>('all');
+  const [dateField, setDateField] = useState<DateField>('soDate');
+  const [dateFrom, setDateFrom]   = useState<string>('');
+  const [dateTo, setDateTo]       = useState<string>('');
 
-  const items = itemsQ.data ?? [];
+  const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
-  // Group by soDocNo so the UI shows each SO as a card containing its lines.
-  const grouped = useMemo(() => {
-    const byDoc = new Map<string, { meta: OutstandingSoItem; lines: OutstandingSoItem[] }>();
-    for (const it of items) {
-      const cur = byDoc.get(it.soDocNo);
-      if (cur) cur.lines.push(it);
-      else byDoc.set(it.soDocNo, { meta: it, lines: [it] });
-    }
-    return [...byDoc.entries()].map(([docNo, { meta, lines }]) => ({ docNo, meta, lines }));
-  }, [items]);
+  // ── Filtered rows fed to the grid ────────────────────────────────────
+  const rows = useMemo(() => {
+    return items.filter((r) => {
+      if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
+      if (dateFrom || dateTo) {
+        const d = rowDateFor(r, dateField);
+        if (!d) return false;
+        if (dateFrom && d < dateFrom) return false;
+        if (dateTo   && d > dateTo)   return false;
+      }
+      return true;
+    });
+  }, [items, category, dateField, dateFrom, dateTo]);
 
+  // ── Pick helpers ─────────────────────────────────────────────────────
   const togglePick = (id: string, remaining: number) =>
     setPicks((s) => ({
       ...s,
@@ -71,17 +126,11 @@ export const PurchaseOrderFromSo = () => {
   const setQty = (id: string, qty: number) =>
     setPicks((s) => ({ ...s, [id]: { picked: true, qty } }));
 
-  const toggleAllInSo = (lines: OutstandingSoItem[], on: boolean) =>
+  // Select / clear all currently-VISIBLE rows (respects the active filters).
+  const selectAll = () =>
     setPicks((s) => {
       const next = { ...s };
-      for (const l of lines) next[l.soItemId] = on ? { picked: true, qty: l.remainingQty } : { picked: false, qty: 0 };
-      return next;
-    });
-
-  const selectAll = () =>
-    setPicks(() => {
-      const next: Record<string, { picked: boolean; qty: number }> = {};
-      for (const l of items) next[l.soItemId] = { picked: true, qty: l.remainingQty };
+      for (const l of rows) next[l.soItemId] = { picked: true, qty: l.remainingQty };
       return next;
     });
 
@@ -90,25 +139,200 @@ export const PurchaseOrderFromSo = () => {
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
 
+  // ── Columns — memoized on `picks` so the controlled checkbox + qty input
+  //    re-render when pick state changes (DataGrid is React.memo'd). ───────
+  const columns = useMemo<DataGridColumn<OutstandingSoItem>[]>(() => [
+    {
+      key: 'pick', label: '', width: 40, sortable: false, groupable: false,
+      accessor: (r) => {
+        const on = Boolean(picks[r.soItemId]?.picked);
+        return (
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={() => togglePick(r.soItemId, r.remainingQty)}
+            // Stop the row-select click from also firing.
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Pick ${r.itemCode}`}
+          />
+        );
+      },
+    },
+    {
+      key: 'soDocNo', label: 'SO Doc No', width: 120, sortable: true, groupable: true,
+      accessor: (r) => <span className={styles.codeCell}>{r.soDocNo}</span>,
+      searchValue: (r) => r.soDocNo,
+    },
+    {
+      key: 'debtorName', label: 'Customer', width: 180, sortable: true, groupable: true,
+      accessor: (r) => r.debtorName ?? '—',
+      searchValue: (r) => r.debtorName ?? '',
+      groupValue: (r) => r.debtorName ?? '(none)',
+    },
+    {
+      key: 'itemGroup', label: 'Category', width: 110, sortable: true, groupable: true,
+      accessor: (r) => <ItemGroupPill group={r.itemGroup} />,
+      searchValue: (r) => r.itemGroup ?? '',
+      groupValue: (r) => (r.itemGroup ?? '(none)').toUpperCase(),
+    },
+    {
+      key: 'itemCode', label: 'Item Code', width: 130, sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 600 }}>{r.itemCode}</span>,
+      searchValue: (r) => r.itemCode ?? '',
+    },
+    {
+      key: 'description', label: 'Description', width: 240, sortable: true,
+      accessor: (r) => {
+        const summary = buildVariantSummary(
+          r.itemGroup,
+          r.variants as Record<string, unknown> | null | undefined,
+        );
+        return (
+          <div>
+            <div>{r.description ?? '—'}</div>
+            {summary && (
+              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
+            )}
+          </div>
+        );
+      },
+      searchValue: (r) => r.description ?? '',
+    },
+    {
+      key: 'qty', label: 'SO Qty', width: 70, align: 'right', sortable: true,
+      accessor: (r) => String(r.qty),
+      sortFn: (a, b) => a.qty - b.qty,
+    },
+    {
+      key: 'poQtyPicked', label: 'Done', width: 70, align: 'right', sortable: true,
+      accessor: (r) => <span className={styles.muted}>{r.poQtyPicked}</span>,
+      sortFn: (a, b) => a.poQtyPicked - b.poQtyPicked,
+    },
+    {
+      key: 'pickQty', label: 'Pick Qty', width: 90, align: 'right', sortable: false, groupable: false,
+      accessor: (r) => {
+        const p = picks[r.soItemId];
+        const on = Boolean(p?.picked);
+        return (
+          <input
+            type="number"
+            min={0}
+            max={r.remainingQty}
+            value={on ? p!.qty : ''}
+            placeholder={String(r.remainingQty)}
+            disabled={!on}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              setQty(r.soItemId, Math.min(r.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
+            style={{ ...FILTER_INPUT, width: 64, textAlign: 'right' }}
+          />
+        );
+      },
+    },
+    {
+      key: 'deliveryDate', label: 'Delivery Date', width: 120, sortable: true,
+      accessor: (r) => r.lineDeliveryDate ?? r.deliveryDate ?? '',
+      searchValue: (r) => r.lineDeliveryDate ?? r.deliveryDate ?? '',
+      sortFn: (a, b) =>
+        String(a.lineDeliveryDate ?? a.deliveryDate ?? '')
+          .localeCompare(String(b.lineDeliveryDate ?? b.deliveryDate ?? '')),
+    },
+    {
+      key: 'lineValue', label: 'Line Value', width: 120, align: 'right', sortable: true,
+      accessor: (r) => {
+        const p = picks[r.soItemId];
+        const pickQty = p?.picked ? p.qty : r.remainingQty;
+        return (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
+            {fmtRm(pickQty * r.unitPriceCenti)}
+          </span>
+        );
+      },
+      sortFn: (a, b) => a.remainingQty * a.unitPriceCenti - b.remainingQty * b.unitPriceCenti,
+    },
+  ], [picks]);
+
+  // ── Create POs ───────────────────────────────────────────────────────
   const onSave = () => {
     if (pickedCount === 0) { window.alert('Tick at least one SO line first.'); return; }
-    if (!expectedAt) { window.alert('Expected Delivery date is required.'); return; }
-    if (!purchaseLocationId) { window.alert('Purchase Location is required.'); return; }
+    // Commander 2026-05-28 — no expectedAt / purchaseLocationId: the server
+    // derives both per-line from the source SO.
     const body = {
       picks: picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty })),
-      expectedAt,
-      purchaseLocationId,
     };
     create.mutate(body, {
       onSuccess: (res) => {
         const summary = res.created.map((p) => p.poNumber).join(', ');
         window.alert(`Created ${res.total} PO${res.total === 1 ? '' : 's'}: ${summary}`);
-        // Land on the list so commander can drill into any of the new POs.
         navigate('/purchase-orders');
       },
       onError: (err) => window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
     });
   };
+
+  // ── Toolbar (filters + select/clear) rendered inside the DataGrid ──────
+  const toolbar = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+      <Button variant="ghost" size="sm" onClick={selectAll} disabled={rows.length === 0}>
+        <CheckSquare {...ICON} /> Select all
+      </Button>
+      <Button variant="ghost" size="sm" onClick={clearAll} disabled={pickedCount === 0}>
+        <Square {...ICON} /> Clear all
+      </Button>
+
+      <span style={{ width: 1, height: 20, background: 'var(--line)' }} aria-hidden />
+
+      <Filter size={14} strokeWidth={1.75} style={{ color: 'var(--fg-muted)' }} aria-label="Filters" />
+
+      {/* Category filter */}
+      <select
+        value={category}
+        onChange={(e) => setCategory(e.target.value)}
+        style={FILTER_INPUT}
+        aria-label="Category filter"
+      >
+        {CATEGORY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+
+      {/* Date-range filter — pick which date field + from/to. */}
+      <select
+        value={dateField}
+        onChange={(e) => setDateField(e.target.value as DateField)}
+        style={FILTER_INPUT}
+        aria-label="Date field"
+      >
+        {DATE_FIELD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <input
+        type="date"
+        value={dateFrom}
+        onChange={(e) => setDateFrom(e.target.value)}
+        style={FILTER_INPUT}
+        aria-label="Date from"
+      />
+      <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>→</span>
+      <input
+        type="date"
+        value={dateTo}
+        onChange={(e) => setDateTo(e.target.value)}
+        style={FILTER_INPUT}
+        aria-label="Date to"
+      />
+      {(category !== 'all' || dateFrom || dateTo) && (
+        <button
+          type="button"
+          onClick={() => { setCategory('all'); setDateFrom(''); setDateTo(''); }}
+          style={{
+            background: 'transparent', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)', padding: '0 10px', height: 28,
+            fontSize: 'var(--fs-11)', fontWeight: 600, color: 'var(--fg-muted)', cursor: 'pointer',
+          }}
+        >
+          Reset
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className={styles.page}>
@@ -126,174 +350,29 @@ export const PurchaseOrderFromSo = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || pickedCount === 0 || !expectedAt || !purchaseLocationId}
+            disabled={create.isPending || pickedCount === 0}
           >
             <Save {...ICON} />
             {create.isPending
               ? 'Creating…'
               : pickedCount === 0
                 ? 'Pick at least 1 line'
-                : (!expectedAt || !purchaseLocationId)
-                  ? 'Set delivery + location'
-                  : `Create POs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
+                : `Create POs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
           </Button>
         </div>
       </div>
 
-      {/* PR #157 — PO defaults that apply to every PO created from this batch. */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>PO Defaults</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            Applied to every PO created from this batch.
-          </span>
-        </div>
-        <div className={styles.cardBody}>
-          <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Expected Delivery *</span>
-              <input
-                type="date"
-                value={expectedAt}
-                onChange={(e) => setExpectedAt(e.target.value)}
-                className={styles.fieldInput}
-                required
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Purchase Location *</span>
-              <select
-                value={purchaseLocationId}
-                onChange={(e) => setPurchaseLocationId(e.target.value)}
-                className={styles.fieldInput}
-                required
-              >
-                <option value="">— Pick a warehouse —</option>
-                {(warehouses.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Outstanding SO Lines</h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <Button variant="ghost" size="sm" onClick={selectAll} disabled={items.length === 0}>
-              <CheckSquare {...ICON} /> Select all (full qty)
-            </Button>
-            <Button variant="ghost" size="sm" onClick={clearAll} disabled={Object.keys(picks).length === 0}>
-              <Square {...ICON} /> Clear all
-            </Button>
-            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              {itemsQ.isLoading ? 'Loading…'
-                : items.length === 0 ? 'No outstanding lines — every SO line has already been converted (or there are no SOs).'
-                : `${items.length} line${items.length === 1 ? '' : 's'} across ${grouped.length} SO${grouped.length === 1 ? '' : 's'}`}
-            </span>
-          </div>
-        </div>
-        <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-          {grouped.length === 0 && !itemsQ.isLoading && (
-            <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>
-              Once you create a Sales Order with line items, the lines that still need to be sourced will show up here.
-            </p>
-          )}
-          {grouped.map(({ docNo, meta, lines }) => {
-            const allPicked = lines.every((l) => picks[l.soItemId]?.picked);
-            return (
-              <div key={docNo} style={{
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--c-paper)',
-                padding: 'var(--space-3) var(--space-4)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={allPicked}
-                      onChange={() => toggleAllInSo(lines, !allPicked)}
-                    />
-                    <strong>{docNo}</strong>
-                  </label>
-                  <span style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
-                    {[meta.debtorName, meta.branding, meta.soStatus, meta.deliveryDate ? `· Δ ${meta.deliveryDate}` : null].filter(Boolean).join(' · ')}
-                  </span>
-                </div>
-
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '24px minmax(120px, 1fr) minmax(200px, 2fr) 70px 70px 70px 110px',
-                  gap: 'var(--space-2)',
-                  alignItems: 'center',
-                  fontSize: 'var(--fs-12)',
-                  fontFamily: 'var(--font-button)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.08em',
-                  color: 'var(--fg-soft)',
-                  padding: 'var(--space-2) 0',
-                  borderBottom: '1px solid var(--line)',
-                }}>
-                  <div></div>
-                  <div>Item Code</div>
-                  <div>Description</div>
-                  <div style={{ textAlign: 'right' }}>SO Qty</div>
-                  <div style={{ textAlign: 'right' }}>Done</div>
-                  <div style={{ textAlign: 'right' }}>Pick Qty</div>
-                  <div style={{ textAlign: 'right' }}>Line Value</div>
-                </div>
-
-                {lines.map((l) => {
-                  const p = picks[l.soItemId];
-                  const on = Boolean(p?.picked);
-                  const pickQty = on ? p!.qty : l.remainingQty;
-                  return (
-                    <div
-                      key={l.soItemId}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '24px minmax(120px, 1fr) minmax(200px, 2fr) 70px 70px 70px 110px',
-                        gap: 'var(--space-2)',
-                        alignItems: 'center',
-                        padding: 'var(--space-2) 0',
-                        borderBottom: '1px solid var(--line)',
-                        background: on ? 'rgba(213, 90, 40, 0.04)' : 'transparent',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        onChange={() => togglePick(l.soItemId, l.remainingQty)}
-                      />
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.itemCode}</span>
-                      <span style={{ fontSize: 'var(--fs-13)' }}>{l.description ?? '—'}</span>
-                      <span style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.qty}</span>
-                      <span style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{l.poQtyPicked}</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={l.remainingQty}
-                        value={on ? pickQty : ''}
-                        placeholder={String(l.remainingQty)}
-                        onChange={(e) => setQty(l.soItemId, Math.min(l.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
-                        disabled={!on}
-                        className={styles.fieldInput}
-                        style={{ textAlign: 'right', padding: '4px 6px', fontSize: 'var(--fs-13)' }}
-                      />
-                      <span style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
-                        {fmtRm(pickQty * l.unitPriceCenti)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      <DataGrid<OutstandingSoItem>
+        rows={rows}
+        columns={columns}
+        storageKey={STORAGE_KEY}
+        rowKey={(r) => r.soItemId}
+        searchPlaceholder="Search SO, customer, item…"
+        toolbar={toolbar}
+        groupBanner={false}
+        isLoading={itemsQ.isLoading}
+        emptyMessage="No outstanding SO lines — every line has been converted (or there are no SOs)."
+      />
     </div>
   );
 };

@@ -12,7 +12,10 @@ import styles from '../SalesOrderDetail.module.css';
 const VARIANT_KEY_LABELS: Record<string, string> = {
   gap:          'Gap',
   legHeight:    'Leg Height',
-  fabricCode:   'Fabric Code',
+  /* Commander 2026-05-28 — unify fabric/colour term → "Fabrics".
+     Keys (fabricCode/colorCode) unchanged; only the displayed label. */
+  fabricCode:   'Fabrics',
+  colorCode:    'Fabrics',
   divanHeight:  'Divan Height',
   totalHeight:  'Total Height',
   seatHeight:   'Seat Height',
