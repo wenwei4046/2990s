@@ -21,6 +21,7 @@ import {
   SlidersHorizontal,
   ArrowLeftRight,
   ClipboardCheck,
+  Warehouse,
   Settings,
   LogOut,
   FileBarChart,
@@ -152,8 +153,9 @@ export const Sidebar = () => {
         { to: '/inventory/adjustments', icon: <SlidersHorizontal {...ICON_PROPS} />, label: 'Adjustments' },
         { to: '/inventory/transfers', icon: <ArrowLeftRight {...ICON_PROPS} />, label: 'Transfers' },
         { to: '/inventory/stock-takes', icon: <ClipboardCheck {...ICON_PROPS} />, label: 'Stock Take' },
-        // Phase 3 — rack/bin Warehouse view (Rack Layout · Stock In-Out ·
-        // Movement History) ported from Hookka ERP lands here.
+        // Rack/bin Warehouse view (Rack Layout · Stock In-Out · Movement
+        // History) ported from Hookka ERP (Phase 3, 2026-05-28).
+        { to: '/warehouse', icon: <Warehouse {...ICON_PROPS} />, label: 'Warehouse' },
       ],
     },
     {
