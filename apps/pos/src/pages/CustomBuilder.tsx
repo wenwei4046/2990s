@@ -1474,7 +1474,11 @@ function SaveComboModal({
     try {
       await create.mutateAsync({
         baseModel,
-        modules,
+        // OR-set storage (PR #272/#273/#274): combo `modules` is string[][] —
+        // each slot an OR-set of alternative codes. A POS "Save from Customize"
+        // pick is a concrete build, so every module code becomes its own
+        // singleton required slot.
+        modules: modules.map((m) => [m]),
         tier: null,   // wildcard — any fabric tier
         pricesByHeight: { [String(depth)]: currentPriceCenti },
         label: label.trim() || null,
