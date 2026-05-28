@@ -116,7 +116,7 @@ export const Sidebar = () => {
   const supplyChain: NavSection[] = [
     {
       id: 'so',
-      label: 'Sales Order Management',
+      label: 'Sales Order',
       items: [
         { to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders' },
         { to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'SO Detail View' },
@@ -125,7 +125,7 @@ export const Sidebar = () => {
     },
     {
       id: 'procurement',
-      label: 'Procurement Management',
+      label: 'Procurement',
       items: [
         { to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
@@ -138,7 +138,7 @@ export const Sidebar = () => {
     },
     {
       id: 'transportation',
-      label: 'Transportation Management',
+      label: 'Transportation',
       items: [
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/drivers', icon: <Truck {...ICON_PROPS} />, label: 'Drivers' },
@@ -147,7 +147,7 @@ export const Sidebar = () => {
     },
     {
       id: 'warehouse',
-      label: 'Warehouse Management',
+      label: 'Warehouse',
       items: [
         { to: '/inventory', icon: <Boxes {...ICON_PROPS} />, label: 'Inventory' },
         { to: '/inventory/adjustments', icon: <SlidersHorizontal {...ICON_PROPS} />, label: 'Adjustments' },
@@ -160,7 +160,7 @@ export const Sidebar = () => {
     },
     {
       id: 'consignment',
-      label: 'Consignment Management',
+      label: 'Consignment',
       items: [
         { to: '/consignment', icon: <Boxes {...ICON_PROPS} />, label: 'Consignment' },
       ],
