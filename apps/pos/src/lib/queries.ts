@@ -484,7 +484,7 @@ export const useProductSizes = (productId: string | undefined) =>
       if (productId.startsWith('mfg-')) {
         const { data: mfgRow, error: mfgErr } = await supabase
           .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen')
+          .select('retail_product_id, model_id, size_code, base_price_sen, base_model, category')
           .eq('id', productId)
           .maybeSingle();
         if (mfgErr) throw mfgErr;
@@ -503,28 +503,58 @@ export const useProductSizes = (productId: string | undefined) =>
           // Fall through to mfg siblings if the retail link exists but has no variants yet.
         }
 
-        // 2b — derive sizes from mfg_products siblings (same model_id)
+        // Helper: map sibling rows → ProductSizeRow[]. Handles INACTIVE siblings
+        // (shown greyed on the size grid) and case-insensitive size_code lookup
+        // (guards against lowercase size_codes stored by older import paths).
+        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; status: string }>) =>
+          sibs
+            .filter((s) => {
+              const sc = (s.size_code ?? '').toUpperCase();
+              return sc && sc in MFG_SIZE_CODE_TO_LIB;
+            })
+            .map((s) => ({
+              sizeId: MFG_SIZE_CODE_TO_LIB[(s.size_code!).toUpperCase()] as string,
+              // Use actual status rather than hardcoded true so INACTIVE size
+              // variants show as greyed tiles ("Not on this Model") while ACTIVE
+              // ones remain selectable.
+              active: (s.status as string) === 'ACTIVE',
+              price: s.base_price_sen != null ? Math.round(s.base_price_sen / 100) : 0,
+            }));
+
+        // 2b — derive sizes from mfg_products siblings (same model_id — set by
+        // generate-skus). No status filter here: include INACTIVE siblings so
+        // discontinued sizes still render as greyed tiles rather than disappearing
+        // from the grid entirely.
         if (mfgRow.model_id) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
             .select('size_code, base_price_sen, status')
-            .eq('model_id', mfgRow.model_id)
-            .eq('status', 'ACTIVE');
+            .eq('model_id', mfgRow.model_id);
           if (sibErr) throw sibErr;
-          const rows = (siblings ?? [])
-            .filter((s) => s.size_code && s.size_code in MFG_SIZE_CODE_TO_LIB)
-            .map((s) => ({
-              sizeId: MFG_SIZE_CODE_TO_LIB[s.size_code!] as string,
-              active: true,
-              price: s.base_price_sen != null ? Math.round(s.base_price_sen / 100) : 0,
-            }));
+          const rows = sibsToRows(siblings ?? []);
           if (rows.length > 0) return rows;
         }
 
-        // 2c — orphan SKU: single size from this SKU's own code + price
-        if (mfgRow.size_code && mfgRow.size_code in MFG_SIZE_CODE_TO_LIB) {
+        // 2b-alt — fallback for SKUs imported before the product_models layer
+        // (model_id is NULL). Group by base_model + category instead — same
+        // denormalised text that generate-skus stamps on every sibling.
+        if (mfgRow.base_model && mfgRow.category) {
+          const { data: siblings, error: sibErr } = await supabase
+            .from('mfg_products')
+            .select('size_code, base_price_sen, status')
+            .eq('base_model', mfgRow.base_model)
+            .eq('category', mfgRow.category);
+          if (sibErr) throw sibErr;
+          const rows = sibsToRows(siblings ?? []);
+          if (rows.length > 0) return rows;
+        }
+
+        // 2c — truly orphan SKU: single size from this SKU's own code + price.
+        // Case-insensitive so lowercase size_codes ('k' → 'K') are handled.
+        const ownCode = (mfgRow.size_code ?? '').toUpperCase();
+        if (ownCode && ownCode in MFG_SIZE_CODE_TO_LIB) {
           return [{
-            sizeId: MFG_SIZE_CODE_TO_LIB[mfgRow.size_code] as string,
+            sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
             active: true,
             price: mfgRow.base_price_sen != null ? Math.round(mfgRow.base_price_sen / 100) : 0,
           }];
