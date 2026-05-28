@@ -335,8 +335,11 @@ mfgSalesOrders.post('/', async (c) => {
      date" AND a sofa+mattress mixed cart — the test batch hit both.)
        1. Processing Date + Delivery Date are all-or-nothing — never one without
           the other (mirrors the edit page's "must be set together" guard).
-       2. A SOFA Sales Order must be standalone — no mattress / bedframe / other
-          lines mixed in (sofa is its own production line + 2990 branding).
+       2. SOFA is exclusive among MAIN products (sofa / bedframe / mattress):
+          a sofa SO may NOT also contain a bedframe or mattress. SERVICE and
+          ACCESSORY (and other add-on lines) ride on ANY SO — they never trip
+          this. (Commander 2026-05-28: "main product 不能添加…但 service 或
+          accessory 什么 products 都可以配".)
        3. All MATTRESS lines in one SO must share ONE brand — different mattress
           brands bill on separate SOs. (Bedframe may ride with a single-brand
           mattress; that combo stays allowed.) */
@@ -367,16 +370,21 @@ mfgSalesOrders.post('/', async (c) => {
         if (g.includes('SOFA'))     return 'SOFA';
         if (g.includes('MATTRESS')) return 'MATTRESS';
         if (g.includes('ACCESSOR')) return 'ACCESSORY';
+        if (g.includes('SERVICE'))  return 'SERVICE';
         return 'OTHERS';
       };
+      // MAIN products carry the mixing constraints; SERVICE / ACCESSORY /
+      // OTHERS are universal add-ons that ride on any SO.
+      const MAIN = new Set(['SOFA', 'BEDFRAME', 'MATTRESS']);
       const cats = items.map((it) =>
         normCat(metaByCode.get(String(it.itemCode ?? ''))?.category ?? (it.itemGroup as string) ?? ''),
       );
-      // Rule 2 — sofa standalone.
-      if (cats.includes('SOFA') && cats.some((cat) => cat !== 'SOFA')) {
+      // Rule 2 — sofa is exclusive among MAIN products: no bedframe / mattress
+      // alongside a sofa. Service / accessory add-ons are always fine.
+      if (cats.includes('SOFA') && cats.some((cat) => cat !== 'SOFA' && MAIN.has(cat))) {
         return c.json({
-          error: 'so_sofa_must_be_standalone',
-          reason: 'A sofa Sales Order cannot contain non-sofa items. Order the sofa on its own SO.',
+          error: 'so_sofa_no_other_main',
+          reason: 'A sofa Sales Order cannot also contain a bedframe or mattress. Service and accessory items are fine.',
         }, 400);
       }
       // Rule 3 — single mattress brand. Null/empty brand → 2990 house brand so
