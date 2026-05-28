@@ -52,6 +52,7 @@ type DemandRow = {
   so: {
     debtor_name: string | null;
     status: string;
+    so_date: string | null;
     customer_delivery_date: string | null;
     internal_expected_dd: string | null; // processing date (drives when to order)
   } | null;
@@ -88,6 +89,7 @@ type MrpLine = {
   soItemId: string;    // mfg_sales_order_items.id — lets the UI one-click PO this line
   soDocNo: string;
   debtorName: string | null;
+  soDate: string | null;
   deliveryDate: string | null;
   processingDate: string | null;
   qty: number;
@@ -139,7 +141,7 @@ mrp.get('/', async (c) => {
     .from('mfg_sales_order_items')
     .select(`
       id, doc_no, item_code, description, item_group, variants, qty, line_delivery_date, cancelled,
-      so:mfg_sales_orders!inner ( debtor_name, status, customer_delivery_date, internal_expected_dd )
+      so:mfg_sales_orders!inner ( debtor_name, status, so_date, customer_delivery_date, internal_expected_dd )
     `)
     .eq('cancelled', false)
     .limit(5000);
@@ -295,6 +297,7 @@ mrp.get('/', async (c) => {
         soItemId: r.id,
         soDocNo: r.doc_no,
         debtorName: r.so?.debtor_name ?? null,
+        soDate: r.so?.so_date ?? null,
         deliveryDate: r.line_delivery_date ?? r.so?.customer_delivery_date ?? null,
         processingDate: r.so?.internal_expected_dd ?? null,
         qty: r.qty,
