@@ -22,7 +22,7 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, type SofaCustomizerData } from '../lib/queries';
+import { useProductFabrics, useCreateSofaCombo, type SofaCustomizerData } from '../lib/queries';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import styles from './CustomBuilder.module.css';
 
@@ -698,6 +698,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // folds onto each sofa line.
   const productFabrics = useProductFabrics(productId);
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
+  /* Commander 2026-05-28 — "Save as Quick Pick" modal. Lets the staff
+     persist the current cell composition as a new Sofa Combo Pricing row
+     so it appears in the Quick Pick row next time. */
+  const [saveComboOpen, setSaveComboOpen] = useState(false);
   // When editing an existing custom-sofa line, seed the fabric picker once from
   // the line snapshot (resolved + passed by the parent). Guarded so the staff's
   // manual changes after hydration aren't clobbered on re-render.
@@ -1378,19 +1382,163 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
             <PriceTag amount={priceResult.total + fabricSurcharge * priceResult.groups.length} size="lg" />
           </div>
-          <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
-            {!cells.length
-              ? 'Add modules to start'
-              : !allClosed
-                ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                : !fabricSel
-                  ? 'Choose a fabric'
-                  : editingKey
-                    ? 'Save changes'
-                    : 'Add to cart'}
-          </Button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* Commander 2026-05-28: save the current layout as a Quick Pick
+                Combo so it auto-renders for future sales. Only visible when
+                the sofa is closed (no point persisting an unfinishable
+                layout) and has at least one cell. */}
+            {cells.length > 0 && allClosed && (
+              <Button
+                variant="ghost"
+                onClick={() => setSaveComboOpen(true)}
+              >
+                Save as Quick Pick
+              </Button>
+            )}
+            <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
+              {!cells.length
+                ? 'Add modules to start'
+                : !allClosed
+                  ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
+                  : !fabricSel
+                    ? 'Choose a fabric'
+                    : editingKey
+                      ? 'Save changes'
+                      : 'Add to cart'}
+            </Button>
+          </div>
         </footer>
+        {saveComboOpen && (
+          <SaveComboModal
+            modules={cells.map((c) => c.moduleId)}
+            depth={depth}
+            currentPriceCenti={priceResult.total}
+            onClose={() => setSaveComboOpen(false)}
+            onSaved={() => setSaveComboOpen(false)}
+          />
+        )}
       </section>
     </div>
   );
+};
+
+/* ─── SaveComboModal ─────────────────────────────────────────────────────
+   Commander 2026-05-28 — "Save as Quick Pick" UX. Captures a label + a
+   price + a fabric tier for the current Customize layout, POSTs to
+   /sofa-combos, and the combos query refetches so the saved layout
+   shows in the Quick Pick row immediately. */
+function SaveComboModal({
+  modules, depth, currentPriceCenti, onClose, onSaved,
+}: {
+  modules: string[];
+  depth: string;
+  currentPriceCenti: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const create = useCreateSofaCombo();
+  const [label, setLabel] = useState('');
+  const [priceRm, setPriceRm] = useState(String(Math.round(currentPriceCenti / 100)));
+  const [tier, setTier] = useState<'PRICE_1' | 'PRICE_2' | 'PRICE_3'>('PRICE_2');
+
+  const submit = async () => {
+    const n = Number(priceRm);
+    if (!Number.isFinite(n) || n <= 0) { alert('Enter a valid price'); return; }
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      await create.mutateAsync({
+        baseModel: '',                          // wildcard for now
+        modules,
+        tier,
+        pricesByHeight: { [String(depth)]: Math.round(n * 100) },
+        label: label.trim() || null,
+        effectiveFrom: today,
+        notes: 'Saved from POS Customize',
+      });
+      onSaved();
+    } catch (e) {
+      alert(`Save failed: ${String(e)}`);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+      padding: '8vh 16px', zIndex: 1000,
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
+        padding: 24, width: '100%', maxWidth: 480,
+        display: 'flex', flexDirection: 'column', gap: 16,
+      }}>
+        <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
+          Save as Quick Pick
+        </h3>
+        <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
+          Saves this layout as a new Combo so it shows on the Quick Pick row next time.
+        </p>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
+            Label (optional)
+          </span>
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder={modules.join(' + ')}
+            style={inputStyle}
+          />
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
+              Price at {depth}" (RM)
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={priceRm}
+              onChange={(e) => setPriceRm(e.target.value)}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
+              Fabric tier
+            </span>
+            <select
+              value={tier}
+              onChange={(e) => setTier(e.target.value as typeof tier)}
+              style={inputStyle}
+            >
+              <option value="PRICE_1">PRICE_1</option>
+              <option value="PRICE_2">PRICE_2</option>
+              <option value="PRICE_3">PRICE_3</option>
+            </select>
+          </label>
+        </div>
+        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          Modules: {modules.join(' · ')}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={submit} disabled={create.isPending}>
+            {create.isPending ? 'Saving…' : 'Save Quick Pick'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-14)',
+  padding: '8px 10px',
+  border: '1px solid var(--line-strong)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--c-cream)',
+  outline: 'none',
+  width: '100%',
 };

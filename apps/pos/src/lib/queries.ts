@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -1006,6 +1006,57 @@ export const useSofaCombos = (baseModel?: string | null) =>
     },
     staleTime: 30_000,
   });
+
+/* Commander 2026-05-28 — "Save as Quick Pick" from POS Customize.
+   Persists the current cell layout as a new Sofa Combo row so it
+   appears in the Quick Pick row next time. Backend Maintenance can
+   then tweak the price tier / effective date later. */
+export const useCreateSofaCombo = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      baseModel: string;       // '' allowed (wildcard)
+      modules: string[];
+      tier: SofaPriceTier | null;
+      pricesByHeight: Record<string, number | null>;  // centi
+      label?: string | null;
+      effectiveFrom: string;   // 'YYYY-MM-DD'
+      notes?: string | null;
+    }): Promise<SofaComboRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/sofa-combos`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          baseModel: body.baseModel,
+          modules: body.modules,
+          tier: body.tier,
+          customerId: null,  // 2990 is B2C
+          pricesByHeight: body.pricesByHeight,
+          label: body.label ?? null,
+          effectiveFrom: body.effectiveFrom,
+          notes: body.notes ?? null,
+        }),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+        throw new Error(`POST /sofa-combos failed (${res.status}): ${detail}`);
+      }
+      return (await res.json()) as SofaComboRow;
+    },
+    onSuccess: () => {
+      // Combos refetch so the new card lands in Quick Pick on next render.
+      void qc.invalidateQueries({ queryKey: ['sofa-combos'] });
+    },
+  });
+};
 
 export const useShowroomSalesStaff = () =>
   useQuery({
