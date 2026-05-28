@@ -1403,25 +1403,23 @@ const buildColumns = (
     searchValue: (r) => r.postcode ?? '',
   },
   {
+    /* "Processing Date" is the UI label for the internal_expected_dd column.
+       PR #121/#140 renamed it app-wide — SO New / SO Detail / OrderInfoCard
+       all read+write internal_expected_dd under this label. The raw
+       processing_date column is dead (nothing in the API ever writes it), so
+       this column must read internal_expected_dd or it shows permanently
+       blank. Key kept as 'processing_date' to preserve saved column layouts.
+       Duplicate "Internal DD" column removed. Commander 2026-05-28. */
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
     defaultHidden: true,
-    accessor: (r) => r.processing_date ?? '',
-    searchValue: (r) => r.processing_date ?? '',
+    accessor: (r) => r.internal_expected_dd ?? '',
+    searchValue: (r) => r.internal_expected_dd ?? '',
   },
   {
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true,
     defaultHidden: true,
     accessor: (r) => r.customer_delivery_date ?? '',
     searchValue: (r) => r.customer_delivery_date ?? '',
-  },
-  {
-    /* PR-E — Internal expected delivery date (private to ops). Separate
-       from customer_delivery_date so a buffered internal date can sit
-       behind the date Loo promised the customer. */
-    key: 'internal_expected_dd', label: 'Internal DD', width: 130, sortable: true,
-    defaultHidden: true,
-    accessor: (r) => r.internal_expected_dd ?? '',
-    searchValue: (r) => r.internal_expected_dd ?? '',
   },
   {
     /* PR #46 — POS handover "Target Date" (marketing-side commitment). */

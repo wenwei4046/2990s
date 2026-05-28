@@ -345,9 +345,14 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       groupValue: (r) => r.remark2 ?? '(none)',
     },
     /* 27 */ {
+      /* "Processing Date" = internal_expected_dd (renamed app-wide PR #121/#140;
+         SO New/Detail/OrderInfoCard read+write it under this label). The raw
+         processing_date column is dead — nothing writes it — so read
+         internal_expected_dd here. Duplicate "Internal DD" column removed.
+         Commander 2026-05-28. */
       key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
-      accessor: (r) => r.processing_date ? compactDate(r.processing_date) : '—',
-      searchValue: (r) => r.processing_date ?? '',
+      accessor: (r) => { const v = opt(r, 'internal_expected_dd'); return v ? compactDate(v) : '—'; },
+      searchValue: (r) => opt(r, 'internal_expected_dd'),
     },
     /* 28 */ {
       key: 'tax_expiry', label: 'Tax Exemption Expiry', width: 150, sortable: true,
@@ -473,17 +478,6 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       defaultHidden: true,
       accessor: (r) => r.customer_delivery_date ? compactDate(r.customer_delivery_date) : '—',
       searchValue: (r) => r.customer_delivery_date ?? '',
-    },
-    {
-      /* Internal-only ETA — distinct from customer_delivery_date. Surfaced
-         by the API as a header passthrough (L73 in reports.ts). */
-      key: 'internal_expected_dd', label: 'Internal DD', width: 130, sortable: true,
-      defaultHidden: true,
-      accessor: (r) => {
-        const v = opt(r, 'internal_expected_dd');
-        return v ? compactDate(v) : '—';
-      },
-      searchValue: (r) => opt(r, 'internal_expected_dd'),
     },
     {
       /* Customer state — populated whenever the customer record has an
