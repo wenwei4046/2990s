@@ -21,6 +21,16 @@
 --
 -- Idempotent: guarded on the current column type so re-running is a no-op
 -- once converted.
+--
+-- WHY NOT `ALTER COLUMN ... TYPE jsonb USING (<subquery>)`:
+--   Postgres forbids a sub-SELECT inside the USING transform expression of an
+--   ALTER COLUMN TYPE — it raises `0A000: cannot use subquery in transform
+--   expression`. The text[] → jsonb string[][] conversion needs an
+--   unnest()-driven correlated sub-select (one jsonb array per element), which
+--   is exactly that forbidden shape. So we use the ADD COLUMN → UPDATE → DROP
+--   → RENAME pattern instead: a plain UPDATE statement DOES allow the
+--   correlated sub-select, sidestepping the restriction while producing the
+--   identical result.
 -- ----------------------------------------------------------------------------
 
 BEGIN;
@@ -39,28 +49,26 @@ BEGIN
       AND column_name = 'modules'
       AND data_type = 'ARRAY'
   ) THEN
-    -- Convert text[] → jsonb string[][] by wrapping each element as a
-    -- singleton slot. NULL/empty arrays become [].
+    -- 1. Add the new jsonb column (NOT NULL with a [] default so the table is
+    --    valid the instant the column exists).
     ALTER TABLE sofa_combo_pricing
-      ALTER COLUMN modules DROP DEFAULT;
+      ADD COLUMN modules_jsonb jsonb NOT NULL DEFAULT '[]'::jsonb;
 
-    ALTER TABLE sofa_combo_pricing
-      ALTER COLUMN modules TYPE jsonb
-      USING (
-        COALESCE(
-          (
-            SELECT jsonb_agg(jsonb_build_array(code))
-            FROM unnest(modules) AS code
-          ),
-          '[]'::jsonb
-        )
+    -- 2. Backfill: wrap each legacy text[] element into a singleton jsonb slot.
+    --    A plain UPDATE permits the correlated sub-select that ALTER COLUMN
+    --    TYPE ... USING forbids. NULL/empty arrays collapse to [].
+    UPDATE sofa_combo_pricing
+      SET modules_jsonb = COALESCE(
+        (
+          SELECT jsonb_agg(jsonb_build_array(code))
+          FROM unnest(modules) AS code
+        ),
+        '[]'::jsonb
       );
 
-    ALTER TABLE sofa_combo_pricing
-      ALTER COLUMN modules SET DEFAULT '[]'::jsonb;
-
-    ALTER TABLE sofa_combo_pricing
-      ALTER COLUMN modules SET NOT NULL;
+    -- 3. Drop the old text[] column and rename the new one into its place.
+    ALTER TABLE sofa_combo_pricing DROP COLUMN modules;
+    ALTER TABLE sofa_combo_pricing RENAME COLUMN modules_jsonb TO modules;
   END IF;
 END $$;
 

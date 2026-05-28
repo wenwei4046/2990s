@@ -26,7 +26,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { normalizeComboModules, comboSlotsKey, type ComboSlots } from '@2990s/shared';
+import { canonicalizeComboModulesForStorage, comboSlotsKey, type ComboSlots } from '@2990s/shared';
 
 export const sofaCombos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -73,17 +73,20 @@ function rowToWire(r: Row) {
 }
 
 /**
- * Validate + normalize incoming combo `modules` into the OR-set slot shape
- * (string[][]). Accepts:
+ * Validate + CANONICALIZE incoming combo `modules` into the OR-set slot shape
+ * (string[][]). Mirrors HOOKKA's `canonicalSizes` (src/api/routes/sofa-combos.ts)
+ * so equivalent combos persist byte-identical JSON and hash to the same scope:
  *   · string[][] — slots, each an OR-set of codes (the new shape).
  *   · string[]   — legacy flat list; each code becomes a singleton slot.
+ *   · trims + de-dupes within each slot, drops empty slots,
+ *   · sorts codes within each slot, then sorts the slots by their first code.
  * Returns null on a malformed payload (non-array, empty after trim, or a
  * slot with no codes).
  */
 function validateComboModules(v: unknown): ComboSlots | null {
   if (!Array.isArray(v) || v.length === 0) return null;
-  // Reject mixed/garbage entries up front; normalizeComboModules handles the
-  // string vs string[] coercion + trimming + intra-slot sort.
+  // Reject mixed/garbage entries up front; the canonicalizer handles the
+  // string vs string[] coercion + trimming + intra-slot/slot sort.
   for (const entry of v) {
     if (Array.isArray(entry)) {
       if (entry.some((c) => typeof c !== 'string')) return null;
@@ -91,9 +94,7 @@ function validateComboModules(v: unknown): ComboSlots | null {
       return null;
     }
   }
-  const slots = normalizeComboModules(v as (string | string[])[]);
-  if (slots.length === 0) return null;
-  return slots;
+  return canonicalizeComboModulesForStorage(v);
 }
 
 function validatePricesByHeight(v: unknown): Record<string, number | null> | null {

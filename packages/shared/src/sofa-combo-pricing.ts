@@ -90,6 +90,51 @@ export function normalizeComboModules(
 }
 
 /**
+ * Storage canonical form (mirrors HOOKKA's `canonicalSizes` in
+ * src/api/routes/sofa-combos.ts). Applied on SAVE (API) so two equivalent
+ * combos persist byte-identical `modules` JSON and therefore hash to the same
+ * scope key:
+ *   · accepts legacy flat `string[]` (each code → its own singleton slot),
+ *   · trims + de-dupes codes within each slot, drops empty slots,
+ *   · SORTS codes within each slot,
+ *   · SORTS the slots by their first element.
+ *
+ * Returns `null` when nothing usable remains (empty input → no combo), so the
+ * API can reject the payload exactly like HOOKKA does.
+ *
+ * NOTE: this DOES reorder slots (unlike `normalizeComboModules`, which keeps
+ * slot order positional). HOOKKA stores the sorted form and renders from it;
+ * matching is order-independent regardless, so sorting only affects the stable
+ * on-disk JSON used for de-dupe + hashing.
+ */
+export function canonicalizeComboModulesForStorage(
+  input: unknown,
+): ComboSlots | null {
+  if (!Array.isArray(input)) return null;
+  // Detect the legacy flat shape (string[]) and wrap each code to a 1-slot.
+  const groups: unknown[] =
+    input.length > 0 && typeof input[0] === 'string'
+      ? input.map((v) => [v])
+      : input;
+  const cleaned: ComboSlots = [];
+  for (const g of groups) {
+    if (!Array.isArray(g)) return null;
+    const inner: string[] = [];
+    for (const v of g) {
+      if (typeof v !== 'string') return null;
+      const t = v.trim();
+      if (!t) continue;
+      if (!inner.includes(t)) inner.push(t);
+    }
+    if (inner.length === 0) continue;
+    cleaned.push(inner.slice().sort());
+  }
+  if (cleaned.length === 0) return null;
+  cleaned.sort((a, b) => a[0]!.localeCompare(b[0]!));
+  return cleaned;
+}
+
+/**
  * Order-independent canonical key for a combo's slot-set. Sorts the codes in
  * each slot, then sorts the slots themselves, then JSON-stringifies. Two
  * combos with the same slots in any order produce the same key — used to
@@ -229,11 +274,13 @@ function fmtCode(raw: string): string {
 }
 
 /**
- * Auto-build a human-readable combo label from a slot-set. Each slot's
- * OR-alternatives are joined with `/`, slots are joined with ` + `. Example:
+ * Auto-build a human-readable combo label from a slot-set, matching HOOKKA's
+ * renderer 1:1 (src/pages/maintenance/sofa-combos.tsx `renderComponentSizes`):
+ * OR-alternatives within a slot are joined with `" / "`, slots are joined with
+ * `" + "`. No parentheses — `" / "` reads as OR, `" + "` reads as AND. Example:
  *   [ ['2A-LHF','2A-RHF'], ['L-LHF','L-RHF'] ]
- *   → "(2A(LHF)/2A(RHF)) + (L(LHF)/L(RHF))"
- * A singleton slot drops its parens:
+ *   → "2A(LHF) / 2A(RHF) + L(LHF) / L(RHF)"
+ * A singleton slot is just the bare code:
  *   [ ['2NA'] ] → "2NA"
  *
  * Also accepts the legacy flat `string[]` (each code = singleton slot).
@@ -243,9 +290,6 @@ export function buildComboLabel(
 ): string {
   const slots = normalizeComboModules(raw);
   return slots
-    .map((slot) => {
-      const codes = slot.map(fmtCode);
-      return codes.length === 1 ? codes[0]! : `(${codes.join('/')})`;
-    })
+    .map((slot) => slot.map(fmtCode).join(' / '))
     .join(' + ');
 }

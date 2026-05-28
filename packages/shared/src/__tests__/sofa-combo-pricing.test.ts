@@ -3,6 +3,7 @@ import {
   matchesComboSlots,
   pickComboPrice,
   normalizeComboModules,
+  canonicalizeComboModulesForStorage,
   comboSlotsKey,
   buildComboLabel,
   type SofaComboRow,
@@ -26,6 +27,46 @@ describe('normalizeComboModules', () => {
   it('wraps a legacy flat string[] as singleton slots', () => {
     expect(normalizeComboModules(['2A-LHF', 'CNR', '2A-RHF']))
       .toEqual([['2A-LHF'], ['CNR'], ['2A-RHF']]);
+  });
+});
+
+describe('canonicalizeComboModulesForStorage (HOOKKA canonicalSizes 1:1)', () => {
+  it('sorts codes within each slot AND sorts slots by first code', () => {
+    // L-slot supplied before the 2A-slot, codes reversed inside each → both
+    // levels get sorted so equivalent combos store byte-identical JSON.
+    expect(
+      canonicalizeComboModulesForStorage([
+        ['L-RHF', 'L-LHF'],
+        ['2A-RHF', '2A-LHF'],
+      ]),
+    ).toEqual([
+      ['2A-LHF', '2A-RHF'],
+      ['L-LHF', 'L-RHF'],
+    ]);
+  });
+
+  it('wraps a legacy flat string[] into singleton slots (then sorts)', () => {
+    expect(canonicalizeComboModulesForStorage(['CNR', '2A-LHF', '2A-RHF']))
+      .toEqual([['2A-LHF'], ['2A-RHF'], ['CNR']]);
+  });
+
+  it('trims, de-dupes, and drops empty slots', () => {
+    expect(
+      canonicalizeComboModulesForStorage([[' 2A-LHF ', '2A-LHF'], ['', '  '], ['CNR']]),
+    ).toEqual([['2A-LHF'], ['CNR']]);
+  });
+
+  it('returns null on empty / unusable input', () => {
+    expect(canonicalizeComboModulesForStorage([])).toBeNull();
+    expect(canonicalizeComboModulesForStorage([[], ['']])).toBeNull();
+    expect(canonicalizeComboModulesForStorage('nope')).toBeNull();
+    expect(canonicalizeComboModulesForStorage([[1, 2]])).toBeNull();
+  });
+
+  it('two equivalent combos canonicalize to the same JSON (stable hashing)', () => {
+    const a = canonicalizeComboModulesForStorage([['2A-RHF', '2A-LHF'], ['L-RHF', 'L-LHF']]);
+    const b = canonicalizeComboModulesForStorage([['L-LHF', 'L-RHF'], ['2A-LHF', '2A-RHF']]);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
 
@@ -188,13 +229,13 @@ describe('pickComboPrice', () => {
   });
 });
 
-describe('buildComboLabel', () => {
-  it('joins OR-alternatives with / and slots with +, parens on multi-code slots', () => {
+describe('buildComboLabel (HOOKKA renderComponentSizes 1:1)', () => {
+  it('joins OR-alternatives with " / " and slots with " + ", no parens', () => {
     expect(buildComboLabel([['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']]))
-      .toBe('(2A(LHF)/2A(RHF)) + (L(LHF)/L(RHF))');
+      .toBe('2A(LHF) / 2A(RHF) + L(LHF) / L(RHF)');
   });
 
-  it('drops parens for singleton slots', () => {
+  it('renders singleton slots as the bare code', () => {
     expect(buildComboLabel([['2A-LHF'], ['2NA'], ['L-RHF']]))
       .toBe('2A(LHF) + 2NA + L(RHF)');
   });
