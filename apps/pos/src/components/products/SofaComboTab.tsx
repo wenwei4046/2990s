@@ -59,15 +59,26 @@ const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const ALL_MODULE_CODES = SOFA_MODULES.map((m) => m.id).sort();
 
+type ComboMode = 'view' | 'add-only' | 'full';
+
 type ComboTabProps = {
   /** POS port: lock write affordances when the viewer is sales-side
    *  (sales / sales_executive / outlet_manager). Combo rules remain
    *  visible — useful for confirming the price the configurator quoted —
-   *  but New Combo / Edit / Delete buttons hide. */
+   *  but New Combo / Edit / Delete buttons hide. Legacy prop. */
   readonly?: boolean;
+  /** Commander 2026-05-28 three-tier role gate. Overrides `readonly`
+   *  when supplied. 'view' = no writes; 'add-only' = + New Combo only,
+   *  no edit/delete on existing cards; 'full' = identical to Backend. */
+  mode?: ComboMode;
 };
 
-export const SofaComboTab = ({ readonly = false }: ComboTabProps) => {
+export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
+  // Resolve effective mode. Caller-supplied `mode` wins.
+  const effectiveMode: ComboMode =
+    mode ?? (readonly ? 'view' : 'full');
+  const canAdd  = effectiveMode !== 'view';
+  const canEdit = effectiveMode === 'full';
   const [baseModelFilter, setBaseModelFilter] = useState<string>('');
   const [composer, setComposer] = useState<{ open: boolean; editing?: SofaComboRule }>({ open: false });
   const [historyFor, setHistoryFor] = useState<SofaComboRule | null>(null);
@@ -129,7 +140,7 @@ export const SofaComboTab = ({ readonly = false }: ComboTabProps) => {
             All combos apply to every customer (2990 B2C model).
           </p>
         </div>
-        {!readonly && (
+        {canAdd && (
           <Button variant="primary" onClick={() => setComposer({ open: true })}>
             <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
           </Button>
@@ -168,9 +179,9 @@ export const SofaComboTab = ({ readonly = false }: ComboTabProps) => {
           border: '1px dashed var(--line)',
           color: 'var(--fg-muted)',
         }}>
-          {readonly
-            ? 'No combo rules yet.'
-            : <>No combo rules yet. Click <strong>+ New Combo</strong> to create one.</>}
+          {canAdd
+            ? <>No combo rules yet. Click <strong>+ New Combo</strong> to create one.</>
+            : 'No combo rules yet.'}
         </div>
       ) : (
         grouped.map(([model, rules]) => (
@@ -194,7 +205,9 @@ export const SofaComboTab = ({ readonly = false }: ComboTabProps) => {
                 <ComboCard
                   key={r.id}
                   rule={r}
-                  readonly={readonly}
+                  /* canEdit gates Edit + Delete on existing cards. add-only
+                     viewers see the card but no per-card edit affordances. */
+                  canEdit={canEdit}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
                   onDelete={() => {
@@ -227,13 +240,15 @@ export const SofaComboTab = ({ readonly = false }: ComboTabProps) => {
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, onEdit, onHistory, onDelete, readonly = false,
+  rule, onEdit, onHistory, onDelete, canEdit = true,
 }: {
   rule: SofaComboRule;
   onEdit: () => void;
   onHistory: () => void;
   onDelete: () => void;
-  readonly?: boolean;
+  /** Show Edit + Delete on this card (admin/full only). add-only +
+      view roles see the card but only History button. */
+  canEdit?: boolean;
 }) {
   const label = rule.label || buildComboLabel(rule.modules);
   const isActive = rule.effectiveFrom <= todayIso();
@@ -259,7 +274,7 @@ function ComboCard({
           {label}
         </span>
         {rule.tier && <span style={chipStyleSoft}>{rule.tier}</span>}
-        {!readonly && (
+        {canEdit && (
           <button
             type="button"
             onClick={onDelete}
@@ -307,7 +322,7 @@ function ComboCard({
           {isActive ? 'Active' : 'Pending'}
         </span>
         <div style={{ flex: 1 }} />
-        {!readonly && (
+        {canEdit && (
           <button type="button" onClick={onEdit} style={ghostBtnStyle}>
             <Pencil size={12} strokeWidth={1.75} /> Edit
           </button>

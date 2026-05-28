@@ -7,11 +7,15 @@
 // /so-dropdown-options API endpoints as Backend — bidirectional sync is
 // automatic):
 //
-//   - admin                                   → 'full'      (identical to Backend)
-//   - outlet_manager / sales_director         → 'add-only'  (add affordances visible,
-//                                                            no edit, no delete,
-//                                                            no status toggle)
-//   - sales_executive / sales (default)       → 'view'      (read-only)
+//   - admin                                              → 'full'      (identical to Backend)
+//   - sales_director                                     → 'add-only'  (add affordances visible,
+//                                                                       no edit, no delete,
+//                                                                       no status toggle)
+//   - sales_executive / outlet_manager / sales (default) → 'view'      (read-only)
+//
+// Commander 2026-05-28 (tightening) — "POS 前面让他们全部不能 edit 先,只有
+// sales director 可以添加,不能 edit". outlet_manager dropped from add-only
+// down to view-only; only sales_director adds, only admin edits.
 //
 // Per-section behaviour summary:
 //
@@ -70,8 +74,10 @@ export type MaintenanceMode = 'view' | 'add-only' | 'full';
 
 function maintenanceMode(role: string | undefined): MaintenanceMode {
   if (role === 'admin') return 'full';
-  if (role === 'sales_director' || role === 'outlet_manager') return 'add-only';
-  return 'view'; // sales_executive, sales, anything else
+  if (role === 'sales_director') return 'add-only';
+  // Commander 2026-05-28 tightening: outlet_manager moved from add-only → view.
+  // sales_executive / sales / outlet_manager / anything else all view-only.
+  return 'view';
 }
 
 const canAdd  = (m: MaintenanceMode) => m !== 'view';
@@ -146,8 +152,8 @@ export const SalesOrderMaintenance = () => {
         )}
         {mode === 'view' && (
           <div className={styles.readOnlyBanner}>
-            <strong>Read-only view.</strong> Changes to Sales Order Maintenance
-            are admin / outlet-manager / sales-director only.
+            <strong>Read-only view.</strong> Only the sales director can add
+            new entries; only admin can edit.
           </div>
         )}
 

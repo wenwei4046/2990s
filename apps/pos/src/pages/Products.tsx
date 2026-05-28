@@ -2,8 +2,14 @@
 // POS Products — mirror of apps/backend/src/pages/Products.tsx, role-gated.
 //
 // Commander 2026-05-28 — "把 Backend 的 Products 整个模块 port 到 POS 这边".
-//   - sales / sales_executive / outlet_manager  → VIEW ONLY (readonly=true)
-//   - sales_director / admin                    → EDIT (readonly=false)
+// Commander 2026-05-28 (tightening) — "POS 前面让他们全部不能 edit 先,只有
+// sales director 可以添加,不能 edit". Three-tier role gate (matches the
+// SO Maintenance page):
+//   - sales / sales_executive / outlet_manager  → VIEW   (readonly display)
+//   - sales_director                            → ADD-ONLY (+ buttons visible,
+//                                                           edit / delete hidden)
+//   - admin                                     → FULL   (everything,
+//                                                           identical to Backend)
 //
 // Cost columns are stripped UNCONDITIONALLY here regardless of role; on POS
 // what looks like "price" is the SELLING price. The raw-material COST that
@@ -80,20 +86,32 @@ import { useQueryClient } from '@tanstack/react-query';
 import styles from './Products.module.css';
 
 /* ════════════════════════════════════════════════════════════════════════
-   POS Role gate — sales_director + admin get edit; everyone else readonly.
+   POS Role gate — three-tier (view / add-only / full).
 
-   The gate lives at the page root so EVERY sub-component, drawer, dialog,
-   and table receives the same `readonly` flag through prop drilling. The
-   sales side staff (sales / sales_executive / outlet_manager) can read the
-   selling prices to quote customers but never mutates any cell, button, or
-   field. Sales_director uses the same screen to actually administer the
-   catalogue.
+   Commander 2026-05-28 tightening: stripped sales_director down from full
+   edit to "add new entries only". Existing rows are display-only for them;
+   only admin can edit / delete / toggle. Sales-side staff (sales /
+   sales_executive / outlet_manager) stay view-only.
+
+   `mode` is threaded through to every sub-component, drawer, dialog, and
+   table. The legacy `readonly` boolean is kept as a derived alias so the
+   sub-components that only care about "can this user enter free-form
+   edit mode?" don't need to change shape: readonly = mode !== 'full'.
+   Components that need to distinguish 'view' from 'add-only' read `mode`
+   directly.
    ════════════════════════════════════════════════════════════════════════ */
-const EDIT_ROLES = new Set(['sales_director', 'admin']);
-function useProductsReadonly(): boolean {
+export type ProductsMode = 'view' | 'add-only' | 'full';
+
+function productsMode(role: string | undefined): ProductsMode {
+  if (role === 'admin') return 'full';
+  if (role === 'sales_director') return 'add-only';
+  return 'view'; // sales / sales_executive / outlet_manager / anything else
+}
+
+function useProductsMode(): ProductsMode {
   const { data: staff } = useStaff();
-  if (!staff) return true; // default to readonly until staff row resolves
-  return !EDIT_ROLES.has(staff.role);
+  if (!staff) return 'view'; // default to safest tier until staff row resolves
+  return productsMode(staff.role);
 }
 
 /* Modal shell shown when a POS user clicks into a flow the POS port
@@ -167,22 +185,52 @@ type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos';
 
 export const Products = () => {
   const [topTab, setTopTab] = useState<TopTab>('sku');
-  const readonly = useProductsReadonly();
+  const mode = useProductsMode();
+  // Legacy alias: every non-'full' role had the old readonly affordances
+  // (no inline cell edit, no delete). add-only roles still see add buttons
+  // — those branches read `mode` directly.
+  const readonly = mode !== 'full';
+
+  /* Chip next to the page title — same style as SO Maintenance so the gate
+     is visible at a glance. */
+  const modeChip =
+    mode === 'view'     ? { label: 'View only', tone: 'muted' as const } :
+    mode === 'add-only' ? { label: 'Add-only · Cannot edit existing', tone: 'warn' as const } :
+                          null;
 
   return (
     <div className={styles.page}>
       <header className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <h1 className={styles.title}>Products</h1>
-          {readonly && (
-            <span
-              className={styles.eyebrow}
-              style={{ color: 'var(--fg-muted)' }}
-              title="Only the Sales Director can edit prices and codes. You can browse the catalogue."
-            >
-              View only · Sales Director edits
-            </span>
-          )}
+          <h1 className={styles.title}>
+            Products
+            {modeChip && (
+              <span
+                style={{
+                  display: 'inline-block',
+                  marginLeft: 'var(--space-3)',
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  fontSize: 'var(--fs-12)',
+                  fontFamily: 'var(--font-button)',
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  verticalAlign: 'middle',
+                  background:
+                    modeChip.tone === 'warn'
+                      ? 'rgba(232, 107, 58, 0.12)'
+                      : 'rgba(34, 31, 32, 0.06)',
+                  color:
+                    modeChip.tone === 'warn'
+                      ? 'var(--c-burnt, #A6471E)'
+                      : 'var(--fg-muted)',
+                }}
+              >
+                {modeChip.label}
+              </span>
+            )}
+          </h1>
           <div className={styles.tabSwitch} role="tablist">
             <button
               type="button"
@@ -234,10 +282,10 @@ export const Products = () => {
         </div>
       </header>
 
-      {topTab === 'sku' && <SkuMasterTab readonly={readonly} />}
+      {topTab === 'sku' && <SkuMasterTab mode={mode} />}
       {topTab === 'modular' && <ProductModelsReadonlyList />}
-      {topTab === 'maintenance' && <MaintenanceTab readonly={readonly} />}
-      {topTab === 'combos' && <SofaComboTab readonly={readonly} />}
+      {topTab === 'maintenance' && <MaintenanceTab mode={mode} />}
+      {topTab === 'combos' && <SofaComboTab mode={mode} />}
     </div>
   );
 };
@@ -530,14 +578,21 @@ const upsertHeightTier = (
   return next;
 };
 
-const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
+const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const [category, setCategory] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const [editModeRaw, setEditMode] = useState(false);
-  /* readonly hard-clamps edit mode off so the inline-edit cells in
-     ProductRow / MaintenanceList never accept input — even if some other
-     code path tried to flip it. */
-  const editMode = readonly ? false : editModeRaw;
+  /* Only 'full' (admin) can flip the Edit Prices toggle on. add-only +
+     view tiers hard-clamp edit mode off so the inline-edit cells in
+     ProductRow never accept input — even if some other code path tried
+     to flip it.
+
+     'add-only' (sales_director) still gets the "+ New SKU" / "Import SKUs"
+     buttons + the Suppliers drawer (read-only inside, but useful for
+     confirming who carries a SKU). They never enter edit mode. */
+  const canAdd  = mode !== 'view';
+  const canEdit = mode === 'full';
+  const editMode = canEdit ? editModeRaw : false;
   const [tier, setTier] = useState<Tier>('PRICE_2');
   // PR #39 — Model filter chip row (visible only on Sofa view).
   // Distinct base_model values pulled from current rows. 'all' = no filter.
@@ -676,13 +731,13 @@ const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
   };
 
   // Total column count (header colspan for loading/empty states):
-  //   PR #82 — leading checkbox column added (+1).
+  //   PR #82 — leading checkbox column added (+1, only in full mode).
   //   PR #38 — Configure + History columns removed. Double-click a row to
   //   open the Suppliers drawer.
-  //   - Sofa: select + code + desc + model + N sizes + unit
-  //   - Mattress: select + code + desc + branding + size + price + unit
-  //   - Other: select + code + desc + category + size + P2 + P1 + unit
-  const colCount = 1 + (isSofaView
+  //   - Sofa: [select?] + code + desc + model + N sizes + unit
+  //   - Mattress: [select?] + code + desc + branding + size + price + unit
+  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit
+  const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
@@ -715,13 +770,14 @@ const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
             />
           </div>
           {/* Export is allowed for everyone — useful audit trail / quote
-              reference. Import + New SKU + bulk Delete + Edit Prices are
-              gated to sales_director / admin. */}
+              reference. Add affordances (Import + New SKU) gate on canAdd
+              (sales_director + admin). Bulk Delete + Edit Prices gate on
+              canEdit (admin only). */}
           <Button variant="ghost" size="md" onClick={() => exportSkusCsv(rows)}>
             <Download {...ICON_PROPS} />
             <span>Export SKUs</span>
           </Button>
-          {!readonly && (
+          {canAdd && (
             <>
               <Button variant="ghost" size="md" onClick={() => setImporting(true)}>
                 <Upload {...ICON_PROPS} />
@@ -731,6 +787,10 @@ const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
                 <Plus {...ICON_PROPS} />
                 <span>New SKU</span>
               </Button>
+            </>
+          )}
+          {canEdit && (
+            <>
               {/* PR #82 — only render the bulk Delete button when at least one row
                   is ticked, so the toolbar stays compact in normal use. */}
               {selectedIds.size > 0 && (
@@ -814,17 +874,20 @@ const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
           <thead>
             <tr>
               {/* PR #82 — leading select-all checkbox. Indeterminate when
-                  partial selection on visible rows. */}
-              <th style={{ width: 32 }}>
-                <input
-                  type="checkbox"
-                  aria-label="Select all visible SKUs"
-                  checked={allSelected}
-                  ref={(el) => { if (el) el.indeterminate = someSelected; }}
-                  onChange={toggleAllVisible}
-                  style={{ cursor: 'pointer' }}
-                />
-              </th>
+                  partial selection on visible rows. Only admin (canEdit)
+                  sees the bulk-delete checkbox column. */}
+              {canEdit && (
+                <th style={{ width: 32 }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible SKUs"
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                    onChange={toggleAllVisible}
+                    style={{ cursor: 'pointer' }}
+                  />
+                </th>
+              )}
               <th>Product Code</th>
               <th>Description</th>
               {isSofaView ? (
@@ -868,7 +931,11 @@ const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
                 isMattressView={isMattressView}
                 sofaSizes={sofaSizes}
                 tier={tier}
-                onOpenSuppliers={readonly ? undefined : setSuppliersRow}
+                /* Suppliers drawer + bulk-delete checkbox + truck icon are
+                   admin-only (canEdit). sales_director / view roles see
+                   selling prices but never the supplier purchase-cost data. */
+                onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
+                showSelectCol={canEdit}
                 selected={selectedIds.has(row.id)}
                 onToggleSelected={() => toggleRow(row.id)}
               />
@@ -922,7 +989,7 @@ const SkuMasterTab = ({ readonly = false }: { readonly?: boolean }) => {
 
 const ProductRow = ({
   row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
-  selected, onToggleSelected,
+  showSelectCol = true, selected, onToggleSelected,
 }: {
   row: MfgProductRow;
   editMode: boolean;
@@ -931,6 +998,10 @@ const ProductRow = ({
   sofaSizes: string[];
   tier: Tier;
   onOpenSuppliers?: (row: MfgProductRow) => void;
+  /** Render the leading select checkbox column (admin/full mode only).
+      add-only + view tiers don't have a bulk-delete affordance so the
+      column is suppressed entirely. */
+  showSelectCol?:   boolean;
   /** PR #82 — multi-select state lives on SkuMasterTab; row just renders
       the checkbox + reports clicks. */
   selected:         boolean;
@@ -967,16 +1038,19 @@ const ProductRow = ({
       style={{ cursor: editMode ? 'default' : 'pointer' }}
     >
       {/* PR #82 — row checkbox. stopPropagation so clicking the box
-          doesn't bubble into the double-click "open suppliers" handler. */}
-      <td style={{ width: 32 }} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          aria-label={`Select ${row.code}`}
-          checked={selected}
-          onChange={onToggleSelected}
-          style={{ cursor: 'pointer' }}
-        />
-      </td>
+          doesn't bubble into the double-click "open suppliers" handler.
+          Hidden entirely in add-only / view modes (no bulk delete there). */}
+      {showSelectCol && (
+        <td style={{ width: 32 }} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            aria-label={`Select ${row.code}`}
+            checked={selected}
+            onChange={onToggleSelected}
+            style={{ cursor: 'pointer' }}
+          />
+        </td>
+      )}
       {/* PR #89 — click code chip to edit.
           PR #95 — Commander 2026-05-26: "容易不小心点到 Edit，你应该点 Edit
           Price 那边就可以进来修改了". Gate click-to-edit behind editMode so
@@ -1538,13 +1612,25 @@ export const MaintenanceTab = ({
   scope = 'master',
   sectionFilter,
   emptyHint,
-  readonly = false,
+  readonly,
+  mode,
 }: {
   scope?: string;
   sectionFilter?: MaintenanceSection[];
   emptyHint?: ReactNode;
+  /** Legacy boolean — `readonly: true` hides every write affordance.
+      Prefer `mode` for the three-tier gate. */
   readonly?: boolean;
+  /** Three-tier role gate (commander 2026-05-28 tightening). Overrides
+      `readonly` when both are supplied. */
+  mode?: ProductsMode;
 } = {}) => {
+  /* Resolve effective mode. If caller supplied `mode`, use it. Otherwise
+     fall back to the legacy boolean (readonly=true → 'view', else 'full'). */
+  const effectiveMode: ProductsMode =
+    mode ?? (readonly ? 'view' : 'full');
+  const canAdd  = effectiveMode !== 'view';
+  const canEdit = effectiveMode === 'full';
   const resolved = useMaintenanceConfig(scope);
   const history = useMaintenanceConfigHistory(scope);
   const save = useSaveMaintenanceConfig();
@@ -1583,7 +1669,9 @@ export const MaintenanceTab = ({
   }, [visibleTabs]);
 
   const [editModeRaw, setEditMode] = useState(false);
-  const editMode = readonly ? false : editModeRaw;
+  /* Only canEdit (admin in POS, or readonly=false on Backend) can flip
+     edit mode on. add-only + view tiers hard-clamp it off. */
+  const editMode = canEdit ? editModeRaw : false;
   const [draft, setDraft] = useState<MaintenanceConfig | null>(null);
   const [showMaintHistory, setShowMaintHistory] = useState(false);
 
@@ -1627,6 +1715,23 @@ export const MaintenanceTab = ({
           setDraft(null);
           setEditMode(false);
         },
+      },
+    );
+  };
+
+  /* Add-only quick-add path (commander 2026-05-28 tightening):
+     sales_director appends one option to a list and we POST immediately.
+     No draft, no Edit-Save dance, no effective-date prompt — just an
+     append that lands as today's effective row. The MaintenanceList
+     calls this with the post-mutation config (existing + the new item).
+     Falls back to noop if there's no config to start from. */
+  const handleQuickAdd = (next: MaintenanceConfig) => {
+    const today = new Date().toISOString().slice(0, 10);
+    save.mutate(
+      { scope, config: next, effectiveFrom: today },
+      {
+        // Refetch will pull the new row; nothing else to reset since we
+        // never entered edit mode.
       },
     );
   };
@@ -1727,7 +1832,11 @@ export const MaintenanceTab = ({
             )}
           </div>
           <div className={styles.actionsRow}>
-            {readonly ? null : !editMode ? (
+            {/* Edit toggle is admin-only (canEdit). add-only roles add via
+                the inline "+ Add new" row at the bottom of each section
+                (handled inside MaintenanceList) — no Edit button surfaces
+                for them. */}
+            {canEdit && (!editMode ? (
               <Button variant="ghost" size="sm" onClick={startEdit}>
                 <Edit3 {...ICON_PROPS} />
                 <span>Edit</span>
@@ -1741,7 +1850,7 @@ export const MaintenanceTab = ({
                   <span>{save.isPending ? 'Saving…' : 'Save'}</span>
                 </Button>
               </>
-            )}
+            ))}
             <Button variant="ghost" size="sm" onClick={() => setShowMaintHistory(true)}>
               <History {...ICON_PROPS} />
               <span>History</span>
@@ -1753,7 +1862,13 @@ export const MaintenanceTab = ({
           listKey={active.key}
           config={config}
           editMode={editMode}
+          /* add-only mode: render the bottom "+ Add new" row even when
+             editMode is false, and commit each add immediately via the
+             quick-add path. Hides all per-row edit/delete affordances
+             so sales_director can append-but-not-modify. */
+          addOnly={!canEdit && canAdd}
           onChange={(next) => setDraft(next)}
+          onQuickAdd={handleQuickAdd}
           priced={active.priced}
         />
       </section>
@@ -1989,18 +2104,23 @@ const resolveCompartmentImageSrc = (
 const SofaCompartmentsList = ({
   config,
   editMode,
+  addOnly = false,
   onChange,
+  onQuickAdd,
   dragRowProps,
   draftValue,
   setDraftValue,
 }: {
   config: MaintenanceConfig;
   editMode: boolean;
+  addOnly?: boolean;
   onChange: (next: MaintenanceConfig) => void;
+  onQuickAdd?: (next: MaintenanceConfig) => void;
   dragRowProps: (i: number) => HTMLAttributes<HTMLDivElement>;
   draftValue: string;
   setDraftValue: (v: string) => void;
 }) => {
+  const showAddRow = editMode || addOnly;
   const items = config.sofaCompartments ?? [];
   const meta  = config.sofaCompartmentMeta ?? {};
   /* PR — Commander 2026-05-28: per-row photo upload + delete. Always
@@ -2036,7 +2156,8 @@ const SofaCompartmentsList = ({
     const arr  = next.sofaCompartments ?? [];
     arr.push(v);
     next.sofaCompartments = arr;
-    onChange(next);
+    if (addOnly && onQuickAdd) onQuickAdd(next);
+    else onChange(next);
     setDraftValue('');
   };
 
@@ -2324,7 +2445,7 @@ const SofaCompartmentsList = ({
         );
       })}
 
-      {editMode && (
+      {showAddRow && (
         <div
           className={styles.maintRow}
           style={{
@@ -2365,15 +2486,27 @@ const MaintenanceList = ({
   listKey,
   config,
   editMode,
+  addOnly = false,
   onChange,
+  onQuickAdd,
   priced,
 }: {
   listKey: MaintenanceListKey;
   config: MaintenanceConfig;
   editMode: boolean;
+  /** Commander 2026-05-28 tightening: sales_director sees the "+ Add new"
+      row at the bottom even when editMode is false. Existing rows render
+      as static display; only the bottom add row accepts input. */
+  addOnly?: boolean;
+  /** Called when the user commits a row in add-only mode. The page-level
+      handler POSTs immediately with today as effective_from. */
+  onQuickAdd?: (next: MaintenanceConfig) => void;
   onChange: (next: MaintenanceConfig) => void;
   priced: boolean;
 }) => {
+  /* When the bottom add row is visible — either because admin is in
+     editMode or because sales_director is in add-only mode. */
+  const showAddRow = editMode || addOnly;
   // Empty draft state for the "add new" row at the bottom of the list when
   // edit mode is on. Kept local so toggling tabs cancels in-flight adds.
   const [draftValue, setDraftValue] = useState('');
@@ -2447,7 +2580,9 @@ const MaintenanceList = ({
       <SofaCompartmentsList
         config={config}
         editMode={editMode}
+        addOnly={addOnly}
         onChange={onChange}
+        onQuickAdd={onQuickAdd}
         dragRowProps={dragRowProps}
         draftValue={draftValue}
         setDraftValue={setDraftValue}
@@ -2480,7 +2615,10 @@ const MaintenanceList = ({
       const arr = (next[listKey] as string[] | undefined) ?? [];
       arr.push(v);
       (next as Record<string, unknown>)[listKey] = arr;
-      onChange(next);
+      // add-only mode: POST immediately. editMode: stash in draft for the
+      // page-level Save button.
+      if (addOnly && onQuickAdd) onQuickAdd(next);
+      else onChange(next);
       setDraftValue('');
     };
 
@@ -2626,7 +2764,7 @@ const MaintenanceList = ({
           );
         })}
 
-        {editMode && (
+        {showAddRow && (
           <div
             className={styles.maintRow}
             style={{
@@ -2690,7 +2828,10 @@ const MaintenanceList = ({
       : { value: v, priceSen };
     arr.push(row);
     (next as Record<string, unknown>)[listKey] = arr;
-    onChange(next);
+    // add-only mode: POST immediately. editMode: stash in draft for the
+    // page-level Save button.
+    if (addOnly && onQuickAdd) onQuickAdd(next);
+    else onChange(next);
     setDraftValue('');
     setDraftPrice('0.00');
     setDraftCost('0.00');
@@ -2784,7 +2925,7 @@ const MaintenanceList = ({
         </div>
       ))}
 
-      {editMode && (
+      {showAddRow && (
         <div
           className={styles.maintRow}
           style={{
@@ -3037,8 +3178,10 @@ const FabricsMaintenancePanel = () => {
   const rows = data ?? [];
   /* POS port: read the role here so the table renders inert when the user
      can't write. FabricsTable supports a readonly prop that wraps the
-     whole card with pointer-events:none. */
-  const readonly = useProductsReadonly();
+     whole card with pointer-events:none. Fabrics editing is admin-only
+     in the tightened gate — sales_director cannot edit existing fabric
+     tier mappings, so we collapse 'add-only' + 'view' down to readonly. */
+  const readonly = useProductsMode() !== 'full';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
