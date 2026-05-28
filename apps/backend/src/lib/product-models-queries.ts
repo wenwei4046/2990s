@@ -72,6 +72,10 @@ export type AllowedOptions = {
       auto-generated SKU name. Set at New Model time or edited later via
       the Model detail page. */
   mattress_thickness_cm?: number;
+  /** SOFA only — fabric_library.id slugs ticked for this Model (e.g.
+      ['linen', 'velvet']). POS Configurator uses this list to populate
+      the fabric colour picker. Empty / missing = no fabrics offered. */
+  fabrics?:               string[];
 };
 
 export type ModelSkuRow = {

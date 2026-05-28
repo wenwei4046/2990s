@@ -117,6 +117,9 @@ export const useProduct = (productId: string | undefined) =>
             seat_upgrade_label: string | null;
             seat_upgrade_footrest: boolean;
             depth_options: string | null;
+            // legacy products table has no base_model column — typed optional
+            // so downstream code that checks product.data?.base_model compiles.
+            base_model?: string | null;
           };
         }
       }
@@ -129,7 +132,7 @@ export const useProduct = (productId: string | undefined) =>
       const { data: mfgData, error: mfgErr } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen',
+          'id, code, name, category, description, branding, size_label, base_price_sen, base_model',
         )
         .eq('id', productId)
         .maybeSingle();
@@ -145,6 +148,7 @@ export const useProduct = (productId: string | undefined) =>
         branding: string | null;
         size_label: string | null;
         base_price_sen: number | null;
+        base_model: string | null;
       };
 
       const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
@@ -180,6 +184,9 @@ export const useProduct = (productId: string | undefined) =>
            'toUpperCase')"). Stamp the lowercased mfg category so the chip
            reads e.g. "BOOQIT · SOFA". */
         category_id: mfg.category ? mfg.category.toLowerCase() : null,
+        /* base_model is needed by Configurator so it can pass it to
+           useSofaCombos() and filter Quick Pick combos to this Model. */
+        base_model: mfg.base_model,
         series_id: null,
         included_addons: [] as { addonId: string; qty: number }[],
         updated_at: new Date().toISOString(),
@@ -234,6 +241,9 @@ export const useProductBundles = (productId: string | undefined) =>
     queryKey: ['product', productId, 'bundles'],
     queryFn: async (): Promise<ProductBundleRow[]> => {
       if (!productId) throw new Error('no productId');
+      // mfg-{12hex} products have no rows in product_bundles (UUID FK).
+      // Their bundles are sourced from sofa_combos via useSofaCombos().
+      if (productId.startsWith('mfg-')) return [];
       const { data, error } = await supabase
         .from('product_bundles')
         .select('bundle_id, active, price')
@@ -253,6 +263,9 @@ export const useProductCompartments = (productId: string | undefined) =>
     queryKey: ['product', productId, 'compartments'],
     queryFn: async (): Promise<ProductCompartmentRow[]> => {
       if (!productId) throw new Error('no productId');
+      // mfg-{12hex} products have no rows in product_compartments (UUID FK).
+      // Their compartments are sourced from useSofaCustomizerData() → allowed_options.
+      if (productId.startsWith('mfg-')) return [];
       const { data, error } = await supabase
         .from('product_compartments')
         .select('compartment_id, active, price')
@@ -327,12 +340,17 @@ export const useFabricColours = () =>
   });
 
 // Per-Model fabric availability + surcharge.
+// mfg-{12hex} products have no rows in product_fabrics (UUID FK). Their
+// fabrics are configured via product_models.allowed_options.fabrics and
+// surfaced through useSofaCustomizerData() → the Configurator builds
+// the ProductFabricRow[] from sofaCustomizer.data.fabricIds + useFabricLibrary.
 export const useProductFabrics = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'fabrics'],
     queryFn: async (): Promise<ProductFabricRow[]> => {
       if (!productId) throw new Error('no productId');
+      if (productId.startsWith('mfg-')) return [];   // mfg path uses sofaCustomizer
       const { data, error } = await supabase
         .from('product_fabrics')
         .select('fabric_id, active, surcharge')
@@ -380,14 +398,27 @@ export const useBedframeColours = (productId: string | undefined) =>
           .select('id, label, swatch_hex, surcharge, active, sort_order')
           .eq('active', true)
           .order('sort_order'),
-        supabase
-          .from('product_bedframe_colours')
-          .select('colour_id, active')
-          .eq('product_id', productId)
-          .eq('active', true),
+        // product_bedframe_colours.product_id is a UUID FK. mfg-{12hex} ids
+        // have no tick rows → we skip and accept all active global colours
+        // for mfg bedframe products (no per-model colour gating at pilot).
+        productId.startsWith('mfg-')
+          ? Promise.resolve({ data: null as null, error: null })
+          : supabase
+              .from('product_bedframe_colours')
+              .select('colour_id, active')
+              .eq('product_id', productId)
+              .eq('active', true),
       ]);
       if (globalRes.error) throw globalRes.error;
       if (tickRes.error) throw tickRes.error;
+      // mfg products: all active global colours available (tickRes.data = null)
+      // legacy UUID products: intersect with the per-model ticked colours
+      if (tickRes.data === null) {
+        return (globalRes.data ?? []).map((r) => ({
+          id: r.id, label: r.label, swatchHex: r.swatch_hex,
+          surcharge: r.surcharge, sortOrder: r.sort_order,
+        }));
+      }
       const ticked = new Set((tickRes.data ?? []).map((r) => r.colour_id));
       return (globalRes.data ?? [])
         .filter((r) => ticked.has(r.id))
@@ -418,12 +449,121 @@ export const useBedframeOptions = () =>
     },
   });
 
+/** Maps HOOKKA mfg_products.size_code → size_library.id (seeded in seed-libraries.sql).
+ *  Only the 4 standard bed sizes have library entries at MVP; SK/SP/7FT etc. are ignored
+ *  until size_library is extended to include them. */
+const MFG_SIZE_CODE_TO_LIB: Record<string, string> = {
+  K: 'king', Q: 'queen', S: 'single', SS: 'super-single',
+};
+
 export const useProductSizes = (productId: string | undefined) =>
   useQuery({
     enabled: !!productId,
     queryKey: ['product', productId, 'sizes'],
     queryFn: async (): Promise<ProductSizeRow[]> => {
       if (!productId) throw new Error('no productId');
+
+      /* ── mfg-* path (new manufacturer SKU system) ──────────────────────────
+         The POS catalog links to `/configure/{mfg.id}` where `mfg.id` is a
+         TEXT key like `mfg-4ea1697f0783`. `product_size_variants.product_id`
+         is a UUID FK to the legacy `products` table — passing a mfg- id
+         directly returns zero rows (Postgres type coercion makes it a no-op,
+         not an error).
+
+         Fix: two-step resolve.
+           1. Fetch `retail_product_id` (nullable UUID bridge) + `model_id`
+              from `mfg_products`.
+           2a. If `retail_product_id` is set → use `product_size_variants` as
+               normal (admin-configured prices from Backend SKU Master).
+           2b. Otherwise → fetch all sibling SKUs that share the same
+               `model_id` and synthesise ProductSizeRow[] from their
+               `size_code` + `base_price_sen`. Works even if `retail_product_id`
+               is never populated — prices come directly from mfg data.
+           2c. Truly orphan SKU (no model, no retail link) → single size entry
+               from its own `size_code`/`base_price_sen`. */
+      if (productId.startsWith('mfg-')) {
+        const { data: mfgRow, error: mfgErr } = await supabase
+          .from('mfg_products')
+          .select('retail_product_id, model_id, size_code, base_price_sen, base_model, category')
+          .eq('id', productId)
+          .maybeSingle();
+        if (mfgErr) throw mfgErr;
+        if (!mfgRow) return [];
+
+        // 2a — retail bridge exists: use admin-configured product_size_variants
+        if (mfgRow.retail_product_id) {
+          const { data, error } = await supabase
+            .from('product_size_variants')
+            .select('size_id, active, price')
+            .eq('product_id', mfgRow.retail_product_id);
+          if (error) throw error;
+          if (data && data.length > 0) {
+            return data.map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price }));
+          }
+          // Fall through to mfg siblings if the retail link exists but has no variants yet.
+        }
+
+        // Helper: map sibling rows → ProductSizeRow[]. Handles INACTIVE siblings
+        // (shown greyed on the size grid) and case-insensitive size_code lookup
+        // (guards against lowercase size_codes stored by older import paths).
+        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; status: string }>) =>
+          sibs
+            .filter((s) => {
+              const sc = (s.size_code ?? '').toUpperCase();
+              return sc && sc in MFG_SIZE_CODE_TO_LIB;
+            })
+            .map((s) => ({
+              sizeId: MFG_SIZE_CODE_TO_LIB[(s.size_code!).toUpperCase()] as string,
+              // Use actual status rather than hardcoded true so INACTIVE size
+              // variants show as greyed tiles ("Not on this Model") while ACTIVE
+              // ones remain selectable.
+              active: (s.status as string) === 'ACTIVE',
+              price: s.base_price_sen != null ? Math.round(s.base_price_sen / 100) : 0,
+            }));
+
+        // 2b — derive sizes from mfg_products siblings (same model_id — set by
+        // generate-skus). No status filter here: include INACTIVE siblings so
+        // discontinued sizes still render as greyed tiles rather than disappearing
+        // from the grid entirely.
+        if (mfgRow.model_id) {
+          const { data: siblings, error: sibErr } = await supabase
+            .from('mfg_products')
+            .select('size_code, base_price_sen, status')
+            .eq('model_id', mfgRow.model_id);
+          if (sibErr) throw sibErr;
+          const rows = sibsToRows(siblings ?? []);
+          if (rows.length > 0) return rows;
+        }
+
+        // 2b-alt — fallback for SKUs imported before the product_models layer
+        // (model_id is NULL). Group by base_model + category instead — same
+        // denormalised text that generate-skus stamps on every sibling.
+        if (mfgRow.base_model && mfgRow.category) {
+          const { data: siblings, error: sibErr } = await supabase
+            .from('mfg_products')
+            .select('size_code, base_price_sen, status')
+            .eq('base_model', mfgRow.base_model)
+            .eq('category', mfgRow.category);
+          if (sibErr) throw sibErr;
+          const rows = sibsToRows(siblings ?? []);
+          if (rows.length > 0) return rows;
+        }
+
+        // 2c — truly orphan SKU: single size from this SKU's own code + price.
+        // Case-insensitive so lowercase size_codes ('k' → 'K') are handled.
+        const ownCode = (mfgRow.size_code ?? '').toUpperCase();
+        if (ownCode && ownCode in MFG_SIZE_CODE_TO_LIB) {
+          return [{
+            sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
+            active: true,
+            price: mfgRow.base_price_sen != null ? Math.round(mfgRow.base_price_sen / 100) : 0,
+          }];
+        }
+
+        return [];
+      }
+
+      // ── Legacy UUID path (retail `products` table) ──────────────────────────
       const { data, error } = await supabase
         .from('product_size_variants')
         .select('size_id, active, price')
@@ -684,6 +824,10 @@ export interface SofaCustomizerData {
   legHeights:   string[];
   /** Special options ticked. */
   specials:     string[];
+  /** Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
+   *  Empty = no fabrics configured → POS hides the fabric picker. Caller
+   *  joins against useFabricLibrary() to resolve label + surcharge. */
+  fabricIds:    string[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;
   modelName:    string;
@@ -801,6 +945,9 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         sizes:      allowed.sizes ?? [],
         legHeights: allowed.leg_heights ?? [],
         specials:   allowed.specials ?? [],
+        // Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
+        // Empty array = no fabrics configured → Configurator hides fabric picker.
+        fabricIds:  (allowed as { fabrics?: string[] }).fabrics ?? [],
         modelId:    model.id,
         modelName:  model.name,
         modelCode:  model.model_code,

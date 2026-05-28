@@ -203,6 +203,10 @@ interface CustomBuilderProps {
    *  builder falls back to its legacy pricing.compartments filter + bundled
    *  /sofa-modules/*.png assets. */
   modelCustomizer?: SofaCustomizerData | null;
+  /** mfg_products.base_model — pins the saved Quick Pick to this Model so
+   *  it only appears in Quick Pick for this exact sofa Model. Empty/absent
+   *  = wildcard (shows for all models). */
+  baseModel?: string;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -225,7 +229,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -1436,6 +1440,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             modules={cells.map((c) => c.moduleId)}
             depth={depth}
             currentPriceCenti={priceResult.total}
+            baseModel={baseModel ?? ''}
             onClose={() => setSaveComboOpen(false)}
             onSaved={() => setSaveComboOpen(false)}
           />
@@ -1446,37 +1451,32 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
 };
 
 /* ─── SaveComboModal ─────────────────────────────────────────────────────
-   Commander 2026-05-28 — "Save as Quick Pick" UX. Captures a label + a
-   price + a fabric tier for the current Customize layout, POSTs to
-   /sofa-combos, and the combos query refetches so the saved layout
-   shows in the Quick Pick row immediately. */
+   "Save as Quick Pick" UX. Staff give the layout a friendly name; price
+   is auto-computed from the live à la carte total. Tier defaults to null
+   (wildcard — applies to any fabric tier). Commander can tweak price/tier
+   later in Backend → Products → Sofa Combos. */
 function SaveComboModal({
-  modules, depth, currentPriceCenti, onClose, onSaved,
+  modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
 }: {
   modules: string[];
   depth: string;
   currentPriceCenti: number;
+  /** mfg_products.base_model — pins the saved pick to this sofa Model. */
+  baseModel: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const create = useCreateSofaCombo();
   const [label, setLabel] = useState('');
-  const [priceRm, setPriceRm] = useState(String(Math.round(currentPriceCenti / 100)));
-  const [tier, setTier] = useState<'PRICE_1' | 'PRICE_2' | 'PRICE_3'>('PRICE_2');
 
   const submit = async () => {
-    const n = Number(priceRm);
-    if (!Number.isFinite(n) || n <= 0) { alert('Enter a valid price'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
-        baseModel: '',                          // wildcard for now
-        // OR-set per slot: a saved POS layout is exact, so each built module
-        // becomes its own singleton slot. Commander can widen a slot to
-        // OR-alternatives later in Backend Maintenance.
-        modules: modules.map((code) => [code]),
-        tier,
-        pricesByHeight: { [String(depth)]: Math.round(n * 100) },
+        baseModel,
+        modules,
+        tier: null,   // wildcard — any fabric tier
+        pricesByHeight: { [String(depth)]: currentPriceCenti },
         label: label.trim() || null,
         effectiveFrom: today,
         notes: 'Saved from POS Customize',
@@ -1502,54 +1502,29 @@ function SaveComboModal({
           Save as Quick Pick
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-          Saves this layout as a new Combo so it shows on the Quick Pick row next time.
+          Saves this {modules.length}-compartment layout so it appears in Quick Pick next time.
+          Price (RM{Math.round(currentPriceCenti / 100).toLocaleString('en-MY')}) is set from the
+          current à la carte total — adjust it later in Backend if needed.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
-            Label (optional)
+            Name (optional)
           </span>
           <input
+            autoFocus
             value={label}
             onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { void submit(); } }}
             placeholder={modules.join(' + ')}
             style={inputStyle}
           />
         </label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
-              Price at {depth}" (RM)
-            </span>
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={priceRm}
-              onChange={(e) => setPriceRm(e.target.value)}
-              style={inputStyle}
-            />
-          </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
-              Fabric tier
-            </span>
-            <select
-              value={tier}
-              onChange={(e) => setTier(e.target.value as typeof tier)}
-              style={inputStyle}
-            >
-              <option value="PRICE_1">PRICE_1</option>
-              <option value="PRICE_2">PRICE_2</option>
-              <option value="PRICE_3">PRICE_3</option>
-            </select>
-          </label>
-        </div>
         <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Modules: {modules.join(' · ')}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={create.isPending}>
+          <Button variant="primary" onClick={() => { void submit(); }} disabled={create.isPending}>
             {create.isPending ? 'Saving…' : 'Save Quick Pick'}
           </Button>
         </div>
