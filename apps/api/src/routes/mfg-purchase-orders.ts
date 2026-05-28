@@ -119,6 +119,26 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
     };
   };
 
+  /* Commander 2026-05-28 — resolve each SKU's MAIN supplier so the PO-from-SO
+     grid can show it (and the user sees which lines are even convertible — an
+     unbound SKU can't be PO'd). One batched query over the distinct codes;
+     prefer is_main_supplier, else first binding. */
+  const skuCodes = [...new Set(((items ?? []) as unknown as Row[]).map((r) => r.item_code).filter(Boolean))];
+  const mainSupplierByCode = new Map<string, { code: string; name: string }>();
+  if (skuCodes.length > 0) {
+    const { data: binds } = await supabase
+      .from('supplier_material_bindings')
+      .select('material_code, is_main_supplier, supplier:suppliers(code, name)')
+      .eq('material_kind', 'mfg_product')
+      .in('material_code', skuCodes)
+      .order('is_main_supplier', { ascending: false });
+    for (const b of (binds ?? []) as Array<{ material_code: string; supplier: { code: string; name: string } | Array<{ code: string; name: string }> | null }>) {
+      if (mainSupplierByCode.has(b.material_code)) continue;
+      const s = Array.isArray(b.supplier) ? b.supplier[0] : b.supplier;
+      if (s) mainSupplierByCode.set(b.material_code, { code: s.code, name: s.name });
+    }
+  }
+
   const outstanding = ((items ?? []) as unknown as Row[])
     .filter((r) => r.so.status !== 'CANCELLED')
     .filter((r) => r.qty - r.po_qty_picked > 0)
@@ -143,6 +163,8 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
       processingDate:   r.so.internal_expected_dd,
       salesLocation:    r.so.sales_location,
       lineDeliveryDate: r.line_delivery_date,
+      mainSupplierCode: mainSupplierByCode.get(r.item_code)?.code ?? null,
+      mainSupplierName: mainSupplierByCode.get(r.item_code)?.name ?? null,
     }));
 
   return c.json({ items: outstanding });
