@@ -123,28 +123,41 @@
   color: var(--c-orange);
 }
 
-/* Filters */
+/* Filters — compact dropdowns, aligned right (Commander 2026-05-29). */
 .filterRow {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
+  justify-content: flex-end;
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
-.chipGroup {
-  display: flex;
+.filterField {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
 }
-.chipGroupLabel {
+.filterLabel {
   font-family: var(--font-sans);
   font-size: var(--fs-11);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--fg-muted);
-  margin-right: 2px;
 }
+.filterSelect {
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--c-ink);
+  background: var(--c-paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 6px var(--space-3);
+  cursor: pointer;
+  min-width: 160px;
+}
+.filterSelect:hover { border-color: var(--line-strong); }
+.filterSelect:focus { outline: none; border-color: var(--c-ink); }
 .chip {
   font-family: var(--font-button);
   font-size: var(--fs-13);

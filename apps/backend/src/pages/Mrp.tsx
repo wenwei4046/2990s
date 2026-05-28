@@ -163,26 +163,27 @@ export const Mrp = () => {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — Commander 2026-05-29: warehouses got too many to chip; use
+          compact dropdowns aligned right instead. */}
       <div className={styles.filterRow}>
-        <div className={styles.chipGroup}>
-          <span className={styles.chipGroupLabel}>Category</span>
-          <button type="button" className={styles.chip} data-active={category === 'all'} onClick={() => setCategory('all')}>All</button>
-          {(data?.categories ?? ['SOFA', 'BEDFRAME', 'MATTRESS']).map((cat) => (
-            <button key={cat} type="button" className={styles.chip} data-active={category === cat} onClick={() => setCategory(cat)}>
-              {CAT_LABELS[cat] ?? cat}
-            </button>
-          ))}
-        </div>
-        <div className={styles.chipGroup}>
-          <span className={styles.chipGroupLabel}>Warehouse</span>
-          <button type="button" className={styles.chip} data-active={warehouseId === 'all'} onClick={() => setWarehouseId('all')}>All</button>
-          {(data?.warehouses ?? []).map((w) => (
-            <button key={w.id} type="button" className={styles.chip} data-active={warehouseId === w.id} onClick={() => setWarehouseId(w.id)}>
-              {w.code}
-            </button>
-          ))}
-        </div>
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>Category</span>
+          <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="all">All categories</option>
+            {(data?.categories ?? ['SOFA', 'BEDFRAME', 'MATTRESS']).map((cat) => (
+              <option key={cat} value={cat}>{CAT_LABELS[cat] ?? cat}</option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>Warehouse</span>
+          <select className={styles.filterSelect} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <option value="all">All warehouses</option>
+            {(data?.warehouses ?? []).map((w) => (
+              <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* Table */}
