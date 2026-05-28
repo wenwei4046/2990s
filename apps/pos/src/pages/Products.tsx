@@ -16,6 +16,12 @@
 // Backend exposes on Maintenance PricedOption rows (PR #216) is purchase
 // cost — never shown to sales-side users.
 //
+// DATA LEAK FIX (Commander 2026-05-28): commander's mental model treats the
+// Backend `priceSen` field on PricedOption rows as COST too — "拍卖价" /
+// purchase reference. Showing it on POS leaks costing info to sales staff.
+// POS now reads / writes a parallel `sellingPriceSen` field; priceSen never
+// renders on POS. See SellingPriceCell below + MaintenanceList row render.
+//
 // Writes (when sales_director edits) hit the SAME API endpoints + Supabase
 // tables the Backend Products uses, via the copied queries under
 // apps/pos/src/lib/products/. No new schema, no new endpoints.
@@ -64,6 +70,7 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
+  useUpdateMfgProductStatus,
   useCreateMfgProduct,
   useDeleteMfgProduct,
   useMaintenanceConfig,
@@ -81,7 +88,12 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useProductModels } from '../lib/products/product-models-queries';
+import {
+  useProductModels,
+  useProductModel,
+  useUpdateProductModel,
+  type AllowedOptions,
+} from '../lib/products/product-models-queries';
 import { FabricsTable } from '../components/products/FabricsTable';
 import { SofaComboTab } from '../components/products/SofaComboTab';
 import { formatSizeRich, formatSizeRichWithCfg, resolveSizeInfo } from '../lib/products/size-info';
@@ -183,6 +195,23 @@ const ScopeDeferredNotice = ({
 );
 
 const ICON_PROPS = { size: 16, strokeWidth: 1.75 } as const;
+
+/* PR — Commander 2026-05-28 (PHOTO FIX): product_models.photo_url is stored
+   as a relative proxy path (`/product-models/{id}/photo/{key}`) — see
+   apps/api/src/routes/product-models.ts. Rendering it raw in an <img src>
+   resolves against the POS origin (which doesn't host that route) → 404 →
+   broken image / first-letter placeholder. Prefix VITE_API_URL so the URL
+   points at the Worker's public photo proxy. Absolute URLs (http(s)://)
+   pass through untouched. Sister function to resolvePhotoUrl() in
+   lib/queries.ts which the Catalog grid already uses; both branches must
+   stay in sync. */
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => {
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!API_URL) return raw; // local dev — best effort, let it break visibly
+  return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
+};
 
 type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos';
 
@@ -287,7 +316,7 @@ export const Products = () => {
       </header>
 
       {topTab === 'sku' && <SkuMasterTab mode={mode} />}
-      {topTab === 'modular' && <ProductModelsReadonlyList />}
+      {topTab === 'modular' && <ProductModelsReadonlyList mode={mode} />}
       {topTab === 'maintenance' && <MaintenanceTab mode={mode} />}
       {topTab === 'combos' && <SofaComboTab mode={mode} />}
     </div>
@@ -295,18 +324,19 @@ export const Products = () => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Modular tab — POS readonly stub.
+   Modular tab — POS list of Models.
 
-   Backend's ProductModels page is a 1500-line editor with allowed-options,
-   photo uploads, supplier multi-pickers, SKU generators — porting it all
-   into POS quadruples the PR size. Sales-side staff don't edit Models
-   anyway. Sales_director can still edit Models from the Backend portal
-   (they're in the Backend allow-list).
+   PR — Commander 2026-05-28: cards are clickable for sales_director to
+   open a minimal-viable Allowed Options drawer (compartments / sizes /
+   leg heights / specials chips). Other roles see the card as readonly.
 
-   Shows the list with: category · model code · name · photo · SKU count.
-   Pulls from the same `product_models` table the Backend reads.
+   Backend's ProductModels page is still the canonical editor (photos,
+   SKU generators, supplier multi-pickers). POS only exposes the chip
+   ticking the commander asked for; deeper editing lives on Backend.
    ════════════════════════════════════════════════════════════════════════ */
-const ProductModelsReadonlyList = () => {
+const ProductModelsReadonlyList = ({ mode }: { mode: ProductsMode }) => {
+  const canEditAllowed = mode === 'add-only' || mode === 'full';
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
   const [filter, setFilter] = useState<MfgCategory | 'all'>('all');
   const [search, setSearch] = useState('');
   const { data: models, isLoading } = useProductModels({
@@ -381,7 +411,9 @@ const ProductModelsReadonlyList = () => {
       <p className={styles.eyebrow}>
         {isLoading
           ? 'Loading models…'
-          : `${rows.length} active model${rows.length === 1 ? '' : 's'} · Model-level allowed options & specs are managed from the Backend portal`}
+          : canEditAllowed
+            ? `${rows.length} active model${rows.length === 1 ? '' : 's'} · Click a card to edit Allowed Options`
+            : `${rows.length} active model${rows.length === 1 ? '' : 's'} · Model-level allowed options & specs are managed from the Backend portal`}
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
@@ -415,6 +447,19 @@ const ProductModelsReadonlyList = () => {
               {list.map((m) => (
                 <div
                   key={m.id}
+                  /* PR — Commander 2026-05-28: card is clickable for
+                     sales_director (+ admin) so they can edit the Model's
+                     Allowed Options pool without leaving POS. View-only
+                     roles see a static card with no hover state. */
+                  role={canEditAllowed ? 'button' : undefined}
+                  tabIndex={canEditAllowed ? 0 : undefined}
+                  onClick={canEditAllowed ? () => setEditingModelId(m.id) : undefined}
+                  onKeyDown={canEditAllowed ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setEditingModelId(m.id);
+                    }
+                  } : undefined}
                   style={{
                     border: '1px solid var(--line)',
                     borderRadius: 'var(--radius-md)',
@@ -423,7 +468,15 @@ const ProductModelsReadonlyList = () => {
                     display: 'flex',
                     gap: 'var(--space-3)',
                     alignItems: 'flex-start',
+                    cursor: canEditAllowed ? 'pointer' : 'default',
+                    transition: canEditAllowed ? 'border-color 120ms ease, transform 120ms ease' : undefined,
                   }}
+                  onMouseEnter={canEditAllowed ? (e) => {
+                    (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--c-orange)';
+                  } : undefined}
+                  onMouseLeave={canEditAllowed ? (e) => {
+                    (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--line)';
+                  } : undefined}
                 >
                   <div
                     style={{
@@ -441,7 +494,11 @@ const ProductModelsReadonlyList = () => {
                     {m.photo_url ? (
                       // eslint-disable-next-line jsx-a11y/img-redundant-alt
                       <img
-                        src={m.photo_url}
+                        /* PR — Commander 2026-05-28: photo_url is a relative
+                           proxy path; prefix VITE_API_URL so the browser
+                           can fetch it from the Worker public photo endpoint
+                           (apps/api/src/routes/product-models.ts). */
+                        src={resolveModelPhotoUrl(m.photo_url) ?? ''}
                         alt={`${m.name} photo`}
                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       />
@@ -513,9 +570,287 @@ const ProductModelsReadonlyList = () => {
           </div>
         )}
       </div>
+
+      {/* PR — Commander 2026-05-28: Allowed Options drawer for sales_director.
+          Minimal-viable: read current allowed_options from the row, render 4
+          chip-pickers (Compartments / Sizes / Leg Heights / Specials), Save
+          PATCHes /product-models/:id. Per-category visibility (mattress
+          doesn't need compartments etc.) is handled inside the drawer. */}
+      {editingModelId && (
+        <ModelAllowedOptionsDrawer
+          modelId={editingModelId}
+          onClose={() => setEditingModelId(null)}
+        />
+      )}
     </>
   );
 };
+
+/* ════════════════════════════════════════════════════════════════════════
+   ModelAllowedOptionsDrawer (PR — Commander 2026-05-28)
+
+   POS-side editor for product_models.allowed_options. Sales_director ticks
+   which compartments / sizes / leg heights / specials should surface on the
+   POS Configurator for this Model. Reads master pools from MaintenanceConfig
+   (so commander's "+ Add Code" wizard pool is the universe), intersects with
+   the Model's current allowed_options, lets the user tick/untick, then
+   PATCHes /product-models/:id.
+
+   This is the minimum-viable replacement for the Backend's full Model editor.
+   Doesn't surface photos, descriptions, SKU generators, or supplier mapping
+   — those stay on Backend.
+   ════════════════════════════════════════════════════════════════════════ */
+const ModelAllowedOptionsDrawer = ({
+  modelId,
+  onClose,
+}: {
+  modelId: string;
+  onClose: () => void;
+}) => {
+  const model = useProductModel(modelId);
+  const updateModel = useUpdateProductModel();
+  const masterCfg = useMaintenanceConfig('master');
+
+  /* Draft of the allowed_options under edit. Initialised once when the row
+     resolves; the chip toggles mutate this draft, Save writes it back. */
+  const [draft, setDraft] = useState<AllowedOptions | null>(null);
+  useEffect(() => {
+    if (model.data?.model && draft == null) {
+      setDraft(JSON.parse(JSON.stringify(model.data.model.allowed_options ?? {})) as AllowedOptions);
+    }
+  }, [model.data, draft]);
+
+  const m = model.data?.model;
+  const cfg = masterCfg.data?.data;
+
+  if (model.isLoading || masterCfg.isLoading) {
+    return (
+      <DrawerShell title="Loading…" onClose={onClose}>
+        <p className={styles.eyebrow}>Loading model data…</p>
+      </DrawerShell>
+    );
+  }
+  if (!m || !cfg) {
+    return (
+      <DrawerShell title="Model not found" onClose={onClose}>
+        <p className={styles.eyebrow}>Could not load this model.</p>
+      </DrawerShell>
+    );
+  }
+
+  /* Per-category section visibility — mattress only needs sizes, sofa only
+     needs sizes + compartments + leg heights + specials, etc. Hidden sections
+     stay absent from the patched allowed_options on save. */
+  const isSofa     = m.category === 'SOFA';
+  const isBedframe = m.category === 'BEDFRAME';
+  const isMattress = m.category === 'MATTRESS';
+
+  /* Master pool sources (drawn from MaintenanceConfig). For lists keyed as
+     PricedOption[], we project just the .value field for the chip text. */
+  const pricedValues = (arr: PricedOption[] | undefined): string[] =>
+    (arr ?? []).map((p) => p.value);
+
+  const sizePool: string[] = isSofa
+    ? (cfg.sofaSizes ?? ['24', '26', '28', '30', '32', '35'])
+    : isMattress
+      ? (cfg.mattressSizes ?? [])
+      : (cfg.bedframeSizes ?? []);
+  const compartmentPool: string[] = isSofa ? (cfg.sofaCompartments ?? []) : [];
+  const legHeightPool: string[]   = isSofa
+    ? pricedValues(cfg.sofaLegHeights)
+    : isBedframe
+      ? pricedValues(cfg.legHeights)
+      : [];
+  const specialPool: string[]     = isSofa
+    ? pricedValues(cfg.sofaSpecials)
+    : isBedframe
+      ? pricedValues(cfg.specials)
+      : [];
+
+  const d = draft ?? {};
+  const isTicked = (pool: keyof AllowedOptions, v: string): boolean => {
+    const arr = d[pool] as string[] | undefined;
+    return Array.isArray(arr) && arr.includes(v);
+  };
+  const toggle = (pool: keyof AllowedOptions, v: string) => {
+    setDraft((prev) => {
+      const next: AllowedOptions = JSON.parse(JSON.stringify(prev ?? {}));
+      const arr = (next[pool] as string[] | undefined) ?? [];
+      const idx = arr.indexOf(v);
+      if (idx >= 0) arr.splice(idx, 1);
+      else arr.push(v);
+      (next as Record<string, unknown>)[pool] = arr;
+      return next;
+    });
+  };
+
+  const onSave = () => {
+    if (!draft) return;
+    updateModel.mutate({ id: modelId, allowedOptions: draft }, { onSuccess: () => onClose() });
+  };
+
+  return (
+    <DrawerShell title={`Allowed Options · ${m.name}`} onClose={onClose}>
+      <p className={styles.eyebrow} style={{ marginBottom: 'var(--space-3)' }}>
+        Tick the options POS staff can pick from when configuring this Model.
+        Master pools live under Maintenance — ask admin to add new codes there
+        first if you don't see what you need.
+      </p>
+
+      {sizePool.length > 0 && (
+        <AllowedOptionsSection
+          label={isSofa ? 'Seat sizes (inches)' : 'Sizes'}
+          pool={sizePool}
+          isTicked={(v) => isTicked('sizes', v)}
+          onToggle={(v) => toggle('sizes', v)}
+        />
+      )}
+      {isSofa && compartmentPool.length > 0 && (
+        <AllowedOptionsSection
+          label="Compartments"
+          pool={compartmentPool}
+          isTicked={(v) => isTicked('compartments', v)}
+          onToggle={(v) => toggle('compartments', v)}
+        />
+      )}
+      {legHeightPool.length > 0 && (
+        <AllowedOptionsSection
+          label="Leg heights"
+          pool={legHeightPool}
+          isTicked={(v) => isTicked('leg_heights', v)}
+          onToggle={(v) => toggle('leg_heights', v)}
+        />
+      )}
+      {specialPool.length > 0 && (
+        <AllowedOptionsSection
+          label="Specials"
+          pool={specialPool}
+          isTicked={(v) => isTicked('specials', v)}
+          onToggle={(v) => toggle('specials', v)}
+        />
+      )}
+
+      <div style={{ display: 'flex', gap: 'var(--space-2)', justifyContent: 'flex-end', marginTop: 'var(--space-5)' }}>
+        <Button variant="ghost" size="md" onClick={onClose}>
+          <span>Cancel</span>
+        </Button>
+        <Button variant="primary" size="md" onClick={onSave} disabled={updateModel.isPending}>
+          <span>{updateModel.isPending ? 'Saving…' : 'Save'}</span>
+        </Button>
+      </div>
+    </DrawerShell>
+  );
+};
+
+/** Minimal drawer-shell wrapper. Right-slide panel with backdrop. */
+const DrawerShell = ({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) => (
+  <div
+    role="dialog"
+    aria-label={title}
+    style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0, 0, 0, 0.32)',
+      zIndex: 80,
+      display: 'flex',
+      justifyContent: 'flex-end',
+    }}
+    onClick={onClose}
+  >
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        width: 'min(520px, 100vw)',
+        height: '100%',
+        background: 'var(--c-paper)',
+        boxShadow: '-12px 0 32px rgba(0, 0, 0, 0.18)',
+        padding: 'var(--space-5)',
+        overflowY: 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
+        <h2 style={{
+          margin: 0,
+          fontFamily: 'var(--font-title)',
+          fontSize: 'var(--fs-20)',
+          fontWeight: 700,
+          color: 'var(--c-ink)',
+        }}>{title}</h2>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className={styles.maintRowIcon}
+          style={{ color: 'var(--fg-muted)' }}
+        >
+          <X {...ICON_PROPS} />
+        </button>
+      </header>
+      <div style={{ flex: 1, minHeight: 0 }}>{children}</div>
+    </div>
+  </div>
+);
+
+/** Chip-picker row used by ModelAllowedOptionsDrawer. */
+const AllowedOptionsSection = ({
+  label,
+  pool,
+  isTicked,
+  onToggle,
+}: {
+  label: string;
+  pool: string[];
+  isTicked: (v: string) => boolean;
+  onToggle: (v: string) => void;
+}) => (
+  <div style={{ marginBottom: 'var(--space-4)' }}>
+    <div style={{
+      fontFamily: 'var(--font-button)',
+      fontSize: 'var(--fs-12)',
+      fontWeight: 600,
+      letterSpacing: '0.08em',
+      textTransform: 'uppercase',
+      color: 'var(--fg-muted)',
+      marginBottom: 'var(--space-2)',
+    }}>{label}</div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+      {pool.map((v) => {
+        const on = isTicked(v);
+        return (
+          <button
+            key={v}
+            type="button"
+            onClick={() => onToggle(v)}
+            style={{
+              padding: '4px 12px',
+              borderRadius: 999,
+              border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+              background: on ? 'var(--c-orange)' : 'var(--c-cream)',
+              color: on ? 'var(--c-paper)' : 'var(--c-ink)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
+            }}
+          >
+            {v}
+          </button>
+        );
+      })}
+    </div>
+  </div>
+);
 
 /* ════════════════════════════════════════════════════════════════════════
    SKU Master tab
@@ -738,14 +1073,15 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   //   PR #82 — leading checkbox column added (+1, only in full mode).
   //   PR #38 — Configure + History columns removed. Double-click a row to
   //   open the Suppliers drawer.
-  //   - Sofa: [select?] + code + desc + model + N sizes + unit
-  //   - Mattress: [select?] + code + desc + branding + size + price + unit
-  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit
+  //   PR — Commander 2026-05-28: VISIBLE column added (+1 always).
+  //   - Sofa: [select?] + code + desc + model + N sizes + unit + visible
+  //   - Mattress: [select?] + code + desc + branding + size + price + unit + visible
+  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit + visible
   const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
-      : 7);
+      : 7) + 1;
 
   return (
     <>
@@ -916,6 +1252,13 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
+              {/* PR — Commander 2026-05-28: per-SKU visibility toggle.
+                  Sales_director (add-only mode counts here as a permitted
+                  special case per commander explicit ask) + admin can flip
+                  whether a SKU surfaces on the POS Catalog. Toggle flips
+                  mfg_products.status between ACTIVE and INACTIVE; the
+                  Catalog query already filters by status === 'ACTIVE'. */}
+              <th style={{ textAlign: 'center' }}>Visible</th>
             </tr>
           </thead>
           <tbody>
@@ -942,6 +1285,13 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 showSelectCol={canEdit}
                 selected={selectedIds.has(row.id)}
                 onToggleSelected={() => toggleRow(row.id)}
+                /* PR — Commander 2026-05-28: VISIBLE toggle gating. The
+                   toggle is technically an EDIT (mfg_products.status flip);
+                   commander explicitly granted sales_director the right
+                   to flip it as a special case. So canToggleVisible is
+                   true for both 'add-only' (sales_director) and 'full'
+                   (admin); 'view' roles see the toggle but it's disabled. */
+                canToggleVisible={mode !== 'view'}
               />
             ))}
             {!isLoading && !error && rows.length === 0 && (
@@ -994,6 +1344,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
 const ProductRow = ({
   row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
   showSelectCol = true, selected, onToggleSelected,
+  canToggleVisible = false,
 }: {
   row: MfgProductRow;
   editMode: boolean;
@@ -1010,7 +1361,27 @@ const ProductRow = ({
       the checkbox + reports clicks. */
   selected:         boolean;
   onToggleSelected: () => void;
+  /** PR — Commander 2026-05-28: whether the VISIBLE toggle can be flipped.
+      true for sales_director (add-only) and admin (full). View-only roles
+      see the toggle in its current state but the input is disabled. */
+  canToggleVisible?: boolean;
 }) => {
+  /* PR — Commander 2026-05-28: visibility toggle wiring. Flips the
+     mfg_products.status field. Catalog query reads status === 'ACTIVE',
+     so toggle-off pulls the SKU from the customer-facing catalogue while
+     keeping all history/stock intact. Confirm with a native confirm
+     before flipping OFF since visibility lapses have customer impact. */
+  const statusMut = useUpdateMfgProductStatus();
+  const isVisible = row.status === 'ACTIVE';
+  const onFlipVisible = () => {
+    if (!canToggleVisible) return;
+    const next: 'ACTIVE' | 'INACTIVE' = isVisible ? 'INACTIVE' : 'ACTIVE';
+    if (next === 'INACTIVE') {
+      // eslint-disable-next-line no-alert
+      if (!confirm(`Hide ${row.code} from the POS catalog? Customers will no longer see this SKU.`)) return;
+    }
+    statusMut.mutate({ id: row.id, status: next });
+  };
   // Local draft of the seat_height_prices array — buffers user edits before
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
@@ -1207,6 +1578,51 @@ const ProductRow = ({
         </>
       )}
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
+      {/* PR — Commander 2026-05-28: VISIBLE toggle. Per-SKU control over
+          whether this row surfaces on the POS Catalog. Toggle wired to
+          mfg_products.status (ACTIVE / INACTIVE). The pencil icon lands
+          alongside per commander's screenshot — currently inert (Phase 2
+          would open a drawer for per-channel visibility); the toggle by
+          itself handles the catalog-level on/off commander asked for. */}
+      <td
+        style={{ textAlign: 'center', whiteSpace: 'nowrap' }}
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
+          {/* Native checkbox styled as a green toggle pill via CSS in
+              Products.module.css (see .visibleToggle). Falls back to a
+              plain checkbox if the class isn't present. */}
+          <label
+            className={styles.visibleToggle}
+            title={isVisible ? 'Visible on POS catalog' : 'Hidden from POS catalog'}
+            style={{ cursor: canToggleVisible ? 'pointer' : 'not-allowed' }}
+          >
+            <input
+              type="checkbox"
+              aria-label={`Toggle ${row.code} visibility`}
+              checked={isVisible}
+              disabled={!canToggleVisible || statusMut.isPending}
+              onChange={onFlipVisible}
+            />
+            <span aria-hidden="true" />
+          </label>
+          {canToggleVisible && (
+            <button
+              type="button"
+              className={styles.maintRowIcon}
+              title="Edit visibility settings (channel-level — coming soon)"
+              onClick={() => {
+                // eslint-disable-next-line no-alert
+                alert('Per-channel visibility (catalog vs configurator) — Phase 2. The toggle on the left controls the global POS catalog visibility for now.');
+              }}
+              style={{ color: 'var(--fg-muted)' }}
+            >
+              <Edit3 {...ICON_PROPS} />
+            </button>
+          )}
+        </span>
+      </td>
     </tr>
   );
 };
@@ -2814,6 +3230,102 @@ const SofaQuickPresetsList = ({
   );
 };
 
+/* PR — Commander 2026-05-28 (DATA LEAK FIX): selling-price cell on POS
+   Maintenance PricedOption rows. Reads `sellingPriceSen` (the POS-authored
+   selling price); never displays `priceSen` (cost benchmark from Backend).
+   Editable when the caller has rights (admin in editMode or sales_director
+   in add-only mode); display-only otherwise. Empty selling-price shows as
+   "—" so commander can see at-a-glance which rows still need a price set
+   on the POS side. Commits on blur or Enter to avoid spamming POSTs.
+
+   Numeric input is buffered locally so typing "1" → "10" doesn't fire a
+   POST mid-keystroke; commit happens on blur or when the user hits Enter
+   (which blurs the input). null commit clears the field (deletes the
+   sellingPriceSen key from the row so it round-trips back to "—"). */
+const SellingPriceCell = ({
+  opt,
+  editable,
+  onCommit,
+}: {
+  opt: PricedOption;
+  editable: boolean;
+  onCommit: (sellingPriceSen: number | null) => void;
+}) => {
+  const initial = opt.sellingPriceSen != null
+    ? (opt.sellingPriceSen / 100).toFixed(2)
+    : '';
+  const [local, setLocal] = useState<string>(initial);
+
+  // Sync local state when the row's persisted value changes (e.g. after a
+  // refetch from the server). Without this, the cell would freeze on the
+  // user's last typed value across reloads.
+  useEffect(() => { setLocal(initial); }, [initial]);
+
+  const commit = () => {
+    const trimmed = local.trim();
+    if (trimmed === '') {
+      // empty input clears the selling price
+      if (opt.sellingPriceSen != null) onCommit(null);
+      return;
+    }
+    const sen = Math.round(Number(trimmed) * 100);
+    if (Number.isNaN(sen)) {
+      setLocal(initial); // bad input — revert
+      return;
+    }
+    if (sen === (opt.sellingPriceSen ?? -1)) return; // no-op
+    onCommit(sen);
+  };
+
+  if (!editable) {
+    /* View-only branch — sales_executive / outlet_manager / sales.
+       Displays the selling price authored by sales_director, or "—" when
+       unset. NEVER falls back to opt.priceSen (which is commander's cost
+       benchmark on Backend). */
+    return (
+      <span className={styles.maintRowPrice}>
+        {opt.sellingPriceSen != null ? (
+          <>
+            <span className={styles.maintRowRmPrefix}>RM</span>
+            <span>{(opt.sellingPriceSen / 100).toFixed(2)}</span>
+          </>
+        ) : (
+          <span className={styles.maintRowPriceMuted}>—</span>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <span className={styles.maintRowPrice}>
+      <span className={styles.maintRowRmPrefix}>RM</span>
+      <input
+        type="number"
+        step="0.01"
+        placeholder="—"
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') { setLocal(initial); (e.target as HTMLInputElement).blur(); }
+        }}
+        style={{
+          width: 90,
+          textAlign: 'right',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 'var(--fs-14)',
+          background: 'var(--c-cream)',
+          border: '1px solid var(--c-orange)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '4px 8px',
+          outline: 'none',
+        }}
+      />
+    </span>
+  );
+};
+
 const MaintenanceList = ({
   listKey,
   config,
@@ -3162,15 +3674,20 @@ const MaintenanceList = ({
   const addItem = () => {
     const v = draftValue.trim();
     if (!v) return;
-    const priceSen = Math.round((Number(draftPrice) || 0) * 100);
-    const costSenRaw = Math.round((Number(draftCost) || 0) * 100);
+    /* PR — Commander 2026-05-28: POS authors `sellingPriceSen` (the value
+       customers see) NOT priceSen (which Backend treats as cost). New rows
+       added on POS start with priceSen=0 to mark "no cost benchmark yet on
+       Backend" — commander on Backend can fill that in later if needed.
+       The draftPrice input collects the selling price. */
+    const sellingPriceSen = Math.round((Number(draftPrice) || 0) * 100);
     const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
     const arr = (next[listKey] as PricedOption[] | undefined) ?? [];
-    // costSen is opt-in — store only when commander typed a non-zero value
-    // so old rows stay shape-identical (avoids dirty diffs on save).
-    const row: PricedOption = costSenRaw > 0
-      ? { value: v, priceSen, costSen: costSenRaw }
-      : { value: v, priceSen };
+    // priceSen stays 0 on POS-authored rows (no cost benchmark) — Backend
+    // commander can fill it later. costSen left absent. sellingPriceSen is
+    // the selling price the customer pays, set here by sales_director.
+    const row: PricedOption = sellingPriceSen > 0
+      ? { value: v, priceSen: 0, sellingPriceSen }
+      : { value: v, priceSen: 0 };
     arr.push(row);
     (next as Record<string, unknown>)[listKey] = arr;
     // add-only mode: POST immediately. editMode: stash in draft for the
@@ -3218,43 +3735,38 @@ const MaintenanceList = ({
             )}
           </span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-3)', alignItems: 'center', justifyContent: 'flex-end' }}>
-            <span className={styles.maintRowPrice}>
-              <span className={styles.maintRowRmPrefix}>RM</span>
-              {editMode ? (
-                <input
-                  type="number"
-                  step="0.01"
-                  value={(opt.priceSen / 100).toFixed(2)}
-                  onChange={(e) => {
-                    const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
-                    const list = next[listKey] as PricedOption[];
-                    list[i]!.priceSen = Math.round(Number(e.target.value) * 100);
-                    onChange(next);
-                  }}
-                  style={{
-                    width: 90,
-                    textAlign: 'right',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 'var(--fs-14)',
-                    background: 'var(--c-cream)',
-                    border: '1px solid var(--c-orange)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '4px 8px',
-                    outline: 'none',
-                  }}
-                />
-              ) : (
-                <span className={opt.priceSen === 0 ? styles.maintRowPriceMuted : undefined}>
-                  {(opt.priceSen / 100).toFixed(2)}
-                </span>
-              )}
-            </span>
+            {/* PR — Commander 2026-05-28 (DATA LEAK FIX): the legacy
+                priceSen column is now treated as COST on POS — never
+                displayed. Sales_director authors a parallel
+                sellingPriceSen value here, surfaced through this column.
+                view-only roles see the read-only value (or "—" when
+                unset). add-only roles (sales_director) get an inline
+                input + onBlur POSTs immediately. editMode (admin only)
+                keeps the same inline editor with Save-on-blur. */}
+            <SellingPriceCell
+              opt={opt}
+              editable={editMode || addOnly}
+              onCommit={(newSellSen) => {
+                const next = JSON.parse(JSON.stringify(config)) as MaintenanceConfig;
+                const list = next[listKey] as PricedOption[];
+                if (newSellSen == null) {
+                  delete (list[i] as PricedOption).sellingPriceSen;
+                } else {
+                  list[i]!.sellingPriceSen = newSellSen;
+                }
+                // add-only mode: POST immediately (special-case edit per
+                // commander's explicit ask — selling price is the only field
+                // sales_director can mutate without entering full edit mode).
+                // editMode: stash in the parent draft for the Save button.
+                if (addOnly && onQuickAdd) onQuickAdd(next);
+                else onChange(next);
+              }}
+            />
             {/* POS port: parallel COST column (Backend PR #216) is stripped
                 unconditionally on POS — sales-side never sees purchase cost.
-                The costSen field still persists on the row; if commander
-                edits the selling price on POS, the existing costSen value
-                rides along untouched (the mutation payload is the full
-                PricedOption object, not the cost column). */}
+                The legacy priceSen + costSen fields still persist on the row
+                untouched; commander on Backend keeps using them as cost
+                benchmark. POS reads/writes ONLY sellingPriceSen. */}
             {editMode && (
               <button
                 type="button"
@@ -3298,13 +3810,18 @@ const MaintenanceList = ({
             }}
           />
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-            <span className={styles.maintRowRmPrefix}>RM</span>
+            {/* PR — Commander 2026-05-28: this is the SELLING price (what
+                customer pays). priceSen (cost benchmark on Backend) stays at
+                0 for POS-authored rows. */}
+            <span className={styles.maintRowRmPrefix} title="Selling price">RM</span>
             <input
               type="number"
               step="0.01"
               value={draftPrice}
               onChange={(e) => setDraftPrice(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+              placeholder="Selling price"
+              title="Selling price (what the customer pays)"
               style={{
                 width: 90,
                 textAlign: 'right',
@@ -3320,8 +3837,7 @@ const MaintenanceList = ({
             {/* POS port: Operation-side cost input (Backend PR #216) is
                 stripped here. The `draftCost` state still exists upstream
                 to keep the addItem() handler signature stable; on POS we
-                never surface a non-zero cost so addItem stores costSen=0
-                and Backend-side viewers can still set it later. */}
+                never surface a non-zero cost. */}
             <Button variant="primary" size="sm" onClick={addItem}>
               <Plus {...ICON_PROPS} />
               <span>Add</span>

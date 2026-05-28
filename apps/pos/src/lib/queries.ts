@@ -78,6 +78,20 @@ export const useProduct = (productId: string | undefined) =>
     queryKey: ['product', productId],
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
+      /* Legacy path: `products` is the prototype's retail catalogue table.
+         Production starts EMPTY (PORT_DESIGN.md §10 Decision 10) — only
+         the per-Model `mfg_products` is seeded by commander via the
+         Backend SKU Master. POS Catalog cards link to `/configure/{mfg.id}`
+         (the mfg SKU id), so the lookup below misses every time.
+
+         PR — Commander 2026-05-28 (CATALOG ROUTING FIX): when products
+         doesn't have the row, fall back to mfg_products + product_models
+         and synthesise a CatalogProduct-shaped object the Configurator
+         can render. The Configurator only touches a small subset of the
+         columns (recliner_upgrade_price / seat_upgrade_label /
+         seat_upgrade_footrest / depth_options / included_addons / etc.),
+         so defaults are safe for now — sofa pricing data flows in from
+         `useSofaCustomizerData` + `useProductCompartments` regardless. */
       const { data, error } = await supabase
         .from('products')
         .select(
@@ -86,12 +100,72 @@ export const useProduct = (productId: string | undefined) =>
         .eq('id', productId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) throw new Error('not_found');
-      return data as typeof data & {
-        included_addons: { addonId: string; qty: number }[];
-        seat_upgrade_label: string | null;
-        seat_upgrade_footrest: boolean;
-        depth_options: string | null;
+      if (data) {
+        return data as typeof data & {
+          included_addons: { addonId: string; qty: number }[];
+          seat_upgrade_label: string | null;
+          seat_upgrade_footrest: boolean;
+          depth_options: string | null;
+        };
+      }
+
+      /* Fallback: look up by mfg_products.id (what the Catalog cards link
+         to). mfg category enum → legacy pricing_kind. SOFA → 'sofa_build',
+         BEDFRAME → 'bedframe_build', MATTRESS → 'size_variants', everything
+         else → 'flat'. Keeps the Configurator's existing branch logic
+         working without porting it to talk to mfg_products directly. */
+      const { data: mfgData, error: mfgErr } = await supabase
+        .from('mfg_products')
+        .select(
+          'id, code, name, category, description, branding, size_label, base_price_sen',
+        )
+        .eq('id', productId)
+        .maybeSingle();
+      if (mfgErr) throw mfgErr;
+      if (!mfgData) throw new Error('not_found');
+
+      const mfg = mfgData as {
+        id: string;
+        code: string;
+        name: string;
+        category: 'SOFA' | 'BEDFRAME' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE';
+        description: string | null;
+        branding: string | null;
+        size_label: string | null;
+        base_price_sen: number | null;
+      };
+
+      const pricingKind: 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat' =
+        mfg.category === 'SOFA'     ? 'sofa_build'     :
+        mfg.category === 'BEDFRAME' ? 'bedframe_build' :
+        mfg.category === 'MATTRESS' ? 'size_variants'  :
+                                       'flat';
+
+      // Synthesise a row shape matching the products select() above so
+      // downstream code that reads `product.data?.foo` keeps working.
+      // base_price_sen is in sen (cents); flat_price expects ringgit
+      // (legacy schema uses whole-RM integers — see CLAUDE.md "Money").
+      return {
+        id: mfg.id,
+        sku: mfg.code,
+        name: mfg.name,
+        detail: mfg.description,
+        size_display: mfg.size_label,
+        img_key: null,
+        thumb_key: null,
+        pricing_kind: pricingKind,
+        flat_price: mfg.base_price_sen != null ? Math.round(mfg.base_price_sen / 100) : null,
+        recliner_upgrade_price: 0,
+        seat_upgrade_label: null,
+        seat_upgrade_footrest: true,
+        depth_options: null,
+        stock: 0,
+        low_at: 0,
+        visible: true,
+        category_id: null,
+        series_id: null,
+        included_addons: [] as { addonId: string; qty: number }[],
+        updated_at: new Date().toISOString(),
       };
     },
   });
