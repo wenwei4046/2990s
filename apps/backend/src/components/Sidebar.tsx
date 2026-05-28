@@ -28,6 +28,7 @@ import {
   ShieldCheck,
   ChevronDown,
   ListTree,
+  Activity,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import styles from './Sidebar.module.css';
@@ -251,6 +252,7 @@ export const Sidebar = () => {
           <>
             <div className={styles.navGroup}>Administration</div>
             {renderLink({ to: '/users', icon: <ShieldCheck {...ICON_PROPS} />, label: 'Users' })}
+            {renderLink({ to: '/system-health', icon: <Activity {...ICON_PROPS} />, label: 'System Health' })}
           </>
         )}
       </nav>
