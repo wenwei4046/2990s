@@ -1,8 +1,9 @@
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router';
 import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
+import { CommandPalette } from './CommandPalette';
 import { ToastProvider } from './Toast';
 import { ErrorBoundary } from './ErrorBoundary';
 import { SkeletonDetailPage } from './Skeleton';
@@ -44,6 +45,20 @@ export const Layout = () => {
   const { user, staff, loading } = useAuth();
   const location = useLocation();
 
+  // Global Ctrl/Cmd+K command palette. Hook runs unconditionally (before any
+  // early return) to satisfy the rules of hooks.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   if (loading) return <div className={styles.loading}>Loading…</div>;
   if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
 
@@ -76,6 +91,7 @@ export const Layout = () => {
             title={meta.title}
             sub={meta.sub}
             searchPlaceholder={meta.searchPlaceholder}
+            onOpenSearch={() => setPaletteOpen(true)}
           />
           <main className={styles.main}>
             {/* Single Suspense boundary for all lazy-loaded route pages.
@@ -89,6 +105,7 @@ export const Layout = () => {
             </Suspense>
           </main>
         </div>
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>
     </ToastProvider>
   );

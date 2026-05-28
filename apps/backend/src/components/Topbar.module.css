@@ -16,6 +16,51 @@
   min-width: 0;
 }
 
+/* Breadcrumbs (Commander 2026-05-29 — UI/UX reorg). */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 2px;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.02em;
+}
+.crumbLink { color: var(--fg-muted); text-decoration: none; }
+.crumbLink:hover { color: var(--c-orange); }
+.crumbSep { color: var(--fg-muted); opacity: 0.6; flex: none; }
+.crumbGroup { color: var(--fg-muted); }
+.crumbCurrent { color: var(--fg); }
+
+/* Global Ctrl+K "Jump to" trigger. */
+.cmdK {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--c-cream);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms;
+}
+.cmdK:hover { border-color: var(--c-orange); color: var(--fg); }
+.cmdKText { font-family: var(--font-sans); font-size: var(--fs-12); }
+.cmdKKbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-family: var(--font-mono, var(--font-sans));
+  font-size: var(--fs-11);
+  color: var(--fg-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 5px;
+  background: #fff;
+}
+
 .title {
   font-family: var(--font-title);
   font-weight: var(--w-bold);
