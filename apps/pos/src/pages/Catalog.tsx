@@ -58,6 +58,38 @@ interface CatalogCard {
   skuCodes:    string[];
 }
 
+/* Commander 2026-05-28: drop the trailing "(K)" / "(Q)" / "(7FT)" /
+   "(L)" type size suffix from a SKU description string so the catalog
+   card reads as a model, not a single-size line item. Matches both
+   1-letter mattress size codes (K, Q, S, SS, SK, SP) and free-form
+   parenthesised sizes (numeric, FT, CM, etc.). Returns null/empty
+   unchanged. Trailing whitespace cleaned up too. */
+function stripSizeSuffix(s: string | null | undefined): string | null {
+  if (!s) return s ?? null;
+  return s.replace(/\s*\([^()]+\)\s*$/, '').trim() || null;
+}
+
+/* Commander 2026-05-28: bucket the filtered cards by branding so the
+   catalog renders one section per brand (HAPPI.S / 2990 / Other). Sort
+   ordering: non-null brands alphabetical, "Other" last. Cards within
+   each section keep their existing global name-sort order. */
+function groupByBranding(cards: CatalogCard[]): { branding: string; items: CatalogCard[] }[] {
+  const map = new Map<string, CatalogCard[]>();
+  for (const c of cards) {
+    const key = (c.branding ?? '').trim() || 'Other';
+    let arr = map.get(key);
+    if (!arr) { arr = []; map.set(key, arr); }
+    arr.push(c);
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => {
+      if (a[0] === 'Other') return 1;
+      if (b[0] === 'Other') return -1;
+      return a[0].localeCompare(b[0]);
+    })
+    .map(([branding, items]) => ({ branding, items }));
+}
+
 function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
   const groups = new Map<string, CatalogCard>();
   for (const r of rows) {
@@ -77,7 +109,12 @@ function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
       // Prefer the Model's name (clean — "ADDA") over the SKU's name
       // ("SOFA ADDA 1A(LHF)") so cards read like a product, not a line item.
       name:         r.modelName ?? r.name,
-      description:  r.description,
+      /* Commander 2026-05-28: strip the trailing size suffix from the
+         displayed detail line so cards show "2990 AKKA-FIRM MATT" instead
+         of "2990 AKKA-FIRM MATT (K)". Matches "(K)" / "(Q)" / "(SS)" /
+         numeric variants and any trailing size-only parens. Same rule
+         applies to sofa size suffixes ("(7FT)" etc.). */
+      description:  stripSizeSuffix(r.description),
       branding:     r.branding,
       photoUrl:     r.photoUrl,
       leadSku:      r.code,
@@ -288,9 +325,42 @@ export const Catalog = () => {
                 </button>
               </div>
             ) : (
-              <div className={styles.grid}>
-                {filtered.map((p) => <ProductCard key={p.modelKey} p={p} />)}
-              </div>
+              /* Commander 2026-05-28: group by branding. 2990 has 2 brands
+                 (2990, HAPPI.S); each renders as a section with a header
+                 chip + its own card grid. Null/empty branding lands in
+                 "Other". Card layout inside each section reuses the
+                 existing .grid CSS class so spacing/columns stay identical. */
+              groupByBranding(filtered).map(({ branding, items }) => (
+                <section key={branding} style={{ marginBottom: 24 }}>
+                  <header style={{
+                    display: 'flex', alignItems: 'baseline', gap: 8,
+                    padding: '4px 0 8px',
+                  }}>
+                    <span style={{
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-12)',
+                      fontWeight: 700,
+                      letterSpacing: 0.5,
+                      textTransform: 'uppercase',
+                      background: 'var(--c-paper)',
+                      color: 'var(--c-ink)',
+                      border: '1px solid var(--line-strong)',
+                      padding: '2px 10px',
+                      borderRadius: 'var(--radius-pill, 999px)',
+                    }}>{branding}</span>
+                    <span style={{
+                      fontFamily: 'var(--font-sans)',
+                      fontSize: 'var(--fs-11)',
+                      color: 'var(--fg-muted)',
+                    }}>
+                      {items.length} {items.length === 1 ? 'piece' : 'pieces'}
+                    </span>
+                  </header>
+                  <div className={styles.grid}>
+                    {items.map((p) => <ProductCard key={p.modelKey} p={p} />)}
+                  </div>
+                </section>
+              ))
             )}
           </section>
 
