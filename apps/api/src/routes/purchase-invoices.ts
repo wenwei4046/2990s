@@ -28,6 +28,99 @@ purchaseInvoices.get('/', async (c) => {
   return c.json({ purchaseInvoices: data ?? [] });
 });
 
+/* ── GET /outstanding-grn-items ─────────────────────────────────────────
+   Returns GRN LINES eligible for invoicing. MVP trade-off (Commander
+   2026-05-27, see task #52): grn_items has no `invoiced_qty` column, so
+   we can't track per-line how much has already been invoiced. Simplest
+   correct behaviour: list lines from POSTED GRNs that don't yet have ANY
+   parent PI (i.e. all-or-nothing per GRN). Once a GRN is invoiced (even
+   one line), the whole GRN drops out of the picker.
+   TODO: add grn_items.invoiced_qty + per-line tracking when partial
+   invoicing across multiple PIs becomes a real customer need.
+
+   IMPORTANT (route ordering): this STATIC path MUST be registered before
+   the `/:id` param route below — otherwise Hono matches `/:id` first and
+   tries to cast "outstanding-grn-items" to a uuid → 500. (Bug fix
+   2026-05-28, same class as the PO-from-SO shadowing.) */
+purchaseInvoices.get('/outstanding-grn-items', async (c) => {
+  const sb = c.get('supabase');
+  // Pull every POSTED GRN with its supplier + parent PO so we can group
+  // and present in the picker.
+  const { data: grnHeaders, error: hErr } = await sb
+    .from('grns')
+    .select(`
+      id, grn_number, received_at, supplier_id, purchase_order_id,
+      supplier:suppliers ( code, name ),
+      purchase_order:purchase_orders ( po_number )
+    `)
+    .eq('status', 'POSTED')
+    .order('received_at', { ascending: false })
+    .limit(500);
+  if (hErr) return c.json({ error: 'load_failed', reason: hErr.message }, 500);
+  const headers = (grnHeaders ?? []) as unknown as Array<{
+    id: string; grn_number: string; received_at: string; supplier_id: string;
+    purchase_order_id: string | null;
+    supplier: { code: string; name: string } | null;
+    purchase_order: { po_number: string } | null;
+  }>;
+  if (headers.length === 0) return c.json({ items: [] });
+
+  // Drop any GRN that already has a PI on it (header-level dedupe per MVP).
+  const grnIds = headers.map((h) => h.id);
+  const { data: pisOnTheseGrns } = await sb
+    .from('purchase_invoices')
+    .select('grn_id')
+    .in('grn_id', grnIds);
+  const invoicedGrnIds = new Set(
+    ((pisOnTheseGrns ?? []) as Array<{ grn_id: string | null }>)
+      .map((r) => r.grn_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const openGrns = headers.filter((h) => !invoicedGrnIds.has(h.id));
+  if (openGrns.length === 0) return c.json({ items: [] });
+
+  // Now load the GRN items for the remaining GRNs.
+  const openIds = openGrns.map((h) => h.id);
+  const { data: items, error: iErr } = await sb
+    .from('grn_items')
+    .select(`
+      id, grn_id, material_kind, material_code, material_name, item_group,
+      description, qty_accepted, qty_rejected, unit_price_centi, variants
+    `)
+    .in('grn_id', openIds);
+  if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
+
+  const headerById = new Map(openGrns.map((h) => [h.id, h]));
+  const out = ((items ?? []) as Array<{
+    id: string; grn_id: string; material_kind: string; material_code: string;
+    material_name: string; item_group: string | null; description: string | null;
+    qty_accepted: number; qty_rejected: number; unit_price_centi: number; variants: unknown;
+  }>)
+    .filter((r) => r.qty_accepted > 0)
+    .map((r) => {
+      const h = headerById.get(r.grn_id)!;
+      return {
+        grnItemId:      r.id,
+        grnId:          r.grn_id,
+        grnDocNo:       h.grn_number,
+        receivedAt:     h.received_at,
+        supplierId:     h.supplier_id,
+        supplierCode:   h.supplier?.code ?? '',
+        supplierName:   h.supplier?.name ?? '',
+        purchaseOrderId: h.purchase_order_id,
+        poDocNo:        h.purchase_order?.po_number ?? null,
+        itemCode:       r.material_code,
+        description:    r.description ?? r.material_name,
+        itemGroup:      r.item_group ?? '',
+        qtyAccepted:    r.qty_accepted,
+        unitPriceCenti: r.unit_price_centi,
+        variants:       r.variants,
+      };
+    });
+
+  return c.json({ items: out });
+});
+
 purchaseInvoices.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
@@ -166,94 +259,6 @@ purchaseInvoices.patch('/:id/cancel', async (c) => {
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
   return c.json({ purchaseInvoice: data });
-});
-
-/* ── GET /outstanding-grn-items ─────────────────────────────────────────
-   Returns GRN LINES eligible for invoicing. MVP trade-off (Commander
-   2026-05-27, see task #52): grn_items has no `invoiced_qty` column, so
-   we can't track per-line how much has already been invoiced. Simplest
-   correct behaviour: list lines from POSTED GRNs that don't yet have ANY
-   parent PI (i.e. all-or-nothing per GRN). Once a GRN is invoiced (even
-   one line), the whole GRN drops out of the picker.
-   TODO: add grn_items.invoiced_qty + per-line tracking when partial
-   invoicing across multiple PIs becomes a real customer need. */
-purchaseInvoices.get('/outstanding-grn-items', async (c) => {
-  const sb = c.get('supabase');
-  // Pull every POSTED GRN with its supplier + parent PO so we can group
-  // and present in the picker.
-  const { data: grnHeaders, error: hErr } = await sb
-    .from('grns')
-    .select(`
-      id, grn_number, received_at, supplier_id, purchase_order_id,
-      supplier:suppliers ( code, name ),
-      purchase_order:purchase_orders ( po_number )
-    `)
-    .eq('status', 'POSTED')
-    .order('received_at', { ascending: false })
-    .limit(500);
-  if (hErr) return c.json({ error: 'load_failed', reason: hErr.message }, 500);
-  const headers = (grnHeaders ?? []) as unknown as Array<{
-    id: string; grn_number: string; received_at: string; supplier_id: string;
-    purchase_order_id: string | null;
-    supplier: { code: string; name: string } | null;
-    purchase_order: { po_number: string } | null;
-  }>;
-  if (headers.length === 0) return c.json({ items: [] });
-
-  // Drop any GRN that already has a PI on it (header-level dedupe per MVP).
-  const grnIds = headers.map((h) => h.id);
-  const { data: pisOnTheseGrns } = await sb
-    .from('purchase_invoices')
-    .select('grn_id')
-    .in('grn_id', grnIds);
-  const invoicedGrnIds = new Set(
-    ((pisOnTheseGrns ?? []) as Array<{ grn_id: string | null }>)
-      .map((r) => r.grn_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const openGrns = headers.filter((h) => !invoicedGrnIds.has(h.id));
-  if (openGrns.length === 0) return c.json({ items: [] });
-
-  // Now load the GRN items for the remaining GRNs.
-  const openIds = openGrns.map((h) => h.id);
-  const { data: items, error: iErr } = await sb
-    .from('grn_items')
-    .select(`
-      id, grn_id, material_kind, material_code, material_name, item_group,
-      description, qty_accepted, qty_rejected, unit_price_centi, variants
-    `)
-    .in('grn_id', openIds);
-  if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
-
-  const headerById = new Map(openGrns.map((h) => [h.id, h]));
-  const out = ((items ?? []) as Array<{
-    id: string; grn_id: string; material_kind: string; material_code: string;
-    material_name: string; item_group: string | null; description: string | null;
-    qty_accepted: number; qty_rejected: number; unit_price_centi: number; variants: unknown;
-  }>)
-    .filter((r) => r.qty_accepted > 0)
-    .map((r) => {
-      const h = headerById.get(r.grn_id)!;
-      return {
-        grnItemId:      r.id,
-        grnId:          r.grn_id,
-        grnDocNo:       h.grn_number,
-        receivedAt:     h.received_at,
-        supplierId:     h.supplier_id,
-        supplierCode:   h.supplier?.code ?? '',
-        supplierName:   h.supplier?.name ?? '',
-        purchaseOrderId: h.purchase_order_id,
-        poDocNo:        h.purchase_order?.po_number ?? null,
-        itemCode:       r.material_code,
-        description:    r.description ?? r.material_name,
-        itemGroup:      r.item_group ?? '',
-        qtyAccepted:    r.qty_accepted,
-        unitPriceCenti: r.unit_price_centi,
-        variants:       r.variants,
-      };
-    });
-
-  return c.json({ items: out });
 });
 
 /* ── POST /from-grn-items ───────────────────────────────────────────────

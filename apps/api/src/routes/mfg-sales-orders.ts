@@ -328,6 +328,83 @@ mfgSalesOrders.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
+     path so the API matches what the SO Detail edit page already blocks.
+     (Bug: the create path let through both "delivery date without a processing
+     date" AND a sofa+mattress mixed cart — the test batch hit both.)
+       1. Processing Date + Delivery Date are all-or-nothing — never one without
+          the other (mirrors the edit page's "must be set together" guard).
+       2. SOFA is exclusive among MAIN products (sofa / bedframe / mattress):
+          a sofa SO may NOT also contain a bedframe or mattress. SERVICE and
+          ACCESSORY (and other add-on lines) ride on ANY SO — they never trip
+          this. (Commander 2026-05-28: "main product 不能添加…但 service 或
+          accessory 什么 products 都可以配".)
+       3. All MATTRESS lines in one SO must share ONE brand — different mattress
+          brands bill on separate SOs. (Bedframe may ride with a single-brand
+          mattress; that combo stays allowed.) */
+  {
+    const procDate  = (body.internalExpectedDd  as string | null | undefined) || null;
+    const delivDate = (body.customerDeliveryDate as string | null | undefined) || null;
+    if (Boolean(procDate) !== Boolean(delivDate)) {
+      return c.json({
+        error: 'processing_delivery_must_pair',
+        reason: 'Processing Date and Delivery Date must be set together (or both left empty).',
+      }, 400);
+    }
+    if (items.length > 0) {
+      const lineCodes = items.map((it) => String(it.itemCode ?? '')).filter(Boolean);
+      const metaByCode = new Map<string, { category: string; branding: string | null }>();
+      if (lineCodes.length > 0) {
+        const { data: meta } = await sb
+          .from('mfg_products')
+          .select('code, category, branding')
+          .in('code', lineCodes);
+        for (const m of (meta ?? []) as Array<{ code: string; category: string; branding: string | null }>) {
+          metaByCode.set(m.code, { category: m.category, branding: m.branding });
+        }
+      }
+      const normCat = (raw: string): string => {
+        const g = (raw ?? '').trim().toUpperCase();
+        if (g.includes('BEDFRAME')) return 'BEDFRAME';
+        if (g.includes('SOFA'))     return 'SOFA';
+        if (g.includes('MATTRESS')) return 'MATTRESS';
+        if (g.includes('ACCESSOR')) return 'ACCESSORY';
+        if (g.includes('SERVICE'))  return 'SERVICE';
+        return 'OTHERS';
+      };
+      // MAIN products carry the mixing constraints; SERVICE / ACCESSORY /
+      // OTHERS are universal add-ons that ride on any SO.
+      const MAIN = new Set(['SOFA', 'BEDFRAME', 'MATTRESS']);
+      const cats = items.map((it) =>
+        normCat(metaByCode.get(String(it.itemCode ?? ''))?.category ?? (it.itemGroup as string) ?? ''),
+      );
+      // Rule 2 — sofa is exclusive among MAIN products: no bedframe / mattress
+      // alongside a sofa. Service / accessory add-ons are always fine.
+      if (cats.includes('SOFA') && cats.some((cat) => cat !== 'SOFA' && MAIN.has(cat))) {
+        return c.json({
+          error: 'so_sofa_no_other_main',
+          reason: 'A sofa Sales Order cannot also contain a bedframe or mattress. Service and accessory items are fine.',
+        }, 400);
+      }
+      // Rule 3 — single mattress brand. Null/empty brand → 2990 house brand so
+      // two unbranded 2990 mattresses don't false-trip the guard.
+      const brands = new Set<string>();
+      items.forEach((it, i) => {
+        if (cats[i] !== 'MATTRESS') return;
+        const b = (metaByCode.get(String(it.itemCode ?? ''))?.branding ?? '').trim().toUpperCase() || '2990';
+        brands.add(b);
+      });
+      if (brands.size > 1) {
+        return c.json({
+          error: 'so_mattress_one_brand',
+          reason: 'All mattress lines in one Sales Order must be the same brand. Split different mattress brands into separate SOs.',
+          brands: [...brands],
+        }, 400);
+      }
+    }
+  }
+
   const docNo = await nextDocNo(sb);
 
   /* Migration 0086 — auto-stamp venue_id from the caller's staff.venue_id
