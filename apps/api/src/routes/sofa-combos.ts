@@ -44,6 +44,7 @@ type Row = {
   modules: ComboSlots;   // jsonb string[][] — OR-set per slot
   tier: Tier;
   customer_id: string | null;
+  supplier_id: string | null;
   prices_by_height: Record<string, number | null>;
   label: string | null;
   effective_from: string;
@@ -61,6 +62,7 @@ function rowToWire(r: Row) {
     modules: r.modules,
     tier: r.tier,
     customerId: r.customer_id,
+    supplierId: r.supplier_id,
     pricesByHeight: r.prices_by_height ?? {},
     label: r.label,
     effectiveFrom: r.effective_from,
@@ -120,18 +122,23 @@ function validatePricesByHeight(v: unknown): Record<string, number | null> | nul
 // Query params:
 //   baseModel?  — filter to one base model
 //   customerId? — filter to one customer ('' or '__all__' = NULL scope only)
+//   supplierId? — filter to one supplier's purchasing-scope combos. When
+//                 omitted the list returns the sales-side / master combos
+//                 (supplier_id IS NULL) so the Products page is unaffected by
+//                 supplier rows.
 //   includeAll? — '1' to skip the "active only" reducer (returns every row;
 //                 used by the History drawer).
 sofaCombos.get('/', async (c) => {
   const supabase = c.get('supabase');
   const baseModel = (c.req.query('baseModel') ?? '').trim();
   const customerIdRaw = c.req.query('customerId');
+  const supplierIdRaw = c.req.query('supplierId');
   const includeAll = c.req.query('includeAll') === '1';
 
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .order('base_model', { ascending: true })
@@ -147,6 +154,15 @@ sofaCombos.get('/', async (c) => {
     } else {
       q = q.eq('customer_id', customerIdRaw);
     }
+  }
+
+  // Supplier scope. Provided = that supplier's combos. Omitted (or explicitly
+  // the NULL sentinels) = sales-side / master combos so the Products page
+  // never sees supplier rows.
+  if (supplierIdRaw !== undefined && supplierIdRaw !== '' && supplierIdRaw !== 'null') {
+    q = q.eq('supplier_id', supplierIdRaw);
+  } else {
+    q = q.is('supplier_id', null);
   }
 
   const { data, error } = await q;
@@ -171,6 +187,7 @@ sofaCombos.get('/', async (c) => {
       comboSlotsKey(r.modules ?? []),
       r.tier,
       r.customer_id,
+      r.supplier_id,
     ]);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -188,6 +205,7 @@ sofaCombos.get('/history', async (c) => {
   const baseModel = (c.req.query('baseModel') ?? '').trim();
   const tierRaw = (c.req.query('tier') ?? '').trim();
   const customerIdRaw = c.req.query('customerId');
+  const supplierIdRaw = c.req.query('supplierId');
   const modulesRaw = c.req.query('modules');
 
   if (!baseModel) return c.json({ error: 'base_model_required' }, 400);
@@ -210,7 +228,7 @@ sofaCombos.get('/history', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .eq('base_model', baseModel)
@@ -224,6 +242,14 @@ sofaCombos.get('/history', async (c) => {
     q = q.is('customer_id', null);
   } else {
     q = q.eq('customer_id', customerIdRaw);
+  }
+
+  // Supplier scope — same convention as GET /: provided = that supplier;
+  // omitted / NULL sentinels = sales-side history (supplier_id IS NULL).
+  if (supplierIdRaw !== undefined && supplierIdRaw !== '' && supplierIdRaw !== 'null') {
+    q = q.eq('supplier_id', supplierIdRaw);
+  } else {
+    q = q.is('supplier_id', null);
   }
 
   const { data, error } = await q;
@@ -252,6 +278,7 @@ sofaCombos.post('/', async (c) => {
     modules?: unknown;
     tier?: string | null;
     customerId?: string | null;
+    supplierId?: string | null;
     pricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
@@ -283,6 +310,12 @@ sofaCombos.post('/', async (c) => {
       ? null
       : body.customerId;
 
+  // Supplier scope — null when absent = sales-side / master combo.
+  const supplierId =
+    body.supplierId === null || body.supplierId === '' || body.supplierId === undefined
+      ? null
+      : body.supplierId;
+
   const prices = validatePricesByHeight(body.pricesByHeight);
   if (!prices) return c.json({ error: 'prices_by_height_invalid' }, 400);
 
@@ -301,6 +334,7 @@ sofaCombos.post('/', async (c) => {
       modules,
       tier,
       customer_id: customerId,
+      supplier_id: supplierId,
       prices_by_height: prices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
@@ -308,7 +342,7 @@ sofaCombos.post('/', async (c) => {
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
@@ -333,7 +367,7 @@ sofaCombos.put('/:id', async (c) => {
 
   const { data: orig, error: findErr } = await supabase
     .from('sofa_combo_pricing')
-    .select('base_model, modules, tier, customer_id')
+    .select('base_model, modules, tier, customer_id, supplier_id')
     .eq('id', id)
     .maybeSingle();
   if (findErr) return c.json({ error: 'load_failed', reason: findErr.message }, 500);
@@ -344,6 +378,7 @@ sofaCombos.put('/:id', async (c) => {
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
+    supplierId?: string | null;
   };
   try {
     body = (await c.req.json()) as typeof body;
@@ -359,6 +394,16 @@ sofaCombos.put('/:id', async (c) => {
     return c.json({ error: 'effective_from_required', message: 'YYYY-MM-DD' }, 400);
   }
 
+  // Supplier scope is part of the combo's identity, so the new effective row
+  // stays in the SAME supplier scope as the original (same as customer_id).
+  // An explicit supplierId in the body may override it (null = sales-side).
+  const supplierId =
+    body.supplierId === undefined
+      ? (orig as { supplier_id: string | null }).supplier_id
+      : body.supplierId === null || body.supplierId === ''
+        ? null
+        : body.supplierId;
+
   const user = c.get('user');
   const { data, error } = await supabase
     .from('sofa_combo_pricing')
@@ -367,6 +412,7 @@ sofaCombos.put('/:id', async (c) => {
       modules:    (orig as { modules: ComboSlots }).modules,
       tier:       (orig as { tier: Tier }).tier,
       customer_id: (orig as { customer_id: string | null }).customer_id,
+      supplier_id: supplierId,
       prices_by_height: prices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
@@ -374,7 +420,7 @@ sofaCombos.put('/:id', async (c) => {
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();

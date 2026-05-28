@@ -40,6 +40,7 @@ export type SofaComboRule = {
   modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
+  supplierId: string | null;
   pricesByHeight: Record<string, number | null>;
   label: string | null;
   effectiveFrom: string;
@@ -56,6 +57,8 @@ export type NewSofaCombo = {
   modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
+  /** Supplier scope. null/undefined = sales-side / master combo. */
+  supplierId?: string | null;
   pricesByHeight: Record<string, number | null>;
   label?: string | null;
   effectiveFrom: string;
@@ -65,6 +68,8 @@ export type NewSofaCombo = {
 export type ComboFilters = {
   baseModel?: string;
   customerId?: string | null;  // null = '__all__' scope; undefined = no filter
+  /** Supplier scope. Set = that supplier's combos; unset = sales-side. */
+  supplierId?: string;
 };
 
 export function useSofaCombos(filters: ComboFilters = {}) {
@@ -75,6 +80,7 @@ export function useSofaCombos(filters: ComboFilters = {}) {
       if (filters.baseModel) params.set('baseModel', filters.baseModel);
       if (filters.customerId === null) params.set('customerId', '__all__');
       else if (filters.customerId) params.set('customerId', filters.customerId);
+      if (filters.supplierId) params.set('supplierId', filters.supplierId);
       const qs = params.toString();
       return authedFetch<{ rules: SofaComboRule[] }>(
         `/sofa-combos${qs ? `?${qs}` : ''}`,
@@ -89,6 +95,8 @@ export function useSofaComboHistory(args: {
   modules: string[][];
   tier: SofaPriceTier | null;
   customerId: string | null;
+  /** Supplier scope. Set = that supplier's history; unset = sales-side. */
+  supplierId?: string | null;
 } | null) {
   return useQuery({
     queryKey: ['sofa-combos-history', args],
@@ -101,6 +109,7 @@ export function useSofaComboHistory(args: {
       params.set('modules', JSON.stringify(args.modules));
       if (args.tier) params.set('tier', args.tier);
       if (args.customerId) params.set('customerId', args.customerId);
+      if (args.supplierId) params.set('supplierId', args.supplierId);
       return authedFetch<{ rules: SofaComboRule[] }>(
         `/sofa-combos/history?${params.toString()}`,
       ).then((r) => r.rules);
@@ -128,17 +137,19 @@ export function useUpdateSofaCombo() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
-      id, pricesByHeight, label, effectiveFrom, notes,
+      id, pricesByHeight, label, effectiveFrom, notes, supplierId,
     }: {
       id: string;
       pricesByHeight: Record<string, number | null>;
       label?: string | null;
       effectiveFrom: string;
       notes?: string | null;
+      /** Supplier scope. Omit to keep the original row's scope. */
+      supplierId?: string | null;
     }) =>
       authedFetch<SofaComboRule>(`/sofa-combos/${id}`, {
         method: 'PUT',
-        body: JSON.stringify({ pricesByHeight, label, effectiveFrom, notes }),
+        body: JSON.stringify({ pricesByHeight, label, effectiveFrom, notes, supplierId }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sofa-combos'] });

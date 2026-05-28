@@ -27,6 +27,7 @@ import {
   Tag, ChevronDown, ChevronRight, Download, Upload,
 } from 'lucide-react';
 import { MaintenanceTab, type MaintenanceSection } from './Products';
+import { SofaComboTab } from '../components/SofaComboTab';
 import { Button } from '@2990s/design-system';
 import {
   useSupplierDetail,
@@ -161,7 +162,7 @@ function mfgCategoryFromSupplierCategory(
   }
 }
 
-type SupplierDetailTab = 'overview' | 'pricing';
+type SupplierDetailTab = 'overview' | 'sku-pricing' | 'maintenance' | 'combos';
 
 export const SupplierDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -172,9 +173,13 @@ export const SupplierDetail = () => {
   const bindings = detail.data?.bindings ?? [];
   const score = scorecard.data;
 
-  // PR #208 — top-level tab on the SupplierDetail page (Overview / Pricing).
-  // Pricing surfaces the same MaintenanceTab UI from Products, scoped to
-  // this supplier and filtered by category.
+  // Top-level tabs on the SupplierDetail page:
+  //   Overview      — KPIs + recent PO history (the supplier scorecard).
+  //   SKU Pricing   — the supplier's SKU mappings + per-SKU price matrix.
+  //   Maintenance   — supplier-scoped MaintenanceTab (surcharges), same UI as
+  //                   Products, filtered by the supplier's category.
+  //   Combo Pricing — supplier-scoped Sofa Combo deals (feeds PO auto-pricing
+  //                   in a later phase).
   const [activeTab, setActiveTab] = useState<SupplierDetailTab>('overview');
   const supplierCategory: SupplierCategory | null = isSupplierCategory(supplier?.category)
     ? supplier!.category
@@ -262,7 +267,7 @@ export const SupplierDetail = () => {
         onClose={() => setEditingInfo(false)}
       />
 
-      {/* ── PR #208: Overview / Pricing tab strip ──────────────────── */}
+      {/* ── Tab strip: Overview / SKU Pricing / Maintenance / Combo ── */}
       <div
         role="tablist"
         style={{
@@ -279,10 +284,29 @@ export const SupplierDetail = () => {
           Overview
         </SupplierTabButton>
         <SupplierTabButton
-          active={activeTab === 'pricing'}
-          onClick={() => setActiveTab('pricing')}
+          active={activeTab === 'sku-pricing'}
+          onClick={() => setActiveTab('sku-pricing')}
         >
-          Pricing
+          SKU Pricing
+          <span
+            style={{
+              marginLeft: 'var(--space-2)',
+              padding: '0 var(--space-2)',
+              borderRadius: 'var(--radius-pill)',
+              background: 'var(--c-paper)',
+              border: '1px solid var(--line)',
+              fontSize: 'var(--fs-11)',
+              color: 'var(--fg-muted)',
+            }}
+          >
+            {bindings.length}
+          </span>
+        </SupplierTabButton>
+        <SupplierTabButton
+          active={activeTab === 'maintenance'}
+          onClick={() => setActiveTab('maintenance')}
+        >
+          Maintenance
           {supplierCategory && (
             <span
               style={{
@@ -299,24 +323,48 @@ export const SupplierDetail = () => {
             </span>
           )}
         </SupplierTabButton>
+        <SupplierTabButton
+          active={activeTab === 'combos'}
+          onClick={() => setActiveTab('combos')}
+        >
+          Combo Pricing
+        </SupplierTabButton>
       </div>
 
-      {activeTab === 'pricing' ? (
+      {activeTab === 'overview' && (
+        <SupplierOverviewPanel
+          score={score}
+          otrTone={otrTone}
+          defectTone={defectTone}
+        />
+      )}
+      {activeTab === 'sku-pricing' && (
+        <SupplierSkuPricingPanel
+          id={id!}
+          supplierCode={supplier.code}
+          bindings={bindings}
+          setSkuDialog={setSkuDialog}
+        />
+      )}
+      {activeTab === 'maintenance' && (
         <SupplierPricingPanel
           supplierId={id!}
           supplierName={supplier.name}
           supplierCategory={supplierCategory}
         />
-      ) : (
-        <SupplierOverviewPanel
-          id={id!}
-          supplierCode={supplier.code}
-          bindings={bindings}
-          score={score}
-          otrTone={otrTone}
-          defectTone={defectTone}
-          setSkuDialog={setSkuDialog}
-        />
+      )}
+      {activeTab === 'combos' && (
+        <section className={styles.card} style={{ marginTop: 'var(--space-3)' }}>
+          <header className={styles.cardHeader}>
+            <h2 className={styles.cardTitle}>
+              <Tag {...ICON} style={{ color: 'var(--c-burnt)' }} />
+              Combo Pricing · {supplier.name}
+            </h2>
+          </header>
+          <div className={styles.cardBody}>
+            <SofaComboTab supplierId={id!} />
+          </div>
+        </section>
       )}
 
       {/* ── SKU dialogs (modals) ──────────────────────────────────── */}
@@ -340,11 +388,14 @@ export const SupplierDetail = () => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   PR #208 — Tab pill + Overview & Pricing panels.
+   Tab pill + the four SupplierDetail panels.
 
-   Overview keeps the existing KPI / SKU Mappings / PO history sections.
-   Pricing mounts the shared MaintenanceTab scoped to this supplier with
-   a section allow-list derived from the supplier's category.
+   Overview     — KPI tiles + recent PO history (the supplier scorecard).
+   SKU Pricing  — SKU mappings + per-SKU price matrix (SupplierSkuPricingPanel).
+   Maintenance  — shared MaintenanceTab (surcharges) scoped to this supplier,
+                  with a section allow-list derived from the category.
+   Combo Pricing — supplier-scoped Sofa Combo deals (SofaComboTab), feeding PO
+                  auto-pricing in a later phase.
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierTabButton = ({
@@ -380,12 +431,82 @@ const SupplierTabButton = ({
 );
 
 const SupplierOverviewPanel = ({
-  id,
-  supplierCode,
-  bindings,
   score,
   otrTone,
   defectTone,
+}: {
+  score: ReturnType<typeof useSupplierScorecard>['data'];
+  otrTone: string | undefined;
+  defectTone: string | undefined;
+}) => {
+  return (
+  <>
+    {/* ── KPI tiles ──────────────────────────────────────────────── */}
+    <section className={styles.kpiGrid}>
+        <div className={styles.kpiCard}>
+          <div className={styles.kpiHead}>
+            <span className={styles.kpiLabel}>On-Time Rate</span>
+            <CheckCircle2 {...ICON} style={{ color: 'var(--c-secondary-a, #2F5D4F)' }} />
+          </div>
+          <p className={`${styles.kpiValue} ${otrTone}`}>
+            {(score?.onTimeRate ?? 0).toFixed(1)}%
+          </p>
+          <p className={styles.kpiCaption}>
+            {score?.onTimeCount ?? 0} of {score?.receivedPOs ?? 0} received POs on time
+          </p>
+        </div>
+
+        <div className={styles.kpiCard}>
+          <div className={styles.kpiHead}>
+            <span className={styles.kpiLabel}>Defect Rate</span>
+            <AlertTriangle {...ICON} style={{ color: 'var(--c-festive-b, #B8331F)' }} />
+          </div>
+          <p className={`${styles.kpiValue} ${defectTone}`}>
+            {(score?.defectRate ?? 0).toFixed(2)}%
+          </p>
+          <p className={styles.kpiCaption}>Rejected qty / total received qty across posted GRNs</p>
+        </div>
+
+        <div className={styles.kpiCard}>
+          <div className={styles.kpiHead}>
+            <span className={styles.kpiLabel}>Avg Lead Days</span>
+            <Clock {...ICON} style={{ color: 'var(--c-burnt)' }} />
+          </div>
+          <p className={styles.kpiValue}>
+            {(score?.averageLeadDays ?? 0).toFixed(1)}
+          </p>
+          <p className={styles.kpiCaption}>Days from order to receipt (received POs only)</p>
+        </div>
+      </section>
+
+    {/* ── Last 10 POs ───────────────────────────────────────────── */}
+    <section className={styles.card}>
+      <header className={styles.cardHeader}>
+        <h2 className={styles.cardTitle}>
+          <TrendingUp {...ICON} style={{ color: 'var(--c-burnt)' }} />
+          Last 10 Purchase Orders
+          <span className={styles.cardTitleCount}>({score?.totalPOs ?? 0} total)</span>
+        </h2>
+      </header>
+      <LastTenPOsTable rows={score?.last10POs ?? []} />
+    </section>
+  </>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   SupplierSkuPricingPanel — the SKU Mappings card + per-SKU price matrix.
+
+   Split out of the old Overview panel into its own "SKU Pricing" tab. Keeps
+   the per-supplier CSV round-trip, the Product-Maintenance-shaped grouping,
+   and the SKU dialog wiring (the dialogs live at the page root and are driven
+   via setSkuDialog).
+   ════════════════════════════════════════════════════════════════════════ */
+
+const SupplierSkuPricingPanel = ({
+  id,
+  supplierCode,
+  bindings,
   setSkuDialog,
 }: {
   id: string;
@@ -393,9 +514,6 @@ const SupplierOverviewPanel = ({
    *  (`supplier-{code}-bindings-{date}.csv`). */
   supplierCode: string;
   bindings: BindingRow[];
-  score: ReturnType<typeof useSupplierScorecard>['data'];
-  otrTone: string | undefined;
-  defectTone: string | undefined;
   setSkuDialog: (s: { mode: 'closed' } | { mode: 'multi' } | { mode: 'edit'; binding: BindingRow }) => void;
 }) => {
   /* PR — Commander 2026-05-28 ("我需要一个 import 跟 export 的功能"):
@@ -480,47 +598,7 @@ const SupplierOverviewPanel = ({
   }, [bindings, products.data]);
 
   return (
-  <>
-    {/* ── KPI tiles ──────────────────────────────────────────────── */}
-    <section className={styles.kpiGrid}>
-        <div className={styles.kpiCard}>
-          <div className={styles.kpiHead}>
-            <span className={styles.kpiLabel}>On-Time Rate</span>
-            <CheckCircle2 {...ICON} style={{ color: 'var(--c-secondary-a, #2F5D4F)' }} />
-          </div>
-          <p className={`${styles.kpiValue} ${otrTone}`}>
-            {(score?.onTimeRate ?? 0).toFixed(1)}%
-          </p>
-          <p className={styles.kpiCaption}>
-            {score?.onTimeCount ?? 0} of {score?.receivedPOs ?? 0} received POs on time
-          </p>
-        </div>
-
-        <div className={styles.kpiCard}>
-          <div className={styles.kpiHead}>
-            <span className={styles.kpiLabel}>Defect Rate</span>
-            <AlertTriangle {...ICON} style={{ color: 'var(--c-festive-b, #B8331F)' }} />
-          </div>
-          <p className={`${styles.kpiValue} ${defectTone}`}>
-            {(score?.defectRate ?? 0).toFixed(2)}%
-          </p>
-          <p className={styles.kpiCaption}>Rejected qty / total received qty across posted GRNs</p>
-        </div>
-
-        <div className={styles.kpiCard}>
-          <div className={styles.kpiHead}>
-            <span className={styles.kpiLabel}>Avg Lead Days</span>
-            <Clock {...ICON} style={{ color: 'var(--c-burnt)' }} />
-          </div>
-          <p className={styles.kpiValue}>
-            {(score?.averageLeadDays ?? 0).toFixed(1)}
-          </p>
-          <p className={styles.kpiCaption}>Days from order to receipt (received POs only)</p>
-        </div>
-      </section>
-
-    {/* ── SKU Mappings ──────────────────────────────────────────── */}
-    <section className={styles.card}>
+    <section className={styles.card} style={{ marginTop: 'var(--space-3)' }}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>
           <Package {...ICON} style={{ color: 'var(--c-burnt)' }} />
@@ -599,22 +677,13 @@ const SupplierOverviewPanel = ({
         ))
       )}
     </section>
-
-    {/* ── Last 10 POs ───────────────────────────────────────────── */}
-    <section className={styles.card}>
-      <header className={styles.cardHeader}>
-        <h2 className={styles.cardTitle}>
-          <TrendingUp {...ICON} style={{ color: 'var(--c-burnt)' }} />
-          Last 10 Purchase Orders
-          <span className={styles.cardTitleCount}>({score?.totalPOs ?? 0} total)</span>
-        </h2>
-      </header>
-      <LastTenPOsTable rows={score?.last10POs ?? []} />
-    </section>
-  </>
   );
 };
 
+// SupplierPricingPanel — the "Maintenance" tab. Mounts the shared
+// MaintenanceTab (surcharge config) scoped to this supplier. Always shown (no
+// category gate) — a supplier can supply multiple categories, so we surface the
+// Bedframe + Sofa + Common surcharge pools by default.
 const SupplierPricingPanel = ({
   supplierId,
   supplierName,
@@ -624,13 +693,17 @@ const SupplierPricingPanel = ({
   supplierName: string;
   supplierCategory: SupplierCategory | null;
 }) => {
-  const sectionFilter = maintenanceSectionsForCategory(supplierCategory);
+  // A supplier can supply multiple categories (e.g. Hookka = bedframe + sofa),
+  // so there is no single category to gate on. When no specific category is
+  // set, show the Bedframe + Sofa + Common surcharge pools by default.
+  const sectionFilter: MaintenanceSection[] =
+    maintenanceSectionsForCategory(supplierCategory) ?? ['Bedframe', 'Sofa', 'Common'];
   return (
     <section className={styles.card} style={{ marginTop: 'var(--space-3)' }}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>
           <Tag {...ICON} style={{ color: 'var(--c-burnt)' }} />
-          Pricing · {supplierName}
+          Maintenance · {supplierName}
           {supplierCategory && (
             <span className={styles.cardTitleCount}>
               ({SUPPLIER_CATEGORY_LABEL[supplierCategory]} surcharges)
@@ -639,24 +712,17 @@ const SupplierPricingPanel = ({
         </h2>
       </header>
       <div className={styles.cardBody}>
-        {!supplierCategory ? (
-          <p className={styles.emptyRow}>
-            Set this supplier's category in Supplier Info first — Pricing shows
-            the surcharges that match what this supplier supplies.
-          </p>
-        ) : (
-          <MaintenanceTab
-            scope={`supplier:${supplierId}`}
-            sectionFilter={sectionFilter}
-            emptyHint={
-              <>
-                No supplier-specific pricing yet. The master / selling-price
-                config will be used by default; commander can override below
-                by editing + saving a row scoped to this supplier.
-              </>
-            }
-          />
-        )}
+        <MaintenanceTab
+          scope={`supplier:${supplierId}`}
+          sectionFilter={sectionFilter}
+          emptyHint={
+            <>
+              No supplier-specific surcharges yet. The master / selling-price
+              config will be used by default; commander can override below
+              by editing + saving a row scoped to this supplier.
+            </>
+          }
+        />
       </div>
     </section>
   );

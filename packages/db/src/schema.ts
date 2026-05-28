@@ -1814,6 +1814,10 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   modules:         jsonb('modules').$type<string[][]>().notNull().default([]),
   tier:            fabricPriceTier('tier'),                               // NULL = applies any tier
   customerId:      uuid('customer_id').references(() => customers.id, { onDelete: 'set null' }),
+  // Supplier scope (migration 0096). NULL = sales-side / master combo (the
+  // default, read + written by the Products page). Non-NULL = combo scoped to
+  // that supplier's purchasing side (Supplier detail Combo Pricing tab).
+  supplierId:      uuid('supplier_id').references(() => suppliers.id, { onDelete: 'cascade' }),
   pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null }
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),
@@ -1824,9 +1828,11 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   createdBy:       uuid('created_by'),
 }, (t) => ({
   idxLookup: index('idx_sofa_combo_pricing_lookup')
-    .on(t.baseModel, t.tier, t.customerId, t.effectiveFrom),
+    .on(t.baseModel, t.tier, t.customerId, t.supplierId, t.effectiveFrom),
   idxHistory: index('idx_sofa_combo_pricing_history')
-    .on(t.baseModel, t.tier, t.customerId, t.effectiveFrom, t.createdAt),
+    .on(t.baseModel, t.tier, t.customerId, t.supplierId, t.effectiveFrom, t.createdAt),
+  idxSupplier: index('idx_sofa_combo_pricing_supplier')
+    .on(t.supplierId),
 }));
 
 /* ─────────────────────────── product_models ─────────────────────────────

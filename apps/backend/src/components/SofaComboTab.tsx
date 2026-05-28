@@ -64,18 +64,28 @@ const todayIso = (): string => new Date().toISOString().slice(0, 10);
 
 const ALL_MODULE_CODES = SOFA_MODULES.map((m) => m.id).sort();
 
-type ComboTabProps = { /* no props for now */ };
+type ComboTabProps = {
+  /**
+   * Supplier scope. When set, the tab reads + writes combos scoped to this
+   * supplier's purchasing side (customer_id stays null). When unset, it keeps
+   * the original sales-side / master behaviour the Products page uses.
+   */
+  supplierId?: string;
+};
 
-export const SofaComboTab = (_props: ComboTabProps) => {
+export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
   const [baseModelFilter, setBaseModelFilter] = useState<string>('');
   const [composer, setComposer] = useState<{ open: boolean; editing?: SofaComboRule }>({ open: false });
   const [historyFor, setHistoryFor] = useState<SofaComboRule | null>(null);
 
   // Default scope: customer_id = null (applies to all). 2990 is B2C, so we
-  // never let the UI write a customer_id.
+  // never let the UI write a customer_id. When a supplierId is supplied the
+  // reads + writes are scoped to that supplier's purchasing side instead of
+  // the sales-side / master combos.
   const combosQ = useSofaCombos({
     baseModel: baseModelFilter || undefined,
     customerId: null,
+    supplierId,
   });
   const productsQ = useMfgProducts({ category: 'SOFA' });
 
@@ -154,7 +164,9 @@ export const SofaComboTab = (_props: ComboTabProps) => {
           }}>
             Module-set combo deals with optional same-fabric-tier discount.
             Append-only history; edits = a new row with a fresher effective date.
-            All combos apply to every customer (2990 B2C model).
+            {supplierId
+              ? ' These combos are scoped to this supplier and used for purchasing (PO auto-pricing).'
+              : ' All combos apply to every customer (2990 B2C model).'}
           </p>
         </div>
         <Button variant="primary" onClick={() => setComposer({ open: true })}>
@@ -236,12 +248,13 @@ export const SofaComboTab = (_props: ComboTabProps) => {
         <ComposerModal
           editing={composer.editing}
           modulesByBaseModel={modulesByBaseModel}
+          supplierId={supplierId}
           onClose={() => setComposer({ open: false })}
         />
       )}
 
       {historyFor && (
-        <HistoryModal rule={historyFor} onClose={() => setHistoryFor(null)} />
+        <HistoryModal rule={historyFor} supplierId={supplierId} onClose={() => setHistoryFor(null)} />
       )}
     </div>
   );
@@ -341,10 +354,11 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, modulesByBaseModel, onClose,
+  editing, modulesByBaseModel, supplierId, onClose,
 }: {
   editing?: SofaComboRule;
   modulesByBaseModel: Record<string, string[]>;
+  supplierId?: string;
   onClose: () => void;
 }) {
   const create = useCreateSofaCombo();
@@ -441,6 +455,7 @@ function ComposerModal({
           modules: orderedModules,
           tier: tier || null,
           customerId: null,  // B2C: always null = applies to all customers
+          supplierId: supplierId ?? null,  // supplier scope when set, else sales-side
           pricesByHeight,
           label: label || null,
           effectiveFrom,
@@ -617,12 +632,13 @@ function ComposerModal({
 
 // ─── History modal ────────────────────────────────────────────────────
 
-function HistoryModal({ rule, onClose }: { rule: SofaComboRule; onClose: () => void }) {
+function HistoryModal({ rule, supplierId, onClose }: { rule: SofaComboRule; supplierId?: string; onClose: () => void }) {
   const historyQ = useSofaComboHistory({
     baseModel: rule.baseModel,
     modules: rule.modules,
     tier: rule.tier,
     customerId: rule.customerId,
+    supplierId: supplierId ?? rule.supplierId,
   });
 
   return (

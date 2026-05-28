@@ -41,7 +41,8 @@ async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
     .from('sofa_combo_pricing')
     .select('id, base_model, modules, tier, customer_id, prices_by_height, label, effective_from, deleted_at')
     .is('deleted_at', null)
-    .is('customer_id', null);  // 2990 B2C — default-scope rows only
+    .is('customer_id', null)   // 2990 B2C — default-scope rows only
+    .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
   return ((data ?? []) as Array<{
     id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
     customer_id: string | null; prices_by_height: Record<string, number | null>;
