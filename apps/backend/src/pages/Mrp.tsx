@@ -47,21 +47,25 @@ export const Mrp = () => {
   const data = q.data;
   const createPos = useCreatePosFromSoItems();
 
-  const toggle = (code: string) =>
+  /* One SKU can now appear as several rows (one per variant), so the row
+     identity is (itemCode + variantKey), not itemCode alone. */
+  const rowKey = (s: MrpSku) => `${s.itemCode}${s.variantKey}`;
+
+  const toggle = (key: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(code)) next.delete(code); else next.add(code);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
 
-  const toggleSelect = (code: string) =>
+  const toggleSelect = (key: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(code)) next.delete(code); else next.add(code);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
 
-  const expandAll = () => setExpanded(new Set((data?.skus ?? []).map((s) => s.itemCode)));
+  const expandAll = () => setExpanded(new Set((data?.skus ?? []).map(rowKey)));
   const collapseAll = () => setExpanded(new Set());
 
   /* Build {soItemId, qty} picks from the SHORT lines of the given SKUs, then
@@ -108,7 +112,7 @@ export const Mrp = () => {
   };
 
   const shortageSkus = (data?.skus ?? []).filter((s) => s.shortage > 0);
-  const selectedShortageSkus = shortageSkus.filter((s) => selected.has(s.itemCode));
+  const selectedShortageSkus = shortageSkus.filter((s) => selected.has(rowKey(s)));
 
   return (
     <div className={styles.page}>
@@ -212,16 +216,19 @@ export const Mrp = () => {
             {data && data.skus.length === 0 && (
               <tr><td colSpan={9} className={styles.stateCell}>No open Sales-Order demand for this filter.</td></tr>
             )}
-            {data?.skus.map((sku) => (
-              <SkuRows
-                key={sku.itemCode}
-                sku={sku}
-                open={expanded.has(sku.itemCode)}
-                onToggle={() => toggle(sku.itemCode)}
-                selected={selected.has(sku.itemCode)}
-                onSelect={() => toggleSelect(sku.itemCode)}
-              />
-            ))}
+            {data?.skus.map((sku) => {
+              const k = rowKey(sku);
+              return (
+                <SkuRows
+                  key={k}
+                  sku={sku}
+                  open={expanded.has(k)}
+                  onToggle={() => toggle(k)}
+                  selected={selected.has(k)}
+                  onSelect={() => toggleSelect(k)}
+                />
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -250,7 +257,10 @@ const SkuRows = ({ sku, open, onToggle, selected, onSelect }: {
           {open ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
         </td>
         <td className={styles.codeCell}>{sku.itemCode}</td>
-        <td className={styles.descCell}>{sku.description ?? '—'}</td>
+        <td className={styles.descCell}>
+          {sku.description ?? '—'}
+          {sku.variantLabel && <span className={styles.variantTag}>{sku.variantLabel}</span>}
+        </td>
         <td className={styles.num}>{sku.qtyNeeded}</td>
         <td className={styles.num}>{sku.stock}</td>
         <td className={styles.num}>{sku.poOutstanding || '—'}</td>

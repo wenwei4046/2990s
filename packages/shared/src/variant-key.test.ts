@@ -50,6 +50,20 @@ describe('computeVariantKey', () => {
     expect(withSpecials).not.toBe(noSpecials); // specials change the bucket
   });
 
+  it('treats colorCode / colourCode as the fabric attribute (alias)', () => {
+    // A line that stores its fabric pick as colorCode must bucket identically
+    // to one that stores it as fabricCode.
+    const viaFabric = computeVariantKey('bedframe', { fabricCode: 'Olive', divanHeight: '10"' });
+    const viaColor  = computeVariantKey('bedframe', { colorCode: 'Olive', divanHeight: '10"' });
+    expect(viaColor).toBe(viaFabric);
+    expect(viaColor).toContain('fabriccode=olive');
+
+    // Different colour → different bucket (the whole point of the fix).
+    const olive = computeVariantKey('bedframe', { colorCode: 'Olive', divanHeight: '10"' });
+    const rust  = computeVariantKey('bedframe', { colorCode: 'Rust', divanHeight: '10"' });
+    expect(olive).not.toBe(rust);
+  });
+
   it('mattress / accessory ignore soft attributes (size lives in the product code)', () => {
     // Mattress carries no soft-attribute identity → empty key (only specials matter).
     expect(computeVariantKey('mattress', { fabricCode: 'X', seatHeight: '28' })).toBe('');
