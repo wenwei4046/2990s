@@ -24,11 +24,9 @@
 
 .title {
   /* PR — Commander 2026-05-27: was fs-32/900 — drop to fs-15/600 so the
-     list page reads like an admin tool (matches SO Detail title).
-     Commander 2026-05-28: "整个 Sales Order 界面太小，写大一点" — nudged the
-     page title up to fs-18 to match the larger ledger below. */
+     list page reads like an admin tool (matches SO Detail title). */
   font-family: var(--font-title);
-  font-size: var(--fs-18, 18px);
+  font-size: var(--fs-15, 15px);
   font-weight: 600;
   color: var(--c-ink);
   margin: 0;
@@ -36,7 +34,7 @@
 
 .subtitle {
   font-family: var(--font-sans);
-  font-size: var(--fs-13);
+  font-size: var(--fs-11);
   color: var(--fg-muted);
   margin-top: 2px;
 }
@@ -60,7 +58,7 @@
   align-items: center;
   gap: 4px;
   font-family: var(--font-button);
-  font-size: var(--fs-13);
+  font-size: var(--fs-11);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--c-ink);
@@ -80,11 +78,11 @@
 
 .docNo {
   font-family: var(--font-sans);
-  font-size: var(--fs-14, 14px);
+  font-size: var(--fs-12);
   font-variant-numeric: tabular-nums;
   background: rgba(34, 31, 32, 0.04);
   border: 1px solid var(--line);
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: var(--radius-pill);
 }
 
