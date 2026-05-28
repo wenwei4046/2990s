@@ -57,6 +57,7 @@ import {
 import { composeSupplierSku, looksAmbiguous } from '../lib/supplier-sku-helpers';
 import { formatPhone } from '@2990s/shared/phone';
 import { PhoneInput } from '../components/PhoneInput';
+import { MoneyInput } from '../components/MoneyInput';
 import styles from './SupplierDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -1230,40 +1231,18 @@ const InlineUnitPrice = ({
   supplierId: string;
   update: ReturnType<typeof useUpdateBinding>;
 }) => {
-  // Local draft in RM (2dp string). Centi conversion happens on commit so
-  // small typos during typing don't fire a PATCH per keystroke.
-  const initial = (binding.unit_price_centi / 100).toFixed(2);
-  const [draft, setDraft] = useState(initial);
-  const [committed, setCommitted] = useState(binding.unit_price_centi);
-  if (committed !== binding.unit_price_centi) {
-    setCommitted(binding.unit_price_centi);
-    setDraft((binding.unit_price_centi / 100).toFixed(2));
-  }
-  const commit = () => {
-    const next = Math.round(Number(draft) * 100);
-    if (!Number.isFinite(next) || next < 0) { setDraft(initial); return; }
-    if (next === binding.unit_price_centi) return;
-    update.mutate({ supplierId, bindingId: binding.id, unitPriceCenti: next });
-  };
+  // Commander 2026-05-29 — shared MoneyInput: free typing, clear & retype,
+  // and no clobbering from background refetches (see MoneyInput.tsx).
   return (
-    <span className={styles.matrixCell}>
-      <span className={styles.matrixCurrency}>
-        {binding.currency === 'MYR' ? 'RM' : binding.currency}
-      </span>
-      <input
-        type="number"
-        step="0.01"
-        className={styles.inlinePrice}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
-          if (e.key === 'Escape') { setDraft(initial); (e.target as HTMLInputElement).blur(); }
-        }}
-        title="Click to edit · Enter to save · Esc to cancel"
-      />
-    </span>
+    <MoneyInput
+      valueSen={binding.unit_price_centi}
+      currency={binding.currency === 'MYR' ? 'RM' : binding.currency}
+      onCommit={(sen) => {
+        const next = sen ?? 0;
+        if (next === binding.unit_price_centi) return;
+        update.mutate({ supplierId, bindingId: binding.id, unitPriceCenti: next });
+      }}
+    />
   );
 };
 
@@ -1354,49 +1333,16 @@ const MatrixPriceInput = ({
   onCommit: (v: number | null) => void;
   placeholder?: string;
 }) => {
-  const initial = valueSen == null ? '' : (valueSen / 100).toFixed(2);
-  const [draft, setDraft] = useState(initial);
-  // Re-sync if upstream changed (server response, tier switch).
-  const [committedSen, setCommittedSen] = useState(valueSen);
-  if (committedSen !== valueSen) {
-    setCommittedSen(valueSen);
-    setDraft(valueSen == null ? '' : (valueSen / 100).toFixed(2));
-  }
-  const commit = () => {
-    const trimmed = draft.trim();
-    if (trimmed === '') {
-      if (valueSen == null) return;
-      onCommit(null);
-      return;
-    }
-    const next = Math.round(Number(trimmed) * 100);
-    if (!Number.isFinite(next) || next < 0) {
-      setDraft(initial);
-      return;
-    }
-    if (next === valueSen) return;
-    onCommit(next);
-  };
+  // Commander 2026-05-29 — shared MoneyInput; blank clears the cell.
   return (
-    <span className={styles.matrixCell}>
-      <span className={styles.matrixCurrency}>
-        {currency === 'MYR' ? 'RM' : currency}
-      </span>
-      <input
-        type="number"
-        step="0.01"
-        className={styles.matrixInput}
-        value={draft}
-        placeholder={placeholder ?? '—'}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
-          if (e.key === 'Escape') { setDraft(initial); (e.target as HTMLInputElement).blur(); }
-        }}
-        title="Click to edit · Enter to save · Esc to cancel · blank to clear"
-      />
-    </span>
+    <MoneyInput
+      valueSen={valueSen}
+      currency={currency === 'MYR' ? 'RM' : currency}
+      allowBlank
+      placeholder={placeholder ?? '—'}
+      onCommit={onCommit}
+      title="Click to edit · Enter to save · Esc to cancel · blank to clear"
+    />
   );
 };
 
