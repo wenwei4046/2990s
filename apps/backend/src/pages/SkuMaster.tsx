@@ -16,7 +16,7 @@ import {
   Download,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useAuth } from '../lib/auth';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import { useCategories, useProducts, useSeries, type ProductRow } from '../lib/queries';
 import { useUpdateProduct, useBulkSetProductVisibility } from '../lib/admin-queries';
 import { SkuDrawer } from '../components/SkuDrawer';
@@ -69,7 +69,7 @@ export const SkuMaster = () => {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
 
-  const isAdmin = staff?.role === 'admin';
+  const isAdmin = isAdminLevel(staff?.role);
   const allCats = cats.data ?? [];
   const allSeries = seriesList.data ?? [];
   const liveCats = allCats.filter((c) => !c.tbc);

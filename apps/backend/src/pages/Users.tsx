@@ -49,6 +49,7 @@ const ROLE_LABEL: Record<StaffRole, string> = {
   sales_executive: 'Sales executive',
   outlet_manager:  'Outlet manager',
   sales_director:  'Sales director',
+  super_admin:     'Super admin',
 };
 
 /* Role options shown in the invite dropdown. We drop showroom_lead from
@@ -56,7 +57,7 @@ const ROLE_LABEL: Record<StaffRole, string> = {
    "keep but not user-facing". Still surfaces on rows for existing users. */
 const INVITE_ROLES: StaffRole[] = [
   'sales_executive', 'outlet_manager', 'sales_director',
-  'coordinator', 'finance', 'admin',
+  'coordinator', 'finance', 'admin', 'super_admin',
   'sales',
 ];
 
@@ -69,7 +70,7 @@ const formatLastSignIn = (iso: string | null): string => {
 export const Users = () => {
   const { staff } = useAuth();
   const toast = useToast();
-  const canWrite = staff?.role === 'admin' || staff?.role === 'sales_director';
+  const canWrite = staff?.role === 'admin' || staff?.role === 'sales_director' || staff?.role === 'super_admin';
   const canRead  = canWrite || staff?.role === 'coordinator';
 
   const users  = useUsers();

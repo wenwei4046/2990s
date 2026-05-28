@@ -40,7 +40,7 @@ const useCategoryHeroes = () =>
     staleTime: 60_000,
   });
 
-const ADMIN_ROLES = new Set(['admin', 'coordinator']);
+const ADMIN_ROLES = new Set(['admin', 'coordinator', 'super_admin']);
 
 export const CategoryHeroSection = () => {
   const { staff } = useAuth();

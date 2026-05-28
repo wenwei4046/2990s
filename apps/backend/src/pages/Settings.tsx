@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, X, Save, MessageCircle, Mail, CheckCircle2, Circle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useAuth } from '../lib/auth';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import { useDrivers, useSuppliers, type DriverRow, type Supplier } from '../lib/queries';
 import {
   useShowrooms,
@@ -43,8 +43,8 @@ export const Settings = () => {
   const { staff } = useAuth();
   const [tab, setTab] = useState<TabId>('suppliers');
 
-  const isAdmin = staff?.role === 'admin';
-  const isCoordOrAdmin = staff?.role === 'admin' || staff?.role === 'coordinator';
+  const isAdmin = isAdminLevel(staff?.role);
+  const isCoordOrAdmin = isAdminLevel(staff?.role) || staff?.role === 'coordinator';
 
   return (
     <div className={styles.page}>

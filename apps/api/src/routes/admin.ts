@@ -30,6 +30,8 @@ admin.use('*', supabaseAuth);
 const STAFF_ROLES = [
   'sales', 'showroom_lead', 'coordinator', 'finance', 'admin',
   'sales_executive', 'outlet_manager', 'sales_director',
+  // Migration 0092 — owner role, full access to both portals.
+  'super_admin',
 ] as const;
 
 /* Roles that still hold a `pin_hash` column for the PATCH /pin endpoint
@@ -40,8 +42,8 @@ const POS_PIN_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manag
 
 /* Roles allowed to invite + update + deactivate other staff. coordinator
    listed in the GET list (see STAFF_LIST_ROLES) but cannot mutate. */
-const STAFF_WRITE_ROLES = new Set<string>(['admin', 'sales_director']);
-const STAFF_LIST_ROLES  = new Set<string>(['admin', 'sales_director', 'coordinator']);
+const STAFF_WRITE_ROLES = new Set<string>(['admin', 'super_admin', 'sales_director']);
+const STAFF_LIST_ROLES  = new Set<string>(['admin', 'super_admin', 'sales_director', 'coordinator']);
 
 /* Email is REQUIRED for every invite — the magic link is the only sign-in
    path. Venue is required for the POS-side roles only; admin / coordinator

@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from '../lib/auth';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import { useAddons, type AddonRow } from '../lib/queries';
 import { supabase } from '../lib/supabase';
 import { NewAddonModal } from '../components/NewAddonModal';
@@ -40,7 +40,7 @@ const fmtStock = (stock: number | null): string =>
 export const Addons = () => {
   const { staff } = useAuth();
   const addons = useAddons();
-  const isAdmin = staff?.role === 'admin';
+  const isAdmin = isAdminLevel(staff?.role);
 
   const [newOpen, setNewOpen] = useState(false);
   const openNew = () => { if (isAdmin) setNewOpen(true); };

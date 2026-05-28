@@ -32,6 +32,9 @@ export const staffRole = pgEnum('staff_role', [
   'sales_executive',
   'outlet_manager',
   'sales_director',
+  /* Migration 0092 (2026-05-28) — super_admin: owner role with FULL access
+     to BOTH portals (POS + Backend). Additive superset of `admin`. */
+  'super_admin',
 ]);
 
 export const compGroup = pgEnum('comp_group', [

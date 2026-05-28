@@ -79,7 +79,7 @@ export const Sidebar = () => {
       icon: <Inbox {...ICON_PROPS} />,
       label: 'Orders',
     },
-    ...(staff && ['finance', 'coordinator', 'admin'].includes(staff.role)
+    ...(staff && ['finance', 'coordinator', 'admin', 'super_admin'].includes(staff.role)
       ? [{
           kind: 'link' as const,
           to: '/audit-log',
@@ -140,7 +140,7 @@ export const Sidebar = () => {
     { kind: 'link', to: '/settings', icon: <Settings {...ICON_PROPS} />, label: 'Settings' },
     /* Migration 0086 (2026-05-27) — Administration group, gated to admin /
        sales_director / coordinator. Users page lives here. */
-    ...(staff && ['admin', 'sales_director', 'coordinator'].includes(staff.role)
+    ...(staff && ['admin', 'sales_director', 'coordinator', 'super_admin'].includes(staff.role)
       ? [
           { kind: 'group' as const, label: 'Administration' },
           { kind: 'link' as const, to: '/users', icon: <ShieldCheck {...ICON_PROPS} />, label: 'Users' },
