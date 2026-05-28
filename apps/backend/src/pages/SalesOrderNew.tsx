@@ -44,7 +44,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
-import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import {
   PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
 } from '../components/PaymentsTable';
@@ -480,6 +480,19 @@ export const SalesOrderNew = () => {
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
       window.alert('Add at least one item via "+ Add line item".');
+      return;
+    }
+    // Commander 2026-05-28: variants are mandatory — block proceeding when a
+    // sofa/bedframe line still has any unselected required variant, so
+    // purchasing never gets a half-specced order to chase.
+    const variantGaps = validLines
+      .map((l) => ({ code: l.itemCode, miss: missingRequiredVariants(l.itemGroup, l.variants) }))
+      .filter((x) => x.miss.length > 0);
+    if (variantGaps.length > 0) {
+      window.alert(
+        'Complete all variant selections before saving:\n\n'
+        + variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
+      );
       return;
     }
 

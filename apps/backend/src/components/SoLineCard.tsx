@@ -507,7 +507,7 @@ const SoLineCardInner = ({
           <div className={styles.variantsHead}>BEDFRAME VARIANTS</div>
           <div className={styles.variantsGrid}>
             <VariantSelect
-              label="Fabrics"
+              label="Fabrics" required
               value={String(draft.variants.fabricCode ?? '')}
               disabled={!isEditing}
               options={fabrics.map((f) => ({
@@ -518,21 +518,21 @@ const SoLineCardInner = ({
               onChange={(v) => setVariant('fabricCode', v)}
             />
             <VariantSelect
-              label="Gaps"
+              label="Gaps" required
               value={String(draft.variants.gap ?? '')}
               disabled={!isEditing}
               options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
               onChange={(v) => setVariant('gap', v)}
             />
             <VariantSelect
-              label="Divan Heights"
+              label="Divan Heights" required
               value={String(draft.variants.divanHeight ?? '')}
               disabled={!isEditing}
               options={maint!.divanHeights}
               onChange={(v) => setVariant('divanHeight', v)}
             />
             <VariantSelect
-              label="Leg Heights"
+              label="Leg Heights" required
               value={String(draft.variants.legHeight ?? '')}
               disabled={!isEditing}
               options={maint!.legHeights}
@@ -566,7 +566,7 @@ const SoLineCardInner = ({
           <div className={styles.variantsHead}>SOFA VARIANTS</div>
           <div className={styles.variantsGrid}>
             <VariantSelect
-              label="Fabrics"
+              label="Fabrics" required
               value={String(draft.variants.fabricCode ?? '')}
               disabled={!isEditing}
               options={fabrics.map((f) => ({
@@ -577,7 +577,7 @@ const SoLineCardInner = ({
               onChange={(v) => setVariant('fabricCode', v)}
             />
             <VariantSelect
-              label="Seat Heights"
+              label="Seat Heights" required
               value={String(draft.variants.seatHeight ?? '')}
               disabled={!isEditing}
               options={maint!.sofaSizes.map((s) => {
@@ -590,7 +590,7 @@ const SoLineCardInner = ({
               onChange={(v) => setVariant('seatHeight', v)}
             />
             <VariantSelect
-              label="Leg Heights"
+              label="Leg Heights" required
               value={String(draft.variants.legHeight ?? '')}
               disabled={!isEditing}
               options={maint!.sofaLegHeights}
@@ -811,7 +811,7 @@ export const SoLineCard = memo(SoLineCardInner);
    ────────────────────────────────────────────────────────────────────── */
 
 const VariantSelect = ({
-  label, options, value, onChange, disabled = false,
+  label, options, value, onChange, disabled = false, required = false,
 }: {
   label:    string;
   /* Commander 2026-05-28: `priceSen` is COST and must NOT surface in the SO
@@ -822,28 +822,65 @@ const VariantSelect = ({
   options:  Array<{ value: string; priceSen: number; sellingPriceSen?: number; display?: string }>;
   value:    string;
   disabled?: boolean;
+  /* Commander 2026-05-28: variants are mandatory — a salesperson must NOT be
+     able to proceed without picking. When required + empty, the field shows a
+     red ring and Save is blocked upstream (SO New / SO Detail). */
+  required?: boolean;
   onChange: (v: string) => void;
-}) => (
-  <label className={styles.variantField}>
-    <span className={styles.variantLabel}>{label}</span>
-    <select
-      className={styles.select}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      <option value="">—</option>
-      {options.map((o) => {
-        const sell = o.sellingPriceSen ?? 0;
-        return (
-          <option key={o.value} value={o.value}>
-            {o.display ?? o.value}{sell > 0 ? ` (+${fmtRm(sell)})` : ''}
-          </option>
-        );
-      })}
-    </select>
-  </label>
-);
+}) => {
+  const invalid = required && !value;
+  return (
+    <label className={styles.variantField}>
+      <span className={styles.variantLabel}>{label}{required ? ' *' : ''}</span>
+      <select
+        className={styles.select}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        style={invalid && !disabled ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined}
+      >
+        {/* Commander 2026-05-28: no selectable blank "—" — the placeholder is
+            disabled so it can't be chosen to "proceed without selecting". */}
+        <option value="" disabled>Select…</option>
+        {options.map((o) => {
+          const sell = o.sellingPriceSen ?? 0;
+          return (
+            <option key={o.value} value={o.value}>
+              {o.display ?? o.value}{sell > 0 ? ` (+${fmtRm(sell)})` : ''}
+            </option>
+          );
+        })}
+      </select>
+    </label>
+  );
+};
+
+/* ──────────────────────────────────────────────────────────────────────
+   Required-variant validation (Commander 2026-05-28: "一定要选东西才能
+   proceed"). Given a line's itemGroup + variants, returns the labels of the
+   mandatory variants that are still empty. Only sofa / bedframe lines carry
+   variants; everything else returns []. Callers (SO New + SO Detail Save)
+   block the save when any line reports a non-empty list.
+   ────────────────────────────────────────────────────────────────────── */
+export function missingRequiredVariants(
+  itemGroup: string | null | undefined,
+  variants: Record<string, unknown> | null | undefined,
+): string[] {
+  const g = (itemGroup ?? '').toLowerCase();
+  const v = variants ?? {};
+  const need: Array<[string, string]> =
+    g === 'bedframe'
+      ? [['fabricCode', 'Fabric'], ['gap', 'Gap'], ['divanHeight', 'Divan Height'], ['legHeight', 'Leg Height']]
+      : g === 'sofa'
+        ? [['fabricCode', 'Fabric'], ['seatHeight', 'Seat Height'], ['legHeight', 'Leg Height']]
+        : [];
+  return need
+    .filter(([k]) => {
+      const val = (v as Record<string, unknown>)[k];
+      return val === undefined || val === null || String(val).trim() === '';
+    })
+    .map(([, lbl]) => lbl);
+}
 
 /* ──────────────────────────────────────────────────────────────────────
    SpecialsAccordion — collapsible checkbox grid (Houzs <details>)
