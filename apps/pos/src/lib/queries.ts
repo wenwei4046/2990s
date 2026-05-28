@@ -91,22 +91,34 @@ export const useProduct = (productId: string | undefined) =>
          columns (recliner_upgrade_price / seat_upgrade_label /
          seat_upgrade_footrest / depth_options / included_addons / etc.),
          so defaults are safe for now — sofa pricing data flows in from
-         `useSofaCustomizerData` + `useProductCompartments` regardless. */
-      const { data, error } = await supabase
-        .from('products')
-        .select(
-          'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
-        )
-        .eq('id', productId)
-        .maybeSingle();
-      if (error) throw error;
-      if (data) {
-        return data as typeof data & {
-          included_addons: { addonId: string; qty: number }[];
-          seat_upgrade_label: string | null;
-          seat_upgrade_footrest: boolean;
-          depth_options: string | null;
-        };
+         `useSofaCustomizerData` + `useProductCompartments` regardless.
+
+         BUGFIX 2026-05-28 (commander caught "Loading product…" hang):
+         mfg_products.id is a TEXT key shaped `mfg-<12hex>` (e.g.
+         mfg-9f684f4b9336). products.id is a UUID column. Querying
+         products by a non-UUID text id makes Postgres throw "invalid
+         input syntax for type uuid", which the old `if (error) throw`
+         propagated → the Configurator (which renders "Loading product…"
+         whenever `!data`) was stuck forever. Skip the products query
+         entirely for mfg- ids; only legacy UUID ids hit the retail table. */
+      const isMfgId = productId.startsWith('mfg-');
+      if (!isMfgId) {
+        const { data, error } = await supabase
+          .from('products')
+          .select(
+            'id, sku, name, detail, size_display, img_key, thumb_key, pricing_kind, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, stock, low_at, visible, category_id, series_id, included_addons, updated_at',
+          )
+          .eq('id', productId)
+          .maybeSingle();
+        if (error) throw error;
+        if (data) {
+          return data as typeof data & {
+            included_addons: { addonId: string; qty: number }[];
+            seat_upgrade_label: string | null;
+            seat_upgrade_footrest: boolean;
+            depth_options: string | null;
+          };
+        }
       }
 
       /* Fallback: look up by mfg_products.id (what the Catalog cards link
