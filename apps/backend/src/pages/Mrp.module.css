@@ -222,6 +222,17 @@
 
 .codeCell { font-weight: 700; white-space: nowrap; }
 .descCell { color: var(--fg-muted); }
+.variantTag {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(60, 110, 200, 0.10);
+  color: #2f5fb3;
+  font-size: var(--fs-11);
+  font-weight: 700;
+  white-space: nowrap;
+}
 .shortNum { color: var(--c-orange); font-weight: 800; }
 
 .supplierCell span {

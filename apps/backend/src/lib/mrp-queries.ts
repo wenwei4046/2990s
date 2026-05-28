@@ -37,6 +37,8 @@ export type MrpLine = {
 
 export type MrpSku = {
   itemCode: string;
+  variantKey: string;
+  variantLabel: string | null;
   description: string | null;
   category: string | null;
   qtyNeeded: number;
