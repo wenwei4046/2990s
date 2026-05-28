@@ -489,11 +489,13 @@ const SupplierOverviewPanel = ({
             <span className={styles.kpiLabel}>On-Time Rate</span>
             <CheckCircle2 {...ICON} style={{ color: 'var(--c-secondary-a, #2F5D4F)' }} />
           </div>
-          <p className={`${styles.kpiValue} ${otrTone}`}>
-            {(score?.onTimeRate ?? 0).toFixed(1)}%
+          <p className={`${styles.kpiValue} ${(score?.receivedPOs ?? 0) > 0 ? otrTone : ''}`}>
+            {(score?.receivedPOs ?? 0) > 0 ? `${(score?.onTimeRate ?? 0).toFixed(1)}%` : '—'}
           </p>
           <p className={styles.kpiCaption}>
-            {score?.onTimeCount ?? 0} of {score?.receivedPOs ?? 0} received POs on time
+            {(score?.receivedPOs ?? 0) > 0
+              ? `${score?.onTimeCount ?? 0} of ${score?.receivedPOs ?? 0} received POs on time`
+              : 'No received POs yet'}
           </p>
         </div>
 
@@ -502,8 +504,8 @@ const SupplierOverviewPanel = ({
             <span className={styles.kpiLabel}>Defect Rate</span>
             <AlertTriangle {...ICON} style={{ color: 'var(--c-festive-b, #B8331F)' }} />
           </div>
-          <p className={`${styles.kpiValue} ${defectTone}`}>
-            {(score?.defectRate ?? 0).toFixed(2)}%
+          <p className={`${styles.kpiValue} ${(score?.receivedPOs ?? 0) > 0 ? defectTone : ''}`}>
+            {(score?.receivedPOs ?? 0) > 0 ? `${(score?.defectRate ?? 0).toFixed(2)}%` : '—'}
           </p>
           <p className={styles.kpiCaption}>Rejected qty / total received qty across posted GRNs</p>
         </div>
@@ -514,7 +516,7 @@ const SupplierOverviewPanel = ({
             <Clock {...ICON} style={{ color: 'var(--c-burnt)' }} />
           </div>
           <p className={styles.kpiValue}>
-            {(score?.averageLeadDays ?? 0).toFixed(1)}
+            {(score?.receivedPOs ?? 0) > 0 ? (score?.averageLeadDays ?? 0).toFixed(1) : '—'}
           </p>
           <p className={styles.kpiCaption}>Days from order to receipt (received POs only)</p>
         </div>
