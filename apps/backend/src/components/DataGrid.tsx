@@ -436,10 +436,23 @@ function DataGridInner<T>({
     const sourceKey = e.dataTransfer.getData('text/x-datagrid-col');
     if (!sourceKey || sourceKey === targetKey) return;
     setLayout((l) => {
-      const orderNow = (l.order.length ? l.order : columns.map((c) => c.key)).filter((k) => k !== sourceKey);
-      const idx = orderNow.indexOf(targetKey);
-      orderNow.splice(idx, 0, sourceKey);
-      return { ...l, order: orderNow };
+      /* Commander 2026-05-28: dragging a column left/right used to "invert"
+         (it always inserted BEFORE the target, so a rightward drag landed on
+         the wrong side). Fix: resolve the FULL current order first, then do a
+         direction-aware move — drag right ⇒ land AFTER the target, drag left ⇒
+         land BEFORE it. Inserting at the target's ORIGINAL index (after
+         removing the source) yields exactly that in both directions. */
+      const full = l.order.length
+        ? [
+            ...l.order.filter((k) => columns.some((c) => c.key === k)),
+            ...columns.filter((c) => !l.order.includes(c.key)).map((c) => c.key),
+          ]
+        : columns.map((c) => c.key);
+      const to = full.indexOf(targetKey);
+      if (to === -1) return l;
+      const next = full.filter((k) => k !== sourceKey);
+      next.splice(to, 0, sourceKey);
+      return { ...l, order: next };
     });
   };
 
