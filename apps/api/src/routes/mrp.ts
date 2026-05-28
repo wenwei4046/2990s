@@ -109,6 +109,9 @@ type MrpSku = {
   shortage: number;
   mainSupplierCode: string | null;
   mainSupplierName: string | null;
+  /* All suppliers bound to this SKU (main first) — lets the UI switch supplier
+     in-place before posting the PO. */
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
   lines: MrpLine[];
 };
 
@@ -201,20 +204,27 @@ mrp.get('/', async (c) => {
   }
   for (const arr of poByKey.values()) arr.sort((a, b) => byDateAsc(a.eta, b.eta));
 
-  // ── 5. Main supplier per SKU (display + later one-click PO) ─────────────
+  // ── 5. Suppliers per SKU — main + alternates (so the UI can switch supplier
+  //       in-place before posting the PO, AutoCount-style). ────────────────
+  type SupplierOpt = { supplierId: string; code: string; name: string; isMain: boolean };
   const codes = [...new Set(demand.map((d) => d.item_code))];
   const mainByCode = new Map<string, { code: string; name: string }>();
+  const suppliersByCode = new Map<string, SupplierOpt[]>();
   if (codes.length > 0) {
     const { data: binds } = await sb
       .from('supplier_material_bindings')
-      .select('material_code, is_main_supplier, supplier:suppliers(code, name)')
+      .select('material_code, is_main_supplier, supplier_id, supplier:suppliers(code, name)')
       .eq('material_kind', 'mfg_product')
       .in('material_code', codes)
       .order('is_main_supplier', { ascending: false });
-    for (const b of (binds ?? []) as Array<{ material_code: string; supplier: { code: string; name: string } | Array<{ code: string; name: string }> | null }>) {
-      if (mainByCode.has(b.material_code)) continue;
+    for (const b of (binds ?? []) as Array<{ material_code: string; is_main_supplier: boolean; supplier_id: string; supplier: { code: string; name: string } | Array<{ code: string; name: string }> | null }>) {
       const s = Array.isArray(b.supplier) ? b.supplier[0] : b.supplier;
-      if (s) mainByCode.set(b.material_code, { code: s.code, name: s.name });
+      if (!s) continue; // orphaned binding (supplier deleted) — skip
+      const arr = suppliersByCode.get(b.material_code) ?? [];
+      arr.push({ supplierId: b.supplier_id, code: s.code, name: s.name, isMain: b.is_main_supplier });
+      suppliersByCode.set(b.material_code, arr);
+      // First (is_main_supplier first via ORDER BY) wins as the default main.
+      if (!mainByCode.has(b.material_code)) mainByCode.set(b.material_code, { code: s.code, name: s.name });
     }
   }
 
@@ -312,6 +322,7 @@ mrp.get('/', async (c) => {
       shortage,
       mainSupplierCode: main?.code ?? null,
       mainSupplierName: main?.name ?? null,
+      suppliers: suppliersByCode.get(code) ?? [],
       lines,
     });
   }
