@@ -13,12 +13,14 @@
 // Commander 2026-05-29 — PO Edit is a DRAFT (#194). Clicking Edit snapshots the
 // header + lets you edit Qty / Unit Price / Disc / Delivery INLINE in each row
 // (no per-line modal — "多此一举"). Nothing persists until the single top Save:
-//   • Save  → commits header changes + every changed line + staged deletions
-//   • Back  → leaves the page, discarding the whole draft (no auto-save —
+//   • Save  → commits header changes + every changed line's field edits
+//   • Back  → leaves the page, discarding the field-edit draft (no auto-save —
 //             "为什么只是点 Back 也会自动 Save 呢")
-//   • Delete (trash) stages a removal immediately (no confirm popup) — the row
-//     vanishes from view + totals; the server delete (which releases the SO
-//     quota back) happens on Save.
+//   • Delete (trash) removes the line immediately (no confirm popup). A line's
+//     add (Convert from SO) and remove both move SO quota server-side, so they
+//     are immediate — deleting a converted line releases its SO quota straight
+//     away so it reappears in the From-SO picker ("delete 掉…想再加回去却没看到").
+//     Only the field edits (Qty / Unit / Disc / Delivery) are draft.
 //   • Changing the header Expected Delivery cascades to every line's delivery.
 // ----------------------------------------------------------------------------
 
@@ -130,7 +132,6 @@ export const PurchaseOrderDetail = () => {
      deletedIds stages removals. None of this persists until Save. */
   const [headerDraft, setHeaderDraft] = useState<HeaderDraft | null>(null);
   const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
-  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
   const [savingDraft, setSavingDraft] = useState(false);
 
   // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
@@ -145,7 +146,6 @@ export const PurchaseOrderDetail = () => {
       setIsEditing(false);
       setHeaderDraft(null);
       setLineDrafts({});
-      setDeletedIds(new Set());
     }
   }, [isLocked, isEditing]);
 
@@ -168,7 +168,10 @@ export const PurchaseOrderDetail = () => {
   }
 
   /* ── Draft helpers (po is guaranteed non-null past the guards above) ── */
-  const visibleItems = items.filter((it) => !deletedIds.has(it.id));
+  /* Commander 2026-05-29 — line add/remove are immediate server actions (they
+     move SO quota), so the table shows the live items straight from the server;
+     only the per-line field edits are buffered in lineDrafts. */
+  const visibleItems = items;
   const lineOf = (it: PoItemRow): LineDraft => lineDrafts[it.id] ?? lineSnapshot(it);
   const lineTotalOf = (it: PoItemRow): number => {
     if (!isEditing) return it.line_total_centi ?? 0;
@@ -199,18 +202,15 @@ export const PurchaseOrderDetail = () => {
   const setLine = (it: PoItemRow, patch: Partial<LineDraft>) =>
     setLineDrafts((prev) => ({ ...prev, [it.id]: { ...(prev[it.id] ?? lineSnapshot(it)), ...patch } }));
 
-  const markDeleted = (itemId: string) =>
-    setDeletedIds((s) => { const n = new Set(s); n.add(itemId); return n; });
-
   const enterEdit = () => {
     setHeaderDraft(null);
     setLineDrafts({});
-    setDeletedIds(new Set());
     setIsEditing(true);
   };
 
-  /* Single Save (#194) — commit header (only if touched), staged deletions, and
-     every changed line, then drop back to View. Back discards instead. */
+  /* Single Save (#194) — commit header (only if touched) + every changed line's
+     field edits, then drop back to View. Back discards the field-edit draft.
+     (Line add/remove already committed server-side — see the trash handler.) */
   const handleSave = async () => {
     if (savingDraft) return;
     setSavingDraft(true);
@@ -218,11 +218,7 @@ export const PurchaseOrderDetail = () => {
       if (headerDraft) {
         await updateHeader.mutateAsync({ id: po.id, ...(headerDraft as Record<string, unknown>) });
       }
-      for (const itemId of deletedIds) {
-        await deleteItem.mutateAsync({ poId: po.id, itemId });
-      }
       for (const it of items) {
-        if (deletedIds.has(it.id)) continue;
         const d = lineDrafts[it.id];
         if (!d) continue;
         const changed =
@@ -241,7 +237,6 @@ export const PurchaseOrderDetail = () => {
       setIsEditing(false);
       setHeaderDraft(null);
       setLineDrafts({});
-      setDeletedIds(new Set());
     } catch (e) {
       window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -484,10 +479,12 @@ export const PurchaseOrderDetail = () => {
                           <span className={styles.actionsCell}>
                             <button type="button"
                               className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                              title="Remove line" disabled={isLocked}
-                              /* Commander 2026-05-29 — stage the removal straight
-                                 away (no confirm popup); it commits on Save. */
-                              onClick={() => { if (!isLocked) markDeleted(it.id); }}>
+                              title="Remove line" disabled={isLocked || deleteItem.isPending}
+                              /* Commander 2026-05-29 — delete immediately (no
+                                 confirm). A converted line's SO quota is released
+                                 right away so it reappears in the From-SO picker
+                                 ("delete 掉…想再加回去却没看到"). */
+                              onClick={() => { if (!isLocked) deleteItem.mutate({ poId: po.id, itemId: it.id }); }}>
                               <Trash2 {...SM_ICON} />
                             </button>
                           </span>
