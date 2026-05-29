@@ -20,19 +20,30 @@ const onlyDigits = (s: string): string => s.replace(/\D+/g, '');
 
 /**
  * Normalize a user-typed phone string to E.164 storage form.
- *  - strips spaces, dashes, parens, plus signs
- *  - if starts with `60` keeps it
- *  - if starts with `0` replaces with `60` (Malaysian local form)
- *  - if 8+ digits with no country code prefix, prepends `60`
- *  - returns `+<digits>` or null when input is empty / less than 7 digits
+ *
+ * Country handling:
+ *  - If the user typed an explicit leading `+` (e.g. "+65 9123 4567" for
+ *    Singapore, "+62 ..." for Indonesia), that country code is PRESERVED —
+ *    we never force Malaysia onto an internationally-prefixed number.
+ *  - Otherwise the input is treated as Malaysian local for the common case:
+ *      · starts with `60` → kept
+ *      · starts with `0`  → drop the 0, prepend `60`
+ *      · 8+ bare digits   → prepend `60`
+ *  - strips spaces, dashes, parens
+ *  - returns `+<digits>` or null when input is empty / too short to be plausible
  */
 export function normalizePhone(raw: string | null | undefined): string | null {
   if (raw == null) return null;
+  const hadPlus = String(raw).trim().startsWith('+');
   const digits = onlyDigits(String(raw));
   if (digits.length === 0) return null;
 
   let normalized: string;
-  if (digits.startsWith('60')) {
+  if (hadPlus) {
+    // Explicit international prefix — trust the user's country code and keep
+    // the digits exactly as typed (Malaysia or otherwise).
+    normalized = digits;
+  } else if (digits.startsWith('60')) {
     normalized = digits;
   } else if (digits.startsWith('0')) {
     // Malaysian local form: drop the leading 0 and prepend 60.

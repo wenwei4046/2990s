@@ -28,6 +28,15 @@ describe('normalizePhone', () => {
     expect(normalizePhone('161556133')).toBe('+60161556133');
   });
 
+  it('preserves an explicit international country code (does not force +60)', () => {
+    // Singapore — must NOT be mangled into +60...
+    expect(normalizePhone('+65 9123 4567')).toBe('+6591234567');
+    // Indonesia
+    expect(normalizePhone('+62 812-3456-7890')).toBe('+6281234567890');
+    // Explicit +60 still works
+    expect(normalizePhone('+60 11-6155 6133')).toBe('+601161556133');
+  });
+
   it('returns null for empty / whitespace / too-short input', () => {
     expect(normalizePhone('')).toBe(null);
     expect(normalizePhone(null)).toBe(null);
