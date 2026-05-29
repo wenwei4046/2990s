@@ -589,6 +589,10 @@ export const MfgDeliveryOrdersList = () => {
              Return" prefills a new return from this DO. */
           if (!['CANCELLED'].includes(status)) {
             items.push({
+              label: 'Convert to Sales Invoice',
+              onClick: () => navigate(`/sales-invoices/new?fromDo=${row.id}`),
+            });
+            items.push({
               label: 'Convert to Delivery Return',
               onClick: () => navigate(`/delivery-returns/new?fromDo=${row.id}`),
             });
