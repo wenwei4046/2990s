@@ -1,25 +1,25 @@
 // ----------------------------------------------------------------------------
-// GrnNew — full-page Create Goods Receipt at /grns/new (PR — Phase 2 of
-// Purchasing rebuild, Commander 2026-05-26).
+// GrnNew — full-page Create Goods Receipt at /grns/new.
 //
-// Workflow: from a PO detail page, commander clicks "Receive Goods" and
-// lands here with ?poId={uuid} pre-loaded. The page shows the PO header
-// (supplier + dates as read-only context) and the PO line items with each
-// row's outstanding qty pre-filled in the Qty Received column. Commander
-// adjusts qty / rejects, hits Save.
+// Commander 2026-05-29: New GRN must work like New PO — land straight on a
+// fillable FORM (header + line items) you can complete directly, NOT a
+// separate "pick a PO" gate page. The Purchase Order picker now lives INLINE
+// in the form header: choose a PO → its outstanding lines load into the items
+// grid → adjust qty received/accepted/rejected → Receive & Post. Arriving with
+// ?poId= (from a PO detail "Receive Goods") pre-selects it. The multi-PO /
+// MRP-style bulk picker stays one click away via "From PO (multi)".
 //
-// PR-DRAFT-removal (2026-05-27, migration 0078): POST /grns now creates
-// the row as POSTED directly — the API handler rolls up received_qty on
-// the PO + writes inventory_movements inline. The legacy PATCH /post
-// remains as an idempotent no-op for older callers.
+// POST /grns creates the row POSTED directly (rolls received_qty onto the PO +
+// writes inventory_movements inline).
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, X, Layers } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders } from '../lib/suppliers-queries';
+import { ActionResultDialog } from '../components/ActionResultDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -47,20 +47,30 @@ type DraftLine = {
 export const GrnNew = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const poId = params.get('poId');
-  const poQ  = usePurchaseOrderDetail(poId);
+
+  // Inline PO picker drives the form (Commander 2026-05-29 — form-first).
+  const [selPoId, setSelPoId] = useState<string>(params.get('poId') ?? '');
+  const poListQ = usePurchaseOrders();
+  const poQ     = usePurchaseOrderDetail(selPoId || null);
+
+  const outstanding = useMemo(
+    () => (poListQ.data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED'),
+    [poListQ.data],
+  );
 
   const create = useCreateGrn();
   const post   = usePostGrn();
   const saving = create.isPending || post.isPending;
 
-  const [receivedAt, setReceivedAt]         = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [receivedAt, setReceivedAt]           = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [deliveryNoteRef, setDeliveryNoteRef] = useState<string>('');
-  const [notes, setNotes]                   = useState<string>('');
-  const [lines, setLines]                   = useState<DraftLine[]>([]);
+  const [notes, setNotes]                     = useState<string>('');
+  const [lines, setLines]                     = useState<DraftLine[]>([]);
+  const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
-  // Pre-fill lines from PO (only those with outstanding qty > 0).
+  // Load lines from the selected PO (only outstanding qty > 0).
   useEffect(() => {
+    if (!selPoId) { setLines([]); return; }
     if (!poQ.data) return;
     const next: DraftLine[] = poQ.data.items
       .map((it: any) => {
@@ -81,7 +91,7 @@ export const GrnNew = () => {
       })
       .filter((l) => l.outstanding > 0);
     setLines(next);
-  }, [poQ.data]);
+  }, [poQ.data, selPoId]);
 
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
@@ -96,12 +106,13 @@ export const GrnNew = () => {
   const supplier = po?.supplier;
   const currency = po?.currency ?? 'MYR';
 
-  const canSave = !!po && lines.length > 0 && lines.every((l) => l.qtyReceived >= 0 && l.qtyAccepted + l.qtyRejected <= l.qtyReceived);
+  const canSave = !!po && lines.length > 0 &&
+    lines.every((l) => l.qtyReceived >= 0 && l.qtyAccepted + l.qtyRejected <= l.qtyReceived);
 
   const onSave = async () => {
-    if (!po) return;
+    if (!po) { setDialog({ title: 'Pick a Purchase Order', body: 'Choose the PO you are receiving against first.' }); return; }
     if (!canSave) {
-      window.alert('Each line: qty accepted + qty rejected must be ≤ qty received.');
+      setDialog({ title: 'Check the quantities', body: 'Each line: qty accepted + qty rejected must be ≤ qty received.' });
       return;
     }
     try {
@@ -123,18 +134,16 @@ export const GrnNew = () => {
           notes:               l.notes || undefined,
         })),
       });
-      // Auto-post so inventory + PO received_qty update immediately.
       await post.mutateAsync(createRes.id);
-      window.alert(`GRN ${createRes.grnNumber} created + posted. Inventory updated.`);
-      navigate(`/grns/${createRes.id}`);
+      setDialog({
+        title: `GRN ${createRes.grnNumber} created`,
+        body: 'Received & posted — inventory + PO received qty updated.',
+        goTo: `/grns/${createRes.id}`,
+      });
     } catch (err) {
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      setDialog({ title: 'Save failed', body: err instanceof Error ? err.message : String(err) });
     }
   };
-
-  if (!poId) {
-    return <GrnPickPo />;
-  }
 
   const gridTemplate = 'minmax(180px, 1.4fr) minmax(200px, 1.8fr) 80px 80px 80px 110px 110px 32px';
   const cellPad = 'var(--space-2)';
@@ -143,13 +152,17 @@ export const GrnNew = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/purchase-orders" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Purchase Orders</span>
+          <Link to="/grns" className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
           </Link>
-          <h1 className={styles.title}>Receive Goods{po?.po_number ? ` · ${po.po_number}` : ''}</h1>
+          <h1 className={styles.title}>New Goods Receipt{po?.po_number ? ` · ${po.po_number}` : ''}</h1>
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate(po ? `/purchase-orders/${po.id}` : '/purchase-orders')}>
+          {/* Bulk / MRP-style multi-PO picker (different flow). */}
+          <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
+            <Layers {...ICON} /> From PO (multi)
+          </Button>
+          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <X {...ICON} /> Cancel
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
@@ -159,14 +172,31 @@ export const GrnNew = () => {
         </div>
       </div>
 
-      {/* Header card */}
+      {/* Header card — PO picker is inline so you stay on the form. */}
       <section className={styles.card}>
         <div className={styles.cardHeader}><h2 className={styles.cardTitle}>Header</h2></div>
         <div className={styles.cardBody}>
           <div className={styles.formGrid2}>
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>PO #</span>
-              <input type="text" readOnly value={po?.po_number ?? ''} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+              <span className={styles.fieldLabel}>Receive against PO *</span>
+              <select
+                value={selPoId}
+                onChange={(e) => setSelPoId(e.target.value)}
+                className={styles.fieldInput}
+                disabled={poListQ.isLoading || outstanding.length === 0}
+              >
+                <option value="">
+                  {poListQ.isLoading ? 'Loading POs…'
+                    : outstanding.length === 0 ? 'No outstanding POs'
+                    : '— Pick an outstanding PO —'}
+                </option>
+                {outstanding.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.po_number} · {p.supplier?.name ?? p.supplier?.code ?? '—'} · {p.po_date}
+                    {p.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>GRN #</span>
@@ -175,7 +205,7 @@ export const GrnNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier</span>
-              <input type="text" readOnly value={supplier?.name ?? ''} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+              <input type="text" readOnly value={supplier?.name ?? '(auto-filled from PO)'} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Received Date *</span>
@@ -199,163 +229,95 @@ export const GrnNew = () => {
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Items</h2>
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {poQ.isLoading
-              ? 'Loading PO items…'
-              : lines.length === 0
-                ? 'No outstanding lines on this PO (all qty already received)'
-                : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
+            {!selPoId
+              ? 'Pick a PO above to load its outstanding lines'
+              : poQ.isLoading
+                ? 'Loading PO items…'
+                : lines.length === 0
+                  ? 'No outstanding lines on this PO (all qty already received)'
+                  : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
           </span>
         </div>
         <div className={styles.cardBody}>
-          {/* Header */}
-          <div style={{
-            display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
-            padding: cellPad, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)',
-            fontWeight: 600, letterSpacing: '0.10em', textTransform: 'uppercase',
-            color: 'var(--fg-soft)', borderBottom: '1px solid var(--line)',
-          }}>
-            <div>Item Code</div>
-            <div>Description</div>
-            <div style={{ textAlign: 'right' }}>Outstanding</div>
-            <div style={{ textAlign: 'right' }}>Received</div>
-            <div style={{ textAlign: 'right' }}>Accepted</div>
-            <div style={{ textAlign: 'right' }}>Rejected</div>
-            <div style={{ textAlign: 'right' }}>Line Value</div>
-            <div></div>
-          </div>
-
-          {/* Rows */}
-          {lines.map((l) => {
-            const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
-            return (
-              <div key={l.rid} style={{
-                display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
-                padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
-              }}>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
-                <div style={{ fontSize: 'var(--fs-13)' }}>{l.materialName}</div>
-                <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{l.outstanding}</div>
-                <input type="number" min={0} max={l.outstanding} value={l.qtyReceived}
-                  onChange={(e) => {
-                    const v = Math.max(0, Math.min(l.outstanding, Number(e.target.value) || 0));
-                    setLine(l.rid, { qtyReceived: v, qtyAccepted: Math.min(l.qtyAccepted, v) });
-                  }}
-                  className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                <input type="number" min={0} max={l.qtyReceived} value={l.qtyAccepted}
-                  onChange={(e) => {
-                    const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
-                    setLine(l.rid, { qtyAccepted: v, qtyRejected: l.qtyReceived - v });
-                  }}
-                  className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                <input type="number" min={0} max={l.qtyReceived} value={l.qtyRejected}
-                  onChange={(e) => {
-                    const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
-                    setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
-                  }}
-                  className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineValueCenti, currency)}</div>
-                <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
-                  <Trash2 {...SM_ICON} />
-                </button>
-              </div>
-            );
-          })}
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
-            Subtotal: {fmtRm(subtotalCenti, currency)}
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-};
-
-/* ─────────────────── GRN — pick-PO picker ────────────────────────────
-   PR — Commander 2026-05-27: "New GRN" on the list page now lands here
-   directly. When no ?poId= is supplied we render a picker card so the
-   buyer can choose a PO without bouncing back to the PO list. Only
-   SUBMITTED + PARTIALLY_RECEIVED POs (Outstanding) are pickable — the
-   only states with anything left to receive.
-   ──────────────────────────────────────────────────────────────────── */
-const GrnPickPo = () => {
-  const navigate = useNavigate();
-  // No multi-status filter on the API — fetch all once and filter client-side
-  // (small dataset; matches the PO list page strategy).
-  const { data, isLoading } = usePurchaseOrders();
-  const outstanding = useMemo(() => {
-    return (data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED');
-  }, [data]);
-  const [pickedId, setPickedId] = useState<string>('');
-
-  const proceed = () => {
-    if (!pickedId) return;
-    navigate(`/grns/new?poId=${pickedId}`);
-  };
-
-  return (
-    <div className={styles.page}>
-      <div className={styles.headerRow}>
-        <div className={styles.titleBlock}>
-          <Link to="/grns" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
-          </Link>
-          <h1 className={styles.title}>New Goods Receipt</h1>
-        </div>
-        <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
-            <X {...ICON} /> Cancel
-          </Button>
-          {/* PR — task #52: shortcut into the line-level multi-PO picker for
-              the partial-receive / split-supplier flow. */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
-            From PO (multi)
-          </Button>
-          <Button variant="primary" size="md" onClick={proceed} disabled={!pickedId}>
-            <Save {...ICON} /> Open Receive Form
-          </Button>
-        </div>
-      </div>
-
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Pick a Purchase Order to receive against</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {isLoading
-              ? 'Loading…'
-              : `${outstanding.length} outstanding PO${outstanding.length === 1 ? '' : 's'}`}
-          </span>
-        </div>
-        <div className={styles.cardBody}>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Purchase Order *</span>
-            <select
-              value={pickedId}
-              onChange={(e) => setPickedId(e.target.value)}
-              className={styles.fieldInput}
-              disabled={isLoading || outstanding.length === 0}
-            >
-              <option value="">— Pick an outstanding PO —</option>
-              {outstanding.map((po) => (
-                <option key={po.id} value={po.id}>
-                  {po.po_number} · {po.supplier?.name ?? po.supplier?.code ?? '—'} · {po.po_date}
-                  {po.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
-                </option>
-              ))}
-            </select>
-            <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
-              Only Submitted and Partially Received POs are listed — the ones with stock still due.
-            </span>
-          </label>
-
-          {!isLoading && outstanding.length === 0 && (
-            <p style={{ marginTop: 'var(--space-3)', color: 'var(--fg-muted)' }}>
-              No outstanding POs right now. Create one from the{' '}
-              <Link to="/purchase-orders" style={{ color: 'var(--c-orange)' }}>Purchase Orders</Link> page.
+          {!selPoId ? (
+            <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', padding: 'var(--space-3) 0' }}>
+              Choose a Purchase Order in the header to receive against it. Receiving lines from several POs at once?
+              Use <button type="button" onClick={() => navigate('/grns/from-po')} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
             </p>
+          ) : (
+            <>
+              {/* Header */}
+              <div style={{
+                display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
+                padding: cellPad, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)',
+                fontWeight: 600, letterSpacing: '0.10em', textTransform: 'uppercase',
+                color: 'var(--fg-soft)', borderBottom: '1px solid var(--line)',
+              }}>
+                <div>Item Code</div>
+                <div>Description</div>
+                <div style={{ textAlign: 'right' }}>Outstanding</div>
+                <div style={{ textAlign: 'right' }}>Received</div>
+                <div style={{ textAlign: 'right' }}>Accepted</div>
+                <div style={{ textAlign: 'right' }}>Rejected</div>
+                <div style={{ textAlign: 'right' }}>Line Value</div>
+                <div></div>
+              </div>
+
+              {/* Rows */}
+              {lines.map((l) => {
+                const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
+                return (
+                  <div key={l.rid} style={{
+                    display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
+                    padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
+                  }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
+                    <div style={{ fontSize: 'var(--fs-13)' }}>{l.materialName}</div>
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{l.outstanding}</div>
+                    <input type="number" min={0} max={l.outstanding} value={l.qtyReceived}
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(l.outstanding, Number(e.target.value) || 0));
+                        setLine(l.rid, { qtyReceived: v, qtyAccepted: Math.min(l.qtyAccepted, v) });
+                      }}
+                      className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
+                    <input type="number" min={0} max={l.qtyReceived} value={l.qtyAccepted}
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
+                        setLine(l.rid, { qtyAccepted: v, qtyRejected: l.qtyReceived - v });
+                      }}
+                      className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
+                    <input type="number" min={0} max={l.qtyReceived} value={l.qtyRejected}
+                      onChange={(e) => {
+                        const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
+                        setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
+                      }}
+                      className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineValueCenti, currency)}</div>
+                    <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
+                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
+                      <Trash2 {...SM_ICON} />
+                    </button>
+                  </div>
+                );
+              })}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
+                Subtotal: {fmtRm(subtotalCenti, currency)}
+              </div>
+            </>
           )}
         </div>
       </section>
+
+      {dialog && (
+        <ActionResultDialog
+          title={dialog.title}
+          body={dialog.body}
+          primaryLabel={dialog.goTo ? 'Open GRN' : undefined}
+          onPrimary={dialog.goTo ? () => { const g = dialog.goTo!; setDialog(null); navigate(g); } : undefined}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 };
