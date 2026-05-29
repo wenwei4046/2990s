@@ -57,7 +57,11 @@ const PurchaseOrders = lazyRetry(() => import('./pages/PurchaseOrders').then(m =
 // detail pages. Replaces the old FlowPages.Grns + DocDetailPages.GrnDetail.
 const GoodsReceived = lazyRetry(() => import('./pages/GoodsReceivedList').then(m => ({ default: m.GoodsReceived })));
 const GoodsReceivedDetail = lazyRetry(() => import('./pages/GoodsReceivedDetail').then(m => ({ default: m.GoodsReceivedDetail })));
-const PurchaseInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseInvoicesPage })));
+// PI module rebuilt as a GRN-clone (PO-parity): standalone list + confirmed,
+// immediate-save detail page. Replaces the old FlowPages.PurchaseInvoicesPage +
+// DocDetailPages.PurchaseInvoiceDetail (both definitions stay in place).
+const PurchaseInvoices = lazyRetry(() => import('./pages/PurchaseInvoicesList').then(m => ({ default: m.PurchaseInvoices })));
+const PurchaseInvoiceDetail = lazyRetry(() => import('./pages/PurchaseInvoiceDetail').then(m => ({ default: m.PurchaseInvoiceDetail })));
 const MfgSalesOrdersPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.MfgSalesOrdersPage })));
 const MfgDeliveryOrdersList = lazyRetry(() => import('./pages/MfgDeliveryOrdersList').then(m => ({ default: m.MfgDeliveryOrdersList })));
 const DeliveryOrderNew = lazyRetry(() => import('./pages/DeliveryOrderNew').then(m => ({ default: m.DeliveryOrderNew })));
@@ -113,7 +117,6 @@ const DeliveryOrderDetailListing = lazyRetry(() => import('./pages/DeliveryOrder
 const SalesInvoiceDetailListing = lazyRetry(() => import('./pages/SalesInvoiceDetailListing').then(m => ({ default: m.SalesInvoiceDetailListing })));
 const ConsignmentDetailListing = lazyRetry(() => import('./pages/ConsignmentDetailListing').then(m => ({ default: m.ConsignmentDetailListing })));
 const DeliveryReturnDetailListing = lazyRetry(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
-const PurchaseInvoiceDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.PurchaseInvoiceDetail })));
 const DeliveryOrderDetail = lazyRetry(() => import('./pages/DeliveryOrderDetail').then(m => ({ default: m.DeliveryOrderDetail })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.SalesInvoiceDetail })));
 const ConsignmentDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.ConsignmentDetail })));
@@ -165,7 +168,8 @@ export const router = createBrowserRouter([
       { path: 'grns/new', element: <GrnNew /> },
       { path: 'grns/from-po', element: <GrnFromPo /> },
       { path: 'grns/:id', element: <GoodsReceivedDetail /> },
-      { path: 'purchase-invoices', element: <PurchaseInvoicesPage /> },
+      { path: 'purchase-invoices', element: <PurchaseInvoices /> },
+      // /new + /from-grn are STATIC paths — must precede the :id param route.
       { path: 'purchase-invoices/new', element: <PurchaseInvoiceNew /> },
       { path: 'purchase-invoices/from-grn', element: <PurchaseInvoiceFromGrn /> },
       { path: 'purchase-invoices/:id', element: <PurchaseInvoiceDetail /> },

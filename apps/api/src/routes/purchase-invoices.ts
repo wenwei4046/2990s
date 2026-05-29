@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { buildVariantSummary } from '@2990s/shared';
 
 export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseInvoices.use('*', supabaseAuth);
@@ -10,7 +11,11 @@ purchaseInvoices.use('*', supabaseAuth);
 const HEADER =
   'id, invoice_number, supplier_invoice_ref, supplier_id, purchase_order_id, grn_id, invoice_date, due_date, currency, subtotal_centi, tax_centi, total_centi, paid_centi, status, notes, posted_at, created_at, created_by, updated_at';
 const ITEM =
-  'id, purchase_invoice_id, grn_item_id, material_kind, material_code, material_name, qty, unit_price_centi, line_total_centi, notes, created_at';
+  'id, purchase_invoice_id, grn_item_id, material_kind, material_code, material_name, qty, unit_price_centi, line_total_centi, notes, ' +
+  /* PR #42 — variant fields (migration 0057) */
+  'item_group, description, description2, uom, discount_centi, variants, ' +
+  'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+  'custom_specials, line_suffix, special_order_price_sen, unit_cost_centi, created_at';
 
 const nextNum = async (sb: any, prefix: string): Promise<string> => {
   const d = new Date();
@@ -19,9 +24,30 @@ const nextNum = async (sb: any, prefix: string): Promise<string> => {
   return `${prefix}-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
 };
 
+/* ── Recompute PI header money rollups (mirror recomputeGrnTotals) ─────────
+   Sum line_total_centi across purchase_invoice_items → write subtotal_centi,
+   then total_centi = subtotal + tax_centi (PI carries a stored tax that GRN
+   does NOT, so we ADD it into total here). paid_centi is untouched — Balance
+   (total - paid) is derived in the UI; payment recording stays on /payment. */
+async function recomputePiTotals(sb: any, piId: string) {
+  const [itemsRes, headerRes] = await Promise.all([
+    sb.from('purchase_invoice_items').select('line_total_centi').eq('purchase_invoice_id', piId),
+    sb.from('purchase_invoices').select('tax_centi').eq('id', piId).maybeSingle(),
+  ]);
+  const subtotal = (itemsRes.data ?? []).reduce((s: number, r: any) => s + (r.line_total_centi ?? 0), 0);
+  const tax = (headerRes.data as { tax_centi?: number } | null)?.tax_centi ?? 0;
+  await sb.from('purchase_invoices').update({
+    subtotal_centi: subtotal,
+    total_centi: subtotal + tax,
+    updated_at: new Date().toISOString(),
+  }).eq('id', piId);
+}
+
 purchaseInvoices.get('/', async (c) => {
   const sb = c.get('supabase');
-  let q = sb.from('purchase_invoices').select(`${HEADER}, supplier:suppliers(id, code, name)`).order('invoice_date', { ascending: false });
+  let q = sb.from('purchase_invoices')
+    .select(`${HEADER}, supplier:suppliers(id, code, name), purchase_order:purchase_orders(id, po_number), grn:grns(id, grn_number)`)
+    .order('invoice_date', { ascending: false });
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
@@ -508,5 +534,143 @@ purchaseInvoices.post('/from-grn', async (c) => {
   const { error: insErr } = await sb.from('purchase_invoice_items').insert(rows);
   if (insErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: insErr.message }, 500); }
 
+  // Refresh header subtotal/total from the inserted lines (parity with GRN/PR).
+  await recomputePiTotals(sb, h.id);
+
   return c.json({ id: h.id, invoiceNumber: h.invoice_number }, 201);
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   PI PO-clone CRUD (PATCH header + line add / edit / delete) — mirrors the
+   GRN detail page's confirmed/immediate-save editing (apps/api/src/routes/grns.ts).
+   The editable line quantity is qty; line_total_centi =
+   qty * unit_price_centi - discount_centi; recomputePiTotals rolls the header
+   subtotal/total (PI keeps the stored tax in total, unlike GRN). PI is AP-only
+   → line delete needs no inventory release (that landed at GRN time).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── PATCH /:id — header update (mirror GRN's PATCH /:id) ── */
+purchaseInvoices.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of [
+    ['supplierId', 'supplier_id'], ['supplierInvoiceRef', 'supplier_invoice_ref'],
+    ['invoiceDate', 'invoice_date'], ['dueDate', 'due_date'],
+    ['currency', 'currency'], ['notes', 'notes'],
+  ] as const) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  // currency is an enum — normalise to upper-case like POST does.
+  if (updates.currency !== undefined) updates.currency = String(updates.currency).toUpperCase();
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_invoices').update(updates).eq('id', id).select(HEADER).single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ purchaseInvoice: data });
+});
+
+/* ── POST /:id/items — add one purchase_invoice_item. qty maps to qty. ── */
+purchaseInvoices.post('/:id/items', async (c) => {
+  const piId = c.req.param('id');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
+  if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const qty = Number(it.qty ?? 1);
+  const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+  const discountCenti = Number(it.discountCenti ?? 0);
+  const lineTotal = (qty * unitPriceCenti) - discountCenti;
+
+  const row: Record<string, unknown> = {
+    purchase_invoice_id: piId,
+    grn_item_id: (it.grnItemId as string) ?? null,
+    material_kind: (it.materialKind as string) ?? 'mfg_product',
+    material_code: it.materialCode,
+    material_name: it.materialName,
+    qty,
+    unit_price_centi: unitPriceCenti,
+    discount_centi: discountCenti,
+    line_total_centi: lineTotal,
+    unit_cost_centi: Number(it.unitCostCenti ?? 0),
+    notes: (it.notes as string) ?? null,
+    /* variant fields (mirror GRN/PO line) */
+    gap_inches: (it.gapInches as number) ?? null,
+    divan_height_inches: (it.divanHeightInches as number) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+    variants: (it.variants as unknown) ?? null,
+    item_group: (it.itemGroup as string) ?? null,
+    description: (it.description as string) ?? null,
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+    uom: (it.uom as string) ?? 'UNIT',
+  };
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_invoice_items').insert(row).select(ITEM).single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  await recomputePiTotals(sb, piId);
+  return c.json({ item: data }, 201);
+});
+
+/* ── PATCH /:id/items/:itemId — partial line update. ── */
+purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
+  const piId = c.req.param('id'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+
+  const { data: prev } = await sb.from('purchase_invoice_items')
+    .select('qty, unit_price_centi, discount_centi, item_group, variants')
+    .eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  const qty = it.qty !== undefined ? Number(it.qty) : (prev as { qty: number }).qty;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
+  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
+  const lineTotal = (qty * unit) - discount;
+
+  const updates: Record<string, unknown> = {
+    qty,
+    unit_price_centi: unit,
+    discount_centi: discount,
+    line_total_centi: lineTotal,
+  };
+  for (const [from, to] of [
+    ['materialCode', 'material_code'], ['materialName', 'material_name'],
+    ['itemGroup', 'item_group'], ['description', 'description'], ['uom', 'uom'],
+    ['unitCostCenti', 'unit_cost_centi'], ['notes', 'notes'],
+    ['gapInches', 'gap_inches'], ['divanHeightInches', 'divan_height_inches'],
+    ['divanPriceSen', 'divan_price_sen'], ['legHeightInches', 'leg_height_inches'],
+    ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
+    ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
+    ['variants', 'variants'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* description2 is server-owned: recompute from effective itemGroup + variants. */
+  {
+    const effGroup = (it.itemGroup ?? (prev as { item_group?: string }).item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
+  }
+
+  const { error } = await sb.from('purchase_invoice_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  await recomputePiTotals(sb, piId);
+  return c.json({ ok: true });
+});
+
+/* ── DELETE /:id/items/:itemId — remove a line + recompute header. ── */
+purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
+  const piId = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase');
+  const { error } = await sb.from('purchase_invoice_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  await recomputePiTotals(sb, piId);
+  return c.body(null, 204);
 });

@@ -243,6 +243,53 @@ export const useCreatePurchaseInvoice = () => {
   });
 };
 
+/* ── PI PO-clone CRUD (mirror the GRN/PR header + line item hooks) ──────────
+   PATCH /purchase-invoices/:id (header), POST/PATCH/DELETE
+   /purchase-invoices/:id/items[/:itemId]. Each invalidates the PI detail
+   (['purchase-invoice-detail', id]) + list (['purchase-invoices']) — the same
+   query keys usePurchaseInvoiceDetail + usePurchaseInvoices read. */
+export const useUpdatePurchaseInvoiceHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: {
+      id: string; supplierId?: string; supplierInvoiceRef?: string; invoiceDate?: string;
+      dueDate?: string; currency?: string; notes?: string;
+    }) => authedFetch<{ purchaseInvoice: any }>(`/purchase-invoices/${id}`, {
+      method: 'PATCH', body: JSON.stringify(body),
+    }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+    },
+  });
+};
+
+export const useUpdatePurchaseInvoiceItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId, ...body }: { id: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: true }>(`/purchase-invoices/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+    },
+  });
+};
+
+export const useDeletePurchaseInvoiceItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId }: { id: string; itemId: string }) =>
+      authedFetch<void>(`/purchase-invoices/${id}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+    },
+  });
+};
+
 /* ── Mfg Sales Order ─────────────────────────────────────────────────── */
 export const useMfgSalesOrders = (status?: string) => baseQuery<{ salesOrders: any[] }>(['mfg-sales-orders', status ?? 'all'], `/mfg-sales-orders${status ? `?status=${status}` : ''}`);
 export const useMfgSalesOrderDetail = (docNo: string | null) => useQuery({
