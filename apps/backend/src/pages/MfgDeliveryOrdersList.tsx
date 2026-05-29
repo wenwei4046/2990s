@@ -578,13 +578,16 @@ export const MfgDeliveryOrdersList = () => {
             { label: 'Print',   onClick: () => renderPdf(row) },
             { divider: true as const },
           ];
-          // Issue Sales Invoice — from DELIVERED / SIGNED.
-          if (['DELIVERED', 'SIGNED'].includes(status)) {
-            items.push({ label: 'Issue Sales Invoice', onClick: () => navigate('/sales-invoices') });
-          }
-          // Issue Delivery Return — from DELIVERED.
-          if (status === 'DELIVERED') {
-            items.push({ label: 'Issue Delivery Return', onClick: () => navigate('/delivery-returns') });
+          /* Commander 2026-05-29 — a DO ships on creation, so the downstream
+             converts are available for any non-cancelled DO (no waiting for a
+             DELIVERED stage that no longer exists). "Convert to Sales Invoice"
+             is wired when the Sales Invoice module lands; "Convert to Delivery
+             Return" prefills a new return from this DO. */
+          if (!['CANCELLED'].includes(status)) {
+            items.push({
+              label: 'Convert to Delivery Return',
+              onClick: () => navigate(`/delivery-returns/new?fromDo=${row.id}`),
+            });
           }
           items.push({ divider: true as const });
           if (!['CANCELLED', 'INVOICED'].includes(status)) {
