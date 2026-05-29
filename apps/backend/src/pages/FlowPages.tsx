@@ -407,11 +407,13 @@ export const PurchaseInvoicesPage = () => {
         title="Purchase Invoices"
         subtitle="Supplier invoices to us"
         newLabel="New Invoice"
-        // PR — Phase 3: PI is created from a GRN (auto-pulls accepted lines).
-        // Bouncing to GRN list forces commander to pick the right GRN first.
-        onNew={() => navigate('/grns')}
-        // PR — task #52: multi-GRN-line picker → one PI per GRN, auto-posted.
-        secondary={{ label: 'From GRN', onClick: () => navigate('/purchase-invoices/from-grn') }}
+        // Commander 2026-05-29: New Invoice lands on a standalone create form
+        // (manual supplier + items), like New PO / New GRN — it no longer
+        // forces you through a GRN first.
+        onNew={() => navigate('/purchase-invoices/new')}
+        // Keep the GRN→Invoice path: "From GRN" still opens the create form's
+        // GRN picker (mirrors how the GRN page keeps a "From PO" secondary).
+        secondary={{ label: 'From GRN', onClick: () => navigate('/grns') }}
       />
       <StatusChips chips={PI_CHIPS} active={status} onPick={setStatus} />
       {poIdFilter  && <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`}    onClear={() => clearFilter('poId')} />}
