@@ -18,6 +18,7 @@ import {
   usePurchaseOrders,
   usePurchaseOrderDetail,
   useCreatePurchaseOrder,
+  useCancelPurchaseOrder,
   useSuppliers,
   useSupplierDetail,
   useSuppliersForMaterial,
@@ -196,6 +197,7 @@ export const PurchaseOrders = () => {
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const grnFromPos = useGrnFromPos();
+  const cancelPo = useCancelPurchaseOrder();
 
   // Always fetch all rows — filtering Outstanding (SUBMITTED ∪
   // PARTIALLY_RECEIVED) client-side is one trip vs. two and the dataset is
@@ -247,6 +249,27 @@ export const PurchaseOrders = () => {
         },
       },
     );
+  };
+
+  /* Commander 2026-05-29 — right-click context menu actions (mirrors the SO
+     list). Single-PO convert reuses the batch GRN endpoint. */
+  const convertOneToGrn = (po: PoHeaderRow) => {
+    grnFromPos.mutate(
+      { purchaseOrderIds: [po.id] },
+      {
+        onSuccess: (res) => {
+          alert(`Created GRN ${res.grnNumber} from ${po.po_number} (${res.lineCount} lines).`);
+          navigate(`/grns/${res.id}`);
+        },
+        onError: (e) => alert(`Convert to GRN failed: ${e instanceof Error ? e.message : String(e)}`),
+      },
+    );
+  };
+  const doCancelPo = (po: PoHeaderRow) => {
+    if (!window.confirm(`Cancel ${po.po_number}? It will stop proceeding and any converted SO lines are released back.`)) return;
+    cancelPo.mutate(po.id, {
+      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+    });
   };
 
   return (
@@ -338,7 +361,30 @@ export const PurchaseOrders = () => {
         storageKey={PO_LIST_STORAGE_KEY}
         rowKey={(po) => po.id}
         searchPlaceholder="Search POs…"
-        onRowClick={(po) => navigate(`/purchase-orders/${po.id}`)}
+        /* Commander 2026-05-29 — open on DOUBLE-click (single-click was too
+           trigger-happy: "本来应该要点两次的嘛"). Right-click → context menu. */
+        onRowDoubleClick={(po) => navigate(`/purchase-orders/${po.id}`)}
+        /* Cancelled POs grey out so they read as dead (mirrors the SO list). */
+        rowStyle={(po) => po.status === 'CANCELLED'
+          ? { opacity: 0.55, filter: 'grayscale(0.6)' }
+          : undefined}
+        contextMenu={(po) => {
+          const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
+            { label: 'View', onClick: () => navigate(`/purchase-orders/${po.id}`) },
+            { label: 'Edit', onClick: () => navigate(`/purchase-orders/${po.id}?edit=1`) },
+            { divider: true as const },
+          ];
+          // Convert to GRN — only while the PO still has goods inbound.
+          if (po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') {
+            menu.push({ label: 'Convert to GRN', onClick: () => convertOneToGrn(po) });
+          }
+          // Cancel — soft-stop. Hidden once already cancelled / received.
+          if (po.status !== 'CANCELLED' && po.status !== 'RECEIVED') {
+            menu.push({ divider: true as const });
+            menu.push({ label: 'Cancel PO', danger: true, onClick: () => doCancelPo(po) });
+          }
+          return menu;
+        }}
         isLoading={isLoading}
         emptyMessage='No POs yet — click "New PO" to start.'
       />

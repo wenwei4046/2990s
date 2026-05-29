@@ -15,7 +15,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Ban, ArrowRightLeft,
   ChevronDown, Check,
@@ -114,8 +114,11 @@ export const PurchaseOrderDetail = () => {
      into Edit mode where the existing editable SupplierCard + line modal + Add
      Line Item appear and "Convert from SO" becomes available. Done returns to
      View. Header changes already persist live via the SupplierCard's own Save
-     (updateHeader), so leaving Edit mode simply reflects the saved snapshot. */
-  const [isEditing, setIsEditing] = useState(false);
+     (updateHeader), so leaving Edit mode simply reflects the saved snapshot.
+     Commander 2026-05-29 — the PO list's right-click "Edit" lands here with
+     ?edit=1, so open straight into Edit mode in that case. */
+  const [searchParams] = useSearchParams();
+  const [isEditing, setIsEditing] = useState(() => searchParams.get('edit') === '1');
 
   // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
   // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
@@ -719,10 +722,6 @@ const PoLineItemModal = ({
   const productsQuery = useMfgProducts({ search: search.trim() || undefined });
   const candidates = productsQuery.data ?? [];
 
-  // PR #77 — per-line ship-to dropdown options
-  const warehousesQ = useWarehouses();
-  const warehouses = warehousesQ.data ?? [];
-
   // PR #75 — supplier bindings drive the default-state picker. When the PO
   // already has a supplier, show only their bound products until commander
   // hits "Show all" or types a search query.
@@ -800,7 +799,11 @@ const PoLineItemModal = ({
       materialName:   p.name,
       itemGroup:      p.category.toLowerCase(),
       description:    p.name,
-      unitPriceCenti: bound?.unit_price_centi ?? (p.base_price_sen ?? 0),
+      /* Commander 2026-05-29 — "选完 item，它的 Price 也没有带出来". The binding's
+         unit_price_centi can be 0 (mattress/accessory SKU mapping with no price
+         set yet). `??` kept that 0; use `||` so a 0/unset binding price falls
+         back to the product's own base price instead of showing RM 0.00. */
+      unitPriceCenti: (bound?.unit_price_centi || (p.base_price_sen ?? 0)),
       supplierSku:    bound?.supplier_sku ?? '',
       variants:       {},
     }));
@@ -1013,7 +1016,7 @@ const PoLineItemModal = ({
                           <span style={{ marginLeft: 6 }}>· {p.name}</span>
                         </div>
                         <div className={styles.suggestCode}>
-                          {p.category} · {fmtRm(bound?.unit_price_centi ?? (p.base_price_sen ?? 0), currency)}
+                          {p.category} · {fmtRm(bound?.unit_price_centi || (p.base_price_sen ?? 0), currency)}
                           {bound && <span style={{ marginLeft: 6, color: 'var(--c-orange)' }}>· bound</span>}
                         </div>
                       </li>
@@ -1126,9 +1129,13 @@ const PoLineItemModal = ({
             </div>
           </div>
 
-          {/* PR #77 — per-line delivery + ship-to. Both empty = inherit
-              from PO header (Expected Delivery + Purchase Location). */}
-          <div className={styles.row} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+          {/* PR #77 — per-line delivery override; empty = inherit from PO
+              header (Expected Delivery).
+              Commander 2026-05-29 — removed the Ship-to Warehouse (line
+              override) picker: "这个 Warehouse 不应该叫我选". The ship-to is
+              the PO header's Purchase Location; per-line override isn't wanted.
+              Delivery Date stays (commander: "Delivery Date 可以叫我选"). */}
+          <div className={styles.row}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date (line override)</span>
               <input
@@ -1137,22 +1144,6 @@ const PoLineItemModal = ({
                 value={draft.deliveryDate ?? ''}
                 onChange={(e) => setDraft((s) => ({ ...s, deliveryDate: e.target.value || null }))}
               />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Ship-to Warehouse (line override)</span>
-              <span className={styles.selectWrap}>
-                <select
-                  className={styles.fieldSelect}
-                  value={draft.warehouseId ?? ''}
-                  onChange={(e) => setDraft((s) => ({ ...s, warehouseId: e.target.value || null }))}
-                >
-                  <option value="">— Use PO default —</option>
-                  {warehouses.filter((w) => w.is_active).map((w) => (
-                    <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                  ))}
-                </select>
-                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-              </span>
             </label>
           </div>
 

@@ -1339,16 +1339,68 @@ mfgPurchaseOrders.patch('/:id/submit', async (c) => {
 mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
   const id = c.req.param('id');
   const supabase = c.get('supabase');
-  const { data, error } = await supabase
+
+  /* Commander 2026-05-29 — BUGFIX: the old `.update(...).select().single()`
+     threw "Cannot coerce the result to a single JSON object" (PostgREST
+     PGRST116) whenever the UPDATE's RETURNING yielded ≠ 1 visible rows. Split
+     into read → guard → update → re-read so the cancel can't 500 on that. */
+  const { data: cur, error: readErr } = await supabase
+    .from('purchase_orders')
+    .select('id, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return c.json({ error: 'load_failed', reason: readErr.message }, 500);
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const curStatus = (cur as { status: string }).status;
+  if (curStatus === 'RECEIVED') return c.json({ error: 'cannot_cancel', message: 'PO already received' }, 409);
+  // Idempotent — already cancelled, just echo back.
+  if (curStatus === 'CANCELLED') {
+    return c.json({ purchaseOrder: { id, status: 'CANCELLED' } });
+  }
+
+  const { error: updErr } = await supabase
     .from('purchase_orders')
     .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .neq('status', 'RECEIVED')
+    .eq('id', id);
+  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+
+  /* Commander 2026-05-29 (BUG 1) — "cancel 了之后 代表这些 SO 有释放出来了是吧":
+     YES. Cancelling a PO releases EVERY converted SO line's quota back so they
+     reappear in the From-SO picker (mirrors the per-line delete release).
+     Read each line's so_item_id + qty, then decrement po_qty_picked (clamped
+     ≥ 0). Best-effort — never fail the cancel on a counter roll-back. */
+  try {
+    const { data: lines } = await supabase
+      .from('purchase_order_items')
+      .select('so_item_id, qty')
+      .eq('purchase_order_id', id);
+    const releaseBySoItem = new Map<string, number>();
+    for (const ln of (lines ?? []) as Array<{ so_item_id: string | null; qty: number }>) {
+      if (ln.so_item_id && ln.qty > 0) {
+        releaseBySoItem.set(ln.so_item_id, (releaseBySoItem.get(ln.so_item_id) ?? 0) + ln.qty);
+      }
+    }
+    if (releaseBySoItem.size > 0) {
+      const soItemIds = [...releaseBySoItem.keys()];
+      const { data: soRows } = await supabase
+        .from('mfg_sales_order_items')
+        .select('id, po_qty_picked')
+        .in('id', soItemIds);
+      await Promise.all(((soRows ?? []) as Array<{ id: string; po_qty_picked: number }>).map(async (row) => {
+        const back = releaseBySoItem.get(row.id) ?? 0;
+        if (back <= 0) return;
+        const next = Math.max(0, (row.po_qty_picked ?? 0) - back);
+        await supabase.from('mfg_sales_order_items').update({ po_qty_picked: next }).eq('id', row.id);
+      }));
+    }
+  } catch { /* best-effort — PO already cancelled, don't fail on counter roll */ }
+
+  const { data: after } = await supabase
+    .from('purchase_orders')
     .select('id, status, cancelled_at')
-    .single();
-  if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'cannot_cancel', message: 'PO already received' }, 409);
-  return c.json({ purchaseOrder: data });
+    .eq('id', id)
+    .maybeSingle();
+  return c.json({ purchaseOrder: after ?? { id, status: 'CANCELLED' } });
 });
 
 // ── Delete ────────────────────────────────────────────────────────────

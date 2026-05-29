@@ -754,7 +754,12 @@ export function useCancelPurchaseOrder() {
         `/mfg-purchase-orders/${id}/cancel`,
         { method: 'PATCH' },
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+    onSuccess: (_, id) => {
+      // Prefix key also matches ['mfg-purchase-orders','outstanding-so-items'],
+      // so the released SO lines reappear in the From-SO picker.
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', id] });
+    },
   });
 }
 
