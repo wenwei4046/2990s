@@ -27,6 +27,8 @@ import {
   Tag, ChevronDown, ChevronRight, Download, Upload,
 } from 'lucide-react';
 import { MaintenanceTab, type MaintenanceSection } from './Products';
+import { SofaComboTab } from '../components/SofaComboTab';
+import { FabricTracking } from './FabricTracking';
 import { Button } from '@2990s/design-system';
 import {
   useSupplierDetail,
@@ -162,7 +164,7 @@ function mfgCategoryFromSupplierCategory(
   }
 }
 
-type SupplierDetailTab = 'overview' | 'pricing';
+type SupplierDetailTab = 'overview' | 'pricing' | 'combos' | 'fabric';
 
 export const SupplierDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -180,6 +182,13 @@ export const SupplierDetail = () => {
   const supplierCategory: SupplierCategory | null = isSupplierCategory(supplier?.category)
     ? supplier!.category
     : null;
+  /* Commander 2026-05-29 — surface the Products config tabs on the supplier,
+     scoped to what the supplier actually supplies:
+       • Combo Pricing  → SOFA suppliers (sofa module-set deals)
+       • Fabric Converter → SOFA + BEDFRAME (fabric/colour pool)
+     MIXED / unknown shows both. (Maintenance is the existing Pricing tab.) */
+  const showCombo  = supplierCategory == null || supplierCategory === 'SOFA' || supplierCategory === 'MIXED';
+  const showFabric = supplierCategory == null || supplierCategory === 'SOFA' || supplierCategory === 'BEDFRAME' || supplierCategory === 'MIXED';
 
   // KPI tone selection — same thresholds as HOOKKA.
   const otrTone = useMemo(() => {
@@ -283,7 +292,7 @@ export const SupplierDetail = () => {
           active={activeTab === 'pricing'}
           onClick={() => setActiveTab('pricing')}
         >
-          Pricing
+          Maintenance
           {supplierCategory && (
             <span
               style={{
@@ -300,15 +309,28 @@ export const SupplierDetail = () => {
             </span>
           )}
         </SupplierTabButton>
+        {showCombo && (
+          <SupplierTabButton active={activeTab === 'combos'} onClick={() => setActiveTab('combos')}>
+            Combo Pricing
+          </SupplierTabButton>
+        )}
+        {showFabric && (
+          <SupplierTabButton active={activeTab === 'fabric'} onClick={() => setActiveTab('fabric')}>
+            Fabric Converter
+          </SupplierTabButton>
+        )}
       </div>
 
-      {activeTab === 'pricing' ? (
+      {activeTab === 'pricing' && (
         <SupplierPricingPanel
           supplierId={id!}
           supplierName={supplier.name}
           supplierCategory={supplierCategory}
         />
-      ) : (
+      )}
+      {activeTab === 'combos' && showCombo && <SofaComboTab />}
+      {activeTab === 'fabric' && showFabric && <FabricTracking />}
+      {activeTab === 'overview' && (
         <SupplierOverviewPanel
           id={id!}
           supplierCode={supplier.code}
