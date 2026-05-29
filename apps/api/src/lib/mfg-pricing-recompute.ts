@@ -116,6 +116,11 @@ const normalizeSpecials = (s: string[] | string | null | undefined): string[] =>
 
 const driftThresholdExceeded = (clientCenti: number, serverSen: number): boolean => {
   // Both columns are sen-equivalent integers (centi == sen × 1 in 2990s).
+  // Commander 2026-05-29 — a client unitPriceCenti of 0 means "not provided"
+  // (e.g. the backend SO line editor couldn't resolve the price client-side).
+  // Trust the server's own recompute instead of rejecting the whole SO. The
+  // anti-tamper guard still catches a NON-zero client price below the server's.
+  if (clientCenti === 0 && serverSen > 0) return false;
   if (serverSen <= 0) return clientCenti !== 0;
   const drift = Math.abs(clientCenti - serverSen) / serverSen;
   return drift > 0.005;
