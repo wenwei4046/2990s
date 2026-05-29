@@ -7,25 +7,32 @@
 //   1. Header: back button + PO# · supplier + status pill + actions
 //   2. Supplier card: editable supplier picker + dates + currency + notes
 //   3. Line items table: code + group + variants summary + qty + unit + total
-//      + Edit/Delete. "+ Add Line Item" opens a modal with product picker +
-//      per-category variant editor (sofa: seat height + leg + special;
-//      bedframe: divan + gap + leg + specials).
 //   4. Totals card: subtotal + total
 //   5. Status flow: Draft → Submitted → Partially Received → Received | Cancelled
+//
+// Commander 2026-05-29 — PO Edit is a DRAFT (#194). Clicking Edit snapshots the
+// header + lets you edit Qty / Unit Price / Disc / Delivery INLINE in each row
+// (no per-line modal — "多此一举"). Nothing persists until the single top Save:
+//   • Save  → commits header changes + every changed line + staged deletions
+//   • Back  → leaves the page, discarding the whole draft (no auto-save —
+//             "为什么只是点 Back 也会自动 Save 呢")
+//   • Delete (trash) stages a removal immediately (no confirm popup) — the row
+//     vanishes from view + totals; the server delete (which releases the SO
+//     quota back) happens on Save.
+//   • Changing the header Expected Delivery cascades to every line's delivery.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, X, Printer, Save, Ban, ArrowRightLeft,
-  ChevronDown, Check,
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ArrowRightLeft,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   usePurchaseOrderDetail,
   useUpdatePurchaseOrderHeader,
-  useAddPurchaseOrderItem,
   useUpdatePurchaseOrderItem,
   useDeletePurchaseOrderItem,
   useCancelPurchaseOrder,
@@ -33,11 +40,8 @@ import {
   useSuppliers,
   useSupplierDetail,
   type PoItemRow,
-  type NewPoItem,
-  type BindingRow,
   type SupplierRow,
 } from '../lib/suppliers-queries';
-import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import styles from './SalesOrderDetail.module.css';
@@ -63,6 +67,39 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   })}`;
 };
 
+/* Draft state shapes (#194). HeaderDraft mirrors the editable header fields;
+   LineDraft holds the four inline-editable per-line fields. */
+type HeaderDraft = {
+  supplierId: string;
+  poDate: string;
+  expectedAt: string;
+  currency: string;
+  notes: string;
+  purchaseLocationId: string;
+};
+type LineDraft = {
+  qty: number;
+  unitPriceCenti: number;
+  discountCenti: number;
+  deliveryDate: string | null;
+};
+
+const headerSnapshot = (p: any): HeaderDraft => ({
+  supplierId:         p.supplier_id ?? '',
+  poDate:             p.po_date ?? '',
+  expectedAt:         p.expected_at ?? '',
+  currency:           p.currency ?? 'MYR',
+  notes:              p.notes ?? '',
+  purchaseLocationId: p.purchase_location_id ?? '',
+});
+
+const lineSnapshot = (it: PoItemRow): LineDraft => ({
+  qty:            it.qty,
+  unitPriceCenti: it.unit_price_centi,
+  discountCenti:  it.discount_centi ?? 0,
+  deliveryDate:   it.delivery_date ?? null,
+});
+
 export const PurchaseOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -71,24 +108,8 @@ export const PurchaseOrderDetail = () => {
   // PR-DRAFT-removal — Submit button removed (POs are SUBMITTED on create).
   const cancel = useCancelPurchaseOrder();
   const deletePo = useDeletePurchaseOrder();
-  const addItem = useAddPurchaseOrderItem();
   const updateItem = useUpdatePurchaseOrderItem();
   const deleteItem = useDeletePurchaseOrderItem();
-  // PR #208 — surcharge config follows the supplier first, master second.
-  // The supplier_id is on po.supplier_id below; we read it via detail.data
-  // before the React render branches, then drive a conditional query.
-  const supplierId = detail.data?.purchaseOrder?.supplier_id ?? null;
-  const supplierMaint = useMaintenanceConfig(
-    supplierId ? `supplier:${supplierId}` : '',
-    { enabled: Boolean(supplierId) },
-  );
-  const masterMaint = useMaintenanceConfig('master', {
-    enabled: !supplierId || !supplierMaint.data?.data,
-  });
-  /** Combined: supplier scope wins, master fallback otherwise. Mirrors the
-   *  shape of the original `useMaintenanceConfig('master')` so callers below
-   *  reading `maint.data?.data` keep working without rework. */
-  const maint = supplierMaint.data?.data ? supplierMaint : masterMaint;
   // PR #102 — PO PDF (AutoCount layout) needs the Purchase Location's
   // human-readable name; the header only carries the warehouse id. Load
   // warehouses once at the top so the print handler can resolve it.
@@ -97,34 +118,34 @@ export const PurchaseOrderDetail = () => {
   const po = detail.data?.purchaseOrder ?? null;
   const items = detail.data?.items ?? [];
 
-  const [editing, setEditing] = useState<PoItemRow | null>(null);
-  const [adding, setAdding] = useState(false);
-
-  /* View → Edit gate (Commander 2026-05-29) — mirrors SalesOrderDetail's
-     isEditing UX. Default is read-only View mode: the header card renders as
-     display text, the line-items table hides its row Edit/Delete + Add Line
-     Item buttons, and "Convert from SO" is hidden. Click Edit → the page flips
-     into Edit mode where the existing editable SupplierCard + line modal + Add
-     Line Item appear and "Convert from SO" becomes available. Done returns to
-     View. Header changes already persist live via the SupplierCard's own Save
-     (updateHeader), so leaving Edit mode simply reflects the saved snapshot.
-     Commander 2026-05-29 — the PO list's right-click "Edit" lands here with
-     ?edit=1, so open straight into Edit mode in that case. */
+  /* View → Edit gate (Commander 2026-05-29) — default is read-only View; click
+     Edit to flip into draft mode. The PO list's right-click "Edit" lands here
+     with ?edit=1, so open straight into Edit in that case. */
   const [searchParams] = useSearchParams();
   const [isEditing, setIsEditing] = useState(() => searchParams.get('edit') === '1');
+
+  /* #194 draft buffers. headerDraft is null until the first header field is
+     touched (then seeded from the PO). lineDrafts overlays per-line edits keyed
+     by item id; any line without an entry just shows its stored values.
+     deletedIds stages removals. None of this persists until Save. */
+  const [headerDraft, setHeaderDraft] = useState<HeaderDraft | null>(null);
+  const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
+  const [savingDraft, setSavingDraft] = useState(false);
 
   // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
   // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
   const isLocked = po ? !(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') : true;
 
   /* If a PO locks while we're in Edit mode (e.g. it's Received / Cancelled
-     after a status change), drop back to View and close any open line modal so
-     the page can never present editable controls on a locked PO. */
+     after a status change), drop back to View and discard the draft so the
+     page can never present editable controls on a locked PO. */
   useEffect(() => {
     if (isLocked && isEditing) {
       setIsEditing(false);
-      setEditing(null);
-      setAdding(false);
+      setHeaderDraft(null);
+      setLineDrafts({});
+      setDeletedIds(new Set());
     }
   }, [isLocked, isEditing]);
 
@@ -145,6 +166,88 @@ export const PurchaseOrderDetail = () => {
       </div>
     );
   }
+
+  /* ── Draft helpers (po is guaranteed non-null past the guards above) ── */
+  const visibleItems = items.filter((it) => !deletedIds.has(it.id));
+  const lineOf = (it: PoItemRow): LineDraft => lineDrafts[it.id] ?? lineSnapshot(it);
+  const lineTotalOf = (it: PoItemRow): number => {
+    if (!isEditing) return it.line_total_centi ?? 0;
+    const d = lineOf(it);
+    return d.qty * d.unitPriceCenti - d.discountCenti;
+  };
+  const itemsSubtotal = visibleItems.reduce((s, it) => s + lineTotalOf(it), 0);
+  const grandTotal = itemsSubtotal + (po.tax_centi ?? 0);
+
+  const headerView = headerDraft ?? headerSnapshot(po);
+
+  const setHeaderField = (k: keyof HeaderDraft, v: string) => {
+    setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(po)), [k]: v }));
+    // Commander 2026-05-29 — header Expected Delivery cascades to every line's
+    // delivery date ("上面的 Expected Delivery Date 换了之后，下面 Item 的
+    // Delivery Date 也要跟着跳").
+    if (k === 'expectedAt') {
+      setLineDrafts((prev) => {
+        const next = { ...prev };
+        for (const it of items) {
+          next[it.id] = { ...(prev[it.id] ?? lineSnapshot(it)), deliveryDate: v || null };
+        }
+        return next;
+      });
+    }
+  };
+
+  const setLine = (it: PoItemRow, patch: Partial<LineDraft>) =>
+    setLineDrafts((prev) => ({ ...prev, [it.id]: { ...(prev[it.id] ?? lineSnapshot(it)), ...patch } }));
+
+  const markDeleted = (itemId: string) =>
+    setDeletedIds((s) => { const n = new Set(s); n.add(itemId); return n; });
+
+  const enterEdit = () => {
+    setHeaderDraft(null);
+    setLineDrafts({});
+    setDeletedIds(new Set());
+    setIsEditing(true);
+  };
+
+  /* Single Save (#194) — commit header (only if touched), staged deletions, and
+     every changed line, then drop back to View. Back discards instead. */
+  const handleSave = async () => {
+    if (savingDraft) return;
+    setSavingDraft(true);
+    try {
+      if (headerDraft) {
+        await updateHeader.mutateAsync({ id: po.id, ...(headerDraft as Record<string, unknown>) });
+      }
+      for (const itemId of deletedIds) {
+        await deleteItem.mutateAsync({ poId: po.id, itemId });
+      }
+      for (const it of items) {
+        if (deletedIds.has(it.id)) continue;
+        const d = lineDrafts[it.id];
+        if (!d) continue;
+        const changed =
+          d.qty !== it.qty ||
+          d.unitPriceCenti !== it.unit_price_centi ||
+          d.discountCenti !== (it.discount_centi ?? 0) ||
+          (d.deliveryDate ?? null) !== (it.delivery_date ?? null);
+        if (changed) {
+          await updateItem.mutateAsync({
+            poId: po.id, itemId: it.id,
+            qty: d.qty, unitPriceCenti: d.unitPriceCenti,
+            discountCenti: d.discountCenti, deliveryDate: d.deliveryDate,
+          });
+        }
+      }
+      setIsEditing(false);
+      setHeaderDraft(null);
+      setLineDrafts({});
+      setDeletedIds(new Set());
+    } catch (e) {
+      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingDraft(false);
+    }
+  };
 
   const handlePrint = () => {
     // PR #102 — pre-resolve purchase_location name (PDF can't hit the API).
@@ -186,10 +289,11 @@ export const PurchaseOrderDetail = () => {
         <div className={styles.actions}>
           {/* PR — Commander 2026-05-27: align with SO Detail PR #231 — total
               moves into a right-rail KPI tile next to the action group so the
-              page title stays compact. */}
+              page title stays compact. Commander 2026-05-29 — the total tracks
+              the live line items (incl. unsaved draft edits). */}
           <div className={styles.totalRail}>
             <span className={styles.totalRailLabel}>Total</span>
-            <span className={styles.totalRailValue}>{fmtRm(po.total_centi, po.currency)}</span>
+            <span className={styles.totalRailValue}>{fmtRm(grandTotal, po.currency)}</span>
           </div>
           <span className={`${styles.statusPill} ${STATUS_CLASS[po.status as PoStatus]}`}>
             {po.status.replace(/_/g, ' ')}
@@ -198,18 +302,13 @@ export const PurchaseOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* PR #78 — Convert from Sales Order. PR-DRAFT-removal: shown while
-              the PO is still editable (SUBMITTED or PARTIALLY_RECEIVED).
-              Commander 2026-05-29 — Convert is now gated behind Edit mode:
-              the user must click Edit first, then Convert is offered (it
-              mutates line items, which only makes sense while editing). */}
+          {/* PR #78 — Convert from Sales Order. Gated behind Edit mode (it
+              mutates line items). Commander 2026-05-29 — opens the full "Pick
+              Sales Orders for this PO" picker scoped to this PO's supplier. */}
           {isEditing && (po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button
               variant="ghost"
               size="md"
-              /* Commander 2026-05-29 — open the full "Pick Sales Orders for this
-                 PO" picker (scoped to this PO's supplier) instead of a prompt.
-                 Picking lines appends them straight to this PO. */
               onClick={() => navigate(`/purchase-orders/from-so?poId=${po.id}`)}
             >
               <ArrowRightLeft {...ICON} />
@@ -262,35 +361,32 @@ export const PurchaseOrderDetail = () => {
               <span>Raise Return</span>
             </Button>
           )}
-          {/* View → Edit gate (Commander 2026-05-29) — mirrors SalesOrderDetail.
-              Default View shows a primary Edit button (disabled while the PO is
-              locked, i.e. RECEIVED / CANCELLED). Clicking it flips into Edit
-              mode, where the header card + line items become editable and
-              "Convert from SO" appears above. In Edit mode the button becomes
-              "Done", which returns to read-only View. Header edits persist live
-              via the SupplierCard's own Save, so Done just reflects them. */}
+          {/* View → Edit gate (Commander 2026-05-29). Default View shows a
+              primary Edit button (disabled while the PO is locked). Editing
+              flips into draft mode; the button becomes the single "Save" that
+              commits the whole draft. Back (top-left) discards. */}
           {!isEditing ? (
-            <Button variant="primary" size="md" onClick={() => setIsEditing(true)} disabled={isLocked}>
+            <Button variant="primary" size="md" onClick={enterEdit} disabled={isLocked}>
               <Pencil {...ICON} />
               <span>Edit</span>
             </Button>
           ) : (
-            <Button variant="primary" size="md" onClick={() => setIsEditing(false)}>
-              <Check {...ICON} />
-              <span>Done</span>
+            <Button variant="primary" size="md" onClick={handleSave} disabled={savingDraft}>
+              <Save {...ICON} />
+              <span>{savingDraft ? 'Saving…' : 'Save'}</span>
             </Button>
           )}
         </div>
       </div>
 
       {/* ── Supplier / dates / currency / notes ─────────────────── */}
-      {/* isEditing drives View vs Edit: in View the card renders read-only
-          display text + hides its Save button; in Edit it shows the editable
-          inputs + Save (which persists header changes live). */}
+      {/* In View the card renders read-only text; in Edit it shows inputs bound
+          to the draft (committed by the single top Save — the card no longer
+          has its own Save button). */}
       <SupplierCard
         po={po}
-        onSave={(patch) => updateHeader.mutate({ id: po.id, ...patch })}
-        saving={updateHeader.isPending}
+        draft={headerView}
+        onField={setHeaderField}
         locked={isLocked}
         isEditing={isEditing}
       />
@@ -298,13 +394,10 @@ export const PurchaseOrderDetail = () => {
       {/* ── Line items ──────────────────────────────────────────── */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          {/* Commander 2026-05-29 — "Add Line Item" removed: it duplicated
-              "Convert from SO" (both opened the same SO picker). Use the
-              "Convert from SO" action in the header to add lines. */}
+          <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
         </header>
 
-        {items.length === 0 ? (
+        {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>
             {isEditing
               ? 'No items yet — click "Convert from SO" above to add lines.'
@@ -322,157 +415,144 @@ export const PurchaseOrderDetail = () => {
                 <th className={styles.tableRight}>Total</th>
                 {/* Commander 2026-05-29 — a PO line has ONE price (Unit = what
                     we pay the supplier); the separate Unit Cost / Total Cost
-                    columns were redundant + confusing ("它的价钱到底是哪一个"),
-                    so they're dropped. Keep the per-line delivery date. */}
+                    columns were dropped ("它的价钱到底是哪一个"). Keep the
+                    per-line delivery date. */}
                 <th className={styles.tableRight}>Delivery</th>
                 {/* Actions column only in Edit mode — View is read-only. */}
                 {isEditing && <th className={styles.tableRight}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id}>
-                  <td>
-                    {/* Commander 2026-05-29 — "只需要 show code 就可以了，
-                        Description 不需要". Show the item CODE only; the redundant
-                        full product name + Sup SKU lines are dropped. The variant
-                        summary stays (that's the bit that says WHAT was ordered). */}
-                    <div className={styles.codeCell}>{it.material_code}</div>
-                    {(() => {
-                      /* Commander 2026-05-29 — compute the variant summary LIVE
-                         from variants (one consistent " / " separator, not the
-                         stale description2 snapshot which carried the retired
-                         " · " seat·leg separator). Fall back to the product
-                         description / name when the line has no variants so it's
-                         never blank under the code (e.g. a bedframe with nothing
-                         picked). */
-                      const summary = buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null)
-                        || it.description
-                        || it.material_name;
-                      return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
-                    })()}
-                  </td>
-                  <td className={styles.muted}>{it.item_group ?? it.material_kind}</td>
-                  <td className={styles.tableRight}>{it.qty}</td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
-                  <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
-                  <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
-                  <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
-                  {/* Row Edit / Delete only in Edit mode — View is read-only. */}
-                  {isEditing && (
+              {visibleItems.map((it) => {
+                const d = lineOf(it);
+                return (
+                  <tr key={it.id}>
                     <td>
-                      <span className={styles.actionsCell}>
-                        <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
-                          onClick={() => !isLocked && setEditing(it)}>
-                          <Pencil {...SM_ICON} />
-                        </button>
-                        <button type="button"
-                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                          title="Delete" disabled={isLocked}
-                          /* Commander 2026-05-29 — already in Edit mode; the
-                             trash deletes the line straight away (no confirm). */
-                          onClick={() => {
-                            if (isLocked) return;
-                            deleteItem.mutate({ poId: po.id, itemId: it.id });
-                          }}>
-                          <Trash2 {...SM_ICON} />
-                        </button>
-                      </span>
+                      {/* Commander 2026-05-29 — show the item CODE only; the
+                          variant summary stays (that's WHAT was ordered). */}
+                      <div className={styles.codeCell}>{it.material_code}</div>
+                      {(() => {
+                        const summary = buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null)
+                          || it.description
+                          || it.material_name;
+                        return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
+                      })()}
                     </td>
-                  )}
-                </tr>
-              ))}
+                    <td className={styles.muted}>{it.item_group ?? it.material_kind}</td>
+
+                    {/* Commander 2026-05-29 (#194) — Qty / Unit / Disc / Delivery
+                        are inline-editable in Edit mode (no per-line modal). */}
+                    {isEditing ? (
+                      <>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="number"
+                            min={0}
+                            className={styles.fieldInput}
+                            style={{ width: 70, textAlign: 'right' }}
+                            value={d.qty}
+                            disabled={isLocked}
+                            onChange={(e) => setLine(it, { qty: Number(e.target.value) || 0 })}
+                          />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                            style={{ width: 110, textAlign: 'right' }}
+                            valueSen={d.unitPriceCenti}
+                            disabled={isLocked}
+                            onCommit={(sen) => setLine(it, { unitPriceCenti: sen ?? 0 })} />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                            style={{ width: 100, textAlign: 'right' }}
+                            valueSen={d.discountCenti}
+                            disabled={isLocked}
+                            onCommit={(sen) => setLine(it, { discountCenti: sen ?? 0 })} />
+                        </td>
+                        <td className={styles.priceCell}>{fmtRm(d.qty * d.unitPriceCenti - d.discountCenti, po.currency)}</td>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="date"
+                            className={styles.fieldInput}
+                            style={{ width: 150 }}
+                            value={d.deliveryDate ?? ''}
+                            disabled={isLocked}
+                            onChange={(e) => setLine(it, { deliveryDate: e.target.value || null })}
+                          />
+                        </td>
+                        <td>
+                          <span className={styles.actionsCell}>
+                            <button type="button"
+                              className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                              title="Remove line" disabled={isLocked}
+                              /* Commander 2026-05-29 — stage the removal straight
+                                 away (no confirm popup); it commits on Save. */
+                              onClick={() => { if (!isLocked) markDeleted(it.id); }}>
+                              <Trash2 {...SM_ICON} />
+                            </button>
+                          </span>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className={styles.tableRight}>{it.qty}</td>
+                        <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
+                        <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
+                        <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
+                        <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </section>
 
-      {/* ── Totals ──────────────────────────────────────────────────
-          PR — Commander 2026-05-27: classnames had a stale `totalsRow /
-          totalsLabel / totalsValue` triple that no longer exists in
-          SalesOrderDetail.module.css — re-bind to the live singular names
-          (totalRow / totalLabel / totalValue / grandTotalRow / grandTotal). */}
+      {/* ── Totals ────────────────────────────────────────────────── */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Totals</h2>
         </header>
         <div className={styles.cardBody}>
-          {/* Commander 2026-05-29 — "total 不是跟着 line items 变动的吗": compute
-              the subtotal/total LIVE from the visible line items so it can never
-              drift from the lines (the stored po.subtotal_centi could be stale
-              if a recompute lagged). Tax stays the stored header value. */}
-          {(() => {
-            const itemsSubtotal = items.reduce((s, it) => s + (it.line_total_centi ?? 0), 0);
-            const grand = itemsSubtotal + (po.tax_centi ?? 0);
-            return (
-              <div className={styles.totalsGrid}>
-                <div className={styles.totalRow}>
-                  <span className={styles.totalLabel}>Subtotal</span>
-                  <span className={styles.totalValue}>{fmtRm(itemsSubtotal, po.currency)}</span>
-                </div>
-                <div className={styles.totalRow}>
-                  <span className={styles.totalLabel}>Tax</span>
-                  <span className={styles.totalValue}>{fmtRm(po.tax_centi, po.currency)}</span>
-                </div>
-                <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
-                  <span className={styles.totalLabel}>Total</span>
-                  <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(grand, po.currency)}</span>
-                </div>
-              </div>
-            );
-          })()}
+          {/* Commander 2026-05-29 — subtotal/total computed LIVE from the visible
+              line items (incl. unsaved draft edits) so they can never drift.
+              Tax stays the stored header value. */}
+          <div className={styles.totalsGrid}>
+            <div className={styles.totalRow}>
+              <span className={styles.totalLabel}>Subtotal</span>
+              <span className={styles.totalValue}>{fmtRm(itemsSubtotal, po.currency)}</span>
+            </div>
+            <div className={styles.totalRow}>
+              <span className={styles.totalLabel}>Tax</span>
+              <span className={styles.totalValue}>{fmtRm(po.tax_centi, po.currency)}</span>
+            </div>
+            <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
+              <span className={styles.totalLabel}>Total</span>
+              <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(grandTotal, po.currency)}</span>
+            </div>
+          </div>
         </div>
       </section>
-
-      {/* ── Modals ─────────────────────────────────────────────── */}
-      {(adding || editing) && (
-        <PoLineItemModal
-          editing={editing}
-          maint={maint.data?.data ?? null}
-          currency={po.currency}
-          supplierId={po.supplier_id ?? null}
-          /* Commander 2026-05-29 (BUG 1) — codes already on this PO so the Add
-             Line picker can't add the same item twice. Exclude the line being
-             edited (so re-saving an edit doesn't hide its own code). */
-          existingCodes={new Set(
-            items
-              .filter((it) => it.id !== editing?.id)
-              .map((it) => it.material_code),
-          )}
-          onClose={() => { setAdding(false); setEditing(null); }}
-          onSave={(payload) => {
-            if (editing) {
-              updateItem.mutate(
-                { poId: po.id, itemId: editing.id, ...payload },
-                { onSuccess: () => setEditing(null) },
-              );
-            } else {
-              addItem.mutate(
-                { poId: po.id, ...payload },
-                { onSuccess: () => setAdding(false) },
-              );
-            }
-          }}
-          saving={addItem.isPending || updateItem.isPending}
-        />
-      )}
     </div>
   );
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Supplier / header card — editable
+   Supplier / header card — controlled by the page's draft (#194)
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierCard = ({
-  po, onSave, saving, locked, isEditing = true,
+  po, draft, onField, locked, isEditing = true,
 }: {
   po: any;
-  onSave: (patch: Record<string, unknown>) => void;
-  saving: boolean;
+  /** Draft header values (page-owned). In View these mirror the saved PO. */
+  draft: HeaderDraft;
+  /** Update a single header field on the page draft. */
+  onField: (k: keyof HeaderDraft, v: string) => void;
   locked: boolean;
-  /** View → Edit gate. When false the card renders read-only display text
-      and hides its Save button. Defaults to true for backward-compat. */
+  /** View → Edit gate. When false the card renders read-only display text. */
   isEditing?: boolean;
 }) => {
   const suppliersQ = useSuppliers();
@@ -480,51 +560,22 @@ const SupplierCard = ({
   // PR #77 — header Purchase Location dropdown options.
   const warehousesQ = useWarehouses();
   const warehouses = warehousesQ.data ?? [];
-  const [form, setForm] = useState({
-    supplierId: po.supplier_id ?? '',
-    poDate: po.po_date ?? '',
-    expectedAt: po.expected_at ?? '',
-    currency: po.currency ?? 'MYR',
-    notes: po.notes ?? '',
-    purchaseLocationId: po.purchase_location_id ?? '',
-  });
-  // PR #75 — auto-fill supplier info card from /suppliers/:id when chosen.
-  // The hook keys on form.supplierId so it refetches on each pick; null
-  // when no supplier yet (renders nothing).
-  const supplierDetail = useSupplierDetail(form.supplierId || null);
+  // PR #75 — auto-fill supplier info card from /suppliers/:id. In Edit follow
+  // the draft's picked supplier; in View follow the saved PO.
+  const supplierIdForDetail = isEditing ? (draft.supplierId || null) : (po.supplier_id ?? null);
+  const supplierDetail = useSupplierDetail(supplierIdForDetail);
   const supplier: SupplierRow | null = supplierDetail.data?.supplier ?? null;
-
-  useEffect(() => {
-    setForm({
-      supplierId: po.supplier_id ?? '',
-      poDate: po.po_date ?? '',
-      expectedAt: po.expected_at ?? '',
-      currency: po.currency ?? 'MYR',
-      notes: po.notes ?? '',
-      purchaseLocationId: po.purchase_location_id ?? '',
-    });
-  }, [po]);
-
-  const set = <K extends keyof typeof form>(k: K, v: string) =>
-    setForm((s) => ({ ...s, [k]: v }));
 
   return (
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Supplier · Dates · Notes</h2>
-        {/* Save only in Edit mode — View is read-only. */}
-        {isEditing && (
-          <Button variant="primary" size="sm"
-            onClick={() => onSave(form)} disabled={saving || locked}>
-            <Save {...ICON} />
-            <span>{saving ? 'Saving…' : 'Save'}</span>
-          </Button>
-        )}
+        {/* Commander 2026-05-29 — the card's own Save is gone; the single top
+            "Save" commits the whole PO draft (header + line edits). */}
       </header>
       <div className={styles.cardBody}>
         {!isEditing ? (
-          /* View mode — read-only display text (not inputs). Mirrors the
-             supplier-info card's InfoCell layout. */
+          /* View mode — read-only display text sourced from the saved PO. */
           <div
             style={{
               display: 'grid',
@@ -538,28 +589,26 @@ const SupplierCard = ({
               <InfoCell label="Supplier"
                 value={po.supplier?.name ?? po.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
-            <InfoCell label="Currency" value={form.currency || null} />
+            <InfoCell label="Currency" value={po.currency || null} />
             <div />
-            <InfoCell label="PO Date" value={form.poDate || null} />
-            <InfoCell label="Expected Delivery" value={form.expectedAt || null} />
+            <InfoCell label="PO Date" value={po.po_date || null} />
+            <InfoCell label="Expected Delivery" value={po.expected_at || null} />
             <InfoCell label="Purchase Location"
               value={(() => {
-                const wh = warehouses.find((w) => w.id === form.purchaseLocationId);
+                const wh = warehouses.find((w) => w.id === po.purchase_location_id);
                 return wh ? `${wh.code} · ${wh.name}` : null;
               })()} />
             <div style={{ gridColumn: 'span 2' }}>
-              <InfoCell label="Notes" value={form.notes || null} />
+              <InfoCell label="Notes" value={po.notes || null} />
             </div>
           </div>
         ) : (
         <div className={styles.formGrid4}>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Supplier *</span>
-            {/* PR — Commander 2026-05-27: custom chevron via selectWrap so
-                native UA arrows don't leak into the polished select look. */}
             <span className={styles.selectWrap}>
-              <select className={styles.fieldSelect} value={form.supplierId} disabled={locked}
-                onChange={(e) => set('supplierId', e.target.value)}>
+              <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
+                onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
                 {suppliers.map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
@@ -571,8 +620,8 @@ const SupplierCard = ({
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Currency</span>
             <span className={styles.selectWrap}>
-              <select className={styles.fieldSelect} value={form.currency} disabled={locked}
-                onChange={(e) => set('currency', e.target.value)}>
+              <select className={styles.fieldSelect} value={draft.currency} disabled={locked}
+                onChange={(e) => onField('currency', e.target.value)}>
                 <option value="MYR">MYR</option>
                 <option value="RMB">RMB</option>
                 <option value="USD">USD</option>
@@ -584,21 +633,23 @@ const SupplierCard = ({
           <div />
           <label className={styles.field}>
             <span className={styles.fieldLabel}>PO Date</span>
-            <input type="date" className={styles.fieldInput} value={form.poDate} disabled={locked}
-              onChange={(e) => set('poDate', e.target.value)} />
+            <input type="date" className={styles.fieldInput} value={draft.poDate} disabled={locked}
+              onChange={(e) => onField('poDate', e.target.value)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Expected Delivery</span>
-            <input type="date" className={styles.fieldInput} value={form.expectedAt} disabled={locked}
-              onChange={(e) => set('expectedAt', e.target.value)} />
+            {/* Commander 2026-05-29 — changing this cascades to every line's
+                Delivery Date (handled in the page's setHeaderField). */}
+            <input type="date" className={styles.fieldInput} value={draft.expectedAt} disabled={locked}
+              onChange={(e) => onField('expectedAt', e.target.value)} />
           </label>
           {/* PR #77 — Purchase Location: default ship-to warehouse for
-              every line on this PO. Each line item can override. */}
+              every line on this PO. */}
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Purchase Location</span>
             <span className={styles.selectWrap}>
-              <select className={styles.fieldSelect} value={form.purchaseLocationId} disabled={locked}
-                onChange={(e) => set('purchaseLocationId', e.target.value)}>
+              <select className={styles.fieldSelect} value={draft.purchaseLocationId} disabled={locked}
+                onChange={(e) => onField('purchaseLocationId', e.target.value)}>
                 <option value="">— No default —</option>
                 {warehouses.filter((w) => w.is_active).map((w) => (
                   <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
@@ -609,15 +660,14 @@ const SupplierCard = ({
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>
-            <input className={styles.fieldInput} value={form.notes} disabled={locked}
-              onChange={(e) => set('notes', e.target.value)} />
+            <input className={styles.fieldInput} value={draft.notes} disabled={locked}
+              onChange={(e) => onField('notes', e.target.value)} />
           </label>
         </div>
         )}
 
         {/* PR #75 — supplier-info auto-fill card. Read-only display sourced
-            from /suppliers/:id, mirrors what AutoCount shows after picking a
-            creditor (address, contact, payment terms). */}
+            from /suppliers/:id. */}
         {supplier && (
           <div
             style={{
@@ -653,520 +703,6 @@ const SupplierCard = ({
     </section>
   );
 };
-
-/* ════════════════════════════════════════════════════════════════════════
-   Variants summary pills
-   ════════════════════════════════════════════════════════════════════════ */
-const VariantsPills = ({ variants }: { variants: Record<string, unknown> | null }) => {
-  if (!variants || typeof variants !== 'object') return null;
-  const entries = Object.entries(variants).filter(([, v]) => v != null && v !== '');
-  if (entries.length === 0) return null;
-  return (
-    <div className={styles.variantBlock}>
-      {entries.map(([k, v]) => (
-        <span key={k} className={styles.variantPill}>{k}: {String(v)}</span>
-      ))}
-    </div>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   PoLineItemModal — HOOKKA per-category variant editor + auto-recompute
-   Adapted from SO LineItemModal but with PO-specific fields (supplier_sku)
-   ════════════════════════════════════════════════════════════════════════ */
-type LinePayload = Omit<NewPoItem, 'qty' | 'unitPriceCenti'> & {
-  qty: number;
-  unitPriceCenti: number;
-};
-
-const PoLineItemModal = ({
-  editing, maint, currency, supplierId, existingCodes, onClose, onSave, saving,
-}: {
-  editing: PoItemRow | null;
-  maint: import('../lib/mfg-products-queries').MaintenanceConfig | null;
-  currency: string;
-  /** PR #75 — when set, the picker shows this supplier's bound items first
-      and auto-fills supplier_sku + unit price from the binding row. */
-  supplierId: string | null;
-  /** Commander 2026-05-29 (BUG 1) — material codes already on this PO. The
-      picker hides them so the same item can't be added/converted twice. */
-  existingCodes: Set<string>;
-  onClose: () => void;
-  onSave: (p: LinePayload) => void;
-  saving: boolean;
-}) => {
-  const [search, setSearch] = useState(editing?.material_code ?? '');
-  const [showAll, setShowAll] = useState(false);
-  const productsQuery = useMfgProducts({ search: search.trim() || undefined });
-  const candidates = productsQuery.data ?? [];
-
-  // PR #75 — supplier bindings drive the default-state picker. When the PO
-  // already has a supplier, show only their bound products until commander
-  // hits "Show all" or types a search query.
-  const supplierDetail = useSupplierDetail(supplierId);
-  const bindings = supplierDetail.data?.bindings ?? [];
-  // Index bindings by material_code for fast pickProduct lookup.
-  const bindingByCode = useMemo(() => {
-    const m = new Map<string, BindingRow>();
-    for (const b of bindings) m.set(b.material_code, b);
-    return m;
-  }, [bindings]);
-
-  /* Commander 2026-05-29 (BUG 1) — drop items already on this PO from BOTH
-     picker lists (bound list + full SKU search) so the same product can't be
-     added twice. When editing an existing line, that line's own code was
-     already excluded by the parent, so it stays pickable. */
-  const visibleBindings = useMemo(
-    () => bindings.filter((b) => !existingCodes.has(b.material_code)),
-    [bindings, existingCodes],
-  );
-  const visibleCandidates = useMemo(
-    () => candidates.filter((p) => !existingCodes.has(p.code)),
-    [candidates, existingCodes],
-  );
-
-  const [picked, setPicked] = useState<import('../lib/mfg-products-queries').MfgProductRow | null>(null);
-  const [manualPrice, setManualPrice] = useState(false);
-
-  const [draft, setDraft] = useState<LinePayload>({
-    materialKind: (editing?.material_kind ?? 'mfg_product') as 'mfg_product' | 'fabric' | 'raw',
-    materialCode: editing?.material_code ?? '',
-    materialName: editing?.material_name ?? '',
-    supplierSku: editing?.supplier_sku ?? '',
-    itemGroup: editing?.item_group ?? 'others',
-    description: editing?.description ?? '',
-    uom: editing?.uom ?? 'UNIT',
-    qty: editing?.qty ?? 1,
-    unitPriceCenti: editing?.unit_price_centi ?? 0,
-    discountCenti: editing?.discount_centi ?? 0,
-    unitCostCenti: editing?.unit_cost_centi ?? 0,
-    variants: (editing?.variants as Record<string, unknown>) ?? {},
-    notes: editing?.notes ?? '',
-    // PR #77 — per-line overrides; null = inherit from PO header.
-    deliveryDate: editing?.delivery_date ?? null,
-    warehouseId:  editing?.warehouse_id ?? null,
-  });
-
-  /* Commander 2026-05-29 — "我要去 edit，为什么 edit 不到它的 variant？".
-     Existing PO lines (especially From-SO converted ones) often have
-     item_group = null, so draft.itemGroup fell back to 'others' and the
-     variant editor (gated on bedframe/sofa) never rendered. Resolve the real
-     category from the product catalog by code on open so the editor shows with
-     the line's stored variants. */
-  useEffect(() => {
-    if (!editing) return;
-    const KNOWN = ['bedframe', 'sofa', 'mattress', 'accessory', 'service'];
-    if (KNOWN.includes(String(draft.itemGroup ?? '').toLowerCase())) return;
-    const hit = candidates.find((p) => p.code === draft.materialCode);
-    if (hit) setDraft((s) => ({ ...s, itemGroup: hit.category.toLowerCase() }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candidates, editing]);
-
-  const pickProduct = (p: import('../lib/mfg-products-queries').MfgProductRow) => {
-    setPicked(p);
-    setManualPrice(false);
-    // PR #75 — if this product is bound to the PO's current supplier, prefer
-    // the binding's supplier_sku + unit price (commander's "Internal Code →
-    // 自动出来绑定的 Code" ask). Otherwise fall back to the product's own
-    // base price and empty supplier_sku.
-    const bound = bindingByCode.get(p.code);
-    setDraft((s) => ({
-      ...s,
-      materialKind:   'mfg_product',
-      materialCode:   p.code,
-      materialName:   p.name,
-      itemGroup:      p.category.toLowerCase(),
-      description:    p.name,
-      /* Commander 2026-05-29 — "选完 item，它的 Price 也没有带出来". The binding's
-         unit_price_centi can be 0 (mattress/accessory SKU mapping with no price
-         set yet). `??` kept that 0; use `||` so a 0/unset binding price falls
-         back to the product's own base price instead of showing RM 0.00. */
-      unitPriceCenti: (bound?.unit_price_centi || (p.base_price_sen ?? 0)),
-      supplierSku:    bound?.supplier_sku ?? '',
-      variants:       {},
-    }));
-    setSearch(p.code);
-  };
-
-  // PR #75 — pick a binding row directly (when the picker is in bindings
-  // mode). Binding rows carry their own material name + price + supplier_sku.
-  const pickBinding = (b: BindingRow) => {
-    setPicked(null);
-    setManualPrice(false);
-    setDraft((s) => ({
-      ...s,
-      materialKind:   b.material_kind,
-      materialCode:   b.material_code,
-      materialName:   b.material_name,
-      itemGroup:      s.itemGroup,
-      description:    b.material_name,
-      unitPriceCenti: b.unit_price_centi,
-      supplierSku:    b.supplier_sku,
-      variants:       {},
-    }));
-    setSearch(b.material_code);
-  };
-
-  /* Commander 2026-05-29 — bedframe Total Height is AUTO-COMPUTED = Divan + Leg
-     + Gap (mirrors SoLineCard); not a manual pick. Recompute it whenever one of
-     those three changes. */
-  const parseInches = (s: unknown): number => {
-    if (s == null) return 0;
-    const m = String(s).match(/(-?\d+(?:\.\d+)?)/);
-    return m && m[1] ? Number(m[1]) : 0;
-  };
-  const setVariant = (k: string, v: string | number) =>
-    setDraft((s) => {
-      const variants: Record<string, unknown> = { ...s.variants, [k]: v };
-      if ((s.itemGroup === 'bedframe') && (k === 'divanHeight' || k === 'legHeight' || k === 'gap')) {
-        const d = parseInches(variants.divanHeight);
-        const lg = parseInches(variants.legHeight);
-        const g = parseInches(variants.gap);
-        variants.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
-      }
-      return { ...s, variants };
-    });
-
-  // Auto-recompute unit price from base + variant surcharges
-  useEffect(() => {
-    if (manualPrice || !maint || !picked) return;
-    const category = (draft.itemGroup ?? '').toUpperCase();
-    let basePriceSen = picked.base_price_sen ?? 0;
-    let extraSen = 0;
-    if (category === 'SOFA') {
-      const sh = String(draft.variants?.seatHeight ?? '');
-      if (sh && Array.isArray(picked.seat_height_prices)) {
-        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-          .find((p) => p.height === sh && p.tier === 'PRICE_2');
-        if (match) basePriceSen = match.priceSen;
-      }
-      const legV = String(draft.variants?.legHeight ?? '');
-      const specV = String(draft.variants?.special ?? '');
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      extraSen += maint.sofaSpecials.find((o) => o.value === specV)?.priceSen ?? 0;
-    } else if (category === 'BEDFRAME') {
-      const divanV = String(draft.variants?.divanHeight ?? '');
-      const legV = String(draft.variants?.legHeight ?? '');
-      const totalV = String(draft.variants?.totalHeight ?? '');
-      const specV = String(draft.variants?.special ?? '');
-      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
-      extraSen += maint.legHeights.find((o) => o.value === legV)?.priceSen ?? 0;
-      // Commander 2026-05-29: apply the Total Heights surcharge so the new
-      // bedframe dropdown actually re-prices the line.
-      extraSen += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
-      extraSen += maint.specials.find((o) => o.value === specV)?.priceSen ?? 0;
-    }
-    const newPrice = basePriceSen + extraSen;
-    setDraft((s) => (s.unitPriceCenti === newPrice ? s : { ...s, unitPriceCenti: newPrice }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
-
-  const lineTotal = (draft.qty * draft.unitPriceCenti) - (draft.discountCenti ?? 0);
-
-  const submit = () => {
-    if (!draft.materialCode.trim()) { alert('Pick a product first.'); return; }
-    onSave(draft);
-  };
-
-  return (
-    <div className={styles.modalBackdrop} onClick={onClose}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <header className={styles.modalHeader}>
-          <h3 className={styles.modalTitle}>{editing ? 'Edit Line Item' : 'Add Line Item'}</h3>
-          <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Close">
-            <X {...ICON} />
-          </button>
-        </header>
-
-        <div className={styles.modalBody}>
-          {/* Product picker */}
-          <div>
-            <p className={styles.subHead}>
-              Product
-              {supplierId && visibleBindings.length > 0 && !showAll && (
-                <span style={{
-                  marginLeft: 8,
-                  fontFamily: 'var(--font-sans)',
-                  fontSize: 'var(--fs-12)',
-                  color: 'var(--fg-muted)',
-                }}>
-                  · showing {visibleBindings.length} bound item{visibleBindings.length === 1 ? '' : 's'}
-                  <button
-                    type="button"
-                    onClick={() => setShowAll(true)}
-                    style={{
-                      marginLeft: 6,
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--c-orange)',
-                      cursor: 'pointer',
-                      fontFamily: 'var(--font-sans)',
-                      fontSize: 'var(--fs-12)',
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    Show all
-                  </button>
-                </span>
-              )}
-              {supplierId && showAll && (
-                <button
-                  type="button"
-                  onClick={() => setShowAll(false)}
-                  style={{
-                    marginLeft: 8,
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--c-orange)',
-                    cursor: 'pointer',
-                    fontFamily: 'var(--font-sans)',
-                    fontSize: 'var(--fs-12)',
-                    textDecoration: 'underline',
-                  }}
-                >
-                  ← back to bound only
-                </button>
-              )}
-            </p>
-            <div className={styles.pickerWrap}>
-              <input
-                className={styles.fieldInput}
-                placeholder={
-                  supplierId && bindings.length > 0
-                    ? 'Search bindings by code / supplier SKU / name…'
-                    : 'Search by code or name…'
-                }
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {/* PR #75 — bindings list shown when supplier picked + no
-                  search active. Each row shows: internal code · supplier
-                  SKU · material name · unit price. */}
-              {supplierId && !showAll && !search.trim() && visibleBindings.length > 0 && (
-                <ul className={styles.suggestList} style={{ position: 'relative', maxHeight: 280, overflow: 'auto' }}>
-                  {visibleBindings.map((b) => (
-                    <li key={b.id} className={styles.suggestItem} onMouseDown={() => pickBinding(b)}>
-                      <div>
-                        <span className={styles.codeCell}>{b.material_code}</span>
-                        {b.supplier_sku && b.supplier_sku !== b.material_code && (
-                          <span style={{ marginLeft: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                            ↔ {b.supplier_sku}
-                          </span>
-                        )}
-                        <span style={{ marginLeft: 6 }}>· {b.material_name}</span>
-                      </div>
-                      <div className={styles.suggestCode}>
-                        {b.material_kind} · {fmtRm(b.unit_price_centi, currency)}
-                        {b.is_main_supplier && <span style={{ marginLeft: 6, color: 'var(--c-orange)' }}>★ main</span>}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {supplierId && !showAll && !search.trim() && visibleBindings.length === 0 && supplierDetail.data && (
-                <p style={{
-                  margin: '8px 0 0',
-                  fontSize: 'var(--fs-13)',
-                  color: 'var(--fg-muted)',
-                  fontFamily: 'var(--font-sans)',
-                }}>
-                  {bindings.length > 0
-                    ? 'All of this supplier’s bound items are already on this PO. Type to search the full SKU master.'
-                    : 'No bindings configured for this supplier. Type to search the full SKU master, or open the supplier detail page to add bindings.'}
-                </p>
-              )}
-              {/* PR #75 — full SKU master search results. Filtered when
-                  `showAll` is off + bindings cover the supplier. Always
-                  shown when commander types a search query. */}
-              {search.trim() && visibleCandidates.length > 0 && search !== draft.materialCode && (
-                <ul className={styles.suggestList}>
-                  {visibleCandidates.slice(0, 12).map((p) => {
-                    const bound = bindingByCode.get(p.code);
-                    return (
-                      <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
-                        <div>
-                          <span className={styles.codeCell}>{p.code}</span>
-                          {bound?.supplier_sku && bound.supplier_sku !== p.code && (
-                            <span style={{ marginLeft: 6, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-                              ↔ {bound.supplier_sku}
-                            </span>
-                          )}
-                          <span style={{ marginLeft: 6 }}>· {p.name}</span>
-                        </div>
-                        <div className={styles.suggestCode}>
-                          {p.category} · {fmtRm(bound?.unit_price_centi || (p.base_price_sen ?? 0), currency)}
-                          {bound && <span style={{ marginLeft: 6, color: 'var(--c-orange)' }}>· bound</span>}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-            {draft.materialCode && (
-              <div className={styles.previewLine} style={{ marginTop: 8 }}>
-                <span><strong>{draft.materialCode}</strong> · {draft.description ?? draft.materialName}</span>
-                <span className={styles.previewPrice}>{fmtRm(draft.unitPriceCenti, currency)}</span>
-              </div>
-            )}
-            <label className={styles.field} style={{ marginTop: 'var(--space-2)' }}>
-              <span className={styles.fieldLabel}>Supplier SKU (optional)</span>
-              <input className={styles.fieldInput} value={draft.supplierSku ?? ''}
-                placeholder="Supplier's own code for this product"
-                onChange={(e) => setDraft((s) => ({ ...s, supplierSku: e.target.value }))} />
-            </label>
-          </div>
-
-          {/* Variants editor — shown by category */}
-          {(draft.itemGroup === 'bedframe' || draft.itemGroup === 'sofa') && maint && (
-            <div>
-              <p className={styles.subHead}>Variants</p>
-              {draft.itemGroup === 'bedframe' ? (
-                <div className={styles.formGrid4}>
-                  <VariantSelect label="Divan Height" options={maint.divanHeights}
-                    value={String(draft.variants?.divanHeight ?? '')}
-                    onChange={(v) => setVariant('divanHeight', v)} />
-                  <VariantSelect label="Gap"
-                    options={maint.gaps.map((g) => ({ value: g, priceSen: 0 }))}
-                    value={String(draft.variants?.gap ?? '')}
-                    onChange={(v) => setVariant('gap', v)} />
-                  <VariantSelect label="Leg Height" options={maint.legHeights}
-                    value={String(draft.variants?.legHeight ?? '')}
-                    onChange={(v) => setVariant('legHeight', v)} />
-                  {/* Total Heights — Commander 2026-05-29: removed. Total Height
-                      is AUTO-COMPUTED from Divan + Leg + Gap (see setVariant). */}
-                  <VariantSelect label="Special" options={maint.specials}
-                    value={String(draft.variants?.special ?? '')}
-                    onChange={(v) => setVariant('special', v)} />
-                </div>
-              ) : (
-                <div className={styles.formGrid4}>
-                  <VariantSelect label="Seat Size"
-                    options={maint.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
-                    value={String(draft.variants?.seatHeight ?? '')}
-                    onChange={(v) => setVariant('seatHeight', v)} />
-                  <VariantSelect label="Leg Height" options={maint.sofaLegHeights}
-                    value={String(draft.variants?.legHeight ?? '')}
-                    onChange={(v) => setVariant('legHeight', v)} />
-                  <VariantSelect label="Special" options={maint.sofaSpecials}
-                    value={String(draft.variants?.special ?? '')}
-                    onChange={(v) => setVariant('special', v)} />
-                  <label className={styles.field}>
-                    {/* Commander 2026-05-28 — unify fabric/colour term → "Fabrics". Key fabricColor unchanged. */}
-                    <span className={styles.fieldLabel}>Fabrics (free text)</span>
-                    <input className={styles.fieldInput}
-                      value={String(draft.variants?.fabricColor ?? '')}
-                      onChange={(e) => setVariant('fabricColor', e.target.value)} />
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Pricing */}
-          <div>
-            <p className={styles.subHead}>Pricing</p>
-            <div className={styles.formGrid4}>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Qty</span>
-                <input type="number" className={styles.fieldInput} value={draft.qty}
-                  onChange={(e) => setDraft((s) => ({ ...s, qty: Number(e.target.value) || 0 }))} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>
-                  Unit Price (RM)
-                  {!manualPrice && picked && (
-                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
-                      · auto
-                    </span>
-                  )}
-                </span>
-                <MoneyInput bare inputClassName={styles.fieldInput} selectOnFocus
-                  valueSen={draft.unitPriceCenti}
-                  onCommit={(sen) => {
-                    setManualPrice(true);
-                    setDraft((s) => ({ ...s, unitPriceCenti: sen ?? 0 }));
-                  }} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Discount (RM)</span>
-                <MoneyInput bare inputClassName={styles.fieldInput} selectOnFocus
-                  valueSen={draft.discountCenti ?? 0}
-                  onCommit={(sen) => setDraft((s) => ({ ...s, discountCenti: sen ?? 0 }))} />
-              </label>
-              <label className={styles.field}>
-                <span className={styles.fieldLabel}>Unit Cost (RM)</span>
-                <MoneyInput bare inputClassName={styles.fieldInput} selectOnFocus
-                  valueSen={draft.unitCostCenti ?? 0}
-                  onCommit={(sen) => setDraft((s) => ({ ...s, unitCostCenti: sen ?? 0 }))} />
-              </label>
-            </div>
-            <div className={styles.previewLine} style={{ marginTop: 8 }}>
-              <span>Line total</span>
-              <span className={styles.previewPrice}>{fmtRm(lineTotal, currency)}</span>
-            </div>
-          </div>
-
-          {/* PR #77 — per-line delivery override; empty = inherit from PO
-              header (Expected Delivery).
-              Commander 2026-05-29 — removed the Ship-to Warehouse (line
-              override) picker: "这个 Warehouse 不应该叫我选". The ship-to is
-              the PO header's Purchase Location; per-line override isn't wanted.
-              Delivery Date stays (commander: "Delivery Date 可以叫我选"). */}
-          <div className={styles.row}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Delivery Date (line override)</span>
-              <input
-                type="date"
-                className={styles.fieldInput}
-                value={draft.deliveryDate ?? ''}
-                onChange={(e) => setDraft((s) => ({ ...s, deliveryDate: e.target.value || null }))}
-              />
-            </label>
-          </div>
-
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Notes</span>
-            <input className={styles.fieldInput} value={draft.notes ?? ''}
-              onChange={(e) => setDraft((s) => ({ ...s, notes: e.target.value }))} />
-          </label>
-        </div>
-
-        <footer className={styles.modalFooter}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" onClick={submit} disabled={saving}>
-            {saving ? 'Saving…' : editing ? 'Save Changes' : 'Add Line Item'}
-          </Button>
-        </footer>
-      </div>
-    </div>
-  );
-};
-
-const VariantSelect = ({
-  label, options, value, onChange,
-}: {
-  label: string;
-  options: Array<{ value: string; priceSen: number }>;
-  value: string;
-  onChange: (v: string) => void;
-}) => (
-  <label className={styles.field}>
-    <span className={styles.fieldLabel}>{label}</span>
-    <span className={styles.selectWrap}>
-      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">—</option>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
-          </option>
-        ))}
-      </select>
-      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-    </span>
-  </label>
-);
-
 
 /* PR #75 — Read-only label/value cell for the supplier auto-fill card. */
 function InfoCell({ label, value }: { label: string; value: string | null | undefined }) {
