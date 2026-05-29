@@ -32,7 +32,7 @@ import {
   usePostPurchaseInvoice,
   useGrnDetail,
 } from '../lib/flow-queries';
-import { useSuppliers } from '../lib/suppliers-queries';
+import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -122,6 +122,11 @@ export const PurchaseInvoiceNew = () => {
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string>('');
   const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate]         = useState<string>('');
+  /* Commander 2026-05-29 — "Bill date 都是 standard 的，放 30 天之内，根据这个
+     supplier 的设定": Due Date auto-defaults to Invoice Date + the supplier's
+     payment-term days. Track whether the operator has hand-edited Due Date so
+     the auto-default stops overwriting their value. */
+  const [dueTouched, setDueTouched]   = useState<boolean>(false);
   const [notes, setNotes]             = useState<string>('');
   const [lines, setLines]             = useState<DraftLine[]>([]);
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
@@ -192,10 +197,43 @@ export const PurchaseInvoiceNew = () => {
   const currency = 'MYR';
 
   // Effective supplier id + display name (from GRN, or the manual <select>).
+  const manualSupplierRow = isManual
+    ? ((suppliersQ.data ?? []).find((s) => s.id === manualSupplierId) ?? null)
+    : null;
   const supplierId   = isManual ? (manualSupplierId || null) : (grn?.supplier_id ?? null);
   const supplierName = isManual
-    ? ((suppliersQ.data ?? []).find((s) => s.id === manualSupplierId)?.name ?? null)
+    ? (manualSupplierRow?.name ?? null)
     : (supplier?.name ?? null);
+
+  /* Commander 2026-05-29 — payment-term days for the resolved supplier. Parse
+     the first integer out of `payment_terms` (e.g. "30 DAYS" / "30" → 30);
+     default 30 when absent/unparseable. The manual supplier carries it on its
+     row; the ?grnId GRN's supplier object omits payment_terms, so it defaults. */
+  const supplierTermDays = useMemo(() => {
+    const raw = manualSupplierRow?.payment_terms ?? null;
+    const m = raw ? String(raw).match(/(\d+)/) : null;
+    const n = m && m[1] ? Number(m[1]) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 30;
+  }, [manualSupplierRow?.payment_terms]);
+
+  /* Auto-default Due Date = Invoice Date + supplierTermDays whenever the
+     invoice date or the supplier changes — UNLESS the operator has manually
+     edited Due Date (dueTouched). */
+  useEffect(() => {
+    if (dueTouched || !invoiceDate) return;
+    const d = new Date(`${invoiceDate}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return;
+    d.setDate(d.getDate() + supplierTermDays);
+    setDueDate(d.toISOString().slice(0, 10));
+  }, [invoiceDate, supplierTermDays, dueTouched]);
+
+  // Commander 2026-05-29 — make the MANUAL item picker supplier-binding-aware,
+  // exactly like New PO / New GRN. Once a supplier is chosen the per-line Item
+  // Code datalist lists THAT supplier's bound SKUs; picking one fills name +
+  // unit price + itemGroup from the binding. Falls back to useMfgProducts when
+  // no supplier is set yet.
+  const supplierDetailQ = useSupplierDetail(supplierId);
+  const bindings        = useMemo(() => supplierDetailQ.data?.bindings ?? [], [supplierDetailQ.data?.bindings]);
 
   // ── Manual product search (gated by min query length, mirrors GrnNew). ───
   const [productQuery, setProductQuery] = useState<string>('');
@@ -203,6 +241,16 @@ export const PurchaseInvoiceNew = () => {
     search: productQuery,
     enabled: isManual && productQuery.trim().length >= 2,
   });
+
+  // Supplier-bound picks carry no category on the binding row, so (mirroring
+  // New PO's `allSkus`/`categoryForCode`) we pull the full catalogue to resolve
+  // a bound SKU's itemGroup. Gated to manual + supplier so a GRN-sourced /
+  // no-supplier PI never fires the lookup.
+  const allSkusQ = useMfgProducts({ enabled: isManual && !!supplierId });
+  const categoryForCode = (code: string): string | null => {
+    const sku = (allSkusQ.data ?? []).find((p) => p.code === code);
+    return sku?.category ? sku.category.toLowerCase() : null;
+  };
 
   /* Fill an existing manual line from a picked SKU code (inline per-line
      picker, mirrors GrnNew.pickItemForLine). */
@@ -216,6 +264,20 @@ export const PurchaseInvoiceNew = () => {
       itemGroup:    p.category ? p.category.toLowerCase() : null,
     });
     setProductQuery('');
+  };
+
+  /* Commander 2026-05-29 — supplier-bound pick (New PO/GRN parity): when a
+     supplier is chosen and the typed/picked code matches one of THAT
+     supplier's bindings, fill name + UNIT PRICE (from the binding) + itemGroup.
+     PI's DraftLine has no supplierSku field, so we skip it. */
+  const pickBindingForLine = (rid: string, b: typeof bindings[number]) => {
+    setLine(rid, {
+      materialKind:   'mfg_product',
+      materialCode:   b.material_code,
+      materialName:   b.material_name,
+      unitPriceCenti: b.unit_price_centi,
+      itemGroup:      categoryForCode(b.material_code),
+    });
   };
   /* Append a blank manual line — PO-style "Add another item". */
   const addEmptyManualLine = () =>
@@ -372,7 +434,9 @@ export const PurchaseInvoiceNew = () => {
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Due Date</span>
-              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={styles.fieldInput} />
+              {/* Commander 2026-05-29 — auto = Invoice Date + supplier term days
+                  (default 30) until the operator edits it (dueTouched). */}
+              <input type="date" value={dueDate} onChange={(e) => { setDueTouched(true); setDueDate(e.target.value); }} className={styles.fieldInput} />
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Notes</span>
@@ -391,6 +455,16 @@ export const PurchaseInvoiceNew = () => {
               : lines.length === 0
                 ? (isManual ? 'Manual invoice — pick a supplier above, then add items below' : 'No accepted items on this GRN')
                 : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
+            {/* Commander 2026-05-29 — same supplier-binding hint New PO / New GRN
+                show: once a supplier is chosen the manual picker filters to that
+                supplier's bound SKUs (or the full catalogue when it has none). */}
+            {isManual && supplierId && (
+              <span style={{ display: 'block', marginTop: 2, color: 'var(--c-burnt)' }}>
+                {bindings.length > 0
+                  ? `${bindings.length} item${bindings.length === 1 ? '' : 's'} bound to this supplier — picker filters to these`
+                  : 'No SKUs bound to this supplier yet — picker shows all SKUs (one-off invoice)'}
+              </span>
+            )}
           </span>
         </div>
         {/* Card-per-line layout — Commander 2026-05-29: "PO / GRN / Purchase
@@ -459,14 +533,33 @@ export const PurchaseInvoiceNew = () => {
                           onChange={(e) => {
                             const code = e.target.value;
                             setProductQuery(code);
+                            // Commander 2026-05-29 — supplier-binding-aware pick
+                            // (New PO/GRN parity). When a supplier is chosen and
+                            // the code matches one of its bindings, fill name +
+                            // unit price + itemGroup from the binding.
+                            const bound = supplierId
+                              ? bindings.find((b) => b.material_code === code)
+                              : undefined;
+                            if (bound) { pickBindingForLine(l.rid, bound); return; }
                             const match = (productsQ.data ?? []).find((p) => p.code === code);
                             if (match) { pickItemForLine(l.rid, code); return; }
                             setLine(l.rid, { materialCode: code });
                           }}
-                          placeholder="Type ≥2 chars to search SKUs by code or name…"
+                          placeholder={supplierId && bindings.length > 0
+                            ? 'Pick one of this supplier’s bound SKUs…'
+                            : 'Type ≥2 chars to search SKUs by code or name…'}
                           className={styles.fieldInput} style={{ fontFamily: 'var(--font-mono)' }} />
                         <datalist id={`pi-products-${l.rid}`}>
-                          {(productsQ.data ?? []).map((p) => (<option key={p.id} value={p.code}>{p.name} · {p.category}</option>))}
+                          {/* Supplier chosen + has bindings → list THAT supplier's
+                              bound SKUs (New PO parity). Else fall back to the
+                              gated full-catalogue search. */}
+                          {supplierId && bindings.length > 0
+                            ? bindings.map((b) => (
+                                <option key={b.id} value={b.material_code}>
+                                  {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
+                                </option>
+                              ))
+                            : (productsQ.data ?? []).map((p) => (<option key={p.id} value={p.code}>{p.name} · {p.category}</option>))}
                         </datalist>
                       </>
                     ) : (

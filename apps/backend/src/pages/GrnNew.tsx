@@ -26,7 +26,7 @@ import { ArrowLeft, Plus, Save, Trash2, X, Layers, ChevronDown } from 'lucide-re
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
-import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers } from '../lib/suppliers-queries';
+import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -251,6 +251,14 @@ export const GrnNew = () => {
   const headerPoId = hasPicks ? pickPoId : (po?.id ?? null);
   const currency   = po?.currency ?? 'MYR';
 
+  // Commander 2026-05-29 — make the MANUAL item picker supplier-binding-aware,
+  // exactly like New PO. Once a supplier is chosen the per-line Item Code
+  // datalist lists THAT supplier's bound SKUs (material_code + name + price);
+  // picking one fills name + unit price + itemGroup from the binding. When no
+  // supplier is set yet we fall back to the free useMfgProducts search below.
+  const supplierDetailQ = useSupplierDetail(supplierId);
+  const bindings        = useMemo(() => supplierDetailQ.data?.bindings ?? [], [supplierDetailQ.data?.bindings]);
+
   // ── Manual product search (gated by min query length, mirrors PO form). ──
   // Commander 2026-05-29 — the single top "ADD ITEM" box is gone. Each MANUAL
   // line now carries its own inline Item Code picker (PO parity). The search
@@ -261,6 +269,16 @@ export const GrnNew = () => {
     search: productQuery,
     enabled: isManual && productQuery.trim().length >= 2,
   });
+
+  // Commander 2026-05-29 — supplier-bound picks carry no category on the
+  // binding row, so (mirroring New PO's `allSkus`/`categoryForCode`) we pull
+  // the full catalogue to resolve a bound SKU's itemGroup. Gated to manual +
+  // supplier so a PO-sourced / no-supplier GRN never fires the lookup.
+  const allSkusQ = useMfgProducts({ enabled: isManual && !!supplierId });
+  const categoryForCode = (code: string): string | undefined => {
+    const sku = (allSkusQ.data ?? []).find((p) => p.code === code);
+    return sku?.category ? sku.category.toLowerCase() : undefined;
+  };
 
   // Append a fresh, empty MANUAL line (the per-line picker fills it in). Used by
   // the dashed "Add another item" button at the bottom of the items card.
@@ -290,6 +308,20 @@ export const GrnNew = () => {
       materialCode: code,
       materialName: sku?.name ?? code,
       itemGroup:    sku?.category ? sku.category.toLowerCase() : null,
+    });
+  };
+
+  // Commander 2026-05-29 — supplier-bound pick (New PO parity): when a supplier
+  // is chosen and the typed/picked code matches one of THAT supplier's
+  // bindings, fill name + UNIT PRICE (from the binding) + itemGroup. GRN's
+  // DraftLine has no supplierSku field, so we skip it. Category is resolved
+  // from the full catalogue (categoryForCode) since bindings carry no category.
+  const pickBindingForLine = (rid: string, b: typeof bindings[number]) => {
+    setLine(rid, {
+      materialCode:   b.material_code,
+      materialName:   b.material_name,
+      unitPriceCenti: b.unit_price_centi,
+      itemGroup:      categoryForCode(b.material_code) ?? null,
     });
   };
 
@@ -470,6 +502,17 @@ export const GrnNew = () => {
                 : lines.length === 0
                   ? 'Manual receipt — pick a supplier above, then add items below'
                   : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
+            {/* Commander 2026-05-29 — same supplier-binding hint New PO shows:
+                once a supplier is chosen the manual picker filters to that
+                supplier's bound SKUs (or falls back to the full catalogue when
+                the supplier has no bindings yet). */}
+            {isManual && supplierId && (
+              <span style={{ display: 'block', marginTop: 2, color: 'var(--c-burnt)' }}>
+                {bindings.length > 0
+                  ? `${bindings.length} item${bindings.length === 1 ? '' : 's'} bound to this supplier — picker filters to these`
+                  : 'No SKUs bound to this supplier yet — picker shows all SKUs (one-off receipt)'}
+              </span>
+            )}
           </span>
         </div>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
@@ -573,20 +616,40 @@ export const GrnNew = () => {
                             onChange={(e) => {
                               const code = e.target.value;
                               setProductQuery(code);
-                              // Exact match on the searched SKU list → fill the line.
+                              // Commander 2026-05-29 — supplier-binding-aware
+                              // pick (New PO parity). When a supplier is chosen
+                              // and the code matches one of its bindings, fill
+                              // name + unit price + itemGroup from the binding.
+                              const bound = supplierId
+                                ? bindings.find((b) => b.material_code === code)
+                                : undefined;
+                              if (bound) { pickBindingForLine(l.rid, bound); return; }
+                              // No supplier (or no binding for this code) → fall
+                              // back to the full SKU search match.
                               const match = (productsQ.data ?? []).find((p) => p.code === code);
                               if (match) { pickItemForLine(l.rid, code); return; }
                               // Free typing — keep what's typed so the field stays editable.
                               setLine(l.rid, { materialCode: code });
                             }}
-                            placeholder="Type ≥2 chars to search SKUs by code or name…"
+                            placeholder={supplierId && bindings.length > 0
+                              ? 'Pick one of this supplier’s bound SKUs…'
+                              : 'Type ≥2 chars to search SKUs by code or name…'}
                             className={styles.fieldInput}
                             style={{ fontFamily: 'var(--font-mono)' }}
                           />
                           <datalist id={`grn-products-${l.rid}`}>
-                            {(productsQ.data ?? []).map((p) => (
-                              <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
-                            ))}
+                            {/* Supplier chosen + has bindings → list THAT
+                                supplier's bound SKUs (New PO parity). Else fall
+                                back to the gated full-catalogue search. */}
+                            {supplierId && bindings.length > 0
+                              ? bindings.map((b) => (
+                                  <option key={b.id} value={b.material_code}>
+                                    {b.material_name} · {b.supplier_sku} · {fmtRm(b.unit_price_centi, b.currency)}
+                                  </option>
+                                ))
+                              : (productsQ.data ?? []).map((p) => (
+                                  <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
+                                ))}
                           </datalist>
                         </>
                       ) : (
