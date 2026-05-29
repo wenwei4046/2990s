@@ -234,6 +234,10 @@ export const PurchaseInvoiceNew = () => {
   // no supplier is set yet.
   const supplierDetailQ = useSupplierDetail(supplierId);
   const bindings        = useMemo(() => supplierDetailQ.data?.bindings ?? [], [supplierDetailQ.data?.bindings]);
+  /* Commander 2026-05-29 — the resolved supplier object (same source New PO uses)
+     so the PI header can auto-fill Name + Address + the Contact · Phone · Email ·
+     Terms · Currency info bar, mirroring New PO. No warehouse (PI is AP only). */
+  const supplierDetail  = supplierDetailQ.data?.supplier ?? null;
 
   // ── Manual product search (gated by min query length, mirrors GrnNew). ───
   const [productQuery, setProductQuery] = useState<string>('');
@@ -423,6 +427,33 @@ export const PurchaseInvoiceNew = () => {
               </>
             )}
 
+            {/* Commander 2026-05-29 — Name + Address auto-fill once a supplier is
+                resolved (manual / from GRN), mirroring New PO. No warehouse (PI
+                is AP only — it doesn't touch inventory). */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Name</span>
+              <input
+                type="text"
+                readOnly
+                value={supplierDetail?.name ?? supplierName ?? ''}
+                placeholder="(auto-filled when supplier selected)"
+                className={styles.fieldInput}
+                style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Address</span>
+              <textarea
+                readOnly
+                value={[supplierDetail?.address, supplierDetail?.area, supplierDetail?.postcode, supplierDetail?.state, supplierDetail?.country]
+                  .filter(Boolean).join(', ')}
+                placeholder="(auto-filled when supplier selected)"
+                className={styles.fieldInput}
+                style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)', minHeight: 52, resize: 'vertical' }}
+                rows={3}
+              />
+            </label>
+
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Invoice # *</span>
               <input type="text" value={supplierInvoiceRef} onChange={(e) => setSupplierInvoiceRef(e.target.value)} placeholder="From the supplier's printed invoice" className={styles.fieldInput} required />
@@ -443,6 +474,28 @@ export const PurchaseInvoiceNew = () => {
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Internal notes for AP" className={styles.fieldInput} rows={2} style={{ resize: 'vertical', minHeight: 60 }} />
             </label>
           </div>
+
+          {/* Read-only supplier-info bar — same markup/classes as New PO. */}
+          {supplierDetail && (
+            <div style={{
+              marginTop: 'var(--space-3)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-2) var(--space-3)',
+              fontSize: 'var(--fs-12)',
+              color: 'var(--fg-muted)',
+              display: 'flex',
+              gap: 'var(--space-4)',
+              flexWrap: 'wrap',
+            }}>
+              {supplierDetail.contact_person && <span>Contact: <strong>{supplierDetail.contact_person}</strong></span>}
+              {supplierDetail.phone          && <span>Phone: <strong>{supplierDetail.phone}</strong></span>}
+              {supplierDetail.email          && <span>Email: <strong>{supplierDetail.email}</strong></span>}
+              {supplierDetail.payment_terms  && <span>Terms: <strong>{supplierDetail.payment_terms}</strong></span>}
+              <span>Currency: <strong>{supplierDetail.currency ?? currency}</strong></span>
+            </div>
+          )}
         </div>
       </section>
 

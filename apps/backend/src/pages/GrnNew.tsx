@@ -28,6 +28,7 @@ import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { useWarehouses } from '../lib/inventory-queries';
 import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
@@ -138,6 +139,12 @@ export const GrnNew = () => {
   const [deliveryNoteRef, setDeliveryNoteRef] = useState<string>('');
   const [notes, setNotes]                     = useState<string>('');
   const [lines, setLines]                     = useState<DraftLine[]>([]);
+  /* Commander 2026-05-29 — New GRN must mirror New PO's header, including a
+     "Receive into" Warehouse picker (PO calls it Purchase Location). The chosen
+     warehouse threads into the create payload (warehouseId) → grns.ts sets it on
+     the header so the inventory-IN movement lands there. */
+  const [warehouseId, setWarehouseId]         = useState<string>('');
+  const warehousesQ = useWarehouses();
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
   // ── Read From-PO-multi picks once on mount (remove after reading). ──────
@@ -258,6 +265,21 @@ export const GrnNew = () => {
   // supplier is set yet we fall back to the free useMfgProducts search below.
   const supplierDetailQ = useSupplierDetail(supplierId);
   const bindings        = useMemo(() => supplierDetailQ.data?.bindings ?? [], [supplierDetailQ.data?.bindings]);
+  /* Commander 2026-05-29 — the resolved supplier object (same source PO uses)
+     so the GRN header can auto-fill Name + Address + the Contact · Phone ·
+     Email · Terms · Currency info bar, exactly like New PO. */
+  const supplier        = supplierDetailQ.data?.supplier ?? null;
+
+  /* Default the Warehouse picker sensibly: prefer the source PO's purchase
+     location (so receiving against a PO lands where the PO expected), else the
+     first warehouse. Only seeds when the picker is still blank — never clobbers
+     a manual choice. */
+  useEffect(() => {
+    if (warehouseId) return;
+    const poLoc = (po as { purchase_location_id?: string | null } | undefined)?.purchase_location_id ?? null;
+    const fallback = poLoc ?? (warehousesQ.data?.[0]?.id ?? '');
+    if (fallback) setWarehouseId(fallback);
+  }, [warehouseId, po, warehousesQ.data]);
 
   // ── Manual product search (gated by min query length, mirrors PO form). ──
   // Commander 2026-05-29 — the single top "ADD ITEM" box is gone. Each MANUAL
@@ -349,6 +371,10 @@ export const GrnNew = () => {
       const createRes = await create.mutateAsync({
         purchaseOrderId: headerPoId,
         supplierId,
+        // Commander 2026-05-29 — chosen "Receive into" warehouse (PO parity).
+        // grns.ts persists it on the header (falls back to the default warehouse
+        // when omitted) so the inventory-IN movement lands in the right place.
+        warehouseId:     warehouseId || undefined,
         receivedAt,
         deliveryNoteRef: deliveryNoteRef || undefined,
         notes:           notes || undefined,
@@ -469,6 +495,53 @@ export const GrnNew = () => {
                 <input type="text" readOnly value={supplierName ?? '(auto-filled from PO)'} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
               )}
             </label>
+            {/* Commander 2026-05-29 — Name + Address auto-fill once a supplier is
+                resolved (manual / from PO / from picks), mirroring New PO. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Name</span>
+              <input
+                type="text"
+                readOnly
+                value={supplier?.name ?? supplierName ?? ''}
+                placeholder="(auto-filled when supplier selected)"
+                className={styles.fieldInput}
+                style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+              />
+            </label>
+
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Address</span>
+              <textarea
+                readOnly
+                value={[supplier?.address, supplier?.area, supplier?.postcode, supplier?.state, supplier?.country]
+                  .filter(Boolean).join(', ')}
+                placeholder="(auto-filled when supplier selected)"
+                className={styles.fieldInput}
+                style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)', minHeight: 52, resize: 'vertical' }}
+                rows={3}
+              />
+            </label>
+            {/* Receive into — Warehouse picker (PO's Purchase Location equivalent).
+                Threads into the create payload → inventory-IN lands here. */}
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Receive into *</span>
+              <select
+                value={warehouseId}
+                onChange={(e) => setWarehouseId(e.target.value)}
+                className={styles.fieldInput}
+                disabled={warehousesQ.isLoading}
+                required
+              >
+                <option value="">{warehousesQ.isLoading ? 'Loading warehouses…' : '— Pick a warehouse —'}</option>
+                {(warehousesQ.data ?? []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+                ))}
+              </select>
+              <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                Warehouse the received stock moves into.
+              </span>
+            </label>
+
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Received Date *</span>
               <input type="date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} className={styles.fieldInput} required />
@@ -483,6 +556,28 @@ export const GrnNew = () => {
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Receiving notes — visible on the GRN detail page" className={styles.fieldInput} rows={2} style={{ resize: 'vertical', minHeight: 60 }} />
             </label>
           </div>
+
+          {/* Read-only supplier-info bar — same markup/classes as New PO. */}
+          {supplier && (
+            <div style={{
+              marginTop: 'var(--space-3)',
+              background: 'var(--c-cream)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-2) var(--space-3)',
+              fontSize: 'var(--fs-12)',
+              color: 'var(--fg-muted)',
+              display: 'flex',
+              gap: 'var(--space-4)',
+              flexWrap: 'wrap',
+            }}>
+              {supplier.contact_person && <span>Contact: <strong>{supplier.contact_person}</strong></span>}
+              {supplier.phone          && <span>Phone: <strong>{supplier.phone}</strong></span>}
+              {supplier.email          && <span>Email: <strong>{supplier.email}</strong></span>}
+              {supplier.payment_terms  && <span>Terms: <strong>{supplier.payment_terms}</strong></span>}
+              <span>Currency: <strong>{supplier.currency ?? currency}</strong></span>
+            </div>
+          )}
         </div>
       </section>
 
