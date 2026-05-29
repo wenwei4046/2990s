@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { MaintenanceTab, type MaintenanceSection } from './Products';
 import { SofaComboTab } from '../components/SofaComboTab';
+import { FabricTracking } from './FabricTracking';
 import { Button } from '@2990s/design-system';
 import {
   useSupplierDetail,
@@ -163,7 +164,7 @@ function mfgCategoryFromSupplierCategory(
   }
 }
 
-type SupplierDetailTab = 'overview' | 'sku-pricing' | 'maintenance' | 'combos';
+type SupplierDetailTab = 'overview' | 'sku-pricing' | 'maintenance' | 'combos' | 'fabric';
 
 export const SupplierDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -185,6 +186,13 @@ export const SupplierDetail = () => {
   const supplierCategory: SupplierCategory | null = isSupplierCategory(supplier?.category)
     ? supplier!.category
     : null;
+  /* Commander 2026-05-29 — surface the Products config tabs on the supplier,
+     scoped to what the supplier actually supplies:
+       • Combo Pricing  → SOFA suppliers (sofa module-set deals)
+       • Fabric Converter → SOFA + BEDFRAME (fabric/colour pool)
+     MIXED / unknown shows both. (Maintenance is the existing Pricing tab.) */
+  const showCombo  = supplierCategory == null || supplierCategory === 'SOFA' || supplierCategory === 'MIXED';
+  const showFabric = supplierCategory == null || supplierCategory === 'SOFA' || supplierCategory === 'BEDFRAME' || supplierCategory === 'MIXED';
 
   // KPI tone selection — same thresholds as HOOKKA.
   const otrTone = useMemo(() => {
@@ -324,12 +332,25 @@ export const SupplierDetail = () => {
             </span>
           )}
         </SupplierTabButton>
-        <SupplierTabButton
-          active={activeTab === 'combos'}
-          onClick={() => setActiveTab('combos')}
-        >
-          Combo Pricing
-        </SupplierTabButton>
+        {showCombo && (
+          <SupplierTabButton
+            active={activeTab === 'combos'}
+            onClick={() => setActiveTab('combos')}
+          >
+            Combo Pricing
+          </SupplierTabButton>
+        )}
+        {/* Commander 2026-05-29 — Fabric Converter tab ported from PR #312.
+            Gated to SOFA / BEDFRAME / MIXED suppliers (showFabric), since the
+            fabric master only drives sofa + bedframe pricing. */}
+        {showFabric && (
+          <SupplierTabButton
+            active={activeTab === 'fabric'}
+            onClick={() => setActiveTab('fabric')}
+          >
+            Fabric Converter
+          </SupplierTabButton>
+        )}
       </div>
 
       {activeTab === 'overview' && (
@@ -354,7 +375,7 @@ export const SupplierDetail = () => {
           supplierCategory={supplierCategory}
         />
       )}
-      {activeTab === 'combos' && (
+      {activeTab === 'combos' && showCombo && (
         <section className={styles.card} style={{ marginTop: 'var(--space-3)' }}>
           <header className={styles.cardHeader}>
             <h2 className={styles.cardTitle}>
@@ -367,6 +388,10 @@ export const SupplierDetail = () => {
           </div>
         </section>
       )}
+      {/* Commander 2026-05-29 — Fabric Converter render case from PR #312.
+          FabricTracking renders its own page header, so mount it bare (no
+          card wrapper) to avoid a doubled "Fabric Converter" title. */}
+      {activeTab === 'fabric' && showFabric && <FabricTracking />}
 
       {/* ── SKU dialogs (modals) ──────────────────────────────────── */}
       {skuDialog.mode === 'multi' && (
