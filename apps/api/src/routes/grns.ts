@@ -466,17 +466,23 @@ grns.post('/from-po-items', async (c) => {
     }
   }
 
-  // Group picks by purchase_order_id → emit one GRN per PO.
-  type Bucket = { poId: string; poNumber: string; supplierId: string; warehouseId: string | null; lines: Array<{ row: ItemRow; qty: number }> };
+  // Group picks by SUPPLIER → one GRN per supplier (Commander 2026-05-29:
+  // "不同 supplier 不能 under 同一张 GRN" + "multi-select → 一张 GRN"). A
+  // supplier's lines may span several POs; the GRN header references the first
+  // PO (grns.purchase_order_id is single-FK) while each grn_item keeps its own
+  // purchase_order_item_id, so received_qty still rolls up to EVERY source PO.
+  type Bucket = { supplierId: string; primaryPoId: string; poNumbers: Set<string>; warehouseId: string | null; lines: Array<{ row: ItemRow; qty: number }> };
   const buckets = new Map<string, Bucket>();
   for (const p of picks) {
     const row = byId.get(p.poItemId)!;
-    const cur = buckets.get(row.po.id) ?? {
-      poId: row.po.id, poNumber: row.po.po_number, supplierId: row.po.supplier_id,
+    const key = row.po.supplier_id;
+    const cur = buckets.get(key) ?? {
+      supplierId: row.po.supplier_id, primaryPoId: row.po.id, poNumbers: new Set<string>(),
       warehouseId: row.po.purchase_location_id, lines: [],
     };
+    cur.poNumbers.add(row.po.po_number);
     cur.lines.push({ row, qty: p.qty });
-    buckets.set(row.po.id, cur);
+    buckets.set(key, cur);
   }
 
   // Generate GRN numbers sequentially within this batch.
@@ -493,13 +499,13 @@ grns.post('/from-po-items', async (c) => {
     const grnNumber = `GRN-${yymm}-${String(counter).padStart(3, '0')}`;
     const { data: header, error: hErr } = await sb.from('grns').insert({
       grn_number: grnNumber,
-      purchase_order_id: bucket.poId,
+      purchase_order_id: bucket.primaryPoId,
       supplier_id: bucket.supplierId,
       received_at: receivedAt,
       warehouse_id: bucket.warehouseId,
       notes: body.notes
-        ? `Multi-pick from ${bucket.poNumber} · ${body.notes}`
-        : `Multi-pick from ${bucket.poNumber}`,
+        ? `Received from ${[...bucket.poNumbers].join(', ')} · ${body.notes}`
+        : `Received from ${[...bucket.poNumbers].join(', ')}`,
       created_by: user.id,
     }).select('id, grn_number').single();
     if (hErr) continue;
@@ -544,7 +550,7 @@ grns.post('/from-po-items', async (c) => {
     }
     created.push({
       id: h.id, grnNumber: h.grn_number,
-      purchaseOrderId: bucket.poId, poNumber: bucket.poNumber,
+      purchaseOrderId: bucket.primaryPoId, poNumber: [...bucket.poNumbers].join(', '),
       lineCount: bucket.lines.length,
     });
   }
