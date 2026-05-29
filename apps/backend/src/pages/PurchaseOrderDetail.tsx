@@ -33,7 +33,6 @@ import {
   useDeletePurchaseOrder,
   useSuppliers,
   useSupplierDetail,
-  useConvertPoFromSo,
   type PoItemRow,
   type NewPoItem,
   type BindingRow,
@@ -72,9 +71,6 @@ export const PurchaseOrderDetail = () => {
   const detail = usePurchaseOrderDetail(id ?? null);
   const linked = usePurchaseOrderLinked(id ?? null);
   const updateHeader = useUpdatePurchaseOrderHeader();
-  // PR #78 — Convert from SO mutation. Pop a prompt for SO doc_no, the
-  // server copies non-cancelled items into this PO (skipping dupes).
-  const convertFromSo = useConvertPoFromSo();
   // PR-DRAFT-removal — Submit button removed (POs are SUBMITTED on create).
   const cancel = useCancelPurchaseOrder();
   const deletePo = useDeletePurchaseOrder();
@@ -231,32 +227,13 @@ export const PurchaseOrderDetail = () => {
             <Button
               variant="ghost"
               size="md"
-              onClick={() => {
-                const docNo = window.prompt(
-                  'Convert from Sales Order — enter SO doc no (e.g. SO-009001):',
-                );
-                if (!docNo) return;
-                convertFromSo.mutate(
-                  { poId: po.id, soDocNo: docNo.trim() },
-                  {
-                    onSuccess: (res) => {
-                      window.alert(
-                        `Copied ${res.copied} item${res.copied === 1 ? '' : 's'} from ${res.sourceDocNo}.`
-                        + (res.skipped > 0 ? ` Skipped ${res.skipped} (already on this PO).` : ''),
-                      );
-                    },
-                    onError: (err) => {
-                      window.alert(
-                        `Convert failed: ${err instanceof Error ? err.message : String(err)}`,
-                      );
-                    },
-                  },
-                );
-              }}
-              disabled={convertFromSo.isPending}
+              /* Commander 2026-05-29 — open the full "Pick Sales Orders for this
+                 PO" picker (scoped to this PO's supplier) instead of a prompt.
+                 Picking lines appends them straight to this PO. */
+              onClick={() => navigate(`/purchase-orders/from-so?poId=${po.id}`)}
             >
               <ArrowRightLeft {...ICON} />
-              <span>{convertFromSo.isPending ? 'Converting…' : 'Convert from SO'}</span>
+              <span>Convert from SO</span>
             </Button>
           )}
           {/* PR — Commander 2026-05-27: "Cancel/Delete PO 没反应".
@@ -342,9 +319,16 @@ export const PurchaseOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          {/* Add Line Item only in Edit mode — View is read-only. */}
+          {/* Add Line Item only in Edit mode — View is read-only.
+              Commander 2026-05-29 — same as "Convert from SO": open the full
+              "Pick Sales Orders for this PO" picker. Lines on a PO come from the
+              SO demand, so adding a line = picking SO line(s). */}
           {isEditing && (
-            <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
+            <Button
+              variant="primary" size="sm"
+              onClick={() => navigate(`/purchase-orders/from-so?poId=${po.id}`)}
+              disabled={isLocked}
+            >
               <Plus {...ICON} />
               <span>Add Line Item</span>
             </Button>
