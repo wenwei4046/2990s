@@ -498,91 +498,24 @@ mfgSalesOrders.post('/', async (c) => {
     };
     return recomputeFromSnapshot(draft, product, fabric, cachedConfig);
   }));
-  /* PR — Commander 2026-05-28 — Server-side combo recompute (HOOKKA subset 1:1).
-     For each sofa line, run the SAME shared `pickComboMatch` the POS cart uses
-     so the match decision + scope ranking + cheaper-only guard stay identical
-     (anti-tamper). A combo now covers a SUBSET of the built cells: every combo
-     slot must be filled by a distinct built module, extras beyond the matched
-     subset are allowed and stay at full master price.
+  /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
+     operator-authored on every SO line. The product price tables are COST,
+     so there is no server-computed selling figure to enforce a combo floor /
+     ceiling against. The former combo selling-price override (which replaced
+     the line's selling price with a cheaper whole-build combo total, or
+     clamped/rejected an out-of-band client price) is therefore retired — it
+     would clobber or reject the operator's manual selling price. The COST
+     path (computeMfgLineCost → unit_cost_centi / line_cost_centi /
+     line_margin_centi) is untouched; combos never fed it.
 
-     The mfg pricing model prices a sofa line as ONE seat-height base for the
-     whole build — it has no per-compartment price table to decompose extras —
-     so we apply the override in two cases that preserve anti-tamper:
-       · WHOLE-BUILD match (no extras): the combo replaces the line price
-         outright IFF it's cheaper than the recomputed full-build base
-         (HOOKKA's `subsetSum − comboTotal > 0`). Drift then compares the
-         client unit to `comboTotal`.
-       · SUBSET match WITH extras: the server can't price the extras
-         per-module, so it pins a FLOOR (client must pay ≥ comboTotal — the
-         combo's own price — since extras only add) and a CEILING (client must
-         pay ≤ the recomputed full-build base — extras can't be priced ABOVE
-         their à-la-carte). A client inside [comboTotal, fullBase] passes; one
-         outside drifts. This keeps a tampering POS from dropping below the
-         combo floor while still allowing the legitimate combo+extras total. */
-  let combos: SofaComboRow[] = [];
-  const hasSofaCustomBuild = items.some((it) =>
-    !!extractSofaComboLookupArgs(it.itemGroup as string | undefined, it.variants)
-  );
-  if (hasSofaCustomBuild) {
-    combos = await loadActiveSofaCombos(sb);
-  }
-  if (combos.length > 0) {
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i]; if (!it) continue;
-      const args = extractSofaComboLookupArgs(it.itemGroup as string | undefined, it.variants);
-      if (!args) continue;
-      const match = pickComboMatch(
-        { baseModel: '', modules: args.modules, customerId: null,
-          tier: args.tier, height: args.height },
-        combos,
-      );
-      if (!match) continue;
-      const r = recomputes[i];
-      if (!r) continue;
-      const comboTotal = match.comboPriceCenti;
-      const fullBase = r.unit_price_sen;            // recomputed whole-build à-la-carte base
-      const qty = Math.max(0, Math.floor(Number(it.qty || 0)));
-      const clientCenti = Number(it.unitPriceCenti ?? 0);
-      const builtCount = args.modules.map((m) => m.trim()).filter(Boolean).length;
-      const hasExtras = match.matchedIndices.length < builtCount;
+     `loadActiveSofaCombos` / `pickComboMatch` / `extractSofaComboLookupArgs`
+     remain imported for the POS sales path and possible future selling-side
+     combo work — they are simply not applied to the SO selling price here. */
+  void loadActiveSofaCombos; void pickComboMatch; void extractSofaComboLookupArgs;
 
-      if (!hasExtras) {
-        // Whole-build combo. Cheaper-only guard vs the recomputed base.
-        if (comboTotal < fullBase) {
-          r.unit_price_sen = comboTotal;
-          r.total_centi = qty * comboTotal;
-          r.drift = clientCenti === 0
-            ? false                                    // 0 = not provided → trust server
-            : comboTotal > 0
-              ? Math.abs(clientCenti - comboTotal) / comboTotal > 0.005
-              : clientCenti !== 0;
-        }
-        // else: combo isn't cheaper → leave the à-la-carte recompute as-is.
-      } else {
-        // Subset match WITH extras. Accept any client unit within
-        // [comboTotal, fullBase]; the combo discount on the matched subset
-        // guarantees the legitimate total never exceeds the full à-la-carte
-        // base, and never drops below the combo's own floor.
-        const floor = comboTotal;
-        const ceiling = Math.max(fullBase, comboTotal);
-        const withinBand = clientCenti >= floor && clientCenti <= ceiling;
-        if (clientCenti === 0 || withinBand) {
-          // 0 = not provided → use the combo floor. withinBand → trust client.
-          r.unit_price_sen = clientCenti === 0 ? floor : clientCenti;
-          r.total_centi = qty * r.unit_price_sen;
-          r.drift = false;
-        } else {
-          // Out of band → clamp the server price to the floor and let the
-          // drift check reject the tampered submission.
-          r.unit_price_sen = floor;
-          r.total_centi = qty * floor;
-          r.drift = true;
-        }
-      }
-    }
-  }
-
-  // Reject the whole request on first drift — keeps the SO atomic.
+  // Drift rejection retained for structural stability; `r.drift` is always
+  // false now (manual selling is accepted in recomputeFromSnapshot), so this
+  // loop never fires — but it keeps the SO atomic if a future path sets drift.
   for (let i = 0; i < recomputes.length; i++) {
     const r = recomputes[i];
     if (r && r.drift) {

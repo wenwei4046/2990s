@@ -172,14 +172,24 @@ export function recomputeFromSnapshot(
     sofaLegHeight: variants.sofaLegHeight ?? null,
   };
 
+  /* Commander 2026-05-29 (system-wide) — the SELLING unit price is
+     operator-authored, NOT computed. The product price tables are COST, so
+     `computeMfgLinePrice` now returns a 0 selling base (surcharges only, 0
+     today). We therefore PERSIST the client's manual selling price unchanged
+     and DO NOT drift-check it (there is no computed selling figure to compare
+     against — clobbering the manual price with the computed 0 would be wrong).
+     `breakdown` is still computed so the surcharge component columns
+     (divan/leg/special) reflect any director-set SELLING surcharges. */
   const breakdown = computeMfgLinePrice(pricingInput, config);
+  const manualUnitSelling = Math.max(0, Math.round(Number(item.unitPriceCenti ?? 0)));
+  const safeQty = Math.max(0, Math.floor(item.qty || 0));
 
   /* Commander 2026-05-28 — COST snapshot. Same (product, fabric, variants,
      config) snapshot, but `computeMfgLineCost` reads the backend maintenance
      `priceSen` tables as the cost (base + Σ priceSen surcharges). This is the
-     SEPARATE cost path — never drift-checked against the client (cost is a
-     server-only snapshot), distinct from the selling-total drift validation
-     done on `breakdown.unitPriceSen` below. */
+     SEPARATE cost path — UNCHANGED — and is what drives unit_cost_centi /
+     line_cost_centi / line_margin_centi. Never drift-checked (cost is a
+     server-only snapshot). Margin = manual selling − computed cost. */
   const costBreakdown = computeMfgLineCost(pricingInput, config);
 
   // Project specials → custom_specials column. Each pick keeps its label
@@ -204,16 +214,23 @@ export function recomputeFromSnapshot(
       })
     : null;
 
-  const drift = driftThresholdExceeded(item.unitPriceCenti, breakdown.unitPriceSen);
+  /* Commander 2026-05-29 — selling is operator-authored, so accept it as-is.
+     No drift check: the legacy guard compared the client price against the
+     computed selling total, which is now 0; keeping it would reject every
+     non-zero manual price. `driftThresholdExceeded` stays exported/imported
+     for the legacy POS pricing.ts path; it is intentionally not applied here. */
+  void driftThresholdExceeded;
+  const drift = false;
 
   return {
     itemCode:          item.itemCode,
-    unit_price_sen:    breakdown.unitPriceSen,
+    // Persist the operator's manual SELLING unit price unchanged.
+    unit_price_sen:    manualUnitSelling,
     divan_price_sen:   breakdown.divanSurchargeSen,
     leg_price_sen:     breakdown.legSurchargeSen,
     special_order_sen: breakdown.specialsSurchargeSen,
     custom_specials:   customSpecials,
-    total_centi:       breakdown.lineTotalSen,
+    total_centi:       manualUnitSelling * safeQty,
     breakdown,
     unit_cost_sen:     costBreakdown.unitPriceSen,
     line_cost_sen:     costBreakdown.lineTotalSen,

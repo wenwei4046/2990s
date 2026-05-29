@@ -245,36 +245,32 @@ export function computeMfgLinePrice(
   const tier: MfgFabricTier | null = fabric?.tier ?? null;
   const fabricSurchargeSen = Math.max(0, fabric?.surchargeSen ?? 0);
 
-  // ── BASE PRICE (fabric-tier-resolved per category) ───────────────────
-  let basePriceSen = 0;
+  // ── BASE PRICE (SELLING) ─────────────────────────────────────────────
+  // Commander 2026-05-29 (system-wide): the product price tables
+  // (`basePriceSen` / `price1Sen` / `seatHeightPrices[].priceSen`) represent
+  // COST (what suppliers charge us), NOT the customer-facing selling price.
+  // So the SELLING base must NEVER auto-populate from those fields — it is
+  // operator-authored on the SO line and defaults to 0. We deliberately do
+  // NOT read product.basePriceSen / price1Sen / seatHeightPrices here.
+  //
+  // The COST side (`computeMfgLineCost` below) is UNCHANGED — it still reads
+  // those product price fields as the cost base, so unit_cost_centi /
+  // line_margin_centi keep working exactly as before.
+  //
+  // `source` still labels the tier the SELLING surcharges would resolve under
+  // (sofa seat row / bedframe price tier) so the breakdown shape is preserved.
+  const basePriceSen = 0;
   let source: MfgPricingBreakdown['source'] = 'BASE_ONLY';
 
   if (product.category === 'SOFA') {
     const seat = resolveSeatHeightSen(product.seatHeightPrices, input.seatSize, tier);
-    if (seat != null) {
-      basePriceSen = seat.priceSen;
-      source = seat.matchedTier === 'PRICE_1' ? 'PRICE_1' : 'PRICE_2';
-    } else {
-      // Legacy sofa without seat_height_prices — fall back to flat columns.
-      if (tier === 'PRICE_1' && product.price1Sen != null && product.price1Sen > 0) {
-        basePriceSen = product.price1Sen;
-        source = 'PRICE_1';
-      } else {
-        basePriceSen = product.basePriceSen ?? 0;
-        source = 'PRICE_2';
-      }
-    }
+    source = seat != null
+      ? (seat.matchedTier === 'PRICE_1' ? 'PRICE_1' : 'PRICE_2')
+      : (tier === 'PRICE_1' && product.price1Sen != null && product.price1Sen > 0 ? 'PRICE_1' : 'PRICE_2');
   } else if (product.category === 'BEDFRAME') {
-    if (tier === 'PRICE_1' && product.price1Sen != null && product.price1Sen > 0) {
-      basePriceSen = product.price1Sen;
-      source = 'PRICE_1';
-    } else {
-      basePriceSen = product.basePriceSen ?? 0;
-      source = 'PRICE_2';
-    }
+    source = tier === 'PRICE_1' && product.price1Sen != null && product.price1Sen > 0 ? 'PRICE_1' : 'PRICE_2';
   } else {
     // MATTRESS / ACCESSORY / SERVICE — single-price per SKU.
-    basePriceSen = product.basePriceSen ?? 0;
     source = 'BASE_ONLY';
   }
 

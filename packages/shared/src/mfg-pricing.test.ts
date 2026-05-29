@@ -1,19 +1,21 @@
-// Unit tests for the mfg SO line pricing engine. Covers Commander
-// 2026-05-27's five pinned cases:
+// Unit tests for the mfg SO line pricing engine.
+//
+// Commander 2026-05-29 (system-wide): the product price tables
+// (basePriceSen / price1Sen / seatHeightPrices[].priceSen) are COST, NOT the
+// customer-facing selling price. So the SELLING base (computeMfgLinePrice) is
+// now ALWAYS 0 — it must never auto-populate from those product cost fields.
+// The operator types the selling unit price manually on the SO line. Selling
+// variant surcharges still come from each option's `sellingPriceSen` (unset
+// today → 0). The COST total (computeMfgLineCost) is UNCHANGED — it still reads
+// the product base price fields + each option's `priceSen` as the cost, so
+// unit_cost_centi / line_margin_centi keep working exactly as before.
+//
+// Covers Commander 2026-05-27's five pinned shapes (now selling-base 0):
 //   1. Mattress single-price
 //   2. Bedframe PRICE_2 default (no fabric tier picked)
 //   3. Bedframe PRICE_1 via fabric tier switch
 //   4. Bedframe with all 4 surcharges + fabric add-on
 //   5. Sofa with seat size + fabric tier switch + leg + specials
-//
-// Commander 2026-05-28 update: the maintenance-config option `priceSen` is
-// the COST benchmark, NOT the customer-facing selling surcharge. The SELLING
-// total (computeMfgLinePrice) now reads each option's `sellingPriceSen`; the
-// COST total (computeMfgLineCost) keeps reading `costSen`. So with only
-// `priceSen` populated (today's data), selling-side surcharges are 0. The
-// `sellingConfig` fixture below mirrors the legacy surcharges onto
-// `sellingPriceSen` so the historic selling cases still exercise non-zero
-// surcharge math.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -123,7 +125,7 @@ const sofaWithSeatTiers: MfgPricingProduct = {
 /* ───────────────── 1. Mattress ───────────────── */
 
 describe('computeMfgLinePrice — mattress', () => {
-  it('uses basePriceSen only; ignores fabric tier and any surcharges sent in', () => {
+  it('selling base is 0 (cost not auto-populated); ignores fabric tier and surcharges', () => {
     const r = computeMfgLinePrice(
       {
         product:     mattress,
@@ -134,14 +136,15 @@ describe('computeMfgLinePrice — mattress', () => {
       },
       config,
     );
-    expect(r.basePriceSen).toBe(89000);
+    // Commander 2026-05-29: selling base is 0 — the product's 89000 is COST.
+    expect(r.basePriceSen).toBe(0);
     expect(r.divanSurchargeSen).toBe(0);
     expect(r.legSurchargeSen).toBe(0);
     expect(r.totalHeightSurchargeSen).toBe(0);
     expect(r.specialsSurchargeSen).toBe(0);
     expect(r.fabricSurchargeSen).toBe(0);
-    expect(r.unitPriceSen).toBe(89000);
-    expect(r.lineTotalSen).toBe(178000);
+    expect(r.unitPriceSen).toBe(0);
+    expect(r.lineTotalSen).toBe(0);
     expect(r.source).toBe('BASE_ONLY');
   });
 });
@@ -149,29 +152,30 @@ describe('computeMfgLinePrice — mattress', () => {
 /* ───────────────── 2. Bedframe PRICE_2 default ───────────────── */
 
 describe('computeMfgLinePrice — bedframe PRICE_2 default', () => {
-  it('uses basePriceSen when no fabric tier is picked', () => {
+  it('selling base 0 when no fabric tier is picked (PRICE_2 label)', () => {
     const r = computeMfgLinePrice(
       { product: bedframeBothTiers, qty: 1 },
       config,
     );
-    expect(r.basePriceSen).toBe(52000);
-    expect(r.unitPriceSen).toBe(52000);
+    // Selling base is 0 — the 52000 PRICE_2 is COST, not selling.
+    expect(r.basePriceSen).toBe(0);
+    expect(r.unitPriceSen).toBe(0);
     expect(r.source).toBe('PRICE_2');
   });
 
-  it('uses basePriceSen when fabric tier is PRICE_2', () => {
+  it('selling base 0 when fabric tier is PRICE_2', () => {
     const r = computeMfgLinePrice(
       { product: bedframeBothTiers, qty: 1, fabric: { tier: 'PRICE_2' } },
       config,
     );
-    expect(r.basePriceSen).toBe(52000);
+    expect(r.basePriceSen).toBe(0);
     expect(r.source).toBe('PRICE_2');
   });
 
-  it('falls back to basePriceSen when fabric=PRICE_1 but product has no price1Sen', () => {
+  it('selling base 0 when fabric=PRICE_1 but product has no price1Sen (PRICE_2 label)', () => {
     const onlyP2: MfgPricingProduct = { category: 'BEDFRAME', basePriceSen: 28000, price1Sen: null };
     const r = computeMfgLinePrice({ product: onlyP2, qty: 1, fabric: { tier: 'PRICE_1' } }, config);
-    expect(r.basePriceSen).toBe(28000);
+    expect(r.basePriceSen).toBe(0);
     expect(r.source).toBe('PRICE_2');   // because price1Sen unavailable
   });
 });
@@ -179,42 +183,45 @@ describe('computeMfgLinePrice — bedframe PRICE_2 default', () => {
 /* ───────────────── 3. Bedframe PRICE_1 via fabric ───────────────── */
 
 describe('computeMfgLinePrice — bedframe PRICE_1 via fabric', () => {
-  it('switches to price1Sen when fabric tier=PRICE_1 and product opts in', () => {
+  it('labels PRICE_1 when fabric tier=PRICE_1 and product opts in, but selling base stays 0', () => {
     const r = computeMfgLinePrice(
       { product: bedframeBothTiers, qty: 3, fabric: { tier: 'PRICE_1' } },
       config,
     );
-    expect(r.basePriceSen).toBe(46000);
-    expect(r.unitPriceSen).toBe(46000);
-    expect(r.lineTotalSen).toBe(138000);
+    // The 46000 PRICE_1 is COST; selling base is 0 regardless of tier.
+    expect(r.basePriceSen).toBe(0);
+    expect(r.unitPriceSen).toBe(0);
+    expect(r.lineTotalSen).toBe(0);
     expect(r.source).toBe('PRICE_1');
   });
 });
 
 /* ───────────────── 4. Bedframe with all surcharges ───────────────── */
 
-describe('computeMfgLinePrice — bedframe with all 4 surcharges + fabric add-on', () => {
-  it('sums Base + Divan + Leg + TotalHeight + Specials + Fabric, all additive', () => {
+describe('computeMfgLinePrice — bedframe selling surcharges + fabric add-on (base 0)', () => {
+  it('sums selling surcharges (Divan + Leg + TotalHeight + Specials + Fabric); base excluded', () => {
     const r = computeMfgLinePrice(
       {
         product:     bedframeBothTiers,
         qty:         1,
         fabric:      { tier: 'PRICE_2', surchargeSen: 7500 }, // optional Fabric pool add-on
-        divanHeight: '10"',                                    // +5000
+        divanHeight: '10"',                                    // sellingPriceSen +5000
         legHeight:   '7"',                                     // +16000
         totalHeight: '24"',                                    // +14000 (Commander: additive on top)
         specials:    ['HB Fully Cover', 'Left Drawer'],        // +5000 + 15000 = +20000
       },
       config,
     );
-    expect(r.basePriceSen).toBe(52000);
+    // Selling base is 0 — the 52000 PRICE_2 is COST. Only the selling
+    // surcharges (sellingPriceSen) + the Fabric pool add-on contribute.
+    expect(r.basePriceSen).toBe(0);
     expect(r.divanSurchargeSen).toBe(5000);
     expect(r.legSurchargeSen).toBe(16000);
     expect(r.totalHeightSurchargeSen).toBe(14000);
     expect(r.specialsSurchargeSen).toBe(20000);
     expect(r.fabricSurchargeSen).toBe(7500);
-    expect(r.unitPriceSen).toBe(52000 + 5000 + 16000 + 14000 + 20000 + 7500);
-    expect(r.unitPriceSen).toBe(114500);
+    expect(r.unitPriceSen).toBe(5000 + 16000 + 14000 + 20000 + 7500);
+    expect(r.unitPriceSen).toBe(62500);
     expect(r.source).toBe('PRICE_2');
   });
 
@@ -248,13 +255,14 @@ describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () 
       },
       costOnlyConfig,
     );
-    expect(r.basePriceSen).toBe(52000);
+    // Selling base is 0 (52000 is COST); surcharges also 0 (no sellingPriceSen).
+    expect(r.basePriceSen).toBe(0);
     expect(r.divanSurchargeSen).toBe(0);
     expect(r.legSurchargeSen).toBe(0);
     expect(r.totalHeightSurchargeSen).toBe(0);
     expect(r.specialsSurchargeSen).toBe(0);
-    // Selling total = base only, surcharges drop out entirely.
-    expect(r.unitPriceSen).toBe(52000);
+    // Selling total = 0 — operator types the selling price manually.
+    expect(r.unitPriceSen).toBe(0);
   });
 
   it('single option: priceSen=5500 (cost) → selling surcharge 0', () => {
@@ -267,10 +275,10 @@ describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () 
       onlyCost,
     );
     expect(r.specialsSurchargeSen).toBe(0);
-    expect(r.unitPriceSen).toBe(52000);
+    expect(r.unitPriceSen).toBe(0);
   });
 
-  it('single option: sellingPriceSen=7000 set → selling surcharge 7000', () => {
+  it('single option: sellingPriceSen=7000 set → selling surcharge 7000, base still 0', () => {
     const withSelling: MaintenanceConfig = {
       ...costOnlyConfig,
       specials: [{ value: 'HB Fully Cover', priceSen: 5500, sellingPriceSen: 7000 }],
@@ -280,8 +288,9 @@ describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () 
       withSelling,
     );
     // Selling reads the director-set selling surcharge, NOT the 5500 cost.
+    // Base stays 0 (52000 is COST) — only the selling surcharge contributes.
     expect(r.specialsSurchargeSen).toBe(7000);
-    expect(r.unitPriceSen).toBe(52000 + 7000);
+    expect(r.unitPriceSen).toBe(7000);
   });
 
   it('cost compute reads priceSen (the backend cost) for the SAME options (cost ≠ sell)', () => {
@@ -310,8 +319,8 @@ describe('computeMfgLinePrice — variant surcharges are SELLING, not COST', () 
 
 /* ───────────────── 5. Sofa seat-size + fabric tier ───────────────── */
 
-describe('computeMfgLinePrice — sofa seat size + fabric tier switch', () => {
-  it('reads PRICE_2 seat row when fabric tier is PRICE_2', () => {
+describe('computeMfgLinePrice — sofa seat size + fabric tier switch (selling base 0)', () => {
+  it('labels PRICE_2 seat row but selling base is 0; surcharges still apply', () => {
     const r = computeMfgLinePrice(
       {
         product:       sofaWithSeatTiers,
@@ -323,16 +332,18 @@ describe('computeMfgLinePrice — sofa seat size + fabric tier switch', () => {
       },
       config,
     );
-    expect(r.basePriceSen).toBe(57200);
+    // The 57200 PRICE_2 seat row is COST; selling base is 0. Only the
+    // selling surcharges (sellingPriceSen) contribute.
+    expect(r.basePriceSen).toBe(0);
     expect(r.legSurchargeSen).toBe(5000);
     expect(r.specialsSurchargeSen).toBe(8000);
     expect(r.divanSurchargeSen).toBe(0);       // sofa has no divan
     expect(r.totalHeightSurchargeSen).toBe(0); // sofa has no total height
-    expect(r.unitPriceSen).toBe(57200 + 5000 + 8000);
+    expect(r.unitPriceSen).toBe(5000 + 8000);
     expect(r.source).toBe('PRICE_2');
   });
 
-  it('switches to PRICE_1 seat row when fabric tier is PRICE_1', () => {
+  it('labels PRICE_1 seat row when fabric tier is PRICE_1, selling base still 0', () => {
     const r = computeMfgLinePrice(
       {
         product:  sofaWithSeatTiers,
@@ -342,11 +353,11 @@ describe('computeMfgLinePrice — sofa seat size + fabric tier switch', () => {
       },
       config,
     );
-    expect(r.basePriceSen).toBe(50000);     // PRICE_1 row
+    expect(r.basePriceSen).toBe(0);         // 50000 PRICE_1 row is COST
     expect(r.source).toBe('PRICE_1');
   });
 
-  it('falls back to PRICE_2 seat row when PRICE_1 is missing for the picked height', () => {
+  it('labels PRICE_2 fallback when PRICE_1 missing for the picked height, base 0', () => {
     const r = computeMfgLinePrice(
       {
         product:  sofaWithSeatTiers,
@@ -356,9 +367,44 @@ describe('computeMfgLinePrice — sofa seat size + fabric tier switch', () => {
       },
       config,
     );
-    expect(r.basePriceSen).toBe(77200);
+    expect(r.basePriceSen).toBe(0);      // 77200 PRICE_2 fallback is COST
     // We treat the fallback as PRICE_2 since that's the row actually used.
     expect(r.source).toBe('PRICE_2');
+  });
+});
+
+/* ── Commander 2026-05-29: selling base 0 while cost base = product cost ── */
+
+describe('computeMfgLinePrice (selling=0) vs computeMfgLineCost (cost) — same snapshot', () => {
+  it('bedframe: selling base 0, cost base = product base price', () => {
+    const sell = computeMfgLinePrice({ product: bedframeBothTiers, qty: 1 }, config);
+    const cost = computeMfgLineCost({ product: bedframeBothTiers, qty: 1 }, config);
+    expect(sell.basePriceSen).toBe(0);
+    expect(sell.unitPriceSen).toBe(0);
+    expect(cost.basePriceSen).toBe(52000);
+    expect(cost.unitPriceSen).toBe(52000);
+  });
+
+  it('bedframe PRICE_1 tier: selling base 0, cost base = price1Sen', () => {
+    const sell = computeMfgLinePrice({ product: bedframeBothTiers, qty: 1, fabric: { tier: 'PRICE_1' } }, config);
+    const cost = computeMfgLineCost({ product: bedframeBothTiers, qty: 1, fabric: { tier: 'PRICE_1' } }, config);
+    expect(sell.basePriceSen).toBe(0);
+    expect(cost.basePriceSen).toBe(46000);
+  });
+
+  it('sofa: selling base 0, cost base = seat-height priceSen', () => {
+    const args = { product: sofaWithSeatTiers, qty: 1, fabric: { tier: 'PRICE_2' as const }, seatSize: '28' };
+    const sell = computeMfgLinePrice(args, config);
+    const cost = computeMfgLineCost(args, config);
+    expect(sell.basePriceSen).toBe(0);
+    expect(cost.basePriceSen).toBe(57200);
+  });
+
+  it('mattress: selling base 0, cost base = basePriceSen', () => {
+    const sell = computeMfgLinePrice({ product: mattress, qty: 1 }, config);
+    const cost = computeMfgLineCost({ product: mattress, qty: 1 }, config);
+    expect(sell.basePriceSen).toBe(0);
+    expect(cost.basePriceSen).toBe(89000);
   });
 });
 

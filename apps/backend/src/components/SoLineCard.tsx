@@ -147,7 +147,6 @@ const SoLineCardInner = ({
 
   const [search, setSearch] = useState(draft.description || draft.itemCode || '');
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
-  const [manualPrice, setManualPrice] = useState(false);
   const [showPicker, setShowPicker]   = useState(false);
   const [specialsOpen, setSpecialsOpen] = useState(false);
   /* Task #102 — Same gate the debtor autocomplete got in PR #99. Without
@@ -198,7 +197,6 @@ const SoLineCardInner = ({
 
   const pickProduct = (p: MfgProductRow) => {
     setPicked(p);
-    setManualPrice(false);
     const category = p.category.toLowerCase();
     /* PR #141 — Sofa-set inherit: same-category follower lines copy the
        master's variants on pick. PR #147 — reset overriddenKeys on a fresh
@@ -210,7 +208,11 @@ const SoLineCardInner = ({
       itemCode:       p.code,
       itemGroup:      category,
       description:    p.name,
-      unitPriceCenti: p.base_price_sen ?? 0,
+      // Commander 2026-05-29: SELLING unit price defaults to 0 and is typed
+      // manually by the operator. The product's base_price_sen is COST, NOT a
+      // selling price, so it must NEVER auto-populate the selling field.
+      // Re-picking a product resets selling to 0.
+      unitPriceCenti: 0,
       variants:       seedVariants,
       overriddenKeys: [],
     });
@@ -302,16 +304,13 @@ const SoLineCardInner = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked, pickedFabric, draft.variants, draft.itemGroup, draft.qty, maint]);
 
-  /* Auto-recompute unit price when variant edits change the computed
-     breakdown. Skipped on manual override (user typed into the price
-     input) — that flips manualPrice=true until a new SKU is picked. */
-  useEffect(() => {
-    if (manualPrice || !pricingBreakdown) return;
-    if (draft.unitPriceCenti !== pricingBreakdown.unitPriceSen) {
-      onChange({ unitPriceCenti: pricingBreakdown.unitPriceSen });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pricingBreakdown, manualPrice]);
+  /* Commander 2026-05-29 — the SELLING unit price is operator-authored. It
+     defaults to 0 on product pick (see pickProduct) and is typed manually;
+     it must NEVER be auto-overwritten from a computed value. The previous
+     auto-recompute effect (which wrote computeMfgLinePrice's selling total
+     into the Unit Price field) is intentionally removed. `pricingBreakdown`
+     is kept ONLY to drive the read-only variant-surcharge display in the
+     right rail — it does not write the editable Unit Price. */
 
   /* Commander 2026-05-29 — only show variant choices the SKU's Model allows
      (allowed_options). An empty/absent pool = no restriction. Stops the editor
@@ -322,10 +321,12 @@ const SoLineCardInner = ({
   const restrictS = (opts: string[], pool?: string[] | null) =>
     (Array.isArray(pool) && pool.length > 0) ? opts.filter((o) => pool.includes(o)) : opts;
 
-  /* Display-side breakdown values mirror the live compute. extraSen
-     collapses all four surcharge components + fabric add-on for the "+
-     Variants" row in the right rail. */
-  const basePriceSen = pricingBreakdown?.basePriceSen ?? (picked?.base_price_sen ?? draft.unitPriceCenti);
+  /* Commander 2026-05-29 — the right-rail "Pricing" summary reflects the
+     operator-authored SELLING unit price, not a computed cost base. extraSen
+     collapses the SELLING variant surcharges (sellingPriceSen via
+     computeMfgLinePrice) — 0 today, non-zero only once a Sales Director sets
+     a selling surcharge. The product's cost base is never shown here as the
+     selling base. */
   const extraSen = pricingBreakdown
     ? pricingBreakdown.divanSurchargeSen
     + pricingBreakdown.legSurchargeSen
@@ -449,7 +450,7 @@ const SoLineCardInner = ({
           value={(draft.unitPriceCenti / 100).toFixed(2)}
           disabled={!isEditing}
           onChange={(e) => {
-            setManualPrice(true);
+            // Commander 2026-05-29 — selling unit price is operator-authored.
             onChange({ unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 });
           }}
         />
@@ -629,14 +630,11 @@ const SoLineCardInner = ({
             <div className={styles.priceSummary}>
               <div className={styles.priceSummaryHead}>
                 <span>Pricing</span>
-                {!manualPrice && (
-                  <span className={styles.autoBadge}>auto</span>
-                )}
               </div>
-              <div className={styles.priceRow}>
-                <span className={styles.priceLabel}>Base</span>
-                <span className={styles.priceValue}>{fmtRm(basePriceSen)}</span>
-              </div>
+              {/* Commander 2026-05-29 — selling unit price is operator-typed.
+                  Show the manually-entered Unit Price (not a computed cost
+                  base). Variant selling surcharges only surface once a Sales
+                  Director sets them (sellingPriceSen) — 0 today. */}
               {extraSen > 0 && (
                 <div className={styles.priceRow}>
                   <span className={styles.priceLabel}>+ Variants</span>

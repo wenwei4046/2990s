@@ -25,7 +25,7 @@
 //      POST (detail page) or stash in local draft state (new-SO page)
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
@@ -79,11 +79,6 @@ export const SoLineItemModal = ({
   // seat_height_prices for sofa pricing + mattress size pool.
   const [picked, setPicked] = useState<MfgProductRow | null>(null);
 
-  // Manual unit-price override — when commander types in the Unit Price box,
-  // we stop auto-recomputing. Tracked separately so any variant change
-  // doesn't overwrite their edit.
-  const [manualPrice, setManualPrice] = useState(false);
-
   const [draft, setDraft] = useState<SoLineDraft>(initial ?? {
     itemCode: '', itemGroup: 'others', description: '', uom: 'UNIT',
     qty: 1, unitPriceCenti: 0, discountCenti: 0, unitCostCenti: 0,
@@ -92,13 +87,15 @@ export const SoLineItemModal = ({
 
   const pickProduct = (p: MfgProductRow) => {
     setPicked(p);
-    setManualPrice(false);
     setDraft((s) => ({
       ...s,
       itemCode:       p.code,
       itemGroup:      p.category.toLowerCase(),
       description:    p.name,
-      unitPriceCenti: p.base_price_sen ?? 0,
+      // Commander 2026-05-29: SELLING unit price defaults to 0 and is typed
+      // manually. base_price_sen is COST, never the selling price — so it must
+      // not auto-populate the selling field. Re-picking resets selling to 0.
+      unitPriceCenti: 0,
       variants:       {},        // reset variants when product changes
     }));
     setSearch(p.code);
@@ -107,13 +104,6 @@ export const SoLineItemModal = ({
   const setVariant = (k: string, v: string | number | string[]) =>
     setDraft((s) => ({ ...s, variants: { ...s.variants, [k]: v } }));
 
-  /* PR #114 — Auto-recompute unit price from base + variant surcharges.
-     Formula: unitPriceSen = basePriceSen + Σ(variant surcharges)
-     For Sofa: base comes from product.seat_height_prices (PRICE_2 tier)
-               when commander picks a seat height; else falls back to
-               product.base_price_sen.
-     For Bedframe: base = product.base_price_sen.
-     Skipped if user manually overrode. */
   /* PR #125 — multi-select Special Orders. variants.specials is the new
      canonical key (string[]); legacy variants.special (single string) is
      migrated on read. specialsList() normalises both shapes. */
@@ -122,61 +112,22 @@ export const SoLineItemModal = ({
     if (typeof v === 'string' && v) return [v];
     return [];
   };
-  useEffect(() => {
-    if (manualPrice || !maint || !picked) return;
+
+  /* Commander 2026-05-29 — the SELLING unit price is operator-authored. It
+     defaults to 0 on product pick (see pickProduct) and is typed manually; it
+     is NEVER auto-recomputed from the product's price tables (those are COST).
+     The previous auto-recompute effect that wrote base + surcharges into the
+     Unit Price field is intentionally removed. The footer below shows the
+     operator-entered Unit Price plus the SELLING variant surcharges only
+     (sellingPriceSen — 0 today, non-zero only once a Sales Director sets one).
+     The product cost base is never shown as the selling base. */
+  const extraSen = useMemo(() => {
+    if (!maint || !picked) return 0;
     const category = draft.itemGroup.toLowerCase();
-    let basePriceSen = picked.base_price_sen ?? 0;
-    let extraSen = 0;
-
-    if (category === 'sofa') {
-      const sh = String(draft.variants.seatHeight ?? '');
-      if (sh && Array.isArray(picked.seat_height_prices)) {
-        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-          .find((p) => p.height === sh && p.tier === 'PRICE_2');
-        if (match) basePriceSen = match.priceSen;
-      }
-      const legV  = String(draft.variants.legHeight ?? '');
-      const specs = specialsList(draft.variants.specials ?? draft.variants.special);
-      // Commander 2026-05-28: variant surcharge for SELLING reads sellingPriceSen
-      // (cost priceSen must NOT inflate the customer-facing line). Unset → 0.
-      extraSen += maint.sofaLegHeights.find((o) => o.value === legV)?.sellingPriceSen ?? 0;
-      for (const s of specs) extraSen += maint.sofaSpecials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
-    } else if (category === 'bedframe') {
-      const divanV = String(draft.variants.divanHeight ?? '');
-      const totalV = String(draft.variants.totalHeight ?? '');
-      const legV   = String(draft.variants.legHeight ?? '');
-      const specs  = specialsList(draft.variants.specials ?? draft.variants.special);
-      extraSen += maint.divanHeights.find((o) => o.value === divanV)?.sellingPriceSen ?? 0;
-      extraSen += maint.totalHeights.find((o) => o.value === totalV)?.sellingPriceSen ?? 0;
-      extraSen += maint.legHeights  .find((o) => o.value === legV)?.sellingPriceSen   ?? 0;
-      for (const s of specs) extraSen += maint.specials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
-    }
-    // Mattress / Accessory / Others: no variant surcharges. Base price as-is.
-
-    const newPrice = basePriceSen + extraSen;
-    setDraft((s) => (s.unitPriceCenti === newPrice ? s : { ...s, unitPriceCenti: newPrice }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picked, draft.variants, draft.itemGroup, maint, manualPrice]);
-
-  /* PR #125 — Base / Unit price footer breakdown helpers.
-     basePriceSen: unit price minus any variant surcharges (what commander
-                   would charge for a "plain" config of this product).
-     extraSen:     the sum of variant surcharges (heights + multi-special). */
-  const { basePriceSen, extraSen } = useMemo(() => {
-    if (!maint || !picked) return { basePriceSen: draft.unitPriceCenti, extraSen: 0 };
-    const category = draft.itemGroup.toLowerCase();
-    let base = picked.base_price_sen ?? 0;
     let extra = 0;
     if (category === 'sofa') {
-      const sh = String(draft.variants.seatHeight ?? '');
-      if (sh && Array.isArray(picked.seat_height_prices)) {
-        const match = (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
-          .find((p) => p.height === sh && p.tier === 'PRICE_2');
-        if (match) base = match.priceSen;
-      }
       const legV  = String(draft.variants.legHeight ?? '');
       const specs = specialsList(draft.variants.specials ?? draft.variants.special);
-      // Selling-side surcharge = sellingPriceSen (not the cost priceSen).
       extra += maint.sofaLegHeights.find((o) => o.value === legV)?.sellingPriceSen ?? 0;
       for (const s of specs) extra += maint.sofaSpecials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
     } else if (category === 'bedframe') {
@@ -189,7 +140,7 @@ export const SoLineItemModal = ({
       extra += maint.legHeights  .find((o) => o.value === legV)?.sellingPriceSen   ?? 0;
       for (const s of specs) extra += maint.specials.find((o) => o.value === s)?.sellingPriceSen ?? 0;
     }
-    return { basePriceSen: base, extraSen: extra };
+    return extra;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked, draft.variants, draft.itemGroup, maint]);
 
@@ -411,17 +362,12 @@ export const SoLineItemModal = ({
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>
                   Unit Price (RM)
-                  {!manualPrice && picked && (
-                    <span style={{ marginLeft: 6, fontSize: 'var(--fs-11)', color: 'var(--c-orange)' }}>
-                      · auto
-                    </span>
-                  )}
                 </span>
                 <input
                   type="number" step="0.01" className={styles.fieldInput}
                   value={(draft.unitPriceCenti / 100).toFixed(2)}
                   onChange={(e) => {
-                    setManualPrice(true);
+                    // Commander 2026-05-29 — selling price is operator-authored.
                     setDraft((s) => ({ ...s, unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 }));
                   }}
                 />
@@ -443,9 +389,10 @@ export const SoLineItemModal = ({
                 />
               </label>
             </div>
-            {/* PR #125 — HOOKKA-style footer breakdown. Shows the four
-                components that make up the final line total so commander
-                can see at a glance where the price is coming from. */}
+            {/* Commander 2026-05-29 — footer breakdown. The selling price is
+                operator-authored, so we show the entered Unit Price (× qty,
+                less discount) and any SELLING variant surcharges (0 today).
+                The product cost base is never shown as a selling base. */}
             <div style={{
               marginTop: 8,
               display: 'grid',
@@ -457,9 +404,6 @@ export const SoLineItemModal = ({
               fontFamily: 'var(--font-mono)',
               fontSize: 'var(--fs-12)',
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
-                <span>Base price</span><span>{fmtRm(basePriceSen)}</span>
-              </div>
               {extraSen > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--fg-muted)' }}>
                   <span>+ Variant surcharges</span><span>+ {fmtRm(extraSen)}</span>
