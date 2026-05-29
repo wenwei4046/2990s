@@ -466,6 +466,15 @@
   white-space: pre-wrap;
   line-height: 1.5;
 }
+/* Proceed-PO confirm — optional Expected Delivery date, label stacked over
+   the input so the long hint wraps cleanly. */
+.dialogField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1, 4px);
+  margin: 0 0 var(--space-4);
+}
+.dialogField .filterSelect { min-width: 0; width: 100%; cursor: text; }
 .dialogActions {
   display: flex;
   justify-content: flex-end;

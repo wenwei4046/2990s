@@ -115,12 +115,19 @@ export const Mrp = () => {
   const setRowSupplier = (itemCode: string, supplierId: string) =>
     setSupplierOverride((prev) => ({ ...prev, [itemCode]: supplierId }));
   /* In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
-     browser window.confirm/alert). null = closed. */
+     browser window.confirm/alert). null = closed.
+     'confirm' (Commander 2026-05-29) — Proceed PO first opens a confirm step so
+     the operator can OPTIONALLY pick one Expected Delivery date for the whole
+     batch; blank = keep each SO's own dates (today's behaviour). */
   const [dialog, setDialog] = useState<
     | { kind: 'info'; title: string; body: string }
     | { kind: 'created'; title: string; body: string }
+    | { kind: 'confirm'; picks: Array<{ soItemId: string; qty: number }>; orderedCodes: Set<string>; count: number; units: number }
     | null
   >(null);
+  /* The Expected Delivery date the operator typed into the confirm dialog
+     (YYYY-MM-DD). Blank = send no override → server uses each SO's own date. */
+  const [proceedExpectedAt, setProceedExpectedAt] = useState<string>('');
 
   // General tab can sub-filter by category (excl. sofa); sofa tab is locked to SOFA.
   const apiCategory = view === 'sofa' ? 'SOFA' : (category === 'all' ? 'all' : category);
@@ -216,8 +223,15 @@ export const Mrp = () => {
   };
 
   /* Fire the (mode-aware) convert-from-SO endpoint for the given picks. Shared
-     by the General (per-variant shortage) and Sofa (per-set) order paths. */
-  const runCreatePos = (picks: Array<{ soItemId: string; qty: number }>, orderedCodes: Set<string>) => {
+     by the General (per-variant shortage) and Sofa (per-set) order paths.
+     `expectedAt` (Commander 2026-05-29) — when set, the server applies it as the
+     PO header expected_at AND every PO line's delivery date for the whole batch;
+     when blank we send nothing so it keeps using each SO's own dates. */
+  const runCreatePos = (
+    picks: Array<{ soItemId: string; qty: number }>,
+    orderedCodes: Set<string>,
+    expectedAt?: string,
+  ) => {
     if (picks.length === 0) {
       setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) lines in the current selection / window.' });
       return;
@@ -227,7 +241,8 @@ export const Mrp = () => {
     for (const [code, sup] of Object.entries(supplierOverride)) {
       if (orderedCodes.has(code) && sup) supplierByCode[code] = sup;
     }
-    createPos.mutate({ picks, mode: poMode, supplierByCode }, {
+    const body = { picks, mode: poMode, supplierByCode, ...(expectedAt ? { expectedAt } : {}) };
+    createPos.mutate(body, {
       onSuccess: (res) => {
         if (!res.total) {
           setDialog({
@@ -261,8 +276,9 @@ export const Mrp = () => {
     });
   };
 
-  /* General — order the SHORT lines of the given SKUs (shortage qty only). */
-  const orderShortages = (skus: MrpResponse['skus']) => {
+  /* General — picks (+ codes + unit count) for the SHORT lines of the given
+     SKUs (shortage qty only). Pure gather; the confirm dialog fires the order. */
+  const gatherShortages = (skus: MrpResponse['skus']) => {
     const picks = skus
       .filter((s) => s.shortage > 0)
       .flatMap((s) => s.lines
@@ -270,19 +286,21 @@ export const Mrp = () => {
         .map((l) => ({ soItemId: l.soItemId, qty: l.shortageQty })))
       .filter((p) => p.soItemId);
     const orderedCodes = new Set(skus.filter((s) => s.shortage > 0).map((s) => s.itemCode));
-    runCreatePos(picks, orderedCodes);
+    const units = skus.filter((s) => s.shortage > 0).reduce((a, s) => a + s.shortage, 0);
+    return { picks, orderedCodes, units };
   };
 
-  /* Sofa — order the un-ordered units of each set as a whole (colour-matched).
-     One pick per SO line; the convert endpoint groups them into POs per the
-     PO mode (Combined = 1 PO/supplier, Per SO = 1 PO/SO). */
-  const orderSofaSets = (sets: SofaSet[]) => {
+  /* Sofa — picks for the un-ordered units of each set as a whole (colour-
+     matched). One pick per SO line; the convert endpoint groups them into POs
+     per the PO mode (Combined = 1 PO/supplier, Per SO = 1 PO/SO). */
+  const gatherSofaSets = (sets: SofaSet[]) => {
     const picks = sets
       .filter((s) => s.shortageQty > 0)
       .map((s) => ({ soItemId: s.soItemId, qty: s.shortageQty }))
       .filter((p) => p.soItemId);
     const orderedCodes = new Set(sets.filter((s) => s.shortageQty > 0).map((s) => s.itemCode));
-    runCreatePos(picks, orderedCodes);
+    const units = sets.filter((s) => s.shortageQty > 0).reduce((a, s) => a + s.shortageQty, 0);
+    return { picks, orderedCodes, units };
   };
 
   // General (per-variant) shortage list.
@@ -318,10 +336,19 @@ export const Mrp = () => {
       return next;
     });
 
-  /* Proceed PO — order the selected shortages, or all if none selected. */
+  /* Proceed PO — gather the selected shortages (or all if none selected) and
+     open the confirm dialog so the operator can OPTIONALLY pick one Expected
+     Delivery date for the whole batch before the POs are generated. */
   const onProceed = () => {
-    if (view === 'sofa') orderSofaSets(selectedShortageSets.length > 0 ? selectedShortageSets : shortageSets);
-    else orderShortages(selectedShortageSkus.length > 0 ? selectedShortageSkus : shortageSkus);
+    const { picks, orderedCodes, units } = view === 'sofa'
+      ? gatherSofaSets(selectedShortageSets.length > 0 ? selectedShortageSets : shortageSets)
+      : gatherShortages(selectedShortageSkus.length > 0 ? selectedShortageSkus : shortageSkus);
+    if (picks.length === 0) {
+      setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) lines in the current selection / window.' });
+      return;
+    }
+    setProceedExpectedAt('');
+    setDialog({ kind: 'confirm', picks, orderedCodes, count: picks.length, units });
   };
 
   const basisLabel = dateBasis === 'processing' ? 'Processing' : dateBasis === 'soDate' ? 'SO Date' : 'Delivery';
@@ -585,8 +612,46 @@ export const Mrp = () => {
       </div>
 
       {/* In-app result dialog — Commander 2026-05-29: confirm/result inside the
-          page, not a browser alert. */}
-      {dialog && (
+          page, not a browser alert. The 'confirm' kind is the Proceed-PO step
+          that lets the operator OPTIONALLY pick one Expected Delivery date. */}
+      {dialog && dialog.kind === 'confirm' && (
+        <div className={styles.dialogBackdrop} onClick={() => setDialog(null)}>
+          <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+            <h2 className={styles.dialogTitle}>Proceed PO</h2>
+            <p className={styles.dialogBody}>
+              Generate purchase orders for {dialog.count} {dialog.count === 1 ? 'line' : 'lines'}
+              {' '}({dialog.units} {dialog.units === 1 ? 'unit' : 'units'}) in{' '}
+              {poMode === 'combined' ? 'Combined (one PO per supplier)' : 'Per SO (one PO per SO)'} mode.
+            </p>
+            <label className={styles.dialogField}>
+              <span className={styles.filterLabel}>Expected Delivery (optional — leave blank to use each SO's own date)</span>
+              <input
+                type="date"
+                className={styles.filterSelect}
+                value={proceedExpectedAt}
+                onChange={(e) => setProceedExpectedAt(e.target.value)}
+                title="Apply one delivery date to the whole batch (PO header + every line). Leave blank to keep each SO's own date."
+              />
+            </label>
+            <div className={styles.dialogActions}>
+              <button type="button" className={styles.ghostBtn} onClick={() => setDialog(null)}>Cancel</button>
+              <button
+                type="button"
+                className={styles.primaryBtn}
+                disabled={createPos.isPending}
+                onClick={() => {
+                  const { picks, orderedCodes } = dialog;
+                  setDialog(null);
+                  runCreatePos(picks, orderedCodes, proceedExpectedAt || undefined);
+                }}
+              >
+                {createPos.isPending ? 'Processing…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {dialog && dialog.kind !== 'confirm' && (
         <div className={styles.dialogBackdrop} onClick={() => setDialog(null)}>
           <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <h2 className={styles.dialogTitle}>{dialog.title}</h2>
