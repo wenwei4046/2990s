@@ -17,7 +17,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
-import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const purchaseReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseReturns.use('*', supabaseAuth);
@@ -38,6 +38,21 @@ const nextNum = async (sb: any): Promise<string> => {
     .like('return_number', `PRT-${yymm}-%`);
   return `PRT-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
 };
+
+/* ── Recompute PR header money rollup (mirror recomputeGrnTotals) ──────────
+   Sum line_refund_centi across purchase_return_items → write refund_centi on
+   the purchase_returns header. A return is qty × unit price (no tax/discount),
+   so refund_centi is the document total. */
+async function recomputePrTotals(sb: any, prId: string) {
+  const { data: items } = await sb.from('purchase_return_items')
+    .select('line_refund_centi')
+    .eq('purchase_return_id', prId);
+  const refund = (items ?? []).reduce((s: number, r: any) => s + (r.line_refund_centi ?? 0), 0);
+  await sb.from('purchase_returns').update({
+    refund_centi: refund,
+    updated_at: new Date().toISOString(),
+  }).eq('id', prId);
+}
 
 purchaseReturns.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -340,6 +355,8 @@ purchaseReturns.post('/from-grn', async (c) => {
   if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
   await writePurchaseReturnMovements(sb, h.id, h.return_number, g.id, user.id);
+  // Refresh header refund_centi from the inserted lines (parity with GRN).
+  await recomputePrTotals(sb, h.id);
 
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
@@ -386,4 +403,134 @@ purchaseReturns.patch('/:id/cancel', async (c) => {
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'cannot_cancel', message: 'Already completed' }, 409);
   return c.json({ purchaseReturn: data });
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   PR PO-clone CRUD (PATCH header + line add / edit / delete) — mirrors the
+   GRN detail page's confirmed/immediate-save editing (apps/api/src/routes/grns.ts).
+   The editable line quantity is qty_returned; line_refund_centi =
+   qty_returned * unit_price_centi (a return has no discount/delivery);
+   recomputePrTotals rolls the header refund_centi.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── PATCH /:id — header update (mirror GRN's PATCH /:id) ── */
+purchaseReturns.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of [
+    ['supplierId', 'supplier_id'], ['returnDate', 'return_date'],
+    ['reason', 'reason'], ['creditNoteRef', 'credit_note_ref'],
+    ['notes', 'notes'],
+  ] as const) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_returns').update(updates).eq('id', id).select(HEADER).single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ purchaseReturn: data });
+});
+
+/* ── POST /:id/items — add one purchase_return_item. qty → qty_returned. ── */
+purchaseReturns.post('/:id/items', async (c) => {
+  const prId = c.req.param('id');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
+  if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const qtyReturned = Number(it.qty ?? 1);
+  const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+  const lineRefund = qtyReturned * unitPriceCenti;
+
+  const row: Record<string, unknown> = {
+    purchase_return_id: prId,
+    grn_item_id: (it.grnItemId as string) ?? null,
+    material_kind: (it.materialKind as string) ?? 'mfg_product',
+    material_code: it.materialCode,
+    material_name: it.materialName,
+    // PR line money meaning: qty = qty_returned; total = qty * unit price.
+    qty_returned: qtyReturned,
+    unit_price_centi: unitPriceCenti,
+    line_refund_centi: lineRefund,
+    reason: (it.reason as string) ?? null,
+    notes: (it.notes as string) ?? null,
+    /* variant fields (mirror GRN/PO line) */
+    gap_inches: (it.gapInches as number) ?? null,
+    divan_height_inches: (it.divanHeightInches as number) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+    variants: (it.variants as unknown) ?? null,
+    item_group: (it.itemGroup as string) ?? null,
+    description: (it.description as string) ?? null,
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+    uom: (it.uom as string) ?? 'UNIT',
+  };
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_return_items').insert(row).select(ITEM).single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  await recomputePrTotals(sb, prId);
+  return c.json({ item: data }, 201);
+});
+
+/* ── PATCH /:id/items/:itemId — partial line update. qty → qty_returned. ── */
+purchaseReturns.patch('/:id/items/:itemId', async (c) => {
+  const prId = c.req.param('id'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+
+  const { data: prev } = await sb.from('purchase_return_items')
+    .select('qty_returned, unit_price_centi, item_group, variants')
+    .eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  // The editable quantity is qty_returned.
+  const qtyReturned = it.qty !== undefined ? Number(it.qty) : (prev as { qty_returned: number }).qty_returned;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
+  const lineRefund = qtyReturned * unit;
+
+  const updates: Record<string, unknown> = {
+    qty_returned: qtyReturned,
+    unit_price_centi: unit,
+    line_refund_centi: lineRefund,
+  };
+  for (const [from, to] of [
+    ['materialCode', 'material_code'], ['materialName', 'material_name'],
+    ['itemGroup', 'item_group'], ['description', 'description'], ['uom', 'uom'],
+    ['reason', 'reason'], ['notes', 'notes'],
+    ['gapInches', 'gap_inches'], ['divanHeightInches', 'divan_height_inches'],
+    ['divanPriceSen', 'divan_price_sen'], ['legHeightInches', 'leg_height_inches'],
+    ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
+    ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
+    ['variants', 'variants'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* description2 is server-owned: recompute from effective itemGroup + variants. */
+  {
+    const effGroup = (it.itemGroup ?? (prev as { item_group?: string }).item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
+  }
+
+  const { error } = await sb.from('purchase_return_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  await recomputePrTotals(sb, prId);
+  return c.json({ ok: true });
+});
+
+/* ── DELETE /:id/items/:itemId — remove a line + recompute header. ── */
+purchaseReturns.delete('/:id/items/:itemId', async (c) => {
+  const prId = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase');
+  const { error } = await sb.from('purchase_return_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  await recomputePrTotals(sb, prId);
+  return c.body(null, 204);
 });

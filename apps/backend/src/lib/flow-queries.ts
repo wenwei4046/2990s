@@ -918,6 +918,53 @@ export const useCancelPurchaseReturn = () => {
   });
 };
 
+/* ── PR PO-clone CRUD (mirror the GRN header + line item hooks) ─────────────
+   PATCH /purchase-returns/:id (header), POST/PATCH/DELETE
+   /purchase-returns/:id/items[/:itemId]. Each invalidates the PR detail
+   (['purchase-return-detail', id]) + list (['purchase-returns']) — the same
+   query keys usePurchaseReturnDetail + usePurchaseReturns read. */
+export const useUpdatePurchaseReturnHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: {
+      id: string; supplierId?: string; returnDate?: string; reason?: string;
+      creditNoteRef?: string; notes?: string;
+    }) => authedFetch<{ purchaseReturn: any }>(`/purchase-returns/${id}`, {
+      method: 'PATCH', body: JSON.stringify(body),
+    }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-return-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+    },
+  });
+};
+
+export const useUpdatePurchaseReturnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId, ...body }: { id: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: true }>(`/purchase-returns/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-return-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+    },
+  });
+};
+
+export const useDeletePurchaseReturnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId }: { id: string; itemId: string }) =>
+      authedFetch<void>(`/purchase-returns/${id}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['purchase-return-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+    },
+  });
+};
+
 /* ── Delivery Returns ────────────────────────────────────────────────── */
 export const useDeliveryReturns = (status?: string) => baseQuery<{ deliveryReturns: any[] }>(['delivery-returns', status ?? 'all'], `/delivery-returns${status ? `?status=${status}` : ''}`);
 export const useDeliveryReturnDetail = (id: string | null) => useQuery({
