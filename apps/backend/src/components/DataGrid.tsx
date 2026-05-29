@@ -791,8 +791,12 @@ function DataGridInner<T>({
                 <Fragment key={`f-${key}-${idx}`}>
                   <tr
                     className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
-                    style={rowStyle?.(row)}
-                    onClick={() => { setSelectedKey(key); onRowClick?.(row); }}
+                    style={{ ...(rowStyle?.(row)), ...(expandKey != null ? { cursor: 'pointer' } : {}) }}
+                    /* Commander 2026-05-29 — on an expandable grid, clicking
+                       anywhere on the row toggles its expansion (not just the
+                       front caret). Interactive cells (links/buttons) stop
+                       propagation, so they still do their own thing. */
+                    onClick={() => { setSelectedKey(key); onRowClick?.(row); if (expandKey != null) toggleExpand(expandKey); }}
                     onDoubleClick={() => onRowDoubleClick?.(row)}
                     onContextMenu={(e) => {
                       if (!contextMenu) return;
