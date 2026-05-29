@@ -177,13 +177,18 @@ grns.get('/', async (c) => {
    2026-05-28, same class as the PO-from-SO shadowing.) */
 grns.get('/outstanding-po-items', async (c) => {
   const sb = c.get('supabase');
+  /* Commander 2026-05-29 — the GRN-from-PO picker now locks to ONE warehouse per
+     GRN (mirrors the supplier-lock pattern) + shows a Warehouse column. Select the
+     parent PO's purchase_location_id so the picker can group/lock by warehouse,
+     and resolve the warehouse code/name in a second round trip (Supabase nested
+     selects can't reach warehouses through the items→po hop cleanly). */
   const { data: items, error } = await sb
     .from('purchase_order_items')
     .select(`
       id, purchase_order_id, material_kind, material_code, material_name, item_group,
-      description, qty, received_qty, unit_price_centi, warehouse_id, variants,
+      description, qty, received_qty, unit_price_centi, warehouse_id, variants, delivery_date,
       po:purchase_orders!inner ( id, po_number, supplier_id, status, po_date, expected_at,
-        supplier:suppliers ( code, name ) )
+        purchase_location_id, supplier:suppliers ( code, name ) )
     `)
     .order('purchase_order_id', { ascending: false })
     .limit(500);
@@ -193,18 +198,31 @@ grns.get('/outstanding-po-items', async (c) => {
     id: string; purchase_order_id: string; material_kind: string; material_code: string;
     material_name: string; item_group: string | null; description: string | null;
     qty: number; received_qty: number; unit_price_centi: number;
-    warehouse_id: string | null; variants: unknown;
+    warehouse_id: string | null; variants: unknown; delivery_date: string | null;
     po: {
       id: string; po_number: string; supplier_id: string; status: string;
-      po_date: string; expected_at: string | null;
+      po_date: string; expected_at: string | null; purchase_location_id: string | null;
       supplier: { code: string; name: string } | null;
     };
   };
 
-  const outstanding = ((items ?? []) as unknown as Row[])
+  const rows = ((items ?? []) as unknown as Row[])
     .filter((r) => r.po.status === 'SUBMITTED' || r.po.status === 'PARTIALLY_RECEIVED')
-    .filter((r) => r.qty - (r.received_qty ?? 0) > 0)
-    .map((r) => ({
+    .filter((r) => r.qty - (r.received_qty ?? 0) > 0);
+
+  // Resolve each PO's purchase_location warehouse code/name in one round trip.
+  const whIds = [...new Set(rows.map((r) => r.po.purchase_location_id).filter((x): x is string => Boolean(x)))];
+  const whById = new Map<string, { code: string; name: string }>();
+  if (whIds.length > 0) {
+    const { data: whs } = await sb.from('warehouses').select('id, code, name').in('id', whIds);
+    for (const w of (whs ?? []) as Array<{ id: string; code: string; name: string }>) {
+      whById.set(w.id, { code: w.code, name: w.name });
+    }
+  }
+
+  const outstanding = rows.map((r) => {
+    const wh = r.po.purchase_location_id ? whById.get(r.po.purchase_location_id) ?? null : null;
+    return {
       poItemId:        r.id,
       poId:            r.po.id,
       poDocNo:         r.po.po_number,
@@ -217,12 +235,21 @@ grns.get('/outstanding-po-items', async (c) => {
       unitPriceCenti:  r.unit_price_centi,
       warehouseId:     r.warehouse_id,
       variants:        r.variants,
+      /* Delivery-carry — surface the PO line's delivery date so it can ride into
+         the converted GRN line (Deliverable 5). */
+      deliveryDate:    r.delivery_date ?? null,
       supplierId:      r.po.supplier_id,
       supplierCode:    r.po.supplier?.code ?? '',
       supplierName:    r.po.supplier?.name ?? '',
       poDate:          r.po.po_date,
       expectedAt:      r.po.expected_at,
-    }));
+      /* Warehouse-lock (Deliverable 4) — the PO's purchase_location, the GRN's
+         receive-into warehouse. One warehouse per GRN. */
+      warehouseLocationId:   r.po.purchase_location_id,
+      warehouseLocationCode: wh?.code ?? null,
+      warehouseLocationName: wh?.name ?? null,
+    };
+  });
 
   return c.json({ items: outstanding });
 });
@@ -396,7 +423,7 @@ grns.post('/from-pos', async (c) => {
   const { data: items } = await sb.from('purchase_order_items')
     .select('id, purchase_order_id, material_kind, material_code, material_name, qty, received_qty, unit_price_centi, ' +
       'item_group, description, description2, uom, variants, gap_inches, divan_height_inches, divan_price_sen, ' +
-      'leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi, unit_cost_centi')
+      'leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi, unit_cost_centi, delivery_date')
     .in('purchase_order_id', poIds);
   const itemList = ((items ?? []) as unknown as Array<{
     id: string; purchase_order_id: string; material_kind: string; material_code: string;
@@ -406,7 +433,7 @@ grns.post('/from-pos', async (c) => {
     divan_height_inches?: number | null; divan_price_sen?: number;
     leg_height_inches?: number | null; leg_price_sen?: number;
     custom_specials?: unknown; line_suffix?: string | null; special_order_price_sen?: number;
-    discount_centi?: number; unit_cost_centi?: number;
+    discount_centi?: number; unit_cost_centi?: number; delivery_date?: string | null;
   }>).filter((it) => it.qty - (it.received_qty ?? 0) > 0);
 
   if (itemList.length === 0) return c.json({ error: 'nothing_outstanding', message: 'All PO items are already fully received' }, 400);
@@ -464,6 +491,9 @@ grns.post('/from-pos', async (c) => {
       line_suffix: it.line_suffix ?? null,
       special_order_price_sen: it.special_order_price_sen ?? 0,
       discount_centi: discountCenti,
+      /* Deliverable 5 — carry the PO line's delivery date into the GRN line so a
+         converted GRN line shows the PO's delivery date instead of blank. */
+      delivery_date: it.delivery_date ?? null,
     };
   });
   const { error: iErr } = await sb.from('grn_items').insert(rows);
@@ -520,7 +550,7 @@ grns.post('/from-po-items', async (c) => {
       item_group, description, description2, uom, qty, received_qty,
       unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen,
       leg_height_inches, leg_price_sen, custom_specials, line_suffix,
-      special_order_price_sen, discount_centi,
+      special_order_price_sen, discount_centi, delivery_date,
       po:purchase_orders!inner ( id, po_number, supplier_id, status, purchase_location_id )
     `)
     .in('id', ids);
@@ -534,7 +564,7 @@ grns.post('/from-po-items', async (c) => {
     variants: unknown; gap_inches: number | null; divan_height_inches: number | null;
     divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
     custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
-    discount_centi: number;
+    discount_centi: number; delivery_date: string | null;
     po: { id: string; po_number: string; supplier_id: string; status: string; purchase_location_id: string | null };
   };
 
@@ -630,6 +660,8 @@ grns.post('/from-po-items', async (c) => {
         line_suffix: row.line_suffix,
         special_order_price_sen: row.special_order_price_sen ?? 0,
         discount_centi: discountCenti,
+        /* Deliverable 5 — carry the PO line's delivery date into the GRN line. */
+        delivery_date: row.delivery_date ?? null,
       };
     });
     const { error: iErr } = await sb.from('grn_items').insert(rows);
@@ -653,6 +685,107 @@ grns.post('/from-po-items', async (c) => {
   }
 
   return c.json({ created, total: created.length }, 201);
+});
+
+/* ── PATCH /:id/cancel — cancel a GRN + reverse its receipt ─────────────────
+   Commander 2026-05-29 — the GRN module is a Confirmed-clone of the PO module,
+   including a Cancel action. Cancelling a GRN:
+     1. Sets status='CANCELLED' (idempotent — already-cancelled echoes back).
+     2. Reverses the inventory IN: writes an OUT movement per line for
+        qty_accepted (negating the original IN that postGrnAndRollup wrote).
+     3. Decrements each linked PO item's received_qty by qty_accepted (clamp ≥0)
+        and re-evaluates the parent PO status (any received remaining →
+        PARTIALLY_RECEIVED, else back to SUBMITTED).
+   Steps 2+3 are best-effort (mirrors postGrnAndRollup's best-effort write) — a
+   movement/rollback failure does not un-cancel the GRN.
+   NOTE: grns has no cancelled_at column, so we set status + updated_at only. */
+grns.patch('/:id/cancel', async (c) => {
+  const id = c.req.param('id');
+  const sb = c.get('supabase');
+  const user = c.get('user');
+
+  // Read → guard → update → reverse (mirrors PO cancel's split-to-avoid-PGRST116).
+  const { data: cur, error: readErr } = await sb.from('grns')
+    .select('id, status, grn_number, warehouse_id')
+    .eq('id', id).maybeSingle();
+  if (readErr) return c.json({ error: 'load_failed', reason: readErr.message }, 500);
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const head = cur as { id: string; status: string; grn_number: string; warehouse_id: string | null };
+  // Idempotent — already cancelled, echo back without re-reversing.
+  if (head.status === 'CANCELLED') {
+    const { data } = await sb.from('grns').select(HEADER).eq('id', id).maybeSingle();
+    return c.json({ grn: data ?? { id, status: 'CANCELLED' } });
+  }
+
+  const { error: updErr } = await sb.from('grns')
+    .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+
+  // Load the GRN lines once for both reversals.
+  const { data: lines } = await sb.from('grn_items')
+    .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi, item_group, variants')
+    .eq('grn_id', id);
+  const lineList = (lines ?? []) as Array<{
+    purchase_order_item_id: string | null; qty_accepted: number;
+    material_code: string; material_name: string | null; unit_price_centi: number | null;
+    item_group?: string | null; variants?: VariantAttrs | null;
+  }>;
+
+  // (a) Inventory OUT per line — negate the original GRN IN. Best-effort.
+  try {
+    const warehouseId = head.warehouse_id ?? (await defaultWarehouseId(sb));
+    if (warehouseId) {
+      const movements = lineList
+        .filter((it) => (it.qty_accepted ?? 0) > 0)
+        .map((it) => ({
+          movement_type: 'OUT' as const,
+          warehouse_id: warehouseId,
+          product_code: it.material_code,
+          variant_key: computeVariantKey(it.item_group, it.variants ?? null),
+          product_name: it.material_name,
+          qty: it.qty_accepted,
+          source_doc_type: 'GRN' as const,
+          source_doc_id: id,
+          source_doc_no: head.grn_number,
+          performed_by: user.id,
+          notes: 'GRN cancelled — reversing receipt',
+        }));
+      if (movements.length > 0) await writeMovements(sb, movements);
+    }
+  } catch { /* best-effort: never un-cancel on a movement failure */ }
+
+  // (b) Decrement each linked PO item's received_qty + re-evaluate PO status.
+  try {
+    const touchedPoIds = new Set<string>();
+    for (const it of lineList) {
+      const poiId = it.purchase_order_item_id;
+      const acc = it.qty_accepted ?? 0;
+      if (!poiId || acc <= 0) continue;
+      const { data: poi } = await sb.from('purchase_order_items')
+        .select('received_qty, qty, purchase_order_id').eq('id', poiId).maybeSingle();
+      if (!poi) continue;
+      const prev = (poi as { received_qty: number }).received_qty ?? 0;
+      const next = Math.max(0, prev - acc);
+      await sb.from('purchase_order_items').update({ received_qty: next }).eq('id', poiId);
+      const poId = (poi as { purchase_order_id: string }).purchase_order_id;
+      if (poId) touchedPoIds.add(poId);
+    }
+    for (const poId of touchedPoIds) {
+      const { data: poLines } = await sb.from('purchase_order_items')
+        .select('received_qty').eq('purchase_order_id', poId);
+      const anyReceived = (poLines ?? [] as Array<{ received_qty: number }>)
+        .some((l: { received_qty: number }) => (l.received_qty ?? 0) > 0);
+      const newStatus = anyReceived ? 'PARTIALLY_RECEIVED' : 'SUBMITTED';
+      // Never resurrect a CANCELLED PO; clear received_at when nothing's left.
+      const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
+      if (!anyReceived) patch.received_at = null;
+      await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+    }
+  } catch { /* best-effort */ }
+
+  const { data } = await sb.from('grns').select(HEADER).eq('id', id).maybeSingle();
+  return c.json({ grn: data ?? { id, status: 'CANCELLED' } });
 });
 
 /* ════════════════════════════════════════════════════════════════════════

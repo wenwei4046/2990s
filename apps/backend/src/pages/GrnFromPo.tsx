@@ -111,28 +111,38 @@ export const GrnFromPo = () => {
     });
   }, [items, category, dateField, dateFrom, dateTo]);
 
-  // One supplier per GRN (Commander 2026-05-29) — once a line is ticked, lines
-  // from other suppliers lock. Mirrors PurchaseOrderFromSo's lockedSupplier.
-  const lockedSupplier = useMemo(() => {
+  // One WAREHOUSE per GRN (Commander 2026-05-30) — once a line is ticked, the
+  // selection locks to that PO line's warehouse (purchase_location). Lines from a
+  // DIFFERENT warehouse grey out / become un-tickable. Mirrors the supplier-lock
+  // pattern in PurchaseOrderFromSo, but keyed on warehouseLocationId. Clearing
+  // all picks unlocks.
+  const lockedWarehouse = useMemo(() => {
     for (const [id, v] of Object.entries(picks)) {
       if (!v.picked) continue;
       const row = items.find((r) => r.poItemId === id);
-      if (row?.supplierId) return row.supplierId;
+      if (row?.warehouseLocationId) return row.warehouseLocationId;
     }
     return null;
   }, [picks, items]);
 
-  // A row is LOCKED when a different supplier is already picked. Grey these out
-  // + disable their checkbox / qty input (copied from PurchaseOrderFromSo).
+  // Human-readable label for the locked warehouse (for the header note).
+  const lockedWarehouseLabel = useMemo(() => {
+    if (!lockedWarehouse) return null;
+    const row = items.find((r) => r.warehouseLocationId === lockedWarehouse);
+    return row?.warehouseLocationName ?? row?.warehouseLocationCode ?? lockedWarehouse;
+  }, [lockedWarehouse, items]);
+
+  // A row is LOCKED when a different warehouse is already picked. Grey these out
+  // + disable their checkbox / qty input.
   const isRowLocked = (r: OutstandingPoItem): boolean =>
-    Boolean(r.supplierId && lockedSupplier && r.supplierId !== lockedSupplier
+    Boolean(lockedWarehouse && r.warehouseLocationId !== lockedWarehouse
       && !picks[r.poItemId]?.picked);
 
   // ── Pick helpers ─────────────────────────────────────────────────────
   const togglePick = (id: string, remaining: number) => {
     const row = items.find((r) => r.poItemId === id);
-    // Block ticking a different supplier than the one already locked.
-    if (row?.supplierId && lockedSupplier && row.supplierId !== lockedSupplier
+    // Block ticking a different warehouse than the one already locked.
+    if (row && lockedWarehouse && row.warehouseLocationId !== lockedWarehouse
         && !picks[id]?.picked) return;
     setPicks((s) => ({
       ...s,
@@ -145,14 +155,14 @@ export const GrnFromPo = () => {
   const setQty = (id: string, qty: number) =>
     setPicks((s) => ({ ...s, [id]: { picked: true, qty } }));
 
-  // Select / clear all currently-VISIBLE rows (respects filters + supplier lock).
+  // Select / clear all currently-VISIBLE rows (respects filters + warehouse lock).
   const selectAll = () =>
     setPicks((s) => {
       const next = { ...s };
-      // Lock to the first visible supplier so a bulk select stays one-supplier.
-      const lockTo = lockedSupplier ?? rows[0]?.supplierId ?? null;
+      // Lock to the first visible warehouse so a bulk select stays one-warehouse.
+      const lockTo = lockedWarehouse ?? rows[0]?.warehouseLocationId ?? null;
       for (const l of rows) {
-        if (lockTo && l.supplierId !== lockTo) continue;
+        if (lockTo && l.warehouseLocationId !== lockTo) continue;
         next[l.poItemId] = { picked: true, qty: l.remainingQty };
       }
       return next;
@@ -196,6 +206,29 @@ export const GrnFromPo = () => {
       accessor: (r) => <span>{r.supplierCode}{r.supplierName ? ` · ${r.supplierName}` : ''}</span>,
       searchValue: (r) => `${r.supplierCode ?? ''} ${r.supplierName ?? ''}`.trim(),
       groupValue: (r) => r.supplierName ?? r.supplierCode ?? '(none)',
+    },
+    {
+      /* Warehouse column (Deliverable 4b) — each PO line's purchase_location.
+         The GRN locks to one warehouse; this column makes the lock legible. */
+      key: 'warehouse', label: 'Warehouse', width: 150, sortable: true, groupable: true,
+      accessor: (r) => (
+        <span className={styles.muted}>
+          {r.warehouseLocationCode
+            ? `${r.warehouseLocationCode}${r.warehouseLocationName ? ` · ${r.warehouseLocationName}` : ''}`
+            : '—'}
+        </span>
+      ),
+      searchValue: (r) => `${r.warehouseLocationCode ?? ''} ${r.warehouseLocationName ?? ''}`.trim(),
+      groupValue: (r) => r.warehouseLocationName ?? r.warehouseLocationCode ?? '(no warehouse)',
+      sortFn: (a, b) => (a.warehouseLocationCode ?? '').localeCompare(b.warehouseLocationCode ?? ''),
+    },
+    {
+      /* PO Date — available in the Columns toggle; hidden by default to keep the
+         picker dense. (Deliverable 4c.) */
+      key: 'poDate', label: 'PO Date', width: 120, sortable: true, defaultHidden: true,
+      accessor: (r) => r.poDate ?? '',
+      searchValue: (r) => r.poDate ?? '',
+      sortFn: (a, b) => String(a.poDate ?? '').localeCompare(String(b.poDate ?? '')),
     },
     {
       key: 'itemGroup', label: 'Category', width: 110, sortable: true, groupable: true,
@@ -385,12 +418,11 @@ export const GrnFromPo = () => {
           </Button>
         </div>
       </div>
-      {lockedSupplier && (
+      {lockedWarehouse && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          One supplier per GRN — locked to{' '}
-          <strong>{items.find((r) => r.supplierId === lockedSupplier)?.supplierName
-            ?? items.find((r) => r.supplierId === lockedSupplier)?.supplierCode
-            ?? lockedSupplier}</strong>. Other suppliers' lines are greyed out; clear picks to switch.
+          One warehouse per GRN — locked to{' '}
+          <code>{lockedWarehouseLabel}</code>. PO lines from a different warehouse
+          are greyed out; clear picks to switch.
         </p>
       )}
 

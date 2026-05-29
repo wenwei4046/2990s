@@ -1,0 +1,23 @@
+-- ----------------------------------------------------------------------------
+-- 0105 — GRN cancel status (Confirmed-clone parity with Purchase Orders).
+--
+-- The Goods Received Note module is now an exact clone of the Purchase Order
+-- module (draft-style Edit → Save/Back, Print PDF, Cancel), with the ONLY
+-- difference being there is no Draft/lifecycle — a GRN reads as "Confirmed".
+-- Cancelling a GRN reverses the receipt (inventory OUT + PO received_qty
+-- decrement) and flips the GRN to CANCELLED, mirroring how a PO cancel works.
+--
+-- This adds the 'CANCELLED' label to the grn_status enum so the cancel handler
+-- (PATCH /grns/:id/cancel) can set it.
+--
+-- IMPORTANT: `ALTER TYPE ... ADD VALUE` cannot run inside a transaction block
+-- that subsequently USES the new value, so this migration is deliberately NOT
+-- wrapped in BEGIN/COMMIT. It contains ONLY the ALTER TYPE statement. Postgres
+-- 12+ allows ADD VALUE outside an explicit txn; the migration runner must apply
+-- this file in autocommit mode (no surrounding BEGIN).
+--
+-- No cancelled_at column is added — grns has no such column, so the cancel
+-- handler sets status + updated_at only (see apps/api/src/routes/grns.ts).
+-- ----------------------------------------------------------------------------
+
+ALTER TYPE grn_status ADD VALUE IF NOT EXISTS 'CANCELLED';

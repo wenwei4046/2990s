@@ -17,21 +17,25 @@ import {
   useGrns,
   usePurchaseInvoiceFromGrn,
   usePurchaseReturnFromGrn,
+  useCancelGrn,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-// GRN status set (grn_status enum): POSTED / CLOSED. Tints mirror the PO list.
+// GRN status set (grn_status enum): POSTED / CLOSED / CANCELLED. Tints mirror
+// the PO list.
 const STATUS_COLOR: Record<string, string> = {
-  POSTED: 'rgba(47, 93, 79, 0.12)',
-  CLOSED: 'rgba(31, 58, 138, 0.10)',
+  POSTED:    'rgba(47, 93, 79, 0.12)',
+  CLOSED:    'rgba(31, 58, 138, 0.10)',
+  CANCELLED: 'rgba(184, 51, 31, 0.10)',
 };
 // A GRN has no draft/lifecycle — POSTED reads as "Confirmed". No raw POSTED.
 const STATUS_LABEL: Record<string, string> = {
-  POSTED: 'Confirmed',
-  CLOSED: 'Closed',
+  POSTED:    'Confirmed',
+  CLOSED:    'Closed',
+  CANCELLED: 'Cancelled',
 };
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
@@ -115,6 +119,7 @@ export const GoodsReceived = () => {
   const { data, isLoading, error } = useGrns();
   const piFromGrn = usePurchaseInvoiceFromGrn();
   const prFromGrn = usePurchaseReturnFromGrn();
+  const cancelGrn = useCancelGrn();
 
   const rows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
   const columns = useMemo(() => buildGrnColumns(), []);
@@ -131,6 +136,13 @@ export const GoodsReceived = () => {
     prFromGrn.mutate(g.id, {
       onSuccess: (res) => navigate(`/purchase-returns/${res.id}`),
       onError: (e) => alert(`Convert to PR failed: ${e instanceof Error ? e.message : String(e)}`),
+    });
+  };
+  // Cancel a GRN (right-click) — reverses the receipt server-side. Confirm first.
+  const doCancelGrn = (g: GrnRow) => {
+    if (!window.confirm(`Cancel GRN ${g.grn_number}? This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`)) return;
+    cancelGrn.mutate(g.id, {
+      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
 
@@ -172,18 +184,27 @@ export const GoodsReceived = () => {
         searchPlaceholder="Search GRNs…"
         /* Open on DOUBLE-click; right-click → context menu (mirrors the PO list). */
         onRowDoubleClick={(g) => navigate(`/grns/${g.id}`)}
-        /* Closed GRNs grey out so they read as locked / done. */
-        rowStyle={(g) => g.status === 'CLOSED'
-          ? { opacity: 0.6, filter: 'grayscale(0.4)' }
+        /* Cancelled / Closed GRNs grey out so they read as dead (mirrors the PO list). */
+        rowStyle={(g) => (g.status === 'CANCELLED' || g.status === 'CLOSED')
+          ? { opacity: 0.55, filter: 'grayscale(0.6)' }
           : undefined}
-        contextMenu={(g) => [
-          // The GRN detail page is always inline-editable (no draft / no Edit
-          // gate), so a single "Open" entry covers both view + edit.
-          { label: 'Open', onClick: () => navigate(`/grns/${g.id}`) },
-          { divider: true as const },
-          { label: 'Convert to PI', onClick: () => convertToPi(g) },
-          { label: 'Convert to PR', onClick: () => convertToPr(g) },
-        ]}
+        contextMenu={(g) => {
+          // Mirror the PO list's right-click menu: View / Edit · divider ·
+          // Convert to PI / Convert to PR · divider · Cancel (danger).
+          const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
+            { label: 'View', onClick: () => navigate(`/grns/${g.id}`) },
+            { label: 'Edit', onClick: () => navigate(`/grns/${g.id}?edit=1`) },
+            { divider: true as const },
+            { label: 'Convert to PI', onClick: () => convertToPi(g) },
+            { label: 'Convert to PR', onClick: () => convertToPr(g) },
+          ];
+          // Cancel — soft-stop. Hidden once already cancelled.
+          if (g.status !== 'CANCELLED') {
+            menu.push({ divider: true as const });
+            menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelGrn(g) });
+          }
+          return menu;
+        }}
         isLoading={isLoading}
         emptyMessage='No GRNs yet — click "New GRN" to receive goods.'
       />
