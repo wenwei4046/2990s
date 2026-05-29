@@ -93,6 +93,9 @@ type MrpLine = {
   soDate: string | null;
   deliveryDate: string | null;
   processingDate: string | null;
+  /* Commander 2026-05-29 — order-by date = delivery date − category lead days.
+     "最迟下单日": place the PO by this date to hit the customer's delivery. */
+  orderByDate: string | null;
   qty: number;
   source: AllocSource;
   poNumber: string | null;
@@ -131,6 +134,7 @@ type SofaSet = {
   soDate: string | null;
   deliveryDate: string | null;
   processingDate: string | null;
+  orderByDate: string | null; // delivery date − category lead days
   itemCode: string;
   description: string | null;
   modules: string[];   // e.g. ['2A','LL','2A'] from variants.cells
@@ -159,6 +163,26 @@ mrp.get('/', async (c) => {
   // isn't ready for goods yet, so it shouldn't drive ordering. Exclude undated
   // demand by default; ?includeUndated=true brings it back for a full view.
   const includeUndated = c.req.query('includeUndated') === 'true';
+
+  // ── 0. Per-category lead times (Commander 2026-05-29) ─────────────────
+  // order-by date = delivery date − lead_days[category]. Keyed lowercase to
+  // match item_group; product category is uppercase so we lowercase on lookup.
+  const { data: leadRows } = await sb
+    .from('mrp_category_lead_times')
+    .select('category, lead_days');
+  const leadDaysByCat = new Map<string, number>();
+  for (const r of (leadRows ?? []) as Array<{ category: string; lead_days: number }>) {
+    leadDaysByCat.set(r.category.toLowerCase(), r.lead_days ?? 0);
+  }
+  const orderByOf = (deliveryDate: string | null, category: string | null): string | null => {
+    if (!deliveryDate) return null;
+    const days = leadDaysByCat.get((category ?? '').toLowerCase()) ?? 0;
+    if (days <= 0) return deliveryDate;
+    const d = new Date(`${deliveryDate.slice(0, 10)}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return deliveryDate;
+    d.setUTCDate(d.getUTCDate() - days);
+    return d.toISOString().slice(0, 10);
+  };
 
   // ── 1. Demand — outstanding SO lines ──────────────────────────────────
   const { data: demandRaw, error: demandErr } = await sb
@@ -348,13 +372,15 @@ mrp.get('/', async (c) => {
         : poNumber != null ? 'po'
         : picked > 0 ? 'po'
         : 'stock';
+      const lineDelivery = r.line_delivery_date ?? r.so?.customer_delivery_date ?? null;
       lines.push({
         soItemId: r.id,
         soDocNo: r.doc_no,
         debtorName: r.so?.debtor_name ?? null,
         soDate: r.so?.so_date ?? null,
-        deliveryDate: r.line_delivery_date ?? r.so?.customer_delivery_date ?? null,
+        deliveryDate: lineDelivery,
         processingDate: r.so?.internal_expected_dd ?? null,
+        orderByDate: orderByOf(lineDelivery, prod?.category ?? null),
         qty: r.qty,
         source,
         poNumber,
@@ -393,10 +419,16 @@ mrp.get('/', async (c) => {
 
   // Shortage SKUs first, then by code + variant — so the rows that need
   // ordering float to the top (the orange ones the commander acts on).
+  // Commander 2026-05-29 — within the shortage group, the soonest ORDER-BY date
+  // floats to the top ("插队": most-urgent-to-order first), then code/variant.
+  const earliestOrderBy = (s: MrpSku): string | null =>
+    s.lines.reduce<string | null>((min, l) => (l.orderByDate && (!min || l.orderByDate < min) ? l.orderByDate : min), null);
   skus.sort((a, b) => {
     if ((b.shortage > 0 ? 1 : 0) !== (a.shortage > 0 ? 1 : 0)) {
       return (b.shortage > 0 ? 1 : 0) - (a.shortage > 0 ? 1 : 0);
     }
+    const byOrderBy = byDateAsc(earliestOrderBy(a), earliestOrderBy(b));
+    if (byOrderBy !== 0) return byOrderBy;
     if (a.itemCode !== b.itemCode) return a.itemCode < b.itemCode ? -1 : 1;
     return (a.variantLabel ?? '') < (b.variantLabel ?? '') ? -1 : 1;
   });
@@ -412,13 +444,15 @@ mrp.get('/', async (c) => {
       const colour = [sstr(v.fabricCode), sstr(v.colorCode) || sstr(v.colourCode)].filter(Boolean).join(' ');
       const ordered = d.po_qty_picked ?? 0;
       const prod = prodByCode.get(d.item_code);
+      const setDelivery = d.line_delivery_date ?? d.so?.customer_delivery_date ?? null;
       return {
         soItemId: d.id,
         soDocNo: d.doc_no,
         debtorName: d.so?.debtor_name ?? null,
         soDate: d.so?.so_date ?? null,
-        deliveryDate: d.line_delivery_date ?? d.so?.customer_delivery_date ?? null,
+        deliveryDate: setDelivery,
         processingDate: d.so?.internal_expected_dd ?? null,
+        orderByDate: orderByOf(setDelivery, prod?.category ?? null),
         itemCode: d.item_code,
         description: prod?.name ?? d.description ?? null,
         modules,
@@ -434,7 +468,8 @@ mrp.get('/', async (c) => {
     const sa = a.shortageQty > 0 ? 1 : 0;
     const sb = b.shortageQty > 0 ? 1 : 0;
     if (sa !== sb) return sb - sa;
-    return byDateAsc(a.deliveryDate, b.deliveryDate);
+    // Commander 2026-05-29 — soonest order-by date first.
+    return byDateAsc(a.orderByDate, b.orderByDate);
   });
 
   return c.json({

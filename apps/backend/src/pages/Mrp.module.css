@@ -243,6 +243,14 @@
   font-family: var(--font-sans);
   font-size: var(--fs-13);
 }
+/* Commander 2026-05-29 — the "order-by date" cell is the headline number
+   (最迟下单日); highlight it so it reads at a glance. */
+.orderByCell {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--c-burnt);
+  white-space: nowrap;
+}
 .table thead th {
   text-align: left;
   font-size: var(--fs-11);
