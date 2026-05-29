@@ -5,6 +5,13 @@
   padding: var(--space-5) var(--space-3);
   background: var(--c-paper);
   border-right: 1px solid var(--line);
+  /* Independent scroll: the shell (Layout.module.css) is capped at 100vh, so
+     this grid track is exactly the viewport height. A tall (all-modules-
+     expanded) nav now scrolls WITHIN the sidebar instead of growing the page
+     and dragging the main content with it. The right column (.col / .main)
+     already scrolls on its own. */
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .brand {
