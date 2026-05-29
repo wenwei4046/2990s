@@ -275,10 +275,18 @@ grns.post('/', async (c) => {
      on the New GRN form, so there's never a moment where DRAFT is useful.
      We insert with status:'POSTED' + posted_at, then call postGrnAndRollup
      to do the receipt rollup + inventory IN. */
+  /* Commander 2026-05-29 — New GRN now mirrors New PO's header, including a
+     "Receive into" Warehouse picker. Persist the chosen warehouse on the grn
+     header so the inventory-IN movement lands in the right warehouse. When the
+     form omits one (legacy / From-PO picks), keep the default-warehouse
+     fallback — postGrnAndRollup reads `warehouse_id ?? defaultWarehouseId`. */
+  const headerWarehouseId =
+    (body.warehouseId as string | undefined) ?? (await defaultWarehouseId(sb)) ?? null;
   const { data: header, error: hErr } = await sb.from('grns').insert({
     grn_number: grnNumber,
     purchase_order_id: (body.purchaseOrderId as string | undefined) ?? null,
     supplier_id: body.supplierId,
+    warehouse_id: headerWarehouseId,
     received_at: (body.receivedAt as string) ?? new Date().toISOString().slice(0, 10),
     delivery_note_ref: (body.deliveryNoteRef as string) ?? null,
     notes: (body.notes as string) ?? null,
