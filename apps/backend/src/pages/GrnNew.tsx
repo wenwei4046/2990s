@@ -22,19 +22,19 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Save, Trash2, X, Layers, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Plus, Save, Trash2, X, Layers, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
+import { ItemGroupPill } from '../lib/category-badges';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
 import type { GrnFromPoPick } from './GrnFromPo';
 import styles from './SalesOrderDetail.module.css';
 
-const ICON    = { size: 16, strokeWidth: 1.75 } as const;
-const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
+const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
@@ -232,20 +232,26 @@ export const GrnNew = () => {
   const currency   = po?.currency ?? 'MYR';
 
   // ── Manual product search (gated by min query length, mirrors PO form). ──
+  // Commander 2026-05-29 — the single top "ADD ITEM" box is gone. Each MANUAL
+  // line now carries its own inline Item Code picker (PO parity). The search
+  // query is shared: only one line input is focused at a time, so a single
+  // gated query feeds whichever line's datalist is active.
   const [productQuery, setProductQuery] = useState<string>('');
   const productsQ = useMfgProducts({
     search: productQuery,
     enabled: isManual && productQuery.trim().length >= 2,
   });
 
-  const addManualLine = (code: string, name: string, category: string | null) => {
+  // Append a fresh, empty MANUAL line (the per-line picker fills it in). Used by
+  // the dashed "Add another item" button at the bottom of the items card.
+  const addEmptyManualLine = () => {
     setLines((prev) => [...prev, {
       rid:                 `m${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       purchaseOrderItemId: null,
       materialKind:        'mfg_product',
-      materialCode:        code,
-      materialName:        name,
-      itemGroup:           category ? category.toLowerCase() : null,
+      materialCode:        '',
+      materialName:        '',
+      itemGroup:           null,
       variants:            null,
       outstanding:         null,
       qtyReceived:         1,
@@ -254,7 +260,17 @@ export const GrnNew = () => {
       unitPriceCenti:      0,
       notes:               '',
     }]);
-    setProductQuery('');
+  };
+
+  // Pick / type an internal SKU on a manual line → fill code + name + itemGroup
+  // (category drives the variant editor below, exactly like the PO line picker).
+  const pickItemForLine = (rid: string, code: string) => {
+    const sku = (productsQ.data ?? []).find((p) => p.code === code);
+    setLine(rid, {
+      materialCode: code,
+      materialName: sku?.name ?? code,
+      itemGroup:    sku?.category ? sku.category.toLowerCase() : null,
+    });
   };
 
   const canSave = !!supplierId && lines.length > 0 &&
@@ -309,9 +325,6 @@ export const GrnNew = () => {
       setDialog({ title: 'Save failed', body: err instanceof Error ? err.message : String(err) });
     }
   };
-
-  const gridTemplate = 'minmax(170px, 1.3fr) minmax(220px, 1.8fr) 70px 70px 70px 70px 120px 120px 32px';
-  const cellPad = 'var(--space-2)';
 
   return (
     <div className={styles.page}>
@@ -437,135 +450,152 @@ export const GrnNew = () => {
                   : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
           </span>
         </div>
-        <div className={styles.cardBody}>
-          {/* Manual item search — only in blank/manual mode. */}
-          {isManual && (
-            <div style={{ marginBottom: 'var(--space-3)' }}>
-              <label className={styles.field} style={{ maxWidth: 480 }}>
-                <span className={styles.fieldLabel}>Add item</span>
-                <input
-                  type="text"
-                  list="grn-manual-products"
-                  value={productQuery}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setProductQuery(v);
-                    // If the typed value exactly matches a product code, add it.
-                    const match = (productsQ.data ?? []).find((p) => p.code === v);
-                    if (match) addManualLine(match.code, match.name, match.category);
-                  }}
-                  placeholder="Type ≥2 chars to search SKUs by code or name…"
-                  className={styles.fieldInput}
-                />
-                <datalist id="grn-manual-products">
-                  {(productsQ.data ?? []).map((p) => (
-                    <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
-                  ))}
-                </datalist>
-                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
-                  Pick a SKU to append a line. Qty, price + accepted/rejected are editable below.
-                </span>
-              </label>
-            </div>
-          )}
-
+        <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           {lines.length === 0 ? (
             <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', padding: 'var(--space-3) 0' }}>
               {isManual
-                ? 'Pick a supplier in the header, then search for items to add above. Receiving against a PO? Pick one in the header, or use '
+                ? 'Pick a supplier in the header, then use “Add another item” below to receive items by hand. Receiving against a PO? Pick one in the header, or use '
                 : 'Choose a Purchase Order in the header to receive against it. Receiving lines from several POs at once? Use '}
               <button type="button" onClick={() => navigate('/grns/from-po')} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
             </p>
           ) : (
-            <>
-              {/* Header */}
-              <div style={{
-                display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
-                padding: cellPad, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)',
-                fontWeight: 600, letterSpacing: '0.10em', textTransform: 'uppercase',
-                color: 'var(--fg-soft)', borderBottom: '1px solid var(--line)',
-              }}>
-                <div>Item Code</div>
-                <div>Description</div>
-                <div style={{ textAlign: 'right' }}>Outstanding</div>
-                <div style={{ textAlign: 'right' }}>Received</div>
-                <div style={{ textAlign: 'right' }}>Accepted</div>
-                <div style={{ textAlign: 'right' }}>Rejected</div>
-                <div style={{ textAlign: 'right' }}>Unit Price</div>
-                <div style={{ textAlign: 'right' }}>Line Value</div>
-                <div></div>
-              </div>
+            /* Card-per-line layout — Commander 2026-05-29: "PO 跟 GRN 界面要一样".
+               Mirrors PurchaseOrderNew's ITEMS: each line is a bordered card with
+               LINE N + category pill + line value + remove at top, an inline item
+               picker (manual) / read-only code (PO-sourced), description, the
+               per-category variant editor, then a fields row. */
+            lines.map((l, idx) => {
+              const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
+              const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
+              // Manual lines have no outstanding cap — qty inputs go uncapped.
+              const cap = l.outstanding;
+              const isManualLine = l.purchaseOrderItemId === null;
+              // Commander 2026-05-29 — editable variant section only for MANUAL
+              // lines (purchaseOrderItemId === null) that are bedframe/sofa, once
+              // the maintenance pools are loaded. PO-sourced lines keep their
+              // read-only summary (their variants came from the PO).
+              const showVariantEditor =
+                isManualLine &&
+                (l.itemGroup === 'bedframe' || l.itemGroup === 'sofa') &&
+                !!maint;
+              const setVariant = (key: string, value: string) =>
+                setLine(l.rid, { variants: (() => {
+                  const variants: Record<string, unknown> = { ...(l.variants ?? {}), [key]: value };
+                  // Auto-compute bedframe Total Height = Divan + Leg + Gap.
+                  if (l.itemGroup === 'bedframe' && (key === 'divanHeight' || key === 'legHeight' || key === 'gap')) {
+                    const d = parseInches(variants.divanHeight);
+                    const lg = parseInches(variants.legHeight);
+                    const g = parseInches(variants.gap);
+                    variants.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
+                  }
+                  return variants;
+                })() });
 
-              {/* Rows */}
-              {lines.map((l) => {
-                const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
-                const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
-                // Manual lines have no outstanding cap — qty inputs go uncapped.
-                const cap = l.outstanding;
-                // Commander 2026-05-29 — editable variant section only for MANUAL
-                // lines (purchaseOrderItemId === null) that are bedframe/sofa, once
-                // the maintenance pools are loaded. PO-sourced lines keep their
-                // read-only summary (their variants came from the PO).
-                const showVariantEditor =
-                  l.purchaseOrderItemId === null &&
-                  (l.itemGroup === 'bedframe' || l.itemGroup === 'sofa') &&
-                  !!maint;
-                const setVariant = (key: string, value: string) =>
-                  setLine(l.rid, { variants: (() => {
-                    const variants: Record<string, unknown> = { ...(l.variants ?? {}), [key]: value };
-                    // Auto-compute bedframe Total Height = Divan + Leg + Gap.
-                    if (l.itemGroup === 'bedframe' && (key === 'divanHeight' || key === 'legHeight' || key === 'gap')) {
-                      const d = parseInches(variants.divanHeight);
-                      const lg = parseInches(variants.legHeight);
-                      const g = parseInches(variants.gap);
-                      variants.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
-                    }
-                    return variants;
-                  })() });
-                return (
-                  <div key={l.rid}>
-                  <div style={{
-                    display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
-                    padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
-                  }}>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
-                    <div style={{ fontSize: 'var(--fs-13)' }}>
-                      <div>{l.materialName}</div>
-                      {variantSummary && (
-                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
-                      )}
+              return (
+                <div
+                  key={l.rid}
+                  style={{
+                    background: 'var(--c-paper)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: 'var(--space-4)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  {/* Card header — LINE N · category pill · line value · remove */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{
+                        fontFamily: 'var(--font-button)',
+                        fontSize: 'var(--fs-12)',
+                        fontWeight: 700,
+                        letterSpacing: '0.10em',
+                        color: 'var(--fg-muted)',
+                      }}>
+                        LINE {idx + 1}
+                      </span>
+                      {l.itemGroup && <ItemGroupPill group={l.itemGroup} />}
                     </div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{cap ?? '—'}</div>
-                    <input type="number" min={0} max={cap ?? undefined} value={l.qtyReceived}
-                      onChange={(e) => {
-                        let v = Math.max(0, Number(e.target.value) || 0);
-                        if (cap != null) v = Math.min(cap, v);
-                        setLine(l.rid, { qtyReceived: v, qtyAccepted: Math.min(l.qtyAccepted, v) });
-                      }}
-                      className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                    <input type="number" min={0} max={l.qtyReceived} value={l.qtyAccepted}
-                      onChange={(e) => {
-                        const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
-                        setLine(l.rid, { qtyAccepted: v, qtyRejected: l.qtyReceived - v });
-                      }}
-                      className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                    <input type="number" min={0} max={l.qtyReceived} value={l.qtyRejected}
-                      onChange={(e) => {
-                        const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
-                        setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
-                      }}
-                      className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                    {/* Editable unit price — carried from the PO / manual entry,
-                        adjustable at receiving time (Commander 2026-05-29). */}
-                    <MoneyInput bare valueSen={l.unitPriceCenti}
-                      onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
-                      inputClassName={styles.fieldInput} style={{ fontSize: 'var(--fs-13)' }} selectOnFocus />
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineValueCenti, currency)}</div>
-                    <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
-                      <Trash2 {...SM_ICON} />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                      <span className={styles.previewPrice}>{fmtRm(lineValueCenti, currency)}</span>
+                      <button
+                        type="button"
+                        onClick={() => dropLine(l.rid)}
+                        title="Remove line"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: 'var(--c-festive-b, #B8331F)',
+                          padding: 4,
+                          display: 'inline-flex',
+                        }}
+                      >
+                        <Trash2 {...ICON} />
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Identity row — Item Code (Internal) + Description */}
+                  <div className={styles.formGrid2}>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Item Code (Internal)</span>
+                      {isManualLine ? (
+                        <>
+                          <input
+                            type="text"
+                            list={`grn-products-${l.rid}`}
+                            value={l.materialCode}
+                            onChange={(e) => {
+                              const code = e.target.value;
+                              setProductQuery(code);
+                              // Exact match on the searched SKU list → fill the line.
+                              const match = (productsQ.data ?? []).find((p) => p.code === code);
+                              if (match) { pickItemForLine(l.rid, code); return; }
+                              // Free typing — keep what's typed so the field stays editable.
+                              setLine(l.rid, { materialCode: code });
+                            }}
+                            placeholder="Type ≥2 chars to search SKUs by code or name…"
+                            className={styles.fieldInput}
+                            style={{ fontFamily: 'var(--font-mono)' }}
+                          />
+                          <datalist id={`grn-products-${l.rid}`}>
+                            {(productsQ.data ?? []).map((p) => (
+                              <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
+                            ))}
+                          </datalist>
+                        </>
+                      ) : (
+                        <input
+                          type="text"
+                          readOnly
+                          value={l.materialCode}
+                          className={styles.fieldInput}
+                          style={{ fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                        />
+                      )}
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Description</span>
+                      <input
+                        type="text"
+                        value={l.materialName}
+                        onChange={(e) => setLine(l.rid, { materialName: e.target.value })}
+                        readOnly={!isManualLine}
+                        placeholder={isManualLine ? '(auto-filled when an item is picked — editable)' : ''}
+                        className={styles.fieldInput}
+                        style={!isManualLine ? { background: 'var(--c-cream)', color: 'var(--fg-muted)' } : undefined}
+                      />
+                    </label>
+                  </div>
+
+                  {/* PO-sourced lines: read-only variant summary (variants came
+                      from the PO). Manual lines get the editable variant block. */}
+                  {!isManualLine && variantSummary && (
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
+                  )}
 
                   {/* Per-category VARIANT EDITOR for MANUAL bedframe/sofa lines —
                       Commander 2026-05-29: mirrors New PO / the PO Edit modal so
@@ -573,14 +603,16 @@ export const GrnNew = () => {
                       seat size + fabric. Same variant keys the PO/SO store. */}
                   {showVariantEditor && (
                     <div style={{
-                      padding: `var(--space-2) ${cellPad} var(--space-3)`,
-                      borderBottom: '1px solid var(--line)', background: 'var(--c-cream)',
+                      background: 'var(--c-cream)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: 'var(--space-3)',
                     }}>
                       <div style={{
-                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
-                        letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--fg-soft)',
+                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 700,
+                        letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--fg-muted)',
                         marginBottom: 'var(--space-2)',
-                      }}>Variants — {l.itemGroup}</div>
+                      }}>{l.itemGroup} Variants</div>
                       {l.itemGroup === 'bedframe' ? (
                         <div className={styles.formGrid4}>
                           <VariantSelect label="Divan Height" options={maint!.divanHeights}
@@ -621,14 +653,105 @@ export const GrnNew = () => {
                       )}
                     </div>
                   )}
-                  </div>
-                );
-              })}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-4)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
-                Subtotal: {fmtRm(subtotalCenti, currency)}
-              </div>
-            </>
+                  {/* Fields row — Outstanding · Received · Accepted · Rejected ·
+                      Unit Price · Line Value. (Outstanding is read-only / PO lines
+                      only; manual lines show "—".) */}
+                  <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Outstanding</span>
+                      <input
+                        type="text"
+                        readOnly
+                        value={cap ?? '—'}
+                        className={styles.fieldInput}
+                        style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                      />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Received</span>
+                      <input type="number" min={0} max={cap ?? undefined} value={l.qtyReceived}
+                        onChange={(e) => {
+                          let v = Math.max(0, Number(e.target.value) || 0);
+                          if (cap != null) v = Math.min(cap, v);
+                          setLine(l.rid, { qtyReceived: v, qtyAccepted: Math.min(l.qtyAccepted, v) });
+                        }}
+                        className={styles.fieldInput} style={{ textAlign: 'right' }} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Accepted</span>
+                      <input type="number" min={0} max={l.qtyReceived} value={l.qtyAccepted}
+                        onChange={(e) => {
+                          const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
+                          setLine(l.rid, { qtyAccepted: v, qtyRejected: l.qtyReceived - v });
+                        }}
+                        className={styles.fieldInput} style={{ textAlign: 'right' }} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Rejected</span>
+                      <input type="number" min={0} max={l.qtyReceived} value={l.qtyRejected}
+                        onChange={(e) => {
+                          const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
+                          setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
+                        }}
+                        className={styles.fieldInput} style={{ textAlign: 'right' }} />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Unit Price ({currency})</span>
+                      {/* Editable unit price — carried from the PO / manual entry,
+                          adjustable at receiving time (Commander 2026-05-29). */}
+                      <MoneyInput bare valueSen={l.unitPriceCenti}
+                        onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
+                        inputClassName={styles.fieldInput} selectOnFocus />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Line Value</span>
+                      <input
+                        type="text"
+                        readOnly
+                        value={fmtRm(lineValueCenti, currency)}
+                        className={styles.fieldInput}
+                        style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                      />
+                    </label>
+                  </div>
+                </div>
+              );
+            })
+          )}
+
+          {/* "Add another item" — only in manual mode once a supplier is chosen
+              (PO-sourced / single-PO lines come from the PO, not added by hand). */}
+          {isManual && !!supplierId && (
+            <button
+              type="button"
+              onClick={addEmptyManualLine}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                width: '100%',
+                padding: '12px 14px',
+                border: '1px dashed var(--c-orange)',
+                borderRadius: 'var(--radius-md)',
+                background: 'transparent',
+                color: 'var(--c-orange)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 'var(--fs-13)',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <Plus {...ICON} /> Add another item
+            </button>
+          )}
+
+          {/* Subtotal footer (kept from the prior layout). */}
+          {lines.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
+              Subtotal: {fmtRm(subtotalCenti, currency)}
+            </div>
           )}
         </div>
       </section>
