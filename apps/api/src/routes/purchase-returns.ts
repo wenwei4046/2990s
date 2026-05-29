@@ -395,14 +395,73 @@ purchaseReturns.patch('/:id/complete', async (c) => {
   return c.json({ purchaseReturn: data });
 });
 
+/* ── PATCH /:id/cancel — cancel a PR + reverse its return ───────────────────
+   Commander 2026-05-30 — the PR module is a Confirmed-clone of the PO module,
+   including a Cancel action. A Purchase Return wrote inventory OUT on create
+   (returning goods to the supplier reduces stock — see
+   writePurchaseReturnMovements). Cancelling a PR:
+     1. Sets status='CANCELLED' (idempotent — already-cancelled echoes back;
+        a COMPLETED return cannot be cancelled).
+     2. Reverses the inventory OUT: writes an IN movement per line for
+        qty_returned (negating the original OUT), to the same warehouse the
+        create path debited (GRN's warehouse_id, else default).
+   Step 2 is best-effort (mirrors writePurchaseReturnMovements / the GRN cancel
+   in grns.ts) — a movement failure does not un-cancel the PR. */
 purchaseReturns.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
-  const { data, error } = await sb.from('purchase_returns').update({
+  const user = c.get('user');
+
+  // Read → guard → update → reverse (mirrors the GRN cancel's split).
+  const { data: cur, error: readErr } = await sb.from('purchase_returns')
+    .select('id, status, return_number, grn_id')
+    .eq('id', id).maybeSingle();
+  if (readErr) return c.json({ error: 'load_failed', reason: readErr.message }, 500);
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const head = cur as { id: string; status: string; return_number: string; grn_id: string | null };
+  if (head.status === 'COMPLETED') return c.json({ error: 'cannot_cancel', message: 'Already completed' }, 409);
+  // Idempotent — already cancelled, echo back without re-reversing (would
+  // double-credit inventory).
+  if (head.status === 'CANCELLED') return c.json({ purchaseReturn: { id, status: 'CANCELLED' } });
+
+  const { error: updErr } = await sb.from('purchase_returns').update({
     status: 'CANCELLED', updated_at: new Date().toISOString(),
-  }).eq('id', id).neq('status', 'COMPLETED').select('id, status').single();
-  if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'cannot_cancel', message: 'Already completed' }, 409);
-  return c.json({ purchaseReturn: data });
+  }).eq('id', id);
+  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+
+  // Reverse the inventory OUT: write an IN per line for qty_returned. The
+  // create path debited the GRN's warehouse (else the default) — credit the
+  // same. Best-effort; never un-cancel on a movement failure.
+  try {
+    let warehouseId: string | null = null;
+    if (head.grn_id) {
+      const { data: grn } = await sb.from('grns').select('warehouse_id').eq('id', head.grn_id).maybeSingle();
+      warehouseId = (grn as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+    }
+    if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
+    if (warehouseId) {
+      const { data: lines } = await sb.from('purchase_return_items')
+        .select('material_code, material_name, qty_returned, item_group, variants')
+        .eq('purchase_return_id', id);
+      const movements = ((lines ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
+        .filter((it) => (it.qty_returned ?? 0) > 0)
+        .map((it) => ({
+          movement_type: 'IN' as const,
+          warehouse_id: warehouseId!,
+          product_code: it.material_code,
+          variant_key: computeVariantKey(it.item_group, it.variants ?? null),
+          product_name: it.material_name,
+          qty: it.qty_returned,
+          source_doc_type: 'PURCHASE_RETURN' as const,
+          source_doc_id: id,
+          source_doc_no: head.return_number,
+          performed_by: user.id,
+          notes: 'Purchase return cancelled — reversing return',
+        }));
+      if (movements.length > 0) await writeMovements(sb, movements);
+    }
+  } catch { /* best-effort: never un-cancel on a movement failure */ }
+
+  return c.json({ purchaseReturn: { id, status: 'CANCELLED' } });
 });
 
 /* ════════════════════════════════════════════════════════════════════════

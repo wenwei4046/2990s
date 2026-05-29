@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Undo2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { usePurchaseReturns } from '../lib/flow-queries';
+import { usePurchaseReturns, useCancelPurchaseReturn } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
@@ -104,9 +104,19 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
 export const PurchaseReturns = () => {
   const navigate = useNavigate();
   const { data, isLoading, error } = usePurchaseReturns();
+  const cancelPr = useCancelPurchaseReturn();
 
   const rows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
   const columns = useMemo(() => buildPrColumns(), []);
+
+  // Cancel a PR (right-click) — reverses the return server-side (stock goes back
+  // in). Confirm first. Mirrors the GRN list's doCancelGrn.
+  const doCancelPr = (r: PrRow) => {
+    if (!window.confirm(`Cancel return ${r.return_number}? This reverses the return — the goods are put back into stock. Line items stay for audit.`)) return;
+    cancelPr.mutate(r.id, {
+      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+    });
+  };
 
   return (
     <div className={styles.page}>
@@ -152,11 +162,21 @@ export const PurchaseReturns = () => {
         rowStyle={(r) => r.status === 'COMPLETED' || r.status === 'CANCELLED'
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
           : undefined}
-        contextMenu={(r) => [
-          // The PR detail page is always inline-editable (no draft / no Edit
-          // gate), so a single "Open" entry covers both view + edit.
-          { label: 'Open', onClick: () => navigate(`/purchase-returns/${r.id}`) },
-        ]}
+        contextMenu={(r) => {
+          // Mirror the PO/GRN list's right-click menu: View / Edit · divider ·
+          // Cancel (danger). View opens read-only; Edit lands on the detail page
+          // with ?edit=1 (the draft-edit gate flips straight into Edit mode).
+          const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
+            { label: 'View', onClick: () => navigate(`/purchase-returns/${r.id}`) },
+            { label: 'Edit', onClick: () => navigate(`/purchase-returns/${r.id}?edit=1`) },
+          ];
+          // Cancel — soft-stop. Hidden once cancelled / completed.
+          if (r.status !== 'CANCELLED' && r.status !== 'COMPLETED') {
+            menu.push({ divider: true as const });
+            menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelPr(r) });
+          }
+          return menu;
+        }}
         isLoading={isLoading}
         emptyMessage='No returns yet — convert a Goods Receipt via "From GRN".'
       />
