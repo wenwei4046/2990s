@@ -1545,6 +1545,7 @@ export const deliveryReturnStatus = pgEnum('delivery_return_status', [
   'REFUNDED',     // money back
   'CREDIT_NOTED', // credit note issued instead of cash refund
   'REJECTED',     // return denied
+  'CANCELLED',    // migration 0107 — DR voided; its inventory IN is reversed
 ]);
 
 /* Consignment orders — stock placed at a customer branch */

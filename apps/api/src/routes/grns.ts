@@ -1008,24 +1008,60 @@ grns.patch('/:id/items/:itemId', async (c) => {
    Blocked by the GRN child-lock (any downstream PI/PR). */
 grns.delete('/:id/items/:itemId', async (c) => {
   const grnId = c.req.param('id'); const itemId = c.req.param('itemId');
-  const sb = c.get('supabase');
+  const sb = c.get('supabase'); const user = c.get('user');
 
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
 
-  // Read the line's PO link + accepted qty BEFORE deleting so we can roll back.
+  // Read the line's PO link + accepted qty + variant/cost fields BEFORE deleting
+  // so we can roll back the PO receipt AND reverse the inventory IN the GRN post
+  // wrote for this line.
   const { data: line } = await sb.from('grn_items')
-    .select('qty_accepted, purchase_order_item_id').eq('id', itemId).maybeSingle();
+    .select('qty_accepted, purchase_order_item_id, material_code, material_name, unit_price_centi, item_group, variants')
+    .eq('id', itemId).maybeSingle();
 
   const { error } = await sb.from('grn_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
 
-  // Roll back the PO receipt for the removed line (best-effort, mirrors the GRN
-  // cancel reversal). Skip manual lines with no purchase_order_item_id.
   if (line) {
-    const l = line as { qty_accepted: number; purchase_order_item_id: string | null };
+    const l = line as {
+      qty_accepted: number; purchase_order_item_id: string | null;
+      material_code: string; material_name: string | null; unit_price_centi: number | null;
+      item_group?: string | null; variants?: VariantAttrs | null;
+    };
+    // (a) Roll back the PO receipt for the removed line (best-effort). Skip
+    //     manual lines with no purchase_order_item_id.
     try { await rollbackPoReceipt(sb, l.purchase_order_item_id, l.qty_accepted ?? 0); } catch { /* best-effort */ }
+
+    // (b) Reverse the inventory IN the GRN post wrote for THIS line: a direct
+    //     OUT of qty_accepted (the helper reverses the whole doc; for one line a
+    //     per-line OUT is precise). GRN is NOT under a same-key UNIQUE index, so
+    //     this lands; the FIFO trigger consumes the line's lot + computes COGS.
+    //     Best-effort — a movement failure never blocks the delete.
+    if ((l.qty_accepted ?? 0) > 0) {
+      try {
+        const { data: grnHeader } = await sb.from('grns')
+          .select('grn_number, warehouse_id').eq('id', grnId).maybeSingle();
+        const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
+          ?? (await defaultWarehouseId(sb));
+        if (warehouseId) {
+          await writeMovements(sb, [{
+            movement_type: 'OUT' as const,
+            warehouse_id: warehouseId,
+            product_code: l.material_code,
+            variant_key: computeVariantKey(l.item_group, l.variants ?? null),
+            product_name: l.material_name,
+            qty: l.qty_accepted,
+            source_doc_type: 'GRN' as const,
+            source_doc_id: grnId,
+            source_doc_no: (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId,
+            performed_by: user.id,
+            notes: 'GRN line deleted — reversing receipt',
+          }]);
+        }
+      } catch { /* best-effort */ }
+    }
   }
 
   await recomputeGrnTotals(sb, grnId);
