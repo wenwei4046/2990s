@@ -22,6 +22,7 @@ import {
 import {
   ListingPickerDialog, ListingPickerTrigger, type ListingChoice,
 } from '../components/ListingPickerDialog';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './FlowPages.module.css';
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -236,6 +237,71 @@ export const Grns = () => {
     });
   };
 
+  /* Commander 2026-05-29 — the GRN list was a bare 7-column table with no
+     sort / filter / column control ("Column 也没有，Filter 也没有，Sort 也没
+     有"). Swap to the shared DataGrid (same chrome as SO / PO lists): per-
+     column sort + filter dropdowns + show/hide columns + global search. The
+     multi-select checkbox column (→ Raise Purchase Return) is preserved.
+     Memoized on `selectedIds` so the controlled checkboxes re-render. */
+  const grnColumns = useMemo<DataGridColumn<any>[]>(() => [
+    {
+      key: 'pick', label: '', width: 40, sortable: false, groupable: false,
+      accessor: (r: any) => (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(r.id)}
+          onChange={() => toggle(r.id)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${r.grn_number}`}
+        />
+      ),
+    },
+    {
+      key: 'grn_number', label: 'GRN #', width: 140, sortable: true,
+      accessor: (r: any) => <span className={styles.codeChip}>{r.grn_number}</span>,
+      searchValue: (r: any) => r.grn_number ?? '',
+    },
+    {
+      key: 'po_number', label: 'Transfer From (PO)', width: 150, sortable: true, groupable: true,
+      accessor: (r: any) => <span className={styles.codeChip}>{r.purchase_order?.po_number ?? '—'}</span>,
+      searchValue: (r: any) => r.purchase_order?.po_number ?? '',
+      groupValue: (r: any) => r.purchase_order?.po_number ?? '(none)',
+    },
+    {
+      key: 'supplier', label: 'Supplier', width: 220, sortable: true, groupable: true,
+      accessor: (r: any) => r.supplier?.name ?? '—',
+      searchValue: (r: any) => `${r.supplier?.code ?? ''} ${r.supplier?.name ?? ''}`.trim(),
+      groupValue: (r: any) => r.supplier?.name ?? '(none)',
+    },
+    {
+      key: 'received_at', label: 'Received Date', width: 120, sortable: true,
+      accessor: (r: any) => (r.received_at ?? '').slice(0, 10),
+      searchValue: (r: any) => r.received_at ?? '',
+      sortFn: (a: any, b: any) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
+    },
+    {
+      key: 'delivery_note_ref', label: 'DN Ref', width: 130, sortable: true,
+      accessor: (r: any) => r.delivery_note_ref ?? '—',
+      searchValue: (r: any) => r.delivery_note_ref ?? '',
+    },
+    {
+      key: 'status', label: 'Status', width: 110, sortable: true, groupable: true,
+      accessor: (r: any) => <span className={styles.statusPill}>{r.status}</span>,
+      searchValue: (r: any) => r.status ?? '',
+      groupValue: (r: any) => r.status ?? '(none)',
+    },
+    {
+      key: 'posted_at', label: 'Posted At', width: 120, sortable: true, defaultHidden: true,
+      accessor: (r: any) => (r.posted_at ?? '').slice(0, 10),
+      searchValue: (r: any) => r.posted_at ?? '',
+    },
+    {
+      key: 'notes', label: 'Notes', width: 200, sortable: false, defaultHidden: true,
+      accessor: (r: any) => r.notes ?? '—',
+      searchValue: (r: any) => r.notes ?? '',
+    },
+  ], [selectedIds]);
+
   return (
     <div className={styles.page}>
       <Header
@@ -280,38 +346,20 @@ export const Grns = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead><tr>
-            <th style={{ width: 36 }}></th>
-            <th>GRN #</th><th>PO #</th><th>Supplier</th><th>Received</th><th>DN Ref</th><th>Status</th>
-          </tr></thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}
-                onClick={() => navigate(`/grns/${r.id}`)}
-                style={{ cursor: 'pointer' }}>
-                <td onClick={(e) => { e.stopPropagation(); toggle(r.id); }}>
-                  <input type="checkbox" checked={selectedIds.has(r.id)}
-                    onChange={() => toggle(r.id)}
-                    onClick={(e) => e.stopPropagation()} />
-                </td>
-                <td><span className={styles.codeChip}>{r.grn_number}</span></td>
-                <td><span className={styles.codeChip}>{r.purchase_order?.po_number ?? '—'}</span></td>
-                <td>{r.supplier?.name ?? '—'}</td>
-                <td>{r.received_at}</td>
-                <td>{r.delivery_note_ref ?? '—'}</td>
-                <td><span className={styles.statusPill}>{r.status}</span></td>
-              </tr>
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>No GRNs yet — click "New GRN" to start.</td></tr>
-            )}
-          </tbody>
-        </table>
+      <DataGrid<any>
+        rows={rows}
+        columns={grnColumns}
+        storageKey="grn-list.layout.v1"
+        rowKey={(r: any) => r.id}
+        searchPlaceholder="Search GRN, PO, supplier…"
+        groupBanner={false}
+        isLoading={isLoading}
+        /* Double-click opens the GRN; single-click row stays for the checkbox
+           multi-select → Raise Purchase Return flow. */
+        onRowDoubleClick={(r: any) => navigate(`/grns/${r.id}`)}
+        emptyMessage='No GRNs yet — click "New GRN" to start.'
+      />
       {open && <CreateGrnDrawer onClose={() => setOpen(false)} />}
-      </div>
     </div>
   );
 };
