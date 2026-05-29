@@ -929,7 +929,101 @@ export const useCreateDeliveryReturn = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: unknown) => authedFetch<{ id: string; returnNumber: string }>(`/delivery-returns`, { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['delivery-returns'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+      /* A return increases stock on create — refresh inventory queries so the
+         on-hand drilldown reflects the IN. */
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+
+/* Convert a DO → new Delivery Return. Server snapshots the DO header + copies
+   the picked lines (with variants + prices + costs) into a new return, then
+   increases stock. Returns can ONLY come from a DO. */
+export const useConvertDoToDeliveryReturn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { deliveryOrderId: string; items?: Array<{ doItemId: string; qtyReturned: number; condition?: string }> }) =>
+      authedFetch<{ id: string; returnNumber: string; lineCount: number }>(
+        `/delivery-returns/from-do`, { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+
+/* DR header PATCH — editable SO/DO-style fields. Mirrors
+   useUpdateMfgDeliveryOrderHeader. */
+export const useUpdateDeliveryReturnHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/delivery-returns/${id}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+      qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+    },
+  });
+};
+
+export const useUpdateDeliveryReturnStatus = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      authedFetch<{ deliveryReturn: unknown }>(`/delivery-returns/${id}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status }),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+      qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+    },
+  });
+};
+
+/* DR line-item CRUD — mirrors the DO item hooks. Each mutation recomputes the
+   DR totals server-side, so we invalidate both the detail + list. */
+export const useAddDeliveryReturnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ item: unknown }>(`/delivery-returns/${id}/items`, {
+        method: 'POST', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+    },
+  });
+};
+
+export const useUpdateDeliveryReturnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/delivery-returns/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+    },
+  });
+};
+
+export const useDeleteDeliveryReturnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId }: { id: string; itemId: string }) =>
+      authedFetch<void>(`/delivery-returns/${id}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['delivery-returns'] });
+    },
   });
 };
 

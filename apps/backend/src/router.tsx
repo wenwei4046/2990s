@@ -63,7 +63,10 @@ const MfgDeliveryOrdersList = lazyRetry(() => import('./pages/MfgDeliveryOrdersL
 const DeliveryOrderNew = lazyRetry(() => import('./pages/DeliveryOrderNew').then(m => ({ default: m.DeliveryOrderNew })));
 const SalesInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.SalesInvoicesPage })));
 const ConsignmentPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
-const DeliveryReturnsPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.DeliveryReturnsPage })));
+const DeliveryReturnsList = lazyRetry(() => import('./pages/DeliveryReturnsList').then(m => ({ default: m.DeliveryReturnsList })));
+const DeliveryReturnDetail = lazyRetry(() => import('./pages/DeliveryReturnDetail').then(m => ({ default: m.DeliveryReturnDetail })));
+const DeliveryReturnNew = lazyRetry(() => import('./pages/DeliveryReturnNew').then(m => ({ default: m.DeliveryReturnNew })));
+const DeliveryReturnFromDo = lazyRetry(() => import('./pages/DeliveryReturnFromDo').then(m => ({ default: m.DeliveryReturnFromDo })));
 const PurchaseReturnsPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseReturnsPage })));
 const SalesOrderDetail = lazyRetry(() => import('./pages/SalesOrderDetail').then(m => ({ default: m.SalesOrderDetail })));
 const SalesOrderNew = lazyRetry(() => import('./pages/SalesOrderNew').then(m => ({ default: m.SalesOrderNew })));
@@ -176,7 +179,11 @@ export const router = createBrowserRouter([
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
       { path: 'consignment', element: <ConsignmentPage /> },
       { path: 'consignment/:id', element: <ConsignmentDetail /> },
-      { path: 'delivery-returns', element: <DeliveryReturnsPage /> },
+      { path: 'delivery-returns', element: <DeliveryReturnsList /> },
+      // /new + /from-do must come BEFORE :id so they aren't caught as a DR id.
+      { path: 'delivery-returns/new', element: <DeliveryReturnNew /> },
+      { path: 'delivery-returns/from-do', element: <DeliveryReturnFromDo /> },
+      { path: 'delivery-returns/:id', element: <DeliveryReturnDetail /> },
       { path: 'purchase-returns', element: <PurchaseReturnsPage /> },
       { path: 'purchase-returns/new', element: <PurchaseReturnNew /> },
       { path: 'purchase-returns/:id', element: <PurchaseReturnDetail /> },

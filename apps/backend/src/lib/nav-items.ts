@@ -27,6 +27,7 @@ export const NAV_ITEMS: NavItem[] = [
   // Commander 2026-05-29 — Delivery flows grouped with Sales Order (outbound side).
   { label: 'Delivery Orders', path: '/mfg-delivery-orders', group: 'Sales Order', keywords: 'do dispatch' },
   { label: 'Delivery Returns', path: '/delivery-returns', group: 'Sales Order', keywords: 'dr return' },
+  { label: 'Convert DO to Return', path: '/delivery-returns/from-do', group: 'Sales Order', keywords: 'convert do delivery return goods back' },
 
   // Procurement
   { label: 'SKU master', path: '/sku-master', group: 'Procurement', keywords: 'catalog pricing' },

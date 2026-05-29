@@ -18,7 +18,6 @@ import { Button } from '@2990s/design-system';
 import {
   useCreateGrn, useCreatePurchaseInvoice, useCreateMfgSalesOrder,
   useCreateSalesInvoice, useCreateConsignment,
-  useCreateDeliveryReturn,
 } from '../lib/flow-queries';
 import {
   useSuppliers, usePurchaseOrders, usePurchaseOrderDetail,
@@ -602,103 +601,9 @@ export const CreateConsignmentDrawer = ({ onClose }: { onClose: () => void }) =>
 };
 
 /* ══════════════════════════════════════════════════════════════════════
-   7. Delivery Return
+   7. Delivery Return — RETIRED 2026-05-29.
+   The plain CreateDeliveryReturnDrawer was replaced by the DO-clone Delivery
+   Return module: a "Convert From DO" picker (pages/DeliveryReturnFromDo.tsx)
+   + a blank Create form (pages/DeliveryReturnNew.tsx) + an editable detail
+   (pages/DeliveryReturnDetail.tsx), all wired in router.tsx.
    ══════════════════════════════════════════════════════════════════════ */
-
-const DR_CONDITIONS = ['NEW', 'DAMAGED', 'DEFECT'];
-
-export const CreateDeliveryReturnDrawer = ({ onClose }: { onClose: () => void }) => {
-  const dos = useMfgDeliveryOrders('DELIVERED');
-  const [deliveryOrderId, setDeliveryOrderId] = useState<string | null>(null);
-  const [form, setForm] = useState({
-    debtorCode: '', debtorName: '', reason: '',
-    returnDate: new Date().toISOString().slice(0, 10),
-    notes: '',
-  });
-  const [items, setItems] = useState<Array<{ itemCode: string; description: string; qtyReturned: number; condition: string; unitPriceCenti: number; refundCenti: number }>>([
-    { itemCode: '', description: '', qtyReturned: 1, condition: 'NEW', unitPriceCenti: 0, refundCenti: 0 },
-  ]);
-  const create = useCreateDeliveryReturn();
-
-  const upd = (k: keyof typeof form, v: string) => setForm({ ...form, [k]: v });
-  const updI = (i: number, k: string, v: unknown) =>
-    setItems(items.map((it, j) => (j === i ? { ...it, [k]: v } : it)));
-  const addLine = () => setItems([...items, { itemCode: '', description: '', qtyReturned: 1, condition: 'NEW', unitPriceCenti: 0, refundCenti: 0 }]);
-  const remLine = (i: number) => setItems(items.filter((_, j) => j !== i));
-
-  type DoLiteSimple = { id: string; debtor_code?: string; debtor_name?: string };
-  const pickDo = (id: string) => {
-    setDeliveryOrderId(id || null);
-    if (id) {
-      const d = ((dos.data?.deliveryOrders ?? []) as DoLiteSimple[]).find((x) => x.id === id);
-      if (d) setForm((s) => ({ ...s, debtorCode: d.debtor_code ?? '', debtorName: d.debtor_name ?? '' }));
-    }
-  };
-
-  const refundTotal = items.reduce((s, i) => s + i.refundCenti, 0);
-
-  const submit = () => {
-    if (!form.debtorName.trim()) return alert('Debtor name required.');
-    const valid = items.filter((it) => it.itemCode && it.qtyReturned > 0);
-    if (!valid.length) return alert('Add at least one item.');
-    create.mutate(
-      {
-        ...form,
-        deliveryOrderId: deliveryOrderId ?? undefined,
-        items: valid,
-      },
-      { onSuccess: (res: any) => { alert(`Return: ${res.returnNumber}`); onClose(); } },
-    );
-  };
-
-  return (
-    <DrawerShell
-      title="New Delivery Return"
-      onClose={onClose}
-      onSubmit={submit}
-      submitLabel="Create Return"
-      submitting={create.isPending}
-      canSubmit={Boolean(form.debtorName.trim())}
-    >
-      <div className={sup.section}>
-        <p className={sup.fieldLabel}>From DO (optional)</p>
-        <select className={sup.fieldSelect} value={deliveryOrderId ?? ''} onChange={(e) => pickDo(e.target.value)}>
-          <option value="">— Free entry —</option>
-          {(dos.data?.deliveryOrders ?? []).map((d: any) => (
-            <option key={d.id} value={d.id}>{d.do_number} · {d.debtor_name}</option>
-          ))}
-        </select>
-      </div>
-
-      <div className={sup.formGrid}>
-        <Field label="Debtor Code" value={form.debtorCode} onChange={(v) => upd('debtorCode', v)} />
-        <Field label="Debtor Name" value={form.debtorName} onChange={(v) => upd('debtorName', v)} required />
-        <Field label="Return Date" type="date" value={form.returnDate} onChange={(v) => upd('returnDate', v)} />
-        <Field label="Reason" value={form.reason} onChange={(v) => upd('reason', v)} gridFull />
-      </div>
-
-      <div className={sup.section}>
-        <p className={sup.fieldLabel}>Items returned</p>
-        {items.map((it, i) => (
-          <div key={i} className={sup.bindingRow}>
-            <span className={sup.bindingIcon}>·</span>
-            <input className={sup.fieldInput} placeholder="Item code" value={it.itemCode} onChange={(e) => updI(i, 'itemCode', e.target.value)} />
-            <input className={sup.fieldInput} placeholder="Description" value={it.description} onChange={(e) => updI(i, 'description', e.target.value)} />
-            <input type="number" min={1} className={sup.fieldInput} style={{ width: 60, textAlign: 'right' }} value={it.qtyReturned} onChange={(e) => updI(i, 'qtyReturned', Number(e.target.value) || 1)} />
-            <select className={sup.fieldSelect} style={{ width: 110 }} value={it.condition} onChange={(e) => updI(i, 'condition', e.target.value)}>
-              {DR_CONDITIONS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <MoneyInput bare valueSen={it.refundCenti} onCommit={(sen) => updI(i, 'refundCenti', sen ?? 0)} inputClassName={sup.fieldInput} style={{ width: 90 }} placeholder="refund" selectOnFocus />
-            <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
-          </div>
-        ))}
-        <button type="button" className={sup.addBindingBtn} onClick={addLine}>+ Add item</button>
-        <p style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-18)', color: 'var(--c-burnt)', fontWeight: 800 }}>
-          Refund: {fmtMoney(refundTotal)}
-        </p>
-      </div>
-
-      <Field label="Notes" value={form.notes} onChange={(v) => upd('notes', v)} multiline />
-    </DrawerShell>
-  );
-};

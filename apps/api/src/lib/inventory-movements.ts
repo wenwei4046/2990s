@@ -31,7 +31,7 @@ type MovementInput = {
   /** PR — Inv PR5 (2026-05-27) — added STOCK_TAKE. ADJUSTMENT remains
    *  for the manual one-off adjustment route. */
   source_doc_type:
-    | 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN'
+    | 'GRN' | 'DO' | 'DR' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN'
     | 'STOCK_TRANSFER' | 'STOCK_TAKE' | 'ADJUSTMENT';
   source_doc_id?: string;
   source_doc_no?: string;

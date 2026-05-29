@@ -11,13 +11,12 @@ import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrns, usePurchaseInvoices,
-  useSalesInvoices, useConsignments, useDeliveryReturns,
+  useSalesInvoices, useConsignments,
   usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
 import {
   CreateGrnDrawer, CreatePurchaseInvoiceDrawer,
   CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
-  CreateDeliveryReturnDrawer,
 } from './FlowDrawers';
 import {
   ListingPickerDialog, ListingPickerTrigger, type ListingChoice,
@@ -618,83 +617,11 @@ export const ConsignmentPage = () => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Delivery Returns
+   Delivery Returns — rebuilt 2026-05-29 as a DO-clone (DataGrid list + editable
+   detail + Convert-From-DO picker). The list now lives in its own page
+   (pages/DeliveryReturnsList.tsx) wired in router.tsx; the old plain-table
+   DeliveryReturnsPage + CreateDeliveryReturnDrawer were retired.
    ════════════════════════════════════════════════════════════════════════ */
-const DR_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'PENDING', label: 'Pending' },
-  { value: 'RECEIVED', label: 'Received' }, { value: 'INSPECTED', label: 'Inspected' },
-  { value: 'REFUNDED', label: 'Refunded' }, { value: 'CREDIT_NOTED', label: 'Credit Noted' },
-  { value: 'REJECTED', label: 'Rejected' },
-];
-
-export const DeliveryReturnsPage = () => {
-  const [status, setStatus] = useState('all');
-  const [open, setOpen] = useState(false);
-  const { data, isLoading, error } = useDeliveryReturns(status === 'all' ? undefined : status);
-  const allRows = useMemo(() => data?.deliveryReturns ?? [], [data]);
-  const picker = useListingPicker('/reports/delivery-return-detail-listing');
-  /* Task #120 — DR outstanding = not yet settled (REFUNDED/CREDIT_NOTED/REJECTED end states). */
-  const rows = useMemo(() => {
-    if (!picker.outstandingOnly) return allRows;
-    return allRows.filter((r: any) => {
-      const s = String(r.status ?? '');
-      return s !== 'REFUNDED' && s !== 'CREDIT_NOTED' && s !== 'REJECTED';
-    });
-  }, [allRows, picker.outstandingOnly]);
-
-  return (
-    <div className={styles.page}>
-      <Header
-        title={`Delivery Returns${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
-        subtitle="Customer returning previously-delivered goods"
-        newLabel="New Return"
-        onNew={() => setOpen(true)}
-      />
-      <ListingPickerDialog
-        open={picker.open}
-        onClose={() => picker.setOpen(false)}
-        onChoose={picker.onPick}
-        detailListingAvailable={true}
-        initial={picker.initial}
-      />
-      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
-        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
-        <StatusChips chips={DR_CHIPS} active={status} onPick={setStatus} />
-      </div>
-      {picker.outstandingOnly && (
-        <OutstandingChip label={`Outstanding only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
-      )}
-      <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} returns`}</p>
-      {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead><tr>
-            <th>Return #</th><th>DO #</th><th>Debtor</th><th>Date</th><th>Reason</th>
-            <th style={{ textAlign: 'right' }}>Refund</th><th>Status</th>
-          </tr></thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}>
-                <td><span className={styles.codeChip}>{r.return_number}</span></td>
-                <td><span className={styles.codeChip}>{r.delivery_order_id ? '—' : '—'}</span></td>
-                <td>{r.debtor_name}</td>
-                <td>{r.return_date}</td>
-                <td>{r.reason ?? '—'}</td>
-                <td className={styles.priceCell}>{fmtMoney(r.refund_centi)}</td>
-                <td><span className={styles.statusPill}>{r.status.replace('_', ' ')}</span></td>
-              </tr>
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>No returns yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      {open && <CreateDeliveryReturnDrawer onClose={() => setOpen(false)} />}
-      </div>
-    </div>
-  );
-};
 
 /* ════════════════════════════════════════════════════════════════════════
    Purchase Returns — we return goods to the supplier
