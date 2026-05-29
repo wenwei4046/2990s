@@ -163,6 +163,22 @@ export const useDeleteGrnItem = () => {
   });
 };
 
+/* ── Cancel a GRN (mirror useCancelPurchaseOrder) ──────────────────────────
+   PATCH /grns/:id/cancel — server flips status → CANCELLED and reverses the
+   receipt (inventory OUT + PO received_qty decrement). Invalidates the GRN
+   detail + list + inventory so the on-hand drilldown reflects the reversal. */
+export const useCancelGrn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => authedFetch<{ grn: any }>(`/grns/${id}/cancel`, { method: 'PATCH' }),
+    onSuccess: (_, id) => {
+      qc.invalidateQueries({ queryKey: ['grn-detail', id] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+
 /* ── Single-GRN conversions (GRN list right-click) ─────────────────────────
    POST /purchase-invoices/from-grn + /purchase-returns/from-grn take { grnId }
    and return the created doc's { id } so the caller can navigate straight in. */

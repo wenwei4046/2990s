@@ -503,11 +503,18 @@ export type OutstandingPoItem = {
   unitPriceCenti: number;
   warehouseId:    string | null;
   variants:       unknown;
+  /* Delivery-carry — the PO line's delivery date, carried into the GRN line. */
+  deliveryDate:   string | null;
   supplierId:     string;
   supplierCode:   string;
   supplierName:   string;
   poDate:         string;
   expectedAt:     string | null;
+  /* The PO's purchase_location (header warehouse) — the GRN's receive-into
+     warehouse. One warehouse per GRN: the from-PO picker locks to it. */
+  warehouseLocationId:   string | null;
+  warehouseLocationCode: string | null;
+  warehouseLocationName: string | null;
 };
 
 export function useOutstandingPoItems() {

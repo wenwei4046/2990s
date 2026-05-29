@@ -928,7 +928,10 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
    Migration 0042.
    ════════════════════════════════════════════════════════════════════════ */
 
-export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED']);
+// 'CANCELLED' added in migration 0105 — GRN is a Confirmed-clone of the PO
+// module; cancelling reverses the receipt (inventory OUT + PO received_qty
+// decrement). No Draft/lifecycle: POSTED reads as "Confirmed".
+export const grnStatus = pgEnum('grn_status', ['POSTED', 'CLOSED', 'CANCELLED']);
 
 export const purchaseInvoiceStatus = pgEnum('purchase_invoice_status', [
   'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED',
