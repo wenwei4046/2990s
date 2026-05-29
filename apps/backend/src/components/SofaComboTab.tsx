@@ -40,6 +40,7 @@ import {
   type SofaComboRule,
 } from '../lib/sofa-combos-queries';
 import { useMfgProducts } from '../lib/mfg-products-queries';
+import { useSupplierDetail } from '../lib/suppliers-queries';
 
 const HEIGHTS = ['24', '28', '30', '32', '35'] as const;
 const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
@@ -127,6 +128,48 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
     for (const arr of Object.values(m)) arr.sort();
     return m;
   }, [productsQ.data]);
+
+  // Supplier-scoped only: derive base_model → the supplier's OWN model code so
+  // each combo card can show "Booqit · 5539" — the code Hookka recognises on
+  // their side. Source = this supplier's bindings (supplier_material_bindings).
+  // A binding's material_code equals the product code (see PurchaseOrderDetail
+  // pickProduct: materialCode = p.code), so we resolve base_model via products,
+  // then take the supplier_sku's leading code ("5539-2A(LHF)" → "5539"; bare
+  // "5539" stays "5539"). When a base_model carries several supplier codes we
+  // pick the most common one. Empty/unmapped → card just shows base_model.
+  const supplierDetailQ = useSupplierDetail(supplierId ?? null);
+
+  const supplierCodeByBaseModel = useMemo(() => {
+    if (!supplierId) return {} as Record<string, string>;
+    // code (SKU) → base_model, from the SOFA products already in hand.
+    const baseModelByCode = new Map<string, string>();
+    for (const p of productsQ.data ?? []) {
+      const row = p as unknown as { base_model?: string | null; code?: string | null };
+      if (row.code && row.base_model) baseModelByCode.set(row.code, row.base_model);
+    }
+    // base_model → { supplierCode → count } so we can pick the most common.
+    const tally: Record<string, Record<string, number>> = {};
+    for (const b of supplierDetailQ.data?.bindings ?? []) {
+      const bm = baseModelByCode.get(b.material_code);
+      if (!bm) continue;
+      const sku = (b.supplier_sku ?? '').trim();
+      if (!sku) continue;
+      const code = sku.split('-')[0]?.trim();
+      if (!code) continue;
+      const counts = (tally[bm] ??= {});
+      counts[code] = (counts[code] ?? 0) + 1;
+    }
+    const out: Record<string, string> = {};
+    for (const [bm, counts] of Object.entries(tally)) {
+      let best = '';
+      let bestN = -1;
+      for (const [code, n] of Object.entries(counts)) {
+        if (n > bestN) { best = code; bestN = n; }
+      }
+      if (best) out[bm] = best;
+    }
+    return out;
+  }, [supplierId, productsQ.data, supplierDetailQ.data]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, SofaComboRule[]>();
@@ -230,6 +273,7 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
                 <ComboCard
                   key={r.id}
                   rule={r}
+                  supplierCode={supplierCodeByBaseModel[r.baseModel]}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
                   onDelete={() => {
@@ -248,6 +292,7 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
         <ComposerModal
           editing={composer.editing}
           modulesByBaseModel={modulesByBaseModel}
+          supplierCodeByBaseModel={supplierCodeByBaseModel}
           supplierId={supplierId}
           onClose={() => setComposer({ open: false })}
         />
@@ -263,9 +308,12 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, onEdit, onHistory, onDelete,
+  rule, supplierCode, onEdit, onHistory, onDelete,
 }: {
   rule: SofaComboRule;
+  /** Supplier's own model code for this base model (e.g. "5539"), shown next
+      to our internal name on the supplier-scoped page. Undefined elsewhere. */
+  supplierCode?: string;
   onEdit: () => void;
   onHistory: () => void;
   onDelete: () => void;
@@ -284,6 +332,11 @@ function ComboCard({
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
         <span style={chipStyleStrong}>{rule.baseModel}</span>
+        {supplierCode && (
+          <span style={chipStyleSupplierCode} title="Supplier's own model code">
+            {supplierCode}
+          </span>
+        )}
         <span style={{
           flex: 1,
           fontFamily: 'var(--font-sans)',
@@ -354,10 +407,12 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, modulesByBaseModel, supplierId, onClose,
+  editing, modulesByBaseModel, supplierCodeByBaseModel, supplierId, onClose,
 }: {
   editing?: SofaComboRule;
   modulesByBaseModel: Record<string, string[]>;
+  /** base_model → supplier's own model code (supplier-scoped page only). */
+  supplierCodeByBaseModel: Record<string, string>;
   supplierId?: string;
   onClose: () => void;
 }) {
@@ -473,7 +528,15 @@ function ComposerModal({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Field label="Base model">
           {editing ? (
-            <input value={baseModel} readOnly style={readonlyInputStyle} />
+            <input
+              value={
+                supplierCodeByBaseModel[baseModel]
+                  ? `${baseModel} · ${supplierCodeByBaseModel[baseModel]}`
+                  : baseModel
+              }
+              readOnly
+              style={readonlyInputStyle}
+            />
           ) : (
             <select
               value={baseModel}
@@ -768,6 +831,19 @@ const chipStyleStrong: CSSProperties = {
   padding: '2px 8px',
   borderRadius: 'var(--radius-sm)',
   border: '1px solid var(--line-strong)',
+};
+
+// Supplier's own model code chip — tinted so it reads as a distinct, second
+// identity next to our internal base-model chip ("Booqit · 5539").
+const chipStyleSupplierCode: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 'var(--fs-12)',
+  fontWeight: 600,
+  background: 'var(--c-paper)',
+  color: 'var(--c-orange, #c47b2f)',
+  padding: '2px 8px',
+  borderRadius: 'var(--radius-sm)',
+  border: '1px solid var(--c-orange, #c47b2f)',
 };
 
 const chipStyleSoft: CSSProperties = {
