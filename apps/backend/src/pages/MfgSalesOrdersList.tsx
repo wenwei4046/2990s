@@ -1039,6 +1039,11 @@ export const MfgSalesOrdersList = () => {
            that column" banner; the page-level filter row replaces it. */
         groupBanner={false}
         onRowDoubleClick={(r) => openDetail(r)}
+        /* Commander 2026-05-29 — cancelled SOs grey out in the list so they
+           read as dead/inactive (they no longer proceed). */
+        rowStyle={(r) => r.status === 'CANCELLED'
+          ? { opacity: 0.55, filter: 'grayscale(0.6)' }
+          : undefined}
         isLoading={isLoading}
         emptyMessage='No sales orders yet — click "+ New Sales Order" to start.'
         expandable={{
@@ -1075,6 +1080,17 @@ export const MfgSalesOrdersList = () => {
           // cancelled / closed so the menu doesn't offer a no-op.
           if (!['CANCELLED', 'CLOSED'].includes(status)) {
             items.push({ label: 'Cancel SO', danger: true, onClick: () => doDelete(row) });
+          }
+          // Reopen — bring a cancelled SO back to CONFIRMED so it proceeds
+          // again (Commander 2026-05-29).
+          if (status === 'CANCELLED') {
+            items.push({
+              label: 'Reopen SO',
+              onClick: () => {
+                if (!window.confirm(`Reopen ${row.doc_no} back to CONFIRMED so it can proceed again?`)) return;
+                updateStatus.mutate({ docNo: row.doc_no, status: 'CONFIRMED' });
+              },
+            });
           }
           // Hard delete — only after a SO has been CANCELLED, matching the
           // PO Cancel/Delete pattern. Today the DELETE endpoint is gated
