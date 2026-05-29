@@ -291,6 +291,15 @@ export const Grns = () => {
       groupValue: (r: any) => r.status ?? '(none)',
     },
     {
+      // Commander 2026-05-29 — GRN list now carries a money column (AutoCount
+      // shows Sub-Total / Total). total_centi = Σ qty_accepted * unit_price_centi,
+      // computed server-side in grns.get('/'). Right-aligned, numeric sort.
+      key: 'total', label: 'Total', width: 130, sortable: true, align: 'right',
+      accessor: (r: any) => fmtMoney(Number(r.total_centi ?? 0), r.currency),
+      searchValue: (r: any) => String(Number(r.total_centi ?? 0)),
+      sortFn: (a: any, b: any) => Number(a.total_centi ?? 0) - Number(b.total_centi ?? 0),
+    },
+    {
       key: 'posted_at', label: 'Posted At', width: 120, sortable: true, defaultHidden: true,
       accessor: (r: any) => (r.posted_at ?? '').slice(0, 10),
       searchValue: (r: any) => r.posted_at ?? '',

@@ -97,7 +97,7 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
 const HEADER =
   'id, grn_number, purchase_order_id, supplier_id, received_at, delivery_note_ref, status, notes, posted_at, created_at, created_by, updated_at';
 const ITEM =
-  'id, grn_id, purchase_order_item_id, material_kind, material_code, material_name, qty_received, qty_accepted, qty_rejected, rejection_reason, unit_price_centi, notes, created_at';
+  'id, grn_id, purchase_order_item_id, material_kind, material_code, material_name, qty_received, qty_accepted, qty_rejected, rejection_reason, unit_price_centi, notes, item_group, variants, created_at';
 
 const nextNumber = async (sb: ReturnType<Variables['supabase']['valueOf']> extends never ? never : any, prefix: string, table: string, col: string): Promise<string> => {
   const d = new Date();
@@ -113,7 +113,27 @@ grns.get('/', async (c) => {
   const supplierId = c.req.query('supplierId'); if (supplierId) q = q.eq('supplier_id', supplierId);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ grns: data ?? [] });
+
+  // Commander 2026-05-29 — the GRN list grid needs a money column (AutoCount's
+  // GRN list shows Sub-Total / Total). Compute total_centi per GRN = Σ over its
+  // grn_items of qty_accepted * unit_price_centi. ONE round trip: collect the
+  // listed GRN ids, pull just the three columns we need, reduce into a Map.
+  const rows = (data ?? []) as Array<{ id: string } & Record<string, unknown>>;
+  const ids = rows.map((g) => g.id);
+  const totals = new Map<string, number>();
+  if (ids.length > 0) {
+    const { data: lineRows, error: lineErr } = await sb
+      .from('grn_items')
+      .select('grn_id, qty_accepted, unit_price_centi')
+      .in('grn_id', ids);
+    if (lineErr) return c.json({ error: 'load_failed', reason: lineErr.message }, 500);
+    for (const li of (lineRows ?? []) as Array<{ grn_id: string; qty_accepted: number | null; unit_price_centi: number | null }>) {
+      const add = (li.qty_accepted ?? 0) * (li.unit_price_centi ?? 0);
+      totals.set(li.grn_id, (totals.get(li.grn_id) ?? 0) + add);
+    }
+  }
+  const grns = rows.map((g) => ({ ...g, total_centi: totals.get(g.id) ?? 0 }));
+  return c.json({ grns });
 });
 
 /* ── GET /outstanding-po-items ──────────────────────────────────────────

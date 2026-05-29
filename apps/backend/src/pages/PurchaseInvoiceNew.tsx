@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared';
 import {
   useCreatePurchaseInvoice,
   usePostPurchaseInvoice,
@@ -41,6 +42,12 @@ type DraftLine = {
   materialKind:   string;
   materialCode:   string;
   materialName:   string;
+  /* Commander 2026-05-29 — PI lines must show the same content as PO/GRN
+     ("PO 有什么内容，Purchase Invoice 也应该随之对应"). Carry the GRN line's
+     category + variant selections so buildVariantSummary can render the same
+     muted sub-line GrnNew shows. */
+  itemGroup:      string | null;
+  variants:       Record<string, unknown> | null;
   qty:            number;
   unitPriceCenti: number;
   notes:          string;
@@ -72,6 +79,10 @@ export const PurchaseInvoiceNew = () => {
         materialKind:   it.material_kind,
         materialCode:   it.material_code,
         materialName:   it.material_name,
+        // Carried from the GRN line (grns.ts ITEM select now returns these) so
+        // the PI shows the same variant summary as the GRN it descends from.
+        itemGroup:      it.item_group ?? null,
+        variants:       (it.variants as Record<string, unknown> | null) ?? null,
         qty:            it.qty_accepted,
         unitPriceCenti: it.unit_price_centi ?? 0,
         notes:          '',
@@ -258,13 +269,21 @@ export const PurchaseInvoiceNew = () => {
 
           {lines.map((l) => {
             const lineTotal = l.qty * l.unitPriceCenti;
+            // Commander 2026-05-29 — same muted variant sub-line GrnNew shows,
+            // so the PI mirrors what the GRN (and PO upstream) describe.
+            const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
             return (
               <div key={l.rid} style={{
                 display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
                 padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
               }}>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
-                <div style={{ fontSize: 'var(--fs-13)' }}>{l.materialName}</div>
+                <div style={{ fontSize: 'var(--fs-13)' }}>
+                  <div>{l.materialName}</div>
+                  {variantSummary && (
+                    <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
+                  )}
+                </div>
                 <input type="number" min={0} value={l.qty}
                   onChange={(e) => setLine(l.rid, { qty: Math.max(0, Number(e.target.value) || 0) })}
                   className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
