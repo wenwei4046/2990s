@@ -285,21 +285,63 @@ export const PurchaseOrderNew = () => {
 
   /* Commander 2026-05-29 — when the From-SO grid hands back a selection, it
      stashes the picked rows in sessionStorage and returns here. Apply them once
-     suppliers have loaded (so the creditor can resolve), then clear. */
+     suppliers have loaded (so the creditor can resolve), then clear.
+
+     Commander 2026-05-29 (fix) — clicking "From SO" NAVIGATES away, which
+     unmounts this form and wipes the lines you already added. So before
+     leaving we stash the whole draft (header + lines) under `poNewDraft`; on
+     return we RESTORE that draft first, then applyFromSo APPENDS the new picks
+     to it (instead of the old behaviour where the remounted form started blank
+     and the picks replaced everything). The draft is only consumed when picks
+     are actually present; a stale draft (user cancelled the picker) is dropped
+     on the next New-PO mount. */
   const appliedFromSoRef = useRef(false);
   useEffect(() => {
     if (appliedFromSoRef.current || suppliers.isLoading) return;
-    let raw: string | null = null;
-    try { raw = sessionStorage.getItem('poFromSoPicks'); } catch { /* ignore */ }
-    if (!raw) return;
+    let rawPicks: string | null = null;
+    try { rawPicks = sessionStorage.getItem('poFromSoPicks'); } catch { /* ignore */ }
+    // Read (and always clear) any stashed draft. Only honour it when picks
+    // came back too — otherwise it's a stale draft from a cancelled picker.
+    let draft: {
+      supplierId?: string; poDate?: string; expectedAt?: string;
+      purchaseLocationId?: string; notes?: string; lines?: DraftLine[];
+    } | null = null;
+    try {
+      const rawDraft = sessionStorage.getItem('poNewDraft');
+      if (rawPicks && rawDraft) draft = JSON.parse(rawDraft);
+    } catch { /* ignore */ }
+    try { sessionStorage.removeItem('poNewDraft'); } catch { /* ignore */ }
+
+    if (!rawPicks) return;
     appliedFromSoRef.current = true;
     try {
       sessionStorage.removeItem('poFromSoPicks');
-      const rows = JSON.parse(raw) as Array<OutstandingSoItem & { _pickQty?: number }>;
+      // Restore the prior draft (header + lines) FIRST so applyFromSo appends.
+      if (draft) {
+        if (draft.supplierId)         setSupplierId(draft.supplierId);
+        if (draft.poDate)             setPoDate(draft.poDate);
+        if (draft.expectedAt)         setExpectedAt(draft.expectedAt);
+        if (draft.purchaseLocationId) setPurchaseLocationId(draft.purchaseLocationId);
+        if (draft.notes)              setNotes(draft.notes);
+        if (Array.isArray(draft.lines) && draft.lines.length) setLines(draft.lines);
+      }
+      const rows = JSON.parse(rawPicks) as Array<OutstandingSoItem & { _pickQty?: number }>;
       if (Array.isArray(rows) && rows.length) applyFromSo(rows);
     } catch { /* malformed — ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suppliers.isLoading]);
+
+  /* Persist the in-progress draft, then go to the full-page From-SO picker.
+     Restored on return (see the effect above) so the picked lines APPEND to
+     what's already here instead of resetting the form. */
+  const goToFromSo = () => {
+    try {
+      sessionStorage.setItem('poNewDraft', JSON.stringify({
+        supplierId, poDate, expectedAt, purchaseLocationId, notes, lines,
+      }));
+    } catch { /* quota — fall through, picks still apply */ }
+    navigate('/purchase-orders/from-so');
+  };
 
   /* Phase 3 (2026-05-29) — Resolve the fabric tier for a line from the
      `fabrics` list by the line's `variants.fabricCode`, split per category
@@ -489,7 +531,7 @@ export const PurchaseOrderNew = () => {
         <div className={styles.actions}>
           {/* PR — Commander 2026-05-27: parity with PO list — quick swap into
               the SO-driven flow without bouncing back to the list page. */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
+          <Button variant="ghost" size="md" onClick={goToFromSo}>
             <Plus {...ICON} /> From SO
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
