@@ -300,6 +300,191 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>) {
   };
 }
 
+// ── Convert several SOs → ONE merged DO ───────────────────────────────────
+/* Commander 2026-05-29 — multi-select DO-from-SO. Mirrors the PO's
+   /from-sos multi-select but at SO-LEVEL: pick several whole Sales Orders of
+   the SAME customer and combine them into ONE Delivery Order.
+
+   Body: { soDocNos: string[] }.
+
+   Steps:
+     1. Load the picked SO headers. They must ALL share one customer — same
+        debtor_code, or (when debtor_code is null) same debtor_name. A mixed
+        bag returns 400 mixed_customers so the operator can't merge two
+        different customers' deliveries onto one DO.
+     2. Load all their non-cancelled line items.
+     3. Create ONE DO — header copied from the FIRST SO (debtor / address /
+        salesperson / branding / venue / contact …), status DISPATCHED (a DO
+        ships on creation), so_doc_no = comma-joined SO doc_nos for reference.
+        Every picked SO's lines are merged into the DO's items, carrying cost
+        (unit_cost_centi / line_cost_centi / line_margin_centi) so margins
+        survive the merge.
+     4. recomputeTotals + deductInventoryForDo (both idempotent) — same
+        helpers the POST / create handler uses, so stock goes OUT exactly once. */
+deliveryOrdersMfg.post('/from-sos', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { soDocNos?: string[] };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const soDocNos = [...new Set((body.soDocNos ?? []).filter((d): d is string => !!d))];
+  if (soDocNos.length === 0) return c.json({ error: 'so_doc_nos_required' }, 400);
+
+  // 1. Load the SO headers. Order by doc_no so "the FIRST SO" is deterministic.
+  const SO_HEADER =
+    'doc_no, status, debtor_code, debtor_name, agent, salesperson_id, ' +
+    'address1, address2, address3, address4, city, customer_state, postcode, phone, ' +
+    'email, customer_type, building_type, branding, venue, venue_id, ref, sales_location, ' +
+    'customer_country, customer_delivery_date, ' +
+    'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, currency';
+  const { data: soHeaders, error: hLoadErr } = await sb
+    .from('mfg_sales_orders')
+    .select(SO_HEADER)
+    .in('doc_no', soDocNos)
+    .order('doc_no', { ascending: true });
+  if (hLoadErr) return c.json({ error: 'load_failed', reason: hLoadErr.message }, 500);
+  const sos = (soHeaders ?? []) as unknown as Array<Record<string, unknown> & {
+    doc_no: string; status: string | null;
+    debtor_code: string | null; debtor_name: string | null;
+  }>;
+  if (sos.length === 0) return c.json({ error: 'not_found' }, 404);
+
+  // A cancelled SO can't ship — block the whole merge if any is cancelled.
+  const cancelled = sos.filter((s) => (s.status ?? '').toUpperCase() === 'CANCELLED').map((s) => s.doc_no);
+  if (cancelled.length > 0) {
+    return c.json({ error: 'so_cancelled', message: `Cancelled SO(s) cannot be delivered: ${cancelled.join(', ')}.`, cancelled }, 409);
+  }
+
+  // 1b. Same-customer guard — every SO must be the SAME customer. Match on
+  //     debtor_code; when a SO has no code, fall back to debtor_name. Building
+  //     ONE distinct key per SO and asserting the set has size 1.
+  const custKey = (s: { debtor_code: string | null; debtor_name: string | null }): string =>
+    (s.debtor_code && s.debtor_code.trim())
+      ? `code:${s.debtor_code.trim().toUpperCase()}`
+      : `name:${(s.debtor_name ?? '').trim().toUpperCase()}`;
+  const customers = new Set(sos.map(custKey));
+  if (customers.size > 1) {
+    return c.json({
+      error: 'mixed_customers',
+      message: 'All selected Sales Orders must belong to the same customer to merge into one Delivery Order.',
+      customers: [...new Set(sos.map((s) => s.debtor_name ?? s.debtor_code ?? '(none)'))],
+    }, 400);
+  }
+
+  // 2. Load every non-cancelled line of the picked SOs.
+  const { data: itemRows, error: iLoadErr } = await sb
+    .from('mfg_sales_order_items')
+    .select(
+      'id, doc_no, item_code, item_group, description, description2, uom, qty, ' +
+      'unit_price_centi, discount_centi, unit_cost_centi, variants, line_delivery_date',
+    )
+    .in('doc_no', soDocNos)
+    .eq('cancelled', false)
+    .order('doc_no', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (iLoadErr) return c.json({ error: 'load_failed', reason: iLoadErr.message }, 500);
+  const soItems = (itemRows ?? []) as unknown as Array<Record<string, unknown> & {
+    id: string; item_code: string; item_group: string | null;
+    description: string | null; description2: string | null; uom: string | null;
+    qty: number; unit_price_centi: number; discount_centi: number;
+    unit_cost_centi: number; variants: unknown; line_delivery_date: string | null;
+  }>;
+  if (soItems.length === 0) return c.json({ error: 'no_items_to_convert' }, 400);
+
+  // 3. Create ONE DO header, copied from the FIRST SO. SO has free-form
+  //    address1-4; the DO header carries address1 + address2 — bundle the SO's
+  //    address3/4 into the DO's address2 when it's empty so nothing is dropped.
+  const head = sos[0]!;
+  const doAddress2 = (head.address2 as string | null)
+    ?? ([head.address3, head.address4].filter(Boolean).join(', ') || null);
+  const phoneRaw = head.phone as string | null;
+  const emPhoneRaw = head.emergency_contact_phone as string | null;
+  const today = new Date().toISOString().slice(0, 10);
+  const doNumber = await nextNum(sb);
+
+  const { data: doHeader, error: hErr } = await sb.from('delivery_orders').insert({
+    do_number: doNumber,
+    // Reference every merged SO so the DO traces back to its sources.
+    so_doc_no: soDocNos.join(', '),
+    debtor_code: head.debtor_code,
+    debtor_name: head.debtor_name,
+    do_date: today,
+    expected_delivery_at: (head.customer_delivery_date as string | null) ?? today,
+    customer_delivery_date: (head.customer_delivery_date as string | null) ?? null,
+    address1: (head.address1 as string | null) ?? null,
+    address2: doAddress2,
+    city: (head.city as string | null) ?? null,
+    state: (head.customer_state as string | null) ?? null,
+    customer_state: (head.customer_state as string | null) ?? null,
+    customer_country: (head.customer_country as string | null) ?? null,
+    postcode: (head.postcode as string | null) ?? null,
+    phone: phoneRaw ? (normalizePhone(phoneRaw) ?? phoneRaw) : null,
+    salesperson_id: (head.salesperson_id as string | null) ?? null,
+    agent: (head.agent as string | null) ?? null,
+    email: (head.email as string | null) ?? null,
+    customer_type: (head.customer_type as string | null) ?? null,
+    building_type: (head.building_type as string | null) ?? null,
+    branding: (head.branding as string | null) ?? null,
+    venue: (head.venue as string | null) ?? null,
+    venue_id: (head.venue_id as string | null) ?? null,
+    ref: (head.ref as string | null) ?? null,
+    sales_location: (head.sales_location as string | null) ?? null,
+    emergency_contact_name: (head.emergency_contact_name as string | null) ?? null,
+    emergency_contact_phone: emPhoneRaw ? (normalizePhone(emPhoneRaw) ?? emPhoneRaw) : null,
+    emergency_contact_relationship: (head.emergency_contact_relationship as string | null) ?? null,
+    currency: (head.currency as string | null) ?? 'MYR',
+    /* A DO means goods are OUT the moment it's created — start at DISPATCHED
+       (= shipped) and deduct stock below. */
+    status: 'DISPATCHED',
+    created_by: user.id,
+  }).select('id, do_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const dh = doHeader as unknown as { id: string; do_number: string };
+
+  // 3b. Merge every picked SO's lines into the DO. Carry cost so margins
+  //     survive. (Mirrors buildItemRow's computed columns; we already have the
+  //     costed SO line so we compute line totals/cost directly.)
+  const doRows = soItems.map((it) => {
+    const qty = Number(it.qty ?? 1);
+    const unit = Number(it.unit_price_centi ?? 0);
+    const discount = Number(it.discount_centi ?? 0);
+    const unitCost = Number(it.unit_cost_centi ?? 0);
+    const lineTotal = (qty * unit) - discount;
+    const lineCost = qty * unitCost;
+    const itemGroup = (it.item_group as string | null) ?? null;
+    const variants = it.variants ?? null;
+    return {
+      delivery_order_id: dh.id,
+      so_item_id: it.id,
+      item_code: it.item_code,
+      item_group: itemGroup,
+      description: it.description ?? null,
+      description2: buildVariantSummary(String(itemGroup ?? ''), (variants as Record<string, unknown> | null) ?? null) || it.description2 || null,
+      uom: it.uom ?? 'UNIT',
+      qty,
+      m3_milli: 0,
+      unit_price_centi: unit,
+      discount_centi: discount,
+      line_total_centi: lineTotal,
+      unit_cost_centi: unitCost,
+      line_cost_centi: lineCost,
+      line_margin_centi: lineTotal - lineCost,
+      variants,
+      line_delivery_date: (it.line_delivery_date as string | null) ?? null,
+    };
+  });
+  const { error: iErr } = await sb.from('delivery_order_items').insert(doRows);
+  if (iErr) {
+    // Roll the header back so we don't leave a headerless DO.
+    await sb.from('delivery_orders').delete().eq('id', dh.id);
+    return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+  }
+
+  // 4. Roll up the header totals + deduct stock (both idempotent).
+  await recomputeTotals(sb, dh.id);
+  await deductInventoryForDo(sb, dh.id, user.id);
+
+  return c.json({ id: dh.id, doNumber: dh.do_number }, 201);
+});
+
 // ── Header PATCH (editable SO-style fields) ───────────────────────────────
 deliveryOrdersMfg.patch('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');

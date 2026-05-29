@@ -1,25 +1,26 @@
 // ----------------------------------------------------------------------------
-// DeliveryOrderFromSo — Sales Order → Delivery Order picker.
+// DeliveryOrderFromSo — multi-select Sales Order → Delivery Order picker.
 //
-// Mirrors DeliveryReturnFromDo / PurchaseOrderFromSo: a DataGrid of the SOURCE
-// documents (here, Sales Orders) where you pick one and convert it into a
-// Delivery Order. This is the DO-side entry point (parity with the DR's
-// "Convert from DO" button); the SO-side "Issue Delivery Order" still works too.
+// Commander 2026-05-29 redesign: MULTI-select, mirroring the PO's multi-select
+// from-SO picker. Combine several Sales Orders of the SAME customer into ONE
+// Delivery Order. Tick whole SOs (SO-LEVEL selection, not line-level), then hit
+// "Convert N SO(s) to Delivery Order". A customer-lock keeps the merge clean:
+// once one SO is ticked, SOs of a DIFFERENT customer (debtor) grey out and
+// can't be picked — a DO ships to ONE customer.
 //
-// A DO is one delivery to one customer, so this is a single-select picker: tick
-// an SO row, hit "Convert to Delivery Order". We hand off to the existing
-// New-DO screen (?fromSo=) which prefills the full header + lines + payments and
-// — on Save — creates the DO as SHIPPED and deducts stock. Routing the operator
-// through that screen lets them review / edit before the DO settles.
+// On convert the server merges every picked SO's lines into one DO (status
+// DISPATCHED) and deducts stock; we land on the new DO in Edit mode so the
+// operator can review before it settles. The SO-side single "Issue Delivery
+// Order" still works too.
 //
 // Routing: /mfg-delivery-orders/from-so.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, ArrowRightLeft, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useMfgSalesOrders } from '../lib/flow-queries';
+import { useMfgSalesOrders, useConvertSosToDo } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -47,6 +48,7 @@ const STORAGE_KEY = 'pr-g.do-from-so.layout.v1';
 type SoLite = {
   doc_no: string;
   so_date: string | null;
+  debtor_code: string | null;
   debtor_name: string | null;
   salesperson_id: string | null;
   branding: string | null;
@@ -55,11 +57,21 @@ type SoLite = {
   status: string | null;
 };
 
+/* One distinct customer key per SO — match the server's same-customer rule:
+   debtor_code when present, else fall back to debtor_name. The lock greys out
+   any SO whose key differs from the first ticked one. */
+const custKey = (s: SoLite): string =>
+  (s.debtor_code && s.debtor_code.trim())
+    ? `code:${s.debtor_code.trim().toUpperCase()}`
+    : `name:${(s.debtor_name ?? '').trim().toUpperCase()}`;
+
 export const DeliveryOrderFromSo = () => {
   const navigate = useNavigate();
   const sosQ = useMfgSalesOrders(undefined);
+  const convert = useConvertSosToDo();
 
-  const [pickedDoc, setPickedDoc] = useState<string | null>(null);
+  // Set of picked SO doc_nos.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<{ title: string; body: string } | null>(null);
 
   const staffQ = useStaff();
@@ -75,21 +87,79 @@ export const DeliveryOrderFromSo = () => {
     return all.filter((s) => (s.status ?? '').toUpperCase() !== 'CANCELLED');
   }, [sosQ.data]);
 
-  const togglePick = (doc: string) => setPickedDoc((cur) => (cur === doc ? null : doc));
+  const rowByDoc = useMemo(() => {
+    const m = new Map<string, SoLite>();
+    for (const r of rows) m.set(r.doc_no, r);
+    return m;
+  }, [rows]);
+
+  /* The customer locked in by the current picks — the key of the first picked
+     SO. Null when nothing is picked (every SO is selectable). */
+  const lockedCustomer = useMemo(() => {
+    for (const doc of picked) {
+      const r = rowByDoc.get(doc);
+      if (r) return custKey(r);
+    }
+    return null;
+  }, [picked, rowByDoc]);
+
+  // Display name for the locked customer (for the banner).
+  const lockedCustomerName = useMemo(() => {
+    for (const doc of picked) {
+      const r = rowByDoc.get(doc);
+      if (r) return r.debtor_name ?? r.debtor_code ?? '(none)';
+    }
+    return null;
+  }, [picked, rowByDoc]);
+
+  // A row is LOCKED when a different customer is already picked.
+  const isRowLocked = (r: SoLite): boolean =>
+    Boolean(lockedCustomer && custKey(r) !== lockedCustomer && !picked.has(r.doc_no));
+
+  const togglePick = (r: SoLite) => {
+    if (isRowLocked(r)) return; // can't tick a different customer
+    setPicked((cur) => {
+      const next = new Set(cur);
+      if (next.has(r.doc_no)) next.delete(r.doc_no);
+      else next.add(r.doc_no);
+      return next;
+    });
+  };
+
+  // Select / clear all currently-VISIBLE rows. Select-all respects the lock:
+  // it only adds SOs of the locked customer (or, if nothing is picked yet, all
+  // SOs of the FIRST row's customer so the result is a valid single-customer set).
+  const selectAll = () => {
+    setPicked((cur) => {
+      const next = new Set(cur);
+      const key = lockedCustomer ?? (rows[0] ? custKey(rows[0]) : null);
+      if (!key) return next;
+      for (const r of rows) if (custKey(r) === key) next.add(r.doc_no);
+      return next;
+    });
+  };
+  const clearAll = () => setPicked(new Set());
+
+  const pickedCount = picked.size;
 
   const columns = useMemo<DataGridColumn<SoLite>[]>(() => [
     {
       key: 'pick', label: '', width: 40, sortable: false, groupable: false,
-      accessor: (r) => (
-        <input
-          type="radio"
-          name="do-from-so-pick"
-          checked={pickedDoc === r.doc_no}
-          onChange={() => togglePick(r.doc_no)}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={`Pick SO ${r.doc_no}`}
-        />
-      ),
+      accessor: (r) => {
+        const on = picked.has(r.doc_no);
+        const locked = isRowLocked(r);
+        return (
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={locked}
+            onChange={() => togglePick(r)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Pick SO ${r.doc_no}`}
+            style={locked ? { cursor: 'not-allowed' } : undefined}
+          />
+        );
+      },
     },
     {
       key: 'doc_no', label: 'SO No', width: 150, sortable: true,
@@ -134,14 +204,38 @@ export const DeliveryOrderFromSo = () => {
       searchValue: (r) => fmtRm(r.local_total_centi ?? 0),
       sortFn: (a, b) => (a.local_total_centi ?? 0) - (b.local_total_centi ?? 0),
     },
-  ], [pickedDoc, staffById]);
+  ], [picked, lockedCustomer, staffById]);
 
   const onConvert = () => {
-    if (!pickedDoc) { setDialog({ title: 'Nothing picked', body: 'Tick the Sales Order to convert first.' }); return; }
-    // Hand off to the New-DO screen prefilled from this SO — review/edit, then
-    // Save creates the DO (SHIPPED + deducts stock).
-    navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(pickedDoc)}`);
+    if (pickedCount === 0) {
+      setDialog({ title: 'Nothing picked', body: 'Tick at least one Sales Order to convert first.' });
+      return;
+    }
+    convert.mutate(
+      { soDocNos: [...picked] },
+      {
+        onSuccess: (res) => {
+          // Land on the new DO in Edit mode so the merged lines are right there.
+          navigate(`/mfg-delivery-orders/${res.id}?edit=1`);
+        },
+        onError: (e) => setDialog({
+          title: 'Convert failed',
+          body: e instanceof Error ? e.message : String(e),
+        }),
+      },
+    );
   };
+
+  const toolbar = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+      <Button variant="ghost" size="sm" onClick={selectAll} disabled={rows.length === 0}>
+        <CheckSquare {...ICON} /> Select all
+      </Button>
+      <Button variant="ghost" size="sm" onClick={clearAll} disabled={pickedCount === 0}>
+        <Square {...ICON} /> Clear all
+      </Button>
+    </div>
+  );
 
   return (
     <div className={styles.page}>
@@ -150,7 +244,7 @@ export const DeliveryOrderFromSo = () => {
           <Link to="/mfg-delivery-orders" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Delivery Orders</span>
           </Link>
-          <h1 className={styles.title}>Pick a Sales Order to convert</h1>
+          <h1 className={styles.title}>Pick Sales Orders to convert</h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders')}>
@@ -159,19 +253,30 @@ export const DeliveryOrderFromSo = () => {
           <Button
             variant="primary" size="md"
             onClick={onConvert}
-            disabled={!pickedDoc}
-            title="Prefill a new Delivery Order from the picked Sales Order"
+            disabled={pickedCount === 0 || convert.isPending}
+            title="Merge the picked Sales Orders into one Delivery Order"
           >
             <ArrowRightLeft {...ICON} />
-            {pickedDoc ? 'Convert to Delivery Order' : 'Pick an SO'}
+            {convert.isPending
+              ? 'Converting…'
+              : pickedCount === 0
+                ? 'Pick at least 1 SO'
+                : `Convert ${pickedCount} SO${pickedCount === 1 ? '' : 's'} to Delivery Order`}
           </Button>
         </div>
       </div>
       <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-        A Delivery Order copies the SO's customer, address, salesperson, payments, and line items
-        (with variants + prices). On Save it ships immediately and deducts stock. You can review and
-        edit everything on the next screen before creating it.
+        Combine several Sales Orders of the SAME customer into ONE Delivery Order. The DO copies the
+        first SO's customer, address, salesperson, and branding, and merges every picked SO's line
+        items (with variants + prices). On convert it ships immediately and deducts stock — you can
+        review and edit it on the next screen.
       </p>
+      {lockedCustomerName && (
+        <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          One customer per Delivery Order — locked to <strong>{lockedCustomerName}</strong>. Other
+          customers' Sales Orders are greyed out; clear picks to switch.
+        </p>
+      )}
 
       <DataGrid<SoLite>
         rows={rows}
@@ -179,7 +284,11 @@ export const DeliveryOrderFromSo = () => {
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.doc_no}
         searchPlaceholder="Search SO, customer…"
-        onRowClick={(r) => togglePick(r.doc_no)}
+        onRowClick={(r) => togglePick(r)}
+        rowStyle={(r) => isRowLocked(r)
+          ? { opacity: 0.45, background: 'var(--c-cream)', cursor: 'not-allowed' }
+          : undefined}
+        toolbar={toolbar}
         groupBanner={false}
         isLoading={sosQ.isLoading}
         emptyMessage="No sales orders to convert."

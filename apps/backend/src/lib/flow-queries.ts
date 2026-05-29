@@ -341,6 +341,25 @@ export const useConvertSoToDo = () => {
   });
 };
 
+/* Convert SEVERAL same-customer SOs → ONE merged DO. Server validates the
+   selected SOs share one customer, copies the first SO's header, merges every
+   SO's lines into one DO (status DISPATCHED), then deducts stock. Returns the
+   new DO's { id, doNumber }. Invalidates the DO list + inventory. */
+export const useConvertSosToDo = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ soDocNos }: { soDocNos: string[] }) =>
+      authedFetch<{ id: string; doNumber: string }>(
+        `/delivery-orders-mfg/from-sos`,
+        { method: 'POST', body: JSON.stringify({ soDocNos }) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+
 export const useUpdateMfgSalesOrderStatus = () => {
   const qc = useQueryClient();
   return useMutation({
