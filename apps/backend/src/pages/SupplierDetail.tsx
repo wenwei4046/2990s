@@ -743,6 +743,7 @@ const SupplierPricingPanel = ({
         <MaintenanceTab
           scope={`supplier:${supplierId}`}
           sectionFilter={sectionFilter}
+          singleCostColumn
           emptyHint={
             <>
               No supplier-specific surcharges yet. The master / selling-price

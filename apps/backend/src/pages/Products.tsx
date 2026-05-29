@@ -1215,15 +1215,22 @@ const MAINTENANCE_TABS: {
  *   emptyHint      — optional message rendered when this scope has no row
  *                    yet AND the master fallback also has none. Supplier
  *                    Detail uses this to nudge "Click Edit to seed".
+ *   singleCostColumn — when true, hide the redundant costSen "COST RM"
+ *                    column and relabel the kept priceSen column "Cost".
+ *                    Supplier Detail sets this because on a supplier the
+ *                    surcharge IS our cost — a second cost column confuses.
+ *                    Defaults false → Products-page behaviour unchanged.
  */
 export const MaintenanceTab = ({
   scope = 'master',
   sectionFilter,
   emptyHint,
+  singleCostColumn = false,
 }: {
   scope?: string;
   sectionFilter?: MaintenanceSection[];
   emptyHint?: ReactNode;
+  singleCostColumn?: boolean;
 } = {}) => {
   const resolved = useMaintenanceConfig(scope);
   const history = useMaintenanceConfigHistory(scope);
@@ -1434,6 +1441,7 @@ export const MaintenanceTab = ({
           editMode={editMode}
           onChange={(next) => setDraft(next)}
           priced={active.priced}
+          singleCostColumn={singleCostColumn}
         />
       </section>
 
@@ -2360,12 +2368,14 @@ const MaintenanceList = ({
   editMode,
   onChange,
   priced,
+  singleCostColumn = false,
 }: {
   listKey: MaintenanceListKey;
   config: MaintenanceConfig;
   editMode: boolean;
   onChange: (next: MaintenanceConfig) => void;
   priced: boolean;
+  singleCostColumn?: boolean;
 }) => {
   // Empty draft state for the "add new" row at the bottom of the list when
   // edit mode is on. Kept local so toggling tabs cancels in-flight adds.
@@ -2737,7 +2747,7 @@ const MaintenanceList = ({
           </span>
           <span style={{ display: 'inline-flex', gap: 'var(--space-3)', alignItems: 'center', justifyContent: 'flex-end' }}>
             <span className={styles.maintRowPrice}>
-              <span className={styles.maintRowRmPrefix}>RM</span>
+              <span className={styles.maintRowRmPrefix}>{singleCostColumn ? 'Cost' : 'RM'}</span>
               {editMode ? (
                 <input
                   type="number"
@@ -2769,8 +2779,10 @@ const MaintenanceList = ({
             </span>
             {/* PR #216 — parallel cost column. Edit mode renders an input;
                 read mode appends "· RM 80.00 cost" when costSen is set,
-                otherwise stays silent so old rows look unchanged. */}
-            {editMode ? (
+                otherwise stays silent so old rows look unchanged.
+                singleCostColumn (Supplier Detail) hides this whole column —
+                there the priceSen "Cost" column already IS our cost. */}
+            {!singleCostColumn && (editMode ? (
               <span className={styles.maintRowPrice} title="Estimated raw cost (Operation)">
                 <span className={styles.maintRowRmPrefix}>COST RM</span>
                 <input
@@ -2809,7 +2821,7 @@ const MaintenanceList = ({
                   <span style={{ marginLeft: 4, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', letterSpacing: '0.08em' }}>COST</span>
                 </span>
               ) : null
-            )}
+            ))}
             {editMode && (
               <button
                 type="button"
@@ -2853,7 +2865,7 @@ const MaintenanceList = ({
             }}
           />
           <span style={{ display: 'inline-flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-            <span className={styles.maintRowRmPrefix}>RM</span>
+            <span className={styles.maintRowRmPrefix}>{singleCostColumn ? 'Cost' : 'RM'}</span>
             <input
               type="number"
               step="0.01"
@@ -2872,27 +2884,33 @@ const MaintenanceList = ({
                 outline: 'none',
               }}
             />
-            {/* PR #216 — Operation-side cost input on the add-new row. */}
-            <span className={styles.maintRowRmPrefix}>COST RM</span>
-            <input
-              type="number"
-              step="0.01"
-              value={draftCost}
-              onChange={(e) => setDraftCost(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
-              title="Estimated raw cost (Operation)"
-              style={{
-                width: 90,
-                textAlign: 'right',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 'var(--fs-14)',
-                background: 'var(--c-cream)',
-                border: '1px dashed var(--line-strong)',
-                borderRadius: 'var(--radius-sm)',
-                padding: '6px 8px',
-                outline: 'none',
-              }}
-            />
+            {/* PR #216 — Operation-side cost input on the add-new row.
+                singleCostColumn (Supplier Detail) hides it for parity with
+                the per-row column. */}
+            {!singleCostColumn && (
+              <>
+                <span className={styles.maintRowRmPrefix}>COST RM</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={draftCost}
+                  onChange={(e) => setDraftCost(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }}
+                  title="Estimated raw cost (Operation)"
+                  style={{
+                    width: 90,
+                    textAlign: 'right',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--fs-14)',
+                    background: 'var(--c-cream)',
+                    border: '1px dashed var(--line-strong)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '6px 8px',
+                    outline: 'none',
+                  }}
+                />
+              </>
+            )}
             <Button variant="primary" size="sm" onClick={addItem}>
               <Plus {...ICON_PROPS} />
               <span>Add</span>
