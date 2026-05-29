@@ -306,10 +306,14 @@ export const PurchaseOrderFromSo = () => {
           r.itemGroup,
           r.variants as Record<string, unknown> | null | undefined,
         );
+        /* Commander 2026-05-29 — "这里为什么有 —": don't show a lone "—" when the
+           SO line has no description. Use the variant summary as the main line
+           instead; only stack both when a real description exists. */
+        const main = r.description || summary || '—';
         return (
           <div>
-            <div>{r.description ?? '—'}</div>
-            {summary && (
+            <div>{main}</div>
+            {r.description && summary && (
               <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
             )}
           </div>
