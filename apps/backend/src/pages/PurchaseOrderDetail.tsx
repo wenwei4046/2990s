@@ -318,13 +318,11 @@ export const PurchaseOrderDetail = () => {
               {items.map((it) => (
                 <tr key={it.id}>
                   <td>
+                    {/* Commander 2026-05-29 — "只需要 show code 就可以了，
+                        Description 不需要". Show the item CODE only; the redundant
+                        full product name + Sup SKU lines are dropped. The variant
+                        summary stays (that's the bit that says WHAT was ordered). */}
                     <div className={styles.codeCell}>{it.material_code}</div>
-                    {(it.description || it.material_name) && <div className={styles.muted}>{it.description ?? it.material_name}</div>}
-                    {it.supplier_sku && <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>Sup SKU: {it.supplier_sku}</div>}
-                    {/* Commander 2026-05-28 — "Description 2": single combined
-                        variant line (like SO), replacing the per-variant pills.
-                        Falls back to computing it for legacy rows that predate
-                        the stored column. */}
                     {(() => {
                       const summary = it.description2 || buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null);
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
@@ -653,6 +651,21 @@ const PoLineItemModal = ({
     deliveryDate: editing?.delivery_date ?? null,
     warehouseId:  editing?.warehouse_id ?? null,
   });
+
+  /* Commander 2026-05-29 — "我要去 edit，为什么 edit 不到它的 variant？".
+     Existing PO lines (especially From-SO converted ones) often have
+     item_group = null, so draft.itemGroup fell back to 'others' and the
+     variant editor (gated on bedframe/sofa) never rendered. Resolve the real
+     category from the product catalog by code on open so the editor shows with
+     the line's stored variants. */
+  useEffect(() => {
+    if (!editing) return;
+    const KNOWN = ['bedframe', 'sofa', 'mattress', 'accessory', 'service'];
+    if (KNOWN.includes(String(draft.itemGroup ?? '').toLowerCase())) return;
+    const hit = candidates.find((p) => p.code === draft.materialCode);
+    if (hit) setDraft((s) => ({ ...s, itemGroup: hit.category.toLowerCase() }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidates, editing]);
 
   const pickProduct = (p: import('../lib/mfg-products-queries').MfgProductRow) => {
     setPicked(p);
