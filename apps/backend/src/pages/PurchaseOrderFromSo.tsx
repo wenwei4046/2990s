@@ -102,9 +102,23 @@ export const PurchaseOrderFromSo = () => {
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
+  /* Commander 2026-05-29 — the New PO form stashes its current draft
+     (poNewDraft) before sending us here. Exclude SO lines ALREADY on that draft
+     so the same line can't be picked/ordered twice into one PO — even before
+     Create PO (the server-side po_qty_picked only bumps on Create). */
+  const alreadyPicked = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem('poNewDraft');
+      if (!raw) return new Set<string>();
+      const d = JSON.parse(raw) as { lines?: Array<{ soItemId?: string | null }> };
+      return new Set((d.lines ?? []).map((l) => l.soItemId).filter(Boolean) as string[]);
+    } catch { return new Set<string>(); }
+  }, []);
+
   // ── Filtered rows fed to the grid ────────────────────────────────────
   const rows = useMemo(() => {
     return items.filter((r) => {
+      if (alreadyPicked.has(r.soItemId)) return false;
       if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
       if (dateFrom || dateTo) {
         const d = rowDateFor(r, dateField);
@@ -114,7 +128,7 @@ export const PurchaseOrderFromSo = () => {
       }
       return true;
     });
-  }, [items, category, dateField, dateFrom, dateTo]);
+  }, [items, alreadyPicked, category, dateField, dateFrom, dateTo]);
 
   // One supplier per PO (Commander 2026-05-29) — once a bound line is ticked,
   // lines from other suppliers lock. Unbound ("— none —") lines don't lock.
@@ -139,14 +153,32 @@ export const PurchaseOrderFromSo = () => {
   // ── Pick helpers ─────────────────────────────────────────────────────
   const togglePick = (id: string, remaining: number) => {
     const row = items.find((r) => r.soItemId === id);
+    if (!row) return;
     // Block ticking a different bound supplier than the one already locked.
-    if (row?.mainSupplierCode && lockedSupplier && row.mainSupplierCode !== lockedSupplier
+    if (row.mainSupplierCode && lockedSupplier && row.mainSupplierCode !== lockedSupplier
         && !picks[id]?.picked) return;
+    const turningOn = !picks[id]?.picked;
+    // Sofa = whole set (Commander 2026-05-29): a sofa SO's compartments MUST be
+    // converted together — ticking one sofa line ticks every sofa line of that
+    // same SO. You can't proceed just one compartment of a sofa set.
+    if ((row.itemGroup ?? '').toLowerCase() === 'sofa') {
+      const siblings = items.filter(
+        (r) => r.soDocNo === row.soDocNo && (r.itemGroup ?? '').toLowerCase() === 'sofa',
+      );
+      setPicks((s) => {
+        const next = { ...s };
+        for (const sib of siblings) {
+          next[sib.soItemId] = turningOn
+            ? { picked: true, qty: sib.remainingQty }
+            : { picked: false, qty: 0 };
+        }
+        return next;
+      });
+      return;
+    }
     setPicks((s) => ({
       ...s,
-      [id]: s[id]?.picked
-        ? { picked: false, qty: 0 }
-        : { picked: true, qty: s[id]?.qty || remaining },
+      [id]: turningOn ? { picked: true, qty: s[id]?.qty || remaining } : { picked: false, qty: 0 },
     }));
   };
 
