@@ -41,6 +41,14 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   return `${currency} ${(v / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
+/* Commander 2026-05-29 — bedframe Total Height is AUTO-COMPUTED = Divan + Leg +
+   Gap (mirrors SoLineCard); it is NOT a manual pick. */
+const parseInches = (s: unknown): number => {
+  if (s == null) return 0;
+  const m = String(s).match(/(-?\d+(?:\.\d+)?)/);
+  return m && m[1] ? Number(m[1]) : 0;
+};
+
 /* Commander 2026-05-29 — "PO 那边根据 Category 会叫我填写我的 Variant，这个
    (GRN) 怎么没有？" Manual GRN lines whose product is a bedframe/sofa now get
    the SAME per-category variant editor as New PO / the PO Edit modal. Small
@@ -503,7 +511,17 @@ export const GrnNew = () => {
                   (l.itemGroup === 'bedframe' || l.itemGroup === 'sofa') &&
                   !!maint;
                 const setVariant = (key: string, value: string) =>
-                  setLine(l.rid, { variants: { ...(l.variants ?? {}), [key]: value } });
+                  setLine(l.rid, { variants: (() => {
+                    const variants: Record<string, unknown> = { ...(l.variants ?? {}), [key]: value };
+                    // Auto-compute bedframe Total Height = Divan + Leg + Gap.
+                    if (l.itemGroup === 'bedframe' && (key === 'divanHeight' || key === 'legHeight' || key === 'gap')) {
+                      const d = parseInches(variants.divanHeight);
+                      const lg = parseInches(variants.legHeight);
+                      const g = parseInches(variants.gap);
+                      variants.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
+                    }
+                    return variants;
+                  })() });
                 return (
                   <div key={l.rid}>
                   <div style={{
@@ -575,9 +593,8 @@ export const GrnNew = () => {
                           <VariantSelect label="Leg Height" options={maint!.legHeights}
                             value={String(l.variants?.legHeight ?? '')}
                             onChange={(v) => setVariant('legHeight', v)} />
-                          <VariantSelect label="Total Heights" options={maint!.totalHeights}
-                            value={String(l.variants?.totalHeight ?? '')}
-                            onChange={(v) => setVariant('totalHeight', v)} />
+                          {/* Total Heights removed — auto-computed from Divan +
+                              Leg + Gap (see setVariant). */}
                           <VariantSelect label="Special" options={maint!.specials}
                             value={String(l.variants?.special ?? '')}
                             onChange={(v) => setVariant('special', v)} />
