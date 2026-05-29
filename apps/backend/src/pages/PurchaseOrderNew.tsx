@@ -24,10 +24,13 @@ import {
   useSuppliers,
   useSupplierDetail,
   useSuppliersForMaterial,
+  useOutstandingSoItems,
   type BindingRow,
   type NewPoItem,
   type MaterialKind,
+  type OutstandingSoItem,
 } from '../lib/suppliers-queries';
+import { buildVariantSummary } from '@2990s/shared';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
@@ -144,6 +147,11 @@ export const PurchaseOrderNew = () => {
   // ── Items state ─────────────────────────────────────────────────────
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
 
+  /* Commander 2026-05-29 — "From SO" must POPULATE this form (multi-select →
+     items auto-added here), NOT jump to a separate auto-create page (that's
+     the MRP flow). A PO is for ONE supplier, so the picker locks to one. */
+  const [showFromSo, setShowFromSo] = useState(false);
+
   // ── Data ────────────────────────────────────────────────────────────
   const suppliers       = useSuppliers({ status: 'ACTIVE' });
   const supplierDetail  = useSupplierDetail(supplierId || null);
@@ -254,6 +262,30 @@ export const PurchaseOrderNew = () => {
     if (!expectedAt) return;
     setLines((prev) => prev.map((l) => ({ ...l, deliveryDate: expectedAt })));
   }, [expectedAt]);
+
+  /* "From SO" → add the picked SO lines into THIS form (Commander 2026-05-29).
+     A PO is one supplier, so adopt the picks' main supplier; the binding /
+     price backfill effects above then fill each line's supplier SKU + cost. */
+  const applyFromSo = (picks: OutstandingSoItem[]) => {
+    setShowFromSo(false);
+    if (picks.length === 0) return;
+    const code = picks[0]!.mainSupplierCode;
+    const sup = code ? (suppliers.data ?? []).find((s) => s.code === code) : null;
+    if (sup) setSupplierId(sup.id);
+    const mapped: DraftLine[] = picks.map((p) => ({
+      rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      materialKind: 'mfg_product',
+      materialCode: p.itemCode,
+      materialName: p.description ?? p.itemCode,
+      qty: p.remainingQty > 0 ? p.remainingQty : p.qty,
+      unitPriceCenti: 0,
+      variants: (p.variants ?? {}) as Record<string, unknown>,
+      category: categoryForCode(p.itemCode),
+      deliveryDate: p.lineDeliveryDate ?? p.deliveryDate ?? undefined,
+    }));
+    // Replace the initial blank line if the form is still empty; else append.
+    setLines((prev) => (prev.some((l) => l.materialCode.trim()) ? [...prev, ...mapped] : mapped));
+  };
 
   /* Phase 3 (2026-05-29) — Resolve the fabric tier for a line from the
      `fabrics` list by the line's `variants.fabricCode`, split per category
@@ -443,7 +475,7 @@ export const PurchaseOrderNew = () => {
         <div className={styles.actions}>
           {/* PR — Commander 2026-05-27: parity with PO list — quick swap into
               the SO-driven flow without bouncing back to the list page. */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
+          <Button variant="ghost" size="md" onClick={() => setShowFromSo(true)}>
             <Plus {...ICON} /> From SO
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
@@ -1116,6 +1148,120 @@ export const PurchaseOrderNew = () => {
             </div>
           </div>
         </section>
+      </div>
+
+      {showFromSo && (
+        <FromSoPicker onClose={() => setShowFromSo(false)} onConfirm={applyFromSo} />
+      )}
+    </div>
+  );
+};
+
+/* ── From-SO picker modal — multi-select outstanding SO lines → populate the
+   New PO form (Commander 2026-05-29). A PO is one supplier, so once a line is
+   ticked, lines from other suppliers (and unbound lines) lock. ────────────── */
+const FromSoPicker = ({
+  onClose, onConfirm,
+}: {
+  onClose: () => void;
+  onConfirm: (picks: OutstandingSoItem[]) => void;
+}) => {
+  const q = useOutstandingSoItems();
+  const items = useMemo(() => q.data ?? [], [q.data]);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const lockedSupplier = useMemo(() => {
+    const first = items.find((i) => picked.has(i.soItemId));
+    return first?.mainSupplierCode ?? null;
+  }, [items, picked]);
+
+  const rows = useMemo(() => [...items].sort((a, b) =>
+    (a.mainSupplierName ?? a.mainSupplierCode ?? '~').localeCompare(b.mainSupplierName ?? b.mainSupplierCode ?? '~')
+    || a.soDocNo.localeCompare(b.soDocNo)), [items]);
+
+  const toggle = (it: OutstandingSoItem) => {
+    if (!it.mainSupplierCode) return; // unbound — can't PO until assigned a supplier
+    if (lockedSupplier && it.mainSupplierCode !== lockedSupplier) return;
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(it.soItemId)) next.delete(it.soItemId); else next.add(it.soItemId);
+      return next;
+    });
+  };
+  const count = picked.size;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', zIndex: 60, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 'var(--space-5)' }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--c-paper)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-3)', width: 'min(900px, 96vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--line)' }}>
+          <div>
+            <h2 style={{ margin: 0, fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: 'var(--fs-18, 18px)', color: 'var(--c-ink)' }}>From Sales Orders</h2>
+            <p style={{ margin: '2px 0 0', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              Tick the SO lines to add into this PO. One supplier per PO — picking a line locks the rest.
+              {lockedSupplier && <> · locked to <strong>{lockedSupplier}</strong></>}
+            </p>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose}><X {...SM_ICON} /> Close</Button>
+        </div>
+
+        <div style={{ overflow: 'auto', flex: 1 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--fs-12)' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--fg-muted)', position: 'sticky', top: 0, background: 'var(--c-cream)', borderBottom: '1px solid var(--line)' }}>
+                <th style={{ padding: '8px 10px', width: 36 }} />
+                <th style={{ padding: '8px 10px' }}>SO</th>
+                <th style={{ padding: '8px 10px' }}>Customer</th>
+                <th style={{ padding: '8px 10px' }}>Supplier</th>
+                <th style={{ padding: '8px 10px' }}>Item</th>
+                <th style={{ padding: '8px 10px' }}>Variant</th>
+                <th style={{ padding: '8px 10px', textAlign: 'right' }}>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.isLoading && <tr><td colSpan={7} style={{ padding: 'var(--space-5)', textAlign: 'center', color: 'var(--fg-muted)' }}>Loading…</td></tr>}
+              {!q.isLoading && rows.length === 0 && <tr><td colSpan={7} style={{ padding: 'var(--space-5)', textAlign: 'center', color: 'var(--fg-muted)' }}>No outstanding SO lines.</td></tr>}
+              {rows.map((it) => {
+                const on = picked.has(it.soItemId);
+                const disabled = !it.mainSupplierCode || (Boolean(lockedSupplier) && it.mainSupplierCode !== lockedSupplier);
+                const summary = buildVariantSummary(it.itemGroup, it.variants as Record<string, unknown> | null | undefined);
+                return (
+                  <tr key={it.soItemId}
+                    onClick={() => toggle(it)}
+                    style={{ borderBottom: '1px solid var(--line)', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.4 : 1, background: on ? 'rgba(213,90,40,0.05)' : 'transparent' }}
+                  >
+                    <td style={{ padding: '6px 10px' }}>
+                      <input type="checkbox" checked={on} disabled={disabled} onChange={() => toggle(it)} onClick={(e) => e.stopPropagation()} />
+                    </td>
+                    <td style={{ padding: '6px 10px', fontFamily: 'var(--font-mono)' }}>{it.soDocNo}</td>
+                    <td style={{ padding: '6px 10px' }}>{it.debtorName ?? '—'}</td>
+                    <td style={{ padding: '6px 10px' }}>
+                      {it.mainSupplierCode
+                        ? <span>{it.mainSupplierCode}{it.mainSupplierName ? ` · ${it.mainSupplierName}` : ''}</span>
+                        : <span style={{ color: 'var(--c-festive-b, #B8331F)' }}>— none —</span>}
+                    </td>
+                    <td style={{ padding: '6px 10px', fontWeight: 600 }}>{it.itemCode}</td>
+                    <td style={{ padding: '6px 10px', color: 'var(--fg-muted)' }}>{summary || '—'}</td>
+                    <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{it.remainingQty}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', padding: 'var(--space-4) var(--space-5)', borderTop: '1px solid var(--line)' }}>
+          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" size="md" disabled={count === 0}
+            onClick={() => onConfirm(rows.filter((r) => picked.has(r.soItemId)))}>
+            <Plus {...SM_ICON} /> Add {count} line{count === 1 ? '' : 's'}
+          </Button>
+        </div>
       </div>
     </div>
   );
