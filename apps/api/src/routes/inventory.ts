@@ -156,7 +156,84 @@ inventory.get('/products', async (c) => {
     }
     return c.json({ error: 'load_failed', reason: error.message }, 500);
   }
-  return c.json({ products: data ?? [] });
+
+  /* Commander 2026-05-29 — enrich each SKU with the live stock picture:
+       reserve 7d/14d  = open Sales-Order demand due within 7 / 14 days
+       reserved_total  = all open SO demand (committed to customers)
+       available_qty   = stock − reserved_total (what's free to sell)
+       incoming_qty    = outstanding PO supply (qty − received) coming in
+       oldest_lot_at   = the oldest open FIFO lot → "age" of the stock
+     Computed by SKU code across all variants (the list is one row per SKU). */
+  const products = (data ?? []) as Array<Record<string, unknown>>;
+  const codes = products.map((p) => String(p.product_code));
+  const SO_DONE = new Set(['DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED']);
+  const todayMY = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const plus = (n: number): string => {
+    const d = new Date(`${todayMY}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+  const d7 = plus(7), d14 = plus(14);
+
+  const reserve7 = new Map<string, number>();
+  const reserve14 = new Map<string, number>();
+  const reservedTotal = new Map<string, number>();
+  const incoming = new Map<string, number>();
+  const oldestLot = new Map<string, string>();
+
+  if (codes.length > 0) {
+    const { data: demand } = await sb
+      .from('mfg_sales_order_items')
+      .select('item_code, qty, line_delivery_date, cancelled, so:mfg_sales_orders!inner(status, customer_delivery_date)')
+      .in('item_code', codes).eq('cancelled', false).limit(5000);
+    for (const r of (demand ?? []) as Array<{ item_code: string; qty: number; line_delivery_date: string | null; so: { status: string; customer_delivery_date: string | null } | Array<{ status: string; customer_delivery_date: string | null }> | null }>) {
+      const so = Array.isArray(r.so) ? r.so[0] : r.so;
+      const qty = Number(r.qty ?? 0);
+      if (!so || SO_DONE.has(so.status) || qty <= 0) continue;
+      const code = r.item_code;
+      reservedTotal.set(code, (reservedTotal.get(code) ?? 0) + qty);
+      const dd = (r.line_delivery_date ?? so.customer_delivery_date)?.slice(0, 10);
+      if (dd) {
+        if (dd <= d7) reserve7.set(code, (reserve7.get(code) ?? 0) + qty);
+        if (dd <= d14) reserve14.set(code, (reserve14.get(code) ?? 0) + qty);
+      }
+    }
+
+    const { data: poItems } = await sb
+      .from('purchase_order_items')
+      .select('material_code, qty, received_qty, po:purchase_orders!inner(status)')
+      .in('material_code', codes).limit(5000);
+    for (const r of (poItems ?? []) as Array<{ material_code: string; qty: number; received_qty: number | null; po: { status: string } | Array<{ status: string }> | null }>) {
+      const po = Array.isArray(r.po) ? r.po[0] : r.po;
+      if (!po || (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED')) continue;
+      const left = Number(r.qty ?? 0) - Number(r.received_qty ?? 0);
+      if (left > 0) incoming.set(r.material_code, (incoming.get(r.material_code) ?? 0) + left);
+    }
+
+    const { data: lots } = await sb
+      .from('v_inventory_lots_open')
+      .select('product_code, received_at').in('product_code', codes).limit(5000);
+    for (const r of (lots ?? []) as Array<{ product_code: string; received_at: string | null }>) {
+      if (!r.received_at) continue;
+      const cur = oldestLot.get(r.product_code);
+      if (!cur || r.received_at < cur) oldestLot.set(r.product_code, r.received_at);
+    }
+  }
+
+  const enriched = products.map((p) => {
+    const code = String(p.product_code);
+    const rt = reservedTotal.get(code) ?? 0;
+    return {
+      ...p,
+      reserve_7d:     reserve7.get(code) ?? 0,
+      reserve_14d:    reserve14.get(code) ?? 0,
+      reserved_total: rt,
+      available_qty:  Number(p.total_qty ?? 0) - rt,
+      incoming_qty:   incoming.get(code) ?? 0,
+      oldest_lot_at:  oldestLot.get(code) ?? null,
+    };
+  });
+  return c.json({ products: enriched });
 });
 
 /* ── Per (warehouse × variant) breakdown for one product (drilldown drawer) ─
