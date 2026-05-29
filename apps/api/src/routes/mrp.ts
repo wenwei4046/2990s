@@ -298,11 +298,32 @@ mrp.get('/', async (c) => {
       ...(useLegacy ? (poByKey.get(legacyKey) ?? []) : []),
     ].map((p) => ({ ...p })).sort((a, b) => byDateAsc(a.eta, b.eta));
 
+    // Commander 2026-05-29 (MRP fusion) — each SO line's own po_qty_picked is
+    // LOCKED coverage for THAT line: those units are already on a PO raised from
+    // this exact line, so they can never be a shortage and must never be
+    // re-ordered (raising another PO for them 409s "qty_exceeds_remaining,
+    // remaining:0"). The old date-priority pooling ignored po_qty_picked and
+    // could hand a line's PO coverage to an earlier-dated sibling, marking the
+    // truly-ordered line SHORT. Fix: drain the shared PO pool by the bucket's
+    // total picked units (earliest ETA first — they belong to already-ordered
+    // lines), then give each line only its UNPICKED remainder (qty - picked) to
+    // the stock/PO competition below.
+    let lockedPicked = rows.reduce((acc, r) => acc + Math.min(r.po_qty_picked ?? 0, r.qty), 0);
+    while (lockedPicked > 0 && poQueue.length > 0) {
+      const front = poQueue[0];
+      if (!front) break;
+      const take = Math.min(front.qtyLeft, lockedPicked);
+      front.qtyLeft -= take;
+      lockedPicked -= take;
+      if (front.qtyLeft <= 0) poQueue.shift();
+    }
+
     const lines: MrpLine[] = [];
     let qtyNeeded = 0;
     for (const r of rows) {
       qtyNeeded += r.qty;
-      let need = r.qty;
+      const picked = Math.min(r.po_qty_picked ?? 0, r.qty); // units already on this line's own PO (locked)
+      let need = r.qty - picked;                            // only the unpicked remainder competes for supply
       const fromStock = Math.min(stockLeft, need);
       stockLeft -= fromStock;
       need -= fromStock;
@@ -319,7 +340,14 @@ mrp.get('/', async (c) => {
         if (front.qtyLeft <= 0) poQueue.shift();
       }
 
-      const source: AllocSource = need > 0 ? 'shortage' : poNumber != null ? 'po' : 'stock';
+      // need>0 → still uncovered (SHORT; orderable up to qty-picked). need==0 →
+      // covered by the pooled PO (poNumber set), by this line's OWN pick
+      // (picked>0 → 'po', the UI shows "ordered"), or by stock.
+      const source: AllocSource =
+        need > 0 ? 'shortage'
+        : poNumber != null ? 'po'
+        : picked > 0 ? 'po'
+        : 'stock';
       lines.push({
         soItemId: r.id,
         soDocNo: r.doc_no,
@@ -338,7 +366,13 @@ mrp.get('/', async (c) => {
     const stock = stockByKey.get(k) ?? 0;
     const poOutstanding = (poOutstandingByKey.get(k) ?? 0)
       + (useLegacy ? (poOutstandingByKey.get(legacyKey) ?? 0) : 0);
-    const shortage = Math.max(0, qtyNeeded - stock - poOutstanding);
+    // Commander 2026-05-29 (MRP fusion) — shortage = sum of the per-line
+    // uncovered units (after locking each line's own pick). This is EXACTLY what
+    // Proceed-PO will try to order, so the parent total can never exceed what
+    // the lines can actually be ordered for. It also matches the client's own
+    // date-window recompute (which already sums line shortageQty), so the
+    // checkbox + "Proceed PO (N)" count stay honest in every view.
+    const shortage = lines.reduce((acc, l) => acc + l.shortageQty, 0);
     const main = mainByCode.get(code);
     skus.push({
       itemCode: code,

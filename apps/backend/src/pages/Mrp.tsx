@@ -109,6 +109,10 @@ export const Mrp = () => {
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
   const [showUndated, setShowUndated] = useState<boolean>(false);
+  /* Commander 2026-05-29 — focus view: hide everything that's fully covered and
+     show ONLY the rows that still need ordering (shortage > 0), so the operator
+     can go straight to Proceed PO without wading past the Ready ones. */
+  const [onlyShort, setOnlyShort] = useState<boolean>(false);
   /* Commander 2026-05-29 — switch a SKU to an alternate supplier in-place
      (AutoCount Post-to-PO). { itemCode: supplierId }; wins over main binding. */
   const [supplierOverride, setSupplierOverride] = useState<Record<string, string>>({});
@@ -183,6 +187,12 @@ export const Mrp = () => {
     return true;
   };
   const viewSets: SofaSet[] = view === 'sofa' ? (data?.sofaSets ?? []).filter(setInWindow) : [];
+
+  /* Only-shortages focus filter (Commander 2026-05-29) — affects which ROWS
+     render; the summary counts above stay on the full demand set so the
+     operator still sees the totals. */
+  const displayModels = onlyShort ? models.filter((m) => m.shortage > 0) : models;
+  const displaySets = onlyShort ? viewSets.filter((s) => s.shortageQty > 0) : viewSets;
 
   const toggleModel = (code: string) =>
     setExpandedModels((prev) => {
@@ -265,10 +275,28 @@ export const Mrp = () => {
       onError: (err) => {
         const raw = err instanceof Error ? err.message : String(err);
         let codes: string[] = [];
+        let errCode = '';
         try {
           const m = raw.match(/\{.*\}/);
-          if (m) { const j = JSON.parse(m[0]); if (j.error === 'missing_bindings' && Array.isArray(j.itemCodes)) codes = j.itemCodes; }
+          if (m) {
+            const j = JSON.parse(m[0]);
+            errCode = typeof j.error === 'string' ? j.error : '';
+            if (j.error === 'missing_bindings' && Array.isArray(j.itemCodes)) codes = j.itemCodes;
+          }
         } catch { /* generic */ }
+        // A stale view can still try to order a line that was already PO'd in
+        // another session/tab (server: qty_exceeds_remaining). Refresh so the
+        // ordered line drops off, and tell the operator plainly instead of
+        // showing the raw error (Commander 2026-05-29).
+        if (errCode === 'qty_exceeds_remaining') {
+          void q.refetch();
+          setDialog({
+            kind: 'info',
+            title: 'Already ordered',
+            body: 'Some of these lines were already put on a PO. The list has been refreshed — review what still needs ordering and proceed again.',
+          });
+          return;
+        }
         setDialog(codes.length > 0
           ? { kind: 'info', title: "SKUs not bound to a supplier", body: 'Assign these to a supplier first, then proceed:\n' + codes.map((c) => `• ${c}`).join('\n') }
           : { kind: 'info', title: 'Order failed', body: raw });
@@ -474,6 +502,10 @@ export const Mrp = () => {
           <input type="checkbox" checked={showUndated} onChange={(e) => setShowUndated(e.target.checked)} />
           <span className={styles.filterLabel}>Show no-date</span>
         </label>
+        <label className={styles.filterField} title="Hide fully-covered rows — show only what still needs ordering">
+          <input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} />
+          <span className={styles.filterLabel}>Only shortages</span>
+        </label>
         <span className={styles.filterSpacer} />
         <div className={styles.filterStack}>
           <label className={styles.filterField}>
@@ -536,12 +568,14 @@ export const Mrp = () => {
               {q.isError && (
                 <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
-              {data && models.length === 0 && (
+              {data && displayModels.length === 0 && (
                 <tr><td colSpan={9} className={styles.stateCell}>
-                  {hasWindow ? 'No demand delivering in this window.' : 'No open Sales-Order demand for this filter.'}
+                  {onlyShort ? 'Nothing needs ordering — everything in view is covered.'
+                    : hasWindow ? 'No demand delivering in this window.'
+                    : 'No open Sales-Order demand for this filter.'}
                 </td></tr>
               )}
-              {models.map((g) => (
+              {displayModels.map((g) => (
                 <ModelRows
                   key={g.itemCode}
                   group={g}
@@ -591,12 +625,14 @@ export const Mrp = () => {
               {q.isError && (
                 <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
-              {data && viewSets.length === 0 && (
+              {data && displaySets.length === 0 && (
                 <tr><td colSpan={9} className={styles.stateCell}>
-                  {hasWindow ? 'No sofa sets delivering in this window.' : 'No open sofa Sales-Order demand for this filter.'}
+                  {onlyShort ? 'No sofa sets need ordering — everything in view is covered.'
+                    : hasWindow ? 'No sofa sets delivering in this window.'
+                    : 'No open sofa Sales-Order demand for this filter.'}
                 </td></tr>
               )}
-              {viewSets.map((set) => (
+              {displaySets.map((set) => (
                 <SofaSetRow
                   key={set.soItemId}
                   set={set}
@@ -891,7 +927,9 @@ const ChildLine = ({ ln }: { ln: MrpLine }) => {
         {ln.source === 'stock' && <span className={`${styles.tag} ${styles.tagStock}`}>stock</span>}
         {ln.source === 'po' && (
           <span className={`${styles.tag} ${styles.tagPo}`}>
-            {ln.poNumber}{ln.poEta ? ` · ETA ${fmtDate(ln.poEta)}` : ''}
+            {ln.poNumber
+              ? `${ln.poNumber}${ln.poEta ? ` · ETA ${fmtDate(ln.poEta)}` : ''}`
+              : 'ordered'}
           </span>
         )}
         {short && (
