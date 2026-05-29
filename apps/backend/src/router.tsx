@@ -63,6 +63,7 @@ const DeliveryReturnsPage = lazyRetry(() => import('./pages/FlowPages').then(m =
 const PurchaseReturnsPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseReturnsPage })));
 const SalesOrderDetail = lazyRetry(() => import('./pages/SalesOrderDetail').then(m => ({ default: m.SalesOrderDetail })));
 const SalesOrderNew = lazyRetry(() => import('./pages/SalesOrderNew').then(m => ({ default: m.SalesOrderNew })));
+const SoFromProducts = lazyRetry(() => import('./pages/SoFromProducts').then(m => ({ default: m.SoFromProducts })));
 const SalesOrderMaintenance = lazyRetry(() => import('./pages/SalesOrderMaintenance').then(m => ({ default: m.SalesOrderMaintenance })));
 const Inventory = lazyRetry(() => import('./pages/Inventory').then(m => ({ default: m.Inventory })));
 const StockCard = lazyRetry(() => import('./pages/StockCard').then(m => ({ default: m.StockCard })));
@@ -158,6 +159,7 @@ export const router = createBrowserRouter([
       { path: 'mfg-sales-orders', element: <MfgSalesOrdersPage /> },
       // PR #106 — must come BEFORE :docNo so /new isn't caught as a doc number.
       { path: 'mfg-sales-orders/new', element: <SalesOrderNew /> },
+      { path: 'mfg-sales-orders/generate', element: <SoFromProducts /> },
       // Task #110 — Localities moved out of Settings → dedicated SO Maintenance
       // page. Must precede :docNo so 'maintenance' isn't read as a doc number.
       { path: 'mfg-sales-orders/maintenance', element: <SalesOrderMaintenance /> },
