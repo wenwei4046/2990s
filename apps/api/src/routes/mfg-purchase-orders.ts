@@ -809,12 +809,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     if (!match) continue;
     const matched = match.matchedIndices.map((i) => members[i]).filter((m): m is SoLine => !!m);
     if (matched.length === 0) continue;
-    // Per-unit base cost of the matched lines; only redistribute when the combo
-    // actually SAVES money vs the matched subset's own sum (HOOKKA discount>0).
-    const baseUnits = matched.map((m) => baseCostByItem.get(m) ?? 0);
-    const subsetSum = baseUnits.reduce((s, c) => s + c, 0);
+    // The combo price IS the supplier's set deal — on the COST side it's
+    // authoritative whether or not it beats the sum of the individual modules
+    // (unlike HOOKKA's SELLING side, which only applies a combo when it's
+    // cheaper to avoid inflating the customer price — that guard is dropped
+    // here). e.g. 2A+L = 2200 → those two lines cost 2200 together; an extra
+    // 1NA outside the matched subset keeps its own per-module cost (2200 + 1NA).
     const comboTotal = match.comboPriceCenti;
-    if (comboTotal <= 0 || comboTotal >= subsetSum) continue;
+    if (comboTotal <= 0) continue; // no price for this height → keep base cost
+    const baseUnits = matched.map((m) => baseCostByItem.get(m) ?? 0);
     const spread = spreadComboTotal(baseUnits, comboTotal);
     matched.forEach((m, i) => adjustedCostByItem.set(m, spread[i] ?? 0));
   }
