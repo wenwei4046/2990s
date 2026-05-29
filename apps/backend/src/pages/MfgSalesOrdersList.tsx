@@ -36,6 +36,7 @@ import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
 import { formatPhone } from '@2990s/shared/phone';
+import { buildVariantSummary } from '@2990s/shared';
 import {
   useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo,
   useMfgSalesOrderDetail,
@@ -304,12 +305,13 @@ type SoItem = {
   item_code: string | null;
   item_group: string | null;
   description: string | null;
-  /* Server-generated variant summary (buildVariantSummary output) — the long
-     attribute string, e.g. "BF-01 / DIVAN 6\" + 4\" / GAP 6\" / T.Heights 14\"
-     / SPECIAL: HB Fully Cover". Shown as a muted second line in the drill-down
-     so the Description column isn't just a bare "—" when Description 1 is empty
-     (Commander 2026-05-29). */
-  description2: string | null;
+  /* Per-line variant bag — fed to buildVariantSummary so the drill-down's
+     Description cell renders the SAME live summary as the SO detail page +
+     report ("BF-01 / SEAT 24 / LEG 6\""). Computed live rather than read from
+     the stored `description2` snapshot, which drifts: older rows still carry
+     the retired " · " seat·leg separator, so reading the snapshot showed mixed
+     "/" and "·" within one order (Commander 2026-05-29). */
+  variants: Record<string, unknown> | null;
   uom: string | null;
   qty: number | null;
   unit_price_centi: number | null;
@@ -608,16 +610,29 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                   {it.item_code ?? '—'}
                 </td>
                 <td style={TD_BASE}>
-                  {/* Commander 2026-05-29 — show the variant summary
-                      (description2) as a muted second line, mirroring the SO
-                      Detail Listing report, so this column isn't a bare "—"
-                      when Description 1 is empty. */}
-                  <div>{it.description ?? '—'}</div>
-                  {it.description2 && (
-                    <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>
-                      {it.description2}
-                    </div>
-                  )}
+                  {/* Commander 2026-05-29 — show the variant summary, computed
+                      LIVE from variants (one consistent " / " separator). When
+                      there's no manual Description 1 we show the summary as the
+                      cell text (no bare "—" above it — that dash confused the
+                      operator: "那个 - 是什么"). Manual text, when present, sits
+                      on top with the summary muted below. */}
+                  {(() => {
+                    const manual = (it.description ?? '').trim();
+                    const summary = buildVariantSummary(it.item_group, it.variants);
+                    if (manual) {
+                      return (
+                        <>
+                          <div>{manual}</div>
+                          {summary && (
+                            <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>
+                              {summary}
+                            </div>
+                          )}
+                        </>
+                      );
+                    }
+                    return summary ? <div>{summary}</div> : '—';
+                  })()}
                 </td>
                 <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
                 <td style={TD_RIGHT}>{it.qty ?? 0}</td>

@@ -359,12 +359,14 @@ export const PurchaseOrderDetail = () => {
                         summary stays (that's the bit that says WHAT was ordered). */}
                     <div className={styles.codeCell}>{it.material_code}</div>
                     {(() => {
-                      /* Commander 2026-05-29 — show the variant summary if the
-                         line has one; otherwise fall back to the product
-                         name/description so the line is never blank under the
-                         code (e.g. a bedframe with no variants picked). */
-                      const summary = it.description2
-                        || buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null)
+                      /* Commander 2026-05-29 — compute the variant summary LIVE
+                         from variants (one consistent " / " separator, not the
+                         stale description2 snapshot which carried the retired
+                         " · " seat·leg separator). Fall back to the product
+                         description / name when the line has no variants so it's
+                         never blank under the code (e.g. a bedframe with nothing
+                         picked). */
+                      const summary = buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null)
                         || it.description
                         || it.material_name;
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
