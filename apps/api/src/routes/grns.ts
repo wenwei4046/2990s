@@ -301,6 +301,12 @@ grns.post('/', async (c) => {
     rejection_reason: (it.rejectionReason as string | undefined) ?? null,
     unit_price_centi: Number(it.unitPriceCenti ?? 0),
     notes: (it.notes as string | undefined) ?? null,
+    /* Commander 2026-05-29 — persist the line category + variant selections so
+       MANUAL bedframe/sofa lines (which now have the per-category variant editor
+       on the New GRN form, like the PO) keep their picks. The inventory-IN
+       movement's variant_key in postGrnAndRollup reads item_group + variants. */
+    item_group: (it.itemGroup as string | undefined) ?? null,
+    variants: it.variants ?? null,
   }));
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
