@@ -61,6 +61,7 @@ const PurchaseInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m 
 const MfgSalesOrdersPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.MfgSalesOrdersPage })));
 const MfgDeliveryOrdersList = lazyRetry(() => import('./pages/MfgDeliveryOrdersList').then(m => ({ default: m.MfgDeliveryOrdersList })));
 const DeliveryOrderNew = lazyRetry(() => import('./pages/DeliveryOrderNew').then(m => ({ default: m.DeliveryOrderNew })));
+const DeliveryOrderFromSo = lazyRetry(() => import('./pages/DeliveryOrderFromSo').then(m => ({ default: m.DeliveryOrderFromSo })));
 const SalesInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.SalesInvoicesPage })));
 const ConsignmentPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
 const DeliveryReturnsList = lazyRetry(() => import('./pages/DeliveryReturnsList').then(m => ({ default: m.DeliveryReturnsList })));
@@ -172,8 +173,9 @@ export const router = createBrowserRouter([
       { path: 'mfg-sales-orders/maintenance', element: <SalesOrderMaintenance /> },
       { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
       { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersList /> },
-      // /new must come BEFORE :id so 'new' isn't caught as a DO id.
+      // /new + /from-so must come BEFORE :id so they aren't caught as a DO id.
       { path: 'mfg-delivery-orders/new', element: <DeliveryOrderNew /> },
+      { path: 'mfg-delivery-orders/from-so', element: <DeliveryOrderFromSo /> },
       { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
       { path: 'sales-invoices', element: <SalesInvoicesPage /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },

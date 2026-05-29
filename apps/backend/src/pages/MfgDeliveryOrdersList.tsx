@@ -11,7 +11,7 @@ import { useMemo, useState } from 'react';
 import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, X, Filter, Search } from 'lucide-react';
+import { Plus, X, Filter, Search, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
@@ -454,6 +454,10 @@ export const MfgDeliveryOrdersList = () => {
           </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/mfg-delivery-orders/from-so')}>
+            <ArrowRightLeft size={14} strokeWidth={1.75} />
+            <span>Convert From Sales Order</span>
+          </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
             <span>New Delivery Order</span>
