@@ -150,6 +150,11 @@ purchaseReturns.post('/', async (c) => {
       line_refund_centi: lineRefund,
       reason: (it.reason as string | undefined) ?? null,
       notes: (it.notes as string | undefined) ?? null,
+      // Commander 2026-05-29 — persist category + variants (columns exist;
+      // writePurchaseReturnMovements reads them for the inventory-OUT
+      // variant_key) so a Purchase Return mirrors WHAT was returned, like GRN/PI.
+      item_group: (it.itemGroup as string | null | undefined) ?? null,
+      variants: (it.variants as Record<string, unknown> | null | undefined) ?? null,
     };
   });
 
