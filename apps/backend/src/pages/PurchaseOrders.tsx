@@ -243,10 +243,13 @@ export const PurchaseOrders = () => {
       { purchaseOrderIds: [...selectedIds] },
       {
         onSuccess: (res) => {
-          alert(`Created GRN ${res.grnNumber} from ${res.poCount} POs (${res.lineCount} lines).`);
+          /* Commander 2026-05-29 — "为什么没有跳进 GR 的界面先": after converting,
+             go STRAIGHT into the new GRN detail page (no blocking alert, no PO
+             drawer). The GRN page shows its own number. */
           setSelectedIds(new Set());
-          setDrawer({ kind: 'detail', poId: res.id });
+          navigate(`/grns/${res.id}`);
         },
+        onError: (e) => alert(`Convert to GRN failed: ${e instanceof Error ? e.message : String(e)}`),
       },
     );
   };
@@ -257,10 +260,8 @@ export const PurchaseOrders = () => {
     grnFromPos.mutate(
       { purchaseOrderIds: [po.id] },
       {
-        onSuccess: (res) => {
-          alert(`Created GRN ${res.grnNumber} from ${po.po_number} (${res.lineCount} lines).`);
-          navigate(`/grns/${res.id}`);
-        },
+        // Jump straight into the created GRN (Commander 2026-05-29).
+        onSuccess: (res) => navigate(`/grns/${res.id}`),
         onError: (e) => alert(`Convert to GRN failed: ${e instanceof Error ? e.message : String(e)}`),
       },
     );
