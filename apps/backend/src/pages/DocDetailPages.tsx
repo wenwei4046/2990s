@@ -20,6 +20,7 @@ import {
   ClipboardCheck, Boxes, Undo2, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-29 — GRN shows the variant config like PO
 import { LoadingButton } from '../components/LoadingButton';
 import {
   useGrnDetail,
@@ -114,7 +115,6 @@ export const GrnDetail = () => {
   // DRAFT removed in migration 0078 — GRNs are POSTED on create.
   const isPosted = grn.status === 'POSTED';
   const isClosed = grn.status === 'CLOSED';
-  const lineTotal = items.reduce((s, it) => s + it.qty_accepted * it.unit_price_centi, 0);
   const rejectedItems = items.filter((it) => it.qty_rejected > 0);
 
   const raisePurchaseReturn = () => {
@@ -234,36 +234,37 @@ export const GrnDetail = () => {
 
       <section className={styles.card}>
         <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Line Items ({items.length})</h2></header>
+        {/* Commander 2026-05-29 — GRN line table matches PO: code + variant
+            summary, Group, Qty (received = what goes into stock), Unit, Total.
+            The Accepted / Rejected / Reason / Kind columns were dropped. */}
         {items.length === 0 ? <p className={styles.emptyRow}>No items.</p> : (
           <table className={styles.table}>
             <thead><tr>
-              <th>Material</th><th>Kind</th>
-              <th className={styles.tableRight}>Received</th>
-              <th className={styles.tableRight}>Accepted</th>
-              <th className={styles.tableRight}>Rejected</th>
-              <th>Reason</th>
-              <th className={styles.tableRight}>Unit Price</th>
-              <th className={styles.tableRight}>Line Value</th>
+              <th>Item</th>
+              <th>Group</th>
+              <th className={styles.tableRight}>Qty</th>
+              <th className={styles.tableRight}>Unit</th>
+              <th className={styles.tableRight}>Total</th>
             </tr></thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id as string}>
-                  <td>
-                    <div className={styles.codeCell}>{it.material_code}</div>
-                    <div className={styles.muted}>{it.material_name}</div>
-                  </td>
-                  <td className={styles.muted}>{String(it.material_kind ?? '')}</td>
-                  <td className={styles.tableRight}>{it.qty_received}</td>
-                  <td className={styles.tableRight}>{it.qty_accepted}</td>
-                  <td className={`${styles.tableRight} ${it.qty_rejected > 0 ? '' : styles.muted}`}
-                      style={it.qty_rejected > 0 ? { color: 'var(--c-festive-b, #B8331F)' } : undefined}>
-                    {it.qty_rejected}
-                  </td>
-                  <td className={styles.muted}>{it.rejection_reason ?? '—'}</td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
-                  <td className={styles.priceCell}>{fmtRm(it.qty_accepted * it.unit_price_centi)}</td>
-                </tr>
-              ))}
+              {items.map((it) => {
+                const summary = buildVariantSummary(
+                  (it.item_group as string | null) ?? null,
+                  (it.variants as Record<string, unknown> | null) ?? null,
+                ) || it.material_name;
+                return (
+                  <tr key={it.id as string}>
+                    <td>
+                      <div className={styles.codeCell}>{it.material_code}</div>
+                      {summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null}
+                    </td>
+                    <td className={styles.muted}>{String(it.item_group ?? it.material_kind ?? '')}</td>
+                    <td className={styles.tableRight}>{it.qty_received}</td>
+                    <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
+                    <td className={styles.priceCell}>{fmtRm(it.qty_received * it.unit_price_centi)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -273,8 +274,8 @@ export const GrnDetail = () => {
         <div className={styles.cardBody}>
           <div className={styles.totalsGrid}>
             <div className={styles.totalRow}>
-              <span className={styles.totalLabel}>Accepted line value</span>
-              <span className={styles.totalValue}>{fmtRm(lineTotal)}</span>
+              <span className={styles.totalLabel}>Line value total</span>
+              <span className={styles.totalValue}>{fmtRm(items.reduce((s, it) => s + it.qty_received * it.unit_price_centi, 0))}</span>
             </div>
             <div className={styles.totalRow}>
               <span className={styles.totalLabel}>Total received units</span>
