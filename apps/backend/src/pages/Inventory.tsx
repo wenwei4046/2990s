@@ -15,11 +15,11 @@
 // COGS auto-posted via DB trigger trg_inventory_movement_fifo (migration 0053).
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, Fragment } from 'react';
 import { Link } from 'react-router';
 import {
   Boxes, Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, X, Plus,
-  Warehouse as WarehouseIcon,
+  Warehouse as WarehouseIcon, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatVariantKey } from '@2990s/shared';
@@ -187,6 +187,17 @@ const BalancesTab = ({
   });
   const rows: InventoryProductTotal[] = data ?? [];
 
+  /* Commander 2026-05-29 — bedframe/sofa must show their variant breakdown in
+     the list itself ("点进去这个 variant 有哪几个种类"), not only in the drawer.
+     Click the caret to expand a SKU into its attribute-composition rows. */
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpand = (code: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+
   const stats = useMemo(() => ({
     totalQty: rows.reduce((s, r) => s + (r.total_qty ?? 0), 0),
     distinctSku: rows.length,
@@ -250,51 +261,119 @@ const BalancesTab = ({
               const qtyClass = r.total_qty > 0 ? styles.numCellPos
                 : r.total_qty < 0 ? styles.numCellNeg
                 : styles.numCellZero;
+              /* Bedframe + sofa carry physical variants worth breaking out. */
+              const expandable = r.category === 'BEDFRAME' || r.category === 'SOFA';
+              const open = expanded.has(r.product_code);
               return (
-                <tr
-                  key={r.product_code}
-                  onDoubleClick={() => onDrilldown(r.product_code, r.product_name)}
-                  title="Double-click to see per-warehouse breakdown"
-                  style={{ cursor: 'pointer' }}
-                >
-                  <td>
-                    <Link
-                      to={`/inventory/stock-card/${encodeURIComponent(r.product_code)}`}
-                      className={styles.codeChip}
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => e.stopPropagation()}
-                      title="Open Stock Card"
-                      style={{ textDecoration: 'none' }}
-                    >
-                      {r.product_code}
-                    </Link>
-                  </td>
-                  <td>
-                    {r.product_name}
-                    {r.branding && <span className={styles.numCellZero}> · {r.branding}</span>}
-                  </td>
-                  <td className={styles.numCellZero}>{r.category}</td>
-                  <td className={styles.numCellZero}>{r.size_label ?? '—'}</td>
-                  <td className={`${styles.numCell} ${qtyClass}`}>{r.total_qty.toLocaleString('en-MY')}</td>
-                  <td className={`${styles.numCell} ${styles.numCellZero}`}>
-                    {r.total_value_sen > 0 ? fmtRm(r.total_value_sen) : '—'}
-                  </td>
-                  <td>
-                    {r.main_supplier_code ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <Star size={11} strokeWidth={2}
-                          style={{ color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
-                        <span className={styles.codeChip}>{r.main_supplier_code}</span>
+                <Fragment key={r.product_code}>
+                  <tr
+                    onDoubleClick={() => onDrilldown(r.product_code, r.product_name)}
+                    title="Double-click to see per-warehouse breakdown"
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {expandable ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); toggleExpand(r.product_code); }}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            title={open ? 'Hide variants' : 'Show variants'}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex', color: 'var(--fg-muted)' }}
+                            aria-label={open ? 'Hide variants' : 'Show variants'}
+                          >
+                            {open ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
+                          </button>
+                        ) : <span style={{ width: 14, display: 'inline-block' }} />}
+                        <Link
+                          to={`/inventory/stock-card/${encodeURIComponent(r.product_code)}`}
+                          className={styles.codeChip}
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                          title="Open Stock Card"
+                          style={{ textDecoration: 'none' }}
+                        >
+                          {r.product_code}
+                        </Link>
                       </span>
-                    ) : <span className={styles.numCellZero}>—</span>}
-                  </td>
-                  <td className={styles.numCellZero}>{r.last_movement_at ? fmtDateTime(r.last_movement_at) : '—'}</td>
-                </tr>
+                    </td>
+                    <td>
+                      {r.product_name}
+                      {r.branding && <span className={styles.numCellZero}> · {r.branding}</span>}
+                    </td>
+                    <td className={styles.numCellZero}>{r.category}</td>
+                    <td className={styles.numCellZero}>{r.size_label ?? '—'}</td>
+                    <td className={`${styles.numCell} ${qtyClass}`}>{r.total_qty.toLocaleString('en-MY')}</td>
+                    <td className={`${styles.numCell} ${styles.numCellZero}`}>
+                      {r.total_value_sen > 0 ? fmtRm(r.total_value_sen) : '—'}
+                    </td>
+                    <td>
+                      {r.main_supplier_code ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <Star size={11} strokeWidth={2}
+                            style={{ color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
+                          <span className={styles.codeChip}>{r.main_supplier_code}</span>
+                        </span>
+                      ) : <span className={styles.numCellZero}>—</span>}
+                    </td>
+                    <td className={styles.numCellZero}>{r.last_movement_at ? fmtDateTime(r.last_movement_at) : '—'}</td>
+                  </tr>
+                  {open && <SkuVariantRows code={r.product_code} />}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
+    </>
+  );
+};
+
+/* Inline variant rows under an expanded bedframe/sofa SKU. Sums each attribute
+   composition (variant_key) across warehouses → one row per variant type, so
+   the list shows "what variants this SKU has" without opening the drawer
+   (Commander 2026-05-29). Lazy: only mounts (and fetches) when expanded. */
+const SkuVariantRows = ({ code }: { code: string }) => {
+  const bd = useInventoryProductBreakdown(code);
+  const balances = (bd.data?.balances ?? []).filter((b) => b.product_code === code);
+  const variants = useMemo(() => {
+    const m = new Map<string, { vk: string; qty: number; value: number }>();
+    for (const b of balances) {
+      const vk = b.variant_key ?? '';
+      const cur = m.get(vk) ?? { vk, qty: 0, value: 0 };
+      cur.qty += b.qty ?? 0;
+      cur.value += b.value_sen ?? 0;
+      m.set(vk, cur);
+    }
+    return [...m.values()].sort((a, b) =>
+      (formatVariantKey(a.vk) || 'Standard').localeCompare(formatVariantKey(b.vk) || 'Standard'));
+  }, [balances]);
+
+  const rowStyle = { background: 'var(--c-cream)' } as const;
+  if (bd.isLoading) {
+    return <tr style={rowStyle}><td /><td colSpan={7} className={styles.numCellZero}>Loading variants…</td></tr>;
+  }
+  if (variants.length === 0) {
+    return <tr style={rowStyle}><td /><td colSpan={7} className={styles.numCellZero}>No stock buckets yet.</td></tr>;
+  }
+  return (
+    <>
+      {variants.map((v) => {
+        const qtyClass = v.qty > 0 ? styles.numCellPos : v.qty < 0 ? styles.numCellNeg : styles.numCellZero;
+        return (
+          <tr key={v.vk} style={rowStyle}>
+            <td />
+            <td style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={styles.numCellZero}>↳</span>
+              <span>{formatVariantKey(v.vk) || 'Standard'}</span>
+            </td>
+            <td /><td />
+            <td className={`${styles.numCell} ${qtyClass}`}>{v.qty.toLocaleString('en-MY')}</td>
+            <td className={`${styles.numCell} ${styles.numCellZero}`}>{v.value > 0 ? fmtRm(v.value) : '—'}</td>
+            <td /><td />
+          </tr>
+        );
+      })}
     </>
   );
 };
