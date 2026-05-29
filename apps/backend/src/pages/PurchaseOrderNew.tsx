@@ -15,23 +15,20 @@
 // dedicated `.itemsGrid` table column setup.
 // ----------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import {
   useCreatePurchaseOrder,
   useSuppliers,
   useSupplierDetail,
   useSuppliersForMaterial,
-  useOutstandingSoItems,
   type BindingRow,
   type NewPoItem,
   type MaterialKind,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
-import { buildVariantSummary } from '@2990s/shared';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
@@ -148,10 +145,6 @@ export const PurchaseOrderNew = () => {
   // ── Items state ─────────────────────────────────────────────────────
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
 
-  /* Commander 2026-05-29 — "From SO" must POPULATE this form (multi-select →
-     items auto-added here), NOT jump to a separate auto-create page (that's
-     the MRP flow). A PO is for ONE supplier, so the picker locks to one. */
-  const [showFromSo, setShowFromSo] = useState(false);
 
   // ── Data ────────────────────────────────────────────────────────────
   const suppliers       = useSuppliers({ status: 'ACTIVE' });
@@ -267,8 +260,7 @@ export const PurchaseOrderNew = () => {
   /* "From SO" → add the picked SO lines into THIS form (Commander 2026-05-29).
      A PO is one supplier, so adopt the picks' main supplier; the binding /
      price backfill effects above then fill each line's supplier SKU + cost. */
-  const applyFromSo = (picks: OutstandingSoItem[]) => {
-    setShowFromSo(false);
+  const applyFromSo = (picks: Array<OutstandingSoItem & { _pickQty?: number }>) => {
     if (picks.length === 0) return;
     // Adopt the first picked line that HAS a main supplier (unbound lines no
     // longer block — they ride as one-off items under whatever Creditor is set).
@@ -280,7 +272,7 @@ export const PurchaseOrderNew = () => {
       materialKind: 'mfg_product',
       materialCode: p.itemCode,
       materialName: p.description ?? p.itemCode,
-      qty: p.remainingQty > 0 ? p.remainingQty : p.qty,
+      qty: p._pickQty ?? (p.remainingQty > 0 ? p.remainingQty : p.qty),
       unitPriceCenti: 0,
       variants: (p.variants ?? {}) as Record<string, unknown>,
       category: categoryForCode(p.itemCode),
@@ -289,6 +281,24 @@ export const PurchaseOrderNew = () => {
     // Replace the initial blank line if the form is still empty; else append.
     setLines((prev) => (prev.some((l) => l.materialCode.trim()) ? [...prev, ...mapped] : mapped));
   };
+
+  /* Commander 2026-05-29 — when the From-SO grid hands back a selection, it
+     stashes the picked rows in sessionStorage and returns here. Apply them once
+     suppliers have loaded (so the creditor can resolve), then clear. */
+  const appliedFromSoRef = useRef(false);
+  useEffect(() => {
+    if (appliedFromSoRef.current || suppliers.isLoading) return;
+    let raw: string | null = null;
+    try { raw = sessionStorage.getItem('poFromSoPicks'); } catch { /* ignore */ }
+    if (!raw) return;
+    appliedFromSoRef.current = true;
+    try {
+      sessionStorage.removeItem('poFromSoPicks');
+      const rows = JSON.parse(raw) as Array<OutstandingSoItem & { _pickQty?: number }>;
+      if (Array.isArray(rows) && rows.length) applyFromSo(rows);
+    } catch { /* malformed — ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suppliers.isLoading]);
 
   /* Phase 3 (2026-05-29) — Resolve the fabric tier for a line from the
      `fabrics` list by the line's `variants.fabricCode`, split per category
@@ -478,7 +488,7 @@ export const PurchaseOrderNew = () => {
         <div className={styles.actions}>
           {/* PR — Commander 2026-05-27: parity with PO list — quick swap into
               the SO-driven flow without bouncing back to the list page. */}
-          <Button variant="ghost" size="md" onClick={() => setShowFromSo(true)}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
             <Plus {...ICON} /> From SO
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
@@ -1153,111 +1163,6 @@ export const PurchaseOrderNew = () => {
         </section>
       </div>
 
-      {showFromSo && (
-        <FromSoPicker onClose={() => setShowFromSo(false)} onConfirm={applyFromSo} />
-      )}
-    </div>
-  );
-};
-
-/* ── From-SO picker modal — multi-select outstanding SO lines → populate the
-   New PO form (Commander 2026-05-29). A PO is one supplier, so once a line is
-   ticked, lines from other suppliers (and unbound lines) lock. ────────────── */
-const SO_PICKER_LAYOUT_KEY = 'po-new-from-so-picker.layout.v1';
-
-const FromSoPicker = ({
-  onClose, onConfirm,
-}: {
-  onClose: () => void;
-  onConfirm: (picks: OutstandingSoItem[]) => void;
-}) => {
-  const q = useOutstandingSoItems();
-  const items = useMemo(() => q.data ?? [], [q.data]);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
-
-  const toggle = useCallback((id: string) => {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }, []);
-
-  /* Same shared DataGrid as everywhere else (Commander 2026-05-29 — "一模一样"):
-     search + per-column filter dropdowns + Columns config. No supplier lock —
-     any SO line is pickable; the PO's Creditor is chosen on the form (it auto-
-     adopts the first picked line's main supplier when there is one). */
-  const columns = useMemo<DataGridColumn<OutstandingSoItem>[]>(() => [
-    {
-      key: 'pick', label: '', width: 40, sortable: false, groupable: false,
-      accessor: (r) => (
-        <input type="checkbox" checked={picked.has(r.soItemId)} onChange={() => toggle(r.soItemId)}
-          onClick={(e) => e.stopPropagation()} aria-label={`Pick ${r.itemCode}`} />
-      ),
-    },
-    { key: 'soDocNo', label: 'SO', width: 110, sortable: true, groupable: true,
-      accessor: (r) => <span style={{ fontFamily: 'var(--font-mono)' }}>{r.soDocNo}</span>, searchValue: (r) => r.soDocNo },
-    { key: 'debtorName', label: 'Customer', width: 160, sortable: true, groupable: true,
-      accessor: (r) => r.debtorName ?? '—', searchValue: (r) => r.debtorName ?? '', groupValue: (r) => r.debtorName ?? '(none)' },
-    { key: 'supplier', label: 'Supplier', width: 180, sortable: true, groupable: true,
-      accessor: (r) => r.mainSupplierCode
-        ? <span>{r.mainSupplierCode}{r.mainSupplierName ? ` · ${r.mainSupplierName}` : ''}</span>
-        : <span style={{ color: 'var(--c-festive-b, #B8331F)' }}>— none —</span>,
-      searchValue: (r) => `${r.mainSupplierCode ?? ''} ${r.mainSupplierName ?? ''}`.trim(),
-      groupValue: (r) => r.mainSupplierName ?? r.mainSupplierCode ?? '(none)' },
-    { key: 'itemCode', label: 'Item', width: 130, sortable: true,
-      accessor: (r) => <span style={{ fontWeight: 600 }}>{r.itemCode}</span>, searchValue: (r) => r.itemCode },
-    { key: 'variant', label: 'Variant', width: 200, sortable: true,
-      accessor: (r) => buildVariantSummary(r.itemGroup, r.variants as Record<string, unknown> | null | undefined) || '—',
-      searchValue: (r) => buildVariantSummary(r.itemGroup, r.variants as Record<string, unknown> | null | undefined),
-      groupValue: (r) => buildVariantSummary(r.itemGroup, r.variants as Record<string, unknown> | null | undefined) || '(none)' },
-    { key: 'remaining', label: 'Remaining', width: 90, align: 'right', sortable: true,
-      accessor: (r) => String(r.remainingQty), sortFn: (a, b) => a.remainingQty - b.remainingQty },
-  ], [picked, toggle]);
-
-  const count = picked.size;
-
-  return (
-    <div
-      onClick={onClose}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', zIndex: 60, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: 'var(--space-5)' }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{ background: 'var(--c-paper)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-3)', width: 'min(1040px, 97vw)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--space-4) var(--space-5)', borderBottom: '1px solid var(--line)' }}>
-          <div>
-            <h2 style={{ margin: 0, fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: 'var(--fs-18, 18px)', color: 'var(--c-ink)' }}>From Sales Orders</h2>
-            <p style={{ margin: '2px 0 0', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-              Tick SO lines to add into this PO. A PO is one supplier — the Creditor is set on the form (auto-filled from the picks when bound).
-            </p>
-          </div>
-          <Button variant="ghost" size="sm" onClick={onClose}><X {...SM_ICON} /> Close</Button>
-        </div>
-
-        <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-3) var(--space-4)' }}>
-          <DataGrid<OutstandingSoItem>
-            rows={items}
-            columns={columns}
-            storageKey={SO_PICKER_LAYOUT_KEY}
-            rowKey={(r) => r.soItemId}
-            searchPlaceholder="Search SO, customer, item…"
-            onRowClick={(r) => toggle(r.soItemId)}
-            groupBanner={false}
-            isLoading={q.isLoading}
-            emptyMessage="No outstanding SO lines."
-          />
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', padding: 'var(--space-4) var(--space-5)', borderTop: '1px solid var(--line)' }}>
-          <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="md" disabled={count === 0}
-            onClick={() => onConfirm(items.filter((r) => picked.has(r.soItemId)))}>
-            <Plus {...SM_ICON} /> Add {count} line{count === 1 ? '' : 's'}
-          </Button>
-        </div>
-      </div>
     </div>
   );
 };

@@ -26,7 +26,6 @@ import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import {
   useOutstandingSoItems,
-  useCreatePosFromSoItems,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -87,7 +86,6 @@ type Pick = { picked: boolean; qty: number };
 export const PurchaseOrderFromSo = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingSoItems();
-  const create   = useCreatePosFromSoItems();
 
   // Map<soItemId, { picked, qty }>. Defaults: picked = false; when ticked,
   // qty defaults to remainingQty.
@@ -99,13 +97,7 @@ export const PurchaseOrderFromSo = () => {
   const [dateFrom, setDateFrom]   = useState<string>('');
   const [dateTo, setDateTo]       = useState<string>('');
 
-  /* Commander 2026-05-28 — PO generation mode. 'combined' = one PO per supplier
-     (mattresses: dozens of SOs → 1 PO); 'per-so' = one PO per SO (sofa/bedframe:
-     1 SO → 1 PO). */
-  const [poMode, setPoMode] = useState<'combined' | 'per-so'>('combined');
-
-  // In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
-  // browser alert). goTo set → offer a navigate button.
+  // In-app result dialog (validation only now — the grid feeds the form).
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
@@ -124,14 +116,30 @@ export const PurchaseOrderFromSo = () => {
     });
   }, [items, category, dateField, dateFrom, dateTo]);
 
+  // One supplier per PO (Commander 2026-05-29) — once a bound line is ticked,
+  // lines from other suppliers lock. Unbound ("— none —") lines don't lock.
+  const lockedSupplier = useMemo(() => {
+    for (const [id, v] of Object.entries(picks)) {
+      if (!v.picked) continue;
+      const row = items.find((r) => r.soItemId === id);
+      if (row?.mainSupplierCode) return row.mainSupplierCode;
+    }
+    return null;
+  }, [picks, items]);
+
   // ── Pick helpers ─────────────────────────────────────────────────────
-  const togglePick = (id: string, remaining: number) =>
+  const togglePick = (id: string, remaining: number) => {
+    const row = items.find((r) => r.soItemId === id);
+    // Block ticking a different bound supplier than the one already locked.
+    if (row?.mainSupplierCode && lockedSupplier && row.mainSupplierCode !== lockedSupplier
+        && !picks[id]?.picked) return;
     setPicks((s) => ({
       ...s,
       [id]: s[id]?.picked
         ? { picked: false, qty: 0 }
         : { picked: true, qty: s[id]?.qty || remaining },
     }));
+  };
 
   const setQty = (id: string, qty: number) =>
     setPicks((s) => ({ ...s, [id]: { picked: true, qty } }));
@@ -275,45 +283,21 @@ export const PurchaseOrderFromSo = () => {
     },
   ], [picks]);
 
-  // ── Create POs ───────────────────────────────────────────────────────
+  // ── Add to PO ────────────────────────────────────────────────────────
+  // Commander 2026-05-29 — this grid is the PICKER that FEEDS the New PO form
+  // (it no longer auto-creates POs; that's MRP's Proceed PO). On confirm, stash
+  // the picked SO lines + their chosen qty, then return to /purchase-orders/new,
+  // which adds them as PO line items.
   const onSave = () => {
     if (pickedCount === 0) { setDialog({ title: 'Nothing picked', body: 'Tick at least one SO line first.' }); return; }
-    // Commander 2026-05-28 — no expectedAt / purchaseLocationId: the server
-    // derives both per-line from the source SO.
-    const body = {
-      picks: picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty })),
-      mode: poMode,
-    };
-    create.mutate(body, {
-      onSuccess: (res) => {
-        /* A 0-PO "success" means the picked lines had no main supplier to group
-           under. Don't show a hollow "Created 0 POs"; tell the user to assign
-           suppliers (the Main Supplier column flags which). */
-        if (!res.total) {
-          setDialog({
-            title: 'No POs created',
-            body: "The selected SKUs aren't bound to a supplier yet. Assign each SKU a supplier (the Main Supplier column shows “— none —”), then convert again.",
-          });
-          return;
-        }
-        setPicks({});
-        const summary = res.created.map((p) => p.poNumber).join(', ');
-        setDialog({ title: `Created ${res.total} PO${res.total === 1 ? '' : 's'}`, body: summary, goTo: '/purchase-orders' });
-      },
-      onError: (err) => {
-        /* Friendly message when the SKUs aren't bound to a supplier yet (the #1
-           reason conversion produces no PO). */
-        const raw = err instanceof Error ? err.message : String(err);
-        let codes: string[] = [];
-        try {
-          const m = raw.match(/\{.*\}/);
-          if (m) { const j = JSON.parse(m[0]); if (j.error === 'missing_bindings' && Array.isArray(j.itemCodes)) codes = j.itemCodes; }
-        } catch { /* fall through to generic */ }
-        setDialog(codes.length > 0
-          ? { title: "SKUs not bound to a supplier", body: 'Assign these to a supplier first, then convert:\n' + codes.map((c) => `• ${c}`).join('\n') }
-          : { title: 'Create failed', body: raw });
-      },
-    });
+    const out = picked
+      .map(([soItemId, v]) => {
+        const row = items.find((r) => r.soItemId === soItemId);
+        return row ? { ...row, _pickQty: v.qty } : null;
+      })
+      .filter(Boolean);
+    try { sessionStorage.setItem('poFromSoPicks', JSON.stringify(out)); } catch { /* quota */ }
+    navigate('/purchase-orders/new');
   };
 
   // ── Toolbar (filters + select/clear) rendered inside the DataGrid ──────
@@ -387,49 +371,28 @@ export const PurchaseOrderFromSo = () => {
           <Link to="/purchase-orders" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Purchase Orders</span>
           </Link>
-          <h1 className={styles.title}>Create PO from Sales Orders</h1>
+          <h1 className={styles.title}>Pick Sales Orders for this PO</h1>
         </div>
         <div className={styles.actions}>
-          {/* Commander 2026-05-28 — PO generation mode. Combined = one PO per
-              supplier (mattress: many SOs → 1 PO). Per-SO = one PO per SO
-              (sofa/bedframe: 1 SO → 1 PO). */}
-          <div className={styles.modeToggle} role="group" aria-label="PO generation mode">
-            <button
-              type="button"
-              className={styles.modeBtn}
-              data-active={poMode === 'combined'}
-              onClick={() => setPoMode('combined')}
-              title="Merge all picked SOs into one PO per supplier"
-            >
-              Combined (1 PO / supplier)
-            </button>
-            <button
-              type="button"
-              className={styles.modeBtn}
-              data-active={poMode === 'per-so'}
-              onClick={() => setPoMode('per-so')}
-              title="One PO per Sales Order (sofa / bedframe)"
-            >
-              Per SO (1 PO / SO)
-            </button>
-          </div>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
             <X {...ICON} /> Cancel
           </Button>
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || pickedCount === 0}
+            disabled={pickedCount === 0}
+            title="Add the picked SO lines into the New PO form"
           >
             <Save {...ICON} />
-            {create.isPending
-              ? 'Creating…'
-              : pickedCount === 0
-                ? 'Pick at least 1 line'
-                : `Create POs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
+            {pickedCount === 0 ? 'Pick at least 1 line' : `Add ${pickedCount} line${pickedCount === 1 ? '' : 's'} to PO`}
           </Button>
         </div>
       </div>
+      {lockedSupplier && (
+        <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          One supplier per PO — locked to <strong>{lockedSupplier}</strong>. Clear picks to switch.
+        </p>
+      )}
 
       <DataGrid<OutstandingSoItem>
         rows={rows}
