@@ -31,6 +31,11 @@ import {
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useFabricTrackings } from '../lib/fabric-queries';
 import { useWarehouses } from '../lib/inventory-queries';
+import {
+  computeMfgPoUnitCost,
+  type MfgFabricTier,
+  type PoPriceMatrix,
+} from '@2990s/shared/mfg-pricing';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -71,6 +76,10 @@ type DraftLine = {
       seat / leg / size depending on category). Shipped to API as
       NewPoItem.variants. */
   variants: Record<string, unknown>;
+  /** Phase 3 (2026-05-29) — true once the operator types into Unit Price.
+      A manual override always wins: auto-pricing from the supplier price
+      table + maintenance surcharges stops touching this line's cost. */
+  priceTouched?: boolean;
 };
 
 const newLine = (): DraftLine => ({
@@ -246,6 +255,62 @@ export const PurchaseOrderNew = () => {
     setLines((prev) => prev.map((l) => ({ ...l, deliveryDate: expectedAt })));
   }, [expectedAt]);
 
+  /* Phase 3 (2026-05-29) — Resolve the fabric tier for a line from the
+     `fabrics` list by the line's `variants.fabricCode`, split per category
+     (sofa → sofa_price_tier, bedframe → bedframe_price_tier), mirroring
+     SoLineCard. Returns null for non-tiered categories or when no fabric /
+     tier is set → the cost engine then defaults to P2. */
+  const fabricTierForLine = (line: DraftLine): MfgFabricTier | null => {
+    const code = String(line.variants.fabricCode ?? '');
+    if (!code) return null;
+    const f = fabrics.find((x) => x.fabric_code === code);
+    if (!f) return null;
+    const cat = line.category?.toLowerCase();
+    if (cat === 'sofa')     return f.sofa_price_tier ?? f.price_tier ?? null;
+    if (cat === 'bedframe') return f.bedframe_price_tier ?? f.price_tier ?? null;
+    return null;
+  };
+
+  /* Phase 3 (2026-05-29) — Auto-fill a PO line's unit COST from the SUPPLIER's
+     own price table (binding.price_matrix) + that supplier's maintenance
+     surcharges, instead of the flat binding.unit_price_centi. Falls back to
+     the flat binding price when there's no binding / matrix / maint, and is a
+     no-op (returns the line's current cost) when the operator has manually
+     overridden the price (priceTouched). Combos are OUT OF SCOPE this phase —
+     PO lines are per-SKU, so there's no combo override here. */
+  const recomputeLineCost = (line: DraftLine): number => {
+    // Find the line's binding: by id when known, else by material_code.
+    const binding = line.bindingId
+      ? bindings.find((b) => b.id === line.bindingId)
+      : bindings.find((b) => b.material_code === line.materialCode);
+    if (!binding) return line.unitPriceCenti;
+    // No maint config loaded yet (or none seeded) → don't crash / zero out;
+    // computeMfgPoUnitCost still returns the matrix/flat base with no
+    // surcharges, which is the right fallback.
+    const category = (line.category?.toUpperCase() ?? '') as
+      'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
+    if (!category) return binding.unit_price_centi;
+    const v = line.variants;
+    const specials = Array.isArray(v.specials) ? (v.specials as string[]) : [];
+    const breakdown = computeMfgPoUnitCost(
+      {
+        category,
+        priceMatrix:    (binding.price_matrix ?? null) as PoPriceMatrix,
+        unitPriceCenti: binding.unit_price_centi,
+        fabricTier:     fabricTierForLine(line),
+        // Sofa seat SIZE lives on variants.seatHeight; sofa leg height is the
+        // same variants.legHeight field (the editor only renders one leg input).
+        seatSize:       category === 'SOFA' ? (v.seatHeight as string | undefined) ?? null : null,
+        divanHeight:    (v.divanHeight as string | undefined) ?? null,
+        legHeight:      category === 'BEDFRAME' ? (v.legHeight as string | undefined) ?? null : null,
+        sofaLegHeight:  category === 'SOFA' ? (v.legHeight as string | undefined) ?? null : null,
+        specials,
+      },
+      maint,
+    );
+    return breakdown.unitPriceSen;
+  };
+
   // ── Helpers ─────────────────────────────────────────────────────────
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
@@ -263,6 +328,10 @@ export const PurchaseOrderNew = () => {
       supplierSku:    b.supplier_sku,
       unitPriceCenti: b.unit_price_centi,
       category:       categoryForCode(b.material_code),
+      // Phase 3 — picking a (new) SKU re-arms supplier-price auto-fill; the
+      // auto-pricing effect below then overwrites the flat seed with the
+      // matrix + maintenance cost (mirrors SoLineCard re-enabling on re-pick).
+      priceTouched:   false,
     });
   };
 
@@ -272,6 +341,30 @@ export const PurchaseOrderNew = () => {
     setLines((prev) => prev.map((l) =>
       l.rid === rid ? { ...l, variants: { ...l.variants, [k]: v } } : l,
     ));
+
+  /* Phase 3 (2026-05-29) — Auto-fill each line's unit COST from the supplier
+     price table + maintenance surcharges whenever a binding is picked
+     (pickBinding / the two item-first effects) or variants change (setVariant).
+     Centralised here so all those paths share one recompute. A manually
+     overridden line (priceTouched) is left alone — the manual value wins.
+     Updates only lines whose computed cost differs from the current value, so
+     this doesn't loop. */
+  useEffect(() => {
+    setLines((prev) => {
+      let changed = false;
+      const next = prev.map((l) => {
+        if (l.priceTouched) return l;
+        const cost = recomputeLineCost(l);
+        if (cost === l.unitPriceCenti) return l;
+        changed = true;
+        return { ...l, unitPriceCenti: cost };
+      });
+      return changed ? next : prev;
+    });
+    // recomputeLineCost closes over bindings / fabrics / maint; re-run when any
+    // of those (or the lines' pricing-relevant fields) change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bindings, fabrics, maint, lines]);
 
   const subtotalCenti = useMemo(
     () => lines.reduce(
@@ -915,7 +1008,9 @@ export const PurchaseOrderNew = () => {
                     <input
                       type="number" min={0} step={0.01}
                       value={(l.unitPriceCenti / 100).toFixed(2)}
-                      onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) })}
+                      // Phase 3 — manual edit wins: flag priceTouched so the
+                      // supplier-price auto-fill stops overwriting this line.
+                      onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100), priceTouched: true })}
                       className={styles.fieldInput}
                       style={{ textAlign: 'right' }}
                     />

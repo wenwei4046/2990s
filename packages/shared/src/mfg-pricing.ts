@@ -419,6 +419,129 @@ export function computeMfgLineCost(
   };
 }
 
+// ----------------------------------------------------------------------------
+// PO line cost from a SUPPLIER binding (Phase 3, Commander 2026-05-29).
+//
+// When creating a Purchase Order, each line's unit COST auto-fills from the
+// SUPPLIER'S OWN price table (`supplier_material_bindings.price_matrix`) plus
+// that supplier's maintenance surcharges — instead of the old flat copy of
+// `binding.unit_price_centi`. Rules (commander-confirmed):
+//   - Base = the binding's price_matrix (per category shape below).
+//   - Tier default = P2; use P1 only when the line's fabric resolves to
+//     PRICE_1 AND a P1 cell exists (the tier rule already lives inside
+//     `computeMfgLineCost`).
+//   - + supplier maintenance surcharges (COST side — reads each option's
+//     `priceSen` via `computeMfgLineCost`).
+//   - A manual unit-price override on the line always wins (handled by the
+//     caller, not here).
+//
+// COMBOS ARE OUT OF SCOPE this phase: PO lines are per-SKU, so there is no
+// combo override here. Combo pricing is deferred to a later phase.
+//
+// This helper is the binding→`MfgPricingProduct` projection layer; it owns no
+// new pricing math — it reuses `computeMfgLineCost` for tier + surcharge logic.
+// ----------------------------------------------------------------------------
+
+/** Raw price_matrix as it arrives off the binding row (JSONB). Bedframe =
+ *  `{P1?,P2?}` (sen); sofa = `{ "<seatSize>": {P1?,P2?,P3?} }` (sen). Null on
+ *  rows / categories that use the flat `unit_price_centi`
+ *  (mattress / accessory / service). */
+export type PoPriceMatrix = Record<string, unknown> | null;
+
+/** Defensive: read a numeric sen value, else null. Matrix cells may already
+ *  be numbers; guards against strings / null / non-objects. */
+const asSen = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+/** Project a supplier binding's `price_matrix` + flat fallback into the
+ *  `MfgPricingProduct` shape that `computeMfgLineCost` understands, then
+ *  delegate. Pure — no I/O, safe in Workers and React.
+ *
+ *  - BEDFRAME: basePriceSen = matrix.P2; price1Sen = matrix.P1. When BOTH are
+ *    missing → basePriceSen = `unitPriceCenti` (flat fallback).
+ *  - SOFA: build seatHeightPrices from each `[size, cell]` — one row per
+ *    populated tier (P2→PRICE_2, P1→PRICE_1, P3→PRICE_3). basePriceSen =
+ *    `unitPriceCenti` so `computeMfgLineCost` falls back to flat when the
+ *    matrix is empty / the picked seat size isn't found.
+ *  - MATTRESS / ACCESSORY / SERVICE: basePriceSen = `unitPriceCenti`.
+ *
+ *  Tier handling (P2 default, P1 only on PRICE_1 + P1 present) lives inside
+ *  `computeMfgLineCost`; we just pass `fabricTier` through. */
+export function computeMfgPoUnitCost(
+  input: {
+    category: 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE';
+    priceMatrix: PoPriceMatrix;
+    /** Flat fallback (accessory / mattress / service + empty matrix). */
+    unitPriceCenti: number;
+    fabricTier?: MfgFabricTier | null;
+    qty?: number;
+    seatSize?: string | null;
+    divanHeight?: string | null;
+    legHeight?: string | null;
+    totalHeight?: string | null;
+    sofaLegHeight?: string | null;
+    specials?: string[];
+  },
+  maintenanceConfig: MaintenanceConfig | null,
+): MfgPricingBreakdown {
+  const matrix =
+    input.priceMatrix && typeof input.priceMatrix === 'object'
+      ? (input.priceMatrix as Record<string, unknown>)
+      : null;
+
+  let product: MfgPricingProduct;
+
+  if (input.category === 'BEDFRAME') {
+    const p2 = matrix ? asSen(matrix.P2) : null;
+    const p1 = matrix ? asSen(matrix.P1) : null;
+    product = {
+      category:     'BEDFRAME',
+      // Both missing → fall back to the flat binding price.
+      basePriceSen: p2 ?? (p1 == null ? input.unitPriceCenti : null),
+      price1Sen:    p1,
+    };
+  } else if (input.category === 'SOFA') {
+    const seatHeightPrices: MfgSeatHeightPrice[] = [];
+    if (matrix) {
+      for (const [size, raw] of Object.entries(matrix)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const cell = raw as Record<string, unknown>;
+        const p2 = asSen(cell.P2);
+        const p1 = asSen(cell.P1);
+        const p3 = asSen(cell.P3);
+        if (p2 != null) seatHeightPrices.push({ height: size, tier: 'PRICE_2', priceSen: p2 });
+        if (p1 != null) seatHeightPrices.push({ height: size, tier: 'PRICE_1', priceSen: p1 });
+        if (p3 != null) seatHeightPrices.push({ height: size, tier: 'PRICE_3', priceSen: p3 });
+      }
+    }
+    product = {
+      category:     'SOFA',
+      // Flat fallback when the matrix is empty or the picked seat size has no
+      // row — computeMfgLineCost falls back to basePriceSen in that case.
+      basePriceSen: input.unitPriceCenti,
+      seatHeightPrices: seatHeightPrices.length > 0 ? seatHeightPrices : null,
+    };
+  } else {
+    // MATTRESS / ACCESSORY / SERVICE — single flat price per SKU.
+    product = { category: input.category, basePriceSen: input.unitPriceCenti };
+  }
+
+  return computeMfgLineCost(
+    {
+      product,
+      fabric:        { tier: input.fabricTier ?? null },
+      qty:           input.qty ?? 1,
+      seatSize:      input.seatSize ?? null,
+      divanHeight:   input.divanHeight ?? null,
+      legHeight:     input.legHeight ?? null,
+      totalHeight:   input.totalHeight ?? null,
+      sofaLegHeight: input.sofaLegHeight ?? null,
+      specials:      input.specials,
+    },
+    maintenanceConfig,
+  );
+}
+
 /** True when the client-submitted unit price drifts more than 0.5% from
  *  the server-computed unit price. Mirrors `pricingDriftExceeds` in
  *  pricing.ts but operates on `*_sen` integers directly. */

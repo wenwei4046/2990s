@@ -19,6 +19,7 @@ import { describe, it, expect } from 'vitest';
 import {
   computeMfgLinePrice,
   computeMfgLineCost,
+  computeMfgPoUnitCost,
   mfgPricingDriftExceeds,
   type MaintenanceConfig,
   type MfgPricingProduct,
@@ -472,5 +473,162 @@ describe('computeMfgLineCost — base + priceSen surcharges', () => {
     );
     expect(r.specialsSurchargeSen).toBe(1200);
     expect(r.unitPriceSen).toBe(52000 + 1200);
+  });
+});
+
+/* ───── PO unit cost from a SUPPLIER binding (Phase 3, 2026-05-29) ─────
+   computeMfgPoUnitCost projects the binding's price_matrix + flat fallback
+   into a MfgPricingProduct, then delegates tier + surcharge logic to
+   computeMfgLineCost. Combos are OUT OF SCOPE this phase. */
+
+describe('computeMfgPoUnitCost — supplier binding projection', () => {
+  it('bedframe: base = matrix P2 by default (no fabric tier)', () => {
+    const r = computeMfgPoUnitCost(
+      {
+        category:       'BEDFRAME',
+        priceMatrix:    { P1: 46000, P2: 52000 },
+        unitPriceCenti: 99999,             // flat fallback — must be ignored
+        qty:            1,
+      },
+      config,
+    );
+    expect(r.basePriceSen).toBe(52000);
+    expect(r.unitPriceSen).toBe(52000);
+    expect(r.source).toBe('PRICE_2');
+  });
+
+  it('bedframe: switches to matrix P1 when fabricTier is PRICE_1 and P1 present', () => {
+    const r = computeMfgPoUnitCost(
+      {
+        category:       'BEDFRAME',
+        priceMatrix:    { P1: 46000, P2: 52000 },
+        unitPriceCenti: 99999,
+        fabricTier:     'PRICE_1',
+        qty:            1,
+      },
+      config,
+    );
+    expect(r.basePriceSen).toBe(46000);
+    expect(r.source).toBe('PRICE_1');
+  });
+
+  it('bedframe: PRICE_1 fabric but only P2 cell → stays on P2', () => {
+    const r = computeMfgPoUnitCost(
+      { category: 'BEDFRAME', priceMatrix: { P2: 52000 }, unitPriceCenti: 0, fabricTier: 'PRICE_1' },
+      config,
+    );
+    expect(r.basePriceSen).toBe(52000);
+    expect(r.source).toBe('PRICE_2');
+  });
+
+  it('bedframe: + divan surcharge from the maintenance config (cost side)', () => {
+    const r = computeMfgPoUnitCost(
+      {
+        category:    'BEDFRAME',
+        priceMatrix: { P2: 52000 },
+        unitPriceCenti: 0,
+        divanHeight: '10"',                 // priceSen 5000 (cost)
+        legHeight:   '7"',                  // priceSen 16000
+        specials:    ['HB Fully Cover'],    // priceSen 5000
+      },
+      config,
+    );
+    expect(r.basePriceSen).toBe(52000);
+    expect(r.divanSurchargeSen).toBe(5000);
+    expect(r.legSurchargeSen).toBe(16000);
+    expect(r.specialsSurchargeSen).toBe(5000);
+    expect(r.unitPriceSen).toBe(52000 + 5000 + 16000 + 5000);
+  });
+
+  it('sofa: base from the matrix seat-size cell (P2 default)', () => {
+    const r = computeMfgPoUnitCost(
+      {
+        category:    'SOFA',
+        priceMatrix: { '24': { P2: 76073 }, '28': { P2: 81000, P1: 70000 } },
+        unitPriceCenti: 0,
+        seatSize:    '28',
+      },
+      config,
+    );
+    expect(r.basePriceSen).toBe(81000);
+    expect(r.source).toBe('PRICE_2');
+  });
+
+  it('sofa: switches to the matrix P1 seat cell when fabricTier is PRICE_1', () => {
+    const r = computeMfgPoUnitCost(
+      {
+        category:    'SOFA',
+        priceMatrix: { '28': { P2: 81000, P1: 70000 } },
+        unitPriceCenti: 0,
+        seatSize:    '28',
+        fabricTier:  'PRICE_1',
+        sofaLegHeight: '6"',               // priceSen 5000
+        specials:    ['5537 Backrest'],    // priceSen 8000
+      },
+      config,
+    );
+    expect(r.basePriceSen).toBe(70000);
+    expect(r.source).toBe('PRICE_1');
+    expect(r.legSurchargeSen).toBe(5000);
+    expect(r.specialsSurchargeSen).toBe(8000);
+    expect(r.unitPriceSen).toBe(70000 + 5000 + 8000);
+  });
+
+  it('accessory: uses the flat unitPriceCenti (matrix null)', () => {
+    const r = computeMfgPoUnitCost(
+      { category: 'ACCESSORY', priceMatrix: null, unitPriceCenti: 12500, qty: 3 },
+      config,
+    );
+    expect(r.basePriceSen).toBe(12500);
+    expect(r.unitPriceSen).toBe(12500);
+    expect(r.lineTotalSen).toBe(37500);
+    expect(r.source).toBe('BASE_ONLY');
+  });
+
+  it('empty matrix → flat unitPriceCenti fallback (bedframe + sofa)', () => {
+    const bf = computeMfgPoUnitCost(
+      { category: 'BEDFRAME', priceMatrix: {}, unitPriceCenti: 33000 },
+      config,
+    );
+    expect(bf.basePriceSen).toBe(33000);
+    expect(bf.unitPriceSen).toBe(33000);
+
+    const sofa = computeMfgPoUnitCost(
+      { category: 'SOFA', priceMatrix: {}, unitPriceCenti: 44000, seatSize: '28' },
+      config,
+    );
+    expect(sofa.basePriceSen).toBe(44000);
+    expect(sofa.unitPriceSen).toBe(44000);
+  });
+
+  it('sofa: seat size not in the matrix → flat unitPriceCenti fallback', () => {
+    const r = computeMfgPoUnitCost(
+      { category: 'SOFA', priceMatrix: { '24': { P2: 76073 } }, unitPriceCenti: 44000, seatSize: '99' },
+      config,
+    );
+    expect(r.basePriceSen).toBe(44000);
+  });
+
+  it('tolerates non-numeric matrix cells without crashing', () => {
+    const r = computeMfgPoUnitCost(
+      {
+        category:    'BEDFRAME',
+        priceMatrix: { P2: 'oops' as unknown as number, P1: null as unknown as number },
+        unitPriceCenti: 28000,
+      },
+      config,
+    );
+    // Both cells unparseable → flat fallback.
+    expect(r.basePriceSen).toBe(28000);
+  });
+
+  it('works with maintenanceConfig null (no surcharges, base only)', () => {
+    const r = computeMfgPoUnitCost(
+      { category: 'BEDFRAME', priceMatrix: { P2: 52000 }, unitPriceCenti: 0, divanHeight: '10"' },
+      null,
+    );
+    expect(r.basePriceSen).toBe(52000);
+    expect(r.divanSurchargeSen).toBe(0);
+    expect(r.unitPriceSen).toBe(52000);
   });
 });

@@ -17,6 +17,13 @@
 
 import { Hono } from 'hono';
 import { buildVariantSummary } from '@2990s/shared';
+import {
+  computeMfgPoUnitCost,
+  type MfgFabricTier,
+  type MaintenanceConfig,
+  type PoPriceMatrix,
+} from '@2990s/shared/mfg-pricing';
+import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
@@ -433,10 +440,16 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     id: string; doc_no: string; item_code: string; description: string | null;
     qty: number; po_qty_picked: number; unit_price_centi: number;
     line_delivery_date: string | null;
+    // Phase 3 (2026-05-29) — carry the SO line's category + variant bag so the
+    // PO line cost can auto-price from the supplier matrix + maintenance
+    // surcharges (mirrors the client recompute), instead of a flat copy.
+    item_group: string | null;
+    variants: Record<string, unknown> | null;
     so: { sales_location: string | null; customer_delivery_date: string | null } | null;
   };
   const SO_ITEM_SELECT =
     'id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
+    'item_group, variants, ' +
     'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
   // supabase-js returns the embedded parent as an object OR a 1-element array
   // depending on the relationship — normalise to a single object.
@@ -486,7 +499,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
         row: row ?? {
           id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName,
           qty: it.qty, po_qty_picked: 0, unit_price_centi: 0,
-          line_delivery_date: null, so: null,
+          line_delivery_date: null, item_group: null, variants: null, so: null,
         },
         qty: it.qty,
       });
@@ -517,23 +530,80 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       qty,
       lineWarehouseId,
       lineDeliveryDate,
+      // Phase 3 — carry the SO line's category + variants for PO auto-pricing.
+      itemGroup: row.item_group,
+      variants:  row.variants,
     };
   });
 
   // Resolve main supplier per item via supplier_material_bindings.
+  // Phase 3 (2026-05-29) — also load price_matrix so the PO line cost can
+  // auto-price from the supplier's own per-category price table.
   const codes = [...new Set(soItems.map((it) => it.itemCode))];
   const { data: bindings } = await supabase
     .from('supplier_material_bindings')
-    .select('material_code, supplier_id, supplier_sku, unit_price_centi, currency')
+    .select('material_code, supplier_id, supplier_sku, unit_price_centi, currency, price_matrix')
     .in('material_code', codes)
     .eq('material_kind', 'mfg_product')
     .order('is_main_supplier', { ascending: false });
 
   // Group by material_code → first row (main supplier or lowest price).
-  const mainByCode = new Map<string, { supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>();
-  for (const b of (bindings ?? []) as Array<{ material_code: string; supplier_id: string; supplier_sku: string; unit_price_centi: number; currency: string }>) {
+  type MainBinding = {
+    supplier_id: string; supplier_sku: string; unit_price_centi: number;
+    currency: string; price_matrix: Record<string, unknown> | null;
+  };
+  const mainByCode = new Map<string, MainBinding>();
+  for (const b of (bindings ?? []) as Array<MainBinding & { material_code: string }>) {
     if (!mainByCode.has(b.material_code)) mainByCode.set(b.material_code, b);
   }
+
+  /* Phase 3 — resolve the fabric tier for each SO line's fabricCode (split
+     per category: sofa_price_tier vs bedframe_price_tier), mirroring the
+     client. Load every distinct fabricCode that appears on a picked line so
+     a PRICE_1 fabric flips the cost to the supplier's P1 cell. When no fabric
+     / tier is set the cost engine defaults to P2. */
+  const fabricCodes = [...new Set(
+    soItems
+      .map((it) => String((it.variants as Record<string, unknown> | null)?.fabricCode ?? ''))
+      .filter(Boolean),
+  )];
+  type FabricTierRow = {
+    fabric_code: string;
+    price_tier: MfgFabricTier | null;
+    sofa_price_tier: MfgFabricTier | null;
+    bedframe_price_tier: MfgFabricTier | null;
+  };
+  const fabricByCode = new Map<string, FabricTierRow>();
+  if (fabricCodes.length > 0) {
+    const { data: fabricRows } = await supabase
+      .from('fabric_trackings')
+      .select('fabric_code, price_tier, sofa_price_tier, bedframe_price_tier')
+      .in('fabric_code', fabricCodes);
+    for (const f of (fabricRows ?? []) as FabricTierRow[]) fabricByCode.set(f.fabric_code, f);
+  }
+  const resolveFabricTier = (
+    category: string | null,
+    variants: Record<string, unknown> | null,
+  ): MfgFabricTier | null => {
+    const code = String(variants?.fabricCode ?? '');
+    if (!code) return null;
+    const f = fabricByCode.get(code);
+    if (!f) return null;
+    const cat = (category ?? '').toLowerCase();
+    if (cat === 'sofa')     return f.sofa_price_tier ?? f.price_tier ?? null;
+    if (cat === 'bedframe') return f.bedframe_price_tier ?? f.price_tier ?? null;
+    return null;
+  };
+
+  /* Phase 3 — maintenance config per supplier (supplier scope → master
+     fallback), resolved ONCE per supplier that owns a picked line. The cost
+     engine reads each option's priceSen as the cost surcharge. */
+  const supplierIdsInvolved = [...new Set([...mainByCode.values()].map((b) => b.supplier_id))];
+  const maintBySupplier = new Map<string, MaintenanceConfig | null>();
+  await Promise.all(supplierIdsInvolved.map(async (sid) => {
+    const { config } = await resolveMaintenanceConfigForSupplier(supabase, sid);
+    maintBySupplier.set(sid, config);
+  }));
 
   // Items without a binding can't be PO'd.
   const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
@@ -562,12 +632,41 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const groupKey = poMode === 'per-so' ? `${b.supplier_id}::${it.soDocNo}` : b.supplier_id;
     const bucket = byGroup.get(groupKey)
       ?? { supplierId: b.supplier_id, currency: b.currency, lines: [], soDocNos: new Set<string>() };
+
+    /* Phase 3 (2026-05-29) — auto-price the PO line cost from the supplier's
+       own price_matrix + maintenance surcharges instead of the flat
+       unit_price_centi. Base = matrix (P2 default; P1 only when the line's
+       fabric resolves to PRICE_1 and a P1 cell exists) + supplier maintenance
+       surcharges. Falls back to the flat binding price when there's no matrix.
+       Combos are OUT OF SCOPE this phase — PO lines are per-SKU. */
+    const category = (it.itemGroup?.toUpperCase() ?? '') as
+      'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
+    const variants = (it.variants ?? {}) as Record<string, unknown>;
+    const specials = Array.isArray(variants.specials) ? (variants.specials as string[]) : [];
+    const autoCostCenti = category
+      ? computeMfgPoUnitCost(
+          {
+            category,
+            priceMatrix:    (b.price_matrix ?? null) as PoPriceMatrix,
+            unitPriceCenti: b.unit_price_centi,
+            fabricTier:     resolveFabricTier(it.itemGroup, it.variants),
+            seatSize:       category === 'SOFA' ? (variants.seatHeight as string | undefined) ?? null : null,
+            divanHeight:    (variants.divanHeight as string | undefined) ?? null,
+            legHeight:      category === 'BEDFRAME' ? (variants.legHeight as string | undefined) ?? null : null,
+            sofaLegHeight:  category === 'SOFA' ? (variants.legHeight as string | undefined) ?? null : null,
+            specials,
+          },
+          maintBySupplier.get(b.supplier_id) ?? null,
+        ).unitPriceSen
+      // No category on the SO line → can't project a matrix; keep the flat price.
+      : b.unit_price_centi;
+
     bucket.lines.push({
       itemCode: it.itemCode,
       itemName: it.itemName,
       qty: it.qty,
       supplierSku: b.supplier_sku,
-      unitPriceCenti: b.unit_price_centi,
+      unitPriceCenti: autoCostCenti,
       warehouseId: it.lineWarehouseId,
       deliveryDate: it.lineDeliveryDate,
     });
