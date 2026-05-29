@@ -4,7 +4,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
-import { pickComboMatch, buildVariantSummary, type SofaComboRow, type SofaPriceTier } from '@2990s/shared';
+import {
+  pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
+  buildVariantSummary, type SofaComboRow, type SofaPriceTier,
+} from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
 import { signSoItemPhotoUrl, soItemPhotoBindings } from '../lib/r2';
@@ -530,10 +533,11 @@ mfgSalesOrders.post('/', async (c) => {
      path (computeMfgLineCost → unit_cost_centi / line_cost_centi /
      line_margin_centi) is untouched; combos never fed it.
 
-     `loadActiveSofaCombos` / `pickComboMatch` / `extractSofaComboLookupArgs`
-     remain imported for the POS sales path and possible future selling-side
-     combo work — they are simply not applied to the SO selling price here. */
-  void loadActiveSofaCombos; void pickComboMatch; void extractSofaComboLookupArgs;
+     Combos DO feed the COST side now (Commander 2026-05-29): recomputeTotals
+     applies the master sofa-combo price to a matched sofa set's cost. They are
+     still NOT applied to the operator's manual SELLING price here.
+     `extractSofaComboLookupArgs` is retained for the POS handover path. */
+  void extractSofaComboLookupArgs;
 
   // Drift rejection retained for structural stability; `r.drift` is always
   // false now (manual selling is accepted in recomputeFromSnapshot), so this
@@ -740,6 +744,11 @@ mfgSalesOrders.post('/', async (c) => {
     const rowsWithDoc = itemRows.map((r) => ({ ...r, doc_no: docNo }));
     const { error: iErr } = await sb.from('mfg_sales_order_items').insert(rowsWithDoc);
     if (iErr) { await sb.from('mfg_sales_orders').delete().eq('doc_no', docNo); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+    /* Commander 2026-05-29 — re-roll the header through recomputeTotals so a
+       matched sofa SET picks up its MASTER combo cost (spread across the lines).
+       The inline rollup above set per-module costs; this corrects them + the
+       header totals to the combo. No-op for non-sofa / non-matching SOs. */
+    await recomputeTotals(sb, docNo);
   }
 
   // PR-D — audit row. Emit one CREATE entry with every non-null field the
@@ -1245,7 +1254,73 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
 // Each mutation recomputes the header totals + category breakdown so the
 // list view stays accurate without a separate refresh step.
 async function recomputeTotals(sb: any, docNo: string) {
-  const { data: items } = await sb.from('mfg_sales_order_items').select('item_group, total_centi, line_cost_centi').eq('doc_no', docNo).eq('cancelled', false);
+  const { data: items } = await sb.from('mfg_sales_order_items')
+    .select('id, item_code, item_group, variants, qty, total_centi, line_cost_centi')
+    .eq('doc_no', docNo).eq('cancelled', false);
+  type Row = { id: string; item_code: string; item_group: string; variants: Record<string, unknown> | null; qty: number; total_centi: number; line_cost_centi: number };
+  const rows = (items ?? []) as Row[];
+
+  /* ── Master sofa-combo COST spread (Commander 2026-05-29) ──────────────────
+     A sofa is a set of per-module lines. When those lines (same base model)
+     match a MASTER combo (sofa_combo_pricing where supplier_id IS NULL — the
+     Product-Maintenance combo), the set's COST = the combo price, spread across
+     the matched lines (mirror of the PO side, but master-scoped). We spread off
+     the stored per-line line_cost_centi (the per-module base cost). Idempotent:
+     spreadComboTotal re-normalises an already-spread group to the same total. */
+  const sofaRows = rows.filter((r) => (r.item_group ?? '').toLowerCase() === 'sofa');
+  if (sofaRows.length > 0) {
+    const combos = await loadActiveSofaCombos(sb); // master scope only
+    if (combos.length > 0) {
+      const fabricCodes = [...new Set(sofaRows.map((r) => String((r.variants ?? {} as Record<string, unknown>).fabricCode ?? '')).filter(Boolean))];
+      const tierByFabric = new Map<string, SofaPriceTier>();
+      if (fabricCodes.length > 0) {
+        const { data: fabs } = await sb.from('fabric_trackings').select('fabric_code, price_tier, sofa_price_tier').in('fabric_code', fabricCodes);
+        for (const f of (fabs ?? []) as Array<{ fabric_code: string; price_tier: SofaPriceTier | null; sofa_price_tier: SofaPriceTier | null }>) {
+          tierByFabric.set(f.fabric_code, (f.sofa_price_tier ?? f.price_tier ?? 'PRICE_2'));
+        }
+      }
+      const groups = new Map<string, Row[]>();
+      for (const r of sofaRows) {
+        const { baseModel, sizeCode } = splitSofaCode(r.item_code);
+        if (!sizeCode.includes('-')) continue; // non-modular (e.g. BLATT-2S) → no combo
+        const key = baseModel.toUpperCase();
+        const arr = groups.get(key) ?? [];
+        arr.push(r); groups.set(key, arr);
+      }
+      for (const [bm, members] of groups) {
+        const tierOf = (m: Row) => tierByFabric.get(String((m.variants ?? {} as Record<string, unknown>).fabricCode ?? '')) ?? 'PRICE_2';
+        const tiers = new Set(members.map(tierOf));
+        if (tiers.size !== 1) continue;
+        const tier = [...tiers][0]!;
+        const heights = new Set(members.map((m) => sofaHeightKey(m.variants)));
+        if (heights.size !== 1) continue;
+        const height = [...heights][0]!;
+        if (!height) continue;
+        const named = combos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === bm);
+        const pool = named.length > 0 ? named : combos;
+        const match = pickComboMatch(
+          { baseModel: '', modules: members.map((m) => splitSofaCode(m.item_code).sizeCode), customerId: null, tier, height },
+          pool,
+        );
+        if (!match) continue;
+        const matched = match.matchedIndices.map((i) => members[i]).filter((m): m is Row => !!m);
+        if (matched.length === 0) continue;
+        const comboTotal = match.comboPriceCenti;
+        if (comboTotal <= 0) continue;
+        const spread = spreadComboTotal(matched.map((m) => m.line_cost_centi || 0), comboTotal);
+        for (let i = 0; i < matched.length; i++) {
+          const m = matched[i]!; const newLineCost = spread[i] ?? 0; const q = Math.max(1, m.qty || 1);
+          m.line_cost_centi = newLineCost; // mutate in place so the rollup below sees it
+          await sb.from('mfg_sales_order_items').update({
+            line_cost_centi:   newLineCost,
+            unit_cost_centi:   Math.round(newLineCost / q),
+            line_margin_centi: (m.total_centi || 0) - newLineCost,
+          }).eq('id', m.id);
+        }
+      }
+    }
+  }
+
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
   // Task #114 — per-category cost mirrors the revenue accumulators. Each
   // bucket below tracks both revenue (total_centi) and cost (line_cost_centi)

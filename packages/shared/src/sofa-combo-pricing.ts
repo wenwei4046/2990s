@@ -333,6 +333,29 @@ export function pickComboPrice(
   return pickComboMatch(args, rows)?.comboPriceCenti ?? null;
 }
 
+/** Split a sofa product code into its base model + module size code. A
+ *  sectional module's code is `<MODEL>-<MODULE>(<ORIENT>)`, e.g.
+ *  `BOOQIT-1A(LHF)` → base `BOOQIT`, size `1A-LHF` (parens normalised to the
+ *  hyphen form combos are stored in). A simple seat-count sofa like `BLATT-2S`
+ *  → base `BLATT`, size `2S` (no orientation → never matches a combo slot).
+ *  Shared by the PO cost path (mfg-purchase-orders) + the SO cost rollup. */
+export function splitSofaCode(itemCode: string): { baseModel: string; sizeCode: string } {
+  const i = itemCode.indexOf('-');
+  if (i < 0) return { baseModel: itemCode, sizeCode: '' };
+  return {
+    baseModel: itemCode.slice(0, i),
+    sizeCode: itemCode.slice(i + 1).replace(/\(([^)]+)\)/, '-$1'),
+  };
+}
+
+/** A sofa line's seat-height key for combo lookup (combos are priced per
+ *  height). Mirrors the sales-side `v.depth ?? v.seatHeight`. */
+export function sofaHeightKey(variants: unknown): string {
+  if (!variants || typeof variants !== 'object') return '';
+  const v = variants as Record<string, unknown>;
+  return String(v.depth ?? v.seatHeight ?? '');
+}
+
 /**
  * Spread a combo's negotiated total across the matched lines, proportional to
  * each line's own base cost, rebalancing the rounding residual into the

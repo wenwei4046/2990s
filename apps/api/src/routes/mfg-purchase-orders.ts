@@ -18,6 +18,7 @@
 import { Hono } from 'hono';
 import {
   buildVariantSummary, computeVariantKey, pickComboMatch, spreadComboTotal,
+  splitSofaCode, sofaHeightKey,
   type VariantAttrs, type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
 import {
@@ -69,31 +70,6 @@ async function loadSupplierSofaCombos(
     out.set(r.supplier_id, arr);
   }
   return out;
-}
-
-/** Split a sofa product code into its base model + module size code, mirroring
-    HOOKKA's per-module sofa lines. A sectional module's code is
-    `<MODEL>-<MODULE>(<ORIENT>)`, e.g. `BOOQIT-1A(LHF)` → base `BOOQIT`, size
-    `1A-LHF` (parens normalised to the hyphen form combo slots are stored in).
-    A simple seat-count sofa like `BLATT-2S` → base `BLATT`, size `2S` — which
-    carries no module/orientation, so it never matches a combo slot and keeps
-    its normal per-module cost (combo logic just skips it). */
-function splitSofaCode(itemCode: string): { baseModel: string; sizeCode: string } {
-  const i = itemCode.indexOf('-');
-  if (i < 0) return { baseModel: itemCode, sizeCode: '' };
-  const baseModel = itemCode.slice(0, i);
-  const rest = itemCode.slice(i + 1);
-  // `1A(LHF)` → `1A-LHF`; `2S` (no orientation) → `2S` (won't match a combo).
-  const sizeCode = rest.replace(/\(([^)]+)\)/, '-$1');
-  return { baseModel, sizeCode };
-}
-
-/** A sofa line's seat-height key for combo lookup (combos are priced per
-    height). Mirrors the sales-side `v.depth ?? v.seatHeight`. */
-function sofaHeightKey(variants: unknown): string {
-  if (!variants || typeof variants !== 'object') return '';
-  const v = variants as Record<string, unknown>;
-  return String(v.depth ?? v.seatHeight ?? '');
 }
 
 export const mfgPurchaseOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
