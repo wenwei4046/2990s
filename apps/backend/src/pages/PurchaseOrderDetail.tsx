@@ -802,8 +802,25 @@ const PoLineItemModal = ({
     setSearch(b.material_code);
   };
 
+  /* Commander 2026-05-29 — bedframe Total Height is AUTO-COMPUTED = Divan + Leg
+     + Gap (mirrors SoLineCard); not a manual pick. Recompute it whenever one of
+     those three changes. */
+  const parseInches = (s: unknown): number => {
+    if (s == null) return 0;
+    const m = String(s).match(/(-?\d+(?:\.\d+)?)/);
+    return m && m[1] ? Number(m[1]) : 0;
+  };
   const setVariant = (k: string, v: string | number) =>
-    setDraft((s) => ({ ...s, variants: { ...s.variants, [k]: v } }));
+    setDraft((s) => {
+      const variants: Record<string, unknown> = { ...s.variants, [k]: v };
+      if ((s.itemGroup === 'bedframe') && (k === 'divanHeight' || k === 'legHeight' || k === 'gap')) {
+        const d = parseInches(variants.divanHeight);
+        const lg = parseInches(variants.legHeight);
+        const g = parseInches(variants.gap);
+        variants.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
+      }
+      return { ...s, variants };
+    });
 
   // Auto-recompute unit price from base + variant surcharges
   useEffect(() => {
@@ -1010,11 +1027,8 @@ const PoLineItemModal = ({
                   <VariantSelect label="Leg Height" options={maint.legHeights}
                     value={String(draft.variants?.legHeight ?? '')}
                     onChange={(v) => setVariant('legHeight', v)} />
-                  {/* Total Heights — Commander 2026-05-29: mirror the SO bedframe
-                      editor so its maintenance surcharge can be picked here too. */}
-                  <VariantSelect label="Total Heights" options={maint.totalHeights}
-                    value={String(draft.variants?.totalHeight ?? '')}
-                    onChange={(v) => setVariant('totalHeight', v)} />
+                  {/* Total Heights — Commander 2026-05-29: removed. Total Height
+                      is AUTO-COMPUTED from Divan + Leg + Gap (see setVariant). */}
                   <VariantSelect label="Special" options={maint.specials}
                     value={String(draft.variants?.special ?? '')}
                     onChange={(v) => setVariant('special', v)} />
