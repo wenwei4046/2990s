@@ -16,7 +16,7 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import {
   computeMfgPoUnitCost,
   type MfgFabricTier,
@@ -397,9 +397,14 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
          'per-so'             = one PO per (supplier × SO) — good for sofa /
                                  bedframe where 1 SO → 1 PO. */
     mode?: 'combined' | 'per-so';
+    /* Commander 2026-05-29 — per-SKU supplier override. The MRP lets the user
+       switch an item to an alternate supplier in-place; { itemCode: supplierId }
+       wins over the SKU's main-supplier binding. */
+    supplierByCode?: Record<string, string>;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
+  const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
 
   /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
      are NO LONGER asked or required. They are derived per-line from the source
@@ -442,14 +447,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     line_delivery_date: string | null;
     // Phase 3 (2026-05-29) — carry the SO line's category + variant bag so the
     // PO line cost can auto-price from the supplier matrix + maintenance
-    // surcharges (mirrors the client recompute), instead of a flat copy.
+    // surcharges (mirrors the client recompute), instead of a flat copy. Also
+    // used by #300 to consolidate same SKU+variant lines + carry the variant
+    // through to the PO line.
     item_group: string | null;
     variants: Record<string, unknown> | null;
     so: { sales_location: string | null; customer_delivery_date: string | null } | null;
   };
   const SO_ITEM_SELECT =
-    'id, doc_no, item_code, description, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
-    'item_group, variants, ' +
+    'id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
     'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
   // supabase-js returns the embedded parent as an object OR a 1-element array
   // depending on the relationship — normalise to a single object.
@@ -530,7 +536,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       qty,
       lineWarehouseId,
       lineDeliveryDate,
-      // Phase 3 — carry the SO line's category + variants for PO auto-pricing.
+      // Phase 3 — carry the SO line's category + variants for PO auto-pricing
+      // (#300 also uses these to consolidate same SKU+variant lines + carry the
+      // variant through to the PO line).
       itemGroup: row.item_group,
       variants:  row.variants,
     };
@@ -547,14 +555,41 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     .eq('material_kind', 'mfg_product')
     .order('is_main_supplier', { ascending: false });
 
-  // Group by material_code → first row (main supplier or lowest price).
+  /* Commander 2026-05-29 — drop ORPHANED bindings (supplier was deleted but the
+     binding row survived, e.g. after a supplier reset). An orphan would slip a
+     dead supplier_id into the PO insert → FK violation → silent 0-PO "success".
+     Resolve which referenced suppliers actually exist and skip the rest, so the
+     SKU is reported as "needs a supplier" via missing_bindings below. */
+  const supplierIds = [...new Set(((bindings ?? []) as Array<{ supplier_id: string }>).map((b) => b.supplier_id))];
+  const liveSupplierIds = new Set<string>();
+  if (supplierIds.length > 0) {
+    const { data: liveSuppliers } = await supabase
+      .from('suppliers').select('id').in('id', supplierIds);
+    for (const s of (liveSuppliers ?? []) as Array<{ id: string }>) liveSupplierIds.add(s.id);
+  }
+
+  /* Group by material_code → the chosen supplier's binding. Commander
+     2026-05-29: an explicit supplierByCode[itemCode] override (picked in the
+     MRP) wins; otherwise the first LIVE row (is_main_supplier first via ORDER
+     BY). Orphaned bindings (deleted supplier) are skipped.
+     Phase 3 (2026-05-29) — the binding also carries price_matrix so the PO line
+     cost can auto-price from the supplier's own per-category price table. */
   type MainBinding = {
-    supplier_id: string; supplier_sku: string; unit_price_centi: number;
-    currency: string; price_matrix: Record<string, unknown> | null;
+    material_code: string; supplier_id: string; supplier_sku: string;
+    unit_price_centi: number; currency: string;
+    price_matrix: Record<string, unknown> | null;
   };
   const mainByCode = new Map<string, MainBinding>();
-  for (const b of (bindings ?? []) as Array<MainBinding & { material_code: string }>) {
-    if (!mainByCode.has(b.material_code)) mainByCode.set(b.material_code, b);
+  for (const b of (bindings ?? []) as MainBinding[]) {
+    if (!liveSupplierIds.has(b.supplier_id)) continue; // orphaned binding — skip
+    const override = supplierByCode[b.material_code];
+    const existing = mainByCode.get(b.material_code);
+    if (override) {
+      // Only accept the binding that matches the chosen supplier.
+      if (b.supplier_id === override) mainByCode.set(b.material_code, b);
+      continue;
+    }
+    if (!existing) mainByCode.set(b.material_code, b);
   }
 
   /* Phase 3 — resolve the fabric tier for each SO line's fabricCode (split
@@ -605,13 +640,13 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     maintBySupplier.set(sid, config);
   }));
 
-  // Items without a binding can't be PO'd.
+  // Items with no LIVE supplier binding can't be PO'd.
   const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
   if (noBinding.length > 0) {
     return c.json({
       error: 'missing_bindings',
       message: 'Some items have no main supplier binding',
-      itemCodes: noBinding.map((it) => it.itemCode),
+      itemCodes: [...new Set(noBinding.map((it) => it.itemCode))],
     }, 400);
   }
 
@@ -624,6 +659,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   type Line = {
     itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
     warehouseId: string | null; deliveryDate: string | null;
+    itemGroup: string | null; variants: Record<string, unknown> | null;
   };
   type Bucket = { supplierId: string; currency: string; lines: Line[]; soDocNos: Set<string> };
   const byGroup = new Map<string, Bucket>();
@@ -669,10 +705,36 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       unitPriceCenti: autoCostCenti,
       warehouseId: it.lineWarehouseId,
       deliveryDate: it.lineDeliveryDate,
+      itemGroup: it.itemGroup,
+      variants: it.variants,
     });
     bucket.soDocNos.add(it.soDocNo);
     byGroup.set(groupKey, bucket);
   }
+
+  /* Commander 2026-05-29 — consolidate lines: the SAME SKU + variant from
+     different SOs merges into ONE PO line with the qty summed (e.g. (K)×2 +
+     (K)×3 → (K)×5), instead of two separate lines. Keep the earliest delivery
+     date (turnover-safe — order to the soonest need) and the most-common
+     warehouse. po_qty_picked tracking is unaffected (it's keyed by SO item id,
+     handled separately below). */
+  const consolidateLines = (lines: Line[]): Line[] => {
+    const merged = new Map<string, Line>();
+    for (const l of lines) {
+      const vkey = computeVariantKey(l.itemGroup, (l.variants ?? null) as VariantAttrs | null);
+      const key = `${l.itemCode}${vkey}`;
+      const cur = merged.get(key);
+      if (!cur) { merged.set(key, { ...l }); continue; }
+      cur.qty += l.qty;
+      // earliest non-null delivery date wins
+      if (l.deliveryDate && (!cur.deliveryDate || l.deliveryDate < cur.deliveryDate)) {
+        cur.deliveryDate = l.deliveryDate;
+      }
+      cur.warehouseId = cur.warehouseId ?? l.warehouseId;
+    }
+    return [...merged.values()];
+  };
+  for (const bucket of byGroup.values()) bucket.lines = consolidateLines(bucket.lines);
 
   // Generate PO numbers + create one PO per supplier.
   const d = new Date();
@@ -747,6 +809,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
          may be null when the SO didn't carry them — that's allowed. */
       delivery_date: l.deliveryDate,
       warehouse_id:  l.warehouseId,
+      /* Commander 2026-05-29 — carry the variant through to the PO so the line
+         shows its config + the MRP can match outstanding PO supply by variant. */
+      item_group: l.itemGroup,
+      variants: l.variants,
+      description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {

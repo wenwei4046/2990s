@@ -27,7 +27,9 @@ export type MrpLine = {
   soItemId: string;
   soDocNo: string;
   debtorName: string | null;
+  soDate: string | null;
   deliveryDate: string | null;
+  processingDate: string | null;
   qty: number;
   source: MrpAllocSource;
   poNumber: string | null;
@@ -37,6 +39,8 @@ export type MrpLine = {
 
 export type MrpSku = {
   itemCode: string;
+  variantKey: string;
+  variantLabel: string | null;
   description: string | null;
   category: string | null;
   qtyNeeded: number;
@@ -45,6 +49,7 @@ export type MrpSku = {
   shortage: number;
   mainSupplierCode: string | null;
   mainSupplierName: string | null;
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
   lines: MrpLine[];
 };
 
@@ -59,14 +64,15 @@ export type MrpResponse = {
 };
 
 /** Stock Status Report / MRP — recomputed server-side on every call. */
-export function useMrp(params: { category: string; warehouseId: string }) {
-  const { category, warehouseId } = params;
+export function useMrp(params: { category: string; warehouseId: string; includeUndated?: boolean }) {
+  const { category, warehouseId, includeUndated } = params;
   return useQuery({
-    queryKey: ['mrp', category, warehouseId],
+    queryKey: ['mrp', category, warehouseId, includeUndated ?? false],
     queryFn: () => {
       const q = new URLSearchParams();
       if (category && category !== 'all') q.set('category', category);
       if (warehouseId && warehouseId !== 'all') q.set('warehouseId', warehouseId);
+      if (includeUndated) q.set('includeUndated', 'true');
       const qs = q.toString();
       return authedFetch<MrpResponse>(`/mrp${qs ? `?${qs}` : ''}`);
     },

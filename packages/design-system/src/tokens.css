@@ -140,12 +140,18 @@
      Archivo Black w/ font-stretch when SVG isn't available.
      Chinese: Hiragino Sans GB → falls back to PingFang/Noto Sans SC.
      ------------------------------------------------------------------ */
+  /* Commander 2026-05-29 — switch the backend ERP to the NATIVE SYSTEM FONT
+     (Segoe UI on Windows, SF on macOS). The serif Merriweather titles + Poppins
+     body were straining the eyes; a system sans reads cleaner for dense data
+     screens and loads instantly (no web-font fetch). One token change re-skins
+     every page. (POS/marketing surfaces can keep brand fonts later if wanted.) */
+  --font-system:  system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   /* Body / paragraphs / general UI text */
-  --font-sans:    "Poppins", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  /* Titles / headings (serif, sets the editorial tone) */
-  --font-title:   "Merriweather", Georgia, "Times New Roman", serif;
+  --font-sans:    var(--font-system);
+  /* Titles / headings — system sans (was serif Merriweather) */
+  --font-title:   var(--font-system);
   /* Buttons, links, navigation, eyebrows */
-  --font-button:  "Raleway", "Poppins", system-ui, sans-serif;
+  --font-button:  var(--font-system);
   /* Hand-written touches (offers, scribbled accents) */
   --font-script:  "Caveat", "Mistrully", "Brush Script MT", cursive;
   /* The 2990 logotype — rounded condensed display, used only on the wordmark */
@@ -153,7 +159,12 @@
   /* Backwards-compat alias — some old components still reference --font-display */
   --font-display: var(--font-mark);
   --font-cn:      "Hiragino Sans GB", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-mono:    ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  /* Commander 2026-05-29 — codes / SKUs / doc numbers should read in the same
+     system font as everything else (the monospace face looked like a different,
+     eye-straining typeface). Point --font-mono at the system stack so every
+     "code" chip across the app matches in one change. Column alignment that
+     needs fixed-width digits uses `font-variant-numeric: tabular-nums`. */
+  --font-mono:    var(--font-system);
 
   /* Base size */
   --fs-base: 16px;

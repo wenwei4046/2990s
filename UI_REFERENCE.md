@@ -271,6 +271,51 @@ The prototype always reflects current spec. If a change is approved but the prot
 
 ---
 
+## Typography, Color & Format Standard (locked 2026-05-29)
+
+Loo signed off: **accent colour stays orange**; fonts + sizes stay as the
+existing tokens. This section is the single reference — every page must use
+these tokens, never hard-coded fonts/sizes/hex. Tokens live in
+`packages/design-system/src/tokens.css`.
+
+### Fonts — NATIVE SYSTEM FONT (Loo 2026-05-29: serif strained the eyes)
+The backend ERP uses the OS system font (Segoe UI on Windows, SF on macOS) for
+titles, body, and buttons — all three tokens resolve to `--font-system`.
+| Role | Token | Family |
+|---|---|---|
+| Page/section titles, KPI numbers | `--font-title` | system-ui (Segoe UI / SF) |
+| Body, tables, inputs, labels | `--font-sans` | system-ui |
+| Buttons, chips, tabs, eyebrow labels | `--font-button` | system-ui |
+| Codes / SKUs / monospace cells | `--font-mono` | JetBrains Mono / system mono |
+| 2990S wordmark only | `--font-mark` | Archivo (unchanged) |
+
+### Type scale (use the token, not px)
+- Page title `--fs-20` bold · subtitle `--fs-12` muted
+- Section heading `--fs-14` semibold
+- Table header `--fs-11` uppercase tracked, muted · body cell `--fs-13`
+- Caption / hint `--fs-11`–`--fs-12` muted
+- Weights: `--w-medium 500` · `--w-semibold 600` · `--w-bold 700`
+
+### Colour
+- Ink (body): `--c-ink` #221F20 · muted: `--fg-muted` #5C5455
+- **Accent: `--c-orange` #E86B3A — accent ONLY** (CTAs, active state, shortage/warn). Never large fills.
+- Surfaces: `--c-paper` (cards) on `--c-cream` (page). Lines: `--line` / `--line-strong`.
+- Status: green = healthy/stock, blue = info/PO, orange = warn/shortage, red = error.
+
+### Numbers & dates — ALWAYS via `@2990s/shared`
+- Money (display): `fmtRM` / `fmtMoney`. Editing: `<MoneyInput>` (`components/MoneyInput.tsx`) — never a raw `<input type="number">`.
+- Date: `fmtDate` → "4 May 2026" · `fmtDateOrDash` (→ "—" when null) · `fmtDateTime` → "4 May 2026, 11:20 AM". No ad-hoc `toLocaleDateString`.
+- Phone: `formatPhone` (`@2990s/shared/phone`).
+
+### Page frame
+- Every page: `Breadcrumbs` (in Topbar) → title (`--fs-20` / title font) → subtitle (`--fs-12` / muted) → actions (right). Global Ctrl/Cmd+K palette always available.
+- Empty/zero states show **"—"** + a short reason, never a bare `0.0%`.
+
+*Rollout: new pages conform now; existing pages are swept onto these
+helpers/components round by round (date helpers + a shared PageHeader).*
+
+---
+
 *This document is a living contract. Update the Approved deviations section every time Loo signs off on a change. Do not delete entries — they are the audit trail.*
 
 *Maintainer: Loo (Chairman, HOUZS Venture). Implementer: Claude Code (or whichever AI/dev is doing the build).*

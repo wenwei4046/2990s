@@ -34,6 +34,14 @@ export type InventoryItemGroup =
 /** Loose attribute bag — callers map a SO/PO/GRN line onto this shape. */
 export type VariantAttrs = {
   fabricCode?: string | null;
+  /** Many SO/POS lines store the fabric pick as `colorCode` / `colourCode`
+   *  (Commander's variant editor) rather than `fabricCode`. These are aliases
+   *  for the SAME physical attribute — the fabric — so the key treats a missing
+   *  fabricCode as the colorCode/colourCode. Without this, two bedframes that
+   *  differ ONLY by colour collapsed into one bucket (the colour never entered
+   *  the key). Fixes the long-standing fabric/colour key mismatch. */
+  colorCode?: string | null;
+  colourCode?: string | null;
   seatHeight?: string | null; // sofa
   gap?: string | null; // bedframe
   divanHeight?: string | null; // bedframe
@@ -85,7 +93,12 @@ export function computeVariantKey(
   const parts: string[] = [];
 
   for (const k of ATTRS_BY_GROUP[group] ?? []) {
-    const val = norm(a[k] as unknown);
+    // Fabric is stored under any of fabricCode / colorCode / colourCode — treat
+    // them as one attribute so colour participates in the bucket identity.
+    const raw = k === 'fabricCode'
+      ? (a.fabricCode ?? a.colorCode ?? a.colourCode)
+      : (a[k] as unknown);
+    const val = norm(raw);
     if (val) parts.push(`${k.toLowerCase()}=${val}`);
   }
 

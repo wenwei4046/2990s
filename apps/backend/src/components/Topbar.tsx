@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { Bell, HelpCircle, Search } from 'lucide-react';
+import { Bell, HelpCircle, Search, Command } from 'lucide-react';
+import { Breadcrumbs } from './Breadcrumbs';
 import styles from './Topbar.module.css';
 
 export interface TopbarProps {
@@ -8,9 +9,11 @@ export interface TopbarProps {
   sub?: string;
   searchPlaceholder?: string;
   right?: ReactNode;
+  /** Opens the global Ctrl+K command palette. */
+  onOpenSearch?: () => void;
 }
 
-export const Topbar = ({ title, sub, searchPlaceholder, right }: TopbarProps) => {
+export const Topbar = ({ title, sub, searchPlaceholder, right, onOpenSearch }: TopbarProps) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const q = searchParams.get('q') ?? '';
 
@@ -24,6 +27,7 @@ export const Topbar = ({ title, sub, searchPlaceholder, right }: TopbarProps) =>
   return (
     <header className={styles.topbar}>
       <div className={styles.left}>
+        <Breadcrumbs />
         <div className={styles.title}>{title}</div>
         {sub && <div className={styles.sub}>{sub}</div>}
       </div>
@@ -45,6 +49,12 @@ export const Topbar = ({ title, sub, searchPlaceholder, right }: TopbarProps) =>
 
       <div className={styles.right}>
         {right}
+        {/* Global jump-to (Ctrl/Cmd+K) — navigable from anywhere. */}
+        <button type="button" className={styles.cmdK} onClick={onOpenSearch} aria-label="Search modules (Ctrl K)">
+          <Search size={14} strokeWidth={1.75} />
+          <span className={styles.cmdKText}>Jump to…</span>
+          <kbd className={styles.cmdKKbd}><Command size={11} strokeWidth={2} />K</kbd>
+        </button>
         <button type="button" className={styles.pill} aria-label="Alerts">
           <Bell size={16} strokeWidth={1.75} />
           <span className={styles.pillLabel}>Alerts</span>
