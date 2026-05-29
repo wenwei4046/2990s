@@ -352,6 +352,22 @@ export const PurchaseOrderNew = () => {
     // Replace the initial blank line if the form is still empty; else append.
     setLines((prev) => (prev.some((l) => l.materialCode.trim()) ? [...prev, ...mapped] : mapped));
 
+    /* Commander 2026-05-29 — carry the SO's header context onto the PO so the
+       buyer doesn't re-key it: "为什么 convert 进来不会把 SO 的 Purchase
+       Location 跟 Delivery Date 带过来呢？SO 的 Delivery Date 就等于我们的
+       Expected Delivery Date". Use functional setState with `cur ||` so an
+       already-set value (e.g. restored draft) wins; otherwise adopt the SO's.
+         · Expected Delivery ← SO line delivery date (else SO header date)
+         · Purchase Location ← SO sales_location (a warehouse CODE) resolved to
+           the matching warehouse id in the Purchase Location dropdown. */
+    const firstDelivery = keep.map((p) => p.lineDeliveryDate ?? p.deliveryDate).find(Boolean) ?? null;
+    if (firstDelivery) setExpectedAt((cur) => cur || firstDelivery);
+    const firstLoc = keep.map((p) => p.salesLocation).find(Boolean) ?? null;
+    if (firstLoc) {
+      const wh = (warehouses.data ?? []).find((w) => w.code === firstLoc || w.name === firstLoc);
+      if (wh) setPurchaseLocationId((cur) => cur || wh.id);
+    }
+
     // If some (but not all) picks were a supplier mismatch, tell the user what
     // was skipped so the omission isn't silent.
     if (dropped > 0) {

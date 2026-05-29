@@ -15,7 +15,7 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Ban, ArrowRightLeft,
   ChevronDown, Check,
@@ -114,8 +114,11 @@ export const PurchaseOrderDetail = () => {
      into Edit mode where the existing editable SupplierCard + line modal + Add
      Line Item appear and "Convert from SO" becomes available. Done returns to
      View. Header changes already persist live via the SupplierCard's own Save
-     (updateHeader), so leaving Edit mode simply reflects the saved snapshot. */
-  const [isEditing, setIsEditing] = useState(false);
+     (updateHeader), so leaving Edit mode simply reflects the saved snapshot.
+     Commander 2026-05-29 — the PO list's right-click "Edit" lands here with
+     ?edit=1, so open straight into Edit mode in that case. */
+  const [searchParams] = useSearchParams();
+  const [isEditing, setIsEditing] = useState(() => searchParams.get('edit') === '1');
 
   // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
   // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
@@ -450,6 +453,14 @@ export const PurchaseOrderDetail = () => {
           maint={maint.data?.data ?? null}
           currency={po.currency}
           supplierId={po.supplier_id ?? null}
+          /* Commander 2026-05-29 (BUG 1) — codes already on this PO so the Add
+             Line picker can't add the same item twice. Exclude the line being
+             edited (so re-saving an edit doesn't hide its own code). */
+          existingCodes={new Set(
+            items
+              .filter((it) => it.id !== editing?.id)
+              .map((it) => it.material_code),
+          )}
           onClose={() => { setAdding(false); setEditing(null); }}
           onSave={(payload) => {
             if (editing) {
@@ -691,7 +702,7 @@ type LinePayload = Omit<NewPoItem, 'qty' | 'unitPriceCenti'> & {
 };
 
 const PoLineItemModal = ({
-  editing, maint, currency, supplierId, onClose, onSave, saving,
+  editing, maint, currency, supplierId, existingCodes, onClose, onSave, saving,
 }: {
   editing: PoItemRow | null;
   maint: import('../lib/mfg-products-queries').MaintenanceConfig | null;
@@ -699,6 +710,9 @@ const PoLineItemModal = ({
   /** PR #75 — when set, the picker shows this supplier's bound items first
       and auto-fills supplier_sku + unit price from the binding row. */
   supplierId: string | null;
+  /** Commander 2026-05-29 (BUG 1) — material codes already on this PO. The
+      picker hides them so the same item can't be added/converted twice. */
+  existingCodes: Set<string>;
   onClose: () => void;
   onSave: (p: LinePayload) => void;
   saving: boolean;
@@ -707,10 +721,6 @@ const PoLineItemModal = ({
   const [showAll, setShowAll] = useState(false);
   const productsQuery = useMfgProducts({ search: search.trim() || undefined });
   const candidates = productsQuery.data ?? [];
-
-  // PR #77 — per-line ship-to dropdown options
-  const warehousesQ = useWarehouses();
-  const warehouses = warehousesQ.data ?? [];
 
   // PR #75 — supplier bindings drive the default-state picker. When the PO
   // already has a supplier, show only their bound products until commander
@@ -723,6 +733,19 @@ const PoLineItemModal = ({
     for (const b of bindings) m.set(b.material_code, b);
     return m;
   }, [bindings]);
+
+  /* Commander 2026-05-29 (BUG 1) — drop items already on this PO from BOTH
+     picker lists (bound list + full SKU search) so the same product can't be
+     added twice. When editing an existing line, that line's own code was
+     already excluded by the parent, so it stays pickable. */
+  const visibleBindings = useMemo(
+    () => bindings.filter((b) => !existingCodes.has(b.material_code)),
+    [bindings, existingCodes],
+  );
+  const visibleCandidates = useMemo(
+    () => candidates.filter((p) => !existingCodes.has(p.code)),
+    [candidates, existingCodes],
+  );
 
   const [picked, setPicked] = useState<import('../lib/mfg-products-queries').MfgProductRow | null>(null);
   const [manualPrice, setManualPrice] = useState(false);
@@ -776,7 +799,11 @@ const PoLineItemModal = ({
       materialName:   p.name,
       itemGroup:      p.category.toLowerCase(),
       description:    p.name,
-      unitPriceCenti: bound?.unit_price_centi ?? (p.base_price_sen ?? 0),
+      /* Commander 2026-05-29 — "选完 item，它的 Price 也没有带出来". The binding's
+         unit_price_centi can be 0 (mattress/accessory SKU mapping with no price
+         set yet). `??` kept that 0; use `||` so a 0/unset binding price falls
+         back to the product's own base price instead of showing RM 0.00. */
+      unitPriceCenti: (bound?.unit_price_centi || (p.base_price_sen ?? 0)),
       supplierSku:    bound?.supplier_sku ?? '',
       variants:       {},
     }));
@@ -878,14 +905,14 @@ const PoLineItemModal = ({
           <div>
             <p className={styles.subHead}>
               Product
-              {supplierId && bindings.length > 0 && !showAll && (
+              {supplierId && visibleBindings.length > 0 && !showAll && (
                 <span style={{
                   marginLeft: 8,
                   fontFamily: 'var(--font-sans)',
                   fontSize: 'var(--fs-12)',
                   color: 'var(--fg-muted)',
                 }}>
-                  · showing {bindings.length} bound item{bindings.length === 1 ? '' : 's'}
+                  · showing {visibleBindings.length} bound item{visibleBindings.length === 1 ? '' : 's'}
                   <button
                     type="button"
                     onClick={() => setShowAll(true)}
@@ -937,9 +964,9 @@ const PoLineItemModal = ({
               {/* PR #75 — bindings list shown when supplier picked + no
                   search active. Each row shows: internal code · supplier
                   SKU · material name · unit price. */}
-              {supplierId && !showAll && !search.trim() && bindings.length > 0 && (
+              {supplierId && !showAll && !search.trim() && visibleBindings.length > 0 && (
                 <ul className={styles.suggestList} style={{ position: 'relative', maxHeight: 280, overflow: 'auto' }}>
-                  {bindings.map((b) => (
+                  {visibleBindings.map((b) => (
                     <li key={b.id} className={styles.suggestItem} onMouseDown={() => pickBinding(b)}>
                       <div>
                         <span className={styles.codeCell}>{b.material_code}</span>
@@ -958,23 +985,24 @@ const PoLineItemModal = ({
                   ))}
                 </ul>
               )}
-              {supplierId && !showAll && !search.trim() && bindings.length === 0 && supplierDetail.data && (
+              {supplierId && !showAll && !search.trim() && visibleBindings.length === 0 && supplierDetail.data && (
                 <p style={{
                   margin: '8px 0 0',
                   fontSize: 'var(--fs-13)',
                   color: 'var(--fg-muted)',
                   fontFamily: 'var(--font-sans)',
                 }}>
-                  No bindings configured for this supplier. Type to search the full SKU master,
-                  or open the supplier detail page to add bindings.
+                  {bindings.length > 0
+                    ? 'All of this supplier’s bound items are already on this PO. Type to search the full SKU master.'
+                    : 'No bindings configured for this supplier. Type to search the full SKU master, or open the supplier detail page to add bindings.'}
                 </p>
               )}
               {/* PR #75 — full SKU master search results. Filtered when
                   `showAll` is off + bindings cover the supplier. Always
                   shown when commander types a search query. */}
-              {search.trim() && candidates.length > 0 && search !== draft.materialCode && (
+              {search.trim() && visibleCandidates.length > 0 && search !== draft.materialCode && (
                 <ul className={styles.suggestList}>
-                  {candidates.slice(0, 12).map((p) => {
+                  {visibleCandidates.slice(0, 12).map((p) => {
                     const bound = bindingByCode.get(p.code);
                     return (
                       <li key={p.id} className={styles.suggestItem} onMouseDown={() => pickProduct(p)}>
@@ -988,7 +1016,7 @@ const PoLineItemModal = ({
                           <span style={{ marginLeft: 6 }}>· {p.name}</span>
                         </div>
                         <div className={styles.suggestCode}>
-                          {p.category} · {fmtRm(bound?.unit_price_centi ?? (p.base_price_sen ?? 0), currency)}
+                          {p.category} · {fmtRm(bound?.unit_price_centi || (p.base_price_sen ?? 0), currency)}
                           {bound && <span style={{ marginLeft: 6, color: 'var(--c-orange)' }}>· bound</span>}
                         </div>
                       </li>
@@ -1101,9 +1129,13 @@ const PoLineItemModal = ({
             </div>
           </div>
 
-          {/* PR #77 — per-line delivery + ship-to. Both empty = inherit
-              from PO header (Expected Delivery + Purchase Location). */}
-          <div className={styles.row} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+          {/* PR #77 — per-line delivery override; empty = inherit from PO
+              header (Expected Delivery).
+              Commander 2026-05-29 — removed the Ship-to Warehouse (line
+              override) picker: "这个 Warehouse 不应该叫我选". The ship-to is
+              the PO header's Purchase Location; per-line override isn't wanted.
+              Delivery Date stays (commander: "Delivery Date 可以叫我选"). */}
+          <div className={styles.row}>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Delivery Date (line override)</span>
               <input
@@ -1112,22 +1144,6 @@ const PoLineItemModal = ({
                 value={draft.deliveryDate ?? ''}
                 onChange={(e) => setDraft((s) => ({ ...s, deliveryDate: e.target.value || null }))}
               />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Ship-to Warehouse (line override)</span>
-              <span className={styles.selectWrap}>
-                <select
-                  className={styles.fieldSelect}
-                  value={draft.warehouseId ?? ''}
-                  onChange={(e) => setDraft((s) => ({ ...s, warehouseId: e.target.value || null }))}
-                >
-                  <option value="">— Use PO default —</option>
-                  {warehouses.filter((w) => w.is_active).map((w) => (
-                    <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-                  ))}
-                </select>
-                <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
-              </span>
             </label>
           </div>
 

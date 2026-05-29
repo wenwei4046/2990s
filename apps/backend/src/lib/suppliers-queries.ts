@@ -724,6 +724,12 @@ export function useDeletePurchaseOrderItem() {
       authedFetch<void>(`/mfg-purchase-orders/${poId}/items/${itemId}`, { method: 'DELETE' }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+      /* Commander 2026-05-29 (BUG 1) — deleting a PO line releases the source
+         SO line's po_qty_picked back. Refresh the PO list (new total) AND the
+         From-SO picker (the released line should reappear). The prefix key
+         ['mfg-purchase-orders'] also matches ['mfg-purchase-orders',
+         'outstanding-so-items']. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
     },
   });
 }
@@ -748,7 +754,12 @@ export function useCancelPurchaseOrder() {
         `/mfg-purchase-orders/${id}/cancel`,
         { method: 'PATCH' },
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+    onSuccess: (_, id) => {
+      // Prefix key also matches ['mfg-purchase-orders','outstanding-so-items'],
+      // so the released SO lines reappear in the From-SO picker.
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', id] });
+    },
   });
 }
 

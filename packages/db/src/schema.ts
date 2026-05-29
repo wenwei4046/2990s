@@ -900,10 +900,15 @@ export const purchaseOrderItems = pgTable('purchase_order_items', {
   // empty = inherit from PO header (expected_at + purchase_location_id).
   deliveryDate:            date('delivery_date'),
   warehouseId:             uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  /* Migration 0098 — Commander 2026-05-29 (BUG 1). Source SO line this PO
+     line was converted from (From-SO picker). NULL for manually-added lines.
+     Lets the delete handler release po_qty_picked back to the SO line. */
+  soItemId:                uuid('so_item_id').references(() => mfgSalesOrderItems.id, { onDelete: 'set null' }),
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxPo:        index('idx_po_items_po').on(t.purchaseOrderId),
   idxWarehouse: index('idx_po_items_warehouse').on(t.warehouseId),
+  idxSoItem:    index('idx_po_items_so_item').on(t.soItemId),
 }));
 
 export const purchaseOrderLines = pgTable('purchase_order_lines', {

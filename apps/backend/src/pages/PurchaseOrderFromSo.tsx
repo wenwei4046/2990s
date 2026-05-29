@@ -158,24 +158,53 @@ export const PurchaseOrderFromSo = () => {
     if (row.mainSupplierCode && lockedSupplier && row.mainSupplierCode !== lockedSupplier
         && !picks[id]?.picked) return;
     const turningOn = !picks[id]?.picked;
-    // Sofa = whole set (Commander 2026-05-29): a sofa SO's compartments MUST be
-    // converted together — ticking one sofa line ticks every sofa line of that
-    // same SO. You can't proceed just one compartment of a sofa set.
-    if ((row.itemGroup ?? '').toLowerCase() === 'sofa') {
-      const siblings = items.filter(
-        (r) => r.soDocNo === row.soDocNo && (r.itemGroup ?? '').toLowerCase() === 'sofa',
-      );
+
+    /* Sofa SET (Commander 2026-05-29) — a sofa SO converts as a UNIT: every sofa
+       compartment AND every accessory (pillows: LONG/SQUARE PILLOW, etc.) of that
+       SAME SO travel together on the sofa's PO ("pillow 开在 sofa 里面就要跟 sofa
+       的 PO 一起"). Ticking ANY set member ticks the whole set. An accessory only
+       joins a set when its SO actually contains a sofa — accessories on a
+       sofa-less SO behave as normal standalone lines. */
+    const grp = (row.itemGroup ?? '').toLowerCase();
+    const docHasSofa = items.some(
+      (r) => r.soDocNo === row.soDocNo && (r.itemGroup ?? '').toLowerCase() === 'sofa',
+    );
+    const isSetMember = grp === 'sofa' || (grp === 'accessory' && docHasSofa);
+    if (isSetMember) {
+      const members = items.filter((r) => {
+        if (r.soDocNo !== row.soDocNo) return false;
+        const g = (r.itemGroup ?? '').toLowerCase();
+        return g === 'sofa' || g === 'accessory';
+      });
+      /* The supplier this set rides on = the sofa's bound supplier (first sofa
+         line that has one), else whatever's already locked. */
+      const sofaSupplier = members
+        .find((r) => (r.itemGroup ?? '').toLowerCase() === 'sofa' && r.mainSupplierCode)?.mainSupplierCode
+        ?? row.mainSupplierCode ?? lockedSupplier ?? null;
+      /* One PO = one supplier. Members on the sofa's supplier (or unbound) ride
+         this PO; members bound to a DIFFERENT supplier (e.g. pillows from another
+         vendor) can't sit on it — they split to their own PO ("不同就分开 + 提示"). */
+      const rideOn   = members.filter((r) => !r.mainSupplierCode || !sofaSupplier || r.mainSupplierCode === sofaSupplier);
+      const splitOff = members.filter((r) => r.mainSupplierCode && sofaSupplier && r.mainSupplierCode !== sofaSupplier);
       setPicks((s) => {
         const next = { ...s };
-        for (const sib of siblings) {
-          next[sib.soItemId] = turningOn
-            ? { picked: true, qty: sib.remainingQty }
+        for (const m of rideOn) {
+          next[m.soItemId] = turningOn
+            ? { picked: true, qty: m.remainingQty }
             : { picked: false, qty: 0 };
         }
         return next;
       });
+      if (turningOn && splitOff.length > 0) {
+        const codes = [...new Set(splitOff.map((r) => `${r.itemCode} · ${r.mainSupplierName ?? r.mainSupplierCode}`))];
+        setDialog({
+          title: 'Pillow 要另开一张 PO',
+          body: `这张 SO (${row.soDocNo}) 的这些 accessory 是别的 supplier，没办法跟 sofa 同一张 PO，请另外 convert 给它们的 supplier：\n` + codes.map((c) => `• ${c}`).join('\n'),
+        });
+      }
       return;
     }
+
     setPicks((s) => ({
       ...s,
       [id]: turningOn ? { picked: true, qty: s[id]?.qty || remaining } : { picked: false, qty: 0 },

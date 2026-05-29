@@ -322,12 +322,36 @@ export const Mrp = () => {
      matched). One pick per SO line; the convert endpoint groups them into POs
      per the PO mode (Combined = 1 PO/supplier, Per SO = 1 PO/SO). */
   const gatherSofaSets = (sets: SofaSet[]) => {
-    const picks = sets
-      .filter((s) => s.shortageQty > 0)
+    const chosen = sets.filter((s) => s.shortageQty > 0);
+    const picks = chosen
       .map((s) => ({ soItemId: s.soItemId, qty: s.shortageQty }))
       .filter((p) => p.soItemId);
-    const orderedCodes = new Set(sets.filter((s) => s.shortageQty > 0).map((s) => s.itemCode));
-    const units = sets.filter((s) => s.shortageQty > 0).reduce((a, s) => a + s.shortageQty, 0);
+    const orderedCodes = new Set(chosen.map((s) => s.itemCode));
+    let units = chosen.reduce((a, s) => a + s.shortageQty, 0);
+
+    /* Commander 2026-05-29 — "pillow 开在 sofa 里面就要跟 sofa 的 PO 一起". For
+       every SO we're proceeding a sofa set on, ALSO pull that SO's accessory
+       (pillow) shortage lines into the same /from-sos batch. The server groups
+       by supplier, so same-supplier pillows land on the sofa's PO and a
+       different-supplier pillow splits to its own PO automatically. Accessories
+       live in the General tab's SKU list, so read them off the raw payload
+       (`data.skus`) — `viewSkus` is sofa-only in this view. Respect the active
+       date window so we don't drag in out-of-window pillows. */
+    const setDocs = new Set(chosen.map((s) => s.soDocNo));
+    const already = new Set(picks.map((p) => p.soItemId));
+    const accessoryLines = (data?.skus ?? [])
+      .filter((s) => (s.category ?? '').toUpperCase() === 'ACCESSORY')
+      .flatMap((s) => s.lines.map((l) => ({ line: l, itemCode: s.itemCode })))
+      .filter(({ line }) =>
+        line.source === 'shortage' && line.shortageQty > 0 && line.soItemId
+        && setDocs.has(line.soDocNo) && (!hasWindow || lineInWindow(line)));
+    for (const { line, itemCode } of accessoryLines) {
+      if (already.has(line.soItemId)) continue;
+      already.add(line.soItemId);
+      picks.push({ soItemId: line.soItemId, qty: line.shortageQty });
+      orderedCodes.add(itemCode);
+      units += line.shortageQty;
+    }
     return { picks, orderedCodes, units };
   };
 
