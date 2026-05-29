@@ -131,6 +131,14 @@ export const GrnFromPo = () => {
 
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
+  /* One GRN per PO (grns.purchase_order_id is a single FK) → different
+     suppliers are NEVER merged into one GRN. Surface the resulting GRN count
+     so the split is obvious before saving (Commander 2026-05-29). */
+  const pickedIds = useMemo(() => new Set(picked.map(([id]) => id)), [picked]);
+  const grnCount = useMemo(
+    () => new Set(items.filter((r) => pickedIds.has(r.poItemId)).map((r) => r.poId)).size,
+    [items, pickedIds],
+  );
 
   // ── Columns — mirror Create-PO-from-SO (PO Doc No / Supplier / Category /
   //    Item Code / Description+variants / Ordered / Received / Pick Qty /
@@ -361,6 +369,7 @@ export const GrnFromPo = () => {
             variant="primary" size="md"
             onClick={onSave}
             disabled={create.isPending || pickedCount === 0 || !receivedDate}
+            title="One GRN per PO — different suppliers are never merged into one GRN."
           >
             <Save {...ICON} />
             {create.isPending
@@ -369,7 +378,7 @@ export const GrnFromPo = () => {
                 ? 'Pick at least 1 line'
                 : !receivedDate
                   ? 'Set received date'
-                  : `Create GRNs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
+                  : `Create ${grnCount} GRN${grnCount === 1 ? '' : 's'} (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
           </Button>
         </div>
       </div>
