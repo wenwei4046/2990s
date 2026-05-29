@@ -28,6 +28,11 @@ const STATUS_COLOR: Record<string, string> = {
   POSTED: 'rgba(47, 93, 79, 0.12)',
   CLOSED: 'rgba(31, 58, 138, 0.10)',
 };
+// A GRN has no draft/lifecycle — POSTED reads as "Confirmed". No raw POSTED.
+const STATUS_LABEL: Record<string, string> = {
+  POSTED: 'Confirmed',
+  CLOSED: 'Closed',
+};
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -96,11 +101,11 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
     accessor: (g) => (
       <span className={styles.statusPill} style={{ background: STATUS_COLOR[g.status] }}>
-        {g.status.replace('_', ' ')}
+        {STATUS_LABEL[g.status] ?? g.status.replace('_', ' ')}
       </span>
     ),
-    searchValue: (g) => g.status.replace('_', ' '),
-    groupValue: (g) => g.status,
+    searchValue: (g) => STATUS_LABEL[g.status] ?? g.status.replace('_', ' '),
+    groupValue: (g) => STATUS_LABEL[g.status] ?? g.status,
     sortFn: (a, b) => a.status.localeCompare(b.status),
   },
 ];
@@ -114,17 +119,17 @@ export const GoodsReceived = () => {
   const rows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
   const columns = useMemo(() => buildGrnColumns(), []);
 
-  // Single-GRN convert (right-click) → create the doc, then jump into its
-  // detail page in Edit mode so the user can trim qty / adjust before posting.
+  // Single-GRN convert (right-click) → create the doc, then jump straight onto
+  // its detail page (the converted doc is already confirmed — no draft step).
   const convertToPi = (g: GrnRow) => {
     piFromGrn.mutate(g.id, {
-      onSuccess: (res) => navigate(`/purchase-invoices/${res.id}?edit=1`),
+      onSuccess: (res) => navigate(`/purchase-invoices/${res.id}`),
       onError: (e) => alert(`Convert to PI failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
   const convertToPr = (g: GrnRow) => {
     prFromGrn.mutate(g.id, {
-      onSuccess: (res) => navigate(`/purchase-returns/${res.id}?edit=1`),
+      onSuccess: (res) => navigate(`/purchase-returns/${res.id}`),
       onError: (e) => alert(`Convert to PR failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
@@ -172,8 +177,9 @@ export const GoodsReceived = () => {
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
           : undefined}
         contextMenu={(g) => [
-          { label: 'View', onClick: () => navigate(`/grns/${g.id}`) },
-          { label: 'Edit', onClick: () => navigate(`/grns/${g.id}?edit=1`) },
+          // The GRN detail page is always inline-editable (no draft / no Edit
+          // gate), so a single "Open" entry covers both view + edit.
+          { label: 'Open', onClick: () => navigate(`/grns/${g.id}`) },
           { divider: true as const },
           { label: 'Convert to PI', onClick: () => convertToPi(g) },
           { label: 'Convert to PR', onClick: () => convertToPr(g) },

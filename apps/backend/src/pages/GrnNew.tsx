@@ -66,7 +66,8 @@ const VariantSelect = ({
     <span className={styles.fieldLabel}>{label}</span>
     <span className={styles.selectWrap}>
       <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">—</option>
+        {/* Empty option keeps the variant unset — blank label (no confusing dash). */}
+        <option value=""></option>
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
@@ -233,7 +234,7 @@ export const GrnNew = () => {
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
 
   const subtotalCenti = useMemo(
-    () => lines.reduce((s, l) => s + l.qtyAccepted * l.unitPriceCenti, 0),
+    () => lines.reduce((s, l) => s + l.qtyReceived * l.unitPriceCenti, 0),
     [lines],
   );
 
@@ -348,7 +349,7 @@ export const GrnNew = () => {
   };
 
   const canSave = !!supplierId && lines.length > 0 &&
-    lines.every((l) => l.qtyReceived >= 0 && l.qtyAccepted + l.qtyRejected <= l.qtyReceived);
+    lines.every((l) => l.qtyReceived >= 0);
 
   const onSave = async () => {
     if (!supplierId) {
@@ -364,7 +365,7 @@ export const GrnNew = () => {
       return;
     }
     if (!canSave) {
-      setDialog({ title: 'Check the quantities', body: 'Each line: qty accepted + qty rejected must be ≤ qty received.' });
+      setDialog({ title: 'Check the quantities', body: 'Each line must have a received qty of 0 or more.' });
       return;
     }
     try {
@@ -384,8 +385,11 @@ export const GrnNew = () => {
           materialCode:        l.materialCode,
           materialName:        l.materialName,
           qtyReceived:         l.qtyReceived,
-          qtyAccepted:         l.qtyAccepted,
-          qtyRejected:         l.qtyRejected,
+          // Commander 2026-05-29 — GRN only captures received qty; accepted
+          // follows received (rejected 0) so the existing API + inventory
+          // rollup keep working with the simplified single-qty UI.
+          qtyAccepted:         l.qtyReceived,
+          qtyRejected:         0,
           unitPriceCenti:      l.unitPriceCenti,
           notes:               l.notes || undefined,
           // Commander 2026-05-29 — persist the line's category + variant
@@ -625,7 +629,7 @@ export const GrnNew = () => {
                picker (manual) / read-only code (PO-sourced), description, the
                per-category variant editor, then a fields row. */
             lines.map((l, idx) => {
-              const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
+              const lineValueCenti = l.qtyReceived * l.unitPriceCenti;
               const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
               // Manual lines have no outstanding cap — qty inputs go uncapped.
               const cap = l.outstanding;
@@ -834,10 +838,12 @@ export const GrnNew = () => {
                     </div>
                   )}
 
-                  {/* Fields row — Outstanding · Received · Accepted · Rejected ·
-                      Unit Price · Line Value. (Outstanding is read-only / PO lines
-                      only; manual lines show "—".) */}
-                  <div className={styles.formGrid4} style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
+                  {/* Fields row — Outstanding · Received · Unit Price · Line Value.
+                      Commander 2026-05-29: GRN only needs the RECEIVED qty.
+                      Accepted/Rejected are gone from the UI — internally accepted
+                      tracks received (rejected 0) so the inventory rollup is intact.
+                      (Outstanding is read-only / PO lines only; manual lines "—".) */}
+                  <div className={styles.formGrid4}>
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>Outstanding</span>
                       <input
@@ -854,25 +860,9 @@ export const GrnNew = () => {
                         onChange={(e) => {
                           let v = Math.max(0, Number(e.target.value) || 0);
                           if (cap != null) v = Math.min(cap, v);
-                          setLine(l.rid, { qtyReceived: v, qtyAccepted: Math.min(l.qtyAccepted, v) });
-                        }}
-                        className={styles.fieldInput} style={{ textAlign: 'right' }} />
-                    </label>
-                    <label className={styles.field}>
-                      <span className={styles.fieldLabel}>Accepted</span>
-                      <input type="number" min={0} max={l.qtyReceived} value={l.qtyAccepted}
-                        onChange={(e) => {
-                          const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
-                          setLine(l.rid, { qtyAccepted: v, qtyRejected: l.qtyReceived - v });
-                        }}
-                        className={styles.fieldInput} style={{ textAlign: 'right' }} />
-                    </label>
-                    <label className={styles.field}>
-                      <span className={styles.fieldLabel}>Rejected</span>
-                      <input type="number" min={0} max={l.qtyReceived} value={l.qtyRejected}
-                        onChange={(e) => {
-                          const v = Math.max(0, Math.min(l.qtyReceived, Number(e.target.value) || 0));
-                          setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
+                          // Accepted follows received (rejected 0) — kept in sync so
+                          // the create payload + inventory rollup stay correct.
+                          setLine(l.rid, { qtyReceived: v, qtyAccepted: v, qtyRejected: 0 });
                         }}
                         className={styles.fieldInput} style={{ textAlign: 'right' }} />
                     </label>
