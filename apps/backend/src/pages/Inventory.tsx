@@ -58,6 +58,16 @@ const fmtRm = (sen: number | null | undefined): string => {
   return `RM ${(sen / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
+/* Age of the stock — days since the oldest open FIFO lot was received
+   (Commander 2026-05-29: "寿命" replaces Last Movement). */
+const fmtAgeDays = (iso: string | null): string => {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const d = Math.floor(ms / 86_400_000);
+  return d === 0 ? 'today' : `${d}d`;
+};
+
 export const Inventory = () => {
   const [tab, setTab] = useState<Tab>('balances');
   const [warehouseId, setWarehouseId] = useState<string | null>(null);
@@ -242,17 +252,20 @@ const BalancesTab = ({
               <th>Product Code</th>
               <th>Description</th>
               <th>Category</th>
-              <th>Size</th>
-              <th style={{ textAlign: 'right' }}>Total Bal Qty</th>
+              <th style={{ textAlign: 'right' }}>Stock</th>
+              <th style={{ textAlign: 'right' }}>Incoming</th>
+              <th style={{ textAlign: 'right' }}>Reserve 7d</th>
+              <th style={{ textAlign: 'right' }}>Reserve 14d</th>
+              <th style={{ textAlign: 'right' }}>Available</th>
               <th style={{ textAlign: 'right' }}>Value</th>
-              <th>Main Supplier</th>
-              <th>Last Movement</th>
+              <th style={{ textAlign: 'right' }}>Unit Cost</th>
+              <th>Age</th>
             </tr>
           </thead>
           <tbody>
-            {isLoading && <tr><td colSpan={8} className={styles.emptyRow}>Loading…</td></tr>}
+            {isLoading && <tr><td colSpan={11} className={styles.emptyRow}>Loading…</td></tr>}
             {!isLoading && rows.length === 0 && (
-              <tr><td colSpan={8} className={styles.emptyRow}>
+              <tr><td colSpan={11} className={styles.emptyRow}>
                 <Boxes size={32} strokeWidth={1.5} />
                 <div style={{ marginTop: 8 }}>No SKUs match the filters.</div>
               </td></tr>
@@ -302,21 +315,27 @@ const BalancesTab = ({
                       {r.branding && <span className={styles.numCellZero}> · {r.branding}</span>}
                     </td>
                     <td className={styles.numCellZero}>{r.category}</td>
-                    <td className={styles.numCellZero}>{r.size_label ?? '—'}</td>
                     <td className={`${styles.numCell} ${qtyClass}`}>{r.total_qty.toLocaleString('en-MY')}</td>
+                    <td className={`${styles.numCell} ${r.incoming_qty > 0 ? styles.numCellPos : styles.numCellZero}`}>
+                      {r.incoming_qty > 0 ? `+${r.incoming_qty.toLocaleString('en-MY')}` : '—'}
+                    </td>
+                    <td className={`${styles.numCell} ${r.reserve_7d > 0 ? '' : styles.numCellZero}`}>
+                      {r.reserve_7d > 0 ? r.reserve_7d.toLocaleString('en-MY') : '—'}
+                    </td>
+                    <td className={`${styles.numCell} ${r.reserve_14d > 0 ? '' : styles.numCellZero}`}>
+                      {r.reserve_14d > 0 ? r.reserve_14d.toLocaleString('en-MY') : '—'}
+                    </td>
+                    <td className={`${styles.numCell} ${r.available_qty < 0 ? styles.numCellNeg : r.available_qty > 0 ? styles.numCellPos : styles.numCellZero}`}
+                      title="Stock − reserved (open SO demand)">
+                      {r.available_qty.toLocaleString('en-MY')}
+                    </td>
                     <td className={`${styles.numCell} ${styles.numCellZero}`}>
                       {r.total_value_sen > 0 ? fmtRm(r.total_value_sen) : '—'}
                     </td>
-                    <td>
-                      {r.main_supplier_code ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <Star size={11} strokeWidth={2}
-                            style={{ color: 'var(--c-orange)', fill: 'var(--c-orange)' }} />
-                          <span className={styles.codeChip}>{r.main_supplier_code}</span>
-                        </span>
-                      ) : <span className={styles.numCellZero}>—</span>}
+                    <td className={`${styles.numCell} ${styles.numCellZero}`}>
+                      {r.total_qty > 0 && r.total_value_sen > 0 ? fmtRm(Math.round(r.total_value_sen / r.total_qty)) : '—'}
                     </td>
-                    <td className={styles.numCellZero}>{r.last_movement_at ? fmtDateTime(r.last_movement_at) : '—'}</td>
+                    <td className={styles.numCellZero} title={r.oldest_lot_at ?? undefined}>{fmtAgeDays(r.oldest_lot_at)}</td>
                   </tr>
                   {open && <SkuVariantRows code={r.product_code} />}
                 </Fragment>
@@ -351,10 +370,10 @@ const SkuVariantRows = ({ code }: { code: string }) => {
 
   const rowStyle = { background: 'var(--c-cream)' } as const;
   if (bd.isLoading) {
-    return <tr style={rowStyle}><td /><td colSpan={7} className={styles.numCellZero}>Loading variants…</td></tr>;
+    return <tr style={rowStyle}><td /><td colSpan={10} className={styles.numCellZero}>Loading variants…</td></tr>;
   }
   if (variants.length === 0) {
-    return <tr style={rowStyle}><td /><td colSpan={7} className={styles.numCellZero}>No stock buckets yet.</td></tr>;
+    return <tr style={rowStyle}><td /><td colSpan={10} className={styles.numCellZero}>No stock buckets yet.</td></tr>;
   }
   return (
     <>
@@ -367,8 +386,9 @@ const SkuVariantRows = ({ code }: { code: string }) => {
               <span className={styles.numCellZero}>↳</span>
               <span>{formatVariantKey(v.vk) || 'Standard'}</span>
             </td>
-            <td /><td />
+            <td />
             <td className={`${styles.numCell} ${qtyClass}`}>{v.qty.toLocaleString('en-MY')}</td>
+            <td /><td /><td /><td />
             <td className={`${styles.numCell} ${styles.numCellZero}`}>{v.value > 0 ? fmtRm(v.value) : '—'}</td>
             <td /><td />
           </tr>

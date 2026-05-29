@@ -70,6 +70,15 @@ export type InventoryProductTotal = {
   main_supplier_code: string | null;
   main_supplier_name: string | null;
   main_supplier_price_centi: number | null;
+  /* Commander 2026-05-29 — live stock picture (computed server-side):
+     reserve = open SO demand by delivery window; available = stock − reserved;
+     incoming = outstanding PO supply; oldest_lot_at = age of the stock. */
+  reserve_7d: number;
+  reserve_14d: number;
+  reserved_total: number;
+  available_qty: number;
+  incoming_qty: number;
+  oldest_lot_at: string | null;
 };
 
 export type InventoryMovement = {
