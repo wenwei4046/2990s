@@ -83,6 +83,7 @@ export const DeliveryOrderNew = () => {
   const [customerSoNo, setCustomerSoNo] = useState('');
 
   // ── Delivery info ──
+  const [doDate, setDoDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [driverId, setDriverId] = useState('');
   const [driverName, setDriverName] = useState('');
   const [vehicle, setVehicle] = useState('');
@@ -253,6 +254,7 @@ export const DeliveryOrderNew = () => {
     create.mutate(
       {
         soDocNo: fromSo || undefined,
+        doDate: doDate || undefined,
         debtorName,
         debtorCode: debtorCode || undefined,
         phone: phone || undefined,
@@ -395,6 +397,11 @@ export const DeliveryOrderNew = () => {
         <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Delivery Info</h2></header>
         <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>DO Date</span>
+              <input type="date" className={styles.fieldInput} value={doDate}
+                onChange={(e) => setDoDate(e.target.value)} />
+            </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Driver</span>
               <span className={styles.selectWrap}>

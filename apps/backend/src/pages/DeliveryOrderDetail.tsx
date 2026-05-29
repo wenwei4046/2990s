@@ -667,6 +667,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     emergencyContactName: h.emergency_contact_name ?? '',
     emergencyContactPhone: h.emergency_contact_phone ?? '',
     emergencyContactRelationship: h.emergency_contact_relationship ?? '',
+    doDate: h.do_date ?? '',
     customerDeliveryDate: h.customer_delivery_date ?? '',
     expectedDeliveryAt: h.expected_delivery_at ?? '',
     note: h.note ?? h.notes ?? '',
@@ -712,6 +713,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
     emergencyContactName: form.emergencyContactName,
     emergencyContactPhone: form.emergencyContactPhone,
     emergencyContactRelationship: form.emergencyContactRelationship,
+    doDate: form.doDate || null,
     customerDeliveryDate: form.customerDeliveryDate || null,
     expectedDeliveryAt: form.expectedDeliveryAt || null,
     note: form.note,
@@ -792,6 +794,11 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
         <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Delivery Info</h2></header>
         <div className={styles.cardBody}>
           <div className={styles.formGrid4}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>DO Date</span>
+              <input type="date" className={styles.fieldInput} value={form.doDate}
+                disabled={inputsDisabled} onChange={(e) => set('doDate', e.target.value)} />
+            </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Driver</span>
               <span className={styles.selectWrap}>

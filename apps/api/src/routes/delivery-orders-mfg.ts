@@ -165,47 +165,140 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
-/* Commander 2026-05-30 — conversion lock. An SO that already has an ACTIVE
-   (non-cancelled) Delivery Order must NOT be converted again — otherwise the
-   same goods ship twice and stock double-deducts. Returns the subset of the
-   given SO doc_nos that are already converted. Detection is path-independent:
-     (a) header link — a non-cancelled DO whose so_doc_no IS the SO (single-SO
-         convert + the first SO of a merge), AND
-     (b) line link — any of the SO's line items referenced by so_item_id on a
-         non-cancelled DO's lines (covers the extra SOs folded into a merge).
-   Cancelling the DO clears both, so the SO becomes convertible again. */
-async function convertedSoDocs(sb: any, soDocNos: string[]): Promise<Set<string>> {
-  const out = new Set<string>();
+/* Commander 2026-05-30 — LINE-LEVEL, QUANTITY-BASED partial delivery.
+   Replaces the old binary whole-SO conversion lock. For each SO line, the
+   DELIVERABLE REMAINING quantity is DERIVED LIVE (no stored counter — that
+   drifts):
+
+     remaining(soItem) = soItem.qty
+       − Σ delivery_order_items.qty   where so_item_id = soItem.id
+                                      AND its delivery_orders.status != 'CANCELLED'
+       + Σ delivery_return_items.qty_returned  where that return line traces
+              (do_item_id → delivery_order_items.so_item_id = soItem.id) to a
+              non-cancelled delivery_returns
+
+   So a line is partially delivered (remaining > 0 → still convertible) or
+   fully delivered (remaining == 0 → not convertible). Cancelling a DO,
+   deleting a DO line, or processing a Delivery Return automatically RAISES
+   remaining again, because the formula re-derives from the live rows.
+
+   Returns one descriptor row per requested SO line (qty + remaining + the
+   fields the picker / convert handler need), keyed by SO line id. */
+type DeliverableLine = {
+  soItemId: string;
+  docNo: string;
+  debtorCode: string | null;
+  debtorName: string | null;
+  itemCode: string;
+  itemGroup: string | null;
+  description: string | null;
+  description2: string | null;
+  uom: string | null;
+  qty: number;
+  unitPriceCenti: number;
+  unitCostCenti: number;
+  discountCenti: number;
+  variants: unknown;
+  delivered: number;
+  returned: number;
+  remaining: number;
+};
+
+async function soDeliverableRemaining(
+  sb: any,
+  soDocNos: string[],
+): Promise<Map<string, DeliverableLine>> {
+  const out = new Map<string, DeliverableLine>();
   if (soDocNos.length === 0) return out;
-  // (a) header link
-  const { data: byHeader } = await sb.from('delivery_orders')
-    .select('so_doc_no, status').in('so_doc_no', soDocNos).neq('status', 'CANCELLED');
-  for (const d of (byHeader ?? []) as Array<{ so_doc_no: string | null }>) {
-    if (d.so_doc_no) out.add(d.so_doc_no);
+
+  // 1. Load the non-cancelled SO lines of the requested SOs.
+  const { data: soItems } = await sb
+    .from('mfg_sales_order_items')
+    .select(
+      'id, doc_no, debtor_code, debtor_name, item_code, item_group, description, description2, ' +
+      'uom, qty, unit_price_centi, unit_cost_centi, discount_centi, variants',
+    )
+    .in('doc_no', soDocNos)
+    .eq('cancelled', false);
+  const lines = (soItems ?? []) as Array<Record<string, unknown> & { id: string; doc_no: string; qty: number }>;
+  if (lines.length === 0) return out;
+  const soItemIds = lines.map((l) => l.id);
+
+  // 2. Σ delivered — DO lines linked by so_item_id whose parent DO is NOT
+  //    cancelled. Two-step: pull the candidate DO lines, then drop those whose
+  //    parent DO is cancelled.
+  const { data: doLines } = await sb
+    .from('delivery_order_items')
+    .select('id, so_item_id, qty, delivery_order_id')
+    .in('so_item_id', soItemIds);
+  const doLineRows = (doLines ?? []) as Array<{ id: string; so_item_id: string | null; qty: number; delivery_order_id: string }>;
+  const doIds = [...new Set(doLineRows.map((l) => l.delivery_order_id).filter(Boolean))];
+  const activeDoIds = new Set<string>();
+  if (doIds.length > 0) {
+    const { data: dos } = await sb.from('delivery_orders').select('id, status').in('id', doIds);
+    for (const d of (dos ?? []) as Array<{ id: string; status: string | null }>) {
+      if ((d.status ?? '').toUpperCase() !== 'CANCELLED') activeDoIds.add(d.id);
+    }
   }
-  // (b) line link via so_item_id
-  const { data: soItems } = await sb.from('mfg_sales_order_items')
-    .select('id, doc_no').in('doc_no', soDocNos);
-  const idToDoc = new Map<string, string>();
-  for (const r of (soItems ?? []) as Array<{ id: string; doc_no: string }>) idToDoc.set(r.id, r.doc_no);
-  const ids = [...idToDoc.keys()];
-  if (ids.length > 0) {
-    const { data: doLines } = await sb.from('delivery_order_items')
-      .select('so_item_id, delivery_order_id').in('so_item_id', ids);
-    const lines = (doLines ?? []) as Array<{ so_item_id: string | null; delivery_order_id: string }>;
-    const doIds = [...new Set(lines.map((l) => l.delivery_order_id).filter(Boolean))];
-    if (doIds.length > 0) {
-      const { data: dos } = await sb.from('delivery_orders').select('id, status').in('id', doIds);
-      const activeIds = new Set(
-        ((dos ?? []) as Array<{ id: string; status: string | null }>)
-          .filter((d) => (d.status ?? '').toUpperCase() !== 'CANCELLED').map((d) => d.id),
-      );
-      for (const l of lines) {
-        if (l.so_item_id && activeIds.has(l.delivery_order_id) && idToDoc.has(l.so_item_id)) {
-          out.add(idToDoc.get(l.so_item_id)!);
-        }
+  // DO line id → SO item id (only for active DOs), used to trace returns below.
+  const doLineToSoItem = new Map<string, string>();
+  const deliveredBySoItem = new Map<string, number>();
+  for (const l of doLineRows) {
+    if (!l.so_item_id || !activeDoIds.has(l.delivery_order_id)) continue;
+    doLineToSoItem.set(l.id, l.so_item_id);
+    deliveredBySoItem.set(l.so_item_id, (deliveredBySoItem.get(l.so_item_id) ?? 0) + Number(l.qty ?? 0));
+  }
+
+  // 3. Σ returned — DR lines whose do_item_id traces (via the active DO line)
+  //    back to one of our SO items, and whose parent DR is NOT cancelled.
+  const returnedBySoItem = new Map<string, number>();
+  const activeDoLineIds = [...doLineToSoItem.keys()];
+  if (activeDoLineIds.length > 0) {
+    const { data: drLines } = await sb
+      .from('delivery_return_items')
+      .select('do_item_id, qty_returned, delivery_return_id')
+      .in('do_item_id', activeDoLineIds);
+    const drLineRows = (drLines ?? []) as Array<{ do_item_id: string | null; qty_returned: number; delivery_return_id: string }>;
+    const drIds = [...new Set(drLineRows.map((l) => l.delivery_return_id).filter(Boolean))];
+    const activeDrIds = new Set<string>();
+    if (drIds.length > 0) {
+      const { data: drs } = await sb.from('delivery_returns').select('id, status').in('id', drIds);
+      for (const d of (drs ?? []) as Array<{ id: string; status: string | null }>) {
+        if ((d.status ?? '').toUpperCase() !== 'CANCELLED') activeDrIds.add(d.id);
       }
     }
+    for (const l of drLineRows) {
+      if (!l.do_item_id || !activeDrIds.has(l.delivery_return_id)) continue;
+      const soItemId = doLineToSoItem.get(l.do_item_id);
+      if (!soItemId) continue;
+      returnedBySoItem.set(soItemId, (returnedBySoItem.get(soItemId) ?? 0) + Number(l.qty_returned ?? 0));
+    }
+  }
+
+  // 4. Assemble per-line descriptors with the live remaining.
+  for (const l of lines) {
+    const qty = Number(l.qty ?? 0);
+    const delivered = deliveredBySoItem.get(l.id) ?? 0;
+    const returned = returnedBySoItem.get(l.id) ?? 0;
+    out.set(l.id, {
+      soItemId: l.id,
+      docNo: l.doc_no,
+      debtorCode: (l.debtor_code as string | null) ?? null,
+      debtorName: (l.debtor_name as string | null) ?? null,
+      itemCode: l.item_code as string,
+      itemGroup: (l.item_group as string | null) ?? null,
+      description: (l.description as string | null) ?? null,
+      description2: (l.description2 as string | null) ?? null,
+      uom: (l.uom as string | null) ?? null,
+      qty,
+      unitPriceCenti: Number(l.unit_price_centi ?? 0),
+      unitCostCenti: Number(l.unit_cost_centi ?? 0),
+      discountCenti: Number(l.discount_centi ?? 0),
+      variants: l.variants ?? null,
+      delivered,
+      returned,
+      remaining: qty - delivered + returned,
+    });
   }
   return out;
 }
@@ -218,6 +311,41 @@ deliveryOrdersMfg.get('/', async (c) => {
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ deliveryOrders: data ?? [] });
+});
+
+// ── Deliverable SO lines (line-level partial-delivery picker) ─────────────
+/* Commander 2026-05-30 — feeds the line-level SO→DO picker. Returns each SO
+   LINE that can still be delivered (remaining > 0), where remaining is derived
+   live by soDeliverableRemaining (qty − delivered + returned). With ?docNos=
+   it scopes to those SOs; without it, every non-cancelled SO is considered.
+
+   IMPORTANT (route ordering): this STATIC path MUST be registered BEFORE the
+   `/:id` param route below — otherwise Hono matches `/:id` first and tries to
+   cast "deliverable-so-lines" to a uuid. */
+deliveryOrdersMfg.get('/deliverable-so-lines', async (c) => {
+  const sb = c.get('supabase');
+
+  // Resolve the candidate SO doc_nos. Explicit ?docNos=A,B wins; otherwise
+  // pull every non-cancelled SO (capped) so the picker can show all of them.
+  const docNosParam = c.req.query('docNos');
+  let docNos: string[];
+  if (docNosParam && docNosParam.trim()) {
+    docNos = [...new Set(docNosParam.split(',').map((d) => d.trim()).filter(Boolean))];
+  } else {
+    const { data: sos, error } = await sb
+      .from('mfg_sales_orders')
+      .select('doc_no, status')
+      .neq('status', 'CANCELLED')
+      .order('doc_no', { ascending: false })
+      .limit(1000);
+    if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+    docNos = ((sos ?? []) as Array<{ doc_no: string }>).map((s) => s.doc_no).filter(Boolean);
+  }
+  if (docNos.length === 0) return c.json({ lines: [] });
+
+  const remainingMap = await soDeliverableRemaining(sb, docNos);
+  const lines = [...remainingMap.values()].filter((l) => l.remaining > 0);
+  return c.json({ lines });
 });
 
 // ── Detail ──────────────────────────────────────────────────────────────
@@ -245,20 +373,11 @@ deliveryOrdersMfg.post('/', async (c) => {
 
   const sb = c.get('supabase'); const user = c.get('user');
 
-  /* Conversion lock — if this DO is being created from an SO (soDocNo set) and
-     that SO already has an active DO, reject. Cancel the existing DO to redo. */
-  const srcSo = (body.soDocNo as string | undefined) ?? undefined;
-  if (srcSo) {
-    const conv = await convertedSoDocs(sb, [srcSo]);
-    if (conv.size > 0) {
-      return c.json({
-        error: 'already_converted',
-        message: `${srcSo} already has an active Delivery Order. Cancel that DO before converting again.`,
-        alreadyConverted: [...conv],
-      }, 409);
-    }
-  }
-
+  /* Commander 2026-05-30 — the old whole-SO "already_converted" binary lock is
+     GONE. Delivery is now line-level + quantity-based (see
+     soDeliverableRemaining): an SO line can be split across several DOs until
+     its remaining hits 0. This single-SO prefill path creates a full-qty DO
+     as before; the partial/multi path lives in POST /from-sos. */
   const doNumber = await nextNum(sb);
 
   const phoneRaw = (body.phone as string | undefined) ?? null;
@@ -360,111 +479,121 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>) {
   };
 }
 
-// ── Convert several SOs → ONE merged DO ───────────────────────────────────
-/* Commander 2026-05-29 — multi-select DO-from-SO. Mirrors the PO's
-   /from-sos multi-select but at SO-LEVEL: pick several whole Sales Orders of
-   the SAME customer and combine them into ONE Delivery Order.
+// ── Convert picked SO LINES (partial qty) → ONE DO ────────────────────────
+/* Commander 2026-05-30 — LINE-LEVEL, QUANTITY-BASED convert. Mirrors the PO's
+   line-level from-SO picker. Pick individual SO LINES (each with a qty 1..
+   remaining) belonging to ONE customer and combine them into ONE Delivery
+   Order. An SO line can be delivered across SEVERAL DOs until its remaining
+   (qty − delivered + returned, derived live) reaches 0.
 
-   Body: { soDocNos: string[] }.
+   Body: { picks: [{ soItemId, qty }] }.
 
    Steps:
-     1. Load the picked SO headers. They must ALL share one customer — same
-        debtor_code, or (when debtor_code is null) same debtor_name. A mixed
-        bag returns 400 mixed_customers so the operator can't merge two
-        different customers' deliveries onto one DO.
-     2. Load all their non-cancelled line items.
-     3. Create ONE DO — header copied from the FIRST SO (debtor / address /
-        salesperson / branding / venue / contact …), status DISPATCHED (a DO
-        ships on creation), so_doc_no = comma-joined SO doc_nos for reference.
-        Every picked SO's lines are merged into the DO's items, carrying cost
-        (unit_cost_centi / line_cost_centi / line_margin_centi) so margins
-        survive the merge.
-     4. recomputeTotals + deductInventoryForDo (both idempotent) — same
-        helpers the POST / create handler uses, so stock goes OUT exactly once. */
+     1. Resolve every picked SO line's parent SO + live remaining via
+        soDeliverableRemaining.
+     2. Validate (a) all picks share ONE customer (else 400 mixed_customers),
+        (b) each pick qty is 1..remaining (else 409 over_remaining with the
+        offending line).
+     3. Create ONE DO — header copied from the FIRST pick's SO; so_doc_no = that
+        SO; ref = "Merged from <distinct SO doc_nos>" when the picks span >1 SO.
+        One DO line per pick (qty = picked qty, so_item_id = soItemId).
+     4. recomputeTotals + deductInventoryForDo (both idempotent). */
 deliveryOrdersMfg.post('/from-sos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { soDocNos?: string[] };
+  let body: { picks?: Array<{ soItemId?: string; qty?: number }> };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
-  const soDocNos = [...new Set((body.soDocNos ?? []).filter((d): d is string => !!d))];
-  if (soDocNos.length === 0) return c.json({ error: 'so_doc_nos_required' }, 400);
 
-  // 1. Load the SO headers. Order by doc_no so "the FIRST SO" is deterministic.
+  // Collapse duplicate soItemIds (sum their qty) so a line can't appear twice.
+  const pickQtyById = new Map<string, number>();
+  for (const p of (body.picks ?? [])) {
+    if (!p || !p.soItemId) continue;
+    const q = Number(p.qty ?? 0);
+    if (!(q > 0)) continue;
+    pickQtyById.set(p.soItemId, (pickQtyById.get(p.soItemId) ?? 0) + q);
+  }
+  if (pickQtyById.size === 0) return c.json({ error: 'picks_required' }, 400);
+
+  // 1. Resolve the SO lines + their live remaining. We don't know the docNos
+  //    yet, so first map picked SO item ids → their doc_no, then derive
+  //    remaining scoped to exactly those SOs.
+  const pickedIds = [...pickQtyById.keys()];
+  const { data: pickedItemRows, error: pErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('id, doc_no')
+    .in('id', pickedIds);
+  if (pErr) return c.json({ error: 'load_failed', reason: pErr.message }, 500);
+  const idToDoc = new Map<string, string>();
+  for (const r of (pickedItemRows ?? []) as Array<{ id: string; doc_no: string }>) idToDoc.set(r.id, r.doc_no);
+  const missing = pickedIds.filter((id) => !idToDoc.has(id));
+  if (missing.length > 0) return c.json({ error: 'so_item_not_found', missing }, 404);
+
+  const docNos = [...new Set([...idToDoc.values()])];
+  const remainingMap = await soDeliverableRemaining(sb, docNos);
+
+  // 2a. Same-customer guard — every picked line must share ONE customer
+  //     (debtor_code, else debtor_name). A DO ships to ONE customer.
+  const custKey = (l: DeliverableLine): string =>
+    (l.debtorCode && l.debtorCode.trim())
+      ? `code:${l.debtorCode.trim().toUpperCase()}`
+      : `name:${(l.debtorName ?? '').trim().toUpperCase()}`;
+  const customers = new Set<string>();
+  const customerNames = new Set<string>();
+  for (const id of pickedIds) {
+    const line = remainingMap.get(id);
+    if (!line) return c.json({ error: 'so_item_not_found', missing: [id] }, 404);
+    customers.add(custKey(line));
+    customerNames.add(line.debtorName ?? line.debtorCode ?? '(none)');
+  }
+  if (customers.size > 1) {
+    return c.json({
+      error: 'mixed_customers',
+      message: 'All picked Sales Order lines must belong to the same customer to combine into one Delivery Order.',
+      customers: [...customerNames],
+    }, 400);
+  }
+
+  // 2b. Per-line qty guard — 1..remaining. Reject the first offender (the
+  //     picker shows remaining so this only trips on a stale view / race).
+  for (const id of pickedIds) {
+    const line = remainingMap.get(id)!;
+    const qty = pickQtyById.get(id)!;
+    if (qty < 1 || qty > line.remaining) {
+      return c.json({
+        error: 'over_remaining',
+        message: `${line.itemCode} on ${line.docNo}: pick qty ${qty} exceeds remaining ${line.remaining}.`,
+        soItemId: id,
+        docNo: line.docNo,
+        itemCode: line.itemCode,
+        remaining: line.remaining,
+        requested: qty,
+      }, 409);
+    }
+  }
+
+  // 3. Create ONE DO header from the FIRST pick's SO. "First" = the SO of the
+  //    earliest-sorted picked line so the result is deterministic.
+  const sortedPicks = pickedIds
+    .map((id) => remainingMap.get(id)!)
+    .sort((a, b) => a.docNo.localeCompare(b.docNo) || a.soItemId.localeCompare(b.soItemId));
+  const firstSoDocNo = sortedPicks[0]!.docNo;
+
+  // Pull the FIRST SO's header for the DO header snapshot (address / salesperson
+  // / branding / venue / contact). Lines carry their own debtor snapshot.
   const SO_HEADER =
-    'doc_no, status, debtor_code, debtor_name, agent, salesperson_id, ' +
+    'doc_no, debtor_code, debtor_name, agent, salesperson_id, ' +
     'address1, address2, address3, address4, city, customer_state, postcode, phone, ' +
     'email, customer_type, building_type, branding, venue, venue_id, ref, sales_location, ' +
     'customer_country, customer_delivery_date, ' +
     'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, currency';
-  const { data: soHeaders, error: hLoadErr } = await sb
+  const { data: soHeaderRow, error: hLoadErr } = await sb
     .from('mfg_sales_orders')
     .select(SO_HEADER)
-    .in('doc_no', soDocNos)
-    .order('doc_no', { ascending: true });
+    .eq('doc_no', firstSoDocNo)
+    .maybeSingle();
   if (hLoadErr) return c.json({ error: 'load_failed', reason: hLoadErr.message }, 500);
-  const sos = (soHeaders ?? []) as unknown as Array<Record<string, unknown> & {
-    doc_no: string; status: string | null;
-    debtor_code: string | null; debtor_name: string | null;
-  }>;
-  if (sos.length === 0) return c.json({ error: 'not_found' }, 404);
+  if (!soHeaderRow) return c.json({ error: 'not_found' }, 404);
+  const head = soHeaderRow as unknown as Record<string, unknown>;
 
-  // A cancelled SO can't ship — block the whole merge if any is cancelled.
-  const cancelled = sos.filter((s) => (s.status ?? '').toUpperCase() === 'CANCELLED').map((s) => s.doc_no);
-  if (cancelled.length > 0) {
-    return c.json({ error: 'so_cancelled', message: `Cancelled SO(s) cannot be delivered: ${cancelled.join(', ')}.`, cancelled }, 409);
-  }
-
-  // 1b. Same-customer guard — every SO must be the SAME customer. Match on
-  //     debtor_code; when a SO has no code, fall back to debtor_name. Building
-  //     ONE distinct key per SO and asserting the set has size 1.
-  const custKey = (s: { debtor_code: string | null; debtor_name: string | null }): string =>
-    (s.debtor_code && s.debtor_code.trim())
-      ? `code:${s.debtor_code.trim().toUpperCase()}`
-      : `name:${(s.debtor_name ?? '').trim().toUpperCase()}`;
-  const customers = new Set(sos.map(custKey));
-  if (customers.size > 1) {
-    return c.json({
-      error: 'mixed_customers',
-      message: 'All selected Sales Orders must belong to the same customer to merge into one Delivery Order.',
-      customers: [...new Set(sos.map((s) => s.debtor_name ?? s.debtor_code ?? '(none)'))],
-    }, 400);
-  }
-
-  // 1c. Conversion lock — reject any picked SO that already has an active DO
-  //     (otherwise the same goods ship twice + stock double-deducts). Cancel
-  //     the existing DO to convert again.
-  const already = await convertedSoDocs(sb, soDocNos);
-  if (already.size > 0) {
-    return c.json({
-      error: 'already_converted',
-      message: `Already delivered (active DO exists): ${[...already].join(', ')}. Cancel that DO to convert again.`,
-      alreadyConverted: [...already],
-    }, 409);
-  }
-
-  // 2. Load every non-cancelled line of the picked SOs.
-  const { data: itemRows, error: iLoadErr } = await sb
-    .from('mfg_sales_order_items')
-    .select(
-      'id, doc_no, item_code, item_group, description, description2, uom, qty, ' +
-      'unit_price_centi, discount_centi, unit_cost_centi, variants, line_delivery_date',
-    )
-    .in('doc_no', soDocNos)
-    .eq('cancelled', false)
-    .order('doc_no', { ascending: true })
-    .order('created_at', { ascending: true });
-  if (iLoadErr) return c.json({ error: 'load_failed', reason: iLoadErr.message }, 500);
-  const soItems = (itemRows ?? []) as unknown as Array<Record<string, unknown> & {
-    id: string; item_code: string; item_group: string | null;
-    description: string | null; description2: string | null; uom: string | null;
-    qty: number; unit_price_centi: number; discount_centi: number;
-    unit_cost_centi: number; variants: unknown; line_delivery_date: string | null;
-  }>;
-  if (soItems.length === 0) return c.json({ error: 'no_items_to_convert' }, 400);
-
-  // 3. Create ONE DO header, copied from the FIRST SO. SO has free-form
-  //    address1-4; the DO header carries address1 + address2 — bundle the SO's
-  //    address3/4 into the DO's address2 when it's empty so nothing is dropped.
-  const head = sos[0]!;
   const doAddress2 = (head.address2 as string | null)
     ?? ([head.address3, head.address4].filter(Boolean).join(', ') || null);
   const phoneRaw = head.phone as string | null;
@@ -474,12 +603,11 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
 
   const { data: doHeader, error: hErr } = await sb.from('delivery_orders').insert({
     do_number: doNumber,
-    /* so_doc_no has a FK to mfg_sales_orders(doc_no), so it must be ONE valid
-       doc — use the first picked SO. The full merged set is recorded in `ref`
-       below for traceability. */
-    so_doc_no: soDocNos[0] ?? null,
-    debtor_code: head.debtor_code,
-    debtor_name: head.debtor_name,
+    /* so_doc_no has a FK to mfg_sales_orders(doc_no) → one valid doc. The full
+       set of source SOs is recorded in `ref` below when the picks span >1 SO. */
+    so_doc_no: firstSoDocNo,
+    debtor_code: (head.debtor_code as string | null) ?? null,
+    debtor_name: (head.debtor_name as string | null) ?? null,
     do_date: today,
     expected_delivery_at: (head.customer_delivery_date as string | null) ?? today,
     customer_delivery_date: (head.customer_delivery_date as string | null) ?? null,
@@ -499,9 +627,8 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     branding: (head.branding as string | null) ?? null,
     venue: (head.venue as string | null) ?? null,
     venue_id: (head.venue_id as string | null) ?? null,
-    // Record every merged SO here (so_doc_no can only hold one FK-valid doc).
-    ref: soDocNos.length > 1
-      ? `Merged from ${soDocNos.join(', ')}`
+    ref: docNos.length > 1
+      ? `Merged from ${[...docNos].sort().join(', ')}`
       : ((head.ref as string | null) ?? null),
     sales_location: (head.sales_location as string | null) ?? null,
     emergency_contact_name: (head.emergency_contact_name as string | null) ?? null,
@@ -516,26 +643,25 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const dh = doHeader as unknown as { id: string; do_number: string };
 
-  // 3b. Merge every picked SO's lines into the DO. Carry cost so margins
-  //     survive. (Mirrors buildItemRow's computed columns; we already have the
-  //     costed SO line so we compute line totals/cost directly.)
-  const doRows = soItems.map((it) => {
-    const qty = Number(it.qty ?? 1);
-    const unit = Number(it.unit_price_centi ?? 0);
-    const discount = Number(it.discount_centi ?? 0);
-    const unitCost = Number(it.unit_cost_centi ?? 0);
+  // 3b. One DO line per pick — qty = the picked qty (NOT the full SO line qty).
+  //     Carry cost so margins survive.
+  const doRows = sortedPicks.map((line) => {
+    const qty = pickQtyById.get(line.soItemId)!;
+    const unit = line.unitPriceCenti;
+    const discount = line.discountCenti;
+    const unitCost = line.unitCostCenti;
     const lineTotal = (qty * unit) - discount;
     const lineCost = qty * unitCost;
-    const itemGroup = (it.item_group as string | null) ?? null;
-    const variants = it.variants ?? null;
+    const itemGroup = line.itemGroup;
+    const variants = line.variants ?? null;
     return {
       delivery_order_id: dh.id,
-      so_item_id: it.id,
-      item_code: it.item_code,
+      so_item_id: line.soItemId,
+      item_code: line.itemCode,
       item_group: itemGroup,
-      description: it.description ?? null,
-      description2: buildVariantSummary(String(itemGroup ?? ''), (variants as Record<string, unknown> | null) ?? null) || it.description2 || null,
-      uom: it.uom ?? 'UNIT',
+      description: line.description ?? null,
+      description2: buildVariantSummary(String(itemGroup ?? ''), (variants as Record<string, unknown> | null) ?? null) || line.description2 || null,
+      uom: line.uom ?? 'UNIT',
       qty,
       m3_milli: 0,
       unit_price_centi: unit,
@@ -545,7 +671,6 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
       line_cost_centi: lineCost,
       line_margin_centi: lineTotal - lineCost,
       variants,
-      line_delivery_date: (it.line_delivery_date as string | null) ?? null,
     };
   });
   const { error: iErr } = await sb.from('delivery_order_items').insert(doRows);

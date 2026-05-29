@@ -357,17 +357,50 @@ export const useConvertSoToDo = () => {
   });
 };
 
-/* Convert SEVERAL same-customer SOs → ONE merged DO. Server validates the
-   selected SOs share one customer, copies the first SO's header, merges every
-   SO's lines into one DO (status DISPATCHED), then deducts stock. Returns the
-   new DO's { id, doNumber }. Invalidates the DO list + inventory. */
-export const useConvertSosToDo = () => {
+/* Deliverable SO LINES for the line-level SO→DO picker (Commander 2026-05-30).
+   Each row is an SO line that can still be delivered — remaining = qty −
+   delivered + returned, derived live by the server (no stored counter). A line
+   can be split across several DOs until remaining hits 0. */
+export type DeliverableSoLine = {
+  soItemId: string;
+  docNo: string;
+  debtorCode: string | null;
+  debtorName: string | null;
+  itemCode: string;
+  itemGroup: string | null;
+  description: string | null;
+  description2: string | null;
+  uom: string | null;
+  qty: number;
+  unitPriceCenti: number;
+  unitCostCenti: number;
+  discountCenti: number;
+  variants: unknown;
+  delivered: number;
+  returned: number;
+  remaining: number;
+};
+export const useDeliverableSoLines = () => useQuery({
+  queryKey: ['mfg-delivery-orders', 'deliverable-so-lines'],
+  queryFn: () => authedFetch<{ lines: DeliverableSoLine[] }>(
+    `/delivery-orders-mfg/deliverable-so-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
+/* Convert picked SO LINES (each with a partial qty) → ONE DO. Server validates
+   the picks share one customer + each qty is 1..remaining, then creates one DO
+   line per pick (status DISPATCHED) and deducts stock. Returns the new DO's
+   { id, doNumber }. Invalidates the DO list + the deliverable-lines picker +
+   inventory. */
+export const useConvertSoLinesToDo = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ soDocNos }: { soDocNos: string[] }) =>
+    mutationFn: ({ picks }: { picks: Array<{ soItemId: string; qty: number }> }) =>
       authedFetch<{ id: string; doNumber: string }>(
         `/delivery-orders-mfg/from-sos`,
-        { method: 'POST', body: JSON.stringify({ soDocNos }) },
+        { method: 'POST', body: JSON.stringify({ picks }) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });

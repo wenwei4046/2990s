@@ -1,30 +1,36 @@
 // ----------------------------------------------------------------------------
-// DeliveryOrderFromSo — multi-select Sales Order → Delivery Order picker.
+// DeliveryOrderFromSo — LINE-LEVEL, QUANTITY-BASED Sales Order → Delivery Order
+// picker.
 //
-// Commander 2026-05-29 redesign: MULTI-select, mirroring the PO's multi-select
-// from-SO picker. Combine several Sales Orders of the SAME customer into ONE
-// Delivery Order. Tick whole SOs (SO-LEVEL selection, not line-level), then hit
-// "Convert N SO(s) to Delivery Order". A customer-lock keeps the merge clean:
-// once one SO is ticked, SOs of a DIFFERENT customer (debtor) grey out and
-// can't be picked — a DO ships to ONE customer.
+// Commander 2026-05-30 rewrite: partial-delivery model, mirroring the PO's
+// line-level from-SO picker (pages/PurchaseOrderFromSo.tsx). Instead of ticking
+// whole Sales Orders, the operator picks individual SO LINES, each with a qty
+// 1..remaining. An SO line can be split across SEVERAL Delivery Orders until its
+// remaining (qty − delivered + returned, derived LIVE by the server) reaches 0:
+//   - Partially delivered (remaining > 0) → the line is still pickable.
+//   - Fully delivered (remaining == 0) → the line drops out of the picker.
+//   - Cancelling a DO, deleting a DO line, or processing a Delivery Return
+//     RAISES remaining again automatically (the server re-derives it).
 //
-// On convert the server merges every picked SO's lines into one DO (status
-// DISPATCHED) and deducts stock; we land on the new DO in Edit mode so the
-// operator can review before it settles. The SO-side single "Issue Delivery
-// Order" still works too.
+// A customer-lock keeps the merge clean: once one line is ticked, lines of a
+// DIFFERENT customer grey out — a DO ships to ONE customer.
+//
+// On convert the server creates ONE DO (status DISPATCHED) with one line per
+// pick (at the picked qty) and deducts stock; we land on the new DO in Edit
+// mode so the operator can review before it settles.
 //
 // Routing: /mfg-delivery-orders/from-so.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useMfgSalesOrders, useConvertSosToDo } from '../lib/flow-queries';
-import { useStaff } from '../lib/admin-queries';
+import { buildVariantSummary } from '@2990s/shared';
+import { useDeliverableSoLines, useConvertSoLinesToDo, type DeliverableSoLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
-import { BrandingPill } from '../lib/category-badges';
+import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -34,119 +40,110 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
-const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const compactDate = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  if (!m) return iso;
-  const y = m[1], mo = MONTH_3[Number(m[2]) - 1] ?? m[2], d = String(Number(m[3]));
-  return `${d} ${mo} ${y}`;
+const STORAGE_KEY = 'pr-g.do-from-so-lines.layout.v1';
+
+/* Compact pill input — mirrors the PO picker's qty input. */
+const QTY_INPUT: CSSProperties = {
+  height: 28,
+  border: '1px solid var(--line)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '0 8px',
+  fontSize: 'var(--fs-12)',
+  background: 'var(--c-paper)',
+  color: 'var(--c-ink)',
 };
 
-const STORAGE_KEY = 'pr-g.do-from-so.layout.v1';
+/* One distinct customer key per SO line — match the server's same-customer
+   rule: debtor_code when present, else fall back to debtor_name. The lock greys
+   out any line whose key differs from the first ticked one. */
+const custKey = (l: DeliverableSoLine): string =>
+  (l.debtorCode && l.debtorCode.trim())
+    ? `code:${l.debtorCode.trim().toUpperCase()}`
+    : `name:${(l.debtorName ?? '').trim().toUpperCase()}`;
 
-type SoLite = {
-  doc_no: string;
-  so_date: string | null;
-  debtor_code: string | null;
-  debtor_name: string | null;
-  salesperson_id: string | null;
-  branding: string | null;
-  venue: string | null;
-  local_total_centi: number | null;
-  status: string | null;
-};
-
-/* One distinct customer key per SO — match the server's same-customer rule:
-   debtor_code when present, else fall back to debtor_name. The lock greys out
-   any SO whose key differs from the first ticked one. */
-const custKey = (s: SoLite): string =>
-  (s.debtor_code && s.debtor_code.trim())
-    ? `code:${s.debtor_code.trim().toUpperCase()}`
-    : `name:${(s.debtor_name ?? '').trim().toUpperCase()}`;
+type Pick = { picked: boolean; qty: number };
 
 export const DeliveryOrderFromSo = () => {
   const navigate = useNavigate();
-  const sosQ = useMfgSalesOrders(undefined);
-  const convert = useConvertSosToDo();
+  const linesQ = useDeliverableSoLines();
+  const convert = useConvertSoLinesToDo();
 
-  // Set of picked SO doc_nos.
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  // Map<soItemId, { picked, qty }>. Defaults: picked = false; when ticked,
+  // qty defaults to the line's remaining.
+  const [picks, setPicks] = useState<Record<string, Pick>>({});
   const [dialog, setDialog] = useState<{ title: string; body: string } | null>(null);
 
-  const staffQ = useStaff();
-  const staffById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const s of (staffQ.data ?? [])) if (s.id) m.set(s.id, s.name ?? s.staffCode ?? s.id);
-    return m;
-  }, [staffQ.data]);
+  const rows = useMemo<DeliverableSoLine[]>(() => linesQ.data ?? [], [linesQ.data]);
 
-  const rows = useMemo<SoLite[]>(() => {
-    const all = (sosQ.data?.salesOrders ?? []) as SoLite[];
-    // Only SOs that can still ship — drop cancelled ones.
-    return all.filter((s) => (s.status ?? '').toUpperCase() !== 'CANCELLED');
-  }, [sosQ.data]);
-
-  const rowByDoc = useMemo(() => {
-    const m = new Map<string, SoLite>();
-    for (const r of rows) m.set(r.doc_no, r);
+  const rowById = useMemo(() => {
+    const m = new Map<string, DeliverableSoLine>();
+    for (const r of rows) m.set(r.soItemId, r);
     return m;
   }, [rows]);
 
   /* The customer locked in by the current picks — the key of the first picked
-     SO. Null when nothing is picked (every SO is selectable). */
+     line. Null when nothing is picked (every line is selectable). */
   const lockedCustomer = useMemo(() => {
-    for (const doc of picked) {
-      const r = rowByDoc.get(doc);
+    for (const [id, v] of Object.entries(picks)) {
+      if (!v.picked) continue;
+      const r = rowById.get(id);
       if (r) return custKey(r);
     }
     return null;
-  }, [picked, rowByDoc]);
+  }, [picks, rowById]);
 
-  // Display name for the locked customer (for the banner).
   const lockedCustomerName = useMemo(() => {
-    for (const doc of picked) {
-      const r = rowByDoc.get(doc);
-      if (r) return r.debtor_name ?? r.debtor_code ?? '(none)';
+    for (const [id, v] of Object.entries(picks)) {
+      if (!v.picked) continue;
+      const r = rowById.get(id);
+      if (r) return r.debtorName ?? r.debtorCode ?? '(none)';
     }
     return null;
-  }, [picked, rowByDoc]);
+  }, [picks, rowById]);
 
   // A row is LOCKED when a different customer is already picked.
-  const isRowLocked = (r: SoLite): boolean =>
-    Boolean(lockedCustomer && custKey(r) !== lockedCustomer && !picked.has(r.doc_no));
+  const isRowLocked = (r: DeliverableSoLine): boolean =>
+    Boolean(lockedCustomer && custKey(r) !== lockedCustomer && !picks[r.soItemId]?.picked);
 
-  const togglePick = (r: SoLite) => {
+  const togglePick = (r: DeliverableSoLine) => {
     if (isRowLocked(r)) return; // can't tick a different customer
-    setPicked((cur) => {
-      const next = new Set(cur);
-      if (next.has(r.doc_no)) next.delete(r.doc_no);
-      else next.add(r.doc_no);
-      return next;
-    });
+    const turningOn = !picks[r.soItemId]?.picked;
+    setPicks((s) => ({
+      ...s,
+      [r.soItemId]: turningOn
+        ? { picked: true, qty: s[r.soItemId]?.qty || r.remaining }
+        : { picked: false, qty: 0 },
+    }));
+  };
+
+  const setQty = (r: DeliverableSoLine, qty: number) => {
+    if (isRowLocked(r)) return;
+    setPicks((s) => ({ ...s, [r.soItemId]: { picked: true, qty } }));
   };
 
   // Select / clear all currently-VISIBLE rows. Select-all respects the lock:
-  // it only adds SOs of the locked customer (or, if nothing is picked yet, all
-  // SOs of the FIRST row's customer so the result is a valid single-customer set).
+  // it only adds lines of the locked customer (or, if nothing is picked yet, all
+  // lines of the FIRST row's customer so the result is a valid single-customer
+  // set).
   const selectAll = () => {
-    setPicked((cur) => {
-      const next = new Set(cur);
+    setPicks((s) => {
+      const next = { ...s };
       const key = lockedCustomer ?? (rows[0] ? custKey(rows[0]) : null);
       if (!key) return next;
-      for (const r of rows) if (custKey(r) === key) next.add(r.doc_no);
+      for (const r of rows) if (custKey(r) === key) next[r.soItemId] = { picked: true, qty: r.remaining };
       return next;
     });
   };
-  const clearAll = () => setPicked(new Set());
+  const clearAll = () => setPicks({});
 
-  const pickedCount = picked.size;
+  const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
+  const pickedCount = picked.length;
 
-  const columns = useMemo<DataGridColumn<SoLite>[]>(() => [
+  const columns = useMemo<DataGridColumn<DeliverableSoLine>[]>(() => [
     {
       key: 'pick', label: '', width: 40, sortable: false, groupable: false,
       accessor: (r) => {
-        const on = picked.has(r.doc_no);
+        const on = Boolean(picks[r.soItemId]?.picked);
         const locked = isRowLocked(r);
         return (
           <input
@@ -155,67 +152,119 @@ export const DeliveryOrderFromSo = () => {
             disabled={locked}
             onChange={() => togglePick(r)}
             onClick={(e) => e.stopPropagation()}
-            aria-label={`Pick SO ${r.doc_no}`}
+            aria-label={`Pick ${r.itemCode}`}
             style={locked ? { cursor: 'not-allowed' } : undefined}
           />
         );
       },
     },
     {
-      key: 'doc_no', label: 'SO No', width: 150, sortable: true,
-      accessor: (r) => <span className={styles.codeCell}>{r.doc_no}</span>,
-      searchValue: (r) => r.doc_no,
+      key: 'docNo', label: 'SO No', width: 140, sortable: true, groupable: true,
+      accessor: (r) => <span className={styles.codeCell}>{r.docNo}</span>,
+      searchValue: (r) => r.docNo,
+      groupValue: (r) => r.docNo,
     },
     {
-      key: 'so_date', label: 'Date', width: 110, sortable: true,
-      accessor: (r) => compactDate(r.so_date),
-      searchValue: (r) => `${r.so_date ?? ''} ${compactDate(r.so_date)}`,
-      sortFn: (a, b) => (a.so_date ?? '').localeCompare(b.so_date ?? ''),
+      key: 'debtorName', label: 'Customer', width: 200, sortable: true, groupable: true,
+      accessor: (r) => r.debtorName ?? '—',
+      searchValue: (r) => r.debtorName ?? '',
+      groupValue: (r) => r.debtorName ?? '(none)',
     },
     {
-      key: 'debtor_name', label: 'Customer', width: 220, sortable: true, groupable: true,
-      accessor: (r) => r.debtor_name ?? '—',
-      searchValue: (r) => r.debtor_name ?? '',
-      groupValue: (r) => r.debtor_name ?? '(none)',
+      key: 'itemGroup', label: 'Category', width: 110, sortable: true, groupable: true,
+      accessor: (r) => <ItemGroupPill group={r.itemGroup} />,
+      searchValue: (r) => r.itemGroup ?? '',
+      groupValue: (r) => (r.itemGroup ?? '(none)').toUpperCase(),
     },
     {
-      key: 'salesperson_id', label: 'Salesperson', width: 150, sortable: true, groupable: true,
-      accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
-      searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
-      groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '(none)' : '(none)'),
+      key: 'itemCode', label: 'Item Code', width: 130, sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 600 }}>{r.itemCode}</span>,
+      searchValue: (r) => r.itemCode ?? '',
     },
     {
-      key: 'branding', label: 'Branding', width: 140, sortable: true, groupable: true,
-      accessor: (r) => (r.branding ? <BrandingPill branding={r.branding} /> : <span style={{ color: 'var(--fg-muted)' }}>—</span>),
-      searchValue: (r) => r.branding ?? '',
-      groupValue: (r) => r.branding ?? '(none)',
+      key: 'description', label: 'Description', width: 260, sortable: true,
+      accessor: (r) => {
+        const summary = buildVariantSummary(
+          r.itemGroup ?? '',
+          r.variants as Record<string, unknown> | null | undefined,
+        );
+        const main = r.description || summary || '—';
+        return (
+          <div>
+            <div>{main}</div>
+            {r.description && summary && (
+              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
+            )}
+          </div>
+        );
+      },
+      searchValue: (r) => `${r.description ?? ''} ${r.description2 ?? ''}`.trim(),
     },
     {
-      key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
-      accessor: (r) => r.venue ?? '—',
-      searchValue: (r) => r.venue ?? '',
-      groupValue: (r) => r.venue ?? '(none)',
+      key: 'qty', label: 'SO Qty', width: 70, align: 'right', sortable: true,
+      accessor: (r) => String(r.qty),
+      sortFn: (a, b) => a.qty - b.qty,
     },
     {
-      key: 'local_total_centi', label: 'SO Value', width: 130, align: 'right', sortable: true,
-      accessor: (r) => (
-        <span style={{ fontWeight: 700, color: 'var(--c-ink)', fontVariantNumeric: 'tabular-nums' }}>{fmtRm(r.local_total_centi ?? 0)}</span>
-      ),
-      searchValue: (r) => fmtRm(r.local_total_centi ?? 0),
-      sortFn: (a, b) => (a.local_total_centi ?? 0) - (b.local_total_centi ?? 0),
+      key: 'delivered', label: 'Delivered', width: 80, align: 'right', sortable: true,
+      accessor: (r) => <span className={styles.muted}>{r.delivered}</span>,
+      sortFn: (a, b) => a.delivered - b.delivered,
     },
-  ], [picked, lockedCustomer, staffById]);
+    {
+      key: 'remaining', label: 'Remaining', width: 80, align: 'right', sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{r.remaining}</span>,
+      sortFn: (a, b) => a.remaining - b.remaining,
+    },
+    {
+      key: 'pickQty', label: 'Qty to Deliver', width: 110, align: 'right', sortable: false, groupable: false,
+      accessor: (r) => {
+        const p = picks[r.soItemId];
+        const on = Boolean(p?.picked);
+        const locked = isRowLocked(r);
+        return (
+          <input
+            type="number"
+            min={0}
+            max={r.remaining}
+            value={on ? p!.qty : ''}
+            placeholder={String(r.remaining)}
+            disabled={locked}
+            /* Always editable: typing a qty auto-selects the row (no need to
+               tick the checkbox first). */
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              setQty(r, Math.min(r.remaining, Math.max(0, Number(e.target.value) || 0)))}
+            style={{ ...QTY_INPUT, width: 76, textAlign: 'right', ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
+          />
+        );
+      },
+    },
+    {
+      key: 'lineValue', label: 'Line Value', width: 130, align: 'right', sortable: true,
+      accessor: (r) => {
+        const p = picks[r.soItemId];
+        const pickQty = p?.picked ? p.qty : r.remaining;
+        return (
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
+            {fmtRm(pickQty * r.unitPriceCenti)}
+          </span>
+        );
+      },
+      sortFn: (a, b) => a.remaining * a.unitPriceCenti - b.remaining * b.unitPriceCenti,
+    },
+  ], [picks, lockedCustomer]);
 
   const onConvert = () => {
     if (pickedCount === 0) {
-      setDialog({ title: 'Nothing picked', body: 'Tick at least one Sales Order to convert first.' });
+      setDialog({ title: 'Nothing picked', body: 'Tick at least one Sales Order line to deliver first.' });
       return;
     }
+    const picksPayload = picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty }));
     convert.mutate(
-      { soDocNos: [...picked] },
+      { picks: picksPayload },
       {
         onSuccess: (res) => {
-          // Land on the new DO in Edit mode so the merged lines are right there.
+          // Land on the new DO in Edit mode so the picked lines are right there.
           navigate(`/mfg-delivery-orders/${res.id}?edit=1`);
         },
         onError: (e) => setDialog({
@@ -244,7 +293,7 @@ export const DeliveryOrderFromSo = () => {
           <Link to="/mfg-delivery-orders" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Delivery Orders</span>
           </Link>
-          <h1 className={styles.title}>Pick Sales Orders to convert</h1>
+          <h1 className={styles.title}>Pick Sales Order lines to deliver</h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders')}>
@@ -254,44 +303,44 @@ export const DeliveryOrderFromSo = () => {
             variant="primary" size="md"
             onClick={onConvert}
             disabled={pickedCount === 0 || convert.isPending}
-            title="Merge the picked Sales Orders into one Delivery Order"
+            title="Combine the picked Sales Order lines into one Delivery Order"
           >
             <ArrowRightLeft {...ICON} />
             {convert.isPending
               ? 'Converting…'
               : pickedCount === 0
-                ? 'Pick at least 1 SO'
-                : `Convert ${pickedCount} SO${pickedCount === 1 ? '' : 's'} to Delivery Order`}
+                ? 'Pick at least 1 line'
+                : `Convert ${pickedCount} line${pickedCount === 1 ? '' : 's'} to Delivery Order`}
           </Button>
         </div>
       </div>
       <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-        Combine several Sales Orders of the SAME customer into ONE Delivery Order. The DO copies the
-        first SO's customer, address, salesperson, and branding, and merges every picked SO's line
-        items (with variants + prices). On convert it ships immediately and deducts stock — you can
-        review and edit it on the next screen.
+        Pick the Sales Order lines you want to deliver and set the quantity for each. A line can be
+        delivered in parts across several Delivery Orders — only the remaining (not-yet-delivered)
+        quantity is shown. On convert it ships immediately and deducts stock — you can review and edit
+        the new Delivery Order on the next screen.
       </p>
       {lockedCustomerName && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           One customer per Delivery Order — locked to <strong>{lockedCustomerName}</strong>. Other
-          customers' Sales Orders are greyed out; clear picks to switch.
+          customers' lines are greyed out; clear picks to switch.
         </p>
       )}
 
-      <DataGrid<SoLite>
+      <DataGrid<DeliverableSoLine>
         rows={rows}
         columns={columns}
         storageKey={STORAGE_KEY}
-        rowKey={(r) => r.doc_no}
-        searchPlaceholder="Search SO, customer…"
+        rowKey={(r) => r.soItemId}
+        searchPlaceholder="Search SO, customer, item…"
         onRowClick={(r) => togglePick(r)}
         rowStyle={(r) => isRowLocked(r)
           ? { opacity: 0.45, background: 'var(--c-cream)', cursor: 'not-allowed' }
           : undefined}
         toolbar={toolbar}
         groupBanner={false}
-        isLoading={sosQ.isLoading}
-        emptyMessage="No sales orders to convert."
+        isLoading={linesQ.isLoading}
+        emptyMessage="No deliverable Sales Order lines — every line has been fully delivered (or there are no Sales Orders)."
       />
 
       {dialog && (
