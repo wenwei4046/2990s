@@ -140,12 +140,18 @@
      Archivo Black w/ font-stretch when SVG isn't available.
      Chinese: Hiragino Sans GB → falls back to PingFang/Noto Sans SC.
      ------------------------------------------------------------------ */
+  /* Commander 2026-05-29 — switch the backend ERP to the NATIVE SYSTEM FONT
+     (Segoe UI on Windows, SF on macOS). The serif Merriweather titles + Poppins
+     body were straining the eyes; a system sans reads cleaner for dense data
+     screens and loads instantly (no web-font fetch). One token change re-skins
+     every page. (POS/marketing surfaces can keep brand fonts later if wanted.) */
+  --font-system:  system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   /* Body / paragraphs / general UI text */
-  --font-sans:    "Poppins", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  /* Titles / headings (serif, sets the editorial tone) */
-  --font-title:   "Merriweather", Georgia, "Times New Roman", serif;
+  --font-sans:    var(--font-system);
+  /* Titles / headings — system sans (was serif Merriweather) */
+  --font-title:   var(--font-system);
   /* Buttons, links, navigation, eyebrows */
-  --font-button:  "Raleway", "Poppins", system-ui, sans-serif;
+  --font-button:  var(--font-system);
   /* Hand-written touches (offers, scribbled accents) */
   --font-script:  "Caveat", "Mistrully", "Brush Script MT", cursive;
   /* The 2990 logotype — rounded condensed display, used only on the wordmark */
