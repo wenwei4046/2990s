@@ -325,6 +325,37 @@
 }
 .shortNum { color: var(--c-orange); font-weight: 800; }
 
+/* Sofa set cell — module chips (2A + LL + 2A) + colour. */
+.setCell { vertical-align: middle; }
+.moduleChips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.moduleChip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--c-ink);
+  color: var(--c-cream);
+  font-family: var(--font-system);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.colourTag {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(60, 110, 200, 0.10);
+  color: #2f5fb3;
+  font-size: var(--fs-11);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .supplierCell span {
   display: inline-flex;
   align-items: center;
