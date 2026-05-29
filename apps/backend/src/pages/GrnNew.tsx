@@ -17,9 +17,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X, Layers } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders } from '../lib/suppliers-queries';
 import { ActionResultDialog } from '../components/ActionResultDialog';
+import { MoneyInput } from '../components/MoneyInput';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -36,6 +38,10 @@ type DraftLine = {
   materialKind:      string;
   materialCode:      string;
   materialName:      string;
+  /* Commander 2026-05-29 — GRN must show WHAT is being received (carry the
+     PO line's category + variant selections, exactly like the PO shows). */
+  itemGroup:         string | null;
+  variants:          Record<string, unknown> | null;
   outstanding:       number;
   qtyReceived:       number;
   qtyAccepted:       number;
@@ -81,6 +87,8 @@ export const GrnNew = () => {
           materialKind:      it.material_kind,
           materialCode:      it.material_code,
           materialName:      it.material_name,
+          itemGroup:         it.item_group ?? null,
+          variants:          (it.variants as Record<string, unknown> | null) ?? null,
           outstanding,
           qtyReceived:       outstanding,
           qtyAccepted:       outstanding,
@@ -145,7 +153,7 @@ export const GrnNew = () => {
     }
   };
 
-  const gridTemplate = 'minmax(180px, 1.4fr) minmax(200px, 1.8fr) 80px 80px 80px 110px 110px 32px';
+  const gridTemplate = 'minmax(170px, 1.3fr) minmax(220px, 1.8fr) 70px 70px 70px 70px 120px 120px 32px';
   const cellPad = 'var(--space-2)';
 
   return (
@@ -259,6 +267,7 @@ export const GrnNew = () => {
                 <div style={{ textAlign: 'right' }}>Received</div>
                 <div style={{ textAlign: 'right' }}>Accepted</div>
                 <div style={{ textAlign: 'right' }}>Rejected</div>
+                <div style={{ textAlign: 'right' }}>Unit Price</div>
                 <div style={{ textAlign: 'right' }}>Line Value</div>
                 <div></div>
               </div>
@@ -266,13 +275,19 @@ export const GrnNew = () => {
               {/* Rows */}
               {lines.map((l) => {
                 const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
+                const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
                 return (
                   <div key={l.rid} style={{
                     display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
                     padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
                   }}>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
-                    <div style={{ fontSize: 'var(--fs-13)' }}>{l.materialName}</div>
+                    <div style={{ fontSize: 'var(--fs-13)' }}>
+                      <div>{l.materialName}</div>
+                      {variantSummary && (
+                        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
+                      )}
+                    </div>
                     <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{l.outstanding}</div>
                     <input type="number" min={0} max={l.outstanding} value={l.qtyReceived}
                       onChange={(e) => {
@@ -292,6 +307,11 @@ export const GrnNew = () => {
                         setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
                       }}
                       className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
+                    {/* Editable unit price — carried from the PO, adjustable at
+                        receiving time (Commander 2026-05-29: "Edit 价钱的功能"). */}
+                    <MoneyInput bare valueSen={l.unitPriceCenti}
+                      onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
+                      inputClassName={styles.fieldInput} style={{ fontSize: 'var(--fs-13)' }} selectOnFocus />
                     <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineValueCenti, currency)}</div>
                     <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
