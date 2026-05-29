@@ -195,14 +195,22 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
         const variants = (r as Record<string, unknown>).variants as
           Record<string, unknown> | null | undefined;
         const summary = buildVariantSummary(r.item_group, variants);
-        return (
-          <div>
-            <div>{r.description ?? '—'}</div>
-            {summary && (
-              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-            )}
-          </div>
-        );
+        const manual = (r.description ?? '').trim();
+        /* Commander 2026-05-29 — when there's no manual Description 1, show the
+           variant summary as the cell text instead of a bare "—" above it (the
+           dash confused the operator). Manual text, when present, keeps the
+           summary muted below it. */
+        if (manual) {
+          return (
+            <div>
+              <div>{manual}</div>
+              {summary && (
+                <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
+              )}
+            </div>
+          );
+        }
+        return <div>{summary || '—'}</div>;
       },
       searchValue: (r) => r.description ?? '',
     },

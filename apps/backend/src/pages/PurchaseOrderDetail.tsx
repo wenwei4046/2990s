@@ -359,7 +359,12 @@ export const PurchaseOrderDetail = () => {
                         summary stays (that's the bit that says WHAT was ordered). */}
                     <div className={styles.codeCell}>{it.material_code}</div>
                     {(() => {
-                      const summary = it.description2 || buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null);
+                      /* Commander 2026-05-29 — compute live from variants, not
+                         the stored description2 snapshot. Older lines' snapshots
+                         still carry the retired " · " seat·leg separator, so
+                         preferring the snapshot showed mixed "/" and "·". The
+                         live helper always uses the single " / " separator. */
+                      const summary = buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null);
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                     })()}
                   </td>
