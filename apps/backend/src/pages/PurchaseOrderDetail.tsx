@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Ban, ArrowRightLeft,
+  ArrowLeft, FileText, Pencil, Trash2, X, Printer, Save, Ban, ArrowRightLeft,
   ChevronDown, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -319,27 +319,16 @@ export const PurchaseOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          {/* Add Line Item only in Edit mode — View is read-only.
-              Commander 2026-05-29 — same as "Convert from SO": open the full
-              "Pick Sales Orders for this PO" picker. Lines on a PO come from the
-              SO demand, so adding a line = picking SO line(s). */}
-          {isEditing && (
-            <Button
-              variant="primary" size="sm"
-              onClick={() => navigate(`/purchase-orders/from-so?poId=${po.id}`)}
-              disabled={isLocked}
-            >
-              <Plus {...ICON} />
-              <span>Add Line Item</span>
-            </Button>
-          )}
+          {/* Commander 2026-05-29 — "Add Line Item" removed: it duplicated
+              "Convert from SO" (both opened the same SO picker). Use the
+              "Convert from SO" action in the header to add lines. */}
         </header>
 
         {items.length === 0 ? (
           <p className={styles.emptyRow}>
             {isEditing
-              ? 'No items yet — click "Add Line Item" to begin.'
-              : 'No items yet — click "Edit" then "Add Line Item" to begin.'}
+              ? 'No items yet — click "Convert from SO" above to add lines.'
+              : 'No items yet — click "Edit" then "Convert from SO" to add lines.'}
           </p>
         ) : (
           <table className={styles.table}>
