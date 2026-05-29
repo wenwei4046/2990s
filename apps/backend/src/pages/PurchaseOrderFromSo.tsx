@@ -30,6 +30,7 @@ import {
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { ActionResultDialog } from '../components/ActionResultDialog';
 import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
@@ -102,6 +103,10 @@ export const PurchaseOrderFromSo = () => {
      (mattresses: dozens of SOs → 1 PO); 'per-so' = one PO per SO (sofa/bedframe:
      1 SO → 1 PO). */
   const [poMode, setPoMode] = useState<'combined' | 'per-so'>('combined');
+
+  // In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
+  // browser alert). goTo set → offer a navigate button.
+  const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
@@ -272,7 +277,7 @@ export const PurchaseOrderFromSo = () => {
 
   // ── Create POs ───────────────────────────────────────────────────────
   const onSave = () => {
-    if (pickedCount === 0) { window.alert('Tick at least one SO line first.'); return; }
+    if (pickedCount === 0) { setDialog({ title: 'Nothing picked', body: 'Tick at least one SO line first.' }); return; }
     // Commander 2026-05-28 — no expectedAt / purchaseLocationId: the server
     // derives both per-line from the source SO.
     const body = {
@@ -281,36 +286,32 @@ export const PurchaseOrderFromSo = () => {
     };
     create.mutate(body, {
       onSuccess: (res) => {
-        /* Commander 2026-05-28 — a 0-PO "success" means the picked lines had no
-           main supplier to group under. Don't show a hollow "Created 0 POs"; tell
-           the user to assign suppliers (the Main Supplier column flags which). */
+        /* A 0-PO "success" means the picked lines had no main supplier to group
+           under. Don't show a hollow "Created 0 POs"; tell the user to assign
+           suppliers (the Main Supplier column flags which). */
         if (!res.total) {
-          window.alert("No POs created — the selected SKUs aren't bound to a supplier yet. Assign each SKU a supplier (see the Main Supplier column showing “— none —”), then convert again.");
+          setDialog({
+            title: 'No POs created',
+            body: "The selected SKUs aren't bound to a supplier yet. Assign each SKU a supplier (the Main Supplier column shows “— none —”), then convert again.",
+          });
           return;
         }
+        setPicks({});
         const summary = res.created.map((p) => p.poNumber).join(', ');
-        window.alert(`Created ${res.total} PO${res.total === 1 ? '' : 's'}: ${summary}`);
-        navigate('/purchase-orders');
+        setDialog({ title: `Created ${res.total} PO${res.total === 1 ? '' : 's'}`, body: summary, goTo: '/purchase-orders' });
       },
       onError: (err) => {
-        /* Commander 2026-05-28 — friendly message when the SKUs aren't bound to
-           a supplier yet (the #1 reason conversion produces no PO). The API
-           returns error:'missing_bindings' with the offending itemCodes; the
-           authedFetch error message embeds that JSON. */
+        /* Friendly message when the SKUs aren't bound to a supplier yet (the #1
+           reason conversion produces no PO). */
         const raw = err instanceof Error ? err.message : String(err);
         let codes: string[] = [];
         try {
           const m = raw.match(/\{.*\}/);
           if (m) { const j = JSON.parse(m[0]); if (j.error === 'missing_bindings' && Array.isArray(j.itemCodes)) codes = j.itemCodes; }
         } catch { /* fall through to generic */ }
-        if (codes.length > 0) {
-          window.alert(
-            "These SKUs aren't bound to a supplier yet — assign them to a supplier first, then convert:\n\n"
-            + codes.map((c) => `• ${c}`).join('\n'),
-          );
-          return;
-        }
-        window.alert(`Create failed: ${raw}`);
+        setDialog(codes.length > 0
+          ? { title: "SKUs not bound to a supplier", body: 'Assign these to a supplier first, then convert:\n' + codes.map((c) => `• ${c}`).join('\n') }
+          : { title: 'Create failed', body: raw });
       },
     });
   };
@@ -444,6 +445,16 @@ export const PurchaseOrderFromSo = () => {
         isLoading={itemsQ.isLoading}
         emptyMessage="No outstanding SO lines — every line has been converted (or there are no SOs)."
       />
+
+      {dialog && (
+        <ActionResultDialog
+          title={dialog.title}
+          body={dialog.body}
+          primaryLabel={dialog.goTo ? 'Open Purchase Orders' : undefined}
+          onPrimary={dialog.goTo ? () => { const g = dialog.goTo!; setDialog(null); navigate(g); } : undefined}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 };

@@ -27,6 +27,7 @@ import {
   type OutstandingPoItem,
 } from '../lib/suppliers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { ActionResultDialog } from '../components/ActionResultDialog';
 import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
@@ -91,6 +92,10 @@ export const GrnFromPo = () => {
   const [dateField, setDateField] = useState<DateField>('poDate');
   const [dateFrom, setDateFrom]   = useState<string>('');
   const [dateTo, setDateTo]       = useState<string>('');
+
+  // In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
+  // browser alert). goTo set → offer a navigate button.
+  const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
@@ -254,8 +259,8 @@ export const GrnFromPo = () => {
 
   // ── Create GRNs ──────────────────────────────────────────────────────
   const onSave = () => {
-    if (pickedCount === 0) { window.alert('Tick at least one PO line first.'); return; }
-    if (!receivedDate)     { window.alert('Received Date is required.'); return; }
+    if (pickedCount === 0) { setDialog({ title: 'Nothing picked', body: 'Tick at least one PO line first.' }); return; }
+    if (!receivedDate)     { setDialog({ title: 'Received date required', body: 'Set a received date before creating GRNs.' }); return; }
     const body = {
       picks: picked.map(([poItemId, v]) => ({ poItemId, qty: v.qty })),
       receivedDate,
@@ -263,16 +268,23 @@ export const GrnFromPo = () => {
     create.mutate(body, {
       onSuccess: (res) => {
         if (!res.total) {
-          window.alert('No GRNs created — the picked lines had nothing receivable.');
+          setDialog({ title: 'No GRNs created', body: 'The picked lines had nothing receivable.' });
           return;
         }
         const summary = res.created.map((g) => g.grnNumber).join(', ');
-        window.alert(`Created ${res.total} GRN${res.total === 1 ? '' : 's'}: ${summary}\nInventory updated.`);
-        navigate('/grns');
+        setSelected();
+        setDialog({
+          title: `Created ${res.total} GRN${res.total === 1 ? '' : 's'}`,
+          body: `${summary}\nInventory updated.`,
+          goTo: '/grns',
+        });
       },
-      onError: (err) => window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
+      onError: (err) => setDialog({ title: 'Create failed', body: err instanceof Error ? err.message : String(err) }),
     });
   };
+
+  /* Clear picks after a successful batch so the grid resets. */
+  const setSelected = () => setPicks({});
 
   // ── Toolbar (filters + select/clear + received date) — same layout as
   //    Create-PO-from-SO, plus the GRN-specific Received Date. ─────────────
@@ -395,6 +407,16 @@ export const GrnFromPo = () => {
         isLoading={itemsQ.isLoading}
         emptyMessage="No outstanding PO lines — every line has been received (or there are no outstanding POs)."
       />
+
+      {dialog && (
+        <ActionResultDialog
+          title={dialog.title}
+          body={dialog.body}
+          primaryLabel={dialog.goTo ? 'Open Goods Receipts' : undefined}
+          onPrimary={dialog.goTo ? () => { const g = dialog.goTo!; setDialog(null); navigate(g); } : undefined}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 };
