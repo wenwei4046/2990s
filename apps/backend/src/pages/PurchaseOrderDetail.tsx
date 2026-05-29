@@ -24,7 +24,6 @@ import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
 import {
   usePurchaseOrderDetail,
-  usePurchaseOrderLinked,
   useUpdatePurchaseOrderHeader,
   useAddPurchaseOrderItem,
   useUpdatePurchaseOrderItem,
@@ -40,7 +39,6 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
-import { SmartButtons } from '../components/SmartButtons';
 import { MoneyInput } from '../components/MoneyInput';
 import styles from './SalesOrderDetail.module.css';
 
@@ -69,7 +67,6 @@ export const PurchaseOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const detail = usePurchaseOrderDetail(id ?? null);
-  const linked = usePurchaseOrderLinked(id ?? null);
   const updateHeader = useUpdatePurchaseOrderHeader();
   // PR-DRAFT-removal — Submit button removed (POs are SUBMITTED on create).
   const cancel = useCancelPurchaseOrder();
@@ -165,23 +162,10 @@ export const PurchaseOrderDetail = () => {
     ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
-  const linkedCounts = {
-    grns:     linked.data?.grns.length     ?? 0,
-    invoices: linked.data?.invoices.length ?? 0,
-    returns:  linked.data?.returns.length  ?? 0,
-  };
-
   return (
     <div className={styles.page}>
-      {/* ── Smart Buttons (document linkage fan-out) ────────────── */}
-      <SmartButtons
-        loading={linked.isLoading}
-        buttons={[
-          { count: linkedCounts.grns,     label: 'GRNs',    to: `/grns?poId=${po.id}` },
-          { count: linkedCounts.invoices, label: 'Invoice', to: `/purchase-invoices?poId=${po.id}` },
-          { count: linkedCounts.returns,  label: 'Returns', to: `/purchase-returns?poId=${po.id}` },
-        ]}
-      />
+      {/* Commander 2026-05-29 — dropped the GRNs/Invoice/Returns smart-button
+          row + the "PO date · N lines · Expected" subtitle (not needed). */}
 
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
@@ -197,10 +181,6 @@ export const PurchaseOrderDetail = () => {
               <FileText size={14} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
               {po.po_number} — {po.supplier?.name ?? po.supplier?.code ?? '—'}
             </h1>
-            <p className={styles.subtitle}>
-              PO date {po.po_date} · {items.length} {items.length === 1 ? 'line' : 'lines'}
-              {po.expected_at && ` · Expected ${po.expected_at}`}
-            </p>
           </div>
         </div>
         <div className={styles.actions}>
