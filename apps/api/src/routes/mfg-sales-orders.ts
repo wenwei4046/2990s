@@ -785,6 +785,7 @@ mfgSalesOrders.post('/:docNo/convert-to-do', async (c) => {
   // helper in the PATCH handler).
   const so = hRes.data as unknown as Record<string, unknown> & {
     doc_no: string;
+    status: string;
     debtor_code: string | null;
     debtor_name: string;
     customer_delivery_date: string | null;
@@ -798,6 +799,15 @@ mfgSalesOrders.post('/:docNo/convert-to-do', async (c) => {
     customer_state: string | null;
     phone: string | null;
   };
+
+  // Commander 2026-05-29 — a cancelled SO must NOT proceed: block converting
+  // it to a Delivery Order. (PO-from-SO + MRP already exclude CANCELLED SOs.)
+  if (so.status === 'CANCELLED') {
+    return c.json(
+      { error: 'so_cancelled', message: `SO ${docNo} is cancelled — it cannot be converted to a Delivery Order.` },
+      409,
+    );
+  }
   const soItems = (iRes.data ?? []) as unknown as Array<Record<string, unknown> & {
     id: string;
     item_code: string;

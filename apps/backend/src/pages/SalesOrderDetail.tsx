@@ -23,7 +23,7 @@ import {
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, X, Printer, Save,
-  DollarSign, Lock, History, ChevronDown, ChevronRight,
+  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
@@ -662,6 +662,25 @@ export const SalesOrderDetail = () => {
 
   const isLocked = lockedStatuses.includes(header.status) && !unlockOverride;
 
+  // Cancel SO flow (Commander 2026-05-29) — a cancelled SO stops proceeding
+  // (no PO / DO / production; the whole page greys out) and can be reopened
+  // back to CONFIRMED. Cancel is offered only on in-flight statuses (not once
+  // it has SHIPPED / been INVOICED / CLOSED — those have downstream docs).
+  const isCancelled = header.status === 'CANCELLED';
+  const cancellableStatuses: SoStatus[] = ['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'];
+  const canCancel = cancellableStatuses.includes(header.status);
+
+  const handleCancelSo = () => {
+    if (!window.confirm(
+      `Cancel ${header.doc_no}?\n\nThe SO will stop proceeding — it won't appear in MRP / PO / DO conversion, and line edits lock. You can Reopen it later.`,
+    )) return;
+    updateStatus.mutate({ docNo: header.doc_no, status: 'CANCELLED' });
+  };
+  const handleReopenSo = () => {
+    if (!window.confirm(`Reopen ${header.doc_no} back to CONFIRMED so it can proceed again?`)) return;
+    updateStatus.mutate({ docNo: header.doc_no, status: 'CONFIRMED' });
+  };
+
   const handlePrint = () => {
     /* Followup #81 — Wait for the payments query before generating; legacy
        header columns (paid_centi, payment_method, …) are deprecated. If
@@ -680,7 +699,10 @@ export const SalesOrderDetail = () => {
   };
 
   return (
-    <div className={styles.page}>
+    /* Commander 2026-05-29 — a CANCELLED SO greys the whole page so it reads
+       as dead/inactive. The Cancel/Reopen buttons + banner stay clickable
+       (a CSS filter doesn't block pointer events). */
+    <div className={styles.page} style={isCancelled ? { filter: 'grayscale(0.7)' } : undefined}>
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
@@ -728,6 +750,22 @@ export const SalesOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* Cancel SO / Reopen SO (Commander 2026-05-29). A cancelled SO
+              stops proceeding (greys out, no MRP/PO/DO). Reopen restores it. */}
+          {isCancelled ? (
+            <Button variant="primary" size="md"
+              onClick={handleReopenSo} disabled={updateStatus.isPending}>
+              <RotateCcw {...ICON} />
+              <span>Reopen SO</span>
+            </Button>
+          ) : canCancel && !isEditing ? (
+            <Button variant="ghost" size="md"
+              onClick={handleCancelSo} disabled={updateStatus.isPending}
+              style={{ color: 'var(--c-festive-b, #B8331F)' }}>
+              <Ban {...ICON} />
+              <span>Cancel SO</span>
+            </Button>
+          ) : null}
           {/* PR-A — Page-level Edit/Save/Cancel. Default view is read-only
               (Edit shown). In edit mode, Edit is replaced by Save + Cancel.
               Edit is disabled while the SO is locked (e.g. SHIPPED+) unless
@@ -763,8 +801,29 @@ export const SalesOrderDetail = () => {
         </div>
       )}
 
+      {/* ── Cancelled banner (Commander 2026-05-29) ─────────────── */}
+      {isCancelled ? (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'rgba(184, 51, 31, 0.10)',
+          border: '1px solid var(--c-festive-b, #B8331F)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: 'var(--fs-13)',
+        }}>
+          <span style={LOCK_BANNER_INNER_STYLE}>
+            <Ban {...ICON} />
+            <span>This SO is <strong>cancelled</strong> — it won't proceed (no MRP / PO / DO / production).
+              Press <em>Reopen SO</em> above to bring it back.</span>
+          </span>
+          <Button variant="primary" size="sm" onClick={handleReopenSo} disabled={updateStatus.isPending}>
+            <RotateCcw {...ICON} /> Reopen
+          </Button>
+        </div>
+      ) : null}
+
       {/* ── Lock banner ─────────────────────────────────────────── */}
-      {lockedStatuses.includes(header.status) && (
+      {!isCancelled && lockedStatuses.includes(header.status) && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: 'var(--space-3) var(--space-4)',
