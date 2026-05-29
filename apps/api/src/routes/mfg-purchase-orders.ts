@@ -485,10 +485,17 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
        switch an item to an alternate supplier in-place; { itemCode: supplierId }
        wins over the SKU's main-supplier binding. */
     supplierByCode?: Record<string, string>;
+    /* Commander 2026-05-29 — "Convert from SO" / "Add Line Item" on an EXISTING
+       PO open this same picker scoped to that PO. When targetPoId is set we do
+       NOT create new POs — we APPEND the picked lines to that PO (only the lines
+       whose supplier matches the PO's supplier), keeping each line's so_item_id
+       so a later delete releases the SO quota. */
+    targetPoId?: string;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
   const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
+  const targetPoId = body.targetPoId as string | undefined;
 
   /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
      are NO LONGER asked or required. They are derived per-line from the source
@@ -625,6 +632,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       // variant through to the PO line).
       itemGroup: row.item_group,
       variants:  row.variants,
+      // Commander 2026-05-29 — the source SO line id, threaded to the PO line so
+      // the append-to-existing-PO path can persist so_item_id (release-on-delete).
+      soItemId:  row.id || null,
     };
   });
 
@@ -847,6 +857,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
     warehouseId: string | null; deliveryDate: string | null;
     itemGroup: string | null; variants: Record<string, unknown> | null;
+    soItemId: string | null;
   };
   type Bucket = { supplierId: string; currency: string; lines: Line[]; soDocNos: Set<string> };
   const byGroup = new Map<string, Bucket>();
@@ -872,6 +883,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       deliveryDate: it.lineDeliveryDate,
       itemGroup: it.itemGroup,
       variants: it.variants,
+      soItemId: it.soItemId,
     });
     bucket.soDocNos.add(it.soDocNo);
     byGroup.set(groupKey, bucket);
@@ -899,7 +911,64 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     }
     return [...merged.values()];
   };
-  for (const bucket of byGroup.values()) bucket.lines = consolidateLines(bucket.lines);
+  /* Consolidate same SKU+variant lines — but ONLY when creating fresh POs.
+     When appending to an existing PO (targetPoId) we keep each picked SO line
+     as its own PO line so its so_item_id stays 1:1 (clean release on delete). */
+  if (!targetPoId) {
+    for (const bucket of byGroup.values()) bucket.lines = consolidateLines(bucket.lines);
+  }
+
+  /* ── Commander 2026-05-29 — APPEND to an existing PO ─────────────────────
+     "Convert from SO" / "Add Line Item" on a PO open this picker scoped to that
+     PO. Append the picked lines (only those whose supplier matches the PO's
+     supplier — the picker locks to it) instead of creating new POs. */
+  if (targetPoId) {
+    const { data: po, error: poErr } = await supabase
+      .from('purchase_orders')
+      .select('id, status, supplier_id, po_number')
+      .eq('id', targetPoId)
+      .maybeSingle();
+    if (poErr) return c.json({ error: 'load_failed', reason: poErr.message }, 500);
+    if (!po) return c.json({ error: 'po_not_found' }, 404);
+    const target = po as { id: string; status: string; supplier_id: string; po_number: string };
+    if (target.status !== 'SUBMITTED' && target.status !== 'PARTIALLY_RECEIVED') {
+      return c.json({ error: 'po_not_editable', reason: `Cannot add lines to a ${target.status} PO.` }, 409);
+    }
+    const bucket = byGroup.get(target.supplier_id);
+    if (!bucket || bucket.lines.length === 0) {
+      return c.json({ error: 'supplier_mismatch', reason: 'None of the picked SO lines belong to this PO’s supplier.' }, 409);
+    }
+    const rows = bucket.lines.map((l) => ({
+      purchase_order_id: target.id,
+      material_kind: 'mfg_product',
+      material_code: l.itemCode,
+      material_name: l.itemName,
+      supplier_sku: l.supplierSku,
+      qty: l.qty,
+      unit_price_centi: l.unitPriceCenti,
+      line_total_centi: l.qty * l.unitPriceCenti,
+      delivery_date: l.deliveryDate,
+      warehouse_id:  l.warehouseId,
+      item_group: l.itemGroup,
+      variants: l.variants,
+      description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
+      // Release-on-delete link (migration 0098).
+      so_item_id: l.soItemId,
+    }));
+    const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
+    if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+    await recomputePoTotals(supabase, target.id);
+    // Bump po_qty_picked on the picked SO lines (drops them from the picker).
+    await Promise.all(pickedItems
+      .filter(({ row }) => row.id && (mainByCode.get(row.item_code)?.supplier_id === target.supplier_id))
+      .map(async ({ row, qty }) => {
+        await supabase
+          .from('mfg_sales_order_items')
+          .update({ po_qty_picked: row.po_qty_picked + qty })
+          .eq('id', row.id);
+      }));
+    return c.json({ targetPoId: target.id, poNumber: target.po_number, added: bucket.lines.length }, 200);
+  }
 
   // Generate PO numbers + create one PO per supplier.
   const d = new Date();

@@ -269,7 +269,7 @@ export const Mrp = () => {
         setDialog({
           kind: 'created',
           title: `Created ${res.total} PO${res.total === 1 ? '' : 's'}`,
-          body: res.created.map((p) => p.poNumber).join(', '),
+          body: (res.created ?? []).map((p) => p.poNumber).join(', '),
         });
       },
       onError: (err) => {

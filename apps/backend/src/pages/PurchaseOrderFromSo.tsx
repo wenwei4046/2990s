@@ -20,12 +20,14 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type CSSProperties } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
 import {
   useOutstandingSoItems,
+  useCreatePosFromSoItems,
+  usePurchaseOrderDetail,
   type OutstandingSoItem,
 } from '../lib/suppliers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -87,6 +89,17 @@ export const PurchaseOrderFromSo = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingSoItems();
 
+  /* Commander 2026-05-29 — when opened from a PO ("Convert from SO" / "Add Line
+     Item"), ?poId scopes this picker to that PO: it locks to the PO's supplier
+     and, on save, APPENDS the picked SO lines to that PO (instead of creating
+     new POs), then returns to the PO. */
+  const [searchParams] = useSearchParams();
+  const targetPoId = searchParams.get('poId');
+  const targetPoQ = usePurchaseOrderDetail(targetPoId);
+  const targetPoSupplierCode = targetPoQ.data?.purchaseOrder?.supplier?.code ?? null;
+  const targetPoNumber = targetPoQ.data?.purchaseOrder?.po_number ?? null;
+  const createPos = useCreatePosFromSoItems();
+
   // Map<soItemId, { picked, qty }>. Defaults: picked = false; when ticked,
   // qty defaults to remainingQty.
   const [picks, setPicks] = useState<Record<string, Pick>>({});
@@ -133,13 +146,16 @@ export const PurchaseOrderFromSo = () => {
   // One supplier per PO (Commander 2026-05-29) — once a bound line is ticked,
   // lines from other suppliers lock. Unbound ("— none —") lines don't lock.
   const lockedSupplier = useMemo(() => {
+    // In PO-scoped mode the supplier is fixed to the PO's supplier from the
+    // start — every other supplier's lines grey out immediately.
+    if (targetPoSupplierCode) return targetPoSupplierCode;
     for (const [id, v] of Object.entries(picks)) {
       if (!v.picked) continue;
       const row = items.find((r) => r.soItemId === id);
       if (row?.mainSupplierCode) return row.mainSupplierCode;
     }
     return null;
-  }, [picks, items]);
+  }, [picks, items, targetPoSupplierCode]);
 
   // A row is LOCKED when a different bound supplier is already picked.
   // Commander 2026-05-29: "不让勾选了，那为什么不把选项置灰呢" — grey these out
@@ -359,12 +375,31 @@ export const PurchaseOrderFromSo = () => {
   ], [picks]);
 
   // ── Add to PO ────────────────────────────────────────────────────────
-  // Commander 2026-05-29 — this grid is the PICKER that FEEDS the New PO form
-  // (it no longer auto-creates POs; that's MRP's Proceed PO). On confirm, stash
-  // the picked SO lines + their chosen qty, then return to /purchase-orders/new,
-  // which adds them as PO line items.
+  // Commander 2026-05-29 — two modes:
+  //   • PO-scoped (?poId): APPEND the picked lines straight to that PO, then
+  //     return to the PO detail page (Convert from SO / Add Line Item).
+  //   • Default: stash the picks + feed the New PO form (/purchase-orders/new).
   const onSave = () => {
     if (pickedCount === 0) { setDialog({ title: 'Nothing picked', body: 'Tick at least one SO line first.' }); return; }
+
+    if (targetPoId) {
+      const picksPayload = picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty }));
+      createPos.mutate(
+        { picks: picksPayload, targetPoId },
+        {
+          onSuccess: (res) => {
+            // Land back on the PO still in Edit mode so the new lines are right there.
+            navigate(`/purchase-orders/${res.targetPoId ?? targetPoId}?edit=1`);
+          },
+          onError: (e) => setDialog({
+            title: 'Add failed',
+            body: e instanceof Error ? e.message : String(e),
+          }),
+        },
+      );
+      return;
+    }
+
     const out = picked
       .map(([soItemId, v]) => {
         const row = items.find((r) => r.soItemId === soItemId);
@@ -443,23 +478,35 @@ export const PurchaseOrderFromSo = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/purchase-orders" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Purchase Orders</span>
+          <Link to={targetPoId ? `/purchase-orders/${targetPoId}?edit=1` : '/purchase-orders'} className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>{targetPoId ? 'Back to PO' : 'Purchase Orders'}</span>
           </Link>
-          <h1 className={styles.title}>Pick Sales Orders for this PO</h1>
+          <h1 className={styles.title}>
+            Pick Sales Orders for this PO
+            {targetPoNumber && (
+              <span style={{ marginLeft: 8, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-14)', color: 'var(--c-burnt)' }}>
+                · {targetPoNumber}
+              </span>
+            )}
+          </h1>
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
+          <Button
+            variant="ghost" size="md"
+            onClick={() => navigate(targetPoId ? `/purchase-orders/${targetPoId}?edit=1` : '/purchase-orders')}
+          >
             <X {...ICON} /> Cancel
           </Button>
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={pickedCount === 0}
-            title="Add the picked SO lines into the New PO form"
+            disabled={pickedCount === 0 || createPos.isPending}
+            title={targetPoId ? 'Add the picked SO lines into this PO' : 'Add the picked SO lines into the New PO form'}
           >
             <Save {...ICON} />
-            {pickedCount === 0 ? 'Pick at least 1 line' : `Add ${pickedCount} line${pickedCount === 1 ? '' : 's'} to PO`}
+            {createPos.isPending
+              ? 'Adding…'
+              : pickedCount === 0 ? 'Pick at least 1 line' : `Add ${pickedCount} line${pickedCount === 1 ? '' : 's'} to PO`}
           </Button>
         </div>
       </div>

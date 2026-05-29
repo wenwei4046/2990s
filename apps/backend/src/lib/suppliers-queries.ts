@@ -620,15 +620,28 @@ export function useCreatePosFromSoItems() {
       /* Commander 2026-05-29 — per-SKU supplier override picked in the MRP
          ({ itemCode: supplierId }); wins over the main-supplier binding. */
       supplierByCode?: Record<string, string>;
+      /* Commander 2026-05-29 — when set, APPEND the picked lines to this existing
+         PO (the "Convert from SO" / "Add Line Item" picker scoped to a PO)
+         instead of creating new POs. */
+      targetPoId?: string;
     }) =>
-      authedFetch<{ created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>; total: number }>(
+      authedFetch<{
+        // Create-new-POs shape:
+        created?: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>;
+        total?: number;
+        // Append-to-existing-PO shape (targetPoId):
+        targetPoId?: string;
+        poNumber?: string;
+        added?: number;
+      }>(
         `/mfg-purchase-orders/from-sos`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
-    onSuccess: () => {
+    onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'] });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      if (vars.targetPoId) qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.targetPoId] });
     },
   });
 }
