@@ -58,11 +58,16 @@ export function buildVariantSummary(
     const total = str(variants.totalHeight);
     if (total) segments.push(`T.Heights ${total}`);
   } else {
-    // SOFA: SEAT {seat} {LEG}
+    // SOFA: SEAT {seat} · LEG {LEG}
+    // Commander 2026-05-29: seat SIZE and leg height were mashed together with
+    // a bare space ("SEAT 28 4\"") — split them with the same ` · ` delimiter
+    // used between other attributes and label the leg value so they read as
+    // two distinct tokens.
     const seat = str(variants.seatHeight);
     if (seat || leg) {
       const seatPart = seat ? `SEAT ${seat}` : '';
-      segments.push([seatPart, leg].filter(Boolean).join(' '));
+      const legPart  = leg ? `LEG ${leg}` : '';
+      segments.push([seatPart, legPart].filter(Boolean).join(' · '));
     }
   }
 

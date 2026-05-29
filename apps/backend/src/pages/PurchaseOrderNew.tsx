@@ -304,6 +304,9 @@ export const PurchaseOrderNew = () => {
         divanHeight:    (v.divanHeight as string | undefined) ?? null,
         legHeight:      category === 'BEDFRAME' ? (v.legHeight as string | undefined) ?? null : null,
         sofaLegHeight:  category === 'SOFA' ? (v.legHeight as string | undefined) ?? null : null,
+        // Bedframe Total Heights surcharge — Commander 2026-05-29: picking a
+        // total height now re-prices the line (engine reads totalHeights).
+        totalHeight:    (v.totalHeight as string | undefined) ?? null,
         specials,
       },
       maint,
@@ -923,6 +926,21 @@ export const PurchaseOrderNew = () => {
                               {maint!.legHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
                             </select>
                           </label>
+                          {/* Total Heights — Commander 2026-05-29: mirror the SO
+                              bedframe editor so its maintenance surcharge applies.
+                              Bound to variants.totalHeight (read by the pricing
+                              engine via computeMfgPoUnitCost → totalHeights). */}
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Total Heights</span>
+                            <select
+                              className={styles.fieldSelect}
+                              value={String(l.variants.totalHeight ?? '')}
+                              onChange={(e) => setVariant(l.rid, 'totalHeight', e.target.value)}
+                            >
+                              <option value="" disabled>Select…</option>
+                              {maint!.totalHeights.map((o) => (<option key={o.value} value={o.value}>{o.value}</option>))}
+                            </select>
+                          </label>
                         </div>
                         <SpecialsCheckboxes
                           pool={maint!.specials}
@@ -954,7 +972,7 @@ export const PurchaseOrderNew = () => {
                             </select>
                           </label>
                           <label className={styles.field}>
-                            <span className={styles.fieldLabel}>Seat Heights</span>
+                            <span className={styles.fieldLabel}>Seat Size</span>
                             <select
                               className={styles.fieldSelect}
                               value={String(l.variants.seatHeight ?? '')}

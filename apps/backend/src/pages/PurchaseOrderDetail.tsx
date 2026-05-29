@@ -717,9 +717,13 @@ const PoLineItemModal = ({
     } else if (category === 'BEDFRAME') {
       const divanV = String(draft.variants?.divanHeight ?? '');
       const legV = String(draft.variants?.legHeight ?? '');
+      const totalV = String(draft.variants?.totalHeight ?? '');
       const specV = String(draft.variants?.special ?? '');
       extraSen += maint.divanHeights.find((o) => o.value === divanV)?.priceSen ?? 0;
       extraSen += maint.legHeights.find((o) => o.value === legV)?.priceSen ?? 0;
+      // Commander 2026-05-29: apply the Total Heights surcharge so the new
+      // bedframe dropdown actually re-prices the line.
+      extraSen += maint.totalHeights.find((o) => o.value === totalV)?.priceSen ?? 0;
       extraSen += maint.specials.find((o) => o.value === specV)?.priceSen ?? 0;
     }
     const newPrice = basePriceSen + extraSen;
@@ -898,13 +902,18 @@ const PoLineItemModal = ({
                   <VariantSelect label="Leg Height" options={maint.legHeights}
                     value={String(draft.variants?.legHeight ?? '')}
                     onChange={(v) => setVariant('legHeight', v)} />
+                  {/* Total Heights — Commander 2026-05-29: mirror the SO bedframe
+                      editor so its maintenance surcharge can be picked here too. */}
+                  <VariantSelect label="Total Heights" options={maint.totalHeights}
+                    value={String(draft.variants?.totalHeight ?? '')}
+                    onChange={(v) => setVariant('totalHeight', v)} />
                   <VariantSelect label="Special" options={maint.specials}
                     value={String(draft.variants?.special ?? '')}
                     onChange={(v) => setVariant('special', v)} />
                 </div>
               ) : (
                 <div className={styles.formGrid4}>
-                  <VariantSelect label="Seat Height"
+                  <VariantSelect label="Seat Size"
                     options={maint.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
                     value={String(draft.variants?.seatHeight ?? '')}
                     onChange={(v) => setVariant('seatHeight', v)} />
