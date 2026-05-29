@@ -3,11 +3,17 @@
 // /purchase-invoices/new (PR — Phase 3 of Purchasing rebuild,
 // Commander 2026-05-26).
 //
-// Workflow: from a posted GRN detail page, commander clicks "Generate
-// Invoice" and lands here with ?grnId={uuid} pre-loaded. The page shows
-// the GRN header (supplier + dates as read-only context) and the GRN
-// accepted items as PI lines. Commander enters the supplier's invoice
-// reference + due date, hits Save.
+// Two ways in (Commander 2026-05-29 — PI must have its OWN create form like
+// New PO / New GRN, not be forced through a GRN):
+//
+//   1. From a posted GRN detail page, commander clicks "Generate Invoice" and
+//      lands here with ?grnId={uuid} pre-loaded. The page shows the GRN header
+//      (supplier + dates as read-only context) and the GRN accepted items as
+//      PI lines (editable price). This path is unchanged.
+//   2. MANUAL — no grnId at all: pick a supplier, search products, add line
+//      items by hand (mirrors GrnNew's manual mode, including the per-category
+//      bedframe/sofa variant editor with auto-computed Total Height). Saves
+//      with grnId:null + each line carrying its own item_group + variants.
 //
 // PR-DRAFT-removal (2026-05-27, migration 0078): POST /purchase-invoices
 // now creates the PI as POSTED directly. PI does NOT touch inventory
@@ -17,7 +23,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -25,7 +31,10 @@ import {
   usePostPurchaseInvoice,
   useGrnDetail,
 } from '../lib/flow-queries';
+import { useSuppliers } from '../lib/suppliers-queries';
+import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { ActionResultDialog } from '../components/ActionResultDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -36,6 +45,41 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   return `${currency} ${(v / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
+/* Commander 2026-05-29 — bedframe Total Height is AUTO-COMPUTED = Divan + Leg +
+   Gap (mirrors GrnNew / SoLineCard); it is NOT a manual pick. */
+const parseInches = (s: unknown): number => {
+  if (s == null) return 0;
+  const m = String(s).match(/(-?\d+(?:\.\d+)?)/);
+  return m && m[1] ? Number(m[1]) : 0;
+};
+
+/* Commander 2026-05-29 — manual PI lines whose product is a bedframe/sofa get
+   the SAME per-category variant editor as New GRN / New PO. Small local copy of
+   GrnNew's VariantSelect (not exported there). */
+const VariantSelect = ({
+  label, options, value, onChange,
+}: {
+  label: string;
+  options: Array<{ value: string; priceSen: number }>;
+  value: string;
+  onChange: (v: string) => void;
+}) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <span className={styles.selectWrap}>
+      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
+  </label>
+);
+
 type DraftLine = {
   rid:            string;
   grnItemId:      string | null;
@@ -43,9 +87,8 @@ type DraftLine = {
   materialCode:   string;
   materialName:   string;
   /* Commander 2026-05-29 — PI lines must show the same content as PO/GRN
-     ("PO 有什么内容，Purchase Invoice 也应该随之对应"). Carry the GRN line's
-     category + variant selections so buildVariantSummary can render the same
-     muted sub-line GrnNew shows. */
+     ("PO 有什么内容，Purchase Invoice 也应该随之对应"). GRN-sourced lines carry
+     the GRN line's category + variants; manual lines pick them below. */
   itemGroup:      string | null;
   variants:       Record<string, unknown> | null;
   qty:            number;
@@ -59,16 +102,30 @@ export const PurchaseInvoiceNew = () => {
   const grnId    = params.get('grnId');
   const grnQ     = useGrnDetail(grnId);
 
+  // Manual mode = no ?grnId= in the URL (Commander 2026-05-29 — blank PI).
+  const isManual = !grnId;
+
   const create = useCreatePurchaseInvoice();
   const post   = usePostPurchaseInvoice();
   const saving = create.isPending || post.isPending;
+
+  // Manual-mode supplier (mirrors GrnNew).
+  const [manualSupplierId, setManualSupplierId] = useState<string>('');
+  const suppliersQ = useSuppliers({ status: 'ACTIVE' });
+
+  // Maintenance config drives the per-category variant editor on MANUAL
+  // bedframe/sofa lines (same dropdown pools as New GRN / New PO).
+  const maintQ = useMaintenanceConfig('master');
+  const maint  = maintQ.data?.data ?? null;
 
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string>('');
   const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate]         = useState<string>('');
   const [notes, setNotes]             = useState<string>('');
   const [lines, setLines]             = useState<DraftLine[]>([]);
+  const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
+  // ── GRN-sourced lines (only when ?grnId= present). ──────────────────────
   useEffect(() => {
     if (!grnQ.data) return;
     const next: DraftLine[] = (grnQ.data.items ?? [])
@@ -79,8 +136,8 @@ export const PurchaseInvoiceNew = () => {
         materialKind:   it.material_kind,
         materialCode:   it.material_code,
         materialName:   it.material_name,
-        // Carried from the GRN line (grns.ts ITEM select now returns these) so
-        // the PI shows the same variant summary as the GRN it descends from.
+        // Carried from the GRN line (grns.ts ITEM select returns these) so the
+        // PI shows the same variant summary as the GRN it descends from.
         itemGroup:      it.item_group ?? null,
         variants:       (it.variants as Record<string, unknown> | null) ?? null,
         qty:            it.qty_accepted,
@@ -115,20 +172,59 @@ export const PurchaseInvoiceNew = () => {
   const po       = grn?.purchase_order;
   const currency = 'MYR';
 
-  const canSave = !!grn && lines.length > 0 && lines.every((l) => l.qty > 0);
+  // Effective supplier id + display name (from GRN, or the manual <select>).
+  const supplierId   = isManual ? (manualSupplierId || null) : (grn?.supplier_id ?? null);
+  const supplierName = isManual
+    ? ((suppliersQ.data ?? []).find((s) => s.id === manualSupplierId)?.name ?? null)
+    : (supplier?.name ?? null);
+
+  // ── Manual product search (gated by min query length, mirrors GrnNew). ───
+  const [productQuery, setProductQuery] = useState<string>('');
+  const productsQ = useMfgProducts({
+    search: productQuery,
+    enabled: isManual && productQuery.trim().length >= 2,
+  });
+
+  const addManualLine = (code: string, name: string, category: string | null) => {
+    setLines((prev) => [...prev, {
+      rid:            `m${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      grnItemId:      null,
+      materialKind:   'mfg_product',
+      materialCode:   code,
+      materialName:   name,
+      itemGroup:      category ? category.toLowerCase() : null,
+      variants:       null,
+      qty:            1,
+      unitPriceCenti: 0,
+      notes:          '',
+    }]);
+    setProductQuery('');
+  };
+
+  const canSave = !!supplierId && lines.length > 0 && lines.every((l) => l.qty > 0);
 
   const onSave = async () => {
-    if (!grn) return;
-    if (!canSave) { window.alert('Each line needs qty > 0.'); return; }
+    if (!supplierId) {
+      setDialog({ title: 'Pick a supplier', body: isManual
+        ? 'Choose a supplier for this manual invoice.'
+        : 'This GRN is missing a supplier — reopen it and try again.' });
+      return;
+    }
+    if (lines.length === 0) {
+      setDialog({ title: 'Add at least one line', body: 'A purchase invoice needs at least one item.' });
+      return;
+    }
+    if (!canSave) { setDialog({ title: 'Check the quantities', body: 'Each line needs qty > 0.' }); return; }
     try {
       const createRes = await create.mutateAsync({
-        supplierId:          grn.supplier_id,
-        purchaseOrderId:     grn.purchase_order_id,
-        grnId:               grn.id,
-        supplierInvoiceRef:  supplierInvoiceRef || undefined,
+        // Manual: no GRN / PO behind it. GRN-sourced: carry both FKs through.
+        supplierId,
+        purchaseOrderId:    isManual ? null : (grn?.purchase_order_id ?? null),
+        grnId:              isManual ? null : (grn?.id ?? null),
+        supplierInvoiceRef: supplierInvoiceRef || undefined,
         invoiceDate,
-        dueDate:             dueDate || undefined,
-        notes:               notes || undefined,
+        dueDate:            dueDate || undefined,
+        notes:              notes || undefined,
         items: lines.map((l) => ({
           grnItemId:      l.grnItemId,
           materialKind:   l.materialKind,
@@ -137,43 +233,24 @@ export const PurchaseInvoiceNew = () => {
           qty:            l.qty,
           unitPriceCenti: l.unitPriceCenti,
           notes:          l.notes || undefined,
+          // Commander 2026-05-29 — persist the line's category + variant
+          // selections (columns exist on purchase_invoice_items, migration 0057)
+          // so the PI reflects WHAT was billed, same as the GRN/PO upstream.
+          itemGroup:      l.itemGroup,
+          variants:       l.variants,
         })),
       });
       // Auto-post so PI lands in POSTED state (matches PO + GRN behaviour).
       await post.mutateAsync(createRes.id);
-      window.alert(`PI ${createRes.invoiceNumber} created + posted.`);
-      navigate(`/purchase-invoices/${createRes.id}`);
+      setDialog({
+        title: `PI ${createRes.invoiceNumber} created`,
+        body: 'Created + posted — AP liability recorded.',
+        goTo: `/purchase-invoices/${createRes.id}`,
+      });
     } catch (err) {
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+      setDialog({ title: 'Save failed', body: err instanceof Error ? err.message : String(err) });
     }
   };
-
-  if (!grnId) {
-    return (
-      <div className={styles.page}>
-        <div className={styles.headerRow}>
-          <div className={styles.titleBlock}>
-            <Link to="/grns" className={styles.backBtn}>
-              <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
-            </Link>
-            <h1 className={styles.title}>New Purchase Invoice</h1>
-          </div>
-          <div className={styles.actions}>
-            {/* PR — task #52: shortcut into the line-level multi-GRN picker. */}
-            <Button variant="ghost" size="md" onClick={() => navigate('/purchase-invoices/from-grn')}>
-              From GRN (multi)
-            </Button>
-          </div>
-        </div>
-        <section className={styles.card}>
-          <div className={styles.cardBody}>
-            <p>Open a GRN first, then click <strong>Generate Invoice</strong> from there.</p>
-            <Button variant="primary" size="md" onClick={() => navigate('/grns')}>Go to Goods Receipts</Button>
-          </div>
-        </section>
-      </div>
-    );
-  }
 
   const gridTemplate = 'minmax(180px, 1.4fr) minmax(220px, 2fr) 90px 120px 130px 32px';
   const cellPad = 'var(--space-2)';
@@ -182,13 +259,19 @@ export const PurchaseInvoiceNew = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/grns" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
+          <Link to="/purchase-invoices" className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>Purchase Invoices</span>
           </Link>
-          <h1 className={styles.title}>New Purchase Invoice{grn?.grn_number ? ` · ${grn.grn_number}` : ''}</h1>
+          <h1 className={styles.title}>New Purchase Invoice{!isManual && grn?.grn_number ? ` · ${grn.grn_number}` : ''}</h1>
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate(grn ? `/grns/${grn.id}` : '/grns')}>
+          {/* Keep the GRN→Invoice path: jump to the multi-GRN-line picker. */}
+          {isManual && (
+            <Button variant="ghost" size="md" onClick={() => navigate('/purchase-invoices/from-grn')}>
+              From GRN (multi)
+            </Button>
+          )}
+          <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-invoices' : (grn ? `/grns/${grn.id}` : '/grns'))}>
             <X {...ICON} /> Cancel
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
@@ -202,23 +285,50 @@ export const PurchaseInvoiceNew = () => {
         <div className={styles.cardHeader}><h2 className={styles.cardTitle}>Header</h2></div>
         <div className={styles.cardBody}>
           <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>GRN #</span>
-              <input type="text" readOnly value={grn?.grn_number ?? ''} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>PI #</span>
-              <input type="text" readOnly value="(assigned on Save)" className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
-            </label>
+            {/* GRN # / PO # context only when sourced from a GRN. In manual mode
+                we show the supplier picker in their place. */}
+            {!isManual ? (
+              <>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>GRN #</span>
+                  <input type="text" readOnly value={grn?.grn_number ?? ''} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>PI #</span>
+                  <input type="text" readOnly value="(assigned on Save)" className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+                </label>
 
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>PO #</span>
-              <input type="text" readOnly value={po?.po_number ?? '—'} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Supplier</span>
-              <input type="text" readOnly value={supplier?.name ?? ''} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
-            </label>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>PO #</span>
+                  <input type="text" readOnly value={po?.po_number ?? '—'} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>Supplier</span>
+                  <input type="text" readOnly value={supplierName ?? ''} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+                </label>
+              </>
+            ) : (
+              <>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>Supplier *</span>
+                  <select
+                    value={manualSupplierId}
+                    onChange={(e) => setManualSupplierId(e.target.value)}
+                    className={styles.fieldInput}
+                    disabled={suppliersQ.isLoading}
+                  >
+                    <option value="">{suppliersQ.isLoading ? 'Loading suppliers…' : '— Pick a supplier —'}</option>
+                    {(suppliersQ.data ?? []).map((s) => (
+                      <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>PI #</span>
+                  <input type="text" readOnly value="(assigned on Save)" className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+                </label>
+              </>
+            )}
 
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Supplier Invoice # *</span>
@@ -245,14 +355,44 @@ export const PurchaseInvoiceNew = () => {
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Items</h2>
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {grnQ.isLoading
+            {!isManual && grnQ.isLoading
               ? 'Loading GRN items…'
               : lines.length === 0
-                ? 'No accepted items on this GRN'
+                ? (isManual ? 'Manual invoice — pick a supplier above, then add items below' : 'No accepted items on this GRN')
                 : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
           </span>
         </div>
         <div className={styles.cardBody}>
+          {/* Manual item search — only in manual mode. */}
+          {isManual && (
+            <div style={{ marginBottom: 'var(--space-3)' }}>
+              <label className={styles.field} style={{ maxWidth: 480 }}>
+                <span className={styles.fieldLabel}>Add item</span>
+                <input
+                  type="text"
+                  list="pi-manual-products"
+                  value={productQuery}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setProductQuery(v);
+                    const match = (productsQ.data ?? []).find((p) => p.code === v);
+                    if (match) addManualLine(match.code, match.name, match.category);
+                  }}
+                  placeholder="Type ≥2 chars to search SKUs by code or name…"
+                  className={styles.fieldInput}
+                />
+                <datalist id="pi-manual-products">
+                  {(productsQ.data ?? []).map((p) => (
+                    <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
+                  ))}
+                </datalist>
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  Pick a SKU to append a line. Qty + price are editable below.
+                </span>
+              </label>
+            </div>
+          )}
+
           <div style={{
             display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
             padding: cellPad, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)',
@@ -272,29 +412,105 @@ export const PurchaseInvoiceNew = () => {
             // Commander 2026-05-29 — same muted variant sub-line GrnNew shows,
             // so the PI mirrors what the GRN (and PO upstream) describe.
             const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
+            // Editable variant section only for MANUAL lines (grnItemId === null)
+            // that are bedframe/sofa, once the maintenance pools are loaded.
+            // GRN-sourced lines keep their read-only summary.
+            const showVariantEditor =
+              l.grnItemId === null &&
+              (l.itemGroup === 'bedframe' || l.itemGroup === 'sofa') &&
+              !!maint;
+            const setVariant = (key: string, value: string) =>
+              setLine(l.rid, { variants: (() => {
+                const variants: Record<string, unknown> = { ...(l.variants ?? {}), [key]: value };
+                // Auto-compute bedframe Total Height = Divan + Leg + Gap.
+                if (l.itemGroup === 'bedframe' && (key === 'divanHeight' || key === 'legHeight' || key === 'gap')) {
+                  const d = parseInches(variants.divanHeight);
+                  const lg = parseInches(variants.legHeight);
+                  const g = parseInches(variants.gap);
+                  variants.totalHeight = (d === 0 && lg === 0 && g === 0) ? '' : `${d + lg + g}"`;
+                }
+                return variants;
+              })() });
             return (
-              <div key={l.rid} style={{
-                display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
-                padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
-              }}>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
-                <div style={{ fontSize: 'var(--fs-13)' }}>
-                  <div>{l.materialName}</div>
-                  {variantSummary && (
-                    <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
-                  )}
+              <div key={l.rid}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
+                  padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
+                }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.materialCode}</div>
+                  <div style={{ fontSize: 'var(--fs-13)' }}>
+                    <div>{l.materialName}</div>
+                    {variantSummary && (
+                      <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
+                    )}
+                  </div>
+                  <input type="number" min={0} value={l.qty}
+                    onChange={(e) => setLine(l.rid, { qty: Math.max(0, Number(e.target.value) || 0) })}
+                    className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
+                  <MoneyInput bare valueSen={l.unitPriceCenti}
+                    onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
+                    inputClassName={styles.fieldInput} style={{ fontSize: 'var(--fs-13)' }} selectOnFocus />
+                  <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineTotal, currency)}</div>
+                  <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
+                    <Trash2 {...SM_ICON} />
+                  </button>
                 </div>
-                <input type="number" min={0} value={l.qty}
-                  onChange={(e) => setLine(l.rid, { qty: Math.max(0, Number(e.target.value) || 0) })}
-                  className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                <MoneyInput bare valueSen={l.unitPriceCenti}
-                  onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
-                  inputClassName={styles.fieldInput} style={{ fontSize: 'var(--fs-13)' }} selectOnFocus />
-                <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineTotal, currency)}</div>
-                <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
-                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
-                  <Trash2 {...SM_ICON} />
-                </button>
+
+                {/* Per-category VARIANT EDITOR for MANUAL bedframe/sofa lines —
+                    Commander 2026-05-29: mirrors New GRN / New PO so the operator
+                    specifies divan/leg/total height, gap, special, seat size +
+                    fabric. Same variant keys the PO/SO/GRN store. */}
+                {showVariantEditor && (
+                  <div style={{
+                    padding: `var(--space-2) ${cellPad} var(--space-3)`,
+                    borderBottom: '1px solid var(--line)', background: 'var(--c-cream)',
+                  }}>
+                    <div style={{
+                      fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+                      letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--fg-soft)',
+                      marginBottom: 'var(--space-2)',
+                    }}>Variants — {l.itemGroup}</div>
+                    {l.itemGroup === 'bedframe' ? (
+                      <div className={styles.formGrid4}>
+                        <VariantSelect label="Divan Height" options={maint!.divanHeights}
+                          value={String(l.variants?.divanHeight ?? '')}
+                          onChange={(v) => setVariant('divanHeight', v)} />
+                        <VariantSelect label="Gap"
+                          options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+                          value={String(l.variants?.gap ?? '')}
+                          onChange={(v) => setVariant('gap', v)} />
+                        <VariantSelect label="Leg Height" options={maint!.legHeights}
+                          value={String(l.variants?.legHeight ?? '')}
+                          onChange={(v) => setVariant('legHeight', v)} />
+                        {/* Total Heights removed — auto-computed from Divan +
+                            Leg + Gap (see setVariant). */}
+                        <VariantSelect label="Special" options={maint!.specials}
+                          value={String(l.variants?.special ?? '')}
+                          onChange={(v) => setVariant('special', v)} />
+                      </div>
+                    ) : (
+                      <div className={styles.formGrid4}>
+                        <VariantSelect label="Seat Size"
+                          options={maint!.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
+                          value={String(l.variants?.seatHeight ?? '')}
+                          onChange={(v) => setVariant('seatHeight', v)} />
+                        <VariantSelect label="Leg Height" options={maint!.sofaLegHeights}
+                          value={String(l.variants?.legHeight ?? '')}
+                          onChange={(v) => setVariant('legHeight', v)} />
+                        <VariantSelect label="Special" options={maint!.sofaSpecials}
+                          value={String(l.variants?.special ?? '')}
+                          onChange={(v) => setVariant('special', v)} />
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>Fabrics (free text)</span>
+                          <input className={styles.fieldInput}
+                            value={String(l.variants?.fabricColor ?? '')}
+                            onChange={(e) => setVariant('fabricColor', e.target.value)} />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -304,6 +520,16 @@ export const PurchaseInvoiceNew = () => {
           </div>
         </div>
       </section>
+
+      {dialog && (
+        <ActionResultDialog
+          title={dialog.title}
+          body={dialog.body}
+          primaryLabel={dialog.goTo ? 'Open PI' : undefined}
+          onPrimary={dialog.goTo ? () => { const g = dialog.goTo!; setDialog(null); navigate(g); } : undefined}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
   );
 };

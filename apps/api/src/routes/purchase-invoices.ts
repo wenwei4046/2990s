@@ -179,6 +179,11 @@ purchaseInvoices.post('/', async (c) => {
       qty, unit_price_centi: unit, line_total_centi: total,
       grn_item_id: (it.grnItemId as string | undefined) ?? null,
       notes: (it.notes as string | undefined) ?? null,
+      // Commander 2026-05-29 — manual PI lines carry their category + variant
+      // selections so the PI mirrors WHAT was billed (same as the from-grn-items
+      // path). Columns exist on purchase_invoice_items (migration 0057).
+      item_group: (it.itemGroup as string | null | undefined) ?? null,
+      variants: (it.variants as Record<string, unknown> | null | undefined) ?? null,
     };
   });
 
