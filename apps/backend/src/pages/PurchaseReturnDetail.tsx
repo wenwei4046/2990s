@@ -1,36 +1,45 @@
 // ----------------------------------------------------------------------------
 // PurchaseReturnDetail — full-page route at /purchase-returns/:id.
 //
-//   1. Header: back button + Return# · supplier + status pill
-//   2. Header card: editable supplier + return date + reason + credit note ref
-//      + notes
+// EXACT clone of PurchaseOrderDetail / GoodsReceivedDetail / PurchaseInvoiceDetail
+// (the gold standard): a draft-style View → Edit → Save/Back machine, Print PDF,
+// Cancel. A Purchase Return is CONFIRMED the moment it exists (no Draft
+// lifecycle), so POSTED reads as "Confirmed".
+//
+//   1. Header: back button + Return# · supplier + status pill + actions
+//   2. Supplier card: editable supplier + return date + reason + credit note ref
+//      + notes (inputs in Edit, read-only InfoCells in View). No currency /
+//      warehouse — money shows as MYR.
 //   3. Line items table: code + group + variants summary + qty(returned) + unit
-//      + total  (a return has NO discount / delivery — dropped vs GRN)
+//      + total  (a return has NO discount / delivery — qty × unit price)
 //   4. Totals card: refund total (live from line items = Σ line_refund_centi)
 //
-// A Purchase Return has NO draft / lifecycle gate — it is CONFIRMED the moment
-// it exists. There is NO Edit → Save → Back-discards cycle: the page is ALWAYS
-// inline-editable with IMMEDIATE SAVE. You change a field and it persists right
-// away:
-//   • Header selects commit on change; text/date commit on blur (only if changed)
-//   • Line qty / unit price commit immediately per field
-//   • Delete (trash) removes the line immediately (no confirm popup)
-// Inputs read straight off server state; TanStack Query refetches after each
-// mutation to keep them fresh.
+// Draft model (mirrors PO #194 / GRN / PI):
+//   • Edit  → snapshots header + lets you edit Qty(returned) / Unit INLINE per
+//             row. Nothing persists until the single top Save.
+//   • Save  → commits header changes + every changed line's field edits.
+//   • Back  → leaves the page, discarding the field-edit draft (no auto-save).
+//   • Delete (trash) removes the line immediately (no confirm popup).
 //
-// purchase_return_status enum is POSTED / COMPLETED / CANCELLED. POSTED renders
-// as "Confirmed" (editable); COMPLETED / CANCELLED render as their label and
-// lock the page read-only.
+// purchase_return_status enum: POSTED / COMPLETED / CANCELLED. POSTED →
+// "Confirmed" (editable). COMPLETED / CANCELLED render their label and lock the
+// page read-only. isLocked = CANCELLED or COMPLETED (mirror GRN's lock logic).
+// Cancel reverses the inventory OUT server-side (writes a reversing IN).
 // ----------------------------------------------------------------------------
 
-import { Link, useParams } from 'react-router';
-import { ArrowLeft, Undo2, Trash2, ChevronDown } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router';
+import {
+  ArrowLeft, Undo2, Pencil, Trash2, Printer, Save, Ban, ChevronDown,
+} from 'lucide-react';
+import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
   usePurchaseReturnDetail,
   useUpdatePurchaseReturnHeader,
   useUpdatePurchaseReturnItem,
   useDeletePurchaseReturnItem,
+  useCancelPurchaseReturn,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
@@ -39,15 +48,15 @@ import styles from './SalesOrderDetail.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-// purchase_return_status — POSTED (editable, "Confirmed") / COMPLETED /
+// purchase_return_status — POSTED ("Confirmed", editable) / COMPLETED /
 // CANCELLED (both locked).
 const STATUS_CLASS: Record<string, string> = {
-  POSTED: styles.statusDelivered ?? '',
+  POSTED:    styles.statusDelivered ?? '',
   COMPLETED: styles.statusDelivered ?? '',
   CANCELLED: styles.statusCancelled ?? '',
 };
 const STATUS_LABEL: Record<string, string> = {
-  POSTED: 'Confirmed',
+  POSTED:    'Confirmed',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
 };
@@ -57,6 +66,21 @@ const fmtRm = (centi: number | null | undefined): string => {
   return `MYR ${(v / 100).toLocaleString('en-MY', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
+};
+
+/* Draft state shapes (mirror PO #194 / GRN / PI). HeaderDraft mirrors the
+   editable PR header fields; LineDraft holds the two inline-editable per-line
+   fields where qty maps to qty_returned (a return has NO discount / delivery). */
+type HeaderDraft = {
+  supplierId: string;
+  returnDate: string;
+  reason: string;
+  creditNoteRef: string;
+  notes: string;
+};
+type LineDraft = {
+  qty: number;            // maps to qty_returned
+  unitPriceCenti: number;
 };
 
 type PrItemRow = Record<string, unknown> & {
@@ -72,18 +96,57 @@ type PrItemRow = Record<string, unknown> & {
   variants?: Record<string, unknown> | null;
 };
 
+const headerSnapshot = (p: any): HeaderDraft => ({
+  supplierId:    p.supplier_id ?? '',
+  returnDate:    (p.return_date ?? '').slice(0, 10),
+  reason:        p.reason ?? '',
+  creditNoteRef: p.credit_note_ref ?? '',
+  notes:         p.notes ?? '',
+});
+
+const lineSnapshot = (it: PrItemRow): LineDraft => ({
+  qty:            it.qty_returned,
+  unitPriceCenti: it.unit_price_centi,
+});
+
 export const PurchaseReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const detail = usePurchaseReturnDetail(id ?? null);
   const updateHeader = useUpdatePurchaseReturnHeader();
   const updateItem = useUpdatePurchaseReturnItem();
   const deleteItem = useDeletePurchaseReturnItem();
+  const cancel = useCancelPurchaseReturn();
 
   const pr = detail.data?.purchaseReturn ?? null;
   const items = (detail.data?.items ?? []) as PrItemRow[];
 
-  // POSTED is editable; COMPLETED / CANCELLED are locked read-only.
+  /* View → Edit gate (mirror PO/GRN/PI) — default read-only View; click Edit to
+     flip into draft mode. The PR list's right-click "Edit" lands here with
+     ?edit=1. */
+  const [searchParams] = useSearchParams();
+  const [isEditing, setIsEditing] = useState(() => searchParams.get('edit') === '1');
+
+  /* Draft buffers. headerDraft is null until the first header field is touched
+     (then seeded from the PR). lineDrafts overlays per-line edits keyed by item
+     id; any line without an entry shows its stored values. None of this persists
+     until Save. */
+  const [headerDraft, setHeaderDraft] = useState<HeaderDraft | null>(null);
+  const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
+  const [savingDraft, setSavingDraft] = useState(false);
+
+  // POSTED ("Confirmed") is editable; COMPLETED / CANCELLED lock read-only
+  // (mirror GRN's lock logic).
   const isLocked = pr ? pr.status !== 'POSTED' : true;
+
+  /* If the PR locks while we're in Edit mode (e.g. cancelled in another tab),
+     drop back to View + discard the draft. */
+  useEffect(() => {
+    if (isLocked && isEditing) {
+      setIsEditing(false);
+      setHeaderDraft(null);
+      setLineDrafts({});
+    }
+  }, [isLocked, isEditing]);
 
   if (detail.isLoading) {
     return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
@@ -103,19 +166,70 @@ export const PurchaseReturnDetail = () => {
     );
   }
 
-  // Refund total computed LIVE from the visible (server) line items.
-  const lineTotalOf = (it: PrItemRow): number => it.qty_returned * it.unit_price_centi;
-  const refundTotal = items.reduce((s, it) => s + lineTotalOf(it), 0);
-
-  // Header commit — only fires the mutation for the one changed field.
-  const commitHeader = (patch: Record<string, unknown>) => {
-    if (isLocked) return;
-    updateHeader.mutate({ id: pr.id, ...patch });
+  /* ── Draft helpers (pr is guaranteed non-null past the guards above) ── */
+  const visibleItems = items;
+  const lineOf = (it: PrItemRow): LineDraft => lineDrafts[it.id] ?? lineSnapshot(it);
+  const lineTotalOf = (it: PrItemRow): number => {
+    if (!isEditing) return it.line_refund_centi ?? (it.qty_returned * it.unit_price_centi);
+    const d = lineOf(it);
+    return d.qty * d.unitPriceCenti;
   };
-  // Line commit — immediate per-field save.
-  const commitLine = (it: PrItemRow, patch: Record<string, unknown>) => {
-    if (isLocked) return;
-    updateItem.mutate({ id: pr.id, itemId: it.id, ...patch });
+  const refundTotal = visibleItems.reduce((s, it) => s + lineTotalOf(it), 0);
+
+  const headerView = headerDraft ?? headerSnapshot(pr);
+
+  const setHeaderField = (k: keyof HeaderDraft, v: string) => {
+    setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(pr)), [k]: v }));
+  };
+
+  const setLine = (it: PrItemRow, patch: Partial<LineDraft>) =>
+    setLineDrafts((prev) => ({ ...prev, [it.id]: { ...(prev[it.id] ?? lineSnapshot(it)), ...patch } }));
+
+  const enterEdit = () => {
+    setHeaderDraft(null);
+    setLineDrafts({});
+    setIsEditing(true);
+  };
+
+  /* Single Save — commit header (only if touched) + every changed line's field
+     edits, then drop back to View. Back discards the field-edit draft.
+     (Line delete already committed server-side — see the trash handler.) */
+  const handleSave = async () => {
+    if (savingDraft) return;
+    setSavingDraft(true);
+    try {
+      if (headerDraft) {
+        await updateHeader.mutateAsync({ id: pr.id, ...(headerDraft as Record<string, unknown>) });
+      }
+      for (const it of items) {
+        const d = lineDrafts[it.id];
+        if (!d) continue;
+        const changed =
+          d.qty !== it.qty_returned ||
+          d.unitPriceCenti !== it.unit_price_centi;
+        if (changed) {
+          await updateItem.mutateAsync({
+            id: pr.id, itemId: it.id,
+            qty: d.qty, unitPriceCenti: d.unitPriceCenti,
+          });
+        }
+      }
+      setIsEditing(false);
+      setHeaderDraft(null);
+      setLineDrafts({});
+    } catch (e) {
+      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const handlePrint = () => {
+    // PR PDF (to send to the supplier for credit-note issuance) — mirrors
+    // PO/GRN/PI's handlePrint wiring its own purchase-return-pdf helper.
+    import('../lib/purchase-return-pdf').then(({ generatePurchaseReturnPdf }) =>
+      generatePurchaseReturnPdf(pr, items as any),
+    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   return (
@@ -135,7 +249,8 @@ export const PurchaseReturnDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          {/* Refund KPI tile — tracks the live line items. */}
+          {/* Refund KPI tile — tracks the live line items (incl. unsaved draft
+              edits). */}
           <div className={styles.totalRail}>
             <span className={styles.totalRailLabel}>Refund</span>
             <span className={styles.totalRailValue}>{fmtRm(refundTotal)}</span>
@@ -144,19 +259,61 @@ export const PurchaseReturnDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[pr.status as string] ?? ''}`}>
             {STATUS_LABEL[pr.status as string] ?? String(pr.status)}
           </span>
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
+          {/* Cancel — only when the PR is still active (not cancelled / completed).
+              Confirm dialog → cancel mutation (reverses the inventory OUT
+              server-side — stock is put back). */}
+          {pr.status !== 'CANCELLED' && pr.status !== 'COMPLETED' && (
+            <Button variant="ghost" size="md"
+              onClick={() => {
+                if (!confirm(`Cancel return ${pr.return_number}? This reverses the return — the goods are put back into stock. Line items stay for audit.`)) return;
+                cancel.mutate(pr.id, {
+                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                });
+              }}
+              disabled={cancel.isPending}>
+              <Ban {...ICON} />
+              <span>{cancel.isPending ? 'Cancelling…' : 'Cancel'}</span>
+            </Button>
+          )}
+          {/* View → Edit gate. Default View shows Edit (disabled while locked);
+              editing flips into draft mode and the button becomes the single
+              "Save" that commits the whole draft. Back (top-left) discards. */}
+          {!isEditing ? (
+            <Button variant="primary" size="md" onClick={enterEdit} disabled={isLocked}>
+              <Pencil {...ICON} />
+              <span>Edit</span>
+            </Button>
+          ) : (
+            <Button variant="primary" size="md" onClick={handleSave} disabled={savingDraft}>
+              <Save {...ICON} />
+              <span>{savingDraft ? 'Saving…' : 'Save'}</span>
+            </Button>
+          )}
         </div>
       </div>
 
       {/* ── Supplier / dates / reason / notes ───────────────────── */}
-      <SupplierCard pr={pr} locked={isLocked} onCommit={commitHeader} />
+      {/* In View the card renders read-only text; in Edit it shows inputs bound
+          to the draft (committed by the single top Save). */}
+      <SupplierCard
+        pr={pr}
+        draft={headerView}
+        onField={setHeaderField}
+        locked={isLocked}
+        isEditing={isEditing}
+      />
 
       {/* ── Line items ──────────────────────────────────────────── */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
+          <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
         </header>
 
-        {items.length === 0 ? (
+        {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>No items on this return.</p>
         ) : (
           <table className={styles.table}>
@@ -167,63 +324,72 @@ export const PurchaseReturnDetail = () => {
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Total</th>
-                {!isLocked && <th className={styles.tableRight}>Actions</th>}
+                {/* Actions column only in Edit mode — View is read-only. A return
+                    has NO discount / delivery, so no Disc / Delivery columns. */}
+                {isEditing && <th className={styles.tableRight}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id}>
-                  <td>
-                    <div className={styles.codeCell}>{it.material_code}</div>
-                    {(() => {
-                      const summary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
-                        || it.description
-                        || it.material_name;
-                      return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
-                    })()}
-                  </td>
-                  <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
-
-                  {/* Qty(returned) / Unit are always inline-editable with
-                      immediate save (a locked status disables the inputs). */}
-                  <td className={styles.tableRight}>
-                    <input
-                      type="number"
-                      min={0}
-                      className={styles.fieldInput}
-                      style={{ width: 70, textAlign: 'right' }}
-                      defaultValue={it.qty_returned}
-                      key={`qty-${it.id}-${it.qty_returned}`}
-                      disabled={isLocked}
-                      onBlur={(e) => {
-                        const v = Number(e.target.value) || 0;
-                        if (v !== it.qty_returned) commitLine(it, { qty: v });
-                      }}
-                    />
-                  </td>
-                  <td className={styles.tableRight}>
-                    <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
-                      style={{ width: 110, textAlign: 'right' }}
-                      valueSen={it.unit_price_centi}
-                      disabled={isLocked}
-                      onCommit={(sen) => commitLine(it, { unitPriceCenti: sen ?? 0 })} />
-                  </td>
-                  <td className={styles.priceCell}>{fmtRm(lineTotalOf(it))}</td>
-                  {!isLocked && (
+              {visibleItems.map((it) => {
+                const d = lineOf(it);
+                return (
+                  <tr key={it.id}>
                     <td>
-                      <span className={styles.actionsCell}>
-                        <button type="button"
-                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                          title="Remove line" disabled={deleteItem.isPending}
-                          /* Delete immediately (no confirm). */
-                          onClick={() => deleteItem.mutate({ id: pr.id, itemId: it.id })}>
-                          <Trash2 {...SM_ICON} />
-                        </button>
-                      </span>
+                      <div className={styles.codeCell}>{it.material_code}</div>
+                      {(() => {
+                        const summary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
+                          || it.description
+                          || it.material_name;
+                        return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
+                      })()}
                     </td>
-                  )}
-                </tr>
-              ))}
+                    <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
+
+                    {/* Qty(returned) / Unit are inline-editable in Edit mode (no
+                        per-line modal). */}
+                    {isEditing ? (
+                      <>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="number"
+                            min={0}
+                            className={styles.fieldInput}
+                            style={{ width: 70, textAlign: 'right' }}
+                            value={d.qty}
+                            disabled={isLocked}
+                            onChange={(e) => setLine(it, { qty: Number(e.target.value) || 0 })}
+                          />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                            style={{ width: 110, textAlign: 'right' }}
+                            valueSen={d.unitPriceCenti}
+                            disabled={isLocked}
+                            onCommit={(sen) => setLine(it, { unitPriceCenti: sen ?? 0 })} />
+                        </td>
+                        <td className={styles.priceCell}>{fmtRm(d.qty * d.unitPriceCenti)}</td>
+                        <td>
+                          <span className={styles.actionsCell}>
+                            <button type="button"
+                              className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                              title="Remove line" disabled={isLocked || deleteItem.isPending}
+                              /* Delete immediately (no confirm). */
+                              onClick={() => { if (!isLocked) deleteItem.mutate({ id: pr.id, itemId: it.id }); }}>
+                              <Trash2 {...SM_ICON} />
+                            </button>
+                          </span>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className={styles.tableRight}>{it.qty_returned}</td>
+                        <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
+                        <td className={styles.priceCell}>{fmtRm(lineTotalOf(it))}</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -235,8 +401,9 @@ export const PurchaseReturnDetail = () => {
           <h2 className={styles.cardTitle}>Totals</h2>
         </header>
         <div className={styles.cardBody}>
-          {/* Refund computed LIVE from the visible line items so it can never
-              drift. A return is qty × unit price — no tax / discount. */}
+          {/* Refund computed LIVE from the visible line items (incl. unsaved
+              draft edits) so it can never drift. A return is qty × unit price —
+              no tax / discount. */}
           <div className={styles.totalsGrid}>
             <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
               <span className={styles.totalLabel}>Total Refund</span>
@@ -250,25 +417,29 @@ export const PurchaseReturnDetail = () => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Supplier / header card — always inline-editable, immediate save.
-   Selects commit on change; text/date commit on blur (only if changed).
-   Inputs bind directly to the server PR row.
+   Supplier / header card — controlled by the page's draft (mirror PO/GRN/PI).
+   In View it renders read-only InfoCells; in Edit it shows inputs bound to the
+   page draft (committed by the single top Save).
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierCard = ({
-  pr, locked, onCommit,
+  pr, draft, onField, locked, isEditing = true,
 }: {
   pr: any;
+  /** Draft header values (page-owned). In View these mirror the saved PR. */
+  draft: HeaderDraft;
+  /** Update a single header field on the page draft. */
+  onField: (k: keyof HeaderDraft, v: string) => void;
   locked: boolean;
-  onCommit: (patch: Record<string, unknown>) => void;
+  /** View → Edit gate. When false the card renders read-only display text. */
+  isEditing?: boolean;
 }) => {
   const suppliersQ = useSuppliers();
   const suppliers = suppliersQ.data ?? [];
-  // Supplier-info auto-fill card follows the saved PR's supplier.
-  const supplierDetail = useSupplierDetail(pr.supplier_id ?? null);
+  // In Edit follow the draft's picked supplier; in View follow the saved PR.
+  const supplierIdForDetail = isEditing ? (draft.supplierId || null) : (pr.supplier_id ?? null);
+  const supplierDetail = useSupplierDetail(supplierIdForDetail);
   const supplier: SupplierRow | null = supplierDetail.data?.supplier ?? null;
-
-  const returnDate = (pr.return_date ?? '').slice(0, 10);
 
   return (
     <section className={styles.card}>
@@ -276,12 +447,37 @@ const SupplierCard = ({
         <h2 className={styles.cardTitle}>Supplier · Dates · Notes</h2>
       </header>
       <div className={styles.cardBody}>
+        {!isEditing ? (
+          /* View mode — read-only display text sourced from the saved PR. */
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: 'var(--space-3) var(--space-4)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+            }}
+          >
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Supplier"
+                value={pr.supplier?.name ?? pr.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
+            </div>
+            <InfoCell label="Return Date" value={(pr.return_date ?? '').slice(0, 10) || null} />
+            <InfoCell label="Credit Note Ref" value={pr.credit_note_ref || null} />
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Reason" value={pr.reason || null} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Notes" value={pr.notes || null} />
+            </div>
+          </div>
+        ) : (
         <div className={styles.formGrid4}>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Supplier *</span>
             <span className={styles.selectWrap}>
-              <select className={styles.fieldSelect} value={pr.supplier_id ?? ''} disabled={locked}
-                onChange={(e) => onCommit({ supplierId: e.target.value })}>
+              <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
+                onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
                 {suppliers.map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
@@ -292,29 +488,26 @@ const SupplierCard = ({
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Return Date</span>
-            <input type="date" className={styles.fieldInput}
-              defaultValue={returnDate} key={`rtn-${returnDate}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== returnDate) onCommit({ returnDate: e.target.value }); }} />
+            <input type="date" className={styles.fieldInput} value={draft.returnDate} disabled={locked}
+              onChange={(e) => onField('returnDate', e.target.value)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Credit Note Ref</span>
-            <input className={styles.fieldInput}
-              defaultValue={pr.credit_note_ref ?? ''} key={`cn-${pr.credit_note_ref ?? ''}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== (pr.credit_note_ref ?? '')) onCommit({ creditNoteRef: e.target.value }); }} />
+            <input className={styles.fieldInput} value={draft.creditNoteRef} disabled={locked}
+              onChange={(e) => onField('creditNoteRef', e.target.value)} />
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Reason</span>
-            <input className={styles.fieldInput}
-              defaultValue={pr.reason ?? ''} key={`reason-${pr.reason ?? ''}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== (pr.reason ?? '')) onCommit({ reason: e.target.value }); }} />
+            <input className={styles.fieldInput} value={draft.reason} disabled={locked}
+              onChange={(e) => onField('reason', e.target.value)} />
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>
-            <input className={styles.fieldInput}
-              defaultValue={pr.notes ?? ''} key={`notes-${pr.notes ?? ''}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== (pr.notes ?? '')) onCommit({ notes: e.target.value }); }} />
+            <input className={styles.fieldInput} value={draft.notes} disabled={locked}
+              onChange={(e) => onField('notes', e.target.value)} />
           </label>
         </div>
+        )}
 
         {/* Supplier-info auto-fill card. Read-only display from /suppliers/:id. */}
         {supplier && (
