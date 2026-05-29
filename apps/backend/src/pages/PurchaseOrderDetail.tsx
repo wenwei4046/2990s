@@ -340,10 +340,10 @@ export const PurchaseOrderDetail = () => {
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
-                {/* Commander 2026-05-29 — surface the COST side + per-line
-                    delivery date alongside the price columns. */}
-                <th className={styles.tableRight}>Unit Cost</th>
-                <th className={styles.tableRight}>Total Cost</th>
+                {/* Commander 2026-05-29 — a PO line has ONE price (Unit = what
+                    we pay the supplier); the separate Unit Cost / Total Cost
+                    columns were redundant + confusing ("它的价钱到底是哪一个"),
+                    so they're dropped. Keep the per-line delivery date. */}
                 <th className={styles.tableRight}>Delivery</th>
                 {/* Actions column only in Edit mode — View is read-only. */}
                 {isEditing && <th className={styles.tableRight}>Actions</th>}
@@ -359,12 +359,16 @@ export const PurchaseOrderDetail = () => {
                         summary stays (that's the bit that says WHAT was ordered). */}
                     <div className={styles.codeCell}>{it.material_code}</div>
                     {(() => {
-                      /* Commander 2026-05-29 — compute live from variants, not
-                         the stored description2 snapshot. Older lines' snapshots
-                         still carry the retired " · " seat·leg separator, so
-                         preferring the snapshot showed mixed "/" and "·". The
-                         live helper always uses the single " / " separator. */
-                      const summary = buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null);
+                      /* Commander 2026-05-29 — compute the variant summary LIVE
+                         from variants (one consistent " / " separator, not the
+                         stale description2 snapshot which carried the retired
+                         " · " seat·leg separator). Fall back to the product
+                         description / name when the line has no variants so it's
+                         never blank under the code (e.g. a bedframe with nothing
+                         picked). */
+                      const summary = buildVariantSummary(it.item_group, it.variants as Record<string, unknown> | null)
+                        || it.description
+                        || it.material_name;
                       return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
                     })()}
                   </td>
@@ -373,9 +377,6 @@ export const PurchaseOrderDetail = () => {
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
                   <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
-                  {/* Commander 2026-05-29 — Unit Cost + Total Cost + per-line delivery date. */}
-                  <td className={styles.tableRight}>{(it.unit_cost_centi ?? 0) > 0 ? fmtRm(it.unit_cost_centi ?? 0, po.currency) : '—'}</td>
-                  <td className={styles.tableRight}>{(it.unit_cost_centi ?? 0) > 0 ? fmtRm(it.qty * (it.unit_cost_centi ?? 0), po.currency) : '—'}</td>
                   <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
                   {/* Row Edit / Delete only in Edit mode — View is read-only. */}
                   {isEditing && (
