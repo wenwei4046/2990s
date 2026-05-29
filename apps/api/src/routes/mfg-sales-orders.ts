@@ -24,6 +24,7 @@ import {
   checkAllowedOptions,
   loadProductAndModel,
 } from '../lib/allowed-options-check';
+import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -359,6 +360,27 @@ mfgSalesOrders.post('/', async (c) => {
         error: 'processing_delivery_must_pair',
         reason: 'Processing Date and Delivery Date must be set together (or both left empty).',
       }, 400);
+    }
+    /* Commander 2026-05-29 — a Processing Date means "ready to build", so every
+       line must carry its category-mandatory variants. This guard existed on
+       the PATCH header path + the UI but the CREATE path skipped it, so a direct
+       POST with a processing date + blank bedframe/sofa variants slipped through
+       (found while seeding test SOs). Shared helper keeps POST/PATCH/UI in sync. */
+    if (procDate) {
+      const offenders = findIncompleteVariantLines(
+        items.map((it) => ({
+          itemCode: String(it.itemCode ?? ''),
+          group:    (it.itemGroup as string | null | undefined) ?? null,
+          variants: (it.variants as Record<string, unknown> | null) ?? null,
+        })),
+      );
+      if (offenders.length > 0) {
+        return c.json({
+          error: 'variants_incomplete',
+          message: 'Processing Date requires all category-mandatory variants on every line.',
+          offenders,
+        }, 409);
+      }
     }
     /* Commander 2026-05-28 — Processing Date + Delivery Date can only be today
        or in the future; a past date is rejected. "Today" is Malaysia time
@@ -1151,28 +1173,16 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
      Bedframes + sofas with incomplete variants block the request with HTTP
      409 + a list of offending lines so the UI can re-render the warning. */
   if (body['internalExpectedDd'] !== undefined && body['internalExpectedDd'] !== null && body['internalExpectedDd'] !== '') {
-    const REQUIRED: Record<string, string[]> = {
-      bedframe: ['divanHeight', 'legHeight', 'gap', 'fabricCode'],
-      sofa:     ['seatHeight',  'legHeight', 'fabricCode'],
-    };
     const { data: liveItems } = await sb
       .from('mfg_sales_order_items')
       .select('id, item_code, item_group, variants, cancelled')
       .eq('doc_no', docNo);
-    const offenders: Array<{ id: string; itemCode: string; group: string; missing: string[] }> = [];
-    for (const it of (liveItems ?? []) as Array<{ id: string; item_code: string; item_group: string; variants: Record<string, unknown> | null; cancelled: boolean }>) {
-      if (it.cancelled) continue;
-      const keys = REQUIRED[(it.item_group ?? '').toLowerCase()];
-      if (!keys) continue;
-      const v = (it.variants ?? {}) as Record<string, unknown>;
-      const missing = keys.filter((k) => {
-        const val = v[k];
-        return val === undefined || val === null || val === '';
-      });
-      if (missing.length > 0) {
-        offenders.push({ id: it.id, itemCode: it.item_code, group: it.item_group, missing });
-      }
-    }
+    // Shared with the POST create path (so-variant-check) — one rule, no drift.
+    const offenders = findIncompleteVariantLines(
+      ((liveItems ?? []) as Array<{ id: string; item_code: string; item_group: string; variants: Record<string, unknown> | null; cancelled: boolean }>)
+        .filter((it) => !it.cancelled)
+        .map((it) => ({ id: it.id, itemCode: it.item_code, group: it.item_group, variants: it.variants })),
+    );
     if (offenders.length > 0) {
       return c.json({
         error: 'variants_incomplete',
