@@ -24,6 +24,7 @@ import {
   usePostPurchaseInvoice,
   useGrnDetail,
 } from '../lib/flow-queries';
+import { MoneyInput } from '../components/MoneyInput';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -267,9 +268,9 @@ export const PurchaseInvoiceNew = () => {
                 <input type="number" min={0} value={l.qty}
                   onChange={(e) => setLine(l.rid, { qty: Math.max(0, Number(e.target.value) || 0) })}
                   className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                <input type="number" min={0} step="0.01" value={(l.unitPriceCenti / 100).toFixed(2)}
-                  onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 })}
-                  className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
+                <MoneyInput bare valueSen={l.unitPriceCenti}
+                  onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
+                  inputClassName={styles.fieldInput} style={{ fontSize: 'var(--fs-13)' }} selectOnFocus />
                 <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{fmtRm(lineTotal, currency)}</div>
                 <button type="button" onClick={() => dropLine(l.rid)} title="Remove line"
                   style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>

@@ -127,6 +127,15 @@ export const PurchaseOrderFromSo = () => {
     return null;
   }, [picks, items]);
 
+  // A row is LOCKED when a different bound supplier is already picked.
+  // Commander 2026-05-29: "不让勾选了，那为什么不把选项置灰呢" — grey these out
+  // and disable their checkbox / qty input so the lock is obvious, not vague.
+  // Nothing is locked while no supplier is chosen ("不要限制得太死"), and
+  // unbound "— none —" rows never lock (they have no supplier to conflict).
+  const isRowLocked = (r: OutstandingSoItem): boolean =>
+    Boolean(r.mainSupplierCode && lockedSupplier && r.mainSupplierCode !== lockedSupplier
+      && !picks[r.soItemId]?.picked);
+
   // ── Pick helpers ─────────────────────────────────────────────────────
   const togglePick = (id: string, remaining: number) => {
     const row = items.find((r) => r.soItemId === id);
@@ -164,14 +173,17 @@ export const PurchaseOrderFromSo = () => {
       key: 'pick', label: '', width: 40, sortable: false, groupable: false,
       accessor: (r) => {
         const on = Boolean(picks[r.soItemId]?.picked);
+        const locked = isRowLocked(r);
         return (
           <input
             type="checkbox"
             checked={on}
+            disabled={locked}
             onChange={() => togglePick(r.soItemId, r.remainingQty)}
             // Stop the row-select click from also firing.
             onClick={(e) => e.stopPropagation()}
             aria-label={`Pick ${r.itemCode}`}
+            style={locked ? { cursor: 'not-allowed' } : undefined}
           />
         );
       },
@@ -243,6 +255,7 @@ export const PurchaseOrderFromSo = () => {
       accessor: (r) => {
         const p = picks[r.soItemId];
         const on = Boolean(p?.picked);
+        const locked = isRowLocked(r);
         return (
           <input
             type="number"
@@ -250,12 +263,13 @@ export const PurchaseOrderFromSo = () => {
             max={r.remainingQty}
             value={on ? p!.qty : ''}
             placeholder={String(r.remainingQty)}
+            disabled={locked}
             /* Commander 2026-05-28 — always editable: typing a qty auto-selects
                the row (no need to tick the checkbox first). */
             onClick={(e) => e.stopPropagation()}
             onChange={(e) =>
               setQty(r.soItemId, Math.min(r.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
-            style={{ ...FILTER_INPUT, width: 64, textAlign: 'right' }}
+            style={{ ...FILTER_INPUT, width: 64, textAlign: 'right', ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
           />
         );
       },
@@ -390,7 +404,8 @@ export const PurchaseOrderFromSo = () => {
       </div>
       {lockedSupplier && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-          One supplier per PO — locked to <strong>{lockedSupplier}</strong>. Clear picks to switch.
+          One supplier per PO — locked to <strong>{lockedSupplier}</strong>. Other suppliers' lines
+          are greyed out; clear picks to switch.
         </p>
       )}
 
@@ -403,6 +418,11 @@ export const PurchaseOrderFromSo = () => {
         /* Commander 2026-05-28 — click anywhere on a row to toggle its pick
            (the checkbox is just a visual). */
         onRowClick={(r) => togglePick(r.soItemId, r.remainingQty)}
+        /* Commander 2026-05-29 — grey out rows whose supplier conflicts with
+           the locked one so the disabled state is obvious. */
+        rowStyle={(r) => isRowLocked(r)
+          ? { opacity: 0.45, background: 'var(--c-cream)', cursor: 'not-allowed' }
+          : undefined}
         toolbar={toolbar}
         groupBanner={false}
         isLoading={itemsQ.isLoading}

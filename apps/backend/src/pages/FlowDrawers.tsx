@@ -24,6 +24,7 @@ import {
   useSuppliers, usePurchaseOrders, usePurchaseOrderDetail,
 } from '../lib/suppliers-queries';
 import { useMfgSalesOrders, useMfgSalesOrderDetail, useMfgDeliveryOrders } from '../lib/flow-queries';
+import { MoneyInput } from '../components/MoneyInput';
 import sup from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -280,7 +281,7 @@ export const CreatePurchaseInvoiceDrawer = ({ onClose }: { onClose: () => void }
             <input className={sup.fieldInput} placeholder="Material code" value={it.materialCode} onChange={(e) => upd(i, 'materialCode', e.target.value)} />
             <input className={sup.fieldInput} placeholder="Name" value={it.materialName} onChange={(e) => upd(i, 'materialName', e.target.value)} />
             <input type="number" className={sup.fieldInput} style={{ width: 80, textAlign: 'right' }} value={it.qty} onChange={(e) => upd(i, 'qty', Number(e.target.value) || 0)} />
-            <input type="number" step="0.01" className={sup.fieldInput} style={{ width: 100, textAlign: 'right' }} value={(it.unitPriceCenti / 100).toFixed(2)} onChange={(e) => upd(i, 'unitPriceCenti', Math.round(Number(e.target.value) * 100) || 0)} />
+            <MoneyInput bare valueSen={it.unitPriceCenti} onCommit={(sen) => upd(i, 'unitPriceCenti', sen ?? 0)} inputClassName={sup.fieldInput} style={{ width: 100 }} selectOnFocus />
             <span className={sup.bindingMeta}>{fmtMoney(it.qty * it.unitPriceCenti)}</span>
             <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
           </div>
@@ -399,7 +400,7 @@ export const CreateSalesOrderDrawer = ({ onClose }: { onClose: () => void }) => 
             <input className={sup.fieldInput} placeholder="Item code" value={it.itemCode} onChange={(e) => updI(i, 'itemCode', e.target.value)} />
             <input className={sup.fieldInput} placeholder="Description" value={it.description} onChange={(e) => updI(i, 'description', e.target.value)} />
             <input type="number" min={1} className={sup.fieldInput} style={{ textAlign: 'right' }} value={it.qty} onChange={(e) => updI(i, 'qty', Number(e.target.value) || 1)} />
-            <input type="number" step="0.01" className={sup.fieldInput} style={{ textAlign: 'right' }} placeholder="unit" value={(it.unitPriceCenti / 100).toFixed(2)} onChange={(e) => updI(i, 'unitPriceCenti', Math.round(Number(e.target.value) * 100) || 0)} />
+            <MoneyInput bare valueSen={it.unitPriceCenti} onCommit={(sen) => updI(i, 'unitPriceCenti', sen ?? 0)} inputClassName={sup.fieldInput} placeholder="unit" selectOnFocus />
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)', textAlign: 'right' }}>
               {fmtMoney(it.qty * it.unitPriceCenti - it.discountCenti)}
             </span>
@@ -642,7 +643,7 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
             <input className={sup.fieldInput} placeholder="Item code" value={it.itemCode} onChange={(e) => updI(i, 'itemCode', e.target.value)} />
             <input className={sup.fieldInput} placeholder="Description" value={it.description} onChange={(e) => updI(i, 'description', e.target.value)} />
             <input type="number" min={1} className={sup.fieldInput} style={{ width: 60, textAlign: 'right' }} value={it.qty} onChange={(e) => updI(i, 'qty', Number(e.target.value) || 1)} />
-            <input type="number" step="0.01" className={sup.fieldInput} style={{ width: 90, textAlign: 'right' }} value={(it.unitPriceCenti / 100).toFixed(2)} onChange={(e) => updI(i, 'unitPriceCenti', Math.round(Number(e.target.value) * 100) || 0)} />
+            <MoneyInput bare valueSen={it.unitPriceCenti} onCommit={(sen) => updI(i, 'unitPriceCenti', sen ?? 0)} inputClassName={sup.fieldInput} style={{ width: 90 }} selectOnFocus />
             <span className={sup.bindingMeta}>{fmtMoney(it.qty * it.unitPriceCenti - it.discountCenti + it.taxCenti)}</span>
             <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
           </div>
@@ -712,7 +713,7 @@ export const CreateConsignmentDrawer = ({ onClose }: { onClose: () => void }) =>
             <input className={sup.fieldInput} placeholder="Item code" value={it.itemCode} onChange={(e) => updI(i, 'itemCode', e.target.value)} />
             <input className={sup.fieldInput} placeholder="Description" value={it.description} onChange={(e) => updI(i, 'description', e.target.value)} />
             <input type="number" min={1} className={sup.fieldInput} style={{ width: 80, textAlign: 'right' }} value={it.qtyPlaced} onChange={(e) => updI(i, 'qtyPlaced', Number(e.target.value) || 1)} />
-            <input type="number" step="0.01" className={sup.fieldInput} style={{ width: 100, textAlign: 'right' }} value={(it.unitPriceCenti / 100).toFixed(2)} onChange={(e) => updI(i, 'unitPriceCenti', Math.round(Number(e.target.value) * 100) || 0)} />
+            <MoneyInput bare valueSen={it.unitPriceCenti} onCommit={(sen) => updI(i, 'unitPriceCenti', sen ?? 0)} inputClassName={sup.fieldInput} style={{ width: 100 }} selectOnFocus />
             <span />
             <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
           </div>
@@ -812,7 +813,7 @@ export const CreateDeliveryReturnDrawer = ({ onClose }: { onClose: () => void })
             <select className={sup.fieldSelect} style={{ width: 110 }} value={it.condition} onChange={(e) => updI(i, 'condition', e.target.value)}>
               {DR_CONDITIONS.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-            <input type="number" step="0.01" className={sup.fieldInput} style={{ width: 90, textAlign: 'right' }} placeholder="refund" value={(it.refundCenti / 100).toFixed(2)} onChange={(e) => updI(i, 'refundCenti', Math.round(Number(e.target.value) * 100) || 0)} />
+            <MoneyInput bare valueSen={it.refundCenti} onCommit={(sen) => updI(i, 'refundCenti', sen ?? 0)} inputClassName={sup.fieldInput} style={{ width: 90 }} placeholder="refund" selectOnFocus />
             <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
           </div>
         ))}
