@@ -165,6 +165,51 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
+/* Commander 2026-05-30 — conversion lock. An SO that already has an ACTIVE
+   (non-cancelled) Delivery Order must NOT be converted again — otherwise the
+   same goods ship twice and stock double-deducts. Returns the subset of the
+   given SO doc_nos that are already converted. Detection is path-independent:
+     (a) header link — a non-cancelled DO whose so_doc_no IS the SO (single-SO
+         convert + the first SO of a merge), AND
+     (b) line link — any of the SO's line items referenced by so_item_id on a
+         non-cancelled DO's lines (covers the extra SOs folded into a merge).
+   Cancelling the DO clears both, so the SO becomes convertible again. */
+async function convertedSoDocs(sb: any, soDocNos: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (soDocNos.length === 0) return out;
+  // (a) header link
+  const { data: byHeader } = await sb.from('delivery_orders')
+    .select('so_doc_no, status').in('so_doc_no', soDocNos).neq('status', 'CANCELLED');
+  for (const d of (byHeader ?? []) as Array<{ so_doc_no: string | null }>) {
+    if (d.so_doc_no) out.add(d.so_doc_no);
+  }
+  // (b) line link via so_item_id
+  const { data: soItems } = await sb.from('mfg_sales_order_items')
+    .select('id, doc_no').in('doc_no', soDocNos);
+  const idToDoc = new Map<string, string>();
+  for (const r of (soItems ?? []) as Array<{ id: string; doc_no: string }>) idToDoc.set(r.id, r.doc_no);
+  const ids = [...idToDoc.keys()];
+  if (ids.length > 0) {
+    const { data: doLines } = await sb.from('delivery_order_items')
+      .select('so_item_id, delivery_order_id').in('so_item_id', ids);
+    const lines = (doLines ?? []) as Array<{ so_item_id: string | null; delivery_order_id: string }>;
+    const doIds = [...new Set(lines.map((l) => l.delivery_order_id).filter(Boolean))];
+    if (doIds.length > 0) {
+      const { data: dos } = await sb.from('delivery_orders').select('id, status').in('id', doIds);
+      const activeIds = new Set(
+        ((dos ?? []) as Array<{ id: string; status: string | null }>)
+          .filter((d) => (d.status ?? '').toUpperCase() !== 'CANCELLED').map((d) => d.id),
+      );
+      for (const l of lines) {
+        if (l.so_item_id && activeIds.has(l.delivery_order_id) && idToDoc.has(l.so_item_id)) {
+          out.add(idToDoc.get(l.so_item_id)!);
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // ── List ────────────────────────────────────────────────────────────────
 deliveryOrdersMfg.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -199,6 +244,21 @@ deliveryOrdersMfg.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Conversion lock — if this DO is being created from an SO (soDocNo set) and
+     that SO already has an active DO, reject. Cancel the existing DO to redo. */
+  const srcSo = (body.soDocNo as string | undefined) ?? undefined;
+  if (srcSo) {
+    const conv = await convertedSoDocs(sb, [srcSo]);
+    if (conv.size > 0) {
+      return c.json({
+        error: 'already_converted',
+        message: `${srcSo} already has an active Delivery Order. Cancel that DO before converting again.`,
+        alreadyConverted: [...conv],
+      }, 409);
+    }
+  }
+
   const doNumber = await nextNum(sb);
 
   const phoneRaw = (body.phone as string | undefined) ?? null;
@@ -367,6 +427,18 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
       message: 'All selected Sales Orders must belong to the same customer to merge into one Delivery Order.',
       customers: [...new Set(sos.map((s) => s.debtor_name ?? s.debtor_code ?? '(none)'))],
     }, 400);
+  }
+
+  // 1c. Conversion lock — reject any picked SO that already has an active DO
+  //     (otherwise the same goods ship twice + stock double-deducts). Cancel
+  //     the existing DO to convert again.
+  const already = await convertedSoDocs(sb, soDocNos);
+  if (already.size > 0) {
+    return c.json({
+      error: 'already_converted',
+      message: `Already delivered (active DO exists): ${[...already].join(', ')}. Cancel that DO to convert again.`,
+      alreadyConverted: [...already],
+    }, 409);
   }
 
   // 2. Load every non-cancelled line of the picked SOs.
