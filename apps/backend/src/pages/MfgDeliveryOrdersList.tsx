@@ -97,14 +97,17 @@ const STATUS_CLASS: Record<string, string> = {
 };
 const STATUS_LABEL: Record<string, string> = {
   LOADED:     'Loaded',
-  DISPATCHED: 'Dispatched',
+  DISPATCHED: 'Shipped',
   IN_TRANSIT: 'In Transit',
   SIGNED:     'Signed',
   DELIVERED:  'Delivered',
   INVOICED:   'Invoiced',
   CANCELLED:  'Cancelled',
 };
-const STATUS_CHIPS = ['all', 'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
+/* Commander 2026-05-29 — a DO ships on creation (status DISPATCHED = "Shipped"),
+   so the intermediate Loaded / In Transit / Signed / Delivered stages were
+   dropped from the filter chips. Only the states that actually occur remain. */
+const STATUS_CHIPS = ['all', 'DISPATCHED', 'INVOICED', 'CANCELLED'] as const;
 
 const StatusPill = ({ status }: { status: string }) => (
   <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[status] ?? ''}`}>

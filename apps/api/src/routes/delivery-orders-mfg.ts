@@ -240,6 +240,10 @@ deliveryOrdersMfg.post('/', async (c) => {
     emergency_contact_phone: emPhoneRaw ? (normalizePhone(emPhoneRaw) ?? emPhoneRaw) : null,
     emergency_contact_relationship: (body.emergencyContactRelationship as string) ?? null,
     currency: (body.currency as string) ?? 'MYR',
+    /* Commander 2026-05-29 — a DO means goods are OUT the moment it's created.
+       Skip the LOADED→DISPATCHED→IN_TRANSIT… hand-walk: start at DISPATCHED
+       (= shipped) and deduct stock right after the items insert below. */
+    status: 'DISPATCHED',
     notes: (body.notes as string) ?? null,
     created_by: user.id,
   }).select(HEADER).single();
@@ -252,6 +256,11 @@ deliveryOrdersMfg.post('/', async (c) => {
     if (iErr) { await sb.from('delivery_orders').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
     await recomputeTotals(sb, h.id);
   }
+
+  /* A DO = goods shipped on creation → deduct stock now (idempotent: the
+     existence check + UNIQUE index mean this never double-deducts even if the
+     status is later advanced). */
+  await deductInventoryForDo(sb, h.id, user.id);
 
   return c.json({ id: h.id, doNumber: h.do_number }, 201);
 });

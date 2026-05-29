@@ -56,16 +56,9 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const STATUS_FLOW = ['LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED', 'DELIVERED', 'INVOICED', 'CANCELLED'] as const;
 type DoStatus = typeof STATUS_FLOW[number];
 
-/* Next-stage transitions per status (linear flow). */
-const DO_NEXT: Record<string, DoStatus[]> = {
-  LOADED:     ['DISPATCHED'],
-  DISPATCHED: ['IN_TRANSIT'],
-  IN_TRANSIT: ['SIGNED'],
-  SIGNED:     ['DELIVERED'],
-  DELIVERED:  ['INVOICED'],
-  INVOICED:   [],
-  CANCELLED:  [],
-};
+/* Commander 2026-05-29 — the linear LOADED→DISPATCHED→… stage walk was retired.
+   A DO is SHIPPED on creation (stock deducted then), so there's no manual
+   next-stage map any more; only Cancel / Reopen remain (header buttons). */
 
 const STATUS_CLASS: Record<string, string> = {
   LOADED:     styles.statusConfirmed ?? '',
@@ -408,7 +401,6 @@ export const DeliveryOrderDetail = () => {
 
   const isLocked = lockedStatuses.includes(header.status);
   const isCancelled = header.status === 'CANCELLED';
-  const nextStages = DO_NEXT[header.status] ?? [];
 
   const handlePrint = () => {
     import('../lib/delivery-order-pdf')
@@ -490,26 +482,11 @@ export const DeliveryOrderDetail = () => {
         </div>
       )}
 
-      {/* ── Status-advance strip ── */}
-      {!isEditing && !isCancelled && nextStages.length > 0 && (
-        <section className={styles.card}>
-          <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Move to next stage</h2></header>
-          <div className={styles.cardBody}>
-            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              {nextStages.map((s, i) => (
-                <Button key={s} variant={i === 0 ? 'primary' : 'ghost'} size="sm"
-                  onClick={() => updateStatus.mutate({ id: header.id, status: s })}
-                  disabled={updateStatus.isPending}>
-                  {s.replace(/_/g, ' ')}
-                </Button>
-              ))}
-            </div>
-            <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', marginTop: 'var(--space-2)' }}>
-              Advancing to a shipped stage deducts stock from inventory (once per DO).
-            </p>
-          </div>
-        </section>
-      )}
+      {/* Commander 2026-05-29 — the LOADED→DISPATCHED→IN_TRANSIT→… hand-walk was
+          removed. A DO is SHIPPED the moment it's created (stock is deducted on
+          create), so there's no manual stage strip — the operator just opens the
+          DO and the goods are already out. Cancel + downstream Invoice/Return
+          remain available from the header. */}
 
       {/* ── Customer / Order Info / Emergency / Address cards ── */}
       <CustomerCard
