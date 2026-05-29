@@ -1,17 +1,18 @@
 // ----------------------------------------------------------------------------
-// GrnFromPo — multi-select PO LINE → GRN picker.
+// GrnFromPo — multi-select PO LINE → New GRN form FEEDER.
 //
-// Commander 2026-05-29 redesign: made IDENTICAL to Create-PO-from-SO
-// (PurchaseOrderFromSo) — same shared <DataGrid> primitive, the same toolbar
-// (Select all / Clear all + category filter + date-range filter targeting
-// PO Date / Expected Delivery + search + Columns config), the same dense
-// ledger columns with the variant summary under each Description, and the same
-// click-row-to-pick + editable Pick Qty behaviour. Only the source differs:
-// outstanding PO lines (qty − received_qty > 0) instead of SO lines.
+// Commander 2026-05-29 redesign: this picker no longer auto-creates GRNs. Like
+// Create-PO-from-SO (PurchaseOrderFromSo), it now FEEDS the New GRN form — tick
+// the outstanding PO lines you're receiving, optionally adjust the Pick Qty,
+// hit "Add N lines to GRN", and you land back on /grns/new with those lines
+// pre-loaded (supplier locked, each line keeping its own purchase_order_item_id
+// so received_qty still rolls up to every source PO).
 //
-// Server groups picks by purchase_order_id and emits one GRN per PO (since
-// grns.purchase_order_id is a single FK). Each GRN is auto-posted → inventory
-// IN movements + PO.received_qty rollup + PO status flip.
+// Same shared <DataGrid> primitive + toolbar (Select all / Clear all + category
+// filter + date-range filter targeting PO Date / Expected Delivery + search +
+// Columns config) + dense ledger columns with the variant summary under each
+// Description + click-row-to-pick + editable Pick Qty. One supplier per GRN:
+// once a line is ticked, other suppliers' lines grey out + disable.
 //
 // Routing: /grns/from-po.
 // ----------------------------------------------------------------------------
@@ -23,7 +24,6 @@ import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
   useOutstandingPoItems,
-  useCreateGrnsFromPoItems,
   type OutstandingPoItem,
 } from '../lib/suppliers-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -75,17 +75,16 @@ const rowDateFor = (r: OutstandingPoItem, field: DateField): string | null =>
 
 type Pick = { picked: boolean; qty: number };
 
+/* Shape stashed to sessionStorage for the New GRN form to consume. Mirrors the
+   poFromSoPicks pattern — the full row plus the chosen pick qty. */
+export type GrnFromPoPick = OutstandingPoItem & { _pickQty: number };
+
 export const GrnFromPo = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingPoItems();
-  const create   = useCreateGrnsFromPoItems();
 
   // Map<poItemId, { picked, qty }>. qty defaults to remainingQty when ticked.
   const [picks, setPicks] = useState<Record<string, Pick>>({});
-
-  // GRN received date — the only GRN-specific default (PO-from-SO derives its
-  // dates server-side; GRN needs the receipt date). Defaults to today.
-  const [receivedDate, setReceivedDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
 
   // Toolbar filters — identical to Create-PO-from-SO.
   const [category, setCategory]   = useState<string>('all');
@@ -93,8 +92,7 @@ export const GrnFromPo = () => {
   const [dateFrom, setDateFrom]   = useState<string>('');
   const [dateTo, setDateTo]       = useState<string>('');
 
-  // In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
-  // browser alert). goTo set → offer a navigate button.
+  // In-app result dialog (validation only now — the grid feeds the form).
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
@@ -113,22 +111,50 @@ export const GrnFromPo = () => {
     });
   }, [items, category, dateField, dateFrom, dateTo]);
 
+  // One supplier per GRN (Commander 2026-05-29) — once a line is ticked, lines
+  // from other suppliers lock. Mirrors PurchaseOrderFromSo's lockedSupplier.
+  const lockedSupplier = useMemo(() => {
+    for (const [id, v] of Object.entries(picks)) {
+      if (!v.picked) continue;
+      const row = items.find((r) => r.poItemId === id);
+      if (row?.supplierId) return row.supplierId;
+    }
+    return null;
+  }, [picks, items]);
+
+  // A row is LOCKED when a different supplier is already picked. Grey these out
+  // + disable their checkbox / qty input (copied from PurchaseOrderFromSo).
+  const isRowLocked = (r: OutstandingPoItem): boolean =>
+    Boolean(r.supplierId && lockedSupplier && r.supplierId !== lockedSupplier
+      && !picks[r.poItemId]?.picked);
+
   // ── Pick helpers ─────────────────────────────────────────────────────
-  const togglePick = (id: string, remaining: number) =>
+  const togglePick = (id: string, remaining: number) => {
+    const row = items.find((r) => r.poItemId === id);
+    // Block ticking a different supplier than the one already locked.
+    if (row?.supplierId && lockedSupplier && row.supplierId !== lockedSupplier
+        && !picks[id]?.picked) return;
     setPicks((s) => ({
       ...s,
       [id]: s[id]?.picked
         ? { picked: false, qty: 0 }
         : { picked: true, qty: s[id]?.qty || remaining },
     }));
+  };
 
   const setQty = (id: string, qty: number) =>
     setPicks((s) => ({ ...s, [id]: { picked: true, qty } }));
 
+  // Select / clear all currently-VISIBLE rows (respects filters + supplier lock).
   const selectAll = () =>
     setPicks((s) => {
       const next = { ...s };
-      for (const l of rows) next[l.poItemId] = { picked: true, qty: l.remainingQty };
+      // Lock to the first visible supplier so a bulk select stays one-supplier.
+      const lockTo = lockedSupplier ?? rows[0]?.supplierId ?? null;
+      for (const l of rows) {
+        if (lockTo && l.supplierId !== lockTo) continue;
+        next[l.poItemId] = { picked: true, qty: l.remainingQty };
+      }
       return next;
     });
 
@@ -136,14 +162,6 @@ export const GrnFromPo = () => {
 
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
-  /* One GRN per SUPPLIER (Commander 2026-05-29) — a supplier's lines across
-     several POs merge into ONE GRN; different suppliers always split. Surface
-     the resulting GRN count (= distinct suppliers picked) before saving. */
-  const pickedIds = useMemo(() => new Set(picked.map(([id]) => id)), [picked]);
-  const grnCount = useMemo(
-    () => new Set(items.filter((r) => pickedIds.has(r.poItemId)).map((r) => r.supplierId)).size,
-    [items, pickedIds],
-  );
 
   // ── Columns — mirror Create-PO-from-SO (PO Doc No / Supplier / Category /
   //    Item Code / Description+variants / Ordered / Received / Pick Qty /
@@ -154,13 +172,16 @@ export const GrnFromPo = () => {
       key: 'pick', label: '', width: 40, sortable: false, groupable: false,
       accessor: (r) => {
         const on = Boolean(picks[r.poItemId]?.picked);
+        const locked = isRowLocked(r);
         return (
           <input
             type="checkbox"
             checked={on}
+            disabled={locked}
             onChange={() => togglePick(r.poItemId, r.remainingQty)}
             onClick={(e) => e.stopPropagation()}
             aria-label={`Pick ${r.itemCode}`}
+            style={locked ? { cursor: 'not-allowed' } : undefined}
           />
         );
       },
@@ -220,6 +241,7 @@ export const GrnFromPo = () => {
       accessor: (r) => {
         const p = picks[r.poItemId];
         const on = Boolean(p?.picked);
+        const locked = isRowLocked(r);
         return (
           <input
             type="number"
@@ -227,11 +249,12 @@ export const GrnFromPo = () => {
             max={r.remainingQty}
             value={on ? p!.qty : ''}
             placeholder={String(r.remainingQty)}
+            disabled={locked}
             /* Typing a qty auto-selects the row (no need to tick first). */
             onClick={(e) => e.stopPropagation()}
             onChange={(e) =>
               setQty(r.poItemId, Math.min(r.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
-            style={{ ...FILTER_INPUT, width: 64, textAlign: 'right' }}
+            style={{ ...FILTER_INPUT, width: 64, textAlign: 'right', ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
           />
         );
       },
@@ -257,37 +280,24 @@ export const GrnFromPo = () => {
     },
   ], [picks]);
 
-  // ── Create GRNs ──────────────────────────────────────────────────────
+  // ── Add to GRN ───────────────────────────────────────────────────────
+  // Commander 2026-05-29 — this grid FEEDS the New GRN form (no longer auto-
+  // creates GRNs). On confirm, stash the picked PO lines + their chosen qty,
+  // then return to /grns/new, which loads them as GRN line items.
   const onSave = () => {
     if (pickedCount === 0) { setDialog({ title: 'Nothing picked', body: 'Tick at least one PO line first.' }); return; }
-    if (!receivedDate)     { setDialog({ title: 'Received date required', body: 'Set a received date before creating GRNs.' }); return; }
-    const body = {
-      picks: picked.map(([poItemId, v]) => ({ poItemId, qty: v.qty })),
-      receivedDate,
-    };
-    create.mutate(body, {
-      onSuccess: (res) => {
-        if (!res.total) {
-          setDialog({ title: 'No GRNs created', body: 'The picked lines had nothing receivable.' });
-          return;
-        }
-        const summary = res.created.map((g) => g.grnNumber).join(', ');
-        setSelected();
-        setDialog({
-          title: `Created ${res.total} GRN${res.total === 1 ? '' : 's'}`,
-          body: `${summary}\nInventory updated.`,
-          goTo: '/grns',
-        });
-      },
-      onError: (err) => setDialog({ title: 'Create failed', body: err instanceof Error ? err.message : String(err) }),
-    });
+    const out: GrnFromPoPick[] = picked
+      .map(([poItemId, v]) => {
+        const row = items.find((r) => r.poItemId === poItemId);
+        return row ? { ...row, _pickQty: v.qty } : null;
+      })
+      .filter((x): x is GrnFromPoPick => x !== null);
+    try { sessionStorage.setItem('grnFromPoPicks', JSON.stringify(out)); } catch { /* quota */ }
+    navigate('/grns/new');
   };
 
-  /* Clear picks after a successful batch so the grid resets. */
-  const setSelected = () => setPicks({});
-
-  // ── Toolbar (filters + select/clear + received date) — same layout as
-  //    Create-PO-from-SO, plus the GRN-specific Received Date. ─────────────
+  // ── Toolbar (filters + select/clear) — same layout as Create-PO-from-SO.
+  //    Received date is now set on the New GRN form, not here. ──────────────
   const toolbar = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
       <Button variant="ghost" size="sm" onClick={selectAll} disabled={rows.length === 0}>
@@ -296,19 +306,6 @@ export const GrnFromPo = () => {
       <Button variant="ghost" size="sm" onClick={clearAll} disabled={pickedCount === 0}>
         <Square {...ICON} /> Clear all
       </Button>
-
-      <span style={{ width: 1, height: 20, background: 'var(--line)' }} aria-hidden />
-
-      <span style={{ fontSize: 'var(--fs-11)', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--fg-muted)' }}>
-        Received
-      </span>
-      <input
-        type="date"
-        value={receivedDate}
-        onChange={(e) => setReceivedDate(e.target.value)}
-        style={FILTER_INPUT}
-        aria-label="Received date"
-      />
 
       <span style={{ width: 1, height: 20, background: 'var(--line)' }} aria-hidden />
 
@@ -371,7 +368,7 @@ export const GrnFromPo = () => {
           <Link to="/grns" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
           </Link>
-          <h1 className={styles.title}>Create GRN from Purchase Orders</h1>
+          <h1 className={styles.title}>Pick PO lines for this GRN</h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
@@ -380,20 +377,22 @@ export const GrnFromPo = () => {
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={create.isPending || pickedCount === 0 || !receivedDate}
-            title="One GRN per supplier — a supplier's lines across several POs merge into one GRN; different suppliers split."
+            disabled={pickedCount === 0}
+            title="Add the picked PO lines into the New GRN form"
           >
             <Save {...ICON} />
-            {create.isPending
-              ? 'Creating…'
-              : pickedCount === 0
-                ? 'Pick at least 1 line'
-                : !receivedDate
-                  ? 'Set received date'
-                  : `Create ${grnCount} GRN${grnCount === 1 ? '' : 's'} (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
+            {pickedCount === 0 ? 'Pick at least 1 line' : `Add ${pickedCount} line${pickedCount === 1 ? '' : 's'} to GRN`}
           </Button>
         </div>
       </div>
+      {lockedSupplier && (
+        <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          One supplier per GRN — locked to{' '}
+          <strong>{items.find((r) => r.supplierId === lockedSupplier)?.supplierName
+            ?? items.find((r) => r.supplierId === lockedSupplier)?.supplierCode
+            ?? lockedSupplier}</strong>. Other suppliers' lines are greyed out; clear picks to switch.
+        </p>
+      )}
 
       <DataGrid<OutstandingPoItem>
         rows={rows}
@@ -402,6 +401,10 @@ export const GrnFromPo = () => {
         rowKey={(r) => r.poItemId}
         searchPlaceholder="Search PO, supplier, item…"
         onRowClick={(r) => togglePick(r.poItemId, r.remainingQty)}
+        /* Grey out rows whose supplier conflicts with the locked one. */
+        rowStyle={(r) => isRowLocked(r)
+          ? { opacity: 0.45, background: 'var(--c-cream)', cursor: 'not-allowed' }
+          : undefined}
         toolbar={toolbar}
         groupBanner={false}
         isLoading={itemsQ.isLoading}
