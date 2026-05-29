@@ -351,11 +351,22 @@ mfgPurchaseOrders.post('/', async (c) => {
 
   // Compute totals
   let subtotal = 0;
+  /* Commander 2026-05-29 (BUG 1) — collect (soItemId, qty) for any line that
+     came from the From-SO picker so we can roll po_qty_picked forward AFTER the
+     items insert (mirrors the /from-sos picks handler). Grouped by soItemId in
+     case the same SO line shows up on more than one PO line. soItemId is NOT a
+     purchase_order_items column — it's stripped from the insert payload. */
+  const pickedQtyBySoItem = new Map<string, number>();
   const itemRows = items.map((it) => {
     const kind = it.materialKind as string;
     if (!VALID_KINDS.has(kind)) throw new Error(`invalid material_kind: ${kind}`);
     if (!it.materialCode || !it.materialName) throw new Error('material_code + material_name required per item');
     const qty = Math.max(0, Number(it.qty ?? 0));
+    // BUG 1 — tally per-SO-line picked qty (only for From-SO lines).
+    const soItemId = (it.soItemId as string | undefined) ?? null;
+    if (soItemId && qty > 0) {
+      pickedQtyBySoItem.set(soItemId, (pickedQtyBySoItem.get(soItemId) ?? 0) + qty);
+    }
     const unit = Math.max(0, Number(it.unitPriceCenti ?? 0));
     const discountCenti = Math.max(0, Number(it.discountCenti ?? 0));
     // PR #97 — line total honours per-line discount when computed up front
@@ -434,6 +445,30 @@ mfgPurchaseOrders.post('/', async (c) => {
       await supabase.from('purchase_orders').delete().eq('id', header.id);
       return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
     }
+  }
+
+  /* Commander 2026-05-29 (BUG 1) — roll po_qty_picked forward on every source
+     SO line this PO converted (the items came from the From-SO picker). This is
+     what makes converted lines drop out of /outstanding-so-items (which filters
+     qty - po_qty_picked > 0). Mirrors the /from-sos picks handler increment.
+     Best-effort: read current counters, then UPDATE each; never fail the PO if
+     this errors — the PO already exists and the counter can be fixed later. */
+  if (pickedQtyBySoItem.size > 0) {
+    try {
+      const soItemIds = [...pickedQtyBySoItem.keys()];
+      const { data: soRows } = await supabase
+        .from('mfg_sales_order_items')
+        .select('id, po_qty_picked')
+        .in('id', soItemIds);
+      await Promise.all(((soRows ?? []) as Array<{ id: string; po_qty_picked: number }>).map(async (row) => {
+        const add = pickedQtyBySoItem.get(row.id) ?? 0;
+        if (add <= 0) return;
+        await supabase
+          .from('mfg_sales_order_items')
+          .update({ po_qty_picked: (row.po_qty_picked ?? 0) + add })
+          .eq('id', row.id);
+      }));
+    } catch { /* best-effort — PO already created, don't fail on counter roll */ }
   }
 
   return c.json({ id: header.id, poNumber: header.po_number }, 201);
