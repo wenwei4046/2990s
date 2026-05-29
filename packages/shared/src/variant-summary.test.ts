@@ -6,8 +6,8 @@ import { buildVariantSummary } from './variant-summary';
 
 describe('buildVariantSummary', () => {
   it('sofa summary keeps seat SIZE and leg height as separate, labelled tokens', () => {
-    // Commander 2026-05-29: seat size and leg height used to mash together
-    // ("SEAT 28 4\"") — they must read as two distinct tokens now.
+    // Commander 2026-05-29: seat size + leg height read as distinct tokens, and
+    // every attribute uses ONE consistent ` / ` separator (no mixed ` · `).
     const summary = buildVariantSummary('sofa', {
       fabricCode: 'BF-17',
       seatHeight: '28',
@@ -15,8 +15,9 @@ describe('buildVariantSummary', () => {
     });
     expect(summary).toContain('SEAT 28');
     expect(summary).toContain('LEG 4"');
-    // The two attributes are split by the shared ` · ` delimiter, not a bare space.
-    expect(summary).toContain('SEAT 28 · LEG 4"');
+    // One consistent ` / ` delimiter throughout: "BF-17 / SEAT 28 / LEG 4\"".
+    expect(summary).toBe('BF-17 / SEAT 28 / LEG 4"');
+    expect(summary).not.toContain(' · ');
     expect(summary).not.toContain('SEAT 28 4"');
   });
 

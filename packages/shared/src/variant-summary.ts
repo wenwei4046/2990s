@@ -58,17 +58,13 @@ export function buildVariantSummary(
     const total = str(variants.totalHeight);
     if (total) segments.push(`T.Heights ${total}`);
   } else {
-    // SOFA: SEAT {seat} · LEG {LEG}
-    // Commander 2026-05-29: seat SIZE and leg height were mashed together with
-    // a bare space ("SEAT 28 4\"") — split them with the same ` · ` delimiter
-    // used between other attributes and label the leg value so they read as
-    // two distinct tokens.
+    // SOFA: SEAT {seat} / LEG {LEG}
+    // Commander 2026-05-29: use the SAME ` / ` delimiter as every other segment
+    // so the summary reads with ONE consistent separator (was mixing ` / ` with
+    // a ` · ` inside the seat·leg token → "BF-01 / SEAT 24 · LEG 6\"").
     const seat = str(variants.seatHeight);
-    if (seat || leg) {
-      const seatPart = seat ? `SEAT ${seat}` : '';
-      const legPart  = leg ? `LEG ${leg}` : '';
-      segments.push([seatPart, legPart].filter(Boolean).join(' · '));
-    }
+    if (seat) segments.push(`SEAT ${seat}`);
+    if (leg)  segments.push(`LEG ${leg}`);
   }
 
   // Special orders always appended last, labelled so they read clearly in the

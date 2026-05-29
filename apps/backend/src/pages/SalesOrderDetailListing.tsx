@@ -287,8 +287,11 @@ const buildColumns = (): DataGridColumn<SoDetailListingRow>[] => {
       searchValue: (r) => opt(r, 'venue'),
       groupValue: (r) => opt(r, 'venue') || '(none)',
     },
-    /* 18 */ {
+    /* 18 — Commander 2026-05-29: branding hidden by default (reveal via the
+       Columns menu when needed); the brand is implicit at order time. */
+    {
       key: 'branding', label: 'Branding', width: 110, sortable: true, groupable: true,
+      defaultHidden: true,
       accessor: (r) => <BrandingPill branding={r.branding} />,
       searchValue: (r) => r.branding ?? '',
       groupValue: (r) => r.branding ?? '(none)',

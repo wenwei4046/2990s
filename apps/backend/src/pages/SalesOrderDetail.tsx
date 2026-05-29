@@ -1911,7 +1911,9 @@ const TotalsCard = ({ header }: { header: SoHeader }) => {
           By Category
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-          {categories.map(({ label, rev, cost }) => {
+          {/* Commander 2026-05-29 — only show categories that actually carry a
+             value; hide the 0.00 rows so the breakdown stays clean ("变弹性"). */}
+          {categories.filter((c) => c.rev > 0 || c.cost > 0).map(({ label, rev, cost }) => {
             const margin = rev - cost;
             return (
               <div key={label} style={{
