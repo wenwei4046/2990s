@@ -232,7 +232,10 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--c-paper);
-  overflow: hidden;
+  /* Commander 2026-05-29 — "右边卡到了": the table is wider than the page on
+     smaller screens, and overflow:hidden cut off the right columns (Main
+     Supplier) + made the expanded SO/date rows unreachable. Scroll instead. */
+  overflow-x: auto;
 }
 .table {
   width: 100%;
