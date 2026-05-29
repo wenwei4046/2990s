@@ -107,7 +107,9 @@ const ITEM =
   'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
   'custom_specials, line_suffix, special_order_price_sen, ' +
   /* Migration 0101 — line money + per-line date + cost snapshot */
-  'line_total_centi, delivery_date, unit_cost_centi, created_at';
+  'line_total_centi, delivery_date, unit_cost_centi, ' +
+  /* Migration 0106 — GRN line consumption (downstream PI/PR draw) */
+  'invoiced_qty, returned_qty, created_at';
 
 const nextNumber = async (sb: ReturnType<Variables['supabase']['valueOf']> extends never ? never : any, prefix: string, table: string, col: string): Promise<string> => {
   const d = new Date();
@@ -132,6 +134,58 @@ async function recomputeGrnTotals(sb: any, grnId: string) {
   }).eq('id', grnId);
 }
 
+/* ── PO received_qty rollback + status re-eval (migration 0106) ─────────────
+   Shared by the GRN cancel handler and GRN line-delete: decrement a PO item's
+   received_qty by `qty` (clamp ≥0), then re-evaluate the parent PO's status
+   (any received remaining → PARTIALLY_RECEIVED, else SUBMITTED + clear
+   received_at). Never resurrects a CANCELLED PO. Best-effort. */
+async function rollbackPoReceipt(sb: any, poItemId: string | null, qty: number) {
+  if (!poItemId || qty <= 0) return;
+  const { data: poi } = await sb.from('purchase_order_items')
+    .select('received_qty, purchase_order_id').eq('id', poItemId).maybeSingle();
+  if (!poi) return;
+  const prev = (poi as { received_qty: number }).received_qty ?? 0;
+  const next = Math.max(0, prev - qty);
+  await sb.from('purchase_order_items').update({ received_qty: next }).eq('id', poItemId);
+  const poId = (poi as { purchase_order_id: string }).purchase_order_id;
+  if (!poId) return;
+  const { data: poLines } = await sb.from('purchase_order_items')
+    .select('received_qty').eq('purchase_order_id', poId);
+  const anyReceived = ((poLines ?? []) as Array<{ received_qty: number }>)
+    .some((l) => (l.received_qty ?? 0) > 0);
+  const newStatus = anyReceived ? 'PARTIALLY_RECEIVED' : 'SUBMITTED';
+  const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
+  if (!anyReceived) patch.received_at = null;
+  await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+}
+
+/* ── GRN child-lock guard (migration 0106) ─────────────────────────────────
+   A GRN locks (read-only — no line edit / no cancel) once ANY of its lines has
+   a downstream child: invoiced_qty > 0 OR returned_qty > 0 (a PI or PR line is
+   drawn from it). Returns the blocking JSON, or null if the GRN is free to
+   edit. */
+async function grnHasDownstream(sb: any, grnId: string): Promise<{ error: string; message: string } | null> {
+  const { data } = await sb.from('grn_items')
+    .select('invoiced_qty, returned_qty').eq('grn_id', grnId);
+  const any = ((data ?? []) as Array<{ invoiced_qty: number; returned_qty: number }>)
+    .some((r) => (r.invoiced_qty ?? 0) > 0 || (r.returned_qty ?? 0) > 0);
+  if (any) return { error: 'grn_has_downstream', message: 'GRN has a Purchase Invoice / Return — delete it first to edit' };
+  return null;
+}
+
+/* ── Per-GRN consumption flags (migration 0106) ────────────────────────────
+   From a GRN's items compute: has_children (any line invoiced_qty>0 or
+   returned_qty>0), fully_invoiced (every accepted line has invoiced_qty >=
+   qty_accepted), fully_returned (likewise returned_qty). A line with
+   qty_accepted = 0 is treated as already satisfied (nothing to consume). */
+function computeGrnFlags(items: Array<{ qty_accepted?: number | null; invoiced_qty?: number | null; returned_qty?: number | null }>) {
+  const accepted = items.filter((r) => (r.qty_accepted ?? 0) > 0);
+  const hasChildren = items.some((r) => (r.invoiced_qty ?? 0) > 0 || (r.returned_qty ?? 0) > 0);
+  const fullyInvoiced = accepted.length > 0 && accepted.every((r) => (r.invoiced_qty ?? 0) >= (r.qty_accepted ?? 0));
+  const fullyReturned = accepted.length > 0 && accepted.every((r) => (r.returned_qty ?? 0) >= (r.qty_accepted ?? 0));
+  return { has_children: hasChildren, fully_invoiced: fullyInvoiced, fully_returned: fullyReturned };
+}
+
 grns.get('/', async (c) => {
   const sb = c.get('supabase');
   let q = sb.from('grns').select(`${HEADER}, supplier:suppliers(id, code, name), purchase_order:purchase_orders(id, po_number)`).order('received_at', { ascending: false });
@@ -147,18 +201,29 @@ grns.get('/', async (c) => {
   const rows = (data ?? []) as Array<{ id: string } & Record<string, unknown>>;
   const ids = rows.map((g) => g.id);
   const totals = new Map<string, number>();
+  // Migration 0106 — also collect each GRN's lines so we can derive the
+  // convert-eligibility / lock flags (has_children / fully_invoiced /
+  // fully_returned) in the SAME one-extra-query pass that computes total_centi.
+  const linesByGrn = new Map<string, Array<{ qty_accepted: number | null; invoiced_qty: number | null; returned_qty: number | null }>>();
   if (ids.length > 0) {
     const { data: lineRows, error: lineErr } = await sb
       .from('grn_items')
-      .select('grn_id, qty_accepted, unit_price_centi')
+      .select('grn_id, qty_accepted, unit_price_centi, invoiced_qty, returned_qty')
       .in('grn_id', ids);
     if (lineErr) return c.json({ error: 'load_failed', reason: lineErr.message }, 500);
-    for (const li of (lineRows ?? []) as Array<{ grn_id: string; qty_accepted: number | null; unit_price_centi: number | null }>) {
+    for (const li of (lineRows ?? []) as Array<{ grn_id: string; qty_accepted: number | null; unit_price_centi: number | null; invoiced_qty: number | null; returned_qty: number | null }>) {
       const add = (li.qty_accepted ?? 0) * (li.unit_price_centi ?? 0);
       totals.set(li.grn_id, (totals.get(li.grn_id) ?? 0) + add);
+      const arr = linesByGrn.get(li.grn_id) ?? [];
+      arr.push({ qty_accepted: li.qty_accepted, invoiced_qty: li.invoiced_qty, returned_qty: li.returned_qty });
+      linesByGrn.set(li.grn_id, arr);
     }
   }
-  const grns = rows.map((g) => ({ ...g, total_centi: totals.get(g.id) ?? 0 }));
+  const grns = rows.map((g) => ({
+    ...g,
+    total_centi: totals.get(g.id) ?? 0,
+    ...computeGrnFlags(linesByGrn.get(g.id) ?? []),
+  }));
   return c.json({ grns });
 });
 
@@ -262,7 +327,11 @@ grns.get('/:id', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ grn: h.data, items: i.data ?? [] });
+  // Migration 0106 — surface the convert-eligibility / lock flags on the grn
+  // object so the detail page can lock once a PI/PR draws from it.
+  const itemRows = (i.data ?? []) as Array<{ qty_accepted?: number | null; invoiced_qty?: number | null; returned_qty?: number | null }>;
+  const grn = { ...(h.data as Record<string, unknown>), ...computeGrnFlags(itemRows) };
+  return c.json({ grn, items: i.data ?? [] });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
@@ -717,6 +786,11 @@ grns.patch('/:id/cancel', async (c) => {
     return c.json({ grn: data ?? { id, status: 'CANCELLED' } });
   }
 
+  // GRN child-lock: can't cancel a GRN that has a downstream PI/PR — the child
+  // must be deleted first (unified model, migration 0106).
+  const childLock = await grnHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
+
   const { error: updErr } = await sb.from('grns')
     .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
     .eq('id', id);
@@ -823,6 +897,11 @@ grns.post('/:id/items', async (c) => {
   if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
 
+  const sb = c.get('supabase');
+  // GRN child-lock: a GRN with any downstream PI/PR is read-only.
+  const childLock = await grnHasDownstream(sb, grnId);
+  if (childLock) return c.json(childLock, 409);
+
   const qtyReceived = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const discountCenti = Number(it.discountCenti ?? 0);
@@ -860,7 +939,6 @@ grns.post('/:id/items', async (c) => {
     uom: (it.uom as string) ?? 'UNIT',
     delivery_date: (it.deliveryDate as string) ?? null,
   };
-  const sb = c.get('supabase');
   const { data, error } = await sb.from('grn_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeGrnTotals(sb, grnId);
@@ -873,6 +951,10 @@ grns.patch('/:id/items/:itemId', async (c) => {
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const sb = c.get('supabase');
+
+  // GRN child-lock: a GRN with any downstream PI/PR is read-only.
+  const childLock = await grnHasDownstream(sb, grnId);
+  if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('grn_items')
     .select('qty_received, unit_price_centi, discount_centi, item_group, variants')
@@ -918,12 +1000,34 @@ grns.patch('/:id/items/:itemId', async (c) => {
   return c.json({ ok: true });
 });
 
-/* ── DELETE /:id/items/:itemId — remove a line (no SO quota to release). ── */
+/* ── DELETE /:id/items/:itemId — remove a line + roll back its PO receipt. ──
+   Deliverable 4 (migration 0106): reading the line's qty_accepted +
+   purchase_order_item_id BEFORE delete, then after delete decrementing the PO
+   item's received_qty by qty_accepted (clamp ≥0) and re-evaluating the parent
+   PO status. This fixes the PO staying RECEIVED after a GRN line is removed.
+   Blocked by the GRN child-lock (any downstream PI/PR). */
 grns.delete('/:id/items/:itemId', async (c) => {
   const grnId = c.req.param('id'); const itemId = c.req.param('itemId');
   const sb = c.get('supabase');
+
+  // GRN child-lock: a GRN with any downstream PI/PR is read-only.
+  const childLock = await grnHasDownstream(sb, grnId);
+  if (childLock) return c.json(childLock, 409);
+
+  // Read the line's PO link + accepted qty BEFORE deleting so we can roll back.
+  const { data: line } = await sb.from('grn_items')
+    .select('qty_accepted, purchase_order_item_id').eq('id', itemId).maybeSingle();
+
   const { error } = await sb.from('grn_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+
+  // Roll back the PO receipt for the removed line (best-effort, mirrors the GRN
+  // cancel reversal). Skip manual lines with no purchase_order_item_id.
+  if (line) {
+    const l = line as { qty_accepted: number; purchase_order_item_id: string | null };
+    try { await rollbackPoReceipt(sb, l.purchase_order_item_id, l.qty_accepted ?? 0); } catch { /* best-effort */ }
+  }
+
   await recomputeGrnTotals(sb, grnId);
   return c.body(null, 204);
 });

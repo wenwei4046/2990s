@@ -998,6 +998,12 @@ export const grnItems = pgTable('grn_items', {
   deliveryDate:          date('delivery_date'),
   unitCostCenti:         integer('unit_cost_centi').notNull().default(0),
   supplierSku:           text('supplier_sku'),
+  /* Migration 0106 — GRN line consumption tracking (GRN → {PI, PR}).
+     invoicedQty = Σ PI line qty drawn from this line (remaining = qty_accepted
+     - invoiced_qty); returnedQty = Σ PR line qty drawn (remaining = qty_accepted
+     - returned_qty). Either > 0 ⇒ the GRN has a downstream child (edit-lock). */
+  invoicedQty:           integer('invoiced_qty').notNull().default(0),
+  returnedQty:           integer('returned_qty').notNull().default(0),
   createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxGrn: index('idx_grn_items_grn').on(t.grnId),

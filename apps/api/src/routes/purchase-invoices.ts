@@ -43,6 +43,35 @@ async function recomputePiTotals(sb: any, piId: string) {
   }).eq('id', piId);
 }
 
+/* ── GRN→PI consumption helpers (migration 0106, unified model) ─────────────
+   Track grn_items.invoiced_qty as PI lines are drawn from / adjusted against /
+   released back to a GRN line. base = qty_accepted; remaining = accepted -
+   invoiced. */
+async function adjustGrnInvoicedQty(sb: any, grnItemId: string, delta: number) {
+  if (!grnItemId || delta === 0) return;
+  const { data: row } = await sb.from('grn_items')
+    .select('qty_accepted, invoiced_qty').eq('id', grnItemId).maybeSingle();
+  if (!row) return;
+  const accepted = (row as { qty_accepted: number }).qty_accepted ?? 0;
+  const cur = (row as { invoiced_qty: number }).invoiced_qty ?? 0;
+  // Clamp into [0, qty_accepted] — never over-invoice, never go negative.
+  const next = Math.min(accepted, Math.max(0, cur + delta));
+  await sb.from('grn_items').update({ invoiced_qty: next }).eq('id', grnItemId);
+}
+
+/* PI edit-lock guard: a PI with ANY payment recorded (paid_centi > 0) or that's
+   CANCELLED is read-only. Returns the blocking JSON response, or null if the PI
+   is editable. */
+async function piLocked(sb: any, piId: string): Promise<{ error: string; message: string } | null> {
+  const { data } = await sb.from('purchase_invoices')
+    .select('paid_centi, status').eq('id', piId).maybeSingle();
+  if (!data) return null; // not found — let the handler's own load surface 404
+  const row = data as { paid_centi: number | null; status: string };
+  if (row.status === 'CANCELLED') return { error: 'pi_cancelled', message: 'Invoice is cancelled' };
+  if ((row.paid_centi ?? 0) > 0) return { error: 'pi_locked', message: 'Invoice has a payment recorded — locked' };
+  return null;
+}
+
 purchaseInvoices.get('/', async (c) => {
   const sb = c.get('supabase');
   let q = sb.from('purchase_invoices')
@@ -55,14 +84,12 @@ purchaseInvoices.get('/', async (c) => {
 });
 
 /* ── GET /outstanding-grn-items ─────────────────────────────────────────
-   Returns GRN LINES eligible for invoicing. MVP trade-off (Commander
-   2026-05-27, see task #52): grn_items has no `invoiced_qty` column, so
-   we can't track per-line how much has already been invoiced. Simplest
-   correct behaviour: list lines from POSTED GRNs that don't yet have ANY
-   parent PI (i.e. all-or-nothing per GRN). Once a GRN is invoiced (even
-   one line), the whole GRN drops out of the picker.
-   TODO: add grn_items.invoiced_qty + per-line tracking when partial
-   invoicing across multiple PIs becomes a real customer need.
+   Returns GRN LINES eligible for invoicing. Migration 0106 added
+   grn_items.invoiced_qty, so this now tracks PER-LINE remaining (Commander
+   2026-05-30 unified consumption model): for each grn_item from a POSTED GRN
+   we return remaining = qty_accepted - invoiced_qty and include only lines
+   with remaining > 0. A GRN line can be invoiced across MULTIPLE PIs until
+   fully consumed (replaces the old header-level all-or-nothing dedupe).
 
    IMPORTANT (route ordering): this STATIC path MUST be registered before
    the `/:id` param route below — otherwise Hono matches `/:id` first and
@@ -91,38 +118,32 @@ purchaseInvoices.get('/outstanding-grn-items', async (c) => {
   }>;
   if (headers.length === 0) return c.json({ items: [] });
 
-  // Drop any GRN that already has a PI on it (header-level dedupe per MVP).
+  // Load the GRN items for every POSTED GRN. Per-line remaining tracking
+  // (migration 0106) replaces the header-level dedupe — a partially-invoiced
+  // GRN keeps surfacing its lines that still have remaining > 0.
   const grnIds = headers.map((h) => h.id);
-  const { data: pisOnTheseGrns } = await sb
-    .from('purchase_invoices')
-    .select('grn_id')
-    .in('grn_id', grnIds);
-  const invoicedGrnIds = new Set(
-    ((pisOnTheseGrns ?? []) as Array<{ grn_id: string | null }>)
-      .map((r) => r.grn_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const openGrns = headers.filter((h) => !invoicedGrnIds.has(h.id));
-  if (openGrns.length === 0) return c.json({ items: [] });
-
-  // Now load the GRN items for the remaining GRNs.
-  const openIds = openGrns.map((h) => h.id);
   const { data: items, error: iErr } = await sb
     .from('grn_items')
     .select(`
       id, grn_id, material_kind, material_code, material_name, item_group,
-      description, qty_accepted, qty_rejected, unit_price_centi, variants
+      description, qty_accepted, qty_rejected, invoiced_qty, unit_price_centi, variants
     `)
-    .in('grn_id', openIds);
+    .in('grn_id', grnIds);
   if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
 
-  const headerById = new Map(openGrns.map((h) => [h.id, h]));
+  const headerById = new Map(headers.map((h) => [h.id, h]));
   const out = ((items ?? []) as Array<{
     id: string; grn_id: string; material_kind: string; material_code: string;
     material_name: string; item_group: string | null; description: string | null;
-    qty_accepted: number; qty_rejected: number; unit_price_centi: number; variants: unknown;
+    qty_accepted: number; qty_rejected: number; invoiced_qty: number;
+    unit_price_centi: number; variants: unknown;
   }>)
-    .filter((r) => r.qty_accepted > 0)
+    .map((r) => {
+      const invoiced = r.invoiced_qty ?? 0;
+      const remaining = (r.qty_accepted ?? 0) - invoiced;
+      return { ...r, _remaining: remaining };
+    })
+    .filter((r) => r._remaining > 0)
     .map((r) => {
       const h = headerById.get(r.grn_id)!;
       return {
@@ -139,6 +160,8 @@ purchaseInvoices.get('/outstanding-grn-items', async (c) => {
         description:    r.description ?? r.material_name,
         itemGroup:      r.item_group ?? '',
         qtyAccepted:    r.qty_accepted,
+        invoicedQty:    r.invoiced_qty ?? 0,
+        remaining:      r._remaining,
         unitPriceCenti: r.unit_price_centi,
         variants:       r.variants,
       };
@@ -284,11 +307,32 @@ purchaseInvoices.patch('/:id/payment', async (c) => {
 
 purchaseInvoices.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
+
+  // Read → guard → release → cancel. Keep the existing PAID guard; a PI with
+  // any payment can't be cancelled.
+  const { data: cur } = await sb.from('purchase_invoices')
+    .select('id, status, paid_centi').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const head = cur as { id: string; status: string; paid_centi: number | null };
+  if (head.status === 'PAID' || (head.paid_centi ?? 0) > 0) {
+    return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
+  }
+  // Idempotent — already cancelled, echo back without re-releasing.
+  if (head.status === 'CANCELLED') return c.json({ purchaseInvoice: { id, status: 'CANCELLED' } });
+
   const { data, error } = await sb.from('purchase_invoices').update({
     status: 'CANCELLED', updated_at: new Date().toISOString(),
   }).eq('id', id).neq('status', 'PAID').select('id, status').single();
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
+
+  // Release the GRN-line consumption: decrement invoiced_qty for every
+  // GRN-linked line (best-effort, mirrors the GRN cancel reversal pattern).
+  const { data: lines } = await sb.from('purchase_invoice_items')
+    .select('qty, grn_item_id').eq('purchase_invoice_id', id);
+  for (const l of (lines ?? []) as Array<{ qty: number; grn_item_id: string | null }>) {
+    if (l.grn_item_id) await adjustGrnInvoicedQty(sb, l.grn_item_id, -(l.qty ?? 0));
+  }
   return c.json({ purchaseInvoice: data });
 });
 
@@ -321,7 +365,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     .from('grn_items')
     .select(`
       id, grn_id, material_kind, material_code, material_name, item_group,
-      description, description2, uom, qty_accepted, unit_price_centi,
+      description, description2, uom, qty_accepted, invoiced_qty, unit_price_centi,
       variants, gap_inches, divan_height_inches, divan_price_sen,
       leg_height_inches, leg_price_sen, custom_specials, line_suffix,
       special_order_price_sen, discount_centi,
@@ -334,7 +378,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     id: string; grn_id: string; material_kind: string; material_code: string;
     material_name: string; item_group: string | null; description: string | null;
     description2: string | null; uom: string | null;
-    qty_accepted: number; unit_price_centi: number;
+    qty_accepted: number; invoiced_qty: number; unit_price_centi: number;
     variants: unknown; gap_inches: number | null; divan_height_inches: number | null;
     divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
     custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
@@ -350,8 +394,11 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     const row = byId.get(p.grnItemId);
     if (!row) return c.json({ error: 'item_not_found', grnItemId: p.grnItemId }, 400);
     if (p.qty <= 0) return c.json({ error: 'qty_must_be_positive', grnItemId: p.grnItemId }, 400);
-    if (p.qty > row.qty_accepted) {
-      return c.json({ error: 'qty_exceeds_accepted', grnItemId: p.grnItemId, requested: p.qty, accepted: row.qty_accepted }, 409);
+    // Cap each pick at the GRN line's REMAINING (qty_accepted - invoiced_qty),
+    // not raw qty_accepted — a line can be invoiced across multiple PIs.
+    const remaining = (row.qty_accepted ?? 0) - (row.invoiced_qty ?? 0);
+    if (p.qty > remaining) {
+      return c.json({ error: 'qty_exceeds_remaining', grnItemId: p.grnItemId, requested: p.qty, remaining }, 409);
     }
     if (row.grn.status !== 'POSTED') {
       return c.json({ error: 'grn_not_posted', grnItemId: p.grnItemId, status: row.grn.status }, 409);
@@ -439,6 +486,10 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       await sb.from('purchase_invoices').delete().eq('id', h.id);
       continue;
     }
+    // Consume the GRN lines: increment invoiced_qty by the picked qty (0106).
+    for (const { row, qty } of bucket.lines) {
+      await adjustGrnInvoicedQty(sb, row.id, qty);
+    }
     created.push({
       id: h.id, invoiceNumber: h.invoice_number,
       supplierId: bucket.supplierId, grnCount: 1, lineCount: bucket.lines.length,
@@ -471,23 +522,28 @@ purchaseInvoices.post('/from-grn', async (c) => {
   if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
 
   const { data: items, error: iErr } = await sb.from('grn_items')
-    .select('id, material_kind, material_code, material_name, item_group, description, description2, uom, qty_accepted, unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi')
+    .select('id, material_kind, material_code, material_name, item_group, description, description2, uom, qty_accepted, invoiced_qty, unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi')
     .eq('grn_id', grnId)
     .gt('qty_accepted', 0);
   if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
   type GrnLine = {
     id: string; material_kind: string; material_code: string; material_name: string;
     item_group: string | null; description: string | null; description2: string | null;
-    uom: string | null; qty_accepted: number; unit_price_centi: number; variants: unknown;
+    uom: string | null; qty_accepted: number; invoiced_qty: number; unit_price_centi: number; variants: unknown;
     gap_inches: number | null; divan_height_inches: number | null; divan_price_sen: number;
     leg_height_inches: number | null; leg_price_sen: number; custom_specials: unknown;
     line_suffix: string | null; special_order_price_sen: number; discount_centi: number;
   };
-  const lines = (items ?? []) as unknown as GrnLine[];
-  if (lines.length === 0) return c.json({ error: 'nothing_to_invoice', message: 'GRN has no accepted lines' }, 400);
+  // Only copy lines that still have remaining = qty_accepted - invoiced_qty > 0,
+  // and bill the REMAINING qty (a GRN can be invoiced across multiple PIs, 0106).
+  const allLines = (items ?? []) as unknown as GrnLine[];
+  const lines = allLines
+    .map((it) => ({ ...it, _remaining: (it.qty_accepted ?? 0) - (it.invoiced_qty ?? 0) }))
+    .filter((it) => it._remaining > 0);
+  if (lines.length === 0) return c.json({ error: 'nothing_to_invoice', message: 'GRN is fully invoiced' }, 400);
 
   const invoiceNumber = await nextNum(sb, 'PI');
-  const subtotal = lines.reduce((s, it) => s + (it.qty_accepted * it.unit_price_centi - (it.discount_centi ?? 0)), 0);
+  const subtotal = lines.reduce((s, it) => s + (it._remaining * it.unit_price_centi - (it.discount_centi ?? 0)), 0);
 
   const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
     invoice_number: invoiceNumber,
@@ -513,9 +569,9 @@ purchaseInvoices.post('/from-grn', async (c) => {
     material_kind: it.material_kind,
     material_code: it.material_code,
     material_name: it.material_name,
-    qty: it.qty_accepted,
+    qty: it._remaining,
     unit_price_centi: it.unit_price_centi,
-    line_total_centi: it.qty_accepted * it.unit_price_centi - (it.discount_centi ?? 0),
+    line_total_centi: it._remaining * it.unit_price_centi - (it.discount_centi ?? 0),
     item_group: it.item_group,
     description: it.description,
     description2: it.description2,
@@ -533,6 +589,11 @@ purchaseInvoices.post('/from-grn', async (c) => {
   }));
   const { error: insErr } = await sb.from('purchase_invoice_items').insert(rows);
   if (insErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: insErr.message }, 500); }
+
+  // Consume each GRN line: increment invoiced_qty by the billed remaining (0106).
+  for (const it of lines) {
+    await adjustGrnInvoicedQty(sb, it.id, it._remaining);
+  }
 
   // Refresh header subtotal/total from the inserted lines (parity with GRN/PR).
   await recomputePiTotals(sb, h.id);
@@ -578,10 +639,26 @@ purchaseInvoices.post('/:id/items', async (c) => {
   if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
 
+  const sb = c.get('supabase');
+  // PI edit-lock: a paid / cancelled PI is read-only.
+  const lock = await piLocked(sb, piId);
+  if (lock) return c.json(lock, 409);
+
   const qty = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const discountCenti = Number(it.discountCenti ?? 0);
   const lineTotal = (qty * unitPriceCenti) - discountCenti;
+
+  // GRN-linked line: cap qty at that GRN line's remaining (accepted - invoiced).
+  const grnItemId = (it.grnItemId as string) ?? null;
+  if (grnItemId) {
+    const { data: gi } = await sb.from('grn_items')
+      .select('qty_accepted, invoiced_qty').eq('id', grnItemId).maybeSingle();
+    if (gi) {
+      const remaining = ((gi as { qty_accepted: number }).qty_accepted ?? 0) - ((gi as { invoiced_qty: number }).invoiced_qty ?? 0);
+      if (qty > remaining) return c.json({ error: 'qty_exceeds_remaining', requested: qty, remaining }, 409);
+    }
+  }
 
   const row: Record<string, unknown> = {
     purchase_invoice_id: piId,
@@ -610,9 +687,11 @@ purchaseInvoices.post('/:id/items', async (c) => {
     description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     uom: (it.uom as string) ?? 'UNIT',
   };
-  const sb = c.get('supabase');
   const { data, error } = await sb.from('purchase_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  // Consume the GRN line if this PI line is GRN-linked (manual lines consume
+  // nothing). Increment invoiced_qty by the new line's qty.
+  if (grnItemId) await adjustGrnInvoicedQty(sb, grnItemId, qty);
   await recomputePiTotals(sb, piId);
   return c.json({ item: data }, 201);
 });
@@ -624,12 +703,18 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const sb = c.get('supabase');
 
+  // PI edit-lock: a paid / cancelled PI is read-only.
+  const lock = await piLocked(sb, piId);
+  if (lock) return c.json(lock, 409);
+
   const { data: prev } = await sb.from('purchase_invoice_items')
-    .select('qty, unit_price_centi, discount_centi, item_group, variants')
+    .select('qty, unit_price_centi, discount_centi, item_group, variants, grn_item_id')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
-  const qty = it.qty !== undefined ? Number(it.qty) : (prev as { qty: number }).qty;
+  const prevQty = (prev as { qty: number }).qty;
+  const grnItemId = (prev as { grn_item_id: string | null }).grn_item_id ?? null;
+  const qty = it.qty !== undefined ? Number(it.qty) : prevQty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
   const lineTotal = (qty * unit) - discount;
@@ -659,8 +744,27 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
     updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
+  // GRN-linked + qty changed: pre-check the delta won't push the GRN line over
+  // its accepted (remaining excluding THIS line's existing draw must cover the
+  // new qty). delta = qty - prevQty.
+  const delta = qty - prevQty;
+  if (grnItemId && delta !== 0) {
+    const { data: gi } = await sb.from('grn_items')
+      .select('qty_accepted, invoiced_qty').eq('id', grnItemId).maybeSingle();
+    if (gi) {
+      const accepted = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+      const invoiced = (gi as { invoiced_qty: number }).invoiced_qty ?? 0;
+      // remaining headroom for THIS line = accepted - (invoiced - prevQty).
+      const headroom = accepted - (invoiced - prevQty);
+      if (qty > headroom) return c.json({ error: 'qty_exceeds_remaining', requested: qty, remaining: headroom }, 409);
+    }
+  }
+
   const { error } = await sb.from('purchase_invoice_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  // Apply the consumption delta to the source GRN line (helper clamps to
+  // [0, qty_accepted]).
+  if (grnItemId && delta !== 0) await adjustGrnInvoicedQty(sb, grnItemId, delta);
   await recomputePiTotals(sb, piId);
   return c.json({ ok: true });
 });
@@ -669,8 +773,20 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
 purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
   const piId = c.req.param('id'); const itemId = c.req.param('itemId');
   const sb = c.get('supabase');
+  // PI edit-lock: a paid / cancelled PI is read-only.
+  const lock = await piLocked(sb, piId);
+  if (lock) return c.json(lock, 409);
+
+  // Read the line first so we can release its GRN-line consumption on delete.
+  const { data: line } = await sb.from('purchase_invoice_items')
+    .select('qty, grn_item_id').eq('id', itemId).maybeSingle();
   const { error } = await sb.from('purchase_invoice_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  if (line) {
+    const l = line as { qty: number; grn_item_id: string | null };
+    // Release: decrement invoiced_qty by the deleted line's qty (helper clamps ≥0).
+    if (l.grn_item_id) await adjustGrnInvoicedQty(sb, l.grn_item_id, -(l.qty ?? 0));
+  }
   await recomputePiTotals(sb, piId);
   return c.body(null, 204);
 });

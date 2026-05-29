@@ -139,8 +139,13 @@ export const GoodsReceivedDetail = () => {
   const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
   const [savingDraft, setSavingDraft] = useState(false);
 
-  // POSTED ("Confirmed") is editable; CANCELLED / CLOSED lock read-only.
-  const isLocked = grn ? !(grn.status === 'POSTED') : true;
+  // POSTED ("Confirmed") is editable UNLESS the GRN has a downstream PI/PR
+  // (unified model, migration 0106): once a child exists the page is read-only —
+  // to edit you must delete the downstream doc first. CANCELLED / CLOSED also lock.
+  const hasChildren = Boolean(grn?.has_children);
+  const isLocked = grn ? (grn.status !== 'POSTED' || hasChildren) : true;
+  // Distinguish the child-lock case so we can show the "delete it first" note.
+  const lockedDueToChildren = grn ? (grn.status === 'POSTED' && hasChildren) : false;
 
   /* If the GRN locks while we're in Edit mode (e.g. cancelled in another tab),
      drop back to View + discard the draft. */
@@ -281,9 +286,10 @@ export const GoodsReceivedDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* Cancel — only when the GRN is still editable (Confirmed). Confirm
-              dialog → cancel mutation (reverses the receipt server-side). */}
-          {grn.status === 'POSTED' && (
+          {/* Cancel — only when the GRN is still editable (Confirmed) AND has no
+              downstream PI/PR (unified model). Confirm dialog → cancel mutation
+              (reverses the receipt server-side). */}
+          {grn.status === 'POSTED' && !hasChildren && (
             <Button variant="ghost" size="md"
               onClick={() => {
                 if (!confirm(`Cancel GRN ${grn.grn_number}? This reverses the receipt — stock is taken back out and the source PO's received qty is rolled back. Line items stay for audit.`)) return;
@@ -312,6 +318,14 @@ export const GoodsReceivedDetail = () => {
           )}
         </div>
       </div>
+
+      {/* Child-lock note — POSTED but has a downstream PI/PR, so the page is
+          read-only until the child is deleted (unified model, migration 0106). */}
+      {lockedDueToChildren && (
+        <div className={styles.bannerWarn}>
+          <strong>Locked</strong> — has a Purchase Invoice / Return. Delete it first to edit.
+        </div>
+      )}
 
       {/* ── Supplier / dates / warehouse / currency / notes ─────── */}
       {/* In View the card renders read-only text; in Edit it shows inputs bound

@@ -57,6 +57,10 @@ type GrnRow = Record<string, unknown> & {
   currency?: string;
   supplier?: { id: string; code: string; name: string } | null;
   purchase_order?: { id: string; po_number: string } | null;
+  /* Migration 0106 — convert-eligibility / lock flags from the list endpoint. */
+  has_children?: boolean;
+  fully_invoiced?: boolean;
+  fully_returned?: boolean;
 };
 
 const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
@@ -189,17 +193,30 @@ export const GoodsReceived = () => {
           ? { opacity: 0.55, filter: 'grayscale(0.6)' }
           : undefined}
         contextMenu={(g) => {
-          // Mirror the PO list's right-click menu: View / Edit · divider ·
-          // Convert to PI / Convert to PR · divider · Cancel (danger).
+          // Unified convert / edit / cancel eligibility (migration 0106). Each
+          // action is HIDDEN when not eligible:
+          //   • Edit / Cancel  — only POSTED && no downstream child.
+          //   • Convert to PI  — only POSTED && not fully invoiced.
+          //   • Convert to PR  — only POSTED && not fully returned.
+          const isPosted = g.status === 'POSTED';
+          const hasChildren = Boolean(g.has_children);
           const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
             { label: 'View', onClick: () => navigate(`/grns/${g.id}`) },
-            { label: 'Edit', onClick: () => navigate(`/grns/${g.id}?edit=1`) },
-            { divider: true as const },
-            { label: 'Convert to PI', onClick: () => convertToPi(g) },
-            { label: 'Convert to PR', onClick: () => convertToPr(g) },
           ];
-          // Cancel — soft-stop. Hidden once already cancelled.
-          if (g.status !== 'CANCELLED') {
+          // Edit — only when editable (POSTED, no child).
+          if (isPosted && !hasChildren) {
+            menu.push({ label: 'Edit', onClick: () => navigate(`/grns/${g.id}?edit=1`) });
+          }
+          // Convert actions — hidden when not eligible (fully consumed / not POSTED).
+          const canPi = isPosted && !g.fully_invoiced;
+          const canPr = isPosted && !g.fully_returned;
+          if (canPi || canPr) {
+            menu.push({ divider: true as const });
+            if (canPi) menu.push({ label: 'Convert to PI', onClick: () => convertToPi(g) });
+            if (canPr) menu.push({ label: 'Convert to PR', onClick: () => convertToPr(g) });
+          }
+          // Cancel — soft-stop. Only POSTED && no downstream child.
+          if (isPosted && !hasChildren) {
             menu.push({ divider: true as const });
             menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelGrn(g) });
           }
