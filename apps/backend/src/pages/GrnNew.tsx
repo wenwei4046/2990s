@@ -176,7 +176,27 @@ export const GrnNew = () => {
   // when From-PO-multi picks already populated the form.
   useEffect(() => {
     if (hasPicks) return;
-    if (!selPoId) { setLines([]); return; }
+    if (!selPoId) {
+      // Manual mode — seed ONE blank starter line so a LINE 1 card shows
+      // immediately (matches New PO). Never clobber existing lines (picks /
+      // hand-added) — only seed when empty.
+      setLines((prev) => prev.length > 0 ? prev : [{
+        rid:                 `m${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        purchaseOrderItemId: null,
+        materialKind:        'mfg_product',
+        materialCode:        '',
+        materialName:        '',
+        itemGroup:           null,
+        variants:            null,
+        outstanding:         null,
+        qtyReceived:         1,
+        qtyAccepted:         1,
+        qtyRejected:         0,
+        unitPriceCenti:      0,
+        notes:               '',
+      }]);
+      return;
+    }
     if (!poQ.data) return;
     const next: DraftLine[] = poQ.data.items
       .map((it: any) => {
@@ -283,8 +303,10 @@ export const GrnNew = () => {
         : 'Choose the PO you are receiving against, or pick a supplier for a manual receipt.' });
       return;
     }
-    if (lines.length === 0) {
-      setDialog({ title: 'Add at least one line', body: 'A GRN needs at least one received item.' });
+    // Drop the blank starter line(s) — only real items (with a code) are saved.
+    const realLines = lines.filter((l) => l.materialCode.trim());
+    if (realLines.length === 0) {
+      setDialog({ title: 'Add at least one item', body: 'Pick at least one SKU to receive.' });
       return;
     }
     if (!canSave) {
@@ -298,7 +320,7 @@ export const GrnNew = () => {
         receivedAt,
         deliveryNoteRef: deliveryNoteRef || undefined,
         notes:           notes || undefined,
-        items: lines.map((l) => ({
+        items: realLines.map((l) => ({
           purchaseOrderItemId: l.purchaseOrderItemId,
           materialKind:        l.materialKind,
           materialCode:        l.materialCode,
@@ -720,9 +742,8 @@ export const GrnNew = () => {
             })
           )}
 
-          {/* "Add another item" — only in manual mode once a supplier is chosen
-              (PO-sourced / single-PO lines come from the PO, not added by hand). */}
-          {isManual && !!supplierId && (
+          {/* "Add another item" — manual mode (mirrors New PO, always shown). */}
+          {isManual && (
             <button
               type="button"
               onClick={addEmptyManualLine}
@@ -747,14 +768,24 @@ export const GrnNew = () => {
             </button>
           )}
 
-          {/* Subtotal footer (kept from the prior layout). */}
-          {lines.length > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
-              Subtotal: {fmtRm(subtotalCenti, currency)}
-            </div>
-          )}
         </div>
       </section>
+
+      {/* Totals card aligned right — identical to New PO / New Purchase Invoice. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <section className={styles.card} style={{ maxWidth: 360, width: '100%' }}>
+          <div className={styles.cardBody}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-14)', marginBottom: 'var(--space-2)' }}>
+              <span>Subtotal</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(subtotalCenti, currency)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-16)', fontWeight: 700, borderTop: '1px solid var(--line)', paddingTop: 'var(--space-2)' }}>
+              <span>Total</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(subtotalCenti, currency)}</span>
+            </div>
+          </div>
+        </section>
+      </div>
 
       {dialog && (
         <ActionResultDialog
