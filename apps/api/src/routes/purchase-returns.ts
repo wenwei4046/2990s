@@ -274,6 +274,76 @@ purchaseReturns.post('/from-grns', async (c) => {
   return c.json({ id: h.id, returnNumber: h.return_number, grnCount: grnList.length, lineCount: rejectedItems.length }, 201);
 });
 
+/* ── POST /from-grn ─────────────────────────────────────────────────────
+   Single-GRN convert (GRN list right-click "Convert to PR"). Unlike
+   /from-grns (which only copies REJECTED qty across many GRNs), this copies
+   ALL of the GRN's accepted lines into a NEW Purchase Return so the user can
+   then trim qty in the PR draft. Returns the created PR's { id } to navigate to.
+
+   Body: { grnId, reason?, notes? }  →  201 { id, returnNumber }. */
+purchaseReturns.post('/from-grn', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { grnId?: string; reason?: string; notes?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const grnId = body.grnId;
+  if (!grnId) return c.json({ error: 'grn_id_required' }, 400);
+
+  const { data: grn, error: grnErr } = await sb.from('grns')
+    .select('id, grn_number, supplier_id, purchase_order_id, status')
+    .eq('id', grnId).maybeSingle();
+  if (grnErr) return c.json({ error: 'load_failed', reason: grnErr.message }, 500);
+  if (!grn) return c.json({ error: 'grn_not_found' }, 404);
+  const g = grn as { id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string };
+  if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
+
+  const { data: items } = await sb.from('grn_items')
+    .select('id, material_kind, material_code, material_name, qty_accepted, qty_rejected, rejection_reason, unit_price_centi')
+    .eq('grn_id', grnId)
+    .gt('qty_accepted', 0);
+  const lines = ((items ?? []) as Array<{
+    id: string; material_kind: string; material_code: string; material_name: string;
+    qty_accepted: number; qty_rejected: number; rejection_reason: string | null; unit_price_centi: number;
+  }>);
+  if (lines.length === 0) return c.json({ error: 'nothing_to_return', message: 'GRN has no accepted lines' }, 400);
+
+  const returnNumber = await nextNum(sb);
+  const totalRefund = lines.reduce((s, it) => s + (it.qty_accepted * it.unit_price_centi), 0);
+
+  const { data: header, error: hErr } = await sb.from('purchase_returns').insert({
+    return_number: returnNumber,
+    purchase_order_id: g.purchase_order_id,
+    grn_id: g.id,
+    supplier_id: g.supplier_id,
+    return_date: new Date().toISOString().slice(0, 10),
+    reason: body.reason ?? `From ${g.grn_number}`,
+    refund_centi: totalRefund,
+    notes: body.notes ?? null,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
+    created_by: user.id,
+  }).select('id, return_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; return_number: string };
+
+  const rows = lines.map((it) => ({
+    purchase_return_id: h.id,
+    grn_item_id: it.id,
+    material_kind: it.material_kind,
+    material_code: it.material_code,
+    material_name: it.material_name,
+    qty_returned: it.qty_accepted,
+    unit_price_centi: it.unit_price_centi,
+    line_refund_centi: it.qty_accepted * it.unit_price_centi,
+    reason: it.rejection_reason,
+  }));
+  const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
+  if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  await writePurchaseReturnMovements(sb, h.id, h.return_number, g.id, user.id);
+
+  return c.json({ id: h.id, returnNumber: h.return_number }, 201);
+});
+
 purchaseReturns.patch('/:id/post', async (c) => {
   /* PR-DRAFT-removal — kept for backward compat; idempotent. POST handler
      now creates PRs as POSTED with inventory OUT already written. If the

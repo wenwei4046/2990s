@@ -103,6 +103,97 @@ export const usePostGrn = () => {
   });
 };
 
+/* ── GRN PO-clone CRUD (mirror the PO header + line item hooks) ─────────────
+   PATCH /grns/:id (header), POST/PATCH/DELETE /grns/:id/items[/:itemId].
+   Each invalidates the GRN detail (['grn-detail', id]) + list (['grns']) —
+   the same query keys useGrnDetail + useGrns read. */
+export const useUpdateGrnHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: {
+      id: string; supplierId?: string; receivedAt?: string; deliveryNoteRef?: string;
+      warehouseId?: string; notes?: string; currency?: string;
+    }) => authedFetch<{ grn: any }>(`/grns/${id}`, {
+      method: 'PATCH', body: JSON.stringify(body),
+    }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['grn-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
+export const useAddGrnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ grnId, ...body }: { grnId: string } & Record<string, unknown>) =>
+      authedFetch<{ item: any }>(`/grns/${grnId}/items`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['grn-detail', vars.grnId] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
+export const useUpdateGrnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ grnId, itemId, ...body }: { grnId: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: true }>(`/grns/${grnId}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['grn-detail', vars.grnId] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
+export const useDeleteGrnItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ grnId, itemId }: { grnId: string; itemId: string }) =>
+      authedFetch<void>(`/grns/${grnId}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['grn-detail', vars.grnId] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
+/* ── Single-GRN conversions (GRN list right-click) ─────────────────────────
+   POST /purchase-invoices/from-grn + /purchase-returns/from-grn take { grnId }
+   and return the created doc's { id } so the caller can navigate straight in. */
+export const usePurchaseInvoiceFromGrn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (grnId: string) =>
+      authedFetch<{ id: string; invoiceNumber: string }>(`/purchase-invoices/from-grn`, {
+        method: 'POST', body: JSON.stringify({ grnId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
+export const usePurchaseReturnFromGrn = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (grnId: string) =>
+      authedFetch<{ id: string; returnNumber: string }>(`/purchase-returns/from-grn`, {
+        method: 'POST', body: JSON.stringify({ grnId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchase-returns'] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+    },
+  });
+};
+
 /* ── Purchase Invoice ────────────────────────────────────────────────── */
 export const usePurchaseInvoices = (status?: string) => baseQuery<{ purchaseInvoices: any[] }>(['purchase-invoices', status ?? 'all'], `/purchase-invoices${status ? `?status=${status}` : ''}`);
 export const usePurchaseInvoiceDetail = (id: string | null) => useQuery({
