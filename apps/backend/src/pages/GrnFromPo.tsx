@@ -136,12 +136,12 @@ export const GrnFromPo = () => {
 
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
-  /* One GRN per PO (grns.purchase_order_id is a single FK) → different
-     suppliers are NEVER merged into one GRN. Surface the resulting GRN count
-     so the split is obvious before saving (Commander 2026-05-29). */
+  /* One GRN per SUPPLIER (Commander 2026-05-29) — a supplier's lines across
+     several POs merge into ONE GRN; different suppliers always split. Surface
+     the resulting GRN count (= distinct suppliers picked) before saving. */
   const pickedIds = useMemo(() => new Set(picked.map(([id]) => id)), [picked]);
   const grnCount = useMemo(
-    () => new Set(items.filter((r) => pickedIds.has(r.poItemId)).map((r) => r.poId)).size,
+    () => new Set(items.filter((r) => pickedIds.has(r.poItemId)).map((r) => r.supplierId)).size,
     [items, pickedIds],
   );
 
@@ -381,7 +381,7 @@ export const GrnFromPo = () => {
             variant="primary" size="md"
             onClick={onSave}
             disabled={create.isPending || pickedCount === 0 || !receivedDate}
-            title="One GRN per PO — different suppliers are never merged into one GRN."
+            title="One GRN per supplier — a supplier's lines across several POs merge into one GRN; different suppliers split."
           >
             <Save {...ICON} />
             {create.isPending
