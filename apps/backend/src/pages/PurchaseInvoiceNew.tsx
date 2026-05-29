@@ -148,6 +148,24 @@ export const PurchaseInvoiceNew = () => {
     setLines(next);
   }, [grnQ.data]);
 
+  // Manual mode — seed ONE blank starter line so a LINE 1 card shows
+  // immediately (matches New PO). Only when empty (never clobbers).
+  useEffect(() => {
+    if (!isManual) return;
+    setLines((prev) => prev.length > 0 ? prev : [{
+      rid:            `m${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      grnItemId:      null,
+      materialKind:   'mfg_product',
+      materialCode:   '',
+      materialName:   '',
+      itemGroup:      null,
+      variants:       null,
+      qty:            1,
+      unitPriceCenti: 0,
+      notes:          '',
+    }]);
+  }, [isManual]);
+
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
@@ -223,8 +241,10 @@ export const PurchaseInvoiceNew = () => {
         : 'This GRN is missing a supplier — reopen it and try again.' });
       return;
     }
-    if (lines.length === 0) {
-      setDialog({ title: 'Add at least one line', body: 'A purchase invoice needs at least one item.' });
+    // Drop the blank starter line(s) — only real items (with a code) are saved.
+    const realLines = lines.filter((l) => l.materialCode.trim());
+    if (realLines.length === 0) {
+      setDialog({ title: 'Add at least one item', body: 'Pick at least one SKU to invoice.' });
       return;
     }
     if (!canSave) { setDialog({ title: 'Check the quantities', body: 'Each line needs qty > 0.' }); return; }
@@ -238,7 +258,7 @@ export const PurchaseInvoiceNew = () => {
         invoiceDate,
         dueDate:            dueDate || undefined,
         notes:              notes || undefined,
-        items: lines.map((l) => ({
+        items: realLines.map((l) => ({
           grnItemId:      l.grnItemId,
           materialKind:   l.materialKind,
           materialCode:   l.materialCode,
@@ -527,19 +547,31 @@ export const PurchaseInvoiceNew = () => {
             );
           })}
 
-          {/* "Add another item" — manual mode once a supplier is chosen. */}
-          {isManual && !!supplierId && (
+          {/* "Add another item" — manual mode (mirrors New PO, always shown). */}
+          {isManual && (
             <button type="button" onClick={addEmptyManualLine}
-              style={{ width: '100%', padding: 'var(--space-3)', border: '1px dashed var(--c-orange)', borderRadius: 'var(--radius-lg)', background: 'transparent', color: 'var(--c-orange)', cursor: 'pointer', fontWeight: 600, fontSize: 'var(--fs-13)' }}>
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, width: '100%', padding: '12px 14px', border: '1px dashed var(--c-orange)', borderRadius: 'var(--radius-md)', background: 'transparent', color: 'var(--c-orange)', fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600, cursor: 'pointer' }}>
               + Add another item
             </button>
           )}
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)', paddingTop: 'var(--space-3)', borderTop: '1px solid var(--line)', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', fontWeight: 800, color: 'var(--c-burnt)' }}>
-            Total: {fmtRm(subtotalCenti, currency)}
-          </div>
         </div>
       </section>
+
+      {/* Totals card aligned right — identical to New PO / New GRN. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <section className={styles.card} style={{ maxWidth: 360, width: '100%' }}>
+          <div className={styles.cardBody}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-14)', marginBottom: 'var(--space-2)' }}>
+              <span>Subtotal</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(subtotalCenti, currency)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-16)', fontWeight: 700, borderTop: '1px solid var(--line)', paddingTop: 'var(--space-2)' }}>
+              <span>Total</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{fmtRm(subtotalCenti, currency)}</span>
+            </div>
+          </div>
+        </section>
+      </div>
 
       {dialog && (
         <ActionResultDialog
