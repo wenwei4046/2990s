@@ -551,9 +551,11 @@ mfgSalesOrders.post('/', async (c) => {
         if (comboTotal < fullBase) {
           r.unit_price_sen = comboTotal;
           r.total_centi = qty * comboTotal;
-          r.drift = comboTotal > 0
-            ? Math.abs(clientCenti - comboTotal) / comboTotal > 0.005
-            : clientCenti !== 0;
+          r.drift = clientCenti === 0
+            ? false                                    // 0 = not provided → trust server
+            : comboTotal > 0
+              ? Math.abs(clientCenti - comboTotal) / comboTotal > 0.005
+              : clientCenti !== 0;
         }
         // else: combo isn't cheaper → leave the à-la-carte recompute as-is.
       } else {
@@ -564,10 +566,10 @@ mfgSalesOrders.post('/', async (c) => {
         const floor = comboTotal;
         const ceiling = Math.max(fullBase, comboTotal);
         const withinBand = clientCenti >= floor && clientCenti <= ceiling;
-        if (withinBand) {
-          // Trust the client's combo+extras total (it's bounded both sides).
-          r.unit_price_sen = clientCenti;
-          r.total_centi = qty * clientCenti;
+        if (clientCenti === 0 || withinBand) {
+          // 0 = not provided → use the combo floor. withinBand → trust client.
+          r.unit_price_sen = clientCenti === 0 ? floor : clientCenti;
+          r.total_centi = qty * r.unit_price_sen;
           r.drift = false;
         } else {
           // Out of band → clamp the server price to the floor and let the
