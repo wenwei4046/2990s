@@ -356,6 +356,13 @@ export const PurchaseOrderFromSo = () => {
       },
     },
     {
+      /* Commander 2026-05-29 — add Processing Date column. */
+      key: 'processingDate', label: 'Processing Date', width: 120, sortable: true,
+      accessor: (r) => r.processingDate ?? '',
+      searchValue: (r) => r.processingDate ?? '',
+      sortFn: (a, b) => String(a.processingDate ?? '').localeCompare(String(b.processingDate ?? '')),
+    },
+    {
       key: 'deliveryDate', label: 'Delivery Date', width: 120, sortable: true,
       accessor: (r) => r.lineDeliveryDate ?? r.deliveryDate ?? '',
       searchValue: (r) => r.lineDeliveryDate ?? r.deliveryDate ?? '',

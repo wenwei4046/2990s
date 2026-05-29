@@ -389,11 +389,11 @@ export const PurchaseOrderDetail = () => {
                         <button type="button"
                           className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
                           title="Delete" disabled={isLocked}
+                          /* Commander 2026-05-29 — already in Edit mode; the
+                             trash deletes the line straight away (no confirm). */
                           onClick={() => {
                             if (isLocked) return;
-                            if (confirm(`Remove ${it.material_code} from this PO?`)) {
-                              deleteItem.mutate({ poId: po.id, itemId: it.id });
-                            }
+                            deleteItem.mutate({ poId: po.id, itemId: it.id });
                           }}>
                           <Trash2 {...SM_ICON} />
                         </button>
@@ -417,20 +417,30 @@ export const PurchaseOrderDetail = () => {
           <h2 className={styles.cardTitle}>Totals</h2>
         </header>
         <div className={styles.cardBody}>
-          <div className={styles.totalsGrid}>
-            <div className={styles.totalRow}>
-              <span className={styles.totalLabel}>Subtotal</span>
-              <span className={styles.totalValue}>{fmtRm(po.subtotal_centi, po.currency)}</span>
-            </div>
-            <div className={styles.totalRow}>
-              <span className={styles.totalLabel}>Tax</span>
-              <span className={styles.totalValue}>{fmtRm(po.tax_centi, po.currency)}</span>
-            </div>
-            <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
-              <span className={styles.totalLabel}>Total</span>
-              <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(po.total_centi, po.currency)}</span>
-            </div>
-          </div>
+          {/* Commander 2026-05-29 — "total 不是跟着 line items 变动的吗": compute
+              the subtotal/total LIVE from the visible line items so it can never
+              drift from the lines (the stored po.subtotal_centi could be stale
+              if a recompute lagged). Tax stays the stored header value. */}
+          {(() => {
+            const itemsSubtotal = items.reduce((s, it) => s + (it.line_total_centi ?? 0), 0);
+            const grand = itemsSubtotal + (po.tax_centi ?? 0);
+            return (
+              <div className={styles.totalsGrid}>
+                <div className={styles.totalRow}>
+                  <span className={styles.totalLabel}>Subtotal</span>
+                  <span className={styles.totalValue}>{fmtRm(itemsSubtotal, po.currency)}</span>
+                </div>
+                <div className={styles.totalRow}>
+                  <span className={styles.totalLabel}>Tax</span>
+                  <span className={styles.totalValue}>{fmtRm(po.tax_centi, po.currency)}</span>
+                </div>
+                <div className={`${styles.totalRow} ${styles.grandTotalRow}`}>
+                  <span className={styles.totalLabel}>Total</span>
+                  <span className={`${styles.totalValue} ${styles.grandTotal}`}>{fmtRm(grand, po.currency)}</span>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </section>
 
