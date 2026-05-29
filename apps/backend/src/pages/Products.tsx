@@ -491,6 +491,11 @@ const SkuMasterTab = () => {
       )}
 
       <div className={styles.tableCard}>
+        {/* PR — viewport-fill scroll wrapper (matches DataGrid .scroll). The
+            SKU table used to leave dead space below it; now it stretches to
+            near the full viewport and scrolls internally with a sticky header.
+            The record footer below stays pinned to the card. */}
+        <div className={styles.skuScroll}>
         <table className={`${styles.table} ${styles.tableCompact}`}>
           <thead>
             <tr>
@@ -567,6 +572,7 @@ const SkuMasterTab = () => {
             )}
           </tbody>
         </table>
+        </div>
         {!isLoading && !error && (
           <div className={styles.tableFoot}>
             <span className={styles.eyebrow}>

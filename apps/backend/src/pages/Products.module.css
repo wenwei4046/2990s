@@ -175,6 +175,27 @@
   padding: var(--space-2) var(--space-3);
 }
 
+/* Viewport-fill scroll wrapper for the SKU Master table (matches the shared
+   DataGrid `.scroll` pattern). The table used to sit in a short card leaving
+   dead space below; this stretches it to nearly the full viewport height and
+   scrolls internally — horizontal scroll preserved for the wide sofa-size
+   view. Offset (~280px) reserves the topbar + page header + tabs + category
+   chips + model rail + eyebrow that sit above the table. */
+.skuScroll {
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+/* Sticky header so column labels stay visible while the body scrolls. Scoped
+   to the SKU scroll wrapper so other tables in this module are untouched. The
+   th already carries a paper background, so rows won't bleed through. */
+.skuScroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
 .rowCompact td {
   vertical-align: middle;
 }

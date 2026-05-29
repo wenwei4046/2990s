@@ -30,6 +30,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useGrnFromPos } from '../lib/flow-queries';
+import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -68,6 +69,119 @@ const summarizeItems = (items: PoHeaderRow['items']): string | null => {
   const extra = items.length - HEAD;
   return extra > 0 ? `${shown} · +${extra} more` : shown;
 };
+
+/* localStorage key for the PO list's DataGrid column layout (order / hidden /
+   widths / sort / grouping). Stable id so commander's column prefs survive
+   reloads — same persistence the SO list + GRN list already use. */
+const PO_LIST_STORAGE_KEY = 'po-list.layout.v1';
+
+/* buildPoColumns — declared as a function so the component can pass fresh
+   selection state (selectedIds + toggleSelect) every render. Memoized inside
+   the component so DataGrid's column memo only invalidates when the selection
+   set actually changes. Columns mirror the plain table this replaced:
+   leading checkbox · PO No. · Supplier · Items · Date · Expected · Currency ·
+   Total · Status. */
+const buildPoColumns = (
+  selectedIds: Set<string>,
+  toggleSelect: (id: string) => void,
+): DataGridColumn<PoHeaderRow>[] => [
+  {
+    /* Leading multi-select checkbox for batch GRN conversion. stopPropagation
+       so ticking a row doesn't also fire the grid's row-click navigation. */
+    key: 'select', label: '', width: 40, minWidth: 36,
+    sortable: false, groupable: false,
+    accessor: (po) => (
+      <input
+        type="checkbox"
+        aria-label={`Select PO ${po.po_number}`}
+        checked={selectedIds.has(po.id)}
+        onChange={() => toggleSelect(po.id)}
+        onClick={(e) => e.stopPropagation()}
+        style={{ cursor: 'pointer' }}
+      />
+    ),
+    searchValue: () => '',
+  },
+  {
+    key: 'po_number', label: 'PO No.', width: 150, sortable: true,
+    accessor: (po) => <span className={styles.codeChip}>{po.po_number}</span>,
+    searchValue: (po) => po.po_number,
+    sortFn: (a, b) => a.po_number.localeCompare(b.po_number),
+  },
+  {
+    key: 'supplier', label: 'Supplier', width: 200, sortable: true, groupable: true,
+    accessor: (po) => po.supplier?.name ?? po.supplier?.code ?? '—',
+    searchValue: (po) => `${po.supplier?.name ?? ''} ${po.supplier?.code ?? ''}`,
+    groupValue: (po) => po.supplier?.name ?? po.supplier?.code ?? '(none)',
+    sortFn: (a, b) =>
+      (a.supplier?.name ?? a.supplier?.code ?? '').localeCompare(b.supplier?.name ?? b.supplier?.code ?? ''),
+  },
+  {
+    /* Items preview between Supplier and Date so the buyer reads each PO
+       without drilling in (Commander 2026-05-27). Hover title shows the full
+       list. */
+    key: 'items', label: 'Items', width: 320, sortable: false, groupable: false,
+    accessor: (po) => {
+      const summary = summarizeItems(po.items);
+      return (
+        <span
+          title={(po.items ?? []).map((it) => `${it.material_code} × ${it.qty}`).join('\n')}
+          style={{
+            display: 'block',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-12)',
+            color: summary ? 'var(--c-ink)' : 'var(--fg-muted)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {summary ?? '—'}
+        </span>
+      );
+    },
+    searchValue: (po) => (po.items ?? []).map((it) => `${it.material_code} ${it.qty}`).join(' '),
+  },
+  {
+    key: 'po_date', label: 'Date', width: 110, sortable: true,
+    accessor: (po) => po.po_date,
+    searchValue: (po) => po.po_date,
+    sortFn: (a, b) => (a.po_date ?? '').localeCompare(b.po_date ?? ''),
+  },
+  {
+    key: 'expected_at', label: 'Expected', width: 110, sortable: true,
+    accessor: (po) => po.expected_at ?? '—',
+    searchValue: (po) => po.expected_at ?? '',
+    sortFn: (a, b) => (a.expected_at ?? '').localeCompare(b.expected_at ?? ''),
+  },
+  {
+    key: 'currency', label: 'Currency', width: 90, sortable: true, groupable: true,
+    accessor: (po) => po.currency,
+    searchValue: (po) => po.currency,
+    groupValue: (po) => po.currency,
+  },
+  {
+    key: 'total_centi', label: 'Total', width: 130, sortable: true, align: 'right', groupable: false,
+    accessor: (po) => (
+      <span style={{ fontFamily: 'var(--font-mark)', color: 'var(--c-burnt)', fontWeight: 800 }}>
+        {fmtMoney(po.total_centi, po.currency)}
+      </span>
+    ),
+    searchValue: (po) => fmtMoney(po.total_centi, po.currency),
+    sortFn: (a, b) => a.total_centi - b.total_centi,
+  },
+  {
+    key: 'status', label: 'Status', width: 150, sortable: true, groupable: true,
+    accessor: (po) => (
+      <span className={styles.statusPill} style={{ background: STATUS_COLOR[po.status] }}>
+        {po.status.replace('_', ' ')}
+      </span>
+    ),
+    searchValue: (po) => po.status.replace('_', ' '),
+    groupValue: (po) => po.status,
+    sortFn: (a, b) => a.status.localeCompare(b.status),
+  },
+];
 
 type Drawer =
   | { kind: 'closed' }
@@ -108,6 +222,13 @@ export const PurchaseOrders = () => {
   const selectedSuppliers = useMemo(
     () => new Set(selectedRows.map((r) => r.supplier_id)),
     [selectedRows],
+  );
+
+  // Memoized columns — only invalidates when the selection set changes, so
+  // DataGrid's prop-memo keeps the sort/filter/group pipeline warm on typing.
+  const columns = useMemo(
+    () => buildPoColumns(selectedIds, toggleSelect),
+    [selectedIds],
   );
 
   const convertToGrn = () => {
@@ -211,75 +332,16 @@ export const PurchaseOrders = () => {
         </div>
       )}
 
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th style={{ width: 36 }}></th>
-              <th>PO #</th>
-              <th>Supplier</th>
-              {/* PR — Commander 2026-05-27: items preview between Supplier
-                  and Date so the buyer can read each PO without drilling in. */}
-              <th>Items</th>
-              <th>Date</th>
-              <th>Expected</th>
-              <th>Currency</th>
-              <th style={{ textAlign: 'right' }}>Total</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={9} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((po) => {
-              const summary = summarizeItems(po.items);
-              return (
-                /* minHeight bump so the items text gets breathing room without
-                   touching the shared CSS module. */
-                <tr key={po.id} onClick={() => navigate(`/purchase-orders/${po.id}`)} style={{ height: 48 }}>
-                  <td onClick={(e) => { e.stopPropagation(); toggleSelect(po.id); }}>
-                    <input type="checkbox" checked={selectedIds.has(po.id)}
-                      onChange={() => toggleSelect(po.id)}
-                      onClick={(e) => e.stopPropagation()} />
-                  </td>
-                  <td><span className={styles.codeChip}>{po.po_number}</span></td>
-                  <td>{po.supplier?.name ?? po.supplier?.code ?? '—'}</td>
-                  <td
-                    title={(po.items ?? []).map((it) => `${it.material_code} × ${it.qty}`).join('\n')}
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 'var(--fs-12)',
-                      color: summary ? 'var(--c-ink)' : 'var(--fg-muted)',
-                      maxWidth: 360,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {summary ?? '—'}
-                  </td>
-                  <td>{po.po_date}</td>
-                  <td>{po.expected_at ?? '—'}</td>
-                  <td>{po.currency}</td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', color: 'var(--c-burnt)', fontWeight: 800 }}>
-                    {fmtMoney(po.total_centi, po.currency)}
-                  </td>
-                  <td>
-                    <span
-                      className={styles.statusPill}
-                      style={{ background: STATUS_COLOR[po.status] }}
-                    >
-                      {po.status.replace('_', ' ')}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={9} className={styles.emptyRow}>No POs yet — click "New PO" to start.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataGrid<PoHeaderRow>
+        rows={rows}
+        columns={columns}
+        storageKey={PO_LIST_STORAGE_KEY}
+        rowKey={(po) => po.id}
+        searchPlaceholder="Search POs…"
+        onRowClick={(po) => navigate(`/purchase-orders/${po.id}`)}
+        isLoading={isLoading}
+        emptyMessage='No POs yet — click "New PO" to start.'
+      />
 
       {/* PR #97 — Create-PO drawer removed; full-page form at /purchase-orders/new */}
       {drawer.kind === 'detail' && (
