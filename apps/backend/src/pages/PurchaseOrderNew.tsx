@@ -37,6 +37,7 @@ import {
   type MfgFabricTier,
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
+import { MoneyInput } from '../components/MoneyInput';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -1068,24 +1069,26 @@ export const PurchaseOrderNew = () => {
                   </label>
                   <label className={styles.field}>
                     <span className={styles.fieldLabel}>Unit Price ({currency})</span>
-                    <input
-                      type="number" min={0} step={0.01}
-                      value={(l.unitPriceCenti / 100).toFixed(2)}
-                      // Phase 3 — manual edit wins: flag priceTouched so the
-                      // supplier-price auto-fill stops overwriting this line.
-                      onChange={(e) => setLine(l.rid, { unitPriceCenti: Math.round(Number(e.target.value) * 100), priceTouched: true })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right' }}
+                    {/* MoneyInput — free typing, no mid-keystroke reformat
+                        (Commander "500→5" fix). Phase 3 — manual edit wins:
+                        flag priceTouched so supplier-price auto-fill stops
+                        overwriting this line. */}
+                    <MoneyInput
+                      bare
+                      valueSen={l.unitPriceCenti}
+                      onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0, priceTouched: true })}
+                      inputClassName={styles.fieldInput}
+                      selectOnFocus
                     />
                   </label>
                   <label className={styles.field}>
                     <span className={styles.fieldLabel}>Discount ({currency})</span>
-                    <input
-                      type="number" min={0} step={0.01}
-                      value={((l.discountCenti ?? 0) / 100).toFixed(2)}
-                      onChange={(e) => setLine(l.rid, { discountCenti: Math.round(Number(e.target.value) * 100) })}
-                      className={styles.fieldInput}
-                      style={{ textAlign: 'right' }}
+                    <MoneyInput
+                      bare
+                      valueSen={l.discountCenti ?? 0}
+                      onCommit={(sen) => setLine(l.rid, { discountCenti: sen ?? 0 })}
+                      inputClassName={styles.fieldInput}
+                      selectOnFocus
                     />
                   </label>
                   <label className={styles.field}>

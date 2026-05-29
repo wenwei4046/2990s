@@ -87,6 +87,10 @@ export type DataGridProps<T> = {
       addition to the highlight). Cells that stopPropagation (checkboxes,
       inline inputs) won't trigger it. Used by PO-from-SO to toggle a pick. */
   onRowClick?: (row: T) => void;
+  /** Commander 2026-05-29 — optional per-row inline style. Used by PO-from-SO
+      to grey out rows whose supplier conflicts with the locked one. Returns
+      undefined for the default look. */
+  rowStyle?: (row: T) => CSSProperties | undefined;
   onSelectionChange?: (rows: T[]) => void;
   toolbar?: ReactNode;
   /** controlled focus for the "Find" button — bump to focus the search box */
@@ -170,6 +174,7 @@ function DataGridInner<T>({
   searchPlaceholder = 'Search…',
   onRowDoubleClick,
   onRowClick,
+  rowStyle,
   onSelectionChange,
   toolbar,
   focusSearchNonce,
@@ -786,6 +791,7 @@ function DataGridInner<T>({
                 <Fragment key={`f-${key}-${idx}`}>
                   <tr
                     className={`${styles.tr} ${selectedKey === key ? styles.trSelected : ''}`}
+                    style={rowStyle?.(row)}
                     onClick={() => { setSelectedKey(key); onRowClick?.(row); }}
                     onDoubleClick={() => onRowDoubleClick?.(row)}
                     onContextMenu={(e) => {

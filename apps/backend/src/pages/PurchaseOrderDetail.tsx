@@ -42,6 +42,7 @@ import {
 import { useMfgProducts, useMaintenanceConfig, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { SmartButtons } from '../components/SmartButtons';
+import { MoneyInput } from '../components/MoneyInput';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -953,24 +954,24 @@ const PoLineItemModal = ({
                     </span>
                   )}
                 </span>
-                <input type="number" step="0.01" className={styles.fieldInput}
-                  value={(draft.unitPriceCenti / 100).toFixed(2)}
-                  onChange={(e) => {
+                <MoneyInput bare inputClassName={styles.fieldInput} selectOnFocus
+                  valueSen={draft.unitPriceCenti}
+                  onCommit={(sen) => {
                     setManualPrice(true);
-                    setDraft((s) => ({ ...s, unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 }));
+                    setDraft((s) => ({ ...s, unitPriceCenti: sen ?? 0 }));
                   }} />
               </label>
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Discount (RM)</span>
-                <input type="number" step="0.01" className={styles.fieldInput}
-                  value={((draft.discountCenti ?? 0) / 100).toFixed(2)}
-                  onChange={(e) => setDraft((s) => ({ ...s, discountCenti: Math.round(Number(e.target.value) * 100) || 0 }))} />
+                <MoneyInput bare inputClassName={styles.fieldInput} selectOnFocus
+                  valueSen={draft.discountCenti ?? 0}
+                  onCommit={(sen) => setDraft((s) => ({ ...s, discountCenti: sen ?? 0 }))} />
               </label>
               <label className={styles.field}>
                 <span className={styles.fieldLabel}>Unit Cost (RM)</span>
-                <input type="number" step="0.01" className={styles.fieldInput}
-                  value={((draft.unitCostCenti ?? 0) / 100).toFixed(2)}
-                  onChange={(e) => setDraft((s) => ({ ...s, unitCostCenti: Math.round(Number(e.target.value) * 100) || 0 }))} />
+                <MoneyInput bare inputClassName={styles.fieldInput} selectOnFocus
+                  valueSen={draft.unitCostCenti ?? 0}
+                  onCommit={(sen) => setDraft((s) => ({ ...s, unitCostCenti: sen ?? 0 }))} />
               </label>
             </div>
             <div className={styles.previewLine} style={{ marginTop: 8 }}>
