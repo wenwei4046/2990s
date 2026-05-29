@@ -23,7 +23,7 @@
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { ChevronRight, ChevronDown, RefreshCw, AlertTriangle, PackageCheck, Truck, ShoppingCart, CalendarRange, Info } from 'lucide-react';
-import { useMrp, type MrpSku, type MrpLine, type MrpResponse } from '../lib/mrp-queries';
+import { useMrp, type MrpSku, type MrpLine, type MrpResponse, type SofaSet } from '../lib/mrp-queries';
 import { useCreatePosFromSoItems } from '../lib/suppliers-queries';
 import { fmtDateOrDash, fmtDateTime } from '@2990s/shared';
 import styles from './Mrp.module.css';
@@ -164,6 +164,19 @@ export const Mrp = () => {
 
   const models = view === 'general' ? groupByModel(viewSkus) : [];
 
+  /* Sofa sets — one per SO line. Apply the same date-basis window as the
+     General lines (each set has one date triple). */
+  const setInWindow = (s: SofaSet): boolean => {
+    if (!hasWindow) return true;
+    const d = dateBasis === 'processing' ? s.processingDate : dateBasis === 'soDate' ? s.soDate : s.deliveryDate;
+    if (!d) return false;
+    const x = d.slice(0, 10);
+    if (dateFrom && x < dateFrom) return false;
+    if (dateTo && x > dateTo) return false;
+    return true;
+  };
+  const viewSets: SofaSet[] = view === 'sofa' ? (data?.sofaSets ?? []).filter(setInWindow) : [];
+
   const toggleModel = (code: string) =>
     setExpandedModels((prev) => {
       const next = new Set(prev);
@@ -202,29 +215,18 @@ export const Mrp = () => {
     setExpandedVariants(new Set());
   };
 
-  /* Build {soItemId, qty} picks from the SHORT lines of the given SKUs, then
-     fire the (mode-aware) convert-from-SO endpoint. Order = the shortage qty
-     only (stock/PO already cover the rest). */
-  const orderShortages = (skus: MrpResponse['skus']) => {
-    const picks = skus
-      .filter((s) => s.shortage > 0)
-      .flatMap((s) => s.lines
-        .filter((l) => l.source === 'shortage' && l.shortageQty > 0)
-        .map((l) => ({ soItemId: l.soItemId, qty: l.shortageQty })),
-      )
-      .filter((p) => p.soItemId);
+  /* Fire the (mode-aware) convert-from-SO endpoint for the given picks. Shared
+     by the General (per-variant shortage) and Sofa (per-set) order paths. */
+  const runCreatePos = (picks: Array<{ soItemId: string; qty: number }>, orderedCodes: Set<string>) => {
     if (picks.length === 0) {
-      setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) SO lines in the current selection / window.' });
+      setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) lines in the current selection / window.' });
       return;
     }
-
     // Only send overrides for the SKUs actually being ordered.
-    const orderedCodes = new Set(skus.filter((s) => s.shortage > 0).map((s) => s.itemCode));
     const supplierByCode: Record<string, string> = {};
     for (const [code, sup] of Object.entries(supplierOverride)) {
       if (orderedCodes.has(code) && sup) supplierByCode[code] = sup;
     }
-
     createPos.mutate({ picks, mode: poMode, supplierByCode }, {
       onSuccess: (res) => {
         if (!res.total) {
@@ -235,8 +237,8 @@ export const Mrp = () => {
           });
           return;
         }
-        // Refresh so PO Outstanding updates immediately; keep the result in an
-        // in-app dialog (not a browser alert) per commander.
+        // Refresh so coverage updates immediately; keep the result in an in-app
+        // dialog (not a browser alert) per commander.
         setSelected(new Set());
         void q.refetch();
         setDialog({
@@ -259,12 +261,53 @@ export const Mrp = () => {
     });
   };
 
+  /* General — order the SHORT lines of the given SKUs (shortage qty only). */
+  const orderShortages = (skus: MrpResponse['skus']) => {
+    const picks = skus
+      .filter((s) => s.shortage > 0)
+      .flatMap((s) => s.lines
+        .filter((l) => l.source === 'shortage' && l.shortageQty > 0)
+        .map((l) => ({ soItemId: l.soItemId, qty: l.shortageQty })))
+      .filter((p) => p.soItemId);
+    const orderedCodes = new Set(skus.filter((s) => s.shortage > 0).map((s) => s.itemCode));
+    runCreatePos(picks, orderedCodes);
+  };
+
+  /* Sofa — order the un-ordered units of each set as a whole (colour-matched).
+     One pick per SO line; the convert endpoint groups them into POs per the
+     PO mode (Combined = 1 PO/supplier, Per SO = 1 PO/SO). */
+  const orderSofaSets = (sets: SofaSet[]) => {
+    const picks = sets
+      .filter((s) => s.shortageQty > 0)
+      .map((s) => ({ soItemId: s.soItemId, qty: s.shortageQty }))
+      .filter((p) => p.soItemId);
+    const orderedCodes = new Set(sets.filter((s) => s.shortageQty > 0).map((s) => s.itemCode));
+    runCreatePos(picks, orderedCodes);
+  };
+
+  // General (per-variant) shortage list.
   const shortageSkus = viewSkus.filter((s) => s.shortage > 0);
   const selectedShortageSkus = shortageSkus.filter((s) => selected.has(rowKey(s)));
-  const allShortSelected = shortageSkus.length > 0 && selectedShortageSkus.length === shortageSkus.length;
-  const someShortSelected = selectedShortageSkus.length > 0 && !allShortSelected;
-  const toggleSelectAll = () =>
-    setSelected(allShortSelected ? new Set() : new Set(shortageSkus.map(rowKey)));
+  // Sofa (per-set) shortage list.
+  const shortageSets = viewSets.filter((s) => s.shortageQty > 0);
+  const selectedShortageSets = shortageSets.filter((s) => selected.has(s.soItemId));
+
+  // View-agnostic counts the header / select-all / summary read from.
+  const shortCount = view === 'sofa' ? shortageSets.length : shortageSkus.length;
+  const selectedShortCount = view === 'sofa' ? selectedShortageSets.length : selectedShortageSkus.length;
+  const shortageUnits = view === 'sofa'
+    ? shortageSets.reduce((a, s) => a + s.shortageQty, 0)
+    : shortageSkus.reduce((a, s) => a + s.shortage, 0);
+  const inDemandCount = view === 'sofa' ? viewSets.length : viewSkus.length;
+
+  const allShortSelected = shortCount > 0 && selectedShortCount === shortCount;
+  const someShortSelected = selectedShortCount > 0 && !allShortSelected;
+  const toggleSelectAll = () => {
+    if (allShortSelected) { setSelected(new Set()); return; }
+    setSelected(view === 'sofa'
+      ? new Set(shortageSets.map((s) => s.soItemId))
+      : new Set(shortageSkus.map(rowKey)));
+  };
   /* Toggle every shortage variant under a model on/off as a unit. */
   const setModelSelected = (g: ModelGroup, on: boolean) =>
     setSelected((prev) => {
@@ -275,10 +318,15 @@ export const Mrp = () => {
       return next;
     });
 
-  const shortageUnits = shortageSkus.reduce((a, s) => a + s.shortage, 0);
+  /* Proceed PO — order the selected shortages, or all if none selected. */
+  const onProceed = () => {
+    if (view === 'sofa') orderSofaSets(selectedShortageSets.length > 0 ? selectedShortageSets : shortageSets);
+    else orderShortages(selectedShortageSkus.length > 0 ? selectedShortageSkus : shortageSkus);
+  };
+
   const basisLabel = dateBasis === 'processing' ? 'Processing' : dateBasis === 'soDate' ? 'SO Date' : 'Delivery';
   const windowLabel = hasWindow ? `${basisLabel} ${dateFrom || '…'} → ${dateTo || '…'}` : '';
-  const skuNoun = view === 'sofa' ? 'SKUs' : 'variants';
+  const skuNoun = view === 'sofa' ? 'sets' : 'variants';
 
   return (
     <div className={styles.page}>
@@ -299,30 +347,34 @@ export const Mrp = () => {
             <button type="button" className={styles.modeBtn} data-active={poMode === 'per-so'}
               onClick={() => setPoMode('per-so')} title="One PO per SO (sofa / bedframe)">Per SO</button>
           </div>
-          <button type="button" className={styles.ghostBtn} onClick={collapseAll}>Collapse</button>
-          <button type="button" className={styles.ghostBtn} onClick={expandAll}>Expand</button>
+          {view === 'general' && (
+            <>
+              <button type="button" className={styles.ghostBtn} onClick={collapseAll}>Collapse</button>
+              <button type="button" className={styles.ghostBtn} onClick={expandAll}>Expand</button>
+            </>
+          )}
           <button type="button" className={styles.ghostBtn} onClick={() => void q.refetch()} disabled={q.isFetching}>
             <RefreshCw {...ICON} className={q.isFetching ? styles.spin : undefined} /> Refresh
           </button>
           <button
             type="button"
             className={styles.primaryBtn}
-            disabled={createPos.isPending || shortageSkus.length === 0}
-            onClick={() => orderShortages(selectedShortageSkus.length > 0 ? selectedShortageSkus : shortageSkus)}
+            disabled={createPos.isPending || shortCount === 0}
+            onClick={onProceed}
             title={
-              selectedShortageSkus.length > 0 ? 'Order the selected shortage SKUs'
-              : hasWindow ? `Order every shortage delivering in ${windowLabel} as one batch`
-              : 'Order all shortage SKUs'
+              selectedShortCount > 0 ? `Order the selected ${view === 'sofa' ? 'sets' : 'SKUs'}`
+              : hasWindow ? `Order everything in ${windowLabel} as one batch`
+              : view === 'sofa' ? 'Order all sofa sets still to order' : 'Order all shortage SKUs'
             }
           >
             <ShoppingCart {...ICON} />
             {createPos.isPending
               ? 'Processing…'
-              : selectedShortageSkus.length > 0
-                ? `Proceed PO (${selectedShortageSkus.length})`
+              : selectedShortCount > 0
+                ? `Proceed PO (${selectedShortCount})`
                 : hasWindow
-                  ? `Proceed PO · window (${shortageSkus.length})`
-                  : `Proceed PO (${shortageSkus.length})`}
+                  ? `Proceed PO · window (${shortCount})`
+                  : `Proceed PO (${shortCount})`}
           </button>
         </div>
       </div>
@@ -342,9 +394,9 @@ export const Mrp = () => {
       {/* Summary badges — reflect the active delivery-date window. */}
       {data && (
         <div className={styles.summaryRow}>
-          <span className={styles.summaryChip}><PackageCheck {...ICON} /> {viewSkus.length} {skuNoun} in demand</span>
-          <span className={`${styles.summaryChip} ${shortageSkus.length > 0 ? styles.summaryChipWarn : ''}`}>
-            <AlertTriangle {...ICON} /> {shortageSkus.length} short · {shortageUnits} units to order
+          <span className={styles.summaryChip}><PackageCheck {...ICON} /> {inDemandCount} {skuNoun} in demand</span>
+          <span className={`${styles.summaryChip} ${shortCount > 0 ? styles.summaryChipWarn : ''}`}>
+            <AlertTriangle {...ICON} /> {shortCount} {view === 'sofa' ? 'sets' : 'short'} · {shortageUnits} units to order
           </span>
           {hasWindow && (
             <span className={styles.summaryChip}><CalendarRange {...ICON} /> Window {windowLabel}</span>
@@ -352,14 +404,14 @@ export const Mrp = () => {
         </div>
       )}
 
-      {/* Sofa stop-gap note — true set-based MRP needs the HOOKKA combo data. */}
+      {/* Sofa is ordered as a colour-matched SET, one per SO line. */}
       {view === 'sofa' && (
         <div className={styles.note}>
           <Info {...ICON} />
           <span>
-            Sofa is ordered as a colour-matched <strong>set</strong>, not per SKU.
-            This per-variant view is a stop-gap until the combo/set definitions are
-            loaded — set-based ordering is coming next.
+            Each row is one SO's configured sofa <strong>set</strong> (its modules
+            + colour), ordered whole so the colours match. Coverage tracks how much
+            of the set is already on a PO; orange rows still need ordering.
           </span>
         </div>
       )}
@@ -424,78 +476,112 @@ export const Mrp = () => {
 
       {/* Table */}
       <div className={styles.tableWrap}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th className={styles.colSelect}>
-                <input
-                  type="checkbox"
-                  aria-label="Select all shortage rows"
-                  title="Select all shortage rows"
-                  disabled={shortageSkus.length === 0}
-                  checked={allShortSelected}
-                  ref={(el) => { if (el) el.indeterminate = someShortSelected; }}
-                  onChange={toggleSelectAll}
+        {view === 'general' ? (
+          /* General — 3-level Model → Variant → orders. */
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th className={styles.colSelect}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all shortage rows"
+                    title="Select all shortage rows"
+                    disabled={shortCount === 0}
+                    checked={allShortSelected}
+                    ref={(el) => { if (el) el.indeterminate = someShortSelected; }}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
+                <th className={styles.colCaret} />
+                <th>Item Code</th>
+                <th>Description</th>
+                <th className={styles.num}>Qty Needed</th>
+                <th className={styles.num}>Stock</th>
+                <th className={styles.num}>PO Outstanding</th>
+                <th className={styles.num}>Shortage</th>
+                <th>Main Supplier</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.isLoading && (
+                <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
+              )}
+              {q.isError && (
+                <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+              )}
+              {data && models.length === 0 && (
+                <tr><td colSpan={9} className={styles.stateCell}>
+                  {hasWindow ? 'No demand delivering in this window.' : 'No open Sales-Order demand for this filter.'}
+                </td></tr>
+              )}
+              {models.map((g) => (
+                <ModelRows
+                  key={g.itemCode}
+                  group={g}
+                  modelOpen={expandedModels.has(g.itemCode)}
+                  onToggleModel={() => toggleModel(g.itemCode)}
+                  expandedVariants={expandedVariants}
+                  onToggleVariant={toggleVariant}
+                  selected={selected}
+                  onSelectVariant={toggleSelect}
+                  onSelectModel={setModelSelected}
+                  chosenSupplierId={supplierOverride[g.itemCode] ?? null}
+                  onSupplierChange={(sid) => setRowSupplier(g.itemCode, sid)}
                 />
-              </th>
-              <th className={styles.colCaret} />
-              <th>Item Code</th>
-              <th>Description</th>
-              <th className={styles.num}>Qty Needed</th>
-              <th className={styles.num}>Stock</th>
-              <th className={styles.num}>PO Outstanding</th>
-              <th className={styles.num}>Shortage</th>
-              <th>Main Supplier</th>
-            </tr>
-          </thead>
-          <tbody>
-            {q.isLoading && (
-              <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
-            )}
-            {q.isError && (
-              <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
-            )}
-            {data && viewSkus.length === 0 && (
-              <tr><td colSpan={9} className={styles.stateCell}>
-                {hasWindow ? 'No demand delivering in this window.' : 'No open Sales-Order demand for this filter.'}
-              </td></tr>
-            )}
-
-            {/* General tab — 3-level Model → Variant → orders. */}
-            {view === 'general' && models.map((g) => (
-              <ModelRows
-                key={g.itemCode}
-                group={g}
-                modelOpen={expandedModels.has(g.itemCode)}
-                onToggleModel={() => toggleModel(g.itemCode)}
-                expandedVariants={expandedVariants}
-                onToggleVariant={toggleVariant}
-                selected={selected}
-                onSelectVariant={toggleSelect}
-                onSelectModel={setModelSelected}
-                chosenSupplierId={supplierOverride[g.itemCode] ?? null}
-                onSupplierChange={(sid) => setRowSupplier(g.itemCode, sid)}
-              />
-            ))}
-
-            {/* Sofa tab — flat per-variant view (stop-gap until set MRP). */}
-            {view === 'sofa' && viewSkus.map((sku) => {
-              const k = rowKey(sku);
-              return (
-                <SkuRows
-                  key={k}
-                  sku={sku}
-                  open={expandedVariants.has(k)}
-                  onToggle={() => toggleVariant(k)}
-                  selected={selected.has(k)}
-                  onSelect={() => toggleSelect(k)}
-                  chosenSupplierId={supplierOverride[sku.itemCode] ?? null}
-                  onSupplierChange={(sid) => setRowSupplier(sku.itemCode, sid)}
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          /* Sofa — one row per SO line = one colour-matched set. */
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th className={styles.colSelect}>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all sofa sets to order"
+                    title="Select all sofa sets to order"
+                    disabled={shortCount === 0}
+                    checked={allShortSelected}
+                    ref={(el) => { if (el) el.indeterminate = someShortSelected; }}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
+                <th>SO No</th>
+                <th>Customer</th>
+                <th>Set (modules · colour)</th>
+                <th>Processing</th>
+                <th>Delivery Date</th>
+                <th className={styles.num}>Qty</th>
+                <th className={styles.num}>To Order</th>
+                <th>Supplier</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.isLoading && (
+                <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
+              )}
+              {q.isError && (
+                <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+              )}
+              {data && viewSets.length === 0 && (
+                <tr><td colSpan={9} className={styles.stateCell}>
+                  {hasWindow ? 'No sofa sets delivering in this window.' : 'No open sofa Sales-Order demand for this filter.'}
+                </td></tr>
+              )}
+              {viewSets.map((set) => (
+                <SofaSetRow
+                  key={set.soItemId}
+                  set={set}
+                  selected={selected.has(set.soItemId)}
+                  onSelect={() => toggleSelect(set.soItemId)}
+                  chosenSupplierId={supplierOverride[set.itemCode] ?? null}
+                  onSupplierChange={(sid) => setRowSupplier(set.itemCode, sid)}
                 />
-              );
-            })}
-          </tbody>
-        </table>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* In-app result dialog — Commander 2026-05-29: confirm/result inside the
@@ -666,44 +752,45 @@ const ModelRows = ({
 /* Tiny helper so multi-element returns inside .map keep a single key. */
 const FragmentRow = ({ children }: { children: ReactNode }) => <>{children}</>;
 
-/* Sofa tab — flat 2-level row (SKU+variant → orders). Stop-gap until set MRP. */
-const SkuRows = ({ sku, open, onToggle, selected, onSelect, chosenSupplierId, onSupplierChange }: {
-  sku: MrpSku; open: boolean; onToggle: () => void; selected: boolean; onSelect: () => void;
+/* Sofa tab — one row per SO line = one colour-matched SET. Shows the set's
+   module composition + colour; coverage tracks how much is already on a PO. */
+const SofaSetRow = ({ set, selected, onSelect, chosenSupplierId, onSupplierChange }: {
+  set: SofaSet; selected: boolean; onSelect: () => void;
   chosenSupplierId: string | null; onSupplierChange: (supplierId: string) => void;
 }) => {
-  const short = sku.shortage > 0;
+  const short = set.shortageQty > 0;
   return (
-    <>
-      <tr className={`${styles.skuRow} ${short ? styles.skuRowShort : ''}`} onClick={onToggle}>
-        <td className={styles.colSelect} onClick={(e) => e.stopPropagation()}>
-          {short && (
-            <input type="checkbox" checked={selected} onChange={onSelect}
-              aria-label={`Select ${sku.itemCode} to order`} />
-          )}
-        </td>
-        <td className={styles.colCaret}>
-          {open ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
-        </td>
-        <td className={styles.codeCell}>{sku.itemCode}</td>
-        <td className={styles.descCell}>
-          {sku.description ?? '—'}
-          {sku.variantLabel && <span className={styles.variantTag}>{sku.variantLabel}</span>}
-        </td>
-        <td className={styles.num}>{sku.qtyNeeded}</td>
-        <td className={styles.num}>{sku.stock}</td>
-        <td className={styles.num}>{sku.poOutstanding || '—'}</td>
-        <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? sku.shortage : '—'}</td>
-        <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
-          <SupplierCell suppliers={sku.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
-        </td>
-      </tr>
-      {open && (
-        <tr className={styles.detailRow}>
-          <td /><td />
-          <td colSpan={7}><OrderLines lines={sku.lines} /></td>
-        </tr>
-      )}
-    </>
+    <tr className={`${styles.skuRow} ${short ? styles.skuRowShort : ''}`}>
+      <td className={styles.colSelect}>
+        {short && (
+          <input type="checkbox" checked={selected} onChange={onSelect}
+            aria-label={`Select ${set.soDocNo} sofa set to order`} />
+        )}
+      </td>
+      <td className={styles.codeCell}>{set.soDocNo}</td>
+      <td>{set.debtorName ?? '—'}</td>
+      <td className={styles.setCell}>
+        {set.modules.length > 0 ? (
+          <span className={styles.moduleChips}>
+            {set.modules.map((m, i) => (
+              <span key={`${m}-${i}`} className={styles.moduleChip}>{m}</span>
+            ))}
+          </span>
+        ) : (
+          <span className={styles.descCell}>{set.description ?? '—'}</span>
+        )}
+        {set.colour && <span className={styles.colourTag}>{set.colour}</span>}
+      </td>
+      <td>{fmtDate(set.processingDate)}</td>
+      <td>{fmtDate(set.deliveryDate)}</td>
+      <td className={styles.num}>{set.qty}</td>
+      <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>
+        {short ? set.shortageQty : <span className={`${styles.tag} ${styles.tagPo}`}>ordered</span>}
+      </td>
+      <td className={styles.supplierCell}>
+        <SupplierCell suppliers={set.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
+      </td>
+    </tr>
   );
 };
 

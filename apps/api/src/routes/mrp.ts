@@ -47,6 +47,7 @@ type DemandRow = {
   item_group: string | null;
   variants: Record<string, unknown> | null;
   qty: number;
+  po_qty_picked: number | null; // units of this line already pulled into a PO
   line_delivery_date: string | null;
   cancelled: boolean;
   so: {
@@ -117,6 +118,29 @@ type MrpSku = {
   lines: MrpLine[];
 };
 
+/* Commander 2026-05-29 — sofa is ordered as a colour-matched SET, one per SO
+   line ("每张 SO 一套"). The inventory variant key only covers fabric+seat+leg,
+   NOT the module layout (cells), so two differently-built sofas with the same
+   fabric collapse into one bucket. A correct set view therefore keys per SO
+   line. Coverage uses po_qty_picked (units already pulled into a PO) — precise
+   per line and immune to the variant-key pooling. */
+type SofaSet = {
+  soItemId: string;
+  soDocNo: string;
+  debtorName: string | null;
+  soDate: string | null;
+  deliveryDate: string | null;
+  processingDate: string | null;
+  itemCode: string;
+  description: string | null;
+  modules: string[];   // e.g. ['2A','LL','2A'] from variants.cells
+  colour: string | null; // fabricCode + colorCode
+  qty: number;
+  orderedQty: number;  // po_qty_picked
+  shortageQty: number; // qty - orderedQty (still to order)
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
+};
+
 /* Earliest-first comparator that pushes NULL dates to the end. */
 function byDateAsc(a: string | null, b: string | null): number {
   if (a === b) return 0;
@@ -140,7 +164,7 @@ mrp.get('/', async (c) => {
   const { data: demandRaw, error: demandErr } = await sb
     .from('mfg_sales_order_items')
     .select(`
-      id, doc_no, item_code, description, item_group, variants, qty, line_delivery_date, cancelled,
+      id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, line_delivery_date, cancelled,
       so:mfg_sales_orders!inner ( debtor_name, status, so_date, customer_delivery_date, internal_expected_dd )
     `)
     .eq('cancelled', false)
@@ -240,6 +264,9 @@ mrp.get('/', async (c) => {
     const prod = prodByCode.get(d.item_code);
     const cat = prod?.category ?? null;
     if (catFilter && cat !== catFilter) continue;
+    // Sofa is handled separately as colour-matched SETS (section 8) — keep it
+    // out of the per-SKU/variant buckets so it isn't double-counted.
+    if (cat === 'SOFA') continue;
     const vkey = variantKeyOf(d.item_group, d.variants);
     const k = composite(d.item_code, vkey);
     const bucket = demandByKey.get(k)
@@ -340,15 +367,54 @@ mrp.get('/', async (c) => {
     return (a.variantLabel ?? '') < (b.variantLabel ?? '') ? -1 : 1;
   });
 
+  // ── 8. Sofa SETS — one per SO line ("每张 SO 一套"). ────────────────────
+  const sstr = (v: unknown): string => (v == null ? '' : String(v).trim());
+  const sofaSets: SofaSet[] = demand
+    .filter((d) => (prodByCode.get(d.item_code)?.category ?? null) === 'SOFA')
+    .map((d) => {
+      const v = (d.variants ?? {}) as Record<string, unknown>;
+      const cells = Array.isArray(v.cells) ? (v.cells as Array<{ moduleId?: string }>) : [];
+      const modules = cells.map((c) => sstr(c.moduleId)).filter(Boolean);
+      const colour = [sstr(v.fabricCode), sstr(v.colorCode) || sstr(v.colourCode)].filter(Boolean).join(' ');
+      const ordered = d.po_qty_picked ?? 0;
+      const prod = prodByCode.get(d.item_code);
+      return {
+        soItemId: d.id,
+        soDocNo: d.doc_no,
+        debtorName: d.so?.debtor_name ?? null,
+        soDate: d.so?.so_date ?? null,
+        deliveryDate: d.line_delivery_date ?? d.so?.customer_delivery_date ?? null,
+        processingDate: d.so?.internal_expected_dd ?? null,
+        itemCode: d.item_code,
+        description: prod?.name ?? d.description ?? null,
+        modules,
+        colour: colour || null,
+        qty: d.qty,
+        orderedQty: ordered,
+        shortageQty: Math.max(0, d.qty - ordered),
+        suppliers: suppliersByCode.get(d.item_code) ?? [],
+      };
+    });
+  // To-order sets float to the top, then by earliest delivery date.
+  sofaSets.sort((a, b) => {
+    const sa = a.shortageQty > 0 ? 1 : 0;
+    const sb = b.shortageQty > 0 ? 1 : 0;
+    if (sa !== sb) return sb - sa;
+    return byDateAsc(a.deliveryDate, b.deliveryDate);
+  });
+
   return c.json({
     asOf: new Date().toISOString(),
     categories: [...categorySet].sort(),
     warehouses: warehouses ?? [],
     skus,
+    sofaSets,
     totals: {
       skuCount: skus.length,
       shortageSkuCount: skus.filter((s) => s.shortage > 0).length,
       shortageUnits: skus.reduce((acc, s) => acc + s.shortage, 0),
+      sofaSetCount: sofaSets.length,
+      sofaSetShortageCount: sofaSets.filter((s) => s.shortageQty > 0).length,
     },
   });
 });

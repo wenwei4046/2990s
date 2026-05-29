@@ -55,12 +55,37 @@ export type MrpSku = {
 
 export type MrpWarehouse = { id: string; code: string; name: string };
 
+/* Sofa is ordered as a colour-matched SET, one per SO line ("每张 SO 一套"). */
+export type SofaSet = {
+  soItemId: string;
+  soDocNo: string;
+  debtorName: string | null;
+  soDate: string | null;
+  deliveryDate: string | null;
+  processingDate: string | null;
+  itemCode: string;
+  description: string | null;
+  modules: string[];
+  colour: string | null;
+  qty: number;
+  orderedQty: number;
+  shortageQty: number;
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
+};
+
 export type MrpResponse = {
   asOf: string;
   categories: string[];
   warehouses: MrpWarehouse[];
   skus: MrpSku[];
-  totals: { skuCount: number; shortageSkuCount: number; shortageUnits: number };
+  sofaSets: SofaSet[];
+  totals: {
+    skuCount: number;
+    shortageSkuCount: number;
+    shortageUnits: number;
+    sofaSetCount: number;
+    sofaSetShortageCount: number;
+  };
 };
 
 /** Stock Status Report / MRP — recomputed server-side on every call. */
