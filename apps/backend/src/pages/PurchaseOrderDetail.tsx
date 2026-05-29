@@ -18,7 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Trash2, Plus, X, Printer, Save, Ban, ArrowRightLeft,
-  ChevronDown,
+  ChevronDown, Check,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28 — Description 2
@@ -107,9 +107,30 @@ export const PurchaseOrderDetail = () => {
   const [editing, setEditing] = useState<PoItemRow | null>(null);
   const [adding, setAdding] = useState(false);
 
+  /* View → Edit gate (Commander 2026-05-29) — mirrors SalesOrderDetail's
+     isEditing UX. Default is read-only View mode: the header card renders as
+     display text, the line-items table hides its row Edit/Delete + Add Line
+     Item buttons, and "Convert from SO" is hidden. Click Edit → the page flips
+     into Edit mode where the existing editable SupplierCard + line modal + Add
+     Line Item appear and "Convert from SO" becomes available. Done returns to
+     View. Header changes already persist live via the SupplierCard's own Save
+     (updateHeader), so leaving Edit mode simply reflects the saved snapshot. */
+  const [isEditing, setIsEditing] = useState(false);
+
   // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
   // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
   const isLocked = po ? !(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') : true;
+
+  /* If a PO locks while we're in Edit mode (e.g. it's Received / Cancelled
+     after a status change), drop back to View and close any open line modal so
+     the page can never present editable controls on a locked PO. */
+  useEffect(() => {
+    if (isLocked && isEditing) {
+      setIsEditing(false);
+      setEditing(null);
+      setAdding(false);
+    }
+  }, [isLocked, isEditing]);
 
   if (detail.isLoading) {
     return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
@@ -199,8 +220,11 @@ export const PurchaseOrderDetail = () => {
             <span>Print PDF</span>
           </Button>
           {/* PR #78 — Convert from Sales Order. PR-DRAFT-removal: shown while
-              the PO is still editable (SUBMITTED or PARTIALLY_RECEIVED). */}
-          {(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
+              the PO is still editable (SUBMITTED or PARTIALLY_RECEIVED).
+              Commander 2026-05-29 — Convert is now gated behind Edit mode:
+              the user must click Edit first, then Convert is offered (it
+              mutates line items, which only makes sense while editing). */}
+          {isEditing && (po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && (
             <Button
               variant="ghost"
               size="md"
@@ -278,29 +302,58 @@ export const PurchaseOrderDetail = () => {
               <span>Raise Return</span>
             </Button>
           )}
+          {/* View → Edit gate (Commander 2026-05-29) — mirrors SalesOrderDetail.
+              Default View shows a primary Edit button (disabled while the PO is
+              locked, i.e. RECEIVED / CANCELLED). Clicking it flips into Edit
+              mode, where the header card + line items become editable and
+              "Convert from SO" appears above. In Edit mode the button becomes
+              "Done", which returns to read-only View. Header edits persist live
+              via the SupplierCard's own Save, so Done just reflects them. */}
+          {!isEditing ? (
+            <Button variant="primary" size="md" onClick={() => setIsEditing(true)} disabled={isLocked}>
+              <Pencil {...ICON} />
+              <span>Edit</span>
+            </Button>
+          ) : (
+            <Button variant="primary" size="md" onClick={() => setIsEditing(false)}>
+              <Check {...ICON} />
+              <span>Done</span>
+            </Button>
+          )}
         </div>
       </div>
 
       {/* ── Supplier / dates / currency / notes ─────────────────── */}
+      {/* isEditing drives View vs Edit: in View the card renders read-only
+          display text + hides its Save button; in Edit it shows the editable
+          inputs + Save (which persists header changes live). */}
       <SupplierCard
         po={po}
         onSave={(patch) => updateHeader.mutate({ id: po.id, ...patch })}
         saving={updateHeader.isPending}
         locked={isLocked}
+        isEditing={isEditing}
       />
 
       {/* ── Line items ──────────────────────────────────────────── */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
-            <Plus {...ICON} />
-            <span>Add Line Item</span>
-          </Button>
+          {/* Add Line Item only in Edit mode — View is read-only. */}
+          {isEditing && (
+            <Button variant="primary" size="sm" onClick={() => setAdding(true)} disabled={isLocked}>
+              <Plus {...ICON} />
+              <span>Add Line Item</span>
+            </Button>
+          )}
         </header>
 
         {items.length === 0 ? (
-          <p className={styles.emptyRow}>No items yet — click "Add Line Item" to begin.</p>
+          <p className={styles.emptyRow}>
+            {isEditing
+              ? 'No items yet — click "Add Line Item" to begin.'
+              : 'No items yet — click "Edit" then "Add Line Item" to begin.'}
+          </p>
         ) : (
           <table className={styles.table}>
             <thead>
@@ -311,7 +364,8 @@ export const PurchaseOrderDetail = () => {
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
-                <th className={styles.tableRight}>Actions</th>
+                {/* Actions column only in Edit mode — View is read-only. */}
+                {isEditing && <th className={styles.tableRight}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -333,25 +387,28 @@ export const PurchaseOrderDetail = () => {
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
                   <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
-                  <td>
-                    <span className={styles.actionsCell}>
-                      <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
-                        onClick={() => !isLocked && setEditing(it)}>
-                        <Pencil {...SM_ICON} />
-                      </button>
-                      <button type="button"
-                        className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                        title="Delete" disabled={isLocked}
-                        onClick={() => {
-                          if (isLocked) return;
-                          if (confirm(`Remove ${it.material_code} from this PO?`)) {
-                            deleteItem.mutate({ poId: po.id, itemId: it.id });
-                          }
-                        }}>
-                        <Trash2 {...SM_ICON} />
-                      </button>
-                    </span>
-                  </td>
+                  {/* Row Edit / Delete only in Edit mode — View is read-only. */}
+                  {isEditing && (
+                    <td>
+                      <span className={styles.actionsCell}>
+                        <button type="button" className={styles.iconBtn} title="Edit" disabled={isLocked}
+                          onClick={() => !isLocked && setEditing(it)}>
+                          <Pencil {...SM_ICON} />
+                        </button>
+                        <button type="button"
+                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                          title="Delete" disabled={isLocked}
+                          onClick={() => {
+                            if (isLocked) return;
+                            if (confirm(`Remove ${it.material_code} from this PO?`)) {
+                              deleteItem.mutate({ poId: po.id, itemId: it.id });
+                            }
+                          }}>
+                          <Trash2 {...SM_ICON} />
+                        </button>
+                      </span>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -419,12 +476,15 @@ export const PurchaseOrderDetail = () => {
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierCard = ({
-  po, onSave, saving, locked,
+  po, onSave, saving, locked, isEditing = true,
 }: {
   po: any;
   onSave: (patch: Record<string, unknown>) => void;
   saving: boolean;
   locked: boolean;
+  /** View → Edit gate. When false the card renders read-only display text
+      and hides its Save button. Defaults to true for backward-compat. */
+  isEditing?: boolean;
 }) => {
   const suppliersQ = useSuppliers();
   const suppliers = suppliersQ.data ?? [];
@@ -463,13 +523,46 @@ const SupplierCard = ({
     <section className={styles.card}>
       <header className={styles.cardHeader}>
         <h2 className={styles.cardTitle}>Supplier · Dates · Notes</h2>
-        <Button variant="primary" size="sm"
-          onClick={() => onSave(form)} disabled={saving || locked}>
-          <Save {...ICON} />
-          <span>{saving ? 'Saving…' : 'Save'}</span>
-        </Button>
+        {/* Save only in Edit mode — View is read-only. */}
+        {isEditing && (
+          <Button variant="primary" size="sm"
+            onClick={() => onSave(form)} disabled={saving || locked}>
+            <Save {...ICON} />
+            <span>{saving ? 'Saving…' : 'Save'}</span>
+          </Button>
+        )}
       </header>
       <div className={styles.cardBody}>
+        {!isEditing ? (
+          /* View mode — read-only display text (not inputs). Mirrors the
+             supplier-info card's InfoCell layout. */
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: 'var(--space-3) var(--space-4)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+            }}
+          >
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Supplier"
+                value={po.supplier?.name ?? po.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
+            </div>
+            <InfoCell label="Currency" value={form.currency || null} />
+            <div />
+            <InfoCell label="PO Date" value={form.poDate || null} />
+            <InfoCell label="Expected Delivery" value={form.expectedAt || null} />
+            <InfoCell label="Purchase Location"
+              value={(() => {
+                const wh = warehouses.find((w) => w.id === form.purchaseLocationId);
+                return wh ? `${wh.code} · ${wh.name}` : null;
+              })()} />
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Notes" value={form.notes || null} />
+            </div>
+          </div>
+        ) : (
         <div className={styles.formGrid4}>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Supplier *</span>
@@ -531,6 +624,7 @@ const SupplierCard = ({
               onChange={(e) => set('notes', e.target.value)} />
           </label>
         </div>
+        )}
 
         {/* PR #75 — supplier-info auto-fill card. Read-only display sourced
             from /suppliers/:id, mirrors what AutoCount shows after picking a
