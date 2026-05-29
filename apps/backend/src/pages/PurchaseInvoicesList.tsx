@@ -49,6 +49,7 @@ type PiRow = Record<string, unknown> & {
   invoice_date: string | null;
   due_date: string | null;
   total_centi?: number;
+  paid_centi?: number;
   currency?: string;
   supplier?: { id: string; code: string; name: string } | null;
   purchase_order?: { id: string; po_number: string } | null;
@@ -175,15 +176,15 @@ export const PurchaseInvoices = () => {
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
           : undefined}
         contextMenu={(r) => {
-          // Mirror the PO/GRN list's right-click menu: View / Edit · divider ·
-          // Cancel (danger). View opens read-only; Edit lands in the detail
-          // page's draft Edit mode via ?edit=1.
+          // Unified edit-lock (migration 0106): a PI is read-only once it has any
+          // payment (paid_centi > 0) or is CANCELLED. Edit + Cancel are HIDDEN
+          // when not eligible. View always available.
+          const locked = r.status === 'CANCELLED' || (r.paid_centi ?? 0) > 0;
           const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
             { label: 'View', onClick: () => navigate(`/purchase-invoices/${r.id}`) },
-            { label: 'Edit', onClick: () => navigate(`/purchase-invoices/${r.id}?edit=1`) },
           ];
-          // Cancel — soft-stop. Hidden once already cancelled.
-          if (r.status !== 'CANCELLED') {
+          if (!locked) {
+            menu.push({ label: 'Edit', onClick: () => navigate(`/purchase-invoices/${r.id}?edit=1`) });
             menu.push({ divider: true as const });
             menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelPi(r) });
           }

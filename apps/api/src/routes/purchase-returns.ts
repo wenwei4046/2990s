@@ -54,6 +54,23 @@ async function recomputePrTotals(sb: any, prId: string) {
   }).eq('id', prId);
 }
 
+/* ── GRN→PR consumption helper (migration 0106, unified model) ──────────────
+   Track grn_items.returned_qty as PR lines are drawn from / adjusted against /
+   released back to a GRN line. base = qty_accepted (you can return up to what
+   was accepted); remaining = qty_accepted - returned_qty. Mirrors
+   adjustGrnInvoicedQty in purchase-invoices.ts. */
+async function adjustGrnReturnedQty(sb: any, grnItemId: string, delta: number) {
+  if (!grnItemId || delta === 0) return;
+  const { data: row } = await sb.from('grn_items')
+    .select('qty_accepted, returned_qty').eq('id', grnItemId).maybeSingle();
+  if (!row) return;
+  const accepted = (row as { qty_accepted: number }).qty_accepted ?? 0;
+  const cur = (row as { returned_qty: number }).returned_qty ?? 0;
+  // Clamp into [0, qty_accepted] — never over-return, never go negative.
+  const next = Math.min(accepted, Math.max(0, cur + delta));
+  await sb.from('grn_items').update({ returned_qty: next }).eq('id', grnItemId);
+}
+
 purchaseReturns.get('/', async (c) => {
   const sb = c.get('supabase');
   let q = sb.from('purchase_returns')
@@ -232,15 +249,23 @@ purchaseReturns.post('/from-grns', async (c) => {
 
   // Load rejected items across all GRNs.
   const { data: items } = await sb.from('grn_items')
-    .select('id, grn_id, material_kind, material_code, material_name, qty_rejected, rejection_reason, unit_price_centi')
+    .select('id, grn_id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi')
     .in('grn_id', grnIds)
     .gt('qty_rejected', 0);
+  // Cap each line's return at its remaining (qty_accepted - returned_qty, 0106) —
+  // a GRN line can be returned across multiple PRs. Drop lines already fully
+  // returned. We return min(qty_rejected, remaining).
   const rejectedItems = ((items ?? []) as Array<{
     id: string; grn_id: string; material_kind: string; material_code: string; material_name: string;
-    qty_rejected: number; rejection_reason: string | null; unit_price_centi: number;
-  }>);
+    qty_accepted: number; qty_rejected: number; returned_qty: number; rejection_reason: string | null; unit_price_centi: number;
+  }>)
+    .map((it) => {
+      const remaining = (it.qty_accepted ?? 0) - (it.returned_qty ?? 0);
+      return { ...it, _qty: Math.min(it.qty_rejected ?? 0, Math.max(0, remaining)) };
+    })
+    .filter((it) => it._qty > 0);
   if (rejectedItems.length === 0) {
-    return c.json({ error: 'no_rejected_qty', message: 'None of the selected GRNs have rejected items' }, 400);
+    return c.json({ error: 'no_rejected_qty', message: 'None of the selected GRNs have remaining rejected qty to return' }, 400);
   }
 
   // Generate PR number.
@@ -250,7 +275,7 @@ purchaseReturns.post('/from-grns', async (c) => {
   const returnNumber = `PRT-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
 
   const grnNumbersJoined = grnList.map((g) => g.grn_number).join(', ');
-  const totalRefund = rejectedItems.reduce((s, it) => s + (it.qty_rejected * it.unit_price_centi), 0);
+  const totalRefund = rejectedItems.reduce((s, it) => s + (it._qty * it.unit_price_centi), 0);
 
   const primaryGrnId = grnList[0]!.id;
   const { data: header, error: hErr } = await sb.from('purchase_returns').insert({
@@ -276,13 +301,18 @@ purchaseReturns.post('/from-grns', async (c) => {
     material_kind: it.material_kind,
     material_code: it.material_code,
     material_name: it.material_name,
-    qty_returned: it.qty_rejected,
+    qty_returned: it._qty,
     unit_price_centi: it.unit_price_centi,
-    line_refund_centi: it.qty_rejected * it.unit_price_centi,
+    line_refund_centi: it._qty * it.unit_price_centi,
     reason: it.rejection_reason,
   }));
   const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
   if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  // Consume each GRN line: increment returned_qty by the returned qty (0106).
+  for (const it of rejectedItems) {
+    await adjustGrnReturnedQty(sb, it.id, it._qty);
+  }
 
   await writePurchaseReturnMovements(sb, h.id, h.return_number, primaryGrnId, user.id);
 
@@ -312,17 +342,22 @@ purchaseReturns.post('/from-grn', async (c) => {
   if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
 
   const { data: items } = await sb.from('grn_items')
-    .select('id, material_kind, material_code, material_name, qty_accepted, qty_rejected, rejection_reason, unit_price_centi')
+    .select('id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi')
     .eq('grn_id', grnId)
     .gt('qty_accepted', 0);
-  const lines = ((items ?? []) as Array<{
+  const allLines = ((items ?? []) as Array<{
     id: string; material_kind: string; material_code: string; material_name: string;
-    qty_accepted: number; qty_rejected: number; rejection_reason: string | null; unit_price_centi: number;
+    qty_accepted: number; qty_rejected: number; returned_qty: number; rejection_reason: string | null; unit_price_centi: number;
   }>);
-  if (lines.length === 0) return c.json({ error: 'nothing_to_return', message: 'GRN has no accepted lines' }, 400);
+  // Only copy lines with remaining = qty_accepted - returned_qty > 0, and return
+  // the REMAINING qty (a GRN can be returned across multiple PRs, 0106).
+  const lines = allLines
+    .map((it) => ({ ...it, _remaining: (it.qty_accepted ?? 0) - (it.returned_qty ?? 0) }))
+    .filter((it) => it._remaining > 0);
+  if (lines.length === 0) return c.json({ error: 'nothing_to_return', message: 'GRN is fully returned' }, 400);
 
   const returnNumber = await nextNum(sb);
-  const totalRefund = lines.reduce((s, it) => s + (it.qty_accepted * it.unit_price_centi), 0);
+  const totalRefund = lines.reduce((s, it) => s + (it._remaining * it.unit_price_centi), 0);
 
   const { data: header, error: hErr } = await sb.from('purchase_returns').insert({
     return_number: returnNumber,
@@ -346,13 +381,18 @@ purchaseReturns.post('/from-grn', async (c) => {
     material_kind: it.material_kind,
     material_code: it.material_code,
     material_name: it.material_name,
-    qty_returned: it.qty_accepted,
+    qty_returned: it._remaining,
     unit_price_centi: it.unit_price_centi,
-    line_refund_centi: it.qty_accepted * it.unit_price_centi,
+    line_refund_centi: it._remaining * it.unit_price_centi,
     reason: it.rejection_reason,
   }));
   const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
   if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  // Consume each GRN line: increment returned_qty by the returned remaining (0106).
+  for (const it of lines) {
+    await adjustGrnReturnedQty(sb, it.id, it._remaining);
+  }
 
   await writePurchaseReturnMovements(sb, h.id, h.return_number, g.id, user.id);
   // Refresh header refund_centi from the inserted lines (parity with GRN).
@@ -461,6 +501,17 @@ purchaseReturns.patch('/:id/cancel', async (c) => {
     }
   } catch { /* best-effort: never un-cancel on a movement failure */ }
 
+  // Release the GRN-line consumption: decrement returned_qty for every
+  // GRN-linked line (best-effort, mirrors the inventory reversal above). The
+  // lines are reloaded so we know each line's qty_returned + grn_item_id.
+  try {
+    const { data: relLines } = await sb.from('purchase_return_items')
+      .select('qty_returned, grn_item_id').eq('purchase_return_id', id);
+    for (const l of (relLines ?? []) as Array<{ qty_returned: number; grn_item_id: string | null }>) {
+      if (l.grn_item_id) await adjustGrnReturnedQty(sb, l.grn_item_id, -(l.qty_returned ?? 0));
+    }
+  } catch { /* best-effort */ }
+
   return c.json({ purchaseReturn: { id, status: 'CANCELLED' } });
 });
 
@@ -499,13 +550,25 @@ purchaseReturns.post('/:id/items', async (c) => {
   if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
 
+  const sb = c.get('supabase');
   const qtyReturned = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const lineRefund = qtyReturned * unitPriceCenti;
 
+  // GRN-linked line: cap qty at that GRN line's remaining (accepted - returned).
+  const grnItemId = (it.grnItemId as string) ?? null;
+  if (grnItemId) {
+    const { data: gi } = await sb.from('grn_items')
+      .select('qty_accepted, returned_qty').eq('id', grnItemId).maybeSingle();
+    if (gi) {
+      const remaining = ((gi as { qty_accepted: number }).qty_accepted ?? 0) - ((gi as { returned_qty: number }).returned_qty ?? 0);
+      if (qtyReturned > remaining) return c.json({ error: 'qty_exceeds_remaining', requested: qtyReturned, remaining }, 409);
+    }
+  }
+
   const row: Record<string, unknown> = {
     purchase_return_id: prId,
-    grn_item_id: (it.grnItemId as string) ?? null,
+    grn_item_id: grnItemId,
     material_kind: (it.materialKind as string) ?? 'mfg_product',
     material_code: it.materialCode,
     material_name: it.materialName,
@@ -530,9 +593,11 @@ purchaseReturns.post('/:id/items', async (c) => {
     description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
     uom: (it.uom as string) ?? 'UNIT',
   };
-  const sb = c.get('supabase');
   const { data, error } = await sb.from('purchase_return_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  // Consume the GRN line if this PR line is GRN-linked (manual lines consume
+  // nothing). Increment returned_qty by the new line's qty.
+  if (grnItemId) await adjustGrnReturnedQty(sb, grnItemId, qtyReturned);
   await recomputePrTotals(sb, prId);
   return c.json({ item: data }, 201);
 });
@@ -545,12 +610,14 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase');
 
   const { data: prev } = await sb.from('purchase_return_items')
-    .select('qty_returned, unit_price_centi, item_group, variants')
+    .select('qty_returned, unit_price_centi, item_group, variants, grn_item_id')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   // The editable quantity is qty_returned.
-  const qtyReturned = it.qty !== undefined ? Number(it.qty) : (prev as { qty_returned: number }).qty_returned;
+  const prevQty = (prev as { qty_returned: number }).qty_returned;
+  const grnItemId = (prev as { grn_item_id: string | null }).grn_item_id ?? null;
+  const qtyReturned = it.qty !== undefined ? Number(it.qty) : prevQty;
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
   const lineRefund = qtyReturned * unit;
 
@@ -578,8 +645,25 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
     updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
+  // GRN-linked + qty changed: pre-check the delta won't push the GRN line over
+  // its accepted. headroom for THIS line = accepted - (returned - prevQty).
+  const delta = qtyReturned - prevQty;
+  if (grnItemId && delta !== 0) {
+    const { data: gi } = await sb.from('grn_items')
+      .select('qty_accepted, returned_qty').eq('id', grnItemId).maybeSingle();
+    if (gi) {
+      const accepted = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+      const returned = (gi as { returned_qty: number }).returned_qty ?? 0;
+      const headroom = accepted - (returned - prevQty);
+      if (qtyReturned > headroom) return c.json({ error: 'qty_exceeds_remaining', requested: qtyReturned, remaining: headroom }, 409);
+    }
+  }
+
   const { error } = await sb.from('purchase_return_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  // Apply the consumption delta to the source GRN line (helper clamps to
+  // [0, qty_accepted]).
+  if (grnItemId && delta !== 0) await adjustGrnReturnedQty(sb, grnItemId, delta);
   await recomputePrTotals(sb, prId);
   return c.json({ ok: true });
 });
@@ -588,8 +672,16 @@ purchaseReturns.patch('/:id/items/:itemId', async (c) => {
 purchaseReturns.delete('/:id/items/:itemId', async (c) => {
   const prId = c.req.param('id'); const itemId = c.req.param('itemId');
   const sb = c.get('supabase');
+  // Read the line first so we can release its GRN-line consumption on delete.
+  const { data: line } = await sb.from('purchase_return_items')
+    .select('qty_returned, grn_item_id').eq('id', itemId).maybeSingle();
   const { error } = await sb.from('purchase_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  if (line) {
+    const l = line as { qty_returned: number; grn_item_id: string | null };
+    // Release: decrement returned_qty by the deleted line's qty (helper clamps ≥0).
+    if (l.grn_item_id) await adjustGrnReturnedQty(sb, l.grn_item_id, -(l.qty_returned ?? 0));
+  }
   await recomputePrTotals(sb, prId);
   return c.body(null, 204);
 });

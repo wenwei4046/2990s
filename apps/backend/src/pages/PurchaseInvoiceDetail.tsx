@@ -143,10 +143,10 @@ export const PurchaseInvoiceDetail = () => {
   const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
   const [savingDraft, setSavingDraft] = useState(false);
 
-  // POSTED / PARTIALLY_PAID / PAID stay editable; only CANCELLED locks the page
-  // read-only (mirror GRN's lock-on-cancelled logic — commander wants PAID
-  // still editable).
-  const isLocked = pi ? pi.status === 'CANCELLED' : true;
+  // Unified edit-lock (migration 0106): a PI is read-only once it has ANY
+  // payment recorded (paid_centi > 0) OR is CANCELLED. POSTED with zero payment
+  // stays editable.
+  const isLocked = pi ? (pi.status === 'CANCELLED' || (pi.paid_centi ?? 0) > 0) : true;
 
   /* If the PI locks while we're in Edit mode (e.g. cancelled in another tab),
      drop back to View + discard the draft. */
@@ -279,10 +279,10 @@ export const PurchaseInvoiceDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* Cancel — only when the PI is not already cancelled. Confirm dialog →
-              cancel mutation (PI is AP-only, so this just flips status; the
-              endpoint blocks a PAID invoice). */}
-          {pi.status !== 'CANCELLED' && (
+          {/* Cancel — only when the PI is not locked (no payment recorded, not
+              already cancelled). Confirm dialog → cancel mutation (PI is AP-only,
+              so this just flips status + releases GRN consumption). */}
+          {!isLocked && (
             <Button variant="ghost" size="md"
               onClick={() => {
                 if (!confirm(`Cancel invoice ${pi.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
