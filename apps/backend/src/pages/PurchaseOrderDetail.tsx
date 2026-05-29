@@ -351,6 +351,11 @@ export const PurchaseOrderDetail = () => {
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
+                {/* Commander 2026-05-29 — surface the COST side + per-line
+                    delivery date alongside the price columns. */}
+                <th className={styles.tableRight}>Unit Cost</th>
+                <th className={styles.tableRight}>Total Cost</th>
+                <th className={styles.tableRight}>Delivery</th>
                 {/* Actions column only in Edit mode — View is read-only. */}
                 {isEditing && <th className={styles.tableRight}>Actions</th>}
               </tr>
@@ -374,6 +379,10 @@ export const PurchaseOrderDetail = () => {
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
                   <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>
+                  {/* Commander 2026-05-29 — Unit Cost + Total Cost + per-line delivery date. */}
+                  <td className={styles.tableRight}>{(it.unit_cost_centi ?? 0) > 0 ? fmtRm(it.unit_cost_centi ?? 0, po.currency) : '—'}</td>
+                  <td className={styles.tableRight}>{(it.unit_cost_centi ?? 0) > 0 ? fmtRm(it.qty * (it.unit_cost_centi ?? 0), po.currency) : '—'}</td>
+                  <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
                   {/* Row Edit / Delete only in Edit mode — View is read-only. */}
                   {isEditing && (
                     <td>
