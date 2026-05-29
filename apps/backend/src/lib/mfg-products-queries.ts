@@ -96,6 +96,17 @@ export type MfgProductRow = {
   seat_height_prices: SeatHeightPrice[] | null;
   default_variants: unknown;
   updated_at: string;
+  /** Commander 2026-05-29 — the SKU's Model allowed_options (sizes / leg_heights
+      / divan_heights / total_heights / specials). Non-empty pool = restrict the
+      SO variant dropdowns to those values; null / empty = no restriction. */
+  allowed_options?: {
+    sizes?: string[] | null;
+    compartments?: string[] | null;
+    divan_heights?: string[] | null;
+    total_heights?: string[] | null;
+    leg_heights?: string[] | null;
+    specials?: string[] | null;
+  } | null;
 };
 
 /* PR #216 — Commander 2026-05-27: parallel cost-side editor. Operation

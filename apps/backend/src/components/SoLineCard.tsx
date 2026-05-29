@@ -313,6 +313,15 @@ const SoLineCardInner = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pricingBreakdown, manualPrice]);
 
+  /* Commander 2026-05-29 — only show variant choices the SKU's Model allows
+     (allowed_options). An empty/absent pool = no restriction. Stops the editor
+     offering e.g. a leg height the SKU rejects on save (variant_not_allowed). */
+  const allowOpts = picked?.allowed_options ?? null;
+  const restrictP = (opts: Array<{ value: string; priceSen: number }>, pool?: string[] | null) =>
+    (Array.isArray(pool) && pool.length > 0) ? opts.filter((o) => pool.includes(o.value)) : opts;
+  const restrictS = (opts: string[], pool?: string[] | null) =>
+    (Array.isArray(pool) && pool.length > 0) ? opts.filter((o) => pool.includes(o)) : opts;
+
   /* Display-side breakdown values mirror the live compute. extraSen
      collapses all four surcharge components + fabric add-on for the "+
      Variants" row in the right rail. */
@@ -528,14 +537,14 @@ const SoLineCardInner = ({
               label="Divan Heights" required
               value={String(draft.variants.divanHeight ?? '')}
               disabled={!isEditing}
-              options={maint!.divanHeights}
+              options={restrictP(maint!.divanHeights, allowOpts?.divan_heights)}
               onChange={(v) => setVariant('divanHeight', v)}
             />
             <VariantSelect
               label="Leg Heights" required
               value={String(draft.variants.legHeight ?? '')}
               disabled={!isEditing}
-              options={maint!.legHeights}
+              options={restrictP(maint!.legHeights, allowOpts?.leg_heights)}
               onChange={(v) => setVariant('legHeight', v)}
             />
           </div>
@@ -554,7 +563,7 @@ const SoLineCardInner = ({
             open={specialsOpen}
             onToggle={() => setSpecialsOpen((o) => !o)}
             picked={specials}
-            options={maint!.specials}
+            options={restrictP(maint!.specials, allowOpts?.specials)}
             disabled={!isEditing}
             onChange={(arr) => setVariant('specials', arr)}
           />
@@ -580,7 +589,7 @@ const SoLineCardInner = ({
               label="Seat Heights" required
               value={String(draft.variants.seatHeight ?? '')}
               disabled={!isEditing}
-              options={maint!.sofaSizes.map((s) => {
+              options={restrictS(maint!.sofaSizes, allowOpts?.sizes).map((s) => {
                 const sh = picked?.seat_height_prices && Array.isArray(picked.seat_height_prices)
                   ? (picked.seat_height_prices as Array<{ height: string; tier: string; priceSen: number }>)
                       .find((p) => p.height === s && p.tier === 'PRICE_2')
@@ -593,7 +602,7 @@ const SoLineCardInner = ({
               label="Leg Heights" required
               value={String(draft.variants.legHeight ?? '')}
               disabled={!isEditing}
-              options={maint!.sofaLegHeights}
+              options={restrictP(maint!.sofaLegHeights, allowOpts?.leg_heights)}
               onChange={(v) => setVariant('legHeight', v)}
             />
             {/* Empty cell so the 4-col grid stays balanced */}
@@ -603,7 +612,7 @@ const SoLineCardInner = ({
             open={specialsOpen}
             onToggle={() => setSpecialsOpen((o) => !o)}
             picked={specials}
-            options={maint!.sofaSpecials}
+            options={restrictP(maint!.sofaSpecials, allowOpts?.specials)}
             disabled={!isEditing}
             onChange={(arr) => setVariant('specials', arr)}
           />

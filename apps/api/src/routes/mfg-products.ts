@@ -41,7 +41,11 @@ mfgProducts.get('/', async (c) => {
     .select(
       'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, ' +
         'unit_m3_milli, status, sku_code, model_id, ' +
-        'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at',
+        'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
+        // Commander 2026-05-29 — surface the Model's allowed_options so the SO
+        // line editor can hide variant choices the SKU doesn't allow (instead
+        // of letting them be picked and failing on save with variant_not_allowed).
+        'model:product_models(allowed_options)',
     )
     .eq('status', 'ACTIVE')
     .order('code', { ascending: true });
@@ -51,7 +55,13 @@ mfgProducts.get('/', async (c) => {
 
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ products: data ?? [] });
+  // Flatten the joined model → a plain allowed_options field on each product.
+  const products = ((data ?? []) as unknown as Array<Record<string, unknown> & { model?: { allowed_options: unknown } | Array<{ allowed_options: unknown }> | null }>)
+    .map(({ model, ...p }) => {
+      const m = Array.isArray(model) ? model[0] : model;
+      return { ...p, allowed_options: m?.allowed_options ?? null };
+    });
+  return c.json({ products });
 });
 
 // ── POST / ─────────────────────────────────────────────────────────────
