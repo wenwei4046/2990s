@@ -38,6 +38,7 @@ import {
   type PoPriceMatrix,
 } from '@2990s/shared/mfg-pricing';
 import { MoneyInput } from '../components/MoneyInput';
+import { ActionResultDialog } from '../components/ActionResultDialog';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -82,6 +83,11 @@ type DraftLine = {
       A manual override always wins: auto-pricing from the supplier price
       table + maintenance surcharges stops touching this line's cost. */
   priceTouched?: boolean;
+  /** Commander 2026-05-29 (BUG 1) — the source SO line this PO line came from
+      (set only when added via "From SO"). Threaded through the create payload
+      so the API increments mfg_sales_order_items.po_qty_picked, which drops the
+      line from the From-SO picker. NULL for manual / one-off PO lines. */
+  soItemId?: string | null;
 };
 
 const newLine = (): DraftLine => ({
@@ -145,6 +151,11 @@ export const PurchaseOrderNew = () => {
 
   // ── Items state ─────────────────────────────────────────────────────
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
+
+  /* Commander 2026-05-29 (BUG 2) — in-app result dialog. Used to surface the
+     "一张 PO 只能一个 supplier" guard when From-SO picks belong to a different
+     supplier than the one this PO is already bound to. */
+  const [dialog, setDialog] = useState<{ title: string; body: string } | null>(null);
 
 
   // ── Data ────────────────────────────────────────────────────────────
@@ -260,15 +271,71 @@ export const PurchaseOrderNew = () => {
 
   /* "From SO" → add the picked SO lines into THIS form (Commander 2026-05-29).
      A PO is one supplier, so adopt the picks' main supplier; the binding /
-     price backfill effects above then fill each line's supplier SKU + cost. */
+     price backfill effects above then fill each line's supplier SKU + cost.
+
+     Commander 2026-05-29 (BUG 2) — a PO is ONE supplier. The picker greys out
+     other suppliers within a session, but the form may already be bound to a
+     supplier (a creditor was chosen, or earlier From-SO picks set one) before a
+     SECOND From-SO trip brings back a DIFFERENT supplier's lines. Guard here:
+     resolve the form's current supplier, and only append picks that match it.
+     If the form has no supplier yet, adopt the picks' supplier (old behaviour).
+     Mismatched picks are dropped and surfaced via the result dialog. */
   const applyFromSo = (picks: Array<OutstandingSoItem & { _pickQty?: number }>) => {
     if (picks.length === 0) return;
-    // Adopt the first picked line that HAS a main supplier (unbound lines no
-    // longer block — they ride as one-off items under whatever Creditor is set).
-    const code = picks.find((p) => p.mainSupplierCode)?.mainSupplierCode ?? null;
-    const sup = code ? (suppliers.data ?? []).find((s) => s.code === code) : null;
-    if (sup) setSupplierId(sup.id);
-    const mapped: DraftLine[] = picks.map((p) => ({
+
+    // The supplier CODE the form is already bound to (if any): explicit creditor
+    // wins; else fall back to the first existing non-empty line's resolved
+    // binding supplier code.
+    const formSupplierCode = (() => {
+      if (supplierId) {
+        return (suppliers.data ?? []).find((s) => s.id === supplierId)?.code ?? null;
+      }
+      const existing = lines.find((l) => l.materialCode.trim());
+      if (!existing) return null;
+      const b = existing.bindingId
+        ? bindings.find((x) => x.id === existing.bindingId)
+        : bindings.find((x) => x.material_code === existing.materialCode);
+      // bindings only resolve once a supplierId is set, so this is mostly a
+      // no-op when supplierId is empty — the explicit-creditor branch above is
+      // the real guard. Returned for completeness.
+      return b ? (suppliers.data ?? []).find((s) => s.id === b.supplier_id)?.code ?? null : null;
+    })();
+
+    // The picks' bound supplier — first pick that HAS a main supplier.
+    const picksSupplierCode = picks.find((p) => p.mainSupplierCode)?.mainSupplierCode ?? null;
+
+    if (formSupplierCode && picksSupplierCode && picksSupplierCode !== formSupplierCode) {
+      // Whole batch belongs to a different supplier — reject all, tell the user.
+      setDialog({
+        title: '一张 PO 只能一个 supplier',
+        body: `这些 SO 行来自 ${picksSupplierCode}，但这张 PO 已经绑定 ${formSupplierCode}。请先清空这张 PO，或者另开一张新的 PO 来转换它们。`,
+      });
+      return;
+    }
+
+    // When the form is already bound, only keep picks that match (or are unbound
+    // — they ride as one-off lines under the current creditor). Drop the rest.
+    const keep = formSupplierCode
+      ? picks.filter((p) => !p.mainSupplierCode || p.mainSupplierCode === formSupplierCode)
+      : picks;
+    const dropped = picks.length - keep.length;
+
+    // No supplier yet → adopt the picks' supplier (old behaviour); the binding /
+    // price backfill effects then fill each line's supplier SKU + cost.
+    if (!formSupplierCode && picksSupplierCode) {
+      const sup = (suppliers.data ?? []).find((s) => s.code === picksSupplierCode);
+      if (sup) setSupplierId(sup.id);
+    }
+
+    if (keep.length === 0) {
+      setDialog({
+        title: '一张 PO 只能一个 supplier',
+        body: `没有匹配 ${formSupplierCode} 的行可以加入。其它 supplier 的行被略过了 — 请清空这张 PO 或另开一张。`,
+      });
+      return;
+    }
+
+    const mapped: DraftLine[] = keep.map((p) => ({
       rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       materialKind: 'mfg_product',
       materialCode: p.itemCode,
@@ -278,9 +345,21 @@ export const PurchaseOrderNew = () => {
       variants: (p.variants ?? {}) as Record<string, unknown>,
       category: categoryForCode(p.itemCode),
       deliveryDate: p.lineDeliveryDate ?? p.deliveryDate ?? undefined,
+      // Commander 2026-05-29 (BUG 1) — remember the source SO line so the
+      // create call can increment its po_qty_picked (drops it from the picker).
+      soItemId: p.soItemId,
     }));
     // Replace the initial blank line if the form is still empty; else append.
     setLines((prev) => (prev.some((l) => l.materialCode.trim()) ? [...prev, ...mapped] : mapped));
+
+    // If some (but not all) picks were a supplier mismatch, tell the user what
+    // was skipped so the omission isn't silent.
+    if (dropped > 0) {
+      setDialog({
+        title: '部分行被略过',
+        body: `已加入 ${keep.length} 行（supplier ${formSupplierCode}）。另外 ${dropped} 行来自其它 supplier，被略过了 — 一张 PO 只能一个 supplier。`,
+      });
+    }
   };
 
   /* Commander 2026-05-29 — when the From-SO grid hands back a selection, it
@@ -515,6 +594,10 @@ export const PurchaseOrderNew = () => {
          purchase_order_items.variants JSONB / item_group. */
       itemGroup:      l.category,
       variants:       Object.keys(l.variants).length ? l.variants : undefined,
+      // Commander 2026-05-29 (BUG 1) — pass the source SO line id (when this
+      // line came from "From SO") so the API rolls po_qty_picked forward and
+      // the line disappears from the From-SO picker.
+      soItemId:       l.soItemId ?? null,
     }));
 
     create.mutate(
@@ -1212,6 +1295,15 @@ export const PurchaseOrderNew = () => {
           </div>
         </section>
       </div>
+
+      {/* BUG 2 — one-supplier-per-PO guard surfaced in-app (no window.alert). */}
+      {dialog && (
+        <ActionResultDialog
+          title={dialog.title}
+          body={dialog.body}
+          onClose={() => setDialog(null)}
+        />
+      )}
 
     </div>
   );
