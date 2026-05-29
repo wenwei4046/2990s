@@ -16,7 +16,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Printer, X, CheckCircle2, Truck, AlertCircle,
+  ArrowLeft, FileText, Printer, X, CheckCircle2, AlertCircle,
   ClipboardCheck, Boxes, Undo2, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -29,8 +29,6 @@ import {
   usePostPurchaseInvoice,
   useRecordPiPayment,
   useCancelPurchaseInvoice,
-  useMfgDeliveryOrderDetail,
-  useUpdateMfgDeliveryOrderStatus,
   useSalesInvoiceDetail,
   useUpdateSalesInvoiceStatus,
   useRecordSiPayment,
@@ -469,161 +467,13 @@ export const PurchaseInvoiceDetail = () => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   3. Delivery Order Detail — driver assignment, status timestamps
+   3. Delivery Order Detail — RETIRED 2026-05-29.
+   The read-only InfoCell DO detail was replaced by the editable SO-clone at
+   src/pages/DeliveryOrderDetail.tsx (route /mfg-delivery-orders/:id). The
+   old component + DO_NEXT / DO_STATUS_CLASS constants were removed here; the
+   useMfgDeliveryOrderDetail / useUpdateMfgDeliveryOrderStatus hooks live on in
+   flow-queries.ts (the new detail page uses them).
    ════════════════════════════════════════════════════════════════════════ */
-
-const DO_STATUS_CLASS: Record<string, string> = {
-  // DRAFT removed in migration 0078 — DOs now start at LOADED.
-  LOADED:      styles.statusPosted ?? '',
-  DISPATCHED:  styles.statusInProgress ?? '',
-  IN_TRANSIT:  styles.statusInProgress ?? '',
-  SIGNED:      styles.statusOk ?? '',
-  DELIVERED:   styles.statusOkStrong ?? '',
-  INVOICED:    styles.statusClosed ?? '',
-  CANCELLED:   styles.statusBad ?? '',
-};
-
-const DO_NEXT: Record<string, string[]> = {
-  // DRAFT removed in migration 0078.
-  LOADED:     ['DISPATCHED', 'CANCELLED'],
-  DISPATCHED: ['IN_TRANSIT', 'SIGNED'],
-  IN_TRANSIT: ['SIGNED'],
-  SIGNED:     ['DELIVERED'],
-  DELIVERED:  ['INVOICED'],
-  INVOICED:   [],
-  CANCELLED:  [],
-};
-
-export const DeliveryOrderDetail = () => {
-  const { id } = useParams<{ id: string }>();
-  const detail = useMfgDeliveryOrderDetail(id ?? null);
-  const updateStatus = useUpdateMfgDeliveryOrderStatus();
-
-  if (detail.isLoading) return <Loading />;
-  if (detail.isError || !detail.data?.deliveryOrder) return <NotFound back="/mfg-delivery-orders" error={detail.error} />;
-
-  const doc = detail.data.deliveryOrder as Record<string, unknown> & {
-    do_number: string; status: string; do_date: string;
-    so_doc_no: string | null; debtor_code: string | null; debtor_name: string;
-    expected_delivery_at: string | null; dispatched_at: string | null;
-    signed_at: string | null; delivered_at: string | null;
-    driver_name: string | null; vehicle: string | null;
-    address1: string | null; address2: string | null; city: string | null;
-    state: string | null; postcode: string | null; phone: string | null;
-    notes: string | null; m3_total_milli: number | null;
-  };
-  const items = (detail.data.items as Array<Record<string, unknown> & {
-    item_code: string; description: string | null; qty: number;
-    m3_milli: number; unit_price_centi: number;
-  }>) ?? [];
-
-  const printSignedDo = () => {
-    import('../lib/delivery-order-pdf').then(({ generateDeliveryOrderPdf }) =>
-      generateDeliveryOrderPdf(doc, items),
-    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
-  };
-
-  const next = DO_NEXT[doc.status] ?? [];
-
-  return (
-    <div className={styles.page}>
-      <div className={styles.headerRow}>
-        <div className={styles.titleBlock}>
-          <Link to="/mfg-delivery-orders" className={styles.backBtn}><ArrowLeft {...ICON} /><span>Back</span></Link>
-          <div>
-            <h1 className={styles.title}>
-              <Truck size={20} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
-              {doc.do_number}
-            </h1>
-            <p className={styles.subtitle}>
-              For {doc.debtor_name} · {fmtDate(doc.do_date)}
-              {doc.so_doc_no && ` · Linked to ${doc.so_doc_no}`}
-            </p>
-          </div>
-        </div>
-        <div className={styles.actions}>
-          <span className={`${styles.statusPill} ${DO_STATUS_CLASS[doc.status] ?? ''}`}>{doc.status.replace('_', ' ')}</span>
-          <Button variant="ghost" size="md" onClick={printSignedDo}>
-            <Printer {...ICON} />
-            <span>Print PDF</span>
-          </Button>
-        </div>
-      </div>
-
-      <section className={styles.card}>
-        <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Delivery Details</h2></header>
-        <div className={styles.cardBody}>
-          <div className={styles.infoGrid}>
-            <InfoCell label="Customer" value={`${doc.debtor_code ?? ''}${doc.debtor_code ? ' · ' : ''}${doc.debtor_name}`} />
-            <InfoCell label="Linked SO" value={doc.so_doc_no
-              ? <Link to={`/mfg-sales-orders/${doc.so_doc_no}`} className={styles.infoLink}>{doc.so_doc_no}</Link>
-              : '—'} />
-            <InfoCell label="Driver" value={doc.driver_name ?? '—'} />
-            <InfoCell label="Vehicle" value={doc.vehicle ?? '—'} />
-            <InfoCell label="Expected" value={fmtDate(doc.expected_delivery_at)} />
-            <InfoCell label="Dispatched" value={fmtDate(doc.dispatched_at)} />
-            <InfoCell label="Signed" value={fmtDate(doc.signed_at)} />
-            <InfoCell label="Delivered" value={fmtDate(doc.delivered_at)} />
-            <InfoCell label="Phone" value={doc.phone ?? '—'} />
-            <InfoCell label="Volume (m³)" value={doc.m3_total_milli ? (doc.m3_total_milli / 1000).toFixed(3) : '—'} />
-            <div className={styles.infoCellFull}>
-              <span className={styles.infoLabel}>Delivery Address</span>
-              <div className={styles.infoValue}>
-                {[doc.address1, doc.address2, [doc.postcode, doc.city, doc.state].filter(Boolean).join(' ')]
-                  .filter(Boolean).join(', ') || '—'}
-              </div>
-            </div>
-            {doc.notes && <div className={styles.infoCellFull}><span className={styles.infoLabel}>Notes</span><div className={styles.infoValue}>{doc.notes}</div></div>}
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.card}>
-        <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Line Items ({items.length})</h2></header>
-        {items.length === 0 ? <p className={styles.emptyRow}>No items.</p> : (
-          <table className={styles.table}>
-            <thead><tr>
-              <th>Item</th><th className={styles.tableRight}>Qty</th>
-              <th className={styles.tableRight}>m³</th>
-              <th className={styles.tableRight}>Unit Price</th>
-            </tr></thead>
-            <tbody>
-              {items.map((it) => (
-                <tr key={it.id as string}>
-                  <td><div className={styles.codeCell}>{it.item_code}</div><div className={styles.muted}>{it.description}</div></td>
-                  <td className={styles.tableRight}>{it.qty}</td>
-                  <td className={styles.tableRight}>{(it.m3_milli / 1000).toFixed(3)}</td>
-                  <td className={styles.tableRight}>{fmtRm(it.unit_price_centi)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      {next.length > 0 && (
-        <section className={styles.card}>
-          <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Move to next stage</h2></header>
-          <div className={styles.cardBody}>
-            <div className={styles.statusBar}>
-              {next.map((s, i) => (
-                <LoadingButton
-                  key={s}
-                  variant={i === 0 ? 'primary' : 'ghost'}
-                  size="sm"
-                  onClick={() => updateStatus.mutate({ id: id!, status: s })}
-                  loading={updateStatus.isPending}
-                >
-                  {s.replace('_', ' ')}
-                </LoadingButton>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-    </div>
-  );
-};
 
 /* ════════════════════════════════════════════════════════════════════════
    4. Sales Invoice Detail — issue + record payment + AR aging

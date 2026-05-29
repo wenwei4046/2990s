@@ -10,13 +10,13 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
-  useGrns, usePurchaseInvoices, useMfgDeliveryOrders,
+  useGrns, usePurchaseInvoices,
   useSalesInvoices, useConsignments, useDeliveryReturns,
   usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
 import {
   CreateGrnDrawer, CreatePurchaseInvoiceDrawer,
-  CreateDeliveryOrderDrawer, CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
+  CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
   CreateDeliveryReturnDrawer,
 } from './FlowDrawers';
 import {
@@ -458,86 +458,13 @@ export const PurchaseInvoicesPage = () => {
 export { MfgSalesOrdersList as MfgSalesOrdersPage } from './MfgSalesOrdersList';
 
 /* ════════════════════════════════════════════════════════════════════════
-   Delivery Orders (mfg)
+   Delivery Orders (mfg) — RETIRED 2026-05-29.
+   The plain-<table> DO list + CreateDeliveryOrderDrawer were replaced by the
+   DataGrid SO-clone at src/pages/MfgDeliveryOrdersList.tsx (route
+   /mfg-delivery-orders) + the editable Create-DO screen at
+   src/pages/DeliveryOrderNew.tsx. The useMfgDeliveryOrders hook is still used
+   by the SI / DR convert drawers in FlowDrawers.tsx.
    ════════════════════════════════════════════════════════════════════════ */
-const DO_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'LOADED', label: 'Loaded' },
-  { value: 'DISPATCHED', label: 'Dispatched' }, { value: 'IN_TRANSIT', label: 'In transit' },
-  { value: 'SIGNED', label: 'Signed' }, { value: 'DELIVERED', label: 'Delivered' },
-  { value: 'INVOICED', label: 'Invoiced' }, { value: 'CANCELLED', label: 'Cancelled' },
-];
-
-export const MfgDeliveryOrdersPage = () => {
-  const navigate = useNavigate();
-  const [status, setStatus] = useState('all');
-  const [open, setOpen] = useState(false);
-  const { data, isLoading, error } = useMfgDeliveryOrders(status === 'all' ? undefined : status);
-  const allRows = useMemo(() => data?.deliveryOrders ?? [], [data]);
-  const picker = useListingPicker('/reports/delivery-order-detail-listing');
-  /* Task #120 — Outstanding filter for DO L1: a DO is "outstanding" if its
-     status hasn't reached DELIVERED / INVOICED / CANCELLED. */
-  const rows = useMemo(() => {
-    if (!picker.outstandingOnly) return allRows;
-    return allRows.filter((r: any) => {
-      const s = String(r.status ?? '');
-      return s !== 'DELIVERED' && s !== 'INVOICED' && s !== 'CANCELLED';
-    });
-  }, [allRows, picker.outstandingOnly]);
-
-  return (
-    <div className={styles.page}>
-      <Header
-        title={`Delivery Orders${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
-        subtitle="DO — deliveries to customer"
-        newLabel="New DO"
-        onNew={() => setOpen(true)}
-      />
-      <ListingPickerDialog
-        open={picker.open}
-        onClose={() => picker.setOpen(false)}
-        onChoose={picker.onPick}
-        detailListingAvailable={true}
-        initial={picker.initial}
-      />
-      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
-        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
-        <StatusChips chips={DO_CHIPS} active={status} onPick={setStatus} />
-      </div>
-      {picker.outstandingOnly && (
-        <OutstandingChip label={`Outstanding only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
-      )}
-      <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} delivery orders`}</p>
-      {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead><tr>
-            <th>DO #</th><th>SO</th><th>Debtor</th><th>Date</th><th>Expected</th><th>Driver</th><th>Status</th>
-          </tr></thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}
-                onClick={() => navigate(`/mfg-delivery-orders/${r.id}`)}
-                style={{ cursor: 'pointer' }}>
-                <td><span className={styles.codeChip}>{r.do_number}</span></td>
-                <td><span className={styles.codeChip}>{r.so_doc_no ?? '—'}</span></td>
-                <td>{r.debtor_name}</td>
-                <td>{r.do_date}</td>
-                <td>{r.expected_delivery_at ?? '—'}</td>
-                <td>{r.driver_name ?? '—'}</td>
-                <td><span className={styles.statusPill}>{r.status.replace('_', ' ')}</span></td>
-              </tr>
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={7} className={styles.emptyRow}>No DOs yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      {open && <CreateDeliveryOrderDrawer onClose={() => setOpen(false)} />}
-      </div>
-    </div>
-  );
-};
 
 /* ════════════════════════════════════════════════════════════════════════
    Sales Invoices

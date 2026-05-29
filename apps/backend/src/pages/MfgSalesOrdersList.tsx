@@ -38,7 +38,7 @@ import { ListingPickerDialog, type ListingChoice } from '../components/ListingPi
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  useMfgSalesOrders, useUpdateMfgSalesOrderStatus, useConvertSoToDo,
+  useMfgSalesOrders, useUpdateMfgSalesOrderStatus,
   useMfgSalesOrderDetail,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -799,7 +799,6 @@ export const MfgSalesOrdersList = () => {
   const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
   const updateStatus = useUpdateMfgSalesOrderStatus();
-  const convertToDoMut = useConvertSoToDo();
 
   // ── Row handlers (no toolbar — every action lives on the row's
   //    right-click context menu, gated by status). ───────────────────
@@ -849,18 +848,13 @@ export const MfgSalesOrdersList = () => {
     );
   };
 
-  /* Convert an SO → new DO via the API, then navigate to the new DO so
-     commander can immediately review/dispatch. Confirmation prompt
-     matches the soft-delete tone — destructive enough to warrant a
-     "are you sure?" but not so dangerous it needs typed confirmation. */
-  const convertToDo = async (row: SoRow) => {
-    if (!window.confirm(`Convert SO ${row.doc_no} to a new Delivery Order?`)) return;
-    try {
-      const res = await convertToDoMut.mutateAsync({ docNo: row.doc_no });
-      navigate(`/mfg-delivery-orders/${res.deliveryOrderId}`);
-    } catch (e) {
-      alert(`Failed to convert: ${e instanceof Error ? e.message : String(e)}`);
-    }
+  /* Issue Delivery Order — navigate to the full Create-DO screen prefilled
+     from this SO (debtor, sales agent, address, phone, line items with
+     variants + prices, AND payment records). The operator reviews/edits and
+     Saves to create the DO. Replaces the old window.confirm() + convert
+     endpoint, which silently dropped the sales agent + payments. */
+  const convertToDo = (row: SoRow) => {
+    navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(row.doc_no)}`);
   };
 
   /* TODO(copy-to-new-so): out of scope for this PR. Will need a
@@ -1109,7 +1103,7 @@ export const MfgSalesOrdersList = () => {
           ];
           // Issue DO (开单) — available before goods ship.
           if (['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'].includes(status)) {
-            items.push({ label: 'Issue Delivery Order', onClick: () => void convertToDo(row) });
+            items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
           }
           // Issue SI — available once the customer has accepted delivery.
           if (['DELIVERED', 'SHIPPED'].includes(status)) {

@@ -561,6 +561,124 @@ export const useUpdateMfgDeliveryOrderStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+      /* A status advance into a shipped state deducts inventory — refresh
+         the inventory queries so the on-hand drilldown reflects the OUT. */
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+
+/* DO header PATCH — editable SO-style fields (debtor / salesperson / address /
+   dates / driver / emergency contact / venue). Mirrors
+   useUpdateMfgSalesOrderHeader. */
+export const useUpdateMfgDeliveryOrderHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+    },
+  });
+};
+
+/* DO line-item CRUD — mirrors the SO item hooks. Each mutation recomputes the
+   DO totals server-side, so we invalidate both the detail + list. */
+export const useAddMfgDeliveryOrderItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
+        method: 'POST', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+    },
+  });
+};
+
+export const useUpdateMfgDeliveryOrderItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+    },
+  });
+};
+
+export const useDeleteMfgDeliveryOrderItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId }: { id: string; itemId: string }) =>
+      authedFetch<void>(`/delivery-orders-mfg/${id}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+    },
+  });
+};
+
+/* DO payments ledger — mirror of the SO payments hooks. The DO Create + Detail
+   screens render the same Houzs PaymentsTable; these hooks back the persisted
+   (Detail) path. */
+export type DoPayment = {
+  id: string;
+  delivery_order_id: string;
+  paid_at: string;
+  method: 'merchant' | 'transfer' | 'cash';
+  merchant_provider: string | null;
+  installment_months: number | null;
+  online_type: string | null;
+  approval_code: string | null;
+  amount_centi: number;
+  account_sheet: string | null;
+  collected_by: string | null;
+  collected_by_name: string | null;
+  note: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export const useDeliveryOrderPayments = (id: string | null) => useQuery({
+  queryKey: ['mfg-delivery-orders', id, 'payments'],
+  queryFn: () => authedFetch<{ payments: DoPayment[] }>(`/delivery-orders-mfg/${id}/payments`).then((r) => r.payments),
+  enabled: Boolean(id),
+  staleTime: 2 * 60_000,
+  retry: 1,
+  retryDelay: 800,
+});
+
+export const useAddDeliveryOrderPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ payment: DoPayment }>(`/delivery-orders-mfg/${id}/payments`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', vars.id, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
+    },
+  });
+};
+
+export const useDeleteDeliveryOrderPayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, paymentId }: { id: string; paymentId: string }) =>
+      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/payments/${paymentId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', vars.id, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
     },
   });
 };

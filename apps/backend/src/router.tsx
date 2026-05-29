@@ -56,7 +56,8 @@ const PurchaseOrders = lazyRetry(() => import('./pages/PurchaseOrders').then(m =
 const Grns = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.Grns })));
 const PurchaseInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.PurchaseInvoicesPage })));
 const MfgSalesOrdersPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.MfgSalesOrdersPage })));
-const MfgDeliveryOrdersPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.MfgDeliveryOrdersPage })));
+const MfgDeliveryOrdersList = lazyRetry(() => import('./pages/MfgDeliveryOrdersList').then(m => ({ default: m.MfgDeliveryOrdersList })));
+const DeliveryOrderNew = lazyRetry(() => import('./pages/DeliveryOrderNew').then(m => ({ default: m.DeliveryOrderNew })));
 const SalesInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.SalesInvoicesPage })));
 const ConsignmentPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
 const DeliveryReturnsPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.DeliveryReturnsPage })));
@@ -101,7 +102,7 @@ const ConsignmentDetailListing = lazyRetry(() => import('./pages/ConsignmentDeta
 const DeliveryReturnDetailListing = lazyRetry(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
 const GrnDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.GrnDetail })));
 const PurchaseInvoiceDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.PurchaseInvoiceDetail })));
-const DeliveryOrderDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.DeliveryOrderDetail })));
+const DeliveryOrderDetail = lazyRetry(() => import('./pages/DeliveryOrderDetail').then(m => ({ default: m.DeliveryOrderDetail })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.SalesInvoiceDetail })));
 const ConsignmentDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.ConsignmentDetail })));
 const PurchaseReturnDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.PurchaseReturnDetail })));
@@ -164,7 +165,9 @@ export const router = createBrowserRouter([
       // page. Must precede :docNo so 'maintenance' isn't read as a doc number.
       { path: 'mfg-sales-orders/maintenance', element: <SalesOrderMaintenance /> },
       { path: 'mfg-sales-orders/:docNo', element: <SalesOrderDetail /> },
-      { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersPage /> },
+      { path: 'mfg-delivery-orders', element: <MfgDeliveryOrdersList /> },
+      // /new must come BEFORE :id so 'new' isn't caught as a DO id.
+      { path: 'mfg-delivery-orders/new', element: <DeliveryOrderNew /> },
       { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
       { path: 'sales-invoices', element: <SalesInvoicesPage /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },

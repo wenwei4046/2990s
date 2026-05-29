@@ -17,13 +17,13 @@ import { X, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useCreateGrn, useCreatePurchaseInvoice, useCreateMfgSalesOrder,
-  useCreateMfgDeliveryOrder, useCreateSalesInvoice, useCreateConsignment,
+  useCreateSalesInvoice, useCreateConsignment,
   useCreateDeliveryReturn,
 } from '../lib/flow-queries';
 import {
   useSuppliers, usePurchaseOrders, usePurchaseOrderDetail,
 } from '../lib/suppliers-queries';
-import { useMfgSalesOrders, useMfgSalesOrderDetail, useMfgDeliveryOrders } from '../lib/flow-queries';
+import { useMfgDeliveryOrders } from '../lib/flow-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import sup from './Suppliers.module.css';
 
@@ -423,137 +423,12 @@ export const CreateSalesOrderDrawer = ({ onClose }: { onClose: () => void }) => 
 };
 
 /* ══════════════════════════════════════════════════════════════════════
-   4. Delivery Order (mfg)
+   4. Delivery Order (mfg) — RETIRED 2026-05-29.
+   CreateDeliveryOrderDrawer was replaced by the full Create-DO screen at
+   src/pages/DeliveryOrderNew.tsx (route /mfg-delivery-orders/new), prefilled
+   from an SO via "Issue Delivery Order" on the SO list. The
+   useCreateMfgDeliveryOrder hook now backs that page.
    ══════════════════════════════════════════════════════════════════════ */
-
-export const CreateDeliveryOrderDrawer = ({ onClose }: { onClose: () => void }) => {
-  const sos = useMfgSalesOrders('CONFIRMED');
-  const sos2 = useMfgSalesOrders('READY_TO_SHIP');
-  const allSos = [...(sos.data?.salesOrders ?? []), ...(sos2.data?.salesOrders ?? [])];
-  const [soDocNo, setSoDocNo] = useState<string | null>(null);
-  const soDetail = useMfgSalesOrderDetail(soDocNo);
-  const [form, setForm] = useState({
-    doDate: new Date().toISOString().slice(0, 10),
-    expectedDeliveryAt: '',
-    driverName: '', vehicle: '',
-    address1: '', address2: '', city: '', state: '', postcode: '', phone: '',
-    notes: '',
-  });
-  const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
-  const create = useCreateMfgDeliveryOrder();
-
-  const upd = (k: keyof typeof form, v: string) => setForm({ ...form, [k]: v });
-  const items = soDetail.data?.items ?? [];
-  // flow-queries.ts types this as `any`; narrow locally to the fields we
-  // touch. Keeps the rest of the file honest without a global refactor.
-  type SoHeader = {
-    doc_no?: string;
-    debtor_code?: string;
-    debtor_name?: string;
-    address1?: string | null;
-    address2?: string | null;
-    address3?: string | null;
-    address4?: string | null;
-    phone?: string | null;
-  };
-  const so = soDetail.data?.salesOrder as SoHeader | undefined;
-
-  // Auto-fill address when SO picked
-  useMemo(() => {
-    if (so) {
-      setForm((s) => ({
-        ...s,
-        address1: so.address1 ?? '',
-        address2: so.address2 ?? '',
-        city: so.address3 ?? '',
-        state: so.address4 ?? '',
-        phone: so.phone ?? '',
-      }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [so?.doc_no]);
-
-  const submit = () => {
-    if (!so) return alert('Pick a sales order.');
-    const itemsBody = items
-      .map((it: any) => ({ soItemId: it.id, itemCode: it.item_code, description: it.description, qty: qtyMap[it.id] ?? it.qty, unitPriceCenti: it.unit_price_centi }))
-      .filter((r: any) => r.qty > 0);
-    if (!itemsBody.length) return alert('Set qty for at least one line.');
-    create.mutate(
-      {
-        soDocNo: so.doc_no,
-        debtorCode: so.debtor_code,
-        debtorName: so.debtor_name,
-        ...form,
-        items: itemsBody,
-      },
-      { onSuccess: (res: any) => { alert(`DO created: ${res.doNumber}`); onClose(); } },
-    );
-  };
-
-  return (
-    <DrawerShell
-      title="New Delivery Order"
-      onClose={onClose}
-      onSubmit={submit}
-      submitLabel="Create DO"
-      submitting={create.isPending}
-      canSubmit={Boolean(soDocNo)}
-    >
-      <div className={sup.section}>
-        <p className={sup.fieldLabel}>Pick Sales Order</p>
-        <select className={sup.fieldSelect} value={soDocNo ?? ''} onChange={(e) => setSoDocNo(e.target.value || null)}>
-          <option value="">— Select SO —</option>
-          {allSos.map((s: any) => (
-            <option key={s.doc_no} value={s.doc_no}>{s.doc_no} · {s.debtor_name}</option>
-          ))}
-        </select>
-      </div>
-
-      {so && (
-        <>
-          <div className={sup.section}>
-            <p className={sup.fieldLabel}>Items</p>
-            {items.map((it: any) => (
-              <div key={it.id} className={sup.bindingRow}>
-                <span className={sup.bindingIcon}>·</span>
-                <div className={sup.bindingMaterial}>
-                  <span className={sup.bindingCode}>{it.item_code}</span>
-                  <span className={sup.bindingName}>{it.description ?? ''}</span>
-                </div>
-                <span className={sup.bindingSku}>{it.uom}</span>
-                <span className={sup.bindingMeta}>SO qty {it.qty}</span>
-                <input
-                  type="number"
-                  min={0}
-                  className={sup.fieldInput}
-                  style={{ width: 80, textAlign: 'right' }}
-                  value={qtyMap[it.id] ?? it.qty}
-                  onChange={(e) => setQtyMap({ ...qtyMap, [it.id]: Number(e.target.value) || 0 })}
-                />
-                <span />
-              </div>
-            ))}
-          </div>
-
-          <div className={sup.formGrid}>
-            <Field label="DO Date" type="date" value={form.doDate} onChange={(v) => upd('doDate', v)} />
-            <Field label="Expected At" type="date" value={form.expectedDeliveryAt} onChange={(v) => upd('expectedDeliveryAt', v)} />
-            <Field label="Driver Name" value={form.driverName} onChange={(v) => upd('driverName', v)} />
-            <Field label="Vehicle" value={form.vehicle} onChange={(v) => upd('vehicle', v)} />
-            <Field label="Address 1" value={form.address1} onChange={(v) => upd('address1', v)} gridFull />
-            <Field label="Address 2" value={form.address2} onChange={(v) => upd('address2', v)} gridFull />
-            <Field label="City" value={form.city} onChange={(v) => upd('city', v)} />
-            <Field label="State" value={form.state} onChange={(v) => upd('state', v)} />
-            <Field label="Postcode" value={form.postcode} onChange={(v) => upd('postcode', v)} />
-            <Field label="Phone" value={form.phone} onChange={(v) => upd('phone', v)} />
-            <Field label="Notes" value={form.notes} onChange={(v) => upd('notes', v)} multiline gridFull />
-          </div>
-        </>
-      )}
-    </DrawerShell>
-  );
-};
 
 /* ══════════════════════════════════════════════════════════════════════
    5. Sales Invoice
