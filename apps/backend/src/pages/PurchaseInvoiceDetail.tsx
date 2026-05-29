@@ -1,38 +1,46 @@
 // ----------------------------------------------------------------------------
 // PurchaseInvoiceDetail — full-page route at /purchase-invoices/:id.
 //
-//   1. Header: back button + Invoice# · supplier + status pill
-//   2. Header card: editable supplier + supplier invoice ref + invoice date +
-//      due date + currency + notes
+// EXACT clone of PurchaseOrderDetail / GoodsReceivedDetail (the gold standard):
+// a draft-style View → Edit → Save/Back machine, Print PDF, Cancel. A Purchase
+// Invoice is CONFIRMED the moment it exists (no Draft lifecycle), so POSTED
+// reads as "Confirmed".
+//
+//   1. Header: back button + Invoice# · supplier + status pill + actions
+//   2. Supplier card: editable supplier + supplier invoice ref + invoice date +
+//      due date + currency + notes (inputs in Edit, read-only InfoCells in View)
 //   3. Line items table: code + group + variants summary + qty + unit + disc +
-//      total  (an invoice has NO per-line delivery date — dropped vs GRN)
-//   4. Totals card: subtotal (live from line items) + tax (stored) + total +
-//      read-only Paid + Balance (total - paid). No payment-entry UI here —
-//      payment recording stays on the existing flow / is a follow-up.
+//      total  (a PI has NO per-line delivery date — Delivery column dropped)
+//   4. Totals card: subtotal (live) + tax (stored) + total + read-only Paid +
+//      Balance (= total - paid). No payment-entry UI here.
 //
-// A Purchase Invoice has NO draft / lifecycle gate — it is CONFIRMED the moment
-// it exists. There is NO Edit → Save → Back-discards cycle: the page is ALWAYS
-// inline-editable with IMMEDIATE SAVE. You change a field and it persists right
-// away:
-//   • Header selects commit on change; text/date commit on blur (only if changed)
-//   • Line qty / unit price / disc commit immediately per field
-//   • Delete (trash) removes the line immediately (no confirm popup)
-// Inputs read straight off server state; TanStack Query refetches after each
-// mutation to keep them fresh.
+// Draft model (mirrors PO #194 / GRN):
+//   • Edit  → snapshots header + lets you edit Qty / Unit / Disc INLINE per row.
+//             Nothing persists until the single top Save.
+//   • Save  → commits header changes + every changed line's field edits.
+//   • Back  → leaves the page, discarding the field-edit draft (no auto-save).
+//   • Delete (trash) removes the line immediately (no confirm popup). PI is
+//     AP-only (inventory landed at GRN time), so removal is a plain line delete.
 //
-// purchase_invoice_status enum is POSTED / PARTIALLY_PAID / PAID / CANCELLED.
-// POSTED renders as "Confirmed"; PARTIALLY_PAID / PAID render their label but
-// stay editable; CANCELLED renders "Cancelled" and locks the page read-only.
+// purchase_invoice_status enum: POSTED / PARTIALLY_PAID / PAID / CANCELLED.
+// POSTED → "Confirmed" (editable). PARTIALLY_PAID / PAID render their label but
+// stay editable (commander wants it editable). CANCELLED → "Cancelled" (locked).
+// isLocked = CANCELLED only (mirror GRN's lock-on-cancelled logic).
 // ----------------------------------------------------------------------------
 
-import { Link, useParams } from 'react-router';
-import { ArrowLeft, FileText, Trash2, ChevronDown } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import {
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown,
+} from 'lucide-react';
+import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
   usePurchaseInvoiceDetail,
   useUpdatePurchaseInvoiceHeader,
   useUpdatePurchaseInvoiceItem,
   useDeletePurchaseInvoiceItem,
+  useCancelPurchaseInvoice,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
@@ -41,19 +49,19 @@ import styles from './SalesOrderDetail.module.css';
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
-// purchase_invoice_status — POSTED (editable, "Confirmed") / PARTIALLY_PAID /
+// purchase_invoice_status — POSTED ("Confirmed", editable) / PARTIALLY_PAID /
 // PAID (editable) / CANCELLED (locked).
 const STATUS_CLASS: Record<string, string> = {
-  POSTED: styles.statusDelivered ?? '',
+  POSTED:         styles.statusDelivered ?? '',
   PARTIALLY_PAID: styles.statusDelivered ?? '',
-  PAID: styles.statusDelivered ?? '',
-  CANCELLED: styles.statusCancelled ?? '',
+  PAID:           styles.statusDelivered ?? '',
+  CANCELLED:      styles.statusCancelled ?? '',
 };
 const STATUS_LABEL: Record<string, string> = {
-  POSTED: 'Confirmed',
+  POSTED:         'Confirmed',
   PARTIALLY_PAID: 'Partially paid',
-  PAID: 'Paid',
-  CANCELLED: 'Cancelled',
+  PAID:           'Paid',
+  CANCELLED:      'Cancelled',
 };
 
 const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
@@ -61,6 +69,23 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   return `${currency} ${(v / 100).toLocaleString('en-MY', {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
+};
+
+/* Draft state shapes (mirror PO #194 / GRN). HeaderDraft mirrors the editable PI
+   header fields; LineDraft holds the three inline-editable per-line fields (PI
+   has NO per-line delivery date). */
+type HeaderDraft = {
+  supplierId: string;
+  supplierInvoiceRef: string;
+  invoiceDate: string;
+  dueDate: string;
+  currency: string;
+  notes: string;
+};
+type LineDraft = {
+  qty: number;
+  unitPriceCenti: number;
+  discountCenti: number;
 };
 
 type PiItemRow = Record<string, unknown> & {
@@ -77,19 +102,61 @@ type PiItemRow = Record<string, unknown> & {
   variants?: Record<string, unknown> | null;
 };
 
+const headerSnapshot = (p: any): HeaderDraft => ({
+  supplierId:         p.supplier_id ?? '',
+  supplierInvoiceRef: p.supplier_invoice_ref ?? '',
+  invoiceDate:        (p.invoice_date ?? '').slice(0, 10),
+  dueDate:            (p.due_date ?? '').slice(0, 10),
+  currency:           p.currency ?? 'MYR',
+  notes:              p.notes ?? '',
+});
+
+const lineSnapshot = (it: PiItemRow): LineDraft => ({
+  qty:            it.qty,
+  unitPriceCenti: it.unit_price_centi,
+  discountCenti:  it.discount_centi ?? 0,
+});
+
 export const PurchaseInvoiceDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const detail = usePurchaseInvoiceDetail(id ?? null);
   const updateHeader = useUpdatePurchaseInvoiceHeader();
   const updateItem = useUpdatePurchaseInvoiceItem();
   const deleteItem = useDeletePurchaseInvoiceItem();
+  const cancel = useCancelPurchaseInvoice();
 
   const pi = detail.data?.purchaseInvoice ?? null;
   const items = (detail.data?.items ?? []) as PiItemRow[];
 
-  // Only CANCELLED locks the page read-only; POSTED / PARTIALLY_PAID / PAID
-  // stay inline-editable (immediate save).
+  /* View → Edit gate (mirror PO/GRN) — default read-only View; click Edit to
+     flip into draft mode. The PI list's right-click "Edit" lands here with
+     ?edit=1. */
+  const [searchParams] = useSearchParams();
+  const [isEditing, setIsEditing] = useState(() => searchParams.get('edit') === '1');
+
+  /* Draft buffers. headerDraft is null until the first header field is touched
+     (then seeded from the PI). lineDrafts overlays per-line edits keyed by item
+     id; any line without an entry shows its stored values. None of this persists
+     until Save. */
+  const [headerDraft, setHeaderDraft] = useState<HeaderDraft | null>(null);
+  const [lineDrafts, setLineDrafts] = useState<Record<string, LineDraft>>({});
+  const [savingDraft, setSavingDraft] = useState(false);
+
+  // POSTED / PARTIALLY_PAID / PAID stay editable; only CANCELLED locks the page
+  // read-only (mirror GRN's lock-on-cancelled logic — commander wants PAID
+  // still editable).
   const isLocked = pi ? pi.status === 'CANCELLED' : true;
+
+  /* If the PI locks while we're in Edit mode (e.g. cancelled in another tab),
+     drop back to View + discard the draft. */
+  useEffect(() => {
+    if (isLocked && isEditing) {
+      setIsEditing(false);
+      setHeaderDraft(null);
+      setLineDrafts({});
+    }
+  }, [isLocked, isEditing]);
 
   if (detail.isLoading) {
     return <div className={styles.page}><p className={styles.fieldLabel}>Loading…</p></div>;
@@ -109,25 +176,76 @@ export const PurchaseInvoiceDetail = () => {
     );
   }
 
-  // Subtotal/total computed LIVE from the visible (server) line items + the
-  // stored tax. Paid is read-only off the header; balance = total - paid.
-  const lineTotalOf = (it: PiItemRow): number =>
-    it.qty * it.unit_price_centi - (it.discount_centi ?? 0);
-  const itemsSubtotal = items.reduce((s, it) => s + lineTotalOf(it), 0);
+  /* ── Draft helpers (pi is guaranteed non-null past the guards above) ── */
+  const visibleItems = items;
+  const lineOf = (it: PiItemRow): LineDraft => lineDrafts[it.id] ?? lineSnapshot(it);
+  const lineTotalOf = (it: PiItemRow): number => {
+    if (!isEditing) return it.line_total_centi ?? (it.qty * it.unit_price_centi - (it.discount_centi ?? 0));
+    const d = lineOf(it);
+    return d.qty * d.unitPriceCenti - d.discountCenti;
+  };
+  const itemsSubtotal = visibleItems.reduce((s, it) => s + lineTotalOf(it), 0);
   const taxCenti = pi.tax_centi ?? 0;
   const grandTotal = itemsSubtotal + taxCenti;
   const paidCenti = pi.paid_centi ?? 0;
   const balanceCenti = grandTotal - paidCenti;
 
-  // Header commit — only fires the mutation for the one changed field.
-  const commitHeader = (patch: Record<string, unknown>) => {
-    if (isLocked) return;
-    updateHeader.mutate({ id: pi.id, ...patch });
+  const headerView = headerDraft ?? headerSnapshot(pi);
+
+  const setHeaderField = (k: keyof HeaderDraft, v: string) => {
+    setHeaderDraft((h) => ({ ...(h ?? headerSnapshot(pi)), [k]: v }));
   };
-  // Line commit — immediate per-field save.
-  const commitLine = (it: PiItemRow, patch: Record<string, unknown>) => {
-    if (isLocked) return;
-    updateItem.mutate({ id: pi.id, itemId: it.id, ...patch });
+
+  const setLine = (it: PiItemRow, patch: Partial<LineDraft>) =>
+    setLineDrafts((prev) => ({ ...prev, [it.id]: { ...(prev[it.id] ?? lineSnapshot(it)), ...patch } }));
+
+  const enterEdit = () => {
+    setHeaderDraft(null);
+    setLineDrafts({});
+    setIsEditing(true);
+  };
+
+  /* Single Save — commit header (only if touched) + every changed line's field
+     edits, then drop back to View. Back discards the field-edit draft.
+     (Line delete already committed server-side — see the trash handler.) */
+  const handleSave = async () => {
+    if (savingDraft) return;
+    setSavingDraft(true);
+    try {
+      if (headerDraft) {
+        await updateHeader.mutateAsync({ id: pi.id, ...(headerDraft as Record<string, unknown>) });
+      }
+      for (const it of items) {
+        const d = lineDrafts[it.id];
+        if (!d) continue;
+        const changed =
+          d.qty !== it.qty ||
+          d.unitPriceCenti !== it.unit_price_centi ||
+          d.discountCenti !== (it.discount_centi ?? 0);
+        if (changed) {
+          await updateItem.mutateAsync({
+            id: pi.id, itemId: it.id,
+            qty: d.qty, unitPriceCenti: d.unitPriceCenti,
+            discountCenti: d.discountCenti,
+          });
+        }
+      }
+      setIsEditing(false);
+      setHeaderDraft(null);
+      setLineDrafts({});
+    } catch (e) {
+      window.alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const handlePrint = () => {
+    // PI PDF (AutoCount layout) — mirrors PO/GRN's handlePrint wiring its own
+    // purchase-invoice-pdf helper.
+    import('../lib/purchase-invoice-pdf').then(({ generatePurchaseInvoicePdf }) =>
+      generatePurchaseInvoicePdf(pi, items as any),
+    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   return (
@@ -147,7 +265,8 @@ export const PurchaseInvoiceDetail = () => {
           </div>
         </div>
         <div className={styles.actions}>
-          {/* Total KPI tile — tracks the live line items + stored tax. */}
+          {/* Total KPI tile — tracks the live line items (incl. unsaved draft
+              edits) + stored tax. */}
           <div className={styles.totalRail}>
             <span className={styles.totalRailLabel}>Total</span>
             <span className={styles.totalRailValue}>{fmtRm(grandTotal, pi.currency)}</span>
@@ -156,19 +275,61 @@ export const PurchaseInvoiceDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[pi.status as string] ?? ''}`}>
             {STATUS_LABEL[pi.status as string] ?? String(pi.status)}
           </span>
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} />
+            <span>Print PDF</span>
+          </Button>
+          {/* Cancel — only when the PI is not already cancelled. Confirm dialog →
+              cancel mutation (PI is AP-only, so this just flips status; the
+              endpoint blocks a PAID invoice). */}
+          {pi.status !== 'CANCELLED' && (
+            <Button variant="ghost" size="md"
+              onClick={() => {
+                if (!confirm(`Cancel invoice ${pi.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
+                cancel.mutate(pi.id, {
+                  onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
+                });
+              }}
+              disabled={cancel.isPending}>
+              <Ban {...ICON} />
+              <span>{cancel.isPending ? 'Cancelling…' : 'Cancel'}</span>
+            </Button>
+          )}
+          {/* View → Edit gate. Default View shows Edit (disabled while locked);
+              editing flips into draft mode and the button becomes the single
+              "Save" that commits the whole draft. Back (top-left) discards. */}
+          {!isEditing ? (
+            <Button variant="primary" size="md" onClick={enterEdit} disabled={isLocked}>
+              <Pencil {...ICON} />
+              <span>Edit</span>
+            </Button>
+          ) : (
+            <Button variant="primary" size="md" onClick={handleSave} disabled={savingDraft}>
+              <Save {...ICON} />
+              <span>{savingDraft ? 'Saving…' : 'Save'}</span>
+            </Button>
+          )}
         </div>
       </div>
 
       {/* ── Supplier / ref / dates / currency / notes ───────────── */}
-      <SupplierCard pi={pi} locked={isLocked} onCommit={commitHeader} />
+      {/* In View the card renders read-only text; in Edit it shows inputs bound
+          to the draft (committed by the single top Save). */}
+      <SupplierCard
+        pi={pi}
+        draft={headerView}
+        onField={setHeaderField}
+        locked={isLocked}
+        isEditing={isEditing}
+      />
 
       {/* ── Line items ──────────────────────────────────────────── */}
       <section className={styles.card}>
         <header className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
+          <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
         </header>
 
-        {items.length === 0 ? (
+        {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>No items on this invoice.</p>
         ) : (
           <table className={styles.table}>
@@ -180,72 +341,82 @@ export const PurchaseInvoiceDetail = () => {
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
-                {!isLocked && <th className={styles.tableRight}>Actions</th>}
+                {/* Actions column only in Edit mode — View is read-only. A PI
+                    has NO per-line delivery date, so no Delivery column. */}
+                {isEditing && <th className={styles.tableRight}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.id}>
-                  <td>
-                    <div className={styles.codeCell}>{it.material_code}</div>
-                    {(() => {
-                      const summary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
-                        || it.description
-                        || it.material_name;
-                      return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
-                    })()}
-                  </td>
-                  <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
-
-                  {/* Qty / Unit / Disc are always inline-editable with immediate
-                      save (a CANCELLED invoice disables the inputs). */}
-                  <td className={styles.tableRight}>
-                    <input
-                      type="number"
-                      min={0}
-                      className={styles.fieldInput}
-                      style={{ width: 70, textAlign: 'right' }}
-                      defaultValue={it.qty}
-                      key={`qty-${it.id}-${it.qty}`}
-                      disabled={isLocked}
-                      onBlur={(e) => {
-                        const v = Number(e.target.value) || 0;
-                        if (v !== it.qty) commitLine(it, { qty: v });
-                      }}
-                    />
-                  </td>
-                  <td className={styles.tableRight}>
-                    <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
-                      style={{ width: 110, textAlign: 'right' }}
-                      valueSen={it.unit_price_centi}
-                      disabled={isLocked}
-                      onCommit={(sen) => commitLine(it, { unitPriceCenti: sen ?? 0 })} />
-                  </td>
-                  <td className={styles.tableRight}>
-                    <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
-                      style={{ width: 100, textAlign: 'right' }}
-                      valueSen={it.discount_centi ?? 0}
-                      disabled={isLocked}
-                      onCommit={(sen) => commitLine(it, { discountCenti: sen ?? 0 })} />
-                  </td>
-                  <td className={styles.priceCell}>{fmtRm(lineTotalOf(it), pi.currency)}</td>
-                  {!isLocked && (
+              {visibleItems.map((it) => {
+                const d = lineOf(it);
+                return (
+                  <tr key={it.id}>
                     <td>
-                      <span className={styles.actionsCell}>
-                        <button type="button"
-                          className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                          title="Remove line" disabled={deleteItem.isPending}
-                          /* Delete immediately (no confirm). PI is AP-only, so
-                             removal is a plain line delete (inventory landed at
-                             GRN time). */
-                          onClick={() => deleteItem.mutate({ id: pi.id, itemId: it.id })}>
-                          <Trash2 {...SM_ICON} />
-                        </button>
-                      </span>
+                      <div className={styles.codeCell}>{it.material_code}</div>
+                      {(() => {
+                        const summary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
+                          || it.description
+                          || it.material_name;
+                        return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
+                      })()}
                     </td>
-                  )}
-                </tr>
-              ))}
+                    <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
+
+                    {/* Qty / Unit / Disc are inline-editable in Edit mode (no
+                        per-line modal). */}
+                    {isEditing ? (
+                      <>
+                        <td className={styles.tableRight}>
+                          <input
+                            type="number"
+                            min={0}
+                            className={styles.fieldInput}
+                            style={{ width: 70, textAlign: 'right' }}
+                            value={d.qty}
+                            disabled={isLocked}
+                            onChange={(e) => setLine(it, { qty: Number(e.target.value) || 0 })}
+                          />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                            style={{ width: 110, textAlign: 'right' }}
+                            valueSen={d.unitPriceCenti}
+                            disabled={isLocked}
+                            onCommit={(sen) => setLine(it, { unitPriceCenti: sen ?? 0 })} />
+                        </td>
+                        <td className={styles.tableRight}>
+                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                            style={{ width: 100, textAlign: 'right' }}
+                            valueSen={d.discountCenti}
+                            disabled={isLocked}
+                            onCommit={(sen) => setLine(it, { discountCenti: sen ?? 0 })} />
+                        </td>
+                        <td className={styles.priceCell}>{fmtRm(d.qty * d.unitPriceCenti - d.discountCenti, pi.currency)}</td>
+                        <td>
+                          <span className={styles.actionsCell}>
+                            <button type="button"
+                              className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
+                              title="Remove line" disabled={isLocked || deleteItem.isPending}
+                              /* Delete immediately (no confirm). PI is AP-only, so
+                                 removal is a plain line delete (inventory landed at
+                                 GRN time). */
+                              onClick={() => { if (!isLocked) deleteItem.mutate({ id: pi.id, itemId: it.id }); }}>
+                              <Trash2 {...SM_ICON} />
+                            </button>
+                          </span>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className={styles.tableRight}>{it.qty}</td>
+                        <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, pi.currency)}</td>
+                        <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, pi.currency) : '—'}</td>
+                        <td className={styles.priceCell}>{fmtRm(lineTotalOf(it), pi.currency)}</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -257,9 +428,9 @@ export const PurchaseInvoiceDetail = () => {
           <h2 className={styles.cardTitle}>Totals</h2>
         </header>
         <div className={styles.cardBody}>
-          {/* Subtotal computed LIVE from the visible line items; tax is the
-              stored header value; total = subtotal + tax. Paid + Balance are
-              read-only (no payment-entry UI here). */}
+          {/* Subtotal computed LIVE from the visible line items (incl. unsaved
+              draft edits); tax is the stored header value; total = subtotal +
+              tax. Paid + Balance are read-only (no payment-entry UI here). */}
           <div className={styles.totalsGrid}>
             <div className={styles.totalRow}>
               <span className={styles.totalLabel}>Subtotal</span>
@@ -289,26 +460,29 @@ export const PurchaseInvoiceDetail = () => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   Supplier / header card — always inline-editable, immediate save.
-   Selects commit on change; text/date commit on blur (only if changed).
-   Inputs bind directly to the server PI row.
+   Supplier / header card — controlled by the page's draft (mirror PO/GRN).
+   In View it renders read-only InfoCells; in Edit it shows inputs bound to the
+   page draft (committed by the single top Save).
    ════════════════════════════════════════════════════════════════════════ */
 
 const SupplierCard = ({
-  pi, locked, onCommit,
+  pi, draft, onField, locked, isEditing = true,
 }: {
   pi: any;
+  /** Draft header values (page-owned). In View these mirror the saved PI. */
+  draft: HeaderDraft;
+  /** Update a single header field on the page draft. */
+  onField: (k: keyof HeaderDraft, v: string) => void;
   locked: boolean;
-  onCommit: (patch: Record<string, unknown>) => void;
+  /** View → Edit gate. When false the card renders read-only display text. */
+  isEditing?: boolean;
 }) => {
   const suppliersQ = useSuppliers();
   const suppliers = suppliersQ.data ?? [];
-  // Supplier-info auto-fill card follows the saved PI's supplier.
-  const supplierDetail = useSupplierDetail(pi.supplier_id ?? null);
+  // In Edit follow the draft's picked supplier; in View follow the saved PI.
+  const supplierIdForDetail = isEditing ? (draft.supplierId || null) : (pi.supplier_id ?? null);
+  const supplierDetail = useSupplierDetail(supplierIdForDetail);
   const supplier: SupplierRow | null = supplierDetail.data?.supplier ?? null;
-
-  const invoiceDate = (pi.invoice_date ?? '').slice(0, 10);
-  const dueDate = (pi.due_date ?? '').slice(0, 10);
 
   return (
     <section className={styles.card}>
@@ -316,12 +490,37 @@ const SupplierCard = ({
         <h2 className={styles.cardTitle}>Supplier · Dates · Notes</h2>
       </header>
       <div className={styles.cardBody}>
+        {!isEditing ? (
+          /* View mode — read-only display text sourced from the saved PI. */
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, 1fr)',
+              gap: 'var(--space-3) var(--space-4)',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-13)',
+            }}
+          >
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Supplier"
+                value={pi.supplier?.name ?? pi.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
+            </div>
+            <InfoCell label="Currency" value={pi.currency || null} />
+            <div />
+            <InfoCell label="Supplier Invoice Ref" value={pi.supplier_invoice_ref || null} />
+            <InfoCell label="Invoice Date" value={(pi.invoice_date ?? '').slice(0, 10) || null} />
+            <InfoCell label="Due Date" value={(pi.due_date ?? '').slice(0, 10) || null} />
+            <div style={{ gridColumn: 'span 2' }}>
+              <InfoCell label="Notes" value={pi.notes || null} />
+            </div>
+          </div>
+        ) : (
         <div className={styles.formGrid4}>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Supplier *</span>
             <span className={styles.selectWrap}>
-              <select className={styles.fieldSelect} value={pi.supplier_id ?? ''} disabled={locked}
-                onChange={(e) => onCommit({ supplierId: e.target.value })}>
+              <select className={styles.fieldSelect} value={draft.supplierId} disabled={locked}
+                onChange={(e) => onField('supplierId', e.target.value)}>
                 <option value="">— Pick supplier —</option>
                 {suppliers.map((s) => (
                   <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
@@ -333,8 +532,8 @@ const SupplierCard = ({
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Currency</span>
             <span className={styles.selectWrap}>
-              <select className={styles.fieldSelect} value={pi.currency ?? 'MYR'} disabled={locked}
-                onChange={(e) => onCommit({ currency: e.target.value })}>
+              <select className={styles.fieldSelect} value={draft.currency} disabled={locked}
+                onChange={(e) => onField('currency', e.target.value)}>
                 <option value="MYR">MYR</option>
                 <option value="RMB">RMB</option>
                 <option value="USD">USD</option>
@@ -343,31 +542,29 @@ const SupplierCard = ({
               <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
             </span>
           </label>
+          <div />
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Supplier Invoice Ref</span>
-            <input className={styles.fieldInput}
-              defaultValue={pi.supplier_invoice_ref ?? ''} key={`ref-${pi.supplier_invoice_ref ?? ''}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== (pi.supplier_invoice_ref ?? '')) onCommit({ supplierInvoiceRef: e.target.value }); }} />
+            <input className={styles.fieldInput} value={draft.supplierInvoiceRef} disabled={locked}
+              onChange={(e) => onField('supplierInvoiceRef', e.target.value)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Invoice Date</span>
-            <input type="date" className={styles.fieldInput}
-              defaultValue={invoiceDate} key={`inv-${invoiceDate}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== invoiceDate) onCommit({ invoiceDate: e.target.value }); }} />
+            <input type="date" className={styles.fieldInput} value={draft.invoiceDate} disabled={locked}
+              onChange={(e) => onField('invoiceDate', e.target.value)} />
           </label>
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Due Date</span>
-            <input type="date" className={styles.fieldInput}
-              defaultValue={dueDate} key={`due-${dueDate}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== dueDate) onCommit({ dueDate: e.target.value }); }} />
+            <input type="date" className={styles.fieldInput} value={draft.dueDate} disabled={locked}
+              onChange={(e) => onField('dueDate', e.target.value)} />
           </label>
           <label className={styles.field} style={{ gridColumn: 'span 2' }}>
             <span className={styles.fieldLabel}>Notes</span>
-            <input className={styles.fieldInput}
-              defaultValue={pi.notes ?? ''} key={`notes-${pi.notes ?? ''}`} disabled={locked}
-              onBlur={(e) => { if (e.target.value !== (pi.notes ?? '')) onCommit({ notes: e.target.value }); }} />
+            <input className={styles.fieldInput} value={draft.notes} disabled={locked}
+              onChange={(e) => onField('notes', e.target.value)} />
           </label>
         </div>
+        )}
 
         {/* Supplier-info auto-fill card. Read-only display from /suppliers/:id. */}
         {supplier && (

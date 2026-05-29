@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, FileText } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { usePurchaseInvoices } from '../lib/flow-queries';
+import { usePurchaseInvoices, useCancelPurchaseInvoice } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
@@ -116,9 +116,19 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
 export const PurchaseInvoices = () => {
   const navigate = useNavigate();
   const { data, isLoading, error } = usePurchaseInvoices();
+  const cancelPi = useCancelPurchaseInvoice();
 
   const rows = useMemo<PiRow[]>(() => (data?.purchaseInvoices ?? []) as PiRow[], [data]);
   const columns = useMemo(() => buildPiColumns(), []);
+
+  // Cancel a PI (right-click) — flips status → CANCELLED (PI is AP-only, no
+  // inventory). Confirm first; the endpoint blocks a PAID invoice.
+  const doCancelPi = (r: PiRow) => {
+    if (!window.confirm(`Cancel invoice ${r.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
+    cancelPi.mutate(r.id, {
+      onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
+    });
+  };
 
   return (
     <div className={styles.page}>
@@ -164,11 +174,21 @@ export const PurchaseInvoices = () => {
         rowStyle={(r) => r.status === 'CANCELLED'
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
           : undefined}
-        contextMenu={(r) => [
-          // The PI detail page is always inline-editable (no draft / no Edit
-          // gate), so a single "Open" entry covers both view + edit.
-          { label: 'Open', onClick: () => navigate(`/purchase-invoices/${r.id}`) },
-        ]}
+        contextMenu={(r) => {
+          // Mirror the PO/GRN list's right-click menu: View / Edit · divider ·
+          // Cancel (danger). View opens read-only; Edit lands in the detail
+          // page's draft Edit mode via ?edit=1.
+          const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
+            { label: 'View', onClick: () => navigate(`/purchase-invoices/${r.id}`) },
+            { label: 'Edit', onClick: () => navigate(`/purchase-invoices/${r.id}?edit=1`) },
+          ];
+          // Cancel — soft-stop. Hidden once already cancelled.
+          if (r.status !== 'CANCELLED') {
+            menu.push({ divider: true as const });
+            menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelPi(r) });
+          }
+          return menu;
+        }}
         isLoading={isLoading}
         emptyMessage='No invoices yet — convert a Goods Receipt via "From GRN".'
       />
