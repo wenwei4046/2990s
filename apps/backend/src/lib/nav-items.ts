@@ -24,6 +24,9 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'SO Detail View', path: '/reports/sales-order-detail-listing', group: 'Sales Order', keywords: 'listing report' },
   { label: 'Sales Invoices', path: '/sales-invoices', group: 'Sales Order', keywords: 'si invoice' },
   { label: 'SO Maintenance', path: '/mfg-sales-orders/maintenance', group: 'Sales Order', keywords: 'localities warehouse dropdown' },
+  // Commander 2026-05-29 — Delivery flows grouped with Sales Order (outbound side).
+  { label: 'Delivery Orders', path: '/mfg-delivery-orders', group: 'Sales Order', keywords: 'do dispatch' },
+  { label: 'Delivery Returns', path: '/delivery-returns', group: 'Sales Order', keywords: 'dr return' },
 
   // Procurement
   { label: 'SKU master', path: '/sku-master', group: 'Procurement', keywords: 'catalog pricing' },
@@ -38,9 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Purchase Returns', path: '/purchase-returns', group: 'Procurement', keywords: 'pr return' },
 
   // Transportation
-  { label: 'Delivery Orders', path: '/mfg-delivery-orders', group: 'Transportation', keywords: 'do dispatch' },
   { label: 'Drivers', path: '/drivers', group: 'Transportation' },
-  { label: 'Delivery Returns', path: '/delivery-returns', group: 'Transportation' },
 
   // Warehouse
   { label: 'Inventory', path: '/inventory', group: 'Warehouse', keywords: 'stock balance' },
