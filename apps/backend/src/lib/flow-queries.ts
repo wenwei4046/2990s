@@ -924,6 +924,11 @@ export const useUpdateSalesInvoiceStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
       qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      /* Cancel reverses revenue (contra JE) — refresh accounting + the
+         invoiceable-lines picker so the released qty re-appears as Pending. */
+      qc.invalidateQueries({ queryKey: ['journal-entries'] });
+      qc.invalidateQueries({ queryKey: ['account-balances'] });
+      qc.invalidateQueries({ queryKey: ['ar-aging'] });
     },
   });
 };
@@ -941,18 +946,58 @@ export const useRecordSiPayment = () => {
   });
 };
 
-/* Convert SEVERAL same-customer Delivery Orders → ONE merged Sales Invoice.
-   Server validates the selected DOs share one customer, copies the first DO's
-   header, merges every DO's lines into one invoice (status SENT), recomputes
-   totals, then records revenue (Dr 1100 AR / Cr 4000 Sales Revenue), idempotent
-   on the invoice number. Returns the new invoice's { id, invoiceNumber }. */
+/* Line-level DO → conversion descriptor (Commander 2026-05-30, Phase B). Each
+   row is a DO line that can still be invoiced OR returned — remaining =
+   delivered − invoiced − returned, derived live by the server (no stored
+   counter). Invoicing + returning compete for the same Pending pool, so an
+   invoiced unit can't be returned and vice-versa. Shared by the invoiceable +
+   returnable pickers (same shape; `remaining` means remaining_to_invoice on the
+   SI side and remaining_to_return on the DR side). */
+export type DoRemainingLine = {
+  doItemId: string;
+  deliveryOrderId: string;
+  doNumber: string;
+  debtorCode: string | null;
+  debtorName: string | null;
+  itemCode: string;
+  itemGroup: string | null;
+  description: string | null;
+  description2: string | null;
+  uom: string | null;
+  delivered: number;
+  invoiced: number;
+  returned: number;
+  remaining: number;
+  unitPriceCenti: number;
+  unitCostCenti: number;
+  discountCenti: number;
+  variants: unknown;
+};
+
+/* Invoiceable DO LINES for the line-level DO→Sales Invoice picker. Each row is a
+   DO line with remaining_to_invoice > 0. A line can be invoiced across several
+   invoices until remaining hits 0. */
+export const useInvoiceableDoLines = () => useQuery({
+  queryKey: ['sales-invoices', 'invoiceable-do-lines'],
+  queryFn: () => authedFetch<{ lines: DoRemainingLine[] }>(
+    `/sales-invoices/invoiceable-do-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
+/* Convert picked DO LINES (each with a partial qty) → ONE Sales Invoice. Server
+   validates the picks share one customer + each qty is 1..remaining_to_invoice,
+   creates one invoice line per pick (status SENT), recomputes totals, then
+   records revenue (Dr 1100 AR / Cr 4000 Sales Revenue), idempotent on the
+   invoice number. Returns the new invoice's { id, invoiceNumber }. */
 export const useConvertDosToSi = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ doIds }: { doIds: string[] }) =>
+    mutationFn: ({ picks }: { picks: Array<{ doItemId: string; qty: number }> }) =>
       authedFetch<{ id: string; invoiceNumber: string; revenue: { posted: boolean; jeNo?: string; status: string } }>(
         `/sales-invoices/from-dos`,
-        { method: 'POST', body: JSON.stringify({ doIds }) },
+        { method: 'POST', body: JSON.stringify({ picks }) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
@@ -1261,13 +1306,28 @@ export const useCreateDeliveryReturn = () => {
   });
 };
 
-/* Convert a DO → new Delivery Return. Server snapshots the DO header + copies
-   the picked lines (with variants + prices + costs) into a new return, then
-   increases stock. Returns can ONLY come from a DO. */
+/* Returnable DO LINES for the line-level DO→Delivery Return picker. Each row is
+   a DO line with remaining_to_return > 0 — the SAME Pending pool as
+   remaining_to_invoice, so invoiced units never appear here. A line can be
+   returned across several returns until remaining hits 0. */
+export const useReturnableDoLines = () => useQuery({
+  queryKey: ['delivery-returns', 'returnable-do-lines'],
+  queryFn: () => authedFetch<{ lines: DoRemainingLine[] }>(
+    `/delivery-returns/returnable-do-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
+/* Convert picked DO LINES (each with a partial qty) → ONE Delivery Return.
+   Server validates the picks share one customer + each qty is
+   1..remaining_to_return, creates one return line per pick (status RECEIVED),
+   recomputes totals, then increases stock. Returns the new return's
+   { id, returnNumber, lineCount }. */
 export const useConvertDoToDeliveryReturn = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { deliveryOrderId: string; items?: Array<{ doItemId: string; qtyReturned: number; condition?: string }> }) =>
+    mutationFn: (body: { picks: Array<{ doItemId: string; qty: number; condition?: string }> }) =>
       authedFetch<{ id: string; returnNumber: string; lineCount: number }>(
         `/delivery-returns/from-do`, { method: 'POST', body: JSON.stringify(body) },
       ),
@@ -1304,6 +1364,9 @@ export const useUpdateDeliveryReturnStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['delivery-returns'] });
       qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+      /* Cancel reverses the inventory increase (negative ADJUSTMENT) — refresh
+         inventory so on-hand reflects the removed stock. */
+      qc.invalidateQueries({ queryKey: ['inventory'] });
     },
   });
 };

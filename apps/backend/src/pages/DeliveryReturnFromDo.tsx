@@ -1,31 +1,38 @@
 // ----------------------------------------------------------------------------
-// DeliveryReturnFromDo — Delivery Order → Delivery Return picker.
+// DeliveryReturnFromDo — LINE-LEVEL, QUANTITY-BASED Delivery Order → Delivery
+// Return picker.
 //
-// Mirrors PurchaseOrderFromSo (the SO → PO picker): a DataGrid of the SOURCE
-// documents (here, Delivery Orders) that converts a chosen one into the target
-// (a Delivery Return). Returns can ONLY come from a DO — there is no free
-// entry — so this is the sole creation path beyond the blank New form.
+// Commander 2026-05-30 (Phase B) rewrite: partial-return model, mirroring the
+// SO→DO line-level picker (DeliveryOrderFromSo.tsx) + the new SI from-DO picker.
+// Instead of ticking a whole Delivery Order, the operator picks individual DO
+// LINES, each with a return qty 1..remaining (and a condition). A DO line can be
+// returned across SEVERAL Delivery Returns until its remaining (delivered −
+// invoiced − returned, derived LIVE by the server) reaches 0:
+//   - Still returnable (remaining > 0) → the line is pickable.
+//   - Fully invoiced/returned (remaining == 0) → the line drops out.
+//   - Cancelling a return (or an invoice) RAISES remaining again automatically.
 //
-// A return comes from exactly ONE DO (one customer, one delivery), so this is
-// a single-select picker: tick a DO row, hit "Create Return from DO". The
-// server snapshots the DO header + copies its line items (with variants +
-// prices + costs) into a new return and INCREASES stock. The new return opens
-// in Edit mode so the operator can trim qty / drop lines / set conditions.
+// Invoicing + returning compete for the SAME Pending pool, so an invoiced unit
+// can't be returned — it never appears here.
+//
+// A customer-lock keeps the merge clean: once one line is ticked, lines of a
+// DIFFERENT customer grey out — a return is for ONE customer.
+//
+// On convert the server creates ONE return (status RECEIVED) with one line per
+// pick and INCREASES stock; we land on the new return in Edit mode.
 //
 // Routing: /delivery-returns/from-do.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import {
-  useMfgDeliveryOrders, useConvertDoToDeliveryReturn,
-} from '../lib/flow-queries';
-import { useStaff } from '../lib/admin-queries';
+import { buildVariantSummary } from '@2990s/shared';
+import { useReturnableDoLines, useConvertDoToDeliveryReturn, type DoRemainingLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
-import { BrandingPill } from '../lib/category-badges';
+import { ItemGroupPill } from '../lib/category-badges';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -35,128 +42,236 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   })}`;
 
-const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const compactDate = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-  if (!m) return iso;
-  const y = m[1], mo = MONTH_3[Number(m[2]) - 1] ?? m[2], d = String(Number(m[3]));
-  return `${d} ${mo} ${y}`;
+const STORAGE_KEY = 'pr-g.dr-from-do-lines.layout.v1';
+
+const CONDITIONS = ['NEW', 'OPENED', 'DAMAGED', 'DEFECTIVE'] as const;
+
+/* Compact pill input — mirrors the SO→DO picker's qty input. */
+const QTY_INPUT: CSSProperties = {
+  height: 28,
+  border: '1px solid var(--line)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '0 8px',
+  fontSize: 'var(--fs-12)',
+  background: 'var(--c-paper)',
+  color: 'var(--c-ink)',
 };
 
-const STORAGE_KEY = 'pr-g.dr-from-do.layout.v1';
+/* One distinct customer key per DO line — match the server's same-customer rule:
+   debtor_code when present, else fall back to debtor_name. */
+const custKey = (l: DoRemainingLine): string =>
+  (l.debtorCode && l.debtorCode.trim())
+    ? `code:${l.debtorCode.trim().toUpperCase()}`
+    : `name:${(l.debtorName ?? '').trim().toUpperCase()}`;
 
-type DoLite = {
-  id: string;
-  do_number: string;
-  do_date: string;
-  debtor_code: string | null;
-  debtor_name: string;
-  salesperson_id: string | null;
-  branding: string | null;
-  venue: string | null;
-  local_total_centi: number;
-  line_count?: number;
-  status: string;
-};
+type Pick = { picked: boolean; qty: number; condition: string };
 
 export const DeliveryReturnFromDo = () => {
   const navigate = useNavigate();
-  /* A return is only meaningful from a DO whose goods have actually gone out,
-     i.e. any non-cancelled DO. The DO list returns every DO; filter out the
-     cancelled ones (nothing was delivered) below. */
-  const dosQ = useMfgDeliveryOrders(undefined);
+  const linesQ = useReturnableDoLines();
   const convert = useConvertDoToDeliveryReturn();
 
-  const [pickedId, setPickedId] = useState<string | null>(null);
+  // Map<doItemId, { picked, qty, condition }>. Defaults: picked = false; when
+  // ticked, qty defaults to the line's remaining, condition to NEW.
+  const [picks, setPicks] = useState<Record<string, Pick>>({});
   const [dialog, setDialog] = useState<{ title: string; body: string } | null>(null);
 
-  const staffQ = useStaff();
-  const staffById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const s of (staffQ.data ?? [])) if (s.id) m.set(s.id, s.name ?? s.staffCode ?? s.id);
+  const rows = useMemo<DoRemainingLine[]>(() => linesQ.data ?? [], [linesQ.data]);
+
+  const rowById = useMemo(() => {
+    const m = new Map<string, DoRemainingLine>();
+    for (const r of rows) m.set(r.doItemId, r);
     return m;
-  }, [staffQ.data]);
+  }, [rows]);
 
-  const rows = useMemo<DoLite[]>(() => {
-    const all = (dosQ.data?.deliveryOrders ?? []) as DoLite[];
-    return all.filter((d) => d.status !== 'CANCELLED');
-  }, [dosQ.data]);
+  const lockedCustomer = useMemo(() => {
+    for (const [id, v] of Object.entries(picks)) {
+      if (!v.picked) continue;
+      const r = rowById.get(id);
+      if (r) return custKey(r);
+    }
+    return null;
+  }, [picks, rowById]);
 
-  const togglePick = (id: string) => setPickedId((cur) => (cur === id ? null : id));
+  const lockedCustomerName = useMemo(() => {
+    for (const [id, v] of Object.entries(picks)) {
+      if (!v.picked) continue;
+      const r = rowById.get(id);
+      if (r) return r.debtorName ?? r.debtorCode ?? '(none)';
+    }
+    return null;
+  }, [picks, rowById]);
 
-  const columns = useMemo<DataGridColumn<DoLite>[]>(() => [
+  const isRowLocked = (r: DoRemainingLine): boolean =>
+    Boolean(lockedCustomer && custKey(r) !== lockedCustomer && !picks[r.doItemId]?.picked);
+
+  const togglePick = (r: DoRemainingLine) => {
+    if (isRowLocked(r)) return;
+    const turningOn = !picks[r.doItemId]?.picked;
+    setPicks((s) => ({
+      ...s,
+      [r.doItemId]: turningOn
+        ? { picked: true, qty: s[r.doItemId]?.qty || r.remaining, condition: s[r.doItemId]?.condition || 'NEW' }
+        : { picked: false, qty: 0, condition: s[r.doItemId]?.condition || 'NEW' },
+    }));
+  };
+
+  const setQty = (r: DoRemainingLine, qty: number) => {
+    if (isRowLocked(r)) return;
+    setPicks((s) => ({ ...s, [r.doItemId]: { picked: true, qty, condition: s[r.doItemId]?.condition || 'NEW' } }));
+  };
+
+  const setCondition = (r: DoRemainingLine, condition: string) => {
+    if (isRowLocked(r)) return;
+    setPicks((s) => {
+      const prev = s[r.doItemId];
+      return { ...s, [r.doItemId]: { picked: prev?.picked ?? true, qty: prev?.picked ? prev.qty : r.remaining, condition } };
+    });
+  };
+
+  const selectAll = () => {
+    setPicks((s) => {
+      const next = { ...s };
+      const key = lockedCustomer ?? (rows[0] ? custKey(rows[0]) : null);
+      if (!key) return next;
+      for (const r of rows) if (custKey(r) === key) next[r.doItemId] = { picked: true, qty: r.remaining, condition: next[r.doItemId]?.condition || 'NEW' };
+      return next;
+    });
+  };
+  const clearAll = () => setPicks({});
+
+  const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
+  const pickedCount = picked.length;
+
+  const columns = useMemo<DataGridColumn<DoRemainingLine>[]>(() => [
     {
       key: 'pick', label: '', width: 40, sortable: false, groupable: false,
-      accessor: (r) => (
-        <input
-          type="radio"
-          name="dr-from-do-pick"
-          checked={pickedId === r.id}
-          onChange={() => togglePick(r.id)}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={`Pick DO ${r.do_number}`}
-        />
-      ),
+      accessor: (r) => {
+        const on = Boolean(picks[r.doItemId]?.picked);
+        const locked = isRowLocked(r);
+        return (
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={locked}
+            onChange={() => togglePick(r)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Pick ${r.itemCode}`}
+            style={locked ? { cursor: 'not-allowed' } : undefined}
+          />
+        );
+      },
     },
     {
-      key: 'do_number', label: 'DO No', width: 150, sortable: true,
-      accessor: (r) => <span className={styles.codeCell}>{r.do_number}</span>,
-      searchValue: (r) => r.do_number,
+      key: 'doNumber', label: 'DO No', width: 140, sortable: true, groupable: true,
+      accessor: (r) => <span className={styles.codeCell}>{r.doNumber}</span>,
+      searchValue: (r) => r.doNumber,
+      groupValue: (r) => r.doNumber,
     },
     {
-      key: 'do_date', label: 'Date', width: 110, sortable: true,
-      accessor: (r) => compactDate(r.do_date),
-      searchValue: (r) => `${r.do_date ?? ''} ${compactDate(r.do_date)}`,
-      sortFn: (a, b) => (a.do_date ?? '').localeCompare(b.do_date ?? ''),
+      key: 'debtorName', label: 'Customer', width: 200, sortable: true, groupable: true,
+      accessor: (r) => r.debtorName ?? '—',
+      searchValue: (r) => r.debtorName ?? '',
+      groupValue: (r) => r.debtorName ?? '(none)',
     },
     {
-      key: 'debtor_name', label: 'Customer', width: 220, sortable: true, groupable: true,
-      accessor: (r) => r.debtor_name ?? '—',
-      searchValue: (r) => r.debtor_name ?? '',
-      groupValue: (r) => r.debtor_name ?? '(none)',
+      key: 'itemGroup', label: 'Category', width: 110, sortable: true, groupable: true,
+      accessor: (r) => <ItemGroupPill group={r.itemGroup} />,
+      searchValue: (r) => r.itemGroup ?? '',
+      groupValue: (r) => (r.itemGroup ?? '(none)').toUpperCase(),
     },
     {
-      key: 'salesperson_id', label: 'Salesperson', width: 150, sortable: true, groupable: true,
-      accessor: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '—' : '—'),
-      searchValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '' : ''),
-      groupValue: (r) => (r.salesperson_id ? staffById.get(r.salesperson_id) ?? '(none)' : '(none)'),
+      key: 'itemCode', label: 'Item Code', width: 130, sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 600 }}>{r.itemCode}</span>,
+      searchValue: (r) => r.itemCode ?? '',
     },
     {
-      key: 'branding', label: 'Branding', width: 140, sortable: true, groupable: true,
-      accessor: (r) => (r.branding ? <BrandingPill branding={r.branding} /> : <span style={{ color: 'var(--fg-muted)' }}>—</span>),
-      searchValue: (r) => r.branding ?? '',
-      groupValue: (r) => r.branding ?? '(none)',
+      key: 'description', label: 'Description', width: 240, sortable: true,
+      accessor: (r) => {
+        const summary = buildVariantSummary(
+          r.itemGroup ?? '',
+          r.variants as Record<string, unknown> | null | undefined,
+        );
+        const main = r.description || summary || '—';
+        return (
+          <div>
+            <div>{main}</div>
+            {r.description && summary && (
+              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
+            )}
+          </div>
+        );
+      },
+      searchValue: (r) => `${r.description ?? ''} ${r.description2 ?? ''}`.trim(),
     },
     {
-      key: 'venue', label: 'Venue', width: 180, sortable: true, groupable: true,
-      accessor: (r) => r.venue ?? '—',
-      searchValue: (r) => r.venue ?? '',
-      groupValue: (r) => r.venue ?? '(none)',
+      key: 'delivered', label: 'Delivered', width: 80, align: 'right', sortable: true,
+      accessor: (r) => String(r.delivered),
+      sortFn: (a, b) => a.delivered - b.delivered,
     },
     {
-      key: 'line_count', label: 'Lines', width: 70, align: 'right', sortable: true,
-      accessor: (r) => String(r.line_count ?? 0),
-      sortFn: (a, b) => (a.line_count ?? 0) - (b.line_count ?? 0),
+      key: 'returned', label: 'Returned', width: 80, align: 'right', sortable: true,
+      accessor: (r) => <span className={styles.muted}>{r.returned}</span>,
+      sortFn: (a, b) => a.returned - b.returned,
     },
     {
-      key: 'local_total_centi', label: 'DO Value', width: 130, align: 'right', sortable: true,
-      accessor: (r) => (
-        <span style={{ fontWeight: 700, color: 'var(--c-ink)', fontVariantNumeric: 'tabular-nums' }}>{fmtRm(r.local_total_centi)}</span>
-      ),
-      searchValue: (r) => fmtRm(r.local_total_centi),
-      sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
+      key: 'remaining', label: 'Remaining', width: 80, align: 'right', sortable: true,
+      accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{r.remaining}</span>,
+      sortFn: (a, b) => a.remaining - b.remaining,
     },
-  ], [pickedId, staffById]);
+    {
+      key: 'pickQty', label: 'Qty to Return', width: 110, align: 'right', sortable: false, groupable: false,
+      accessor: (r) => {
+        const p = picks[r.doItemId];
+        const on = Boolean(p?.picked);
+        const locked = isRowLocked(r);
+        return (
+          <input
+            type="number"
+            min={0}
+            max={r.remaining}
+            value={on ? p!.qty : ''}
+            placeholder={String(r.remaining)}
+            disabled={locked}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              setQty(r, Math.min(r.remaining, Math.max(0, Number(e.target.value) || 0)))}
+            style={{ ...QTY_INPUT, width: 76, textAlign: 'right', ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
+          />
+        );
+      },
+    },
+    {
+      key: 'condition', label: 'Condition', width: 130, sortable: false, groupable: false,
+      accessor: (r) => {
+        const p = picks[r.doItemId];
+        const locked = isRowLocked(r);
+        return (
+          <select
+            value={p?.condition ?? 'NEW'}
+            disabled={locked}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setCondition(r, e.target.value)}
+            style={{ ...QTY_INPUT, width: 118, ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
+          >
+            {CONDITIONS.map((cond) => <option key={cond} value={cond}>{cond}</option>)}
+          </select>
+        );
+      },
+    },
+  ], [picks, lockedCustomer]);
 
-  const onSave = () => {
-    if (!pickedId) { setDialog({ title: 'Nothing picked', body: 'Tick the Delivery Order to return from first.' }); return; }
+  const onConvert = () => {
+    if (pickedCount === 0) {
+      setDialog({ title: 'Nothing picked', body: 'Tick at least one Delivery Order line to return first.' });
+      return;
+    }
+    const picksPayload = picked.map(([doItemId, v]) => ({ doItemId, qty: v.qty, condition: v.condition }));
     convert.mutate(
-      { deliveryOrderId: pickedId },
+      { picks: picksPayload },
       {
         onSuccess: (res) => {
-          // Open the new return in Edit mode so the operator can trim qty /
-          // drop lines / set conditions before it settles.
+          // Open the new return in Edit mode so the operator can review.
           navigate(`/delivery-returns/${res.id}?edit=1`);
         },
         onError: (e) => setDialog({
@@ -167,6 +282,17 @@ export const DeliveryReturnFromDo = () => {
     );
   };
 
+  const toolbar = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+      <Button variant="ghost" size="sm" onClick={selectAll} disabled={rows.length === 0}>
+        <CheckSquare {...ICON} /> Select all
+      </Button>
+      <Button variant="ghost" size="sm" onClick={clearAll} disabled={pickedCount === 0}>
+        <Square {...ICON} /> Clear all
+      </Button>
+    </div>
+  );
+
   return (
     <div className={styles.page}>
       <div className={styles.headerRow}>
@@ -174,7 +300,7 @@ export const DeliveryReturnFromDo = () => {
           <Link to="/delivery-returns" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Delivery Returns</span>
           </Link>
-          <h1 className={styles.title}>Pick a Delivery Order to return from</h1>
+          <h1 className={styles.title}>Pick Delivery Order lines to return</h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns')}>
@@ -182,30 +308,45 @@ export const DeliveryReturnFromDo = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={onSave}
-            disabled={!pickedId || convert.isPending}
-            title="Copy the picked DO's header + lines into a new Delivery Return"
+            onClick={onConvert}
+            disabled={pickedCount === 0 || convert.isPending}
+            title="Combine the picked Delivery Order lines into one Delivery Return"
           >
-            <Save {...ICON} />
-            {convert.isPending ? 'Converting…' : pickedId ? 'Create Return from DO' : 'Pick a DO'}
+            <ArrowRightLeft {...ICON} />
+            {convert.isPending
+              ? 'Converting…'
+              : pickedCount === 0
+                ? 'Pick at least 1 line'
+                : `Convert ${pickedCount} line${pickedCount === 1 ? '' : 's'} to Delivery Return`}
           </Button>
         </div>
       </div>
       <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-        A return copies the DO's customer, address, and line items (with variants + prices). Returned stock goes back IN.
-        After converting you can trim quantities, drop lines, or set each item's condition on the return.
+        Pick the Delivery Order lines being returned and set the quantity + condition for each. A line can be
+        returned in parts across several returns — only the remaining (not-yet-returned, not-yet-invoiced)
+        quantity is shown. Returned stock goes back IN. You can review and edit the new return on the next screen.
       </p>
+      {lockedCustomerName && (
+        <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          One customer per Delivery Return — locked to <strong>{lockedCustomerName}</strong>. Other
+          customers' lines are greyed out; clear picks to switch.
+        </p>
+      )}
 
-      <DataGrid<DoLite>
+      <DataGrid<DoRemainingLine>
         rows={rows}
         columns={columns}
         storageKey={STORAGE_KEY}
-        rowKey={(r) => r.id}
-        searchPlaceholder="Search DO, customer…"
-        onRowClick={(r) => togglePick(r.id)}
+        rowKey={(r) => r.doItemId}
+        searchPlaceholder="Search DO, customer, item…"
+        onRowClick={(r) => togglePick(r)}
+        rowStyle={(r) => isRowLocked(r)
+          ? { opacity: 0.45, background: 'var(--c-cream)', cursor: 'not-allowed' }
+          : undefined}
+        toolbar={toolbar}
         groupBanner={false}
-        isLoading={dosQ.isLoading}
-        emptyMessage="No delivery orders to return from."
+        isLoading={linesQ.isLoading}
+        emptyMessage="No returnable Delivery Order lines — every line has been fully returned or invoiced (or there are no Delivery Orders)."
       />
 
       {dialog && (

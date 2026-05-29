@@ -19,6 +19,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 
 export const deliveryReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryReturns.use('*', supabaseAuth);
@@ -171,6 +172,81 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
+/* Commander 2026-05-30 (Phase B) — REVERSE a DR's inventory increase when it is
+   CANCELLED. The return wrote IN movements on create (creating FIFO lots);
+   cancelling must remove that stock so on-hand isn't permanently inflated.
+
+   We write a NEGATIVE ADJUSTMENT row per (product_code, variant_key) bucket
+   (qty = −returned). The inventory_balances view treats ADJUSTMENT as signed
+   (migration 0095: `WHEN movement_type = 'ADJUSTMENT' THEN qty`), so a negative
+   qty subtracts exactly what the IN added — net stock impact of the return
+   becomes zero. We deliberately do NOT write an 'OUT' row here:
+     • an OUT would FIFO-consume an arbitrary lot + compute a spurious COGS, and
+     • source_doc_type 'DR' carries a UNIQUE index (uq_inv_mov_dr_source on
+       doc+product+variant, migration 0102) that an OUT reusing the DR id would
+       collide with. An ADJUSTMENT row is unindexed and FIFO-neutral.
+
+   IDEMPOTENT: an existence check for a prior ADJUSTMENT row tagged with this
+   DR's id skips a re-reversal. Best-effort — a movement failure never un-cancels
+   the DR (audit-DLQ pattern, same as increaseInventoryForReturn). */
+async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
+  // Idempotency guard — has this DR already been reversed?
+  const { count: existing } = await sb
+    .from('inventory_movements')
+    .select('id', { head: true, count: 'exact' })
+    .eq('source_doc_type', 'ADJUSTMENT')
+    .eq('source_doc_id', deliveryReturnId)
+    .eq('movement_type', 'ADJUSTMENT');
+  if ((existing ?? 0) > 0) return; // already reversed — no-op
+
+  const { data: drHeader } = await sb.from('delivery_returns')
+    .select('return_number, warehouse_id')
+    .eq('id', deliveryReturnId).maybeSingle();
+  const { data: items } = await sb.from('delivery_return_items')
+    .select('item_code, description, qty_returned, item_group, variants')
+    .eq('delivery_return_id', deliveryReturnId);
+  const warehouseId = (drHeader as { warehouse_id: string | null } | null)?.warehouse_id
+    ?? (await defaultWarehouseId(sb));
+  const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
+  if (!warehouseId || !items) return;
+
+  // Collapse identical (product_code, variant_key) lines into one reversal row,
+  // mirroring increaseInventoryForReturn's bucketing.
+  const byKey = new Map<string, { product_code: string; variant_key: string; product_name: string | null; qty: number }>();
+  for (const it of (items as Array<{ item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+    const qty = Number(it.qty_returned ?? 0);
+    if (qty <= 0) continue;
+    const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+    const k = `${it.item_code}::${variantKey}`;
+    const cur = byKey.get(k);
+    if (cur) { cur.qty += qty; }
+    else byKey.set(k, { product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
+  }
+  const movements = [...byKey.values()].map((m) => ({
+    movement_type: 'ADJUSTMENT' as const,
+    warehouse_id: warehouseId,
+    product_code: m.product_code,
+    variant_key: m.variant_key,
+    product_name: m.product_name,
+    qty: -m.qty, // signed: negative removes the stock the return added
+    source_doc_type: 'ADJUSTMENT' as const,
+    source_doc_id: deliveryReturnId,
+    source_doc_no: drNo,
+    performed_by: performedBy,
+    notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
+  }));
+  if (movements.length > 0) await writeMovements(sb, movements);
+}
+
+/* Commander 2026-05-30 (Phase B) — LINE-LEVEL, QUANTITY-BASED DO → Delivery
+   Return remaining. Wraps the shared Pending formula (do-line-remaining.ts):
+   remaining_to_return = delivered − invoiced − returned. The SAME pool as
+   remaining_to_invoice — invoiced units can't be returned + vice-versa.
+   Cancelling a return releases its qty back to Pending. */
+async function doReturnableRemaining(sb: any, doIds: string[]): Promise<Map<string, DoRemainingLine>> {
+  return doLineRemaining(sb, doIds);
+}
+
 /* Build one delivery_return_items insert row from a client line payload.
    Shared by POST / (bulk create), POST /:id/items (single add), and the
    convert-from-DO copy. Computes line_total / line_cost / margin so
@@ -215,6 +291,23 @@ deliveryReturns.get('/', async (c) => {
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ deliveryReturns: data ?? [] });
+});
+
+// ── Returnable DO lines (line-level partial-return picker) ────────────────
+/* Commander 2026-05-30 (Phase B) — feeds the line-level DO→Delivery Return
+   picker. Returns each DO LINE that can still be returned (remaining > 0),
+   where remaining = delivered − invoiced − returned (derived live). With
+   ?doIds= it scopes to those DOs; without it, every non-cancelled DO.
+
+   IMPORTANT (route ordering): this STATIC path MUST be registered BEFORE the
+   `/:id` param route below, or Hono tries to cast it to an id. */
+deliveryReturns.get('/returnable-do-lines', async (c) => {
+  const sb = c.get('supabase');
+  const doIds = await resolveCandidateDoIds(sb, c.req.query('doIds'));
+  if (doIds.length === 0) return c.json({ lines: [] });
+  const remainingMap = await doReturnableRemaining(sb, doIds);
+  const lines = [...remainingMap.values()].filter((l) => l.remaining > 0);
+  return c.json({ lines });
 });
 
 // ── Detail ──────────────────────────────────────────────────────────────
@@ -309,52 +402,114 @@ deliveryReturns.post('/', async (c) => {
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
-// ── Convert from DO ───────────────────────────────────────────────────────
-// Returns can ONLY come from a DO (no free entry). Copies the source DO's
-// header (debtor / salesperson / address / branding / venue / warehouse) +
-// its line items (with variants + prices + costs) into a new return, then
-// increases stock. Optional `items` payload lets the picker send a subset of
-// the DO's lines (with edited return qty); when omitted, ALL the DO's lines
-// are copied at full qty.
-deliveryReturns.post('/from-do', async (c) => {
-  let body: { deliveryOrderId?: string; items?: Array<{ doItemId?: string; qtyReturned?: number; condition?: string }> };
+// ── Convert picked DO LINES (partial qty) → ONE Delivery Return ────────────
+/* Commander 2026-05-30 (Phase B) — LINE-LEVEL, QUANTITY-BASED convert, mirroring
+   the SO→DO /from-sos picker. Pick individual DO LINES (each with a qty
+   1..remaining_to_return) of ONE customer and combine them into ONE Delivery
+   Return. A DO line can be returned across SEVERAL returns until its remaining
+   (delivered − invoiced − returned, derived live) reaches 0. Invoiced units
+   can't be returned — they're already out of the Pending pool.
+
+   Body: { picks: [{ doItemId, qty, condition? }] }.
+
+   Steps:
+     1. Resolve every picked DO line's parent DO + live remaining via
+        doReturnableRemaining.
+     2. Validate (a) all picks share ONE customer (else 400 mixed_customers),
+        (b) each pick qty is 1..remaining_to_return (else 409 over_remaining).
+     3. Create ONE return (status RECEIVED) — header copied from the FIRST
+        pick's DO; one return line per pick (qty_returned = picked, do_item_id
+        set). recomputeTotals, then increaseInventoryForReturn (idempotent).
+
+   Mounted at both /from-do and /from-dos so existing callers keep working. */
+const convertDoLinesToReturn = async (c: any) => {
+  let body: { picks?: Array<{ doItemId?: string; qty?: number; qtyReturned?: number; condition?: string }> };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
-  if (!body.deliveryOrderId) return c.json({ error: 'delivery_order_id_required' }, 400);
 
   const sb = c.get('supabase'); const user = c.get('user');
 
-  // Pull the source DO header + items.
+  // Collapse duplicate doItemIds (sum their qty) so a line can't appear twice.
+  // Keep the first non-empty condition seen for each line.
+  const pickQtyById = new Map<string, number>();
+  const conditionById = new Map<string, string>();
+  for (const p of (body.picks ?? [])) {
+    if (!p || !p.doItemId) continue;
+    const q = Number(p.qty ?? p.qtyReturned ?? 0);
+    if (!(q > 0)) continue;
+    pickQtyById.set(p.doItemId, (pickQtyById.get(p.doItemId) ?? 0) + q);
+    if (p.condition && !conditionById.has(p.doItemId)) conditionById.set(p.doItemId, p.condition);
+  }
+  if (pickQtyById.size === 0) return c.json({ error: 'picks_required' }, 400);
+
+  // 1. Resolve each picked DO line → its parent DO, then derive remaining.
+  const pickedIds = [...pickQtyById.keys()];
+  const { data: pickedItemRows, error: pErr } = await sb
+    .from('delivery_order_items')
+    .select('id, delivery_order_id')
+    .in('id', pickedIds);
+  if (pErr) return c.json({ error: 'load_failed', reason: pErr.message }, 500);
+  const idToDo = new Map<string, string>();
+  for (const r of (pickedItemRows ?? []) as Array<{ id: string; delivery_order_id: string }>) idToDo.set(r.id, r.delivery_order_id);
+  const missing = pickedIds.filter((id) => !idToDo.has(id));
+  if (missing.length > 0) return c.json({ error: 'do_item_not_found', missing }, 404);
+
+  const doIds = [...new Set([...idToDo.values()])];
+  const remainingMap = await doReturnableRemaining(sb, doIds);
+
+  // 2a. Same-customer guard — every picked line must share ONE customer.
+  const customers = new Set<string>();
+  const customerNames = new Set<string>();
+  for (const id of pickedIds) {
+    const line = remainingMap.get(id);
+    if (!line) return c.json({ error: 'do_item_not_found', missing: [id] }, 404);
+    customers.add(custKeyOf(line));
+    customerNames.add(line.debtorName ?? line.debtorCode ?? '(none)');
+  }
+  if (customers.size > 1) {
+    return c.json({
+      error: 'mixed_customers',
+      message: 'All picked Delivery Order lines must belong to the same customer to combine into one Delivery Return.',
+      customers: [...customerNames],
+    }, 400);
+  }
+
+  // 2b. Per-line qty guard — 1..remaining_to_return.
+  for (const id of pickedIds) {
+    const line = remainingMap.get(id)!;
+    const qty = pickQtyById.get(id)!;
+    if (qty < 1 || qty > line.remaining) {
+      return c.json({
+        error: 'over_remaining',
+        message: `${line.itemCode} on ${line.doNumber}: return qty ${qty} exceeds remaining ${line.remaining}.`,
+        doItemId: id,
+        doNumber: line.doNumber,
+        itemCode: line.itemCode,
+        remaining: line.remaining,
+        requested: qty,
+      }, 409);
+    }
+  }
+
+  // 3. Create ONE return header from the FIRST pick's DO. "First" = the DO of
+  //    the earliest-sorted picked line so the result is deterministic.
+  const sortedPicks = pickedIds
+    .map((id) => remainingMap.get(id)!)
+    .sort((a, b) => a.doNumber.localeCompare(b.doNumber) || a.doItemId.localeCompare(b.doItemId));
+  const firstDoId = sortedPicks[0]!.deliveryOrderId;
+  const distinctDoNumbers = [...new Set(sortedPicks.map((l) => l.doNumber))].sort();
+
+  // Pull the FIRST DO's header for the return header snapshot.
   const { data: doHeader, error: dhErr } = await sb.from('delivery_orders')
     .select('id, do_number, debtor_code, debtor_name, phone, email, salesperson_id, agent, ' +
             'customer_type, building_type, branding, venue, venue_id, ref, customer_so_no, ' +
             'sales_location, customer_state, customer_country, address1, address2, city, state, postcode, ' +
             'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, ' +
             'warehouse_id, currency, note')
-    .eq('id', body.deliveryOrderId).maybeSingle();
+    .eq('id', firstDoId).maybeSingle();
   if (dhErr) return c.json({ error: 'load_failed', reason: dhErr.message }, 500);
   if (!doHeader) return c.json({ error: 'delivery_order_not_found' }, 404);
   const doh = doHeader as unknown as Record<string, unknown>;
 
-  const { data: doItems } = await sb.from('delivery_order_items')
-    .select('id, item_code, item_group, description, uom, qty, unit_price_centi, discount_centi, ' +
-            'unit_cost_centi, variants')
-    .eq('delivery_order_id', body.deliveryOrderId);
-
-  /* Pick map: when the picker sends a subset, key by doItemId → return qty +
-     condition. When omitted, copy every DO line at its full qty. */
-  const pickByDoItem = new Map<string, { qty?: number; condition?: string }>();
-  if (Array.isArray(body.items)) {
-    for (const p of body.items) {
-      if (p.doItemId) pickByDoItem.set(p.doItemId, { qty: p.qtyReturned, condition: p.condition });
-    }
-  }
-  const sourceLines = (doItems ?? []) as unknown as Array<Record<string, unknown>>;
-  const chosen = (Array.isArray(body.items) && body.items.length > 0)
-    ? sourceLines.filter((l) => pickByDoItem.has(String(l.id)))
-    : sourceLines;
-  if (chosen.length === 0) return c.json({ error: 'no_lines_to_return' }, 400);
-
-  // Insert the DR header (snapshot the DO header).
   const { data: header, error: hErr } = await insertHeader(sb, user.id, {
     doDocNo: doh.do_number,
     deliveryOrderId: doh.id,
@@ -369,7 +524,7 @@ deliveryReturns.post('/from-do', async (c) => {
     branding: doh.branding,
     venue: doh.venue,
     venueId: doh.venue_id,
-    ref: doh.ref,
+    ref: distinctDoNumbers.length > 1 ? `Merged from ${distinctDoNumbers.join(', ')}` : (doh.ref ?? null),
     customerSoNo: doh.customer_so_no,
     salesLocation: doh.sales_location,
     customerState: doh.customer_state,
@@ -385,29 +540,28 @@ deliveryReturns.post('/from-do', async (c) => {
     warehouseId: doh.warehouse_id,
     currency: doh.currency,
     note: doh.note,
-    reason: 'Return from DO ' + String(doh.do_number ?? ''),
+    reason: distinctDoNumbers.length > 1
+      ? `Return from DO ${distinctDoNumbers.join(', ')}`
+      : `Return from DO ${String(doh.do_number ?? '')}`,
   });
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const h = header as unknown as { id: string; return_number: string };
 
-  // Copy the chosen DO lines into return items.
-  const rows = chosen.map((l) => {
-    const pick = pickByDoItem.get(String(l.id));
-    const qty = pick?.qty != null ? Number(pick.qty) : Number(l.qty ?? 1);
-    return buildItemRow(h.id, {
-      doItemId: l.id,
-      itemCode: l.item_code,
-      itemGroup: l.item_group,
-      description: l.description,
-      uom: l.uom,
-      qtyReturned: qty,
-      condition: pick?.condition ?? 'NEW',
-      unitPriceCenti: l.unit_price_centi,
-      discountCenti: 0,
-      unitCostCenti: l.unit_cost_centi,
-      variants: l.variants,
-    });
-  });
+  // 3b. One return line per pick — qty_returned = the picked qty, do_item_id
+  //     set for the remaining-formula link. Carry cost so margins survive.
+  const rows = sortedPicks.map((line) => buildItemRow(h.id, {
+    doItemId: line.doItemId,
+    itemCode: line.itemCode,
+    itemGroup: line.itemGroup,
+    description: line.description,
+    uom: line.uom,
+    qtyReturned: pickQtyById.get(line.doItemId)!,
+    condition: conditionById.get(line.doItemId) ?? 'NEW',
+    unitPriceCenti: line.unitPriceCenti,
+    discountCenti: 0,
+    unitCostCenti: line.unitCostCenti,
+    variants: line.variants,
+  }));
   const { error: iErr } = await sb.from('delivery_return_items').insert(rows);
   if (iErr) { await sb.from('delivery_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   await recomputeTotals(sb, h.id);
@@ -416,7 +570,9 @@ deliveryReturns.post('/from-do', async (c) => {
   await increaseInventoryForReturn(sb, h.id, user.id);
 
   return c.json({ id: h.id, returnNumber: h.return_number, lineCount: rows.length }, 201);
-});
+};
+deliveryReturns.post('/from-do', convertDoLinesToReturn);
+deliveryReturns.post('/from-dos', convertDoLinesToReturn);
 
 // ── Header PATCH (editable SO/DO-style fields) ─────────────────────────────
 deliveryReturns.patch('/:id', async (c) => {
@@ -530,11 +686,11 @@ deliveryReturns.delete('/:id/items/:itemId', async (c) => {
 // CANCELLED is allowed. Other statuses (INSPECTED / REFUNDED / CREDIT_NOTED /
 // REJECTED) remain valid enum values and stamp their timestamp.
 //
-// Migration 0107 — CANCELLED now reverses the inventory IN a DR wrote on create
-// (a DR put goods BACK into stock; cancelling must take them out again). The
-// reversal is idempotent: we read the current status first and skip if the DR
-// is already CANCELLED, and reverseMovements itself is a no-op once the doc's
-// signed net is 0. Best-effort: a movement failure never un-cancels the DR.
+// Migration 0107 — CANCELLED reverses the inventory IN a DR wrote on create
+// (a DR put goods BACK into stock; cancelling must take them out again), via the
+// shared reverseMovements helper (#375). Idempotent: we read the current status
+// first and skip if already CANCELLED. The cancelled return's qty also returns to
+// Pending automatically (the do-line-remaining formula filters non-cancelled DRs).
 deliveryReturns.patch('/:id/status', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string; inspectionNotes?: string };
@@ -559,7 +715,7 @@ deliveryReturns.patch('/:id/status', async (c) => {
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
   // Cancelling a DR → reverse the inventory IN it wrote on create (balancing
-  // OUT per line, via the FIFO trigger). Best-effort.
+  // OUT per line, via the shared reverseMovements helper). Best-effort.
   if (body.status === 'CANCELLED') {
     try { await reverseMovements(sb, 'DR', id, user.id); } catch { /* best-effort */ }
   }
