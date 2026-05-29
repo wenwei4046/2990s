@@ -402,8 +402,10 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
 
   const { data: doHeader, error: hErr } = await sb.from('delivery_orders').insert({
     do_number: doNumber,
-    // Reference every merged SO so the DO traces back to its sources.
-    so_doc_no: soDocNos.join(', '),
+    /* so_doc_no has a FK to mfg_sales_orders(doc_no), so it must be ONE valid
+       doc — use the first picked SO. The full merged set is recorded in `ref`
+       below for traceability. */
+    so_doc_no: soDocNos[0] ?? null,
     debtor_code: head.debtor_code,
     debtor_name: head.debtor_name,
     do_date: today,
@@ -425,7 +427,10 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     branding: (head.branding as string | null) ?? null,
     venue: (head.venue as string | null) ?? null,
     venue_id: (head.venue_id as string | null) ?? null,
-    ref: (head.ref as string | null) ?? null,
+    // Record every merged SO here (so_doc_no can only hold one FK-valid doc).
+    ref: soDocNos.length > 1
+      ? `Merged from ${soDocNos.join(', ')}`
+      : ((head.ref as string | null) ?? null),
     sales_location: (head.sales_location as string | null) ?? null,
     emergency_contact_name: (head.emergency_contact_name as string | null) ?? null,
     emergency_contact_phone: emPhoneRaw ? (normalizePhone(emPhoneRaw) ?? emPhoneRaw) : null,
