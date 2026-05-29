@@ -237,7 +237,13 @@ grns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (body.status === 'DRAFT') return c.json({ error: 'draft_status_not_supported', message: 'DRAFT was removed in migration 0078 — GRNs post immediately on create.' }, 400);
-  if (!body.purchaseOrderId || !body.supplierId) return c.json({ error: 'po_and_supplier_required' }, 400);
+  /* Commander 2026-05-29 — a GRN may now be created WITHOUT a parent PO
+     (blank/manual receipt + From-PO-multi picks that feed the New GRN form).
+     Only the supplier is required; purchaseOrderId is optional. Each grn_item
+     still carries its own purchase_order_item_id (or null) so the received-qty
+     rollup in postGrnAndRollup runs per-line for PO-linked rows and is skipped
+     for manual rows (which still write the inventory-IN movement). */
+  if (!body.supplierId) return c.json({ error: 'supplier_required' }, 400);
   const items = body.items as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
 
@@ -251,7 +257,7 @@ grns.post('/', async (c) => {
      to do the receipt rollup + inventory IN. */
   const { data: header, error: hErr } = await sb.from('grns').insert({
     grn_number: grnNumber,
-    purchase_order_id: body.purchaseOrderId,
+    purchase_order_id: (body.purchaseOrderId as string | undefined) ?? null,
     supplier_id: body.supplierId,
     received_at: (body.receivedAt as string) ?? new Date().toISOString().slice(0, 10),
     delivery_note_ref: (body.deliveryNoteRef as string) ?? null,

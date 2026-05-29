@@ -2,26 +2,35 @@
 // GrnNew — full-page Create Goods Receipt at /grns/new.
 //
 // Commander 2026-05-29: New GRN must work like New PO — land straight on a
-// fillable FORM (header + line items) you can complete directly, NOT a
-// separate "pick a PO" gate page. The Purchase Order picker now lives INLINE
-// in the form header: choose a PO → its outstanding lines load into the items
-// grid → adjust qty received/accepted/rejected → Receive & Post. Arriving with
-// ?poId= (from a PO detail "Receive Goods") pre-selects it. The multi-PO /
-// MRP-style bulk picker stays one click away via "From PO (multi)".
+// fillable FORM (header + line items) you can complete directly. Three ways in:
+//
+//   1. Single PO dropdown (or ?poId= deep link from a PO detail "Receive
+//      Goods") → its outstanding lines load into the items grid.
+//   2. "From PO (multi)" picker (/grns/from-po) → multi-select PO lines across
+//      one supplier, stashed to sessionStorage['grnFromPoPicks'], which this
+//      form reads ONCE on mount and loads as lines (supplier locked, header
+//      purchaseOrderId = first pick's PO id; each line keeps its own
+//      purchase_order_item_id so received_qty rolls up to every source PO).
+//   3. Manual / blank GRN — no PO at all: pick a supplier, search products,
+//      add line items by hand. Saves with purchaseOrderId:null + each item
+//      purchaseOrderItemId:null (server writes inventory-IN, skips PO rollup).
 //
 // POST /grns creates the row POSTED directly (rolls received_qty onto the PO +
-// writes inventory_movements inline).
+// writes inventory_movements inline). Adjust qty received/accepted/rejected per
+// line → Receive & Post.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, Trash2, X, Layers } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
-import { usePurchaseOrderDetail, usePurchaseOrders } from '../lib/suppliers-queries';
+import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers } from '../lib/suppliers-queries';
+import { useMfgProducts } from '../lib/mfg-products-queries';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
+import type { GrnFromPoPick } from './GrnFromPo';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON    = { size: 16, strokeWidth: 1.75 } as const;
@@ -42,7 +51,9 @@ type DraftLine = {
      PO line's category + variant selections, exactly like the PO shows). */
   itemGroup:         string | null;
   variants:          Record<string, unknown> | null;
-  outstanding:       number;
+  /** Outstanding qty for PO-linked lines; for manual lines there's no cap so
+      this is null (the qty inputs go uncapped). */
+  outstanding:       number | null;
   qtyReceived:       number;
   qtyAccepted:       number;
   qtyRejected:       number;
@@ -54,10 +65,23 @@ export const GrnNew = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
 
-  // Inline PO picker drives the form (Commander 2026-05-29 — form-first).
+  // ── From-PO-multi picks (Commander 2026-05-29) — read ONCE on mount.
+  //    When present, they drive the form: lines pre-loaded, supplier locked,
+  //    header purchaseOrderId = first pick's PO id. ────────────────────────
+  const [picks, setPicks] = useState<GrnFromPoPick[] | null>(null);
+  const pickSupplierId   = picks?.[0]?.supplierId ?? null;
+  const pickSupplierName = picks?.[0]?.supplierName ?? picks?.[0]?.supplierCode ?? null;
+  const pickPoId         = picks?.[0]?.poId ?? null;
+  const hasPicks         = !!picks && picks.length > 0;
+
+  // Inline single-PO picker (drives the form when there are no picks).
   const [selPoId, setSelPoId] = useState<string>(params.get('poId') ?? '');
   const poListQ = usePurchaseOrders();
   const poQ     = usePurchaseOrderDetail(selPoId || null);
+
+  // Manual-mode supplier (Commander 2026-05-29 — blank GRN, no PO).
+  const [manualSupplierId, setManualSupplierId] = useState<string>('');
+  const suppliersQ = useSuppliers({ status: 'ACTIVE' });
 
   const outstanding = useMemo(
     () => (poListQ.data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED'),
@@ -74,8 +98,42 @@ export const GrnNew = () => {
   const [lines, setLines]                     = useState<DraftLine[]>([]);
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
-  // Load lines from the selected PO (only outstanding qty > 0).
+  // ── Read From-PO-multi picks once on mount (remove after reading). ──────
+  const readPicksRef = useRef(false);
   useEffect(() => {
+    if (readPicksRef.current) return;
+    readPicksRef.current = true;
+    let raw: string | null = null;
+    try { raw = sessionStorage.getItem('grnFromPoPicks'); } catch { /* ignore */ }
+    if (!raw) return;
+    try {
+      sessionStorage.removeItem('grnFromPoPicks');
+      const rows = JSON.parse(raw) as GrnFromPoPick[];
+      if (Array.isArray(rows) && rows.length) {
+        setPicks(rows);
+        setLines(rows.map((p) => ({
+          rid:                 `p${p.poItemId}`,
+          purchaseOrderItemId: p.poItemId,
+          materialKind:        'mfg_product',
+          materialCode:        p.itemCode,
+          materialName:        p.description ?? p.itemCode,
+          itemGroup:           p.itemGroup || null,
+          variants:            (p.variants as Record<string, unknown> | null) ?? null,
+          outstanding:         p.remainingQty,
+          qtyReceived:         p._pickQty,
+          qtyAccepted:         p._pickQty,
+          qtyRejected:         0,
+          unitPriceCenti:      p.unitPriceCenti ?? 0,
+          notes:               '',
+        })));
+      }
+    } catch { /* malformed — ignore */ }
+  }, []);
+
+  // Load lines from the selected single PO (only outstanding qty > 0). Skipped
+  // when From-PO-multi picks already populated the form.
+  useEffect(() => {
+    if (hasPicks) return;
     if (!selPoId) { setLines([]); return; }
     if (!poQ.data) return;
     const next: DraftLine[] = poQ.data.items
@@ -97,9 +155,9 @@ export const GrnNew = () => {
           notes:             '',
         };
       })
-      .filter((l) => l.outstanding > 0);
+      .filter((l) => (l.outstanding ?? 0) > 0);
     setLines(next);
-  }, [poQ.data, selPoId]);
+  }, [poQ.data, selPoId, hasPicks]);
 
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
@@ -110,23 +168,75 @@ export const GrnNew = () => {
     [lines],
   );
 
+  // ── Mode + resolved supplier / header PO. ──────────────────────────────
+  // Manual mode = no picks AND no single PO chosen. Then the operator picks a
+  // supplier + adds lines by hand.
   const po       = poQ.data?.purchaseOrder;
-  const supplier = po?.supplier;
-  const currency = po?.currency ?? 'MYR';
+  const isManual = !hasPicks && !selPoId;
 
-  const canSave = !!po && lines.length > 0 &&
+  // The effective supplier id + display name for the save + header card.
+  const supplierId =
+    hasPicks   ? pickSupplierId
+    : po       ? po.supplier_id
+    : isManual ? (manualSupplierId || null)
+    : null;
+  const supplierName =
+    hasPicks   ? pickSupplierName
+    : po       ? (po.supplier?.name ?? po.supplier?.code ?? null)
+    : isManual ? ((suppliersQ.data ?? []).find((s) => s.id === manualSupplierId)?.name ?? null)
+    : null;
+  // Header PO id: picks → first pick's PO; single-PO → that PO; manual → null.
+  const headerPoId = hasPicks ? pickPoId : (po?.id ?? null);
+  const currency   = po?.currency ?? 'MYR';
+
+  // ── Manual product search (gated by min query length, mirrors PO form). ──
+  const [productQuery, setProductQuery] = useState<string>('');
+  const productsQ = useMfgProducts({
+    search: productQuery,
+    enabled: isManual && productQuery.trim().length >= 2,
+  });
+
+  const addManualLine = (code: string, name: string, category: string | null) => {
+    setLines((prev) => [...prev, {
+      rid:                 `m${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      purchaseOrderItemId: null,
+      materialKind:        'mfg_product',
+      materialCode:        code,
+      materialName:        name,
+      itemGroup:           category ? category.toLowerCase() : null,
+      variants:            null,
+      outstanding:         null,
+      qtyReceived:         1,
+      qtyAccepted:         1,
+      qtyRejected:         0,
+      unitPriceCenti:      0,
+      notes:               '',
+    }]);
+    setProductQuery('');
+  };
+
+  const canSave = !!supplierId && lines.length > 0 &&
     lines.every((l) => l.qtyReceived >= 0 && l.qtyAccepted + l.qtyRejected <= l.qtyReceived);
 
   const onSave = async () => {
-    if (!po) { setDialog({ title: 'Pick a Purchase Order', body: 'Choose the PO you are receiving against first.' }); return; }
+    if (!supplierId) {
+      setDialog({ title: 'Pick a supplier', body: hasPicks
+        ? 'The picks are missing a supplier — go back to the picker and try again.'
+        : 'Choose the PO you are receiving against, or pick a supplier for a manual receipt.' });
+      return;
+    }
+    if (lines.length === 0) {
+      setDialog({ title: 'Add at least one line', body: 'A GRN needs at least one received item.' });
+      return;
+    }
     if (!canSave) {
       setDialog({ title: 'Check the quantities', body: 'Each line: qty accepted + qty rejected must be ≤ qty received.' });
       return;
     }
     try {
       const createRes = await create.mutateAsync({
-        purchaseOrderId: po.id,
-        supplierId:      po.supplier_id,
+        purchaseOrderId: headerPoId,
+        supplierId,
         receivedAt,
         deliveryNoteRef: deliveryNoteRef || undefined,
         notes:           notes || undefined,
@@ -166,7 +276,7 @@ export const GrnNew = () => {
           <h1 className={styles.title}>New Goods Receipt{po?.po_number ? ` · ${po.po_number}` : ''}</h1>
         </div>
         <div className={styles.actions}>
-          {/* Bulk / MRP-style multi-PO picker (different flow). */}
+          {/* Bulk / multi-PO picker that FEEDS this form. */}
           <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
             <Layers {...ICON} /> From PO (multi)
           </Button>
@@ -185,35 +295,65 @@ export const GrnNew = () => {
         <div className={styles.cardHeader}><h2 className={styles.cardTitle}>Header</h2></div>
         <div className={styles.cardBody}>
           <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Receive against PO *</span>
-              <select
-                value={selPoId}
-                onChange={(e) => setSelPoId(e.target.value)}
-                className={styles.fieldInput}
-                disabled={poListQ.isLoading || outstanding.length === 0}
-              >
-                <option value="">
-                  {poListQ.isLoading ? 'Loading POs…'
-                    : outstanding.length === 0 ? 'No outstanding POs'
-                    : '— Pick an outstanding PO —'}
-                </option>
-                {outstanding.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.po_number} · {p.supplier?.name ?? p.supplier?.code ?? '—'} · {p.po_date}
-                    {p.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
+            {/* Receive-against picker. Hidden when From-PO-multi picks drive the
+                form (supplier + PO are locked to the picks). */}
+            {hasPicks ? (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Receiving from PO picks</span>
+                <input
+                  type="text"
+                  readOnly
+                  value={`${picks!.length} line${picks!.length === 1 ? '' : 's'} from ${[...new Set(picks!.map((p) => p.poDocNo))].join(', ')}`}
+                  className={styles.fieldInput}
+                  style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                />
+              </label>
+            ) : (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Receive against PO</span>
+                <select
+                  value={selPoId}
+                  onChange={(e) => setSelPoId(e.target.value)}
+                  className={styles.fieldInput}
+                  disabled={poListQ.isLoading || outstanding.length === 0}
+                >
+                  <option value="">
+                    {poListQ.isLoading ? 'Loading POs…'
+                      : outstanding.length === 0 ? 'No outstanding POs — receive manually below'
+                      : '— Pick an outstanding PO (or leave blank for a manual receipt) —'}
                   </option>
-                ))}
-              </select>
-            </label>
+                  {outstanding.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.po_number} · {p.supplier?.name ?? p.supplier?.code ?? '—'} · {p.po_date}
+                      {p.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className={styles.field}>
               <span className={styles.fieldLabel}>GRN #</span>
               <input type="text" readOnly value="(assigned on Save)" className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
             </label>
 
+            {/* Supplier — locked from picks / PO, or a manual <select>. */}
             <label className={styles.field}>
-              <span className={styles.fieldLabel}>Supplier</span>
-              <input type="text" readOnly value={supplier?.name ?? '(auto-filled from PO)'} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+              <span className={styles.fieldLabel}>Supplier *{hasPicks ? ' (from picks)' : ''}</span>
+              {isManual ? (
+                <select
+                  value={manualSupplierId}
+                  onChange={(e) => setManualSupplierId(e.target.value)}
+                  className={styles.fieldInput}
+                  disabled={suppliersQ.isLoading}
+                >
+                  <option value="">{suppliersQ.isLoading ? 'Loading suppliers…' : '— Pick a supplier —'}</option>
+                  {(suppliersQ.data ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>{s.code} · {s.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input type="text" readOnly value={supplierName ?? '(auto-filled from PO)'} className={styles.fieldInput} style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }} />
+              )}
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Received Date *</span>
@@ -237,20 +377,57 @@ export const GrnNew = () => {
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Items</h2>
           <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            {!selPoId
-              ? 'Pick a PO above to load its outstanding lines'
-              : poQ.isLoading
-                ? 'Loading PO items…'
+            {hasPicks
+              ? `${lines.length} line${lines.length === 1 ? '' : 's'} from picks · subtotal ${fmtRm(subtotalCenti, currency)}`
+              : selPoId
+                ? (poQ.isLoading
+                    ? 'Loading PO items…'
+                    : lines.length === 0
+                      ? 'No outstanding lines on this PO (all qty already received)'
+                      : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`)
                 : lines.length === 0
-                  ? 'No outstanding lines on this PO (all qty already received)'
+                  ? 'Manual receipt — pick a supplier above, then add items below'
                   : `${lines.length} line${lines.length === 1 ? '' : 's'} · subtotal ${fmtRm(subtotalCenti, currency)}`}
           </span>
         </div>
         <div className={styles.cardBody}>
-          {!selPoId ? (
+          {/* Manual item search — only in blank/manual mode. */}
+          {isManual && (
+            <div style={{ marginBottom: 'var(--space-3)' }}>
+              <label className={styles.field} style={{ maxWidth: 480 }}>
+                <span className={styles.fieldLabel}>Add item</span>
+                <input
+                  type="text"
+                  list="grn-manual-products"
+                  value={productQuery}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setProductQuery(v);
+                    // If the typed value exactly matches a product code, add it.
+                    const match = (productsQ.data ?? []).find((p) => p.code === v);
+                    if (match) addManualLine(match.code, match.name, match.category);
+                  }}
+                  placeholder="Type ≥2 chars to search SKUs by code or name…"
+                  className={styles.fieldInput}
+                />
+                <datalist id="grn-manual-products">
+                  {(productsQ.data ?? []).map((p) => (
+                    <option key={p.id} value={p.code}>{p.name} · {p.category}</option>
+                  ))}
+                </datalist>
+                <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                  Pick a SKU to append a line. Qty, price + accepted/rejected are editable below.
+                </span>
+              </label>
+            </div>
+          )}
+
+          {lines.length === 0 ? (
             <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', padding: 'var(--space-3) 0' }}>
-              Choose a Purchase Order in the header to receive against it. Receiving lines from several POs at once?
-              Use <button type="button" onClick={() => navigate('/grns/from-po')} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
+              {isManual
+                ? 'Pick a supplier in the header, then search for items to add above. Receiving against a PO? Pick one in the header, or use '
+                : 'Choose a Purchase Order in the header to receive against it. Receiving lines from several POs at once? Use '}
+              <button type="button" onClick={() => navigate('/grns/from-po')} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
             </p>
           ) : (
             <>
@@ -276,6 +453,8 @@ export const GrnNew = () => {
               {lines.map((l) => {
                 const lineValueCenti = l.qtyAccepted * l.unitPriceCenti;
                 const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
+                // Manual lines have no outstanding cap — qty inputs go uncapped.
+                const cap = l.outstanding;
                 return (
                   <div key={l.rid} style={{
                     display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
@@ -288,10 +467,11 @@ export const GrnNew = () => {
                         <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
                       )}
                     </div>
-                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{l.outstanding}</div>
-                    <input type="number" min={0} max={l.outstanding} value={l.qtyReceived}
+                    <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>{cap ?? '—'}</div>
+                    <input type="number" min={0} max={cap ?? undefined} value={l.qtyReceived}
                       onChange={(e) => {
-                        const v = Math.max(0, Math.min(l.outstanding, Number(e.target.value) || 0));
+                        let v = Math.max(0, Number(e.target.value) || 0);
+                        if (cap != null) v = Math.min(cap, v);
                         setLine(l.rid, { qtyReceived: v, qtyAccepted: Math.min(l.qtyAccepted, v) });
                       }}
                       className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
@@ -307,8 +487,8 @@ export const GrnNew = () => {
                         setLine(l.rid, { qtyRejected: v, qtyAccepted: l.qtyReceived - v });
                       }}
                       className={styles.fieldInput} style={{ textAlign: 'right', fontSize: 'var(--fs-13)' }} />
-                    {/* Editable unit price — carried from the PO, adjustable at
-                        receiving time (Commander 2026-05-29: "Edit 价钱的功能"). */}
+                    {/* Editable unit price — carried from the PO / manual entry,
+                        adjustable at receiving time (Commander 2026-05-29). */}
                     <MoneyInput bare valueSen={l.unitPriceCenti}
                       onCommit={(sen) => setLine(l.rid, { unitPriceCenti: sen ?? 0 })}
                       inputClassName={styles.fieldInput} style={{ fontSize: 'var(--fs-13)' }} selectOnFocus />
