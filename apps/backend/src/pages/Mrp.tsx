@@ -105,7 +105,7 @@ export const Mrp = () => {
   /* Commander 2026-05-29 — turnover control: order by delivery-date window.
      Single date window with a switchable basis (like the convert page): filter
      by Delivery / Processing / SO date. Delivery basis = the turnover window. */
-  const [dateBasis, setDateBasis] = useState<'delivery' | 'processing' | 'soDate'>('delivery');
+  const [dateBasis, setDateBasis] = useState<'delivery' | 'processing' | 'soDate' | 'orderBy'>('delivery');
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
   const [showUndated, setShowUndated] = useState<boolean>(false);
@@ -154,6 +154,7 @@ export const Mrp = () => {
   const lineDate = (l: MrpLine): string | null =>
     dateBasis === 'processing' ? l.processingDate
     : dateBasis === 'soDate' ? l.soDate
+    : dateBasis === 'orderBy' ? l.orderByDate
     : l.deliveryDate;
   const lineInWindow = (l: MrpLine): boolean => {
     const d = lineDate(l);
@@ -179,7 +180,7 @@ export const Mrp = () => {
      General lines (each set has one date triple). */
   const setInWindow = (s: SofaSet): boolean => {
     if (!hasWindow) return true;
-    const d = dateBasis === 'processing' ? s.processingDate : dateBasis === 'soDate' ? s.soDate : s.deliveryDate;
+    const d = dateBasis === 'processing' ? s.processingDate : dateBasis === 'soDate' ? s.soDate : dateBasis === 'orderBy' ? s.orderByDate : s.deliveryDate;
     if (!d) return false;
     const x = d.slice(0, 10);
     if (dateFrom && x < dateFrom) return false;
@@ -403,7 +404,7 @@ export const Mrp = () => {
     setDialog({ kind: 'confirm', picks, orderedCodes, count: picks.length, units });
   };
 
-  const basisLabel = dateBasis === 'processing' ? 'Processing' : dateBasis === 'soDate' ? 'SO Date' : 'Delivery';
+  const basisLabel = dateBasis === 'processing' ? 'Processing' : dateBasis === 'soDate' ? 'SO Date' : dateBasis === 'orderBy' ? 'Order-by' : 'Delivery';
   const windowLabel = hasWindow ? `${basisLabel} ${dateFrom || '…'} → ${dateTo || '…'}` : '';
   const skuNoun = view === 'sofa' ? 'sets' : 'variants';
 
@@ -504,6 +505,7 @@ export const Mrp = () => {
             onChange={(e) => setDateBasis(e.target.value as typeof dateBasis)}
             title="Which date the From–To window filters on">
             <option value="delivery">Delivery date</option>
+            <option value="orderBy">Order-by date</option>
             <option value="processing">Processing date</option>
             <option value="soDate">SO date</option>
           </select>
@@ -583,18 +585,21 @@ export const Mrp = () => {
                 <th className={styles.num}>Stock</th>
                 <th className={styles.num}>PO Outstanding</th>
                 <th className={styles.num}>Shortage</th>
+                {/* Commander 2026-05-29 — soonest "order-by" date (delivery −
+                    category lead days) so the buyer sees urgency without expanding. */}
+                <th>Order By</th>
                 <th>Main Supplier</th>
               </tr>
             </thead>
             <tbody>
               {q.isLoading && (
-                <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
+                <tr><td colSpan={10} className={styles.stateCell}>Loading MRP…</td></tr>
               )}
               {q.isError && (
-                <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+                <tr><td colSpan={10} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
               {data && displayModels.length === 0 && (
-                <tr><td colSpan={9} className={styles.stateCell}>
+                <tr><td colSpan={10} className={styles.stateCell}>
                   {onlyShort ? 'Nothing needs ordering — everything in view is covered.'
                     : hasWindow ? 'No demand delivering in this window.'
                     : 'No open Sales-Order demand for this filter.'}
@@ -638,6 +643,7 @@ export const Mrp = () => {
                 <th>Set (modules · colour)</th>
                 <th>Processing</th>
                 <th>Delivery Date</th>
+                <th>Order By</th>
                 <th className={styles.num}>Qty</th>
                 <th className={styles.num}>To Order</th>
                 <th>Supplier</th>
@@ -645,13 +651,13 @@ export const Mrp = () => {
             </thead>
             <tbody>
               {q.isLoading && (
-                <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
+                <tr><td colSpan={10} className={styles.stateCell}>Loading MRP…</td></tr>
               )}
               {q.isError && (
-                <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+                <tr><td colSpan={10} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
               {data && displaySets.length === 0 && (
-                <tr><td colSpan={9} className={styles.stateCell}>
+                <tr><td colSpan={10} className={styles.stateCell}>
                   {onlyShort ? 'No sofa sets need ordering — everything in view is covered.'
                     : hasWindow ? 'No sofa sets delivering in this window.'
                     : 'No open sofa Sales-Order demand for this filter.'}
@@ -763,6 +769,15 @@ const SupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
   );
 };
 
+/* Soonest order-by date across a set of SO lines (delivery − category lead
+   days), NULLs last. Lets a parent/variant row show "最迟下单日" at a glance. */
+function earliestOrderBy(lines: MrpLine[]): string | null {
+  return lines.reduce<string | null>(
+    (min, l) => (l.orderByDate && (!min || l.orderByDate < min) ? l.orderByDate : min),
+    null,
+  );
+}
+
 /* General tab — one Model and its variants. Multi-variant models expand into
    variant sub-rows (each expandable to its SO orders). Single-variant models
    (mattress, accessory) expand straight to their SO orders. */
@@ -817,6 +832,7 @@ const ModelRows = ({
         <td className={styles.num}>{group.stock}</td>
         <td className={styles.num}>{group.poOutstanding || '—'}</td>
         <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? group.shortage : '—'}</td>
+        <td className={styles.orderByCell}>{fmtDate(earliestOrderBy(group.variants.flatMap((v) => v.lines)))}</td>
         <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
           <SupplierCell suppliers={group.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
         </td>
@@ -826,7 +842,7 @@ const ModelRows = ({
       {modelOpen && single && (
         <tr className={styles.detailRow}>
           <td /><td />
-          <td colSpan={7}><OrderLines lines={onlyVariant.lines} /></td>
+          <td colSpan={8}><OrderLines lines={onlyVariant.lines} /></td>
         </tr>
       )}
 
@@ -860,12 +876,13 @@ const ModelRows = ({
               <td className={styles.num}>{v.stock}</td>
               <td className={styles.num}>{v.poOutstanding || '—'}</td>
               <td className={`${styles.num} ${vShort ? styles.shortNum : ''}`}>{vShort ? v.shortage : '—'}</td>
+              <td className={styles.orderByCell}>{fmtDate(earliestOrderBy(v.lines))}</td>
               <td />
             </tr>
             {vOpen && (
               <tr className={styles.detailRow}>
                 <td /><td />
-                <td colSpan={7}><OrderLines lines={v.lines} /></td>
+                <td colSpan={8}><OrderLines lines={v.lines} /></td>
               </tr>
             )}
           </FragmentRow>
@@ -909,6 +926,7 @@ const SofaSetRow = ({ set, selected, onSelect, chosenSupplierId, onSupplierChang
       </td>
       <td>{fmtDate(set.processingDate)}</td>
       <td>{fmtDate(set.deliveryDate)}</td>
+      <td className={styles.orderByCell}>{fmtDate(set.orderByDate)}</td>
       <td className={styles.num}>{set.qty}</td>
       <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>
         {short ? set.shortageQty : <span className={`${styles.tag} ${styles.tagPo}`}>ordered</span>}
@@ -929,6 +947,7 @@ const OrderLines = ({ lines }: { lines: MrpLine[] }) => (
         <th>Customer</th>
         <th>Processing</th>
         <th>Delivery Date</th>
+        <th>Order By</th>
         <th className={styles.num}>Qty</th>
         <th>Coverage</th>
       </tr>
@@ -947,6 +966,7 @@ const ChildLine = ({ ln }: { ln: MrpLine }) => {
       <td>{ln.debtorName ?? '—'}</td>
       <td>{fmtDate(ln.processingDate)}</td>
       <td>{fmtDate(ln.deliveryDate)}</td>
+      <td className={styles.orderByCell}>{fmtDate(ln.orderByDate)}</td>
       <td className={styles.num}>{ln.qty}</td>
       <td>
         {ln.source === 'stock' && <span className={`${styles.tag} ${styles.tagStock}`}>stock</span>}
