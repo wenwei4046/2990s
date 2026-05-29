@@ -585,9 +585,10 @@ export const Mrp = () => {
                 <th className={styles.num}>Stock</th>
                 <th className={styles.num}>PO Outstanding</th>
                 <th className={styles.num}>Shortage</th>
-                {/* Commander 2026-05-29 — soonest "order-by" date (delivery −
-                    category lead days) so the buyer sees urgency without expanding. */}
-                <th>Order By</th>
+                {/* Commander 2026-05-29 — soonest delivery date so the buyer
+                    sees the nearest due date without expanding (Order-By column
+                    dropped; lead time still drives the sort). */}
+                <th>Delivery</th>
                 <th>Main Supplier</th>
               </tr>
             </thead>
@@ -641,9 +642,7 @@ export const Mrp = () => {
                 <th>SO No</th>
                 <th>Customer</th>
                 <th>Set (modules · colour)</th>
-                <th>Processing</th>
                 <th>Delivery Date</th>
-                <th>Order By</th>
                 <th className={styles.num}>Qty</th>
                 <th className={styles.num}>To Order</th>
                 <th>Supplier</th>
@@ -651,13 +650,13 @@ export const Mrp = () => {
             </thead>
             <tbody>
               {q.isLoading && (
-                <tr><td colSpan={10} className={styles.stateCell}>Loading MRP…</td></tr>
+                <tr><td colSpan={8} className={styles.stateCell}>Loading MRP…</td></tr>
               )}
               {q.isError && (
-                <tr><td colSpan={10} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+                <tr><td colSpan={8} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
               {data && displaySets.length === 0 && (
-                <tr><td colSpan={10} className={styles.stateCell}>
+                <tr><td colSpan={8} className={styles.stateCell}>
                   {onlyShort ? 'No sofa sets need ordering — everything in view is covered.'
                     : hasWindow ? 'No sofa sets delivering in this window.'
                     : 'No open sofa Sales-Order demand for this filter.'}
@@ -769,11 +768,12 @@ const SupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
   );
 };
 
-/* Soonest order-by date across a set of SO lines (delivery − category lead
-   days), NULLs last. Lets a parent/variant row show "最迟下单日" at a glance. */
-function earliestOrderBy(lines: MrpLine[]): string | null {
+/* Soonest delivery date across a set of SO lines, NULLs last. Lets a
+   parent/variant row show the nearest due date at a glance. (Commander
+   2026-05-29 — main row shows Delivery only; lead time still drives sort.) */
+function earliestDelivery(lines: MrpLine[]): string | null {
   return lines.reduce<string | null>(
-    (min, l) => (l.orderByDate && (!min || l.orderByDate < min) ? l.orderByDate : min),
+    (min, l) => (l.deliveryDate && (!min || l.deliveryDate < min) ? l.deliveryDate : min),
     null,
   );
 }
@@ -832,7 +832,7 @@ const ModelRows = ({
         <td className={styles.num}>{group.stock}</td>
         <td className={styles.num}>{group.poOutstanding || '—'}</td>
         <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? group.shortage : '—'}</td>
-        <td className={styles.orderByCell}>{fmtDate(earliestOrderBy(group.variants.flatMap((v) => v.lines)))}</td>
+        <td className={styles.orderByCell}>{fmtDate(earliestDelivery(group.variants.flatMap((v) => v.lines)))}</td>
         <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
           <SupplierCell suppliers={group.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
         </td>
@@ -876,7 +876,7 @@ const ModelRows = ({
               <td className={styles.num}>{v.stock}</td>
               <td className={styles.num}>{v.poOutstanding || '—'}</td>
               <td className={`${styles.num} ${vShort ? styles.shortNum : ''}`}>{vShort ? v.shortage : '—'}</td>
-              <td className={styles.orderByCell}>{fmtDate(earliestOrderBy(v.lines))}</td>
+              <td className={styles.orderByCell}>{fmtDate(earliestDelivery(v.lines))}</td>
               <td />
             </tr>
             {vOpen && (
@@ -924,9 +924,7 @@ const SofaSetRow = ({ set, selected, onSelect, chosenSupplierId, onSupplierChang
         )}
         {set.colour && <span className={styles.colourTag}>{set.colour}</span>}
       </td>
-      <td>{fmtDate(set.processingDate)}</td>
       <td>{fmtDate(set.deliveryDate)}</td>
-      <td className={styles.orderByCell}>{fmtDate(set.orderByDate)}</td>
       <td className={styles.num}>{set.qty}</td>
       <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>
         {short ? set.shortageQty : <span className={`${styles.tag} ${styles.tagPo}`}>ordered</span>}
@@ -947,7 +945,6 @@ const OrderLines = ({ lines }: { lines: MrpLine[] }) => (
         <th>Customer</th>
         <th>Processing</th>
         <th>Delivery Date</th>
-        <th>Order By</th>
         <th className={styles.num}>Qty</th>
         <th>Coverage</th>
       </tr>
@@ -966,7 +963,6 @@ const ChildLine = ({ ln }: { ln: MrpLine }) => {
       <td>{ln.debtorName ?? '—'}</td>
       <td>{fmtDate(ln.processingDate)}</td>
       <td>{fmtDate(ln.deliveryDate)}</td>
-      <td className={styles.orderByCell}>{fmtDate(ln.orderByDate)}</td>
       <td className={styles.num}>{ln.qty}</td>
       <td>
         {ln.source === 'stock' && <span className={`${styles.tag} ${styles.tagStock}`}>stock</span>}
