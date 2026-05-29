@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
-import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
@@ -95,9 +95,19 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
 }
 
 const HEADER =
-  'id, grn_number, purchase_order_id, supplier_id, received_at, delivery_note_ref, status, notes, posted_at, created_at, created_by, updated_at';
+  'id, grn_number, purchase_order_id, supplier_id, warehouse_id, received_at, delivery_note_ref, status, notes, ' +
+  /* Migration 0101 — GRN ↔ PO money parity */
+  'currency, subtotal_centi, tax_centi, total_centi, ' +
+  'posted_at, created_at, created_by, updated_at';
 const ITEM =
-  'id, grn_id, purchase_order_item_id, material_kind, material_code, material_name, qty_received, qty_accepted, qty_rejected, rejection_reason, unit_price_centi, notes, item_group, variants, created_at';
+  'id, grn_id, purchase_order_item_id, material_kind, material_code, material_name, supplier_sku, ' +
+  'qty_received, qty_accepted, qty_rejected, rejection_reason, unit_price_centi, notes, ' +
+  /* PR #42 — variant fields (migration 0057) */
+  'item_group, description, description2, uom, discount_centi, variants, ' +
+  'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+  'custom_specials, line_suffix, special_order_price_sen, ' +
+  /* Migration 0101 — line money + per-line date + cost snapshot */
+  'line_total_centi, delivery_date, unit_cost_centi, created_at';
 
 const nextNumber = async (sb: ReturnType<Variables['supabase']['valueOf']> extends never ? never : any, prefix: string, table: string, col: string): Promise<string> => {
   const d = new Date();
@@ -105,6 +115,22 @@ const nextNumber = async (sb: ReturnType<Variables['supabase']['valueOf']> exten
   const { count } = await sb.from(table).select('id', { head: true, count: 'exact' }).like(col, `${prefix}-${yymm}-%`);
   return `${prefix}-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
 };
+
+/* ── Recompute GRN header money rollups (migration 0101) ──────────────────
+   Mirrors recomputePoTotals (apps/api/src/routes/mfg-purchase-orders.ts):
+   sum line_total_centi across grn_items → write subtotal_centi + total_centi
+   on the grns header. GRN carries no tax, so total = subtotal. */
+async function recomputeGrnTotals(sb: any, grnId: string) {
+  const { data: items } = await sb.from('grn_items')
+    .select('line_total_centi')
+    .eq('grn_id', grnId);
+  const subtotal = (items ?? []).reduce((s: number, r: any) => s + (r.line_total_centi ?? 0), 0);
+  await sb.from('grns').update({
+    subtotal_centi: subtotal,
+    total_centi: subtotal,
+    updated_at: new Date().toISOString(),
+  }).eq('id', grnId);
+}
 
 grns.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -297,30 +323,45 @@ grns.post('/', async (c) => {
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const h = header as unknown as { id: string; grn_number: string };
 
-  const rows = items.map((it) => ({
-    grn_id: h.id,
-    purchase_order_item_id: (it.purchaseOrderItemId as string | undefined) ?? null,
-    material_kind: it.materialKind,
-    material_code: it.materialCode,
-    material_name: it.materialName,
-    qty_received: Number(it.qtyReceived ?? 0),
-    qty_accepted: Number(it.qtyAccepted ?? it.qtyReceived ?? 0),
-    qty_rejected: Number(it.qtyRejected ?? 0),
-    rejection_reason: (it.rejectionReason as string | undefined) ?? null,
-    unit_price_centi: Number(it.unitPriceCenti ?? 0),
-    notes: (it.notes as string | undefined) ?? null,
-    /* Commander 2026-05-29 — persist the line category + variant selections so
-       MANUAL bedframe/sofa lines (which now have the per-category variant editor
-       on the New GRN form, like the PO) keep their picks. The inventory-IN
-       movement's variant_key in postGrnAndRollup reads item_group + variants. */
-    item_group: (it.itemGroup as string | undefined) ?? null,
-    variants: it.variants ?? null,
-  }));
+  const rows = items.map((it) => {
+    const qtyReceived = Number(it.qtyReceived ?? 0);
+    const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+    const discountCenti = Number(it.discountCenti ?? 0);
+    return {
+      grn_id: h.id,
+      purchase_order_item_id: (it.purchaseOrderItemId as string | undefined) ?? null,
+      material_kind: it.materialKind,
+      material_code: it.materialCode,
+      material_name: it.materialName,
+      supplier_sku: (it.supplierSku as string | undefined) ?? null,
+      qty_received: qtyReceived,
+      qty_accepted: Number(it.qtyAccepted ?? it.qtyReceived ?? 0),
+      qty_rejected: Number(it.qtyRejected ?? 0),
+      rejection_reason: (it.rejectionReason as string | undefined) ?? null,
+      unit_price_centi: unitPriceCenti,
+      discount_centi: discountCenti,
+      /* Migration 0101 — GRN line money: qty_received * unit - discount. */
+      line_total_centi: (qtyReceived * unitPriceCenti) - discountCenti,
+      delivery_date: (it.deliveryDate as string | undefined) ?? null,
+      unit_cost_centi: Number(it.unitCostCenti ?? 0),
+      notes: (it.notes as string | undefined) ?? null,
+      /* Commander 2026-05-29 — persist the line category + variant selections so
+         MANUAL bedframe/sofa lines (which now have the per-category variant editor
+         on the New GRN form, like the PO) keep their picks. The inventory-IN
+         movement's variant_key in postGrnAndRollup reads item_group + variants. */
+      item_group: (it.itemGroup as string | undefined) ?? null,
+      variants: it.variants ?? null,
+      description: (it.description as string | undefined) ?? null,
+      description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+    };
+  });
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
   // Roll up qty_accepted to PO items + write inventory IN. Best-effort.
   await postGrnAndRollup(sb, h.id, user.id);
+  // Migration 0101 — populate header money rollups from the inserted lines.
+  await recomputeGrnTotals(sb, h.id);
 
   return c.json({ id: h.id, grnNumber: h.grn_number }, 201);
 });
@@ -392,37 +433,46 @@ grns.post('/from-pos', async (c) => {
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const h = header as unknown as { id: string; grn_number: string };
 
-  const rows = itemList.map((it) => ({
-    grn_id: h.id,
-    purchase_order_item_id: it.id,
-    material_kind: it.material_kind,
-    material_code: it.material_code,
-    material_name: it.material_name,
-    qty_received: it.qty - (it.received_qty ?? 0),
-    qty_accepted: it.qty - (it.received_qty ?? 0),
-    qty_rejected: 0,
-    unit_price_centi: it.unit_price_centi,
-    /* PR #44 — preserve variants from PO line */
-    item_group: it.item_group ?? null,
-    description: it.description ?? null,
-    description2: it.description2 ?? null,
-    uom: it.uom ?? 'UNIT',
-    variants: it.variants ?? null,
-    gap_inches: it.gap_inches ?? null,
-    divan_height_inches: it.divan_height_inches ?? null,
-    divan_price_sen: it.divan_price_sen ?? 0,
-    leg_height_inches: it.leg_height_inches ?? null,
-    leg_price_sen: it.leg_price_sen ?? 0,
-    custom_specials: it.custom_specials ?? null,
-    line_suffix: it.line_suffix ?? null,
-    special_order_price_sen: it.special_order_price_sen ?? 0,
-    discount_centi: it.discount_centi ?? 0,
-  }));
+  const rows = itemList.map((it) => {
+    const qtyReceived = it.qty - (it.received_qty ?? 0);
+    const discountCenti = it.discount_centi ?? 0;
+    return {
+      grn_id: h.id,
+      purchase_order_item_id: it.id,
+      material_kind: it.material_kind,
+      material_code: it.material_code,
+      material_name: it.material_name,
+      qty_received: qtyReceived,
+      qty_accepted: qtyReceived,
+      qty_rejected: 0,
+      unit_price_centi: it.unit_price_centi,
+      /* Migration 0101 — GRN line money: qty_received * unit - discount. */
+      line_total_centi: (qtyReceived * it.unit_price_centi) - discountCenti,
+      unit_cost_centi: it.unit_cost_centi ?? 0,
+      /* PR #44 — preserve variants from PO line */
+      item_group: it.item_group ?? null,
+      description: it.description ?? null,
+      description2: it.description2 ?? null,
+      uom: it.uom ?? 'UNIT',
+      variants: it.variants ?? null,
+      gap_inches: it.gap_inches ?? null,
+      divan_height_inches: it.divan_height_inches ?? null,
+      divan_price_sen: it.divan_price_sen ?? 0,
+      leg_height_inches: it.leg_height_inches ?? null,
+      leg_price_sen: it.leg_price_sen ?? 0,
+      custom_specials: it.custom_specials ?? null,
+      line_suffix: it.line_suffix ?? null,
+      special_order_price_sen: it.special_order_price_sen ?? 0,
+      discount_centi: discountCenti,
+    };
+  });
   const { error: iErr } = await sb.from('grn_items').insert(rows);
   if (iErr) { await sb.from('grns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
 
   /* PR-DRAFT-removal — auto-rollup + inventory IN after items insert. */
   await postGrnAndRollup(sb, h.id, user.id);
+  // Migration 0101 — populate header money rollups from the inserted lines.
+  await recomputeGrnTotals(sb, h.id);
 
   return c.json({ id: h.id, grnNumber: h.grn_number, poCount: poList.length, lineCount: itemList.length }, 201);
 });
@@ -551,32 +601,37 @@ grns.post('/from-po-items', async (c) => {
     if (hErr) continue;
     const h = header as unknown as { id: string; grn_number: string };
 
-    const rows = bucket.lines.map(({ row, qty }) => ({
-      grn_id: h.id,
-      purchase_order_item_id: row.id,
-      material_kind: row.material_kind,
-      material_code: row.material_code,
-      material_name: row.material_name,
-      qty_received: qty,
-      qty_accepted: qty,
-      qty_rejected: 0,
-      unit_price_centi: row.unit_price_centi,
-      // PR #44 — preserve variants from PO line
-      item_group: row.item_group,
-      description: row.description,
-      description2: row.description2,
-      uom: row.uom ?? 'UNIT',
-      variants: row.variants,
-      gap_inches: row.gap_inches,
-      divan_height_inches: row.divan_height_inches,
-      divan_price_sen: row.divan_price_sen ?? 0,
-      leg_height_inches: row.leg_height_inches,
-      leg_price_sen: row.leg_price_sen ?? 0,
-      custom_specials: row.custom_specials,
-      line_suffix: row.line_suffix,
-      special_order_price_sen: row.special_order_price_sen ?? 0,
-      discount_centi: row.discount_centi ?? 0,
-    }));
+    const rows = bucket.lines.map(({ row, qty }) => {
+      const discountCenti = row.discount_centi ?? 0;
+      return {
+        grn_id: h.id,
+        purchase_order_item_id: row.id,
+        material_kind: row.material_kind,
+        material_code: row.material_code,
+        material_name: row.material_name,
+        qty_received: qty,
+        qty_accepted: qty,
+        qty_rejected: 0,
+        unit_price_centi: row.unit_price_centi,
+        /* Migration 0101 — GRN line money: qty_received * unit - discount. */
+        line_total_centi: (qty * row.unit_price_centi) - discountCenti,
+        // PR #44 — preserve variants from PO line
+        item_group: row.item_group,
+        description: row.description,
+        description2: row.description2,
+        uom: row.uom ?? 'UNIT',
+        variants: row.variants,
+        gap_inches: row.gap_inches,
+        divan_height_inches: row.divan_height_inches,
+        divan_price_sen: row.divan_price_sen ?? 0,
+        leg_height_inches: row.leg_height_inches,
+        leg_price_sen: row.leg_price_sen ?? 0,
+        custom_specials: row.custom_specials,
+        line_suffix: row.line_suffix,
+        special_order_price_sen: row.special_order_price_sen ?? 0,
+        discount_centi: discountCenti,
+      };
+    });
     const { error: iErr } = await sb.from('grn_items').insert(rows);
     if (iErr) {
       await sb.from('grns').delete().eq('id', h.id);
@@ -584,6 +639,8 @@ grns.post('/from-po-items', async (c) => {
     }
     // Immediately post — rolls up received_qty, flips PO status, writes inventory.
     const postRes = await postGrnAndRollup(sb, h.id, user.id);
+    // Migration 0101 — populate header money rollups from the inserted lines.
+    await recomputeGrnTotals(sb, h.id);
     if (!postRes.ok) {
       // Post failed — leave the GRN as DRAFT (it's created), report counts.
       // Don't delete — commander can inspect and post manually.
@@ -596,4 +653,144 @@ grns.post('/from-po-items', async (c) => {
   }
 
   return c.json({ created, total: created.length }, 201);
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   GRN PO-clone CRUD (PATCH header + line add / edit / delete) — mirrors the
+   PO detail page's draft-mode editing (apps/api/src/routes/mfg-purchase-orders.ts).
+   The editable line quantity is qty_received; line_total_centi =
+   qty_received * unit_price_centi - discount_centi; recomputeGrnTotals rolls the
+   header subtotal/total. GRN lines hold no SO quota → delete needs no release.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── PATCH /:id — header update (mirror PO's PATCH /:id) ── */
+grns.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of [
+    ['supplierId', 'supplier_id'], ['receivedAt', 'received_at'],
+    ['deliveryNoteRef', 'delivery_note_ref'], ['warehouseId', 'warehouse_id'],
+    ['notes', 'notes'], ['currency', 'currency'],
+  ] as const) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('grns').update(updates).eq('id', id).select(HEADER).single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ grn: data });
+});
+
+/* ── POST /:id/items — add one grn_item. qty maps to qty_received. ── */
+grns.post('/:id/items', async (c) => {
+  const grnId = c.req.param('id');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
+  if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const qtyReceived = Number(it.qty ?? 1);
+  const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+  const discountCenti = Number(it.discountCenti ?? 0);
+  const lineTotal = (qtyReceived * unitPriceCenti) - discountCenti;
+
+  const row: Record<string, unknown> = {
+    grn_id: grnId,
+    purchase_order_item_id: (it.purchaseOrderItemId as string) ?? null,
+    material_kind: (it.materialKind as string) ?? 'mfg_product',
+    material_code: it.materialCode,
+    material_name: it.materialName,
+    supplier_sku: (it.supplierSku as string) ?? null,
+    // GRN line money meaning: qty = qty_received; accepted mirrors received.
+    qty_received: qtyReceived,
+    qty_accepted: qtyReceived,
+    qty_rejected: 0,
+    unit_price_centi: unitPriceCenti,
+    discount_centi: discountCenti,
+    line_total_centi: lineTotal,
+    unit_cost_centi: Number(it.unitCostCenti ?? 0),
+    notes: (it.notes as string) ?? null,
+    /* variant fields (mirror PO line) */
+    gap_inches: (it.gapInches as number) ?? null,
+    divan_height_inches: (it.divanHeightInches as number) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+    variants: (it.variants as unknown) ?? null,
+    item_group: (it.itemGroup as string) ?? null,
+    description: (it.description as string) ?? null,
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+    uom: (it.uom as string) ?? 'UNIT',
+    delivery_date: (it.deliveryDate as string) ?? null,
+  };
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('grn_items').insert(row).select(ITEM).single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  await recomputeGrnTotals(sb, grnId);
+  return c.json({ item: data }, 201);
+});
+
+/* ── PATCH /:id/items/:itemId — partial line update. qty → qty_received. ── */
+grns.patch('/:id/items/:itemId', async (c) => {
+  const grnId = c.req.param('id'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+
+  const { data: prev } = await sb.from('grn_items')
+    .select('qty_received, unit_price_centi, discount_centi, item_group, variants')
+    .eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  // The editable quantity is qty_received (also keep qty_accepted in lockstep).
+  const qtyReceived = it.qty !== undefined ? Number(it.qty) : (prev as { qty_received: number }).qty_received;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
+  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
+  const lineTotal = (qtyReceived * unit) - discount;
+
+  const updates: Record<string, unknown> = {
+    qty_received: qtyReceived,
+    qty_accepted: qtyReceived,
+    unit_price_centi: unit,
+    discount_centi: discount,
+    line_total_centi: lineTotal,
+  };
+  for (const [from, to] of [
+    ['materialCode', 'material_code'], ['materialName', 'material_name'],
+    ['supplierSku', 'supplier_sku'], ['itemGroup', 'item_group'],
+    ['description', 'description'], ['uom', 'uom'],
+    ['unitCostCenti', 'unit_cost_centi'], ['notes', 'notes'],
+    ['gapInches', 'gap_inches'], ['divanHeightInches', 'divan_height_inches'],
+    ['divanPriceSen', 'divan_price_sen'], ['legHeightInches', 'leg_height_inches'],
+    ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
+    ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
+    ['variants', 'variants'], ['deliveryDate', 'delivery_date'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* description2 is server-owned: recompute from effective itemGroup + variants. */
+  {
+    const effGroup = (it.itemGroup ?? (prev as { item_group?: string }).item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
+  }
+
+  const { error } = await sb.from('grn_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  await recomputeGrnTotals(sb, grnId);
+  return c.json({ ok: true });
+});
+
+/* ── DELETE /:id/items/:itemId — remove a line (no SO quota to release). ── */
+grns.delete('/:id/items/:itemId', async (c) => {
+  const grnId = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase');
+  const { error } = await sb.from('grn_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  await recomputeGrnTotals(sb, grnId);
+  return c.body(null, 204);
 });

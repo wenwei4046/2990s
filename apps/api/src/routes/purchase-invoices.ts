@@ -421,3 +421,92 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
 
   return c.json({ created, total: created.length }, 201);
 });
+
+/* ── POST /from-grn ─────────────────────────────────────────────────────
+   Single-GRN convert (GRN list right-click "Convert to PI"). Copies ALL of
+   the GRN's accepted lines (with variants) into a new POSTED PI and returns
+   the created PI's { id } so the caller can navigate straight to it. Mirrors
+   from-grn-items but scoped to one whole GRN and returns a single id.
+
+   Body: { grnId }  →  201 { id, invoiceNumber }. */
+purchaseInvoices.post('/from-grn', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  let body: { grnId?: string };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const grnId = body.grnId;
+  if (!grnId) return c.json({ error: 'grn_id_required' }, 400);
+
+  const { data: grn, error: grnErr } = await sb.from('grns')
+    .select('id, grn_number, supplier_id, purchase_order_id, status')
+    .eq('id', grnId).maybeSingle();
+  if (grnErr) return c.json({ error: 'load_failed', reason: grnErr.message }, 500);
+  if (!grn) return c.json({ error: 'grn_not_found' }, 404);
+  const g = grn as { id: string; grn_number: string; supplier_id: string; purchase_order_id: string | null; status: string };
+  if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
+
+  const { data: items, error: iErr } = await sb.from('grn_items')
+    .select('id, material_kind, material_code, material_name, item_group, description, description2, uom, qty_accepted, unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi')
+    .eq('grn_id', grnId)
+    .gt('qty_accepted', 0);
+  if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
+  type GrnLine = {
+    id: string; material_kind: string; material_code: string; material_name: string;
+    item_group: string | null; description: string | null; description2: string | null;
+    uom: string | null; qty_accepted: number; unit_price_centi: number; variants: unknown;
+    gap_inches: number | null; divan_height_inches: number | null; divan_price_sen: number;
+    leg_height_inches: number | null; leg_price_sen: number; custom_specials: unknown;
+    line_suffix: string | null; special_order_price_sen: number; discount_centi: number;
+  };
+  const lines = (items ?? []) as unknown as GrnLine[];
+  if (lines.length === 0) return c.json({ error: 'nothing_to_invoice', message: 'GRN has no accepted lines' }, 400);
+
+  const invoiceNumber = await nextNum(sb, 'PI');
+  const subtotal = lines.reduce((s, it) => s + (it.qty_accepted * it.unit_price_centi - (it.discount_centi ?? 0)), 0);
+
+  const { data: header, error: hErr } = await sb.from('purchase_invoices').insert({
+    invoice_number: invoiceNumber,
+    supplier_id: g.supplier_id,
+    purchase_order_id: g.purchase_order_id,
+    grn_id: g.id,
+    invoice_date: new Date().toISOString().slice(0, 10),
+    currency: 'MYR',
+    subtotal_centi: subtotal,
+    tax_centi: 0,
+    total_centi: subtotal,
+    status: 'POSTED',
+    posted_at: new Date().toISOString(),
+    notes: `From ${g.grn_number}`,
+    created_by: user.id,
+  }).select('id, invoice_number').single();
+  if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  const h = header as unknown as { id: string; invoice_number: string };
+
+  const rows = lines.map((it) => ({
+    purchase_invoice_id: h.id,
+    grn_item_id: it.id,
+    material_kind: it.material_kind,
+    material_code: it.material_code,
+    material_name: it.material_name,
+    qty: it.qty_accepted,
+    unit_price_centi: it.unit_price_centi,
+    line_total_centi: it.qty_accepted * it.unit_price_centi - (it.discount_centi ?? 0),
+    item_group: it.item_group,
+    description: it.description,
+    description2: it.description2,
+    uom: it.uom ?? 'UNIT',
+    variants: it.variants,
+    gap_inches: it.gap_inches,
+    divan_height_inches: it.divan_height_inches,
+    divan_price_sen: it.divan_price_sen ?? 0,
+    leg_height_inches: it.leg_height_inches,
+    leg_price_sen: it.leg_price_sen ?? 0,
+    custom_specials: it.custom_specials,
+    line_suffix: it.line_suffix,
+    special_order_price_sen: it.special_order_price_sen ?? 0,
+    discount_centi: it.discount_centi ?? 0,
+  }));
+  const { error: insErr } = await sb.from('purchase_invoice_items').insert(rows);
+  if (insErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: insErr.message }, 500); }
+
+  return c.json({ id: h.id, invoiceNumber: h.invoice_number }, 201);
+});

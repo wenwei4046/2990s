@@ -943,6 +943,13 @@ export const grns = pgTable('grns', {
   deliveryNoteRef:   text('delivery_note_ref'),                     // supplier's DO number
   status:            grnStatus('status').notNull().default('POSTED'),
   notes:             text('notes'),
+  /* Migration 0101 — GRN ↔ PO money parity. currency reuses the same
+     currency_code enum as purchase_orders. subtotal/total are recomputed
+     server-side as Σ grn_items.line_total_centi (no tax for GRN). */
+  currency:          currencyCode('currency').notNull().default('MYR'),
+  subtotalCenti:     integer('subtotal_centi').notNull().default(0),
+  taxCenti:          integer('tax_centi').notNull().default(0),
+  totalCenti:        integer('total_centi').notNull().default(0),
   postedAt:          timestamp('posted_at', { withTimezone: true }),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
@@ -981,6 +988,13 @@ export const grnItems = pgTable('grn_items', {
   description2:          text('description2'),
   uom:                   text('uom').notNull().default('UNIT'),
   discountCenti:         integer('discount_centi').notNull().default(0),
+  /* Migration 0101 — GRN ↔ PO line money parity.
+     lineTotalCenti = qty_received * unit_price_centi - discount_centi.
+     deliveryDate / unitCostCenti / supplierSku mirror purchase_order_items. */
+  lineTotalCenti:        integer('line_total_centi').notNull().default(0),
+  deliveryDate:          date('delivery_date'),
+  unitCostCenti:         integer('unit_cost_centi').notNull().default(0),
+  supplierSku:           text('supplier_sku'),
   createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxGrn: index('idx_grn_items_grn').on(t.grnId),
