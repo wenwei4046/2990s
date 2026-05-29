@@ -3348,6 +3348,51 @@ const ProductSuppliersDrawer = ({
         </header>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+          {/* Commander 2026-05-29 — "双击点进去要看到 supplier 和 available 什么
+              variant". This drill-in now shows BOTH: the model's allowed variant
+              options first, then the suppliers carrying the SKU. */}
+          {(() => {
+            const ao = row.allowed_options as Record<string, string[] | undefined> | null | undefined;
+            const groups: Array<[string, string[]]> = [];
+            const push = (label: string, vals?: string[]) => { if (vals && vals.length) groups.push([label, vals]); };
+            if (ao) {
+              push('Sizes', ao.sizes);
+              push('Compartments', ao.compartments);
+              push('Divan heights', ao.divan_heights);
+              push('Total heights', ao.total_heights);
+              push('Leg heights', ao.leg_heights);
+              push('Specials', ao.specials);
+            }
+            return (
+              <section style={{ marginBottom: 'var(--space-5)' }}>
+                <h3 style={{ fontSize: 'var(--fs-12)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>
+                  Available variants
+                </h3>
+                {groups.length === 0 ? (
+                  <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+                    No variant options configured for this model{row.category ? ` (${row.category})` : ''}.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                    {groups.map(([label, vals]) => (
+                      <div key={label} style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                        <span style={{ minWidth: 120, fontSize: 'var(--fs-11)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)' }}>{label}</span>
+                        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {vals.map((v) => (
+                            <span key={v} className={styles.codeChip} style={{ fontSize: 'var(--fs-12)' }}>{v}</span>
+                          ))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })()}
+
+          <h3 style={{ fontSize: 'var(--fs-12)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--fg-muted)', marginBottom: 'var(--space-2)' }}>
+            Suppliers
+          </h3>
           {q.isLoading && (
             <p style={{ textAlign: 'center', color: 'var(--fg-muted)' }}>Loading suppliers…</p>
           )}

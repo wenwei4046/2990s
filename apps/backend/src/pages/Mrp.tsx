@@ -506,31 +506,32 @@ export const Mrp = () => {
           <input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} />
           <span className={styles.filterLabel}>Only shortages</span>
         </label>
-        <span className={styles.filterSpacer} />
-        <div className={styles.filterStack}>
+        {/* Commander 2026-05-29 — "排版整理一下": Warehouse + Category used to sit
+            in a right-aligned vertical stack (pushed by a spacer), which read as
+            mis-indented. Flattened into the same left-aligned wrapping row as the
+            date/checkbox filters so everything lines up on one consistent grid. */}
+        <label className={styles.filterField}>
+          <span className={styles.filterLabel}>Warehouse</span>
+          <select className={styles.filterSelect} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+            <option value="all">All warehouses</option>
+            {(data?.warehouses ?? []).map((w) => (
+              <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
+            ))}
+          </select>
+        </label>
+        {view === 'general' && (
           <label className={styles.filterField}>
-            <span className={styles.filterLabel}>Warehouse</span>
-            <select className={styles.filterSelect} value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
-              <option value="all">All warehouses</option>
-              {(data?.warehouses ?? []).map((w) => (
-                <option key={w.id} value={w.id}>{w.code} · {w.name}</option>
-              ))}
+            <span className={styles.filterLabel}>Category</span>
+            <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="all">All (non-sofa)</option>
+              {(data?.categories ?? ['BEDFRAME', 'MATTRESS'])
+                .filter((cat) => cat !== 'SOFA')
+                .map((cat) => (
+                  <option key={cat} value={cat}>{CAT_LABELS[cat] ?? cat}</option>
+                ))}
             </select>
           </label>
-          {view === 'general' && (
-            <label className={styles.filterField}>
-              <span className={styles.filterLabel}>Category</span>
-              <select className={styles.filterSelect} value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="all">All (non-sofa)</option>
-                {(data?.categories ?? ['BEDFRAME', 'MATTRESS'])
-                  .filter((cat) => cat !== 'SOFA')
-                  .map((cat) => (
-                    <option key={cat} value={cat}>{CAT_LABELS[cat] ?? cat}</option>
-                  ))}
-              </select>
-            </label>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Table */}
