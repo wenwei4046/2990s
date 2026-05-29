@@ -245,7 +245,10 @@
 .scroll {
   overflow-x: scroll;
   overflow-y: auto;
-  max-height: calc(100vh - 220px);
+  /* Commander 2026-05-29 — the grid sat in a short box with dead space below.
+     Reserve only the topbar + page header + toolbar (~150px) so the grid
+     stretches to nearly the full viewport height like the rest of the system. */
+  max-height: calc(100vh - 150px);
 }
 .scroll::-webkit-scrollbar {
   height: 12px;
