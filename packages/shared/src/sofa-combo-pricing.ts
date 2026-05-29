@@ -333,6 +333,62 @@ export function pickComboPrice(
   return pickComboMatch(args, rows)?.comboPriceCenti ?? null;
 }
 
+/**
+ * Spread a combo's negotiated total across the matched lines, proportional to
+ * each line's own base cost, rebalancing the rounding residual into the
+ * highest-cost line so the returned values sum to EXACTLY `comboTotalCenti`.
+ *
+ * This is the cost-side mirror of HOOKKA's sales-order combo redistribution
+ * (src/pages/sales/create.tsx — `ratio = comboTotal / groupSum` per line, then
+ * push the rounding residual into the highest line). A sofa is bought as a set
+ * of per-module lines; when those modules match a supplier combo we don't flat-
+ * replace, we re-spread the combo total back across the matched lines so every
+ * PO line keeps a sensible per-unit cost and the set still sums to the combo
+ * price. Lines OUTSIDE the matched subset ("extras") are not passed in here —
+ * they keep their full per-module cost.
+ *
+ * @param baseCostsCenti  per-line base cost (already × qty if you spread totals,
+ *                        or per-unit if per-unit — the function is unit-agnostic;
+ *                        it preserves whatever scale you pass and the sum lands
+ *                        on comboTotalCenti). Pass LINE TOTALS for parity with
+ *                        HOOKKA.
+ * @returns new per-line values, same length/order, summing to comboTotalCenti.
+ *          When the base costs sum to 0 (no signal to weight by) the total is
+ *          split as evenly as possible. Pure — safe in Workers + React.
+ */
+export function spreadComboTotal(
+  baseCostsCenti: readonly number[],
+  comboTotalCenti: number,
+): number[] {
+  const n = baseCostsCenti.length;
+  if (n === 0) return [];
+  const total = Math.max(0, Math.round(comboTotalCenti));
+  const sum = baseCostsCenti.reduce((s, c) => s + Math.max(0, c), 0);
+
+  let out: number[];
+  if (sum <= 0) {
+    // No base-cost signal → split as evenly as possible.
+    const each = Math.floor(total / n);
+    out = baseCostsCenti.map(() => each);
+  } else {
+    const ratio = total / sum;
+    out = baseCostsCenti.map((c) => Math.max(0, Math.floor(Math.max(0, c) * ratio)));
+  }
+
+  // Rebalance the rounding residual into the highest base-cost line so the sum
+  // is exactly comboTotalCenti (HOOKKA pushes the residual into the dearest line).
+  const newSum = out.reduce((s, c) => s + c, 0);
+  const residual = total - newSum;
+  if (residual !== 0) {
+    let target = 0;
+    for (let i = 1; i < n; i++) {
+      if ((baseCostsCenti[i] ?? 0) > (baseCostsCenti[target] ?? 0)) target = i;
+    }
+    out[target] = Math.max(0, (out[target] ?? 0) + residual);
+  }
+  return out;
+}
+
 /** Format a single module code with its LHF/RHF orientation in parens. */
 function fmtCode(raw: string): string {
   const m = raw.match(/^(.+?)-(LHF|RHF)$/);

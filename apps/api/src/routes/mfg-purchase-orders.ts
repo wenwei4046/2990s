@@ -16,7 +16,10 @@
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
-import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import {
+  buildVariantSummary, computeVariantKey, pickComboMatch, spreadComboTotal,
+  type VariantAttrs, type SofaComboRow, type SofaPriceTier,
+} from '@2990s/shared';
 import {
   computeMfgPoUnitCost,
   type MfgFabricTier,
@@ -26,6 +29,72 @@ import {
 import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+
+/* ── Supplier sofa-combo auto-pricing (Commander 2026-05-29) ─────────────────
+   The supplier prices a sofa SET (a colour-matched bundle of modules) as a
+   single deal. When a PO sofa line's modules MATCH one of the supplier's own
+   combo rows, the combo price is the cost — exactly mirroring how the sales
+   order side overrides a sofa's à-la-carte total with a combo (sofa-build.ts
+   `groupPrice`), but on the COST side and scoped to the supplier's combos
+   (sofa_combo_pricing.supplier_id = the PO's supplier, NOT the NULL sales-side
+   rows). When nothing matches, the line keeps its per-seat-size matrix cost. */
+
+/** Load the involved suppliers' OWN combo rows, grouped by supplier_id. Sales-
+    side rows (supplier_id IS NULL) are intentionally excluded — those are the
+    Products-page master combos and must never leak into purchasing cost. */
+async function loadSupplierSofaCombos(
+  sb: any,
+  supplierIds: readonly string[],
+): Promise<Map<string, SofaComboRow[]>> {
+  const out = new Map<string, SofaComboRow[]>();
+  if (supplierIds.length === 0) return out;
+  const { data } = await sb
+    .from('sofa_combo_pricing')
+    .select('id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, effective_from, deleted_at')
+    .is('deleted_at', null)
+    .in('supplier_id', supplierIds);
+  for (const r of (data ?? []) as Array<{
+    id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
+    customer_id: string | null; supplier_id: string; prices_by_height: Record<string, number | null>;
+    label: string | null; effective_from: string; deleted_at: string | null;
+  }>) {
+    const row: SofaComboRow = {
+      id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
+      tier: r.tier, customerId: r.customer_id,
+      pricesByHeight: r.prices_by_height ?? {},
+      label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
+    };
+    const arr = out.get(r.supplier_id) ?? [];
+    arr.push(row);
+    out.set(r.supplier_id, arr);
+  }
+  return out;
+}
+
+/** Split a sofa product code into its base model + module size code, mirroring
+    HOOKKA's per-module sofa lines. A sectional module's code is
+    `<MODEL>-<MODULE>(<ORIENT>)`, e.g. `BOOQIT-1A(LHF)` → base `BOOQIT`, size
+    `1A-LHF` (parens normalised to the hyphen form combo slots are stored in).
+    A simple seat-count sofa like `BLATT-2S` → base `BLATT`, size `2S` — which
+    carries no module/orientation, so it never matches a combo slot and keeps
+    its normal per-module cost (combo logic just skips it). */
+function splitSofaCode(itemCode: string): { baseModel: string; sizeCode: string } {
+  const i = itemCode.indexOf('-');
+  if (i < 0) return { baseModel: itemCode, sizeCode: '' };
+  const baseModel = itemCode.slice(0, i);
+  const rest = itemCode.slice(i + 1);
+  // `1A(LHF)` → `1A-LHF`; `2S` (no orientation) → `2S` (won't match a combo).
+  const sizeCode = rest.replace(/\(([^)]+)\)/, '-$1');
+  return { baseModel, sizeCode };
+}
+
+/** A sofa line's seat-height key for combo lookup (combos are priced per
+    height). Mirrors the sales-side `v.depth ?? v.seatHeight`. */
+function sofaHeightKey(variants: unknown): string {
+  if (!variants || typeof variants !== 'object') return '';
+  const v = variants as Record<string, unknown>;
+  return String(v.depth ?? v.seatHeight ?? '');
+}
 
 export const mfgPurchaseOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -640,6 +709,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     maintBySupplier.set(sid, config);
   }));
 
+  /* Commander 2026-05-29 — also load each involved supplier's own sofa combos
+     so a sofa line whose modules MATCH a combo is costed at the combo price
+     (the supplier's set deal) instead of the per-seat-size matrix. */
+  const combosBySupplier = await loadSupplierSofaCombos(supabase, supplierIdsInvolved);
+
   // Items with no LIVE supplier binding can't be PO'd.
   const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
   if (noBinding.length > 0) {
@@ -648,6 +722,101 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       message: 'Some items have no main supplier binding',
       itemCodes: [...new Set(noBinding.map((it) => it.itemCode))],
     }, 400);
+  }
+
+  /* ── Per-line cost + sofa-combo redistribution (Commander 2026-05-29) ──────
+     Step 1: base per-unit cost for EVERY pickable line — the supplier's
+     price_matrix (P2 default; P1 when the fabric resolves to PRICE_1) + the
+     supplier's maintenance surcharges, via computeMfgPoUnitCost. Falls back to
+     the flat binding price when there's no category/matrix.
+
+     Step 2: sofa-combo redistribution, a faithful cost-side port of HOOKKA's
+     sales-order combo logic (src/pages/sales/create.tsx). A sectional sofa is
+     bought as PER-MODULE lines (e.g. BOOQIT-1A(LHF), BOOQIT-L(LHF) …). We group
+     those lines by (supplier, SO, base model), require a uniform tier + seat
+     height, match the group's module set against that supplier's combo, and —
+     when the combo total is cheaper than the matched lines' summed base cost —
+     re-spread the combo total across the matched lines (spreadComboTotal).
+     Extra modules outside the matched subset keep their full per-module cost.
+     Simple seat-count sofas (BLATT-2S) carry no module/orientation → never
+     match → untouched. */
+  type SoLine = (typeof soItems)[number];
+  const baseCostByItem = new Map<SoLine, number>();
+  for (const it of soItems) {
+    const b = mainByCode.get(it.itemCode);
+    if (!b) continue; // guarded by the missing_bindings check above
+    const category = (it.itemGroup?.toUpperCase() ?? '') as
+      'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
+    const variants = (it.variants ?? {}) as Record<string, unknown>;
+    const specials = Array.isArray(variants.specials) ? (variants.specials as string[]) : [];
+    const base = category
+      ? computeMfgPoUnitCost(
+          {
+            category,
+            priceMatrix:    (b.price_matrix ?? null) as PoPriceMatrix,
+            unitPriceCenti: b.unit_price_centi,
+            fabricTier:     resolveFabricTier(it.itemGroup, it.variants),
+            seatSize:       category === 'SOFA' ? (variants.seatHeight as string | undefined) ?? null : null,
+            divanHeight:    (variants.divanHeight as string | undefined) ?? null,
+            legHeight:      category === 'BEDFRAME' ? (variants.legHeight as string | undefined) ?? null : null,
+            sofaLegHeight:  category === 'SOFA' ? (variants.legHeight as string | undefined) ?? null : null,
+            specials,
+          },
+          maintBySupplier.get(b.supplier_id) ?? null,
+        ).unitPriceSen
+      // No category on the SO line → can't project a matrix; keep the flat price.
+      : b.unit_price_centi;
+    baseCostByItem.set(it, base);
+  }
+
+  // Combo redistribution → overrides baseCostByItem for matched sofa lines.
+  const adjustedCostByItem = new Map<SoLine, number>();
+  const sofaGroups = new Map<string, SoLine[]>();
+  for (const it of soItems) {
+    if ((it.itemGroup?.toUpperCase() ?? '') !== 'SOFA') continue;
+    const b = mainByCode.get(it.itemCode);
+    if (!b) continue;
+    const { baseModel, sizeCode } = splitSofaCode(it.itemCode);
+    if (!sizeCode.includes('-')) continue; // not a module (e.g. BLATT-2S) → no combo
+    const key = `${b.supplier_id}|${it.soDocNo}|${baseModel.toUpperCase()}`;
+    const arr = sofaGroups.get(key) ?? [];
+    arr.push(it);
+    sofaGroups.set(key, arr);
+  }
+  for (const [key, members] of sofaGroups) {
+    const supplierId = key.slice(0, key.indexOf('|'));
+    const baseModelU = key.slice(key.lastIndexOf('|') + 1);
+    const supplierCombos = combosBySupplier.get(supplierId) ?? [];
+    if (supplierCombos.length === 0) continue;
+    // Uniform tier + seat height across the group, else the combo can't apply.
+    const tiers = new Set(members.map((m) => resolveFabricTier(m.itemGroup, m.variants)));
+    if (tiers.size !== 1) continue;
+    const tier = [...tiers][0];
+    if (!tier) continue;
+    const heights = new Set(members.map((m) => sofaHeightKey(m.variants)));
+    if (heights.size !== 1) continue;
+    const height = [...heights][0]!;
+    if (!height) continue;
+    // Scope to this base model's combos (case-insensitive — products are
+    // BOOQIT-… while combos store "Booqit"); fall back to all of the supplier's
+    // combos if none match by name (different spelling), relying on module match.
+    const named = supplierCombos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === baseModelU);
+    const rows = named.length > 0 ? named : supplierCombos;
+    const match = pickComboMatch(
+      { baseModel: '', modules: members.map((m) => splitSofaCode(m.itemCode).sizeCode), customerId: null, tier, height },
+      rows,
+    );
+    if (!match) continue;
+    const matched = match.matchedIndices.map((i) => members[i]).filter((m): m is SoLine => !!m);
+    if (matched.length === 0) continue;
+    // Per-unit base cost of the matched lines; only redistribute when the combo
+    // actually SAVES money vs the matched subset's own sum (HOOKKA discount>0).
+    const baseUnits = matched.map((m) => baseCostByItem.get(m) ?? 0);
+    const subsetSum = baseUnits.reduce((s, c) => s + c, 0);
+    const comboTotal = match.comboPriceCenti;
+    if (comboTotal <= 0 || comboTotal >= subsetSum) continue;
+    const spread = spreadComboTotal(baseUnits, comboTotal);
+    matched.forEach((m, i) => adjustedCostByItem.set(m, spread[i] ?? 0));
   }
 
   // Group items into PO buckets.
@@ -669,33 +838,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const bucket = byGroup.get(groupKey)
       ?? { supplierId: b.supplier_id, currency: b.currency, lines: [], soDocNos: new Set<string>() };
 
-    /* Phase 3 (2026-05-29) — auto-price the PO line cost from the supplier's
-       own price_matrix + maintenance surcharges instead of the flat
-       unit_price_centi. Base = matrix (P2 default; P1 only when the line's
-       fabric resolves to PRICE_1 and a P1 cell exists) + supplier maintenance
-       surcharges. Falls back to the flat binding price when there's no matrix.
-       Combos are OUT OF SCOPE this phase — PO lines are per-SKU. */
-    const category = (it.itemGroup?.toUpperCase() ?? '') as
-      'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
-    const variants = (it.variants ?? {}) as Record<string, unknown>;
-    const specials = Array.isArray(variants.specials) ? (variants.specials as string[]) : [];
-    const autoCostCenti = category
-      ? computeMfgPoUnitCost(
-          {
-            category,
-            priceMatrix:    (b.price_matrix ?? null) as PoPriceMatrix,
-            unitPriceCenti: b.unit_price_centi,
-            fabricTier:     resolveFabricTier(it.itemGroup, it.variants),
-            seatSize:       category === 'SOFA' ? (variants.seatHeight as string | undefined) ?? null : null,
-            divanHeight:    (variants.divanHeight as string | undefined) ?? null,
-            legHeight:      category === 'BEDFRAME' ? (variants.legHeight as string | undefined) ?? null : null,
-            sofaLegHeight:  category === 'SOFA' ? (variants.legHeight as string | undefined) ?? null : null,
-            specials,
-          },
-          maintBySupplier.get(b.supplier_id) ?? null,
-        ).unitPriceSen
-      // No category on the SO line → can't project a matrix; keep the flat price.
-      : b.unit_price_centi;
+    // Cost was resolved in the pre-pass above: a combo-redistributed cost wins,
+    // else the per-line base cost (matrix + surcharges), else the flat price.
+    const autoCostCenti = adjustedCostByItem.get(it)
+      ?? baseCostByItem.get(it)
+      ?? b.unit_price_centi;
 
     bucket.lines.push({
       itemCode: it.itemCode,

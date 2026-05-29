@@ -3,6 +3,7 @@ import {
   matchComboSubset,
   pickComboMatch,
   pickComboPrice,
+  spreadComboTotal,
   normalizeComboModules,
   canonicalizeComboModulesForStorage,
   comboSlotsKey,
@@ -276,6 +277,41 @@ describe('pickComboMatch / pickComboPrice', () => {
       { baseModel: '5530', modules: ['2A-RHF', 'L-RHF'], customerId: null, tier: 'PRICE_2', height: '24', asOf },
       [legacy],
     )).toBeNull();
+  });
+});
+
+describe('spreadComboTotal (PO cost side — HOOKKA redistribution 1:1)', () => {
+  it('spreads proportional to base cost; sum equals combo total exactly', () => {
+    // bases 600 + 400 = 1000; combo 900 → ratio 0.9 → 540 + 360 = 900.
+    expect(spreadComboTotal([60000, 40000], 90000)).toEqual([54000, 36000]);
+  });
+
+  it('rebalances the rounding residual into the highest-cost line', () => {
+    // bases 100 + 100 + 100 = 300; combo 100 → floor(33.33)=33 each = 99,
+    // residual 1 → highest line (ties → first) gets it: 34 + 33 + 33 = 100.
+    const out = spreadComboTotal([10000, 10000, 10000], 10000);
+    expect(out.reduce((s, c) => s + c, 0)).toBe(10000);
+    expect(out).toEqual([3334, 3333, 3333]);
+  });
+
+  it('residual lands on the dearest line, not just the first', () => {
+    const out = spreadComboTotal([10000, 50000], 30001);
+    expect(out.reduce((s, c) => s + c, 0)).toBe(30001);
+    // base 10k/60k → 5000.16→5000; 50k/60k → 25000.83→25000; residual 1 → line[1]
+    expect(out).toEqual([5000, 25001]);
+  });
+
+  it('all-zero base costs → split as evenly as possible (sum exact)', () => {
+    const out = spreadComboTotal([0, 0, 0], 10000);
+    expect(out.reduce((s, c) => s + c, 0)).toBe(10000);
+  });
+
+  it('single line → gets the whole combo total', () => {
+    expect(spreadComboTotal([12345], 99999)).toEqual([99999]);
+  });
+
+  it('empty input → empty output', () => {
+    expect(spreadComboTotal([], 5000)).toEqual([]);
   });
 });
 
