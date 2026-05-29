@@ -16,7 +16,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -791,8 +791,37 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   return c.json({ ok: true });
 });
 
+/* ── DELETE /:id/items/:itemId — remove a DO line. ──────────────────────────
+   Commander 2026-05-30 — inventory integrity. A DO is created in DISPATCHED
+   (= shipped) state, so deductInventoryForDo has already written an OUT row for
+   every (product_code, variant_key) bucket on the DO. Deleting a line on a
+   shipped DO must not leave that OUT on the books with no matching line — that
+   silently loses stock.
+
+   The clean per-line reversal (write a balancing IN for just this line's qty)
+   is structurally BLOCKED here: the partial UNIQUE index uq_inv_mov_do_source
+   (migration 0100) keys on (source_doc_type, source_doc_id, product_code,
+   variant_key) WITHOUT movement_type, so a reversing IN that reuses the DO's key
+   collides with the original OUT and is rejected — and the deduction COLLAPSES
+   same-(product,variant) lines into one OUT, so a per-line IN can't be keyed
+   distinctly either. Rather than corrupt stock with a silently-failed reversal,
+   we BLOCK line-delete on a shipped DO with a 409 (the spec-sanctioned fallback)
+   and steer the user to cancel the DO (whole-doc reversal works) or edit qty.
+   A non-shipped DO (LOADED) has no OUT yet, so its lines delete freely. */
 deliveryOrdersMfg.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+
+  // Guard: a shipped DO has inventory OUT already written for this line's
+  // bucket; deleting it would desync stock (see header comment).
+  const { data: doRow } = await sb.from('delivery_orders').select('status').eq('id', id).maybeSingle();
+  const status = (doRow as { status: string } | null)?.status ?? null;
+  if (status && SHIPPED_STATES.includes(status)) {
+    return c.json({
+      error: 'do_shipped_line_locked',
+      message: 'This Delivery Order has shipped — its stock OUT is already booked. Cancel the DO (which reverses stock) or adjust the line quantity instead of deleting the line.',
+    }, 409);
+  }
+
   const { error } = await sb.from('delivery_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
@@ -876,11 +905,20 @@ deliveryOrdersMfg.delete('/:id/payments/:paymentId', async (c) => {
   return c.json({ ok: true });
 });
 
-// ── Status transition + inventory deduction ───────────────────────────────
+// ── Status transition + inventory deduction / reversal ────────────────────
 deliveryOrdersMfg.patch('/:id/status', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string }; try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
+
+  // Read current status so the CANCELLED reversal is idempotent.
+  const { data: cur } = await sb.from('delivery_orders').select('status').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const prevStatus = (cur as { status: string }).status;
+  // Already cancelled → echo back without re-reversing (would double-credit).
+  if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
+    return c.json({ deliveryOrder: { id, status: 'CANCELLED' } });
+  }
 
   const now = new Date().toISOString();
   const ts: Record<string, string> = { updated_at: now };
@@ -894,10 +932,24 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
   /* Inventory OUT — fire on the first transition into ANY shipped state.
      deductInventoryForDo is idempotent (existence check + UNIQUE index), so a
      DO that jumps straight to SIGNED/DELIVERED still deducts exactly once, and
-     re-advancing through later shipped states never double-deducts. We skip
-     CANCELLED (returns to stock are handled by the Delivery Return flow). */
+     re-advancing through later shipped states never double-deducts. */
   if (SHIPPED_STATES.includes(body.status)) {
     await deductInventoryForDo(sb, id, user.id);
+  }
+
+  /* Commander 2026-05-30 — cancelling a DO AUTO-REVERSES the stock OUT: the
+     create/dispatch wrote an OUT (source_doc_type:'DO'), so cancel writes the
+     balancing IN back, putting the goods back on the shelf. reverseMovements is
+     idempotent (its signed-net guard skips an already-reversed doc) and
+     best-effort (a movement failure never un-cancels the DO).
+
+     NOTE: the partial UNIQUE index uq_inv_mov_do_source (migration 0100) keys on
+     (source_doc_type, source_doc_id, product_code, variant_key) — WITHOUT
+     movement_type — so it rejects a reversing IN that shares the original OUT's
+     key. reverseMovements inserts per-row + reports failures; see its doc + the
+     deviation note. */
+  if (body.status === 'CANCELLED') {
+    try { await reverseMovements(sb, 'DO', id, user.id); } catch { /* best-effort */ }
   }
 
   return c.json({ deliveryOrder: data });

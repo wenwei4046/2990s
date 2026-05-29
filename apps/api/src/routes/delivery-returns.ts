@@ -17,7 +17,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
+import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 
 export const deliveryReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -529,11 +529,27 @@ deliveryReturns.delete('/:id/items/:itemId', async (c) => {
 // Kept simple per spec: a return is RECEIVED on create (stock already added);
 // CANCELLED is allowed. Other statuses (INSPECTED / REFUNDED / CREDIT_NOTED /
 // REJECTED) remain valid enum values and stamp their timestamp.
+//
+// Migration 0107 — CANCELLED now reverses the inventory IN a DR wrote on create
+// (a DR put goods BACK into stock; cancelling must take them out again). The
+// reversal is idempotent: we read the current status first and skip if the DR
+// is already CANCELLED, and reverseMovements itself is a no-op once the doc's
+// signed net is 0. Best-effort: a movement failure never un-cancels the DR.
 deliveryReturns.patch('/:id/status', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string; inspectionNotes?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
+
+  // Read the current status so the CANCELLED reversal is idempotent.
+  const { data: cur } = await sb.from('delivery_returns').select('status').eq('id', id).maybeSingle();
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const prevStatus = (cur as { status: string }).status;
+  // Already cancelled → echo back without re-reversing (would double-deduct).
+  if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
+    return c.json({ deliveryReturn: { id, status: 'CANCELLED' } });
+  }
+
   const now = new Date().toISOString();
   const ts: Record<string, string> = { updated_at: now, status: body.status };
   if (body.status === 'RECEIVED') ts.received_at = now;
@@ -541,5 +557,12 @@ deliveryReturns.patch('/:id/status', async (c) => {
   if (body.status === 'REFUNDED') ts.refunded_at = now;
   const { data, error } = await sb.from('delivery_returns').update(ts).eq('id', id).select('id, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  // Cancelling a DR → reverse the inventory IN it wrote on create (balancing
+  // OUT per line, via the FIFO trigger). Best-effort.
+  if (body.status === 'CANCELLED') {
+    try { await reverseMovements(sb, 'DR', id, user.id); } catch { /* best-effort */ }
+  }
+
   return c.json({ deliveryReturn: data });
 });
