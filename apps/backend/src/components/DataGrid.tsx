@@ -33,7 +33,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Search, Columns3, RotateCcw } from 'lucide-react';
+import { Search, Columns3, RotateCcw, Filter } from 'lucide-react';
 import styles from './DataGrid.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -214,6 +214,11 @@ function DataGridInner<T>({
      discoverable toolbar button + popover with a per-column checkbox + Reset
      link, matching houzs-erp/src/pages/SalesOrderPage.tsx lines 576-624. */
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+  /* Per-column value filter (Commander 2026-05-29 — "没有 drop-down 菜单让我
+     去做选择"). filters[colKey] = the set of allowed values; absent / empty =
+     no filter on that column. filterMenu anchors the open dropdown. */
+  const [filters, setFilters] = useState<Record<string, string[]>>({});
+  const [filterMenu, setFilterMenu] = useState<{ colKey: string; x: number; y: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Refocus search when parent bumps focusSearchNonce ("Find" button).
@@ -264,6 +269,40 @@ function DataGridInner<T>({
       window.removeEventListener('keydown', onKey);
     };
   }, [columnsMenuOpen]);
+
+  /* Close the per-column filter dropdown on outside click / Escape. */
+  useEffect(() => {
+    if (!filterMenu) return;
+    const close = () => setFilterMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [filterMenu]);
+
+  // Value a column reports for grouping/filtering (groupValue → searchValue → text).
+  const colValue = useCallback((c: DataGridColumn<T>, row: T): string => {
+    if (c.groupValue) return c.groupValue(row);
+    if (c.searchValue) return c.searchValue(row);
+    return coerceSearchString(c.accessor(row));
+  }, []);
+
+  const toggleFilterValue = useCallback((colKey: string, val: string) => {
+    setFilters((prev) => {
+      const cur = prev[colKey] ?? [];
+      const next = cur.includes(val) ? cur.filter((v) => v !== val) : [...cur, val];
+      const out = { ...prev };
+      if (next.length === 0) delete out[colKey]; else out[colKey] = next;
+      return out;
+    });
+  }, []);
+  const clearFilter = useCallback((colKey: string) =>
+    setFilters((prev) => { const o = { ...prev }; delete o[colKey]; return o; }), []);
 
   /* HOUZS-parity column show/hide actions for the Columns popover. Reset
      clears hidden + order + widths (preserving groupBy + sort so search
@@ -338,14 +377,31 @@ function DataGridInner<T>({
   // ── Filtered + sorted + grouped rows ──────────────────────────────
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((row) =>
-      columns.some((c) => {
+    const active = Object.entries(filters).filter(([, vals]) => vals.length > 0);
+    if (!q && active.length === 0) return rows;
+    return rows.filter((row) => {
+      if (q && !columns.some((c) => {
         const sv = c.searchValue ? c.searchValue(row) : coerceSearchString(c.accessor(row));
         return sv.toLowerCase().includes(q);
-      }),
-    );
-  }, [rows, columns, search]);
+      })) return false;
+      for (const [colKey, vals] of active) {
+        const c = columns.find((cc) => cc.key === colKey);
+        if (!c) continue;
+        if (!vals.includes(colValue(c, row))) return false;
+      }
+      return true;
+    });
+  }, [rows, columns, search, filters, colValue]);
+
+  // Distinct values for the currently-open filter dropdown.
+  const filterValues = useMemo(() => {
+    if (!filterMenu) return [];
+    const c = columns.find((cc) => cc.key === filterMenu.colKey);
+    if (!c) return [];
+    const set = new Set<string>();
+    for (const row of rows) set.add(colValue(c, row));
+    return [...set].sort((a, b) => (a || '~').localeCompare(b || '~'));
+  }, [filterMenu, columns, rows, colValue]);
 
   const sortedRows = useMemo(() => {
     if (!layout.sort) return filteredRows;
@@ -678,6 +734,21 @@ function DataGridInner<T>({
                           {arrow && <span className={styles.sortArrow}>{arrow === 'A' ? '^' : 'v'}</span>}
                         </button>
                       ) : col.label}
+                      {col.key !== '__expand__' && (
+                        <button
+                          type="button"
+                          title="Filter this column"
+                          aria-label={`Filter ${col.label}`}
+                          onClick={(e) => { e.stopPropagation(); setFilterMenu({ colKey: col.key, x: e.clientX, y: e.clientY }); }}
+                          style={{
+                            background: 'transparent', border: 0, padding: '0 2px', marginLeft: 2,
+                            cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+                            color: (filters[col.key]?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-soft, #9a9a9a)',
+                          }}
+                        >
+                          <Filter size={11} strokeWidth={2} aria-hidden />
+                        </button>
+                      )}
                     </span>
                     <div
                       className={styles.resizeHandle}
@@ -834,6 +905,40 @@ function DataGridInner<T>({
                 Show column
               </button>
             )}
+          </div>
+        );
+      })()}
+
+      {/* Per-column filter dropdown — pick which values to keep (Commander
+          2026-05-29). Distinct values come from the column's groupValue /
+          searchValue / text. */}
+      {filterMenu && (() => {
+        const col = columns.find((c) => c.key === filterMenu.colKey);
+        const sel = filters[filterMenu.colKey] ?? [];
+        return (
+          <div
+            className={styles.ctxMenu}
+            style={{ top: filterMenu.y, left: filterMenu.x, maxHeight: 320, overflowY: 'auto', minWidth: 200 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 10px', borderBottom: '1px solid var(--line)' }}>
+              <strong style={{ fontSize: 'var(--fs-11)' }}>Filter: {col?.label}</strong>
+              {sel.length > 0 && (
+                <button type="button" onClick={() => clearFilter(filterMenu.colKey)}
+                  style={{ background: 'transparent', border: 0, color: 'var(--c-orange)', cursor: 'pointer', fontSize: 'var(--fs-11)', fontWeight: 600 }}>
+                  Clear
+                </button>
+              )}
+            </div>
+            {filterValues.length === 0 && (
+              <div style={{ padding: '6px 10px', color: 'var(--fg-muted)', fontSize: 'var(--fs-11)' }}>No values.</div>
+            )}
+            {filterValues.map((v) => (
+              <label key={v} className={styles.ctxItem} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input type="checkbox" checked={sel.includes(v)} onChange={() => toggleFilterValue(filterMenu.colKey, v)} />
+                <span>{v || '(blank)'}</span>
+              </label>
+            ))}
           </div>
         );
       })()}
