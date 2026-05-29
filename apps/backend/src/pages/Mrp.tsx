@@ -419,7 +419,7 @@ const SkuRows = ({ sku, open, onToggle, selected, onSelect, chosenSupplierId, on
           {sku.suppliers.length === 0 ? (
             <span className={styles.noSupplier}>— none —</span>
           ) : sku.suppliers.length === 1 ? (
-            <span><Truck {...ICON} /> {sku.suppliers[0]!.code}</span>
+            <span title={sku.suppliers[0]!.code}><Truck {...ICON} /> {sku.suppliers[0]!.name}</span>
           ) : (
             <select
               className={styles.supplierSelect}
@@ -429,7 +429,7 @@ const SkuRows = ({ sku, open, onToggle, selected, onSelect, chosenSupplierId, on
             >
               {sku.suppliers.map((s) => (
                 <option key={s.supplierId} value={s.supplierId}>
-                  {s.code}{s.isMain ? ' ★' : ''}
+                  {s.name}{s.isMain ? ' ★' : ''} · {s.code}
                 </option>
               ))}
             </select>
