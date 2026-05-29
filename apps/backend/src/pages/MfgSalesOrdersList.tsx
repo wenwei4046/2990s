@@ -128,6 +128,11 @@ type SoRow = {
   payment_method: string | null;
   installment_months: number | null;
   merchant_provider: string | null;
+  /* #19 (Commander 2026-05-29) — distinct payment methods drawn from the
+     mfg_sales_order_payments ledger, joined with " + " (e.g. "Cash + Card").
+     '' when no receipts logged yet; the column falls back to the header
+     payment_method field in that case. Computed server-side in the SO list GET. */
+  payment_methods_summary?: string;
   note: string | null;
   local_total_centi: number;
   /* Live balance + paid total come from mfg_sales_orders_with_payment_totals
@@ -1451,12 +1456,14 @@ const buildColumns = (
     searchValue: (r) => r.target_date ?? '',
   },
   {
-    /* PR #143 — header-level payment method snapshot. The full per-receipt
-       ledger lives in mfg_sales_order_payments (surfaced on the SO Detail
-       Payments table). This column shows the SO's primary method at a glance. */
-    key: 'payment_method', label: 'Payment Method', width: 130, sortable: true, groupable: true,
-    defaultHidden: true,
+    /* #19 (Commander 2026-05-29) — Payment Method summarises the per-receipt
+       LEDGER (mfg_sales_order_payments), so an SO settled across several
+       methods reads e.g. "Cash + Card" rather than only the header's single
+       snapshot. Falls back to the header payment_method field (with merchant
+       provider / installment detail) when no receipts are logged yet. */
+    key: 'payment_method', label: 'Payment Method', width: 150, sortable: true, groupable: true,
     accessor: (r) => {
+      if (r.payment_methods_summary) return r.payment_methods_summary;
       if (!r.payment_method) return '';
       const base = r.payment_method.toUpperCase();
       if (r.payment_method === 'merchant') {
@@ -1466,8 +1473,8 @@ const buildColumns = (
       }
       return base;
     },
-    searchValue: (r) => `${r.payment_method ?? ''} ${r.merchant_provider ?? ''}`,
-    groupValue: (r) => r.payment_method ?? '(none)',
+    searchValue: (r) => `${r.payment_methods_summary ?? ''} ${r.payment_method ?? ''} ${r.merchant_provider ?? ''}`,
+    groupValue: (r) => r.payment_methods_summary || r.payment_method || '(none)',
   },
   {
     key: 'note', label: 'Note', width: 200, sortable: true,

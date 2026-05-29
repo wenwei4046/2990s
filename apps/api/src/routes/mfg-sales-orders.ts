@@ -147,6 +147,36 @@ const deriveCountryFromState = async (
   return country ?? 'Malaysia';
 };
 
+/* Commander 2026-05-29 — the Sales/shipping Location (warehouse) follows the
+   customer's State. The create FORM resolves it via state_warehouse_mappings
+   and sends salesLocation; this server-side derive closes the gap for callers
+   that set a State but no salesLocation (e.g. API/import) so Location is bound
+   to the address everywhere, not only through the form. Returns the warehouse
+   name (or code) for the state, or null when unmapped. */
+const deriveSalesLocationFromState = async (
+  sb: any,
+  state: string | null | undefined,
+): Promise<string | null> => {
+  if (!state) return null;
+  // state_warehouse_mappings keys on the canonical state name; map the common
+  // WP-KL alias the locality table doesn't carry under the WP prefix.
+  const key = state === 'Wilayah Persekutuan Kuala Lumpur' ? 'Kuala Lumpur' : state;
+  const { data: m } = await sb
+    .from('state_warehouse_mappings')
+    .select('warehouse_id')
+    .eq('state', key)
+    .maybeSingle();
+  const whId = (m as { warehouse_id?: string } | null)?.warehouse_id;
+  if (!whId) return null;
+  const { data: w } = await sb
+    .from('warehouses')
+    .select('name, code')
+    .eq('id', whId)
+    .maybeSingle();
+  const wh = w as { name?: string; code?: string } | null;
+  return wh ? (wh.name ?? wh.code ?? null) : null;
+};
+
 const nextDocNo = async (sb: any): Promise<string> => {
   // HOUZS pattern: SO-NNNNNN (6-digit zero-padded counter across all time)
   const { count } = await sb.from('mfg_sales_orders').select('doc_no', { head: true, count: 'exact' });
@@ -284,6 +314,33 @@ mfgSalesOrders.get('/', async (c) => {
       }
     }
 
+    /* Commander 2026-05-29 (#19) — Payment Method column summarises the
+       payments LEDGER, not just the header's single payment_method field. A
+       SO can be settled across several methods (e.g. a cash deposit + a card
+       balance), so we collect the DISTINCT method labels per doc_no and join
+       them with " + " (→ "Cash + Card"). Label rules mirror the payment form
+       cascade: cash→"Cash"; merchant→"Card"; transfer→its online_type
+       (Bank Transfer / TNG / Cheque / DuitNow) when set, else "Transfer".
+       One cheap batched read over the same doc_no set already in play. */
+    const paymentMethods = new Map<string, Set<string>>();
+    {
+      const { data: payRows } = await sb
+        .from('mfg_sales_order_payments')
+        .select('so_doc_no, method, online_type')
+        .in('so_doc_no', docNos);
+      for (const p of (payRows ?? []) as Array<{ so_doc_no: string; method: string | null; online_type: string | null }>) {
+        const m = (p.method ?? '').trim().toLowerCase();
+        let label: string;
+        if (m === 'cash') label = 'Cash';
+        else if (m === 'merchant') label = 'Card';
+        else if (m === 'transfer') label = (p.online_type && p.online_type.trim()) ? p.online_type.trim() : 'Transfer';
+        else continue;
+        let set = paymentMethods.get(p.so_doc_no);
+        if (!set) { set = new Set(); paymentMethods.set(p.so_doc_no, set); }
+        set.add(label);
+      }
+    }
+
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
       const perGroup = agg.get(docNo);
@@ -297,6 +354,11 @@ mfgSalesOrders.get('/', async (c) => {
         fBranding = (code && productBranding.get(code)) || fBranding;
       }
       (r as Record<string, unknown>).first_item_branding = fBranding;
+      /* #19 — distinct ledger payment methods, sorted + joined ("Cash + Card").
+         Empty string when no payments recorded yet (UI falls back to the
+         header payment_method field). */
+      const pm = paymentMethods.get(docNo);
+      (r as Record<string, unknown>).payment_methods_summary = pm ? [...pm].sort().join(' + ') : '';
       if (!perGroup) {
         (r as Record<string, unknown>).ready_categories = [];
         (r as Record<string, unknown>).is_fully_ready = false;
@@ -648,6 +710,17 @@ mfgSalesOrders.post('/', async (c) => {
     (body.customerState as string | null | undefined) ?? null,
   );
 
+  /* Commander 2026-05-29 — Location follows the address (State). When the
+     caller already sent a salesLocation it wins; otherwise derive it from the
+     State so API/import callers get the same warehouse binding the form gives.
+     Stays null when the State is unmapped. */
+  const derivedSalesLocation =
+    (body.salesLocation as string | null | undefined) ??
+    (await deriveSalesLocationFromState(
+      sb,
+      (body.customerState as string | null | undefined) ?? null,
+    ));
+
   const { error: hErr } = await sb.from('mfg_sales_orders').insert({
     doc_no: docNo,
     transfer_to: (body.transferTo as string) ?? null,
@@ -656,7 +729,7 @@ mfgSalesOrders.post('/', async (c) => {
     debtor_code: (body.debtorCode ?? body.customerCode as string) ?? null,
     debtor_name: customerName,
     agent: (body.agent as string) ?? null,
-    sales_location: (body.salesLocation as string) ?? null,
+    sales_location: derivedSalesLocation ?? null,
     ref: (body.ref as string) ?? null,
     po_doc_no: (body.poDocNo as string) ?? null,
     venue: (body.venue as string) ?? null,
@@ -1167,6 +1240,18 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
       sb,
       body['customerState'] as string | null,
     );
+    /* Commander 2026-05-29 — Location follows the address. When the State
+       changes and the caller didn't also send an explicit salesLocation,
+       re-derive the warehouse so Location tracks the new State. An explicit
+       salesLocation in the same patch still wins (already mapped above). A
+       null/unmapped State leaves Location untouched rather than wiping it. */
+    if (body['salesLocation'] === undefined) {
+      const derived = await deriveSalesLocationFromState(
+        sb,
+        body['customerState'] as string | null,
+      );
+      if (derived) updates['sales_location'] = derived;
+    }
   }
 
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
