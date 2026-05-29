@@ -22,12 +22,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Save, Trash2, X, Layers } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, X, Layers, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers } from '../lib/suppliers-queries';
-import { useMfgProducts } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { MoneyInput } from '../components/MoneyInput';
 import type { GrnFromPoPick } from './GrnFromPo';
@@ -40,6 +40,34 @@ const fmtRm = (centi: number | null | undefined, currency = 'MYR'): string => {
   const v = centi ?? 0;
   return `${currency} ${(v / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+
+/* Commander 2026-05-29 — "PO 那边根据 Category 会叫我填写我的 Variant，这个
+   (GRN) 怎么没有？" Manual GRN lines whose product is a bedframe/sofa now get
+   the SAME per-category variant editor as New PO / the PO Edit modal. Small
+   local copy of PurchaseOrderDetail's VariantSelect (not exported there). */
+const VariantSelect = ({
+  label, options, value, onChange,
+}: {
+  label: string;
+  options: Array<{ value: string; priceSen: number }>;
+  value: string;
+  onChange: (v: string) => void;
+}) => (
+  <label className={styles.field}>
+    <span className={styles.fieldLabel}>{label}</span>
+    <span className={styles.selectWrap}>
+      <select className={styles.fieldSelect} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.value}{o.priceSen > 0 ? ` (+${fmtRm(o.priceSen)})` : ''}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
+    </span>
+  </label>
+);
 
 type DraftLine = {
   rid:               string;
@@ -82,6 +110,12 @@ export const GrnNew = () => {
   // Manual-mode supplier (Commander 2026-05-29 — blank GRN, no PO).
   const [manualSupplierId, setManualSupplierId] = useState<string>('');
   const suppliersQ = useSuppliers({ status: 'ACTIVE' });
+
+  // Commander 2026-05-29 — maintenance config drives the per-category variant
+  // editor on MANUAL bedframe/sofa lines (same dropdown pools as New PO / the
+  // PO Edit modal: divan/leg/total height, gap, special, seat size, fabric).
+  const maintQ = useMaintenanceConfig('master');
+  const maint  = maintQ.data?.data ?? null;
 
   const outstanding = useMemo(
     () => (poListQ.data ?? []).filter((po) => po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED'),
@@ -250,6 +284,11 @@ export const GrnNew = () => {
           qtyRejected:         l.qtyRejected,
           unitPriceCenti:      l.unitPriceCenti,
           notes:               l.notes || undefined,
+          // Commander 2026-05-29 — persist the line's category + variant
+          // selections (manual bedframe/sofa lines pick these below; PO-sourced
+          // lines carry them through) so the GRN/inventory reflect WHAT was received.
+          itemGroup:           l.itemGroup,
+          variants:            l.variants,
         })),
       });
       await post.mutateAsync(createRes.id);
@@ -455,8 +494,19 @@ export const GrnNew = () => {
                 const variantSummary = buildVariantSummary(l.itemGroup, l.variants);
                 // Manual lines have no outstanding cap — qty inputs go uncapped.
                 const cap = l.outstanding;
+                // Commander 2026-05-29 — editable variant section only for MANUAL
+                // lines (purchaseOrderItemId === null) that are bedframe/sofa, once
+                // the maintenance pools are loaded. PO-sourced lines keep their
+                // read-only summary (their variants came from the PO).
+                const showVariantEditor =
+                  l.purchaseOrderItemId === null &&
+                  (l.itemGroup === 'bedframe' || l.itemGroup === 'sofa') &&
+                  !!maint;
+                const setVariant = (key: string, value: string) =>
+                  setLine(l.rid, { variants: { ...(l.variants ?? {}), [key]: value } });
                 return (
-                  <div key={l.rid} style={{
+                  <div key={l.rid}>
+                  <div style={{
                     display: 'grid', gridTemplateColumns: gridTemplate, gap: 'var(--space-2)',
                     padding: cellPad, alignItems: 'center', borderBottom: '1px solid var(--line)',
                   }}>
@@ -497,6 +547,63 @@ export const GrnNew = () => {
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--c-festive-b, #B8331F)', padding: 4 }}>
                       <Trash2 {...SM_ICON} />
                     </button>
+                  </div>
+
+                  {/* Per-category VARIANT EDITOR for MANUAL bedframe/sofa lines —
+                      Commander 2026-05-29: mirrors New PO / the PO Edit modal so
+                      the receiver specifies divan/leg/total height, gap, special,
+                      seat size + fabric. Same variant keys the PO/SO store. */}
+                  {showVariantEditor && (
+                    <div style={{
+                      padding: `var(--space-2) ${cellPad} var(--space-3)`,
+                      borderBottom: '1px solid var(--line)', background: 'var(--c-cream)',
+                    }}>
+                      <div style={{
+                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-11)', fontWeight: 600,
+                        letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--fg-soft)',
+                        marginBottom: 'var(--space-2)',
+                      }}>Variants — {l.itemGroup}</div>
+                      {l.itemGroup === 'bedframe' ? (
+                        <div className={styles.formGrid4}>
+                          <VariantSelect label="Divan Height" options={maint!.divanHeights}
+                            value={String(l.variants?.divanHeight ?? '')}
+                            onChange={(v) => setVariant('divanHeight', v)} />
+                          <VariantSelect label="Gap"
+                            options={maint!.gaps.map((g) => ({ value: g, priceSen: 0 }))}
+                            value={String(l.variants?.gap ?? '')}
+                            onChange={(v) => setVariant('gap', v)} />
+                          <VariantSelect label="Leg Height" options={maint!.legHeights}
+                            value={String(l.variants?.legHeight ?? '')}
+                            onChange={(v) => setVariant('legHeight', v)} />
+                          <VariantSelect label="Total Heights" options={maint!.totalHeights}
+                            value={String(l.variants?.totalHeight ?? '')}
+                            onChange={(v) => setVariant('totalHeight', v)} />
+                          <VariantSelect label="Special" options={maint!.specials}
+                            value={String(l.variants?.special ?? '')}
+                            onChange={(v) => setVariant('special', v)} />
+                        </div>
+                      ) : (
+                        <div className={styles.formGrid4}>
+                          <VariantSelect label="Seat Size"
+                            options={maint!.sofaSizes.map((s) => ({ value: s, priceSen: 0 }))}
+                            value={String(l.variants?.seatHeight ?? '')}
+                            onChange={(v) => setVariant('seatHeight', v)} />
+                          <VariantSelect label="Leg Height" options={maint!.sofaLegHeights}
+                            value={String(l.variants?.legHeight ?? '')}
+                            onChange={(v) => setVariant('legHeight', v)} />
+                          <VariantSelect label="Special" options={maint!.sofaSpecials}
+                            value={String(l.variants?.special ?? '')}
+                            onChange={(v) => setVariant('special', v)} />
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>Fabrics (free text)</span>
+                            <input className={styles.fieldInput}
+                              value={String(l.variants?.fabricColor ?? '')}
+                              onChange={(e) => setVariant('fabricColor', e.target.value)} />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   </div>
                 );
               })}
