@@ -1311,20 +1311,24 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
 
   /* Commander 2026-05-27 (Fix 5) — State → Sales Location cascade. When the
      user picks a delivery state, look up state_warehouse_mappings and set
-     the Sales Location to the mapped warehouse code (the canonical inventory
-     identifier; warehouse.name is also surfaced as a tooltip for context).
-     Only fires when we have a mapping AND the resolved code differs from
-     what the form already shows — guards against re-render loops and avoids
+     the Sales Location to the mapped warehouse NAME (e.g. "BELAKONG
+     WAREHOUSE"). Commander 2026-05-29: standardised on the warehouse NAME (was
+     the code, e.g. "SLGR WAREHOUSE") so this form, the server-side derive, and
+     the SO-list Location column all show ONE consistent, human-readable label.
+     PO warehouse resolution (resolveWarehouseId) matches on name OR code, so
+     either resolves the same warehouse downstream — this is purely display.
+     Only fires when we have a mapping AND the resolved name differs from what
+     the form already shows — guards against re-render loops and avoids
      stomping a manual override before the mappings query resolves. */
   useEffect(() => {
     if (!form.state) return;
     const list = stateWarehousesQ.data?.mappings ?? [];
     if (list.length === 0) return;
     const hit = list.find((m) => m.state === form.state);
-    const code = hit?.warehouse?.code ?? null;
-    if (!code) return;
-    if (form.salesLocation === code) return;
-    setForm((s) => ({ ...s, salesLocation: code }));
+    const name = hit?.warehouse?.name ?? hit?.warehouse?.code ?? null;
+    if (!name) return;
+    if (form.salesLocation === name) return;
+    setForm((s) => ({ ...s, salesLocation: name }));
   }, [form.state, stateWarehousesQ.data, form.salesLocation]);
 
   // Cascade derivations

@@ -1449,13 +1449,6 @@ const buildColumns = (
     searchValue: (r) => r.customer_delivery_date ?? '',
   },
   {
-    /* PR #46 — POS handover "Target Date" (marketing-side commitment). */
-    key: 'target_date', label: 'Target Date', width: 130, sortable: true,
-    defaultHidden: true,
-    accessor: (r) => r.target_date ?? '',
-    searchValue: (r) => r.target_date ?? '',
-  },
-  {
     /* #19 (Commander 2026-05-29) — Payment Method summarises the per-receipt
        LEDGER (mfg_sales_order_payments), so an SO settled across several
        methods reads e.g. "Cash + Card" rather than only the header's single
