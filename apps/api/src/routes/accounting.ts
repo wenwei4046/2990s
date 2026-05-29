@@ -21,6 +21,7 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
+import { postSiRevenue } from '../lib/post-si-revenue';
 
 export const accounting = new Hono<{ Bindings: Env; Variables: Variables }>();
 accounting.use('*', supabaseAuth);
@@ -202,83 +203,21 @@ accounting.post('/post/si/:invoiceNumber', async (c) => {
   const invoiceNumber = c.req.param('invoiceNumber');
   const sb = c.get('supabase');
 
-  // Avoid duplicate posting
-  const { data: existing } = await sb
-    .from('journal_entries')
-    .select('id, je_no')
-    .eq('source_type', 'SI')
-    .eq('source_doc_no', invoiceNumber)
-    .limit(1);
-  if (existing && existing.length > 0) {
-    return c.json({ error: 'already_posted', existingJe: existing[0] }, 409);
+  // Delegates to the shared idempotent poster (post-si-revenue). Same code path
+  // the SI POST handler uses on confirm, so manual + auto posting can never
+  // diverge or double-post.
+  const r = await postSiRevenue(sb, invoiceNumber);
+
+  if (r.ok) {
+    if (r.status === 'already_posted') {
+      // Keep the historical 409 contract for the explicit re-post endpoint.
+      return c.json({ error: 'already_posted', existingJe: { id: r.jeId, je_no: r.jeNo } }, 409);
+    }
+    return c.json({ ok: true, jeNo: r.jeNo, jeId: r.jeId, totalSen: r.totalSen });
   }
-
-  const { data: si, error } = await sb
-    .from('sales_invoices')
-    .select('invoice_number, invoice_date, debtor_code, debtor_name, total_centi, discount_centi, tax_centi, subtotal_centi')
-    .eq('invoice_number', invoiceNumber)
-    .single();
-  if (error || !si) return c.json({ error: 'invoice_not_found' }, 404);
-
-  const totalSen = Number(si.total_centi);
-  if (totalSen <= 0) return c.json({ error: 'zero_total' }, 400);
-
-  const lines: JeLineIn[] = [
-    {
-      accountCode: '1100',                                   // Accounts Receivable
-      debitSen: totalSen,
-      partyType: 'CUSTOMER',
-      partyCode: si.debtor_code,
-      partyName: si.debtor_name,
-      notes: `AR for ${si.invoice_number}`,
-    },
-    {
-      accountCode: '4000',                                   // Sales Revenue
-      creditSen: totalSen,
-      notes: `Revenue from ${si.invoice_number}`,
-    },
-  ];
-
-  const jeNo = await nextJeNo(sb, new Date(si.invoice_date));
-  const { data: je, error: jeErr } = await sb
-    .from('journal_entries')
-    .insert({
-      je_no: jeNo,
-      entry_date: si.invoice_date,
-      source_type: 'SI',
-      source_doc_no: si.invoice_number,
-      narration: `Sales invoice ${si.invoice_number} — ${si.debtor_name}`,
-      total_debit_sen: totalSen,
-      total_credit_sen: totalSen,
-    })
-    .select('*')
-    .single();
-  if (jeErr) return c.json({ error: 'je_insert_failed', reason: jeErr.message }, 500);
-
-  const lineRows = lines.map((l, i) => ({
-    journal_entry_id: je.id,
-    line_no: i + 1,
-    account_code: l.accountCode,
-    debit_sen: l.debitSen ?? 0,
-    credit_sen: l.creditSen ?? 0,
-    party_type: l.partyType ?? null,
-    party_code: l.partyCode ?? null,
-    party_name: l.partyName ?? null,
-    notes: l.notes ?? null,
-  }));
-  const { error: linesErr } = await sb.from('journal_entry_lines').insert(lineRows);
-  if (linesErr) {
-    await sb.from('journal_entries').delete().eq('id', je.id);
-    return c.json({ error: 'lines_insert_failed', reason: linesErr.message }, 500);
-  }
-
-  const { error: postErr } = await sb
-    .from('journal_entries')
-    .update({ posted: true })
-    .eq('id', je.id);
-  if (postErr) return c.json({ error: 'post_failed', reason: postErr.message }, 500);
-
-  return c.json({ ok: true, jeNo: je.je_no, jeId: je.id, totalSen });
+  if (r.status === 'invoice_not_found') return c.json({ error: 'invoice_not_found' }, 404);
+  if (r.status === 'zero_total')        return c.json({ error: 'zero_total' }, 400);
+  return c.json({ error: r.status, reason: r.reason }, 500);
 });
 
 accounting.post('/post/pi/:invoiceNumber', async (c) => {

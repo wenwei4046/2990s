@@ -66,7 +66,13 @@ const MfgSalesOrdersPage = lazyRetry(() => import('./pages/FlowPages').then(m =>
 const MfgDeliveryOrdersList = lazyRetry(() => import('./pages/MfgDeliveryOrdersList').then(m => ({ default: m.MfgDeliveryOrdersList })));
 const DeliveryOrderNew = lazyRetry(() => import('./pages/DeliveryOrderNew').then(m => ({ default: m.DeliveryOrderNew })));
 const DeliveryOrderFromSo = lazyRetry(() => import('./pages/DeliveryOrderFromSo').then(m => ({ default: m.DeliveryOrderFromSo })));
-const SalesInvoicesPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.SalesInvoicesPage })));
+// SI module rebuilt as a DO-clone (SO-parity): standalone DataGrid list +
+// editable detail + multi-select Convert-From-DO picker + Create form.
+// Replaces the old FlowPages.SalesInvoicesPage + DocDetailPages.SalesInvoiceDetail
+// (both definitions stay in place).
+const SalesInvoicesList = lazyRetry(() => import('./pages/SalesInvoicesList').then(m => ({ default: m.SalesInvoicesList })));
+const SalesInvoiceNew = lazyRetry(() => import('./pages/SalesInvoiceNew').then(m => ({ default: m.SalesInvoiceNew })));
+const SalesInvoiceFromDo = lazyRetry(() => import('./pages/SalesInvoiceFromDo').then(m => ({ default: m.SalesInvoiceFromDo })));
 const ConsignmentPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
 const DeliveryReturnsList = lazyRetry(() => import('./pages/DeliveryReturnsList').then(m => ({ default: m.DeliveryReturnsList })));
 const DeliveryReturnDetail = lazyRetry(() => import('./pages/DeliveryReturnDetail').then(m => ({ default: m.DeliveryReturnDetail })));
@@ -118,7 +124,7 @@ const SalesInvoiceDetailListing = lazyRetry(() => import('./pages/SalesInvoiceDe
 const ConsignmentDetailListing = lazyRetry(() => import('./pages/ConsignmentDetailListing').then(m => ({ default: m.ConsignmentDetailListing })));
 const DeliveryReturnDetailListing = lazyRetry(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
 const DeliveryOrderDetail = lazyRetry(() => import('./pages/DeliveryOrderDetail').then(m => ({ default: m.DeliveryOrderDetail })));
-const SalesInvoiceDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.SalesInvoiceDetail })));
+const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').then(m => ({ default: m.SalesInvoiceDetail })));
 const ConsignmentDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.ConsignmentDetail })));
 
 export const router = createBrowserRouter([
@@ -186,7 +192,10 @@ export const router = createBrowserRouter([
       { path: 'mfg-delivery-orders/new', element: <DeliveryOrderNew /> },
       { path: 'mfg-delivery-orders/from-so', element: <DeliveryOrderFromSo /> },
       { path: 'mfg-delivery-orders/:id', element: <DeliveryOrderDetail /> },
-      { path: 'sales-invoices', element: <SalesInvoicesPage /> },
+      { path: 'sales-invoices', element: <SalesInvoicesList /> },
+      // /new + /from-do must come BEFORE :id so they aren't caught as an SI id.
+      { path: 'sales-invoices/new', element: <SalesInvoiceNew /> },
+      { path: 'sales-invoices/from-do', element: <SalesInvoiceFromDo /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
       { path: 'consignment', element: <ConsignmentPage /> },
       { path: 'consignment/:id', element: <ConsignmentDetail /> },

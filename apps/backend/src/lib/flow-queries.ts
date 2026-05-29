@@ -896,11 +896,21 @@ export const useSalesInvoiceDetail = (id: string | null) => useQuery({
   queryFn: () => authedFetch<{ salesInvoice: any; items: any[] }>(`/sales-invoices/${id}`),
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
+/* Create a Sales Invoice (header + line items). The server posts revenue on
+   create (idempotent), so invalidate the GL queries too. */
 export const useCreateSalesInvoice = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: unknown) => authedFetch<{ id: string; invoiceNumber: string }>(`/sales-invoices`, { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sales-invoices'] }),
+    mutationFn: (body: unknown) =>
+      authedFetch<{ id: string; invoiceNumber: string; revenue?: { posted: boolean; jeNo?: string; status: string } }>(
+        `/sales-invoices`, { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+      qc.invalidateQueries({ queryKey: ['journal-entries'] });
+      qc.invalidateQueries({ queryKey: ['account-balances'] });
+      qc.invalidateQueries({ queryKey: ['ar-aging'] });
+    },
   });
 };
 
@@ -927,6 +937,157 @@ export const useRecordSiPayment = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
       qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+    },
+  });
+};
+
+/* Convert SEVERAL same-customer Delivery Orders → ONE merged Sales Invoice.
+   Server validates the selected DOs share one customer, copies the first DO's
+   header, merges every DO's lines into one invoice (status SENT), recomputes
+   totals, then records revenue (Dr 1100 AR / Cr 4000 Sales Revenue), idempotent
+   on the invoice number. Returns the new invoice's { id, invoiceNumber }. */
+export const useConvertDosToSi = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ doIds }: { doIds: string[] }) =>
+      authedFetch<{ id: string; invoiceNumber: string; revenue: { posted: boolean; jeNo?: string; status: string } }>(
+        `/sales-invoices/from-dos`,
+        { method: 'POST', body: JSON.stringify({ doIds }) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+      qc.invalidateQueries({ queryKey: ['journal-entries'] });
+      qc.invalidateQueries({ queryKey: ['account-balances'] });
+      qc.invalidateQueries({ queryKey: ['ar-aging'] });
+    },
+  });
+};
+
+/* Append a DO's lines into an EXISTING invoice (Detail "Convert from DO"). */
+export const useAppendDoToSalesInvoice = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, doId }: { id: string; doId: string }) =>
+      authedFetch<{ ok: boolean; added: number }>(`/sales-invoices/${id}/items/from-do/${doId}`, { method: 'POST' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+      qc.invalidateQueries({ queryKey: ['journal-entries'] });
+      qc.invalidateQueries({ queryKey: ['account-balances'] });
+    },
+  });
+};
+
+/* SI header PATCH — editable SO/DO-style fields. Mirrors
+   useUpdateMfgDeliveryOrderHeader. */
+export const useUpdateSalesInvoiceHeader = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/sales-invoices/${id}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+    },
+  });
+};
+
+/* SI line-item CRUD — mirrors the DO item hooks. Each mutation recomputes the
+   SI totals server-side, so we invalidate both the detail + list. */
+export const useAddSalesInvoiceItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ item: unknown }>(`/sales-invoices/${id}/items`, {
+        method: 'POST', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+    },
+  });
+};
+
+export const useUpdateSalesInvoiceItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
+      authedFetch<{ ok: boolean }>(`/sales-invoices/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(item),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+    },
+  });
+};
+
+export const useDeleteSalesInvoiceItem = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, itemId }: { id: string; itemId: string }) =>
+      authedFetch<void>(`/sales-invoices/${id}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+    },
+  });
+};
+
+/* SI payments ledger — mirror of the DO payments hooks. */
+export type SiPayment = {
+  id: string;
+  sales_invoice_id: string;
+  paid_at: string;
+  method: 'merchant' | 'transfer' | 'cash';
+  merchant_provider: string | null;
+  installment_months: number | null;
+  online_type: string | null;
+  approval_code: string | null;
+  amount_centi: number;
+  account_sheet: string | null;
+  collected_by: string | null;
+  collected_by_name: string | null;
+  note: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export const useSalesInvoicePayments = (id: string | null) => useQuery({
+  queryKey: ['sales-invoices', id, 'payments'],
+  queryFn: () => authedFetch<{ payments: SiPayment[] }>(`/sales-invoices/${id}/payments`).then((r) => r.payments),
+  enabled: Boolean(id),
+  staleTime: 2 * 60_000,
+  retry: 1,
+  retryDelay: 800,
+});
+
+export const useAddSalesInvoicePayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
+      authedFetch<{ payment: SiPayment }>(`/sales-invoices/${id}/payments`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices', vars.id, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
+    },
+  });
+};
+
+export const useDeleteSalesInvoicePayment = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, paymentId }: { id: string; paymentId: string }) =>
+      authedFetch<{ ok: boolean }>(`/sales-invoices/${id}/payments/${paymentId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['sales-invoices', vars.id, 'payments'] });
+      qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['sales-invoices'] });
     },
   });
 };
