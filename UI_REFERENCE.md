@@ -278,13 +278,16 @@ existing tokens. This section is the single reference — every page must use
 these tokens, never hard-coded fonts/sizes/hex. Tokens live in
 `packages/design-system/src/tokens.css`.
 
-### Fonts
+### Fonts — NATIVE SYSTEM FONT (Loo 2026-05-29: serif strained the eyes)
+The backend ERP uses the OS system font (Segoe UI on Windows, SF on macOS) for
+titles, body, and buttons — all three tokens resolve to `--font-system`.
 | Role | Token | Family |
 |---|---|---|
-| Page/section titles, KPI numbers | `--font-title` | **Merriweather** (serif) |
-| Body, tables, inputs, labels | `--font-sans` | **Poppins** |
-| Buttons, chips, tabs, eyebrow labels | `--font-button` | **Raleway** |
-| Codes / SKUs / monospace cells | `--font-mono` | JetBrains Mono |
+| Page/section titles, KPI numbers | `--font-title` | system-ui (Segoe UI / SF) |
+| Body, tables, inputs, labels | `--font-sans` | system-ui |
+| Buttons, chips, tabs, eyebrow labels | `--font-button` | system-ui |
+| Codes / SKUs / monospace cells | `--font-mono` | JetBrains Mono / system mono |
+| 2990S wordmark only | `--font-mark` | Archivo (unchanged) |
 
 ### Type scale (use the token, not px)
 - Page title `--fs-20` bold · subtitle `--fs-12` muted
