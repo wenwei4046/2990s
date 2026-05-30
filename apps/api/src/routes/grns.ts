@@ -124,52 +124,59 @@ export async function recomputePoReceived(sb: any, poItemIds: Array<string | nul
   const ids = [...new Set(poItemIds.filter((x): x is string => Boolean(x)))];
   if (ids.length === 0) return;
 
-  // 1. Recount received_qty per PO item from live GRN lines. Net out goods
-  //    sent back to the supplier (returned_qty, migration 0106): a returned
-  //    qty no longer counts as received, so the PO line re-opens and a
-  //    replacement shipment can be received against it. Clamped ≥ 0.
-  const { data: glines } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, returned_qty, grn_id')
-    .in('purchase_order_item_id', ids);
-  const rows = (glines ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; returned_qty: number; grn_id: string }>;
-  const grnIds = [...new Set(rows.map((r) => r.grn_id).filter(Boolean))];
-  const cancelled = new Set<string>();
-  if (grnIds.length > 0) {
-    const { data: gs } = await sb.from('grns').select('id, status').in('id', grnIds);
-    for (const g of (gs ?? []) as Array<{ id: string; status: string }>) {
-      if (g.status === 'CANCELLED') cancelled.add(g.id);
+  // Best-effort, never throws (Commander 2026-05-30): the primary write already
+  // committed. If this secondary recount hiccups we log + skip — the live-count
+  // model self-heals on the next operation that touches these PO lines.
+  try {
+    // 1. Recount received_qty per PO item from live GRN lines. Net out goods
+    //    sent back to the supplier (returned_qty, migration 0106): a returned
+    //    qty no longer counts as received, so the PO line re-opens and a
+    //    replacement shipment can be received against it. Clamped ≥ 0.
+    const { data: glines } = await sb.from('grn_items')
+      .select('purchase_order_item_id, qty_accepted, returned_qty, grn_id')
+      .in('purchase_order_item_id', ids);
+    const rows = (glines ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; returned_qty: number; grn_id: string }>;
+    const grnIds = [...new Set(rows.map((r) => r.grn_id).filter(Boolean))];
+    const cancelled = new Set<string>();
+    if (grnIds.length > 0) {
+      const { data: gs } = await sb.from('grns').select('id, status').in('id', grnIds);
+      for (const g of (gs ?? []) as Array<{ id: string; status: string }>) {
+        if (g.status === 'CANCELLED') cancelled.add(g.id);
+      }
     }
-  }
-  const recvByPoi = new Map<string, number>(ids.map((id) => [id, 0]));
-  for (const r of rows) {
-    if (cancelled.has(r.grn_id)) continue;
-    const net = Number(r.qty_accepted ?? 0) - Number(r.returned_qty ?? 0);
-    recvByPoi.set(r.purchase_order_item_id, (recvByPoi.get(r.purchase_order_item_id) ?? 0) + Math.max(0, net));
-  }
-  await Promise.all([...recvByPoi.entries()].map(([poiId, recv]) =>
-    sb.from('purchase_order_items').update({ received_qty: recv }).eq('id', poiId),
-  ));
+    const recvByPoi = new Map<string, number>(ids.map((id) => [id, 0]));
+    for (const r of rows) {
+      if (cancelled.has(r.grn_id)) continue;
+      const net = Number(r.qty_accepted ?? 0) - Number(r.returned_qty ?? 0);
+      recvByPoi.set(r.purchase_order_item_id, (recvByPoi.get(r.purchase_order_item_id) ?? 0) + Math.max(0, net));
+    }
+    await Promise.all([...recvByPoi.entries()].map(([poiId, recv]) =>
+      sb.from('purchase_order_items').update({ received_qty: recv }).eq('id', poiId),
+    ));
 
-  // 2. Re-evaluate each touched PO's status from its (now-recounted) lines.
-  const { data: poiRows } = await sb.from('purchase_order_items')
-    .select('purchase_order_id').in('id', ids);
-  const poIds = [...new Set(((poiRows ?? []) as Array<{ purchase_order_id: string }>)
-    .map((r) => r.purchase_order_id).filter(Boolean))];
-  for (const poId of poIds) {
-    const { data: lines } = await sb.from('purchase_order_items')
-      .select('qty, received_qty').eq('purchase_order_id', poId);
-    const ll = (lines ?? []) as Array<{ qty: number; received_qty: number }>;
-    if (ll.length === 0) continue;
-    const anyReceived = ll.some((l) => (l.received_qty ?? 0) > 0);
-    const fully = ll.every((l) => (l.received_qty ?? 0) >= l.qty);
-    const newStatus = fully ? 'RECEIVED' : anyReceived ? 'PARTIALLY_RECEIVED' : 'SUBMITTED';
-    const { data: head } = await sb.from('purchase_orders')
-      .select('received_at').eq('id', poId).maybeSingle();
-    const prevReceivedAt = (head as { received_at: string | null } | null)?.received_at ?? null;
-    const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
-    // Stamp received_at on first full receipt, preserve it if already set, clear on regression.
-    patch.received_at = fully ? (prevReceivedAt ?? new Date().toISOString()) : null;
-    await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+    // 2. Re-evaluate each touched PO's status from its (now-recounted) lines.
+    const { data: poiRows } = await sb.from('purchase_order_items')
+      .select('purchase_order_id').in('id', ids);
+    const poIds = [...new Set(((poiRows ?? []) as Array<{ purchase_order_id: string }>)
+      .map((r) => r.purchase_order_id).filter(Boolean))];
+    for (const poId of poIds) {
+      const { data: lines } = await sb.from('purchase_order_items')
+        .select('qty, received_qty').eq('purchase_order_id', poId);
+      const ll = (lines ?? []) as Array<{ qty: number; received_qty: number }>;
+      if (ll.length === 0) continue;
+      const anyReceived = ll.some((l) => (l.received_qty ?? 0) > 0);
+      const fully = ll.every((l) => (l.received_qty ?? 0) >= l.qty);
+      const newStatus = fully ? 'RECEIVED' : anyReceived ? 'PARTIALLY_RECEIVED' : 'SUBMITTED';
+      const { data: head } = await sb.from('purchase_orders')
+        .select('received_at').eq('id', poId).maybeSingle();
+      const prevReceivedAt = (head as { received_at: string | null } | null)?.received_at ?? null;
+      const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
+      // Stamp received_at on first full receipt, preserve it if already set, clear on regression.
+      patch.received_at = fully ? (prevReceivedAt ?? new Date().toISOString()) : null;
+      await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+    }
+  } catch (e) {
+    console.error('[recomputePoReceived] best-effort recount failed', { poItemIds: ids, error: e });
   }
 }
 

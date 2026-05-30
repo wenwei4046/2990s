@@ -1129,27 +1129,34 @@ async function recomputePoTotals(sb: any, poId: string) {
 async function recomputeSoPicked(sb: any, soItemIds: Array<string | null | undefined>) {
   const ids = [...new Set(soItemIds.filter((x): x is string => Boolean(x)))];
   if (ids.length === 0) return;
-  const { data: lines } = await sb
-    .from('purchase_order_items')
-    .select('so_item_id, qty, purchase_order_id')
-    .in('so_item_id', ids);
-  const rows = (lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string }>;
-  const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter(Boolean))];
-  const cancelled = new Set<string>();
-  if (poIds.length > 0) {
-    const { data: pos } = await sb.from('purchase_orders').select('id, status').in('id', poIds);
-    for (const p of (pos ?? []) as Array<{ id: string; status: string }>) {
-      if (p.status === 'CANCELLED') cancelled.add(p.id);
+  // Best-effort, never throws (Commander 2026-05-30): the primary write already
+  // committed. If this secondary recount hiccups we log + skip — the live-count
+  // model self-heals on the next operation that touches these SO lines.
+  try {
+    const { data: lines } = await sb
+      .from('purchase_order_items')
+      .select('so_item_id, qty, purchase_order_id')
+      .in('so_item_id', ids);
+    const rows = (lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string }>;
+    const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter(Boolean))];
+    const cancelled = new Set<string>();
+    if (poIds.length > 0) {
+      const { data: pos } = await sb.from('purchase_orders').select('id, status').in('id', poIds);
+      for (const p of (pos ?? []) as Array<{ id: string; status: string }>) {
+        if (p.status === 'CANCELLED') cancelled.add(p.id);
+      }
     }
+    const pickedBySo = new Map<string, number>(ids.map((id) => [id, 0]));
+    for (const r of rows) {
+      if (cancelled.has(r.purchase_order_id)) continue;
+      pickedBySo.set(r.so_item_id, (pickedBySo.get(r.so_item_id) ?? 0) + Number(r.qty ?? 0));
+    }
+    await Promise.all([...pickedBySo.entries()].map(([soItemId, picked]) =>
+      sb.from('mfg_sales_order_items').update({ po_qty_picked: picked }).eq('id', soItemId),
+    ));
+  } catch (e) {
+    console.error('[recomputeSoPicked] best-effort recount failed', { soItemIds: ids, error: e });
   }
-  const pickedBySo = new Map<string, number>(ids.map((id) => [id, 0]));
-  for (const r of rows) {
-    if (cancelled.has(r.purchase_order_id)) continue;
-    pickedBySo.set(r.so_item_id, (pickedBySo.get(r.so_item_id) ?? 0) + Number(r.qty ?? 0));
-  }
-  await Promise.all([...pickedBySo.entries()].map(([soItemId, picked]) =>
-    sb.from('mfg_sales_order_items').update({ po_qty_picked: picked }).eq('id', soItemId),
-  ));
 }
 
 mfgPurchaseOrders.post('/:id/items', async (c) => {

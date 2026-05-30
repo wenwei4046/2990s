@@ -54,35 +54,42 @@ async function recomputeGrnInvoiced(sb: any, grnItemIds: Array<string | null | u
   const ids = [...new Set(grnItemIds.filter((x): x is string => Boolean(x)))];
   if (ids.length === 0) return;
 
-  // 1. Sum qty from live (non-cancelled) PI lines per GRN item.
-  const { data: plines } = await sb.from('purchase_invoice_items')
-    .select('grn_item_id, qty, purchase_invoice_id')
-    .in('grn_item_id', ids);
-  const rows = (plines ?? []) as Array<{ grn_item_id: string; qty: number; purchase_invoice_id: string }>;
-  const piIds = [...new Set(rows.map((r) => r.purchase_invoice_id).filter(Boolean))];
-  const cancelled = new Set<string>();
-  if (piIds.length > 0) {
-    const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
-    for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
-      if (p.status === 'CANCELLED') cancelled.add(p.id);
+  // Best-effort, never throws (Commander 2026-05-30): the primary write already
+  // committed. If this secondary recount hiccups we log + skip — the live-count
+  // model self-heals on the next operation that touches these GRN lines.
+  try {
+    // 1. Sum qty from live (non-cancelled) PI lines per GRN item.
+    const { data: plines } = await sb.from('purchase_invoice_items')
+      .select('grn_item_id, qty, purchase_invoice_id')
+      .in('grn_item_id', ids);
+    const rows = (plines ?? []) as Array<{ grn_item_id: string; qty: number; purchase_invoice_id: string }>;
+    const piIds = [...new Set(rows.map((r) => r.purchase_invoice_id).filter(Boolean))];
+    const cancelled = new Set<string>();
+    if (piIds.length > 0) {
+      const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
+      for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
+        if (p.status === 'CANCELLED') cancelled.add(p.id);
+      }
     }
-  }
-  const invByGrnItem = new Map<string, number>(ids.map((id) => [id, 0]));
-  for (const r of rows) {
-    if (cancelled.has(r.purchase_invoice_id)) continue;
-    invByGrnItem.set(r.grn_item_id, (invByGrnItem.get(r.grn_item_id) ?? 0) + Number(r.qty ?? 0));
-  }
+    const invByGrnItem = new Map<string, number>(ids.map((id) => [id, 0]));
+    for (const r of rows) {
+      if (cancelled.has(r.purchase_invoice_id)) continue;
+      invByGrnItem.set(r.grn_item_id, (invByGrnItem.get(r.grn_item_id) ?? 0) + Number(r.qty ?? 0));
+    }
 
-  // 2. Clamp into [0, qty_accepted] per line, then write.
-  const { data: giRows } = await sb.from('grn_items')
-    .select('id, qty_accepted').in('id', ids);
-  const acceptedById = new Map<string, number>(
-    ((giRows ?? []) as Array<{ id: string; qty_accepted: number }>).map((g) => [g.id, g.qty_accepted ?? 0]),
-  );
-  await Promise.all([...invByGrnItem.entries()].map(([giId, inv]) => {
-    const capped = Math.min(acceptedById.get(giId) ?? inv, Math.max(0, inv));
-    return sb.from('grn_items').update({ invoiced_qty: capped }).eq('id', giId);
-  }));
+    // 2. Clamp into [0, qty_accepted] per line, then write.
+    const { data: giRows } = await sb.from('grn_items')
+      .select('id, qty_accepted').in('id', ids);
+    const acceptedById = new Map<string, number>(
+      ((giRows ?? []) as Array<{ id: string; qty_accepted: number }>).map((g) => [g.id, g.qty_accepted ?? 0]),
+    );
+    await Promise.all([...invByGrnItem.entries()].map(([giId, inv]) => {
+      const capped = Math.min(acceptedById.get(giId) ?? inv, Math.max(0, inv));
+      return sb.from('grn_items').update({ invoiced_qty: capped }).eq('id', giId);
+    }));
+  } catch (e) {
+    console.error('[recomputeGrnInvoiced] best-effort recount failed', { grnItemIds: ids, error: e });
+  }
 }
 
 /* PI edit-lock guard: a PI with ANY payment recorded (paid_centi > 0) or that's
