@@ -99,6 +99,20 @@ type DraftLine = {
   notes:             string;
 };
 
+/* Stashed to sessionStorage before leaving for the From-PO-multi picker, so the
+   in-progress GRN draft (lines + header) survives the round trip AND the picker
+   can grey-out / cap PO lines this draft already holds (anti-double-pick). */
+type GrnNewDraft = {
+  lines:            DraftLine[];
+  picks:            GrnFromPoPick[] | null;
+  receivedAt?:      string;
+  deliveryNoteRef?: string;
+  notes?:           string;
+  warehouseId?:     string;
+  selPoId?:         string;
+  manualSupplierId?: string;
+};
+
 export const GrnNew = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -148,36 +162,74 @@ export const GrnNew = () => {
   const warehousesQ = useWarehouses();
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
-  // ── Read From-PO-multi picks once on mount (remove after reading). ──────
+  // ── On mount: restore the stashed draft + merge the From-PO-multi picks.
+  //    Commander 2026-05-30 (anti-double-pick): leaving for the picker now
+  //    stashes the in-progress draft (grnNewDraft). On return we restore those
+  //    lines + header first, THEN append only the newly-picked PO lines that
+  //    aren't already in the draft (dedupe by purchase_order_item_id) — so the
+  //    same PO line can't be received twice across the round trip, and existing
+  //    edits aren't lost. Mirrors PurchaseOrderNew's restore-then-append. ─────
   const readPicksRef = useRef(false);
   useEffect(() => {
     if (readPicksRef.current) return;
     readPicksRef.current = true;
+
     let raw: string | null = null;
     try { raw = sessionStorage.getItem('grnFromPoPicks'); } catch { /* ignore */ }
-    if (!raw) return;
-    try {
-      sessionStorage.removeItem('grnFromPoPicks');
-      const rows = JSON.parse(raw) as GrnFromPoPick[];
-      if (Array.isArray(rows) && rows.length) {
-        setPicks(rows);
-        setLines(rows.map((p) => ({
-          rid:                 `p${p.poItemId}`,
-          purchaseOrderItemId: p.poItemId,
-          materialKind:        'mfg_product',
-          materialCode:        p.itemCode,
-          materialName:        p.description ?? p.itemCode,
-          itemGroup:           p.itemGroup || null,
-          variants:            (p.variants as Record<string, unknown> | null) ?? null,
-          outstanding:         p.remainingQty,
-          qtyReceived:         p._pickQty,
-          qtyAccepted:         p._pickQty,
-          qtyRejected:         0,
-          unitPriceCenti:      p.unitPriceCenti ?? 0,
-          notes:               '',
-        })));
-      }
-    } catch { /* malformed — ignore */ }
+    if (!raw) {
+      // No round-trip picks → drop any stale stashed draft (e.g. the picker was
+      // cancelled, which navigates away) so a fresh New GRN starts clean.
+      try { sessionStorage.removeItem('grnNewDraft'); } catch { /* ignore */ }
+      return;
+    }
+    try { sessionStorage.removeItem('grnFromPoPicks'); } catch { /* ignore */ }
+
+    let newPicks: GrnFromPoPick[] = [];
+    try { const r = JSON.parse(raw); if (Array.isArray(r)) newPicks = r as GrnFromPoPick[]; } catch { /* malformed */ }
+
+    // Restore the draft saved before we left for the picker (header + lines).
+    let draft: GrnNewDraft | null = null;
+    try { const d = sessionStorage.getItem('grnNewDraft'); if (d) draft = JSON.parse(d) as GrnNewDraft; } catch { /* ignore */ }
+    try { sessionStorage.removeItem('grnNewDraft'); } catch { /* ignore */ }
+
+    if (draft) {
+      if (draft.receivedAt) setReceivedAt(draft.receivedAt);
+      if (typeof draft.deliveryNoteRef === 'string') setDeliveryNoteRef(draft.deliveryNoteRef);
+      if (typeof draft.notes === 'string') setNotes(draft.notes);
+      if (draft.warehouseId) setWarehouseId(draft.warehouseId);
+      if (draft.selPoId) setSelPoId(draft.selPoId);
+      if (draft.manualSupplierId) setManualSupplierId(draft.manualSupplierId);
+    }
+
+    // Merge: restored draft lines + only the new picks not already drafted.
+    const baseLines = (draft?.lines ?? []) as DraftLine[];
+    const seen = new Set(baseLines.map((l) => l.purchaseOrderItemId).filter(Boolean) as string[]);
+    const pickLines: DraftLine[] = newPicks
+      .filter((p) => !seen.has(p.poItemId))
+      .map((p) => ({
+        rid:                 `p${p.poItemId}`,
+        purchaseOrderItemId: p.poItemId,
+        materialKind:        'mfg_product',
+        materialCode:        p.itemCode,
+        materialName:        p.description ?? p.itemCode,
+        itemGroup:           p.itemGroup || null,
+        variants:            (p.variants as Record<string, unknown> | null) ?? null,
+        outstanding:         p.remainingQty,
+        qtyReceived:         p._pickQty,
+        qtyAccepted:         p._pickQty,
+        qtyRejected:         0,
+        unitPriceCenti:      p.unitPriceCenti ?? 0,
+        notes:               '',
+      }));
+    setLines([...baseLines, ...pickLines]);
+
+    // Picks state drives the supplier lock + header PO — union of draft + new
+    // (deduped by PO line id).
+    const pickMap = new Map<string, GrnFromPoPick>();
+    for (const p of (draft?.picks ?? [])) pickMap.set(p.poItemId, p);
+    for (const p of newPicks) pickMap.set(p.poItemId, p);
+    const union = [...pickMap.values()];
+    if (union.length) setPicks(union);
   }, []);
 
   // Load lines from the selected single PO (only outstanding qty > 0). Skipped
@@ -232,6 +284,18 @@ export const GrnNew = () => {
   const setLine  = (rid: string, patch: Partial<DraftLine>) =>
     setLines((prev) => prev.map((l) => (l.rid === rid ? { ...l, ...patch } : l)));
   const dropLine = (rid: string) => setLines((prev) => prev.filter((l) => l.rid !== rid));
+
+  // ── Leave for the From-PO-multi picker, stashing the in-progress draft so it
+  //    survives the round trip + the picker can exclude lines already drafted
+  //    here (anti-double-pick). Mirrors PurchaseOrderNew's goToFromSo. ────────
+  const goToFromPo = () => {
+    const draft: GrnNewDraft = {
+      lines, picks, receivedAt, deliveryNoteRef, notes, warehouseId,
+      selPoId, manualSupplierId,
+    };
+    try { sessionStorage.setItem('grnNewDraft', JSON.stringify(draft)); } catch { /* quota */ }
+    navigate('/grns/from-po');
+  };
 
   const subtotalCenti = useMemo(
     () => lines.reduce((s, l) => s + l.qtyReceived * l.unitPriceCenti, 0),
@@ -421,7 +485,7 @@ export const GrnNew = () => {
         </div>
         <div className={styles.actions}>
           {/* Bulk / multi-PO picker that FEEDS this form. */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
+          <Button variant="ghost" size="md" onClick={goToFromPo}>
             <Layers {...ICON} /> From PO (multi)
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
@@ -620,7 +684,7 @@ export const GrnNew = () => {
               {isManual
                 ? 'Pick a supplier in the header, then use “Add another item” below to receive items by hand. Receiving against a PO? Pick one in the header, or use '
                 : 'Choose a Purchase Order in the header to receive against it. Receiving lines from several POs at once? Use '}
-              <button type="button" onClick={() => navigate('/grns/from-po')} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
+              <button type="button" onClick={goToFromPo} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
             </p>
           ) : (
             /* Card-per-line layout — Commander 2026-05-29: "PO 跟 GRN 界面要一样".
