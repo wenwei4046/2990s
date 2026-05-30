@@ -389,6 +389,35 @@ const ProductBreakdownDrawer = ({
   const lots = useInventoryLots(code);
   const movements = useInventoryMovements({ productCode: code });
   const cogs = useCogsEntries({ productCode: code });
+  const warehouses = useWarehouses();
+
+  /* Movements + COGS sections are collapsed by default (Commander 2026-05-30).
+     Operator opens what they want to see — keeps the drawer scannable. */
+  const [movementsOpen, setMovementsOpen] = useState(false);
+  const [cogsOpen, setCogsOpen] = useState(false);
+
+  /* Warehouse name lookup (UUID → code) so the Movements table can show
+     "SLGR" instead of "41d544bc". */
+  const whById = useMemo(
+    () => new Map((warehouses.data ?? []).map((w) => [w.id, w])),
+    [warehouses.data],
+  );
+
+  /* Running-balance computation for Movements (same pattern as Stock Card):
+     API returns DESC, reverse to ASC, accumulate signed qty, then render DESC.
+     OUT subtracts, IN/ADJUSTMENT/TRANSFER add as-is (ADJUSTMENT carries a
+     signed qty per inventory_movements convention). */
+  const movementsWithBalance = useMemo(() => {
+    const desc = movements.data ?? [];
+    const asc = [...desc].reverse();
+    let running = 0;
+    const out: Array<typeof desc[number] & { runningBalance: number }> = [];
+    for (const m of asc) {
+      running += m.movement_type === 'OUT' ? -m.qty : m.qty;
+      out.push({ ...m, runningBalance: running });
+    }
+    return out.reverse();
+  }, [movements.data]);
 
   const balances = (breakdown.data?.balances ?? []).filter((b) => b.product_code === code);
   const totalQty = balances.reduce((s, b) => s + (b.qty ?? 0), 0);
@@ -510,95 +539,116 @@ const ProductBreakdownDrawer = ({
           </table>
         </div>
 
-        {/* Movements ledger — every IN / OUT / ADJUSTMENT / TRANSFER for
-            this SKU. Source doc shown so the warehouse staff can trace
-            "why did stock change here". */}
-        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-4)' }}>
-          Movements (newest first — every stock change for this SKU)
-        </p>
-        <div className={styles.tableCard}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Type</th>
-                <th>Warehouse</th>
-                <th style={{ textAlign: 'right' }}>Qty</th>
-                <th>Source Doc</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {movements.isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
-              {!movements.isLoading && (movements.data ?? []).length === 0 && (
-                <tr><td colSpan={6} className={styles.emptyRow}>No movements yet for this SKU.</td></tr>
-              )}
-              {(movements.data ?? []).map((m) => {
-                const href = docHrefFor(m);
-                const qtySign = m.movement_type === 'IN' ? '+' : m.movement_type === 'OUT' ? '−' : (m.qty > 0 ? '+' : m.qty < 0 ? '−' : '');
-                const qtyClass = m.qty > 0 ? styles.numCellPos : m.qty < 0 ? styles.numCellNeg : styles.numCellZero;
-                return (
-                  <tr key={m.id}>
-                    <td className={styles.numCellZero}>{fmtDateTime(m.created_at)}</td>
-                    <td>
-                      <span className={`${styles.movementPill} ${
-                        m.movement_type === 'IN' ? styles.movementIn
-                        : m.movement_type === 'OUT' ? styles.movementOut
-                        : styles.movementAdj}`}>{m.movement_type}</span>
-                    </td>
-                    <td>{m.warehouse_id ? <code style={{ fontSize: 'var(--fs-11)' }}>{m.warehouse_id.slice(0, 8)}</code> : '—'}</td>
-                    <td className={`${styles.numCell} ${qtyClass}`}>{qtySign}{Math.abs(m.qty).toLocaleString('en-MY')}</td>
-                    <td>
-                      {m.source_doc_no ? (
-                        href
-                          ? <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
-                          : <span className={styles.docLink}>{m.source_doc_no}</span>
-                      ) : <span className={styles.numCellZero}>—</span>}
-                    </td>
-                    <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* COGS — FIFO consumption stream. Every OUT movement triggers
-            consumption of the oldest open lot(s); these rows are the
-            cost-of-goods-sold ledger for this SKU. */}
-        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-4)' }}>
-          COGS (FIFO consumptions for this SKU)
-        </p>
-        <div className={styles.tableCard}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Consumed at</th>
-                <th>Source Doc</th>
-                <th style={{ textAlign: 'right' }}>Qty</th>
-                <th style={{ textAlign: 'right' }}>Unit Cost</th>
-                <th style={{ textAlign: 'right' }}>Total Cost</th>
-                <th>From Lot</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cogs.isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
-              {!cogs.isLoading && (cogs.data ?? []).length === 0 && (
-                <tr><td colSpan={6} className={styles.emptyRow}>No COGS entries yet for this SKU.</td></tr>
-              )}
-              {(cogs.data ?? []).map((c) => (
-                <tr key={c.id}>
-                  <td className={styles.numCellZero}>{fmtDateTime(c.consumed_at)}</td>
-                  <td><span className={styles.docLink}>{c.source_doc_no ?? '—'}</span></td>
-                  <td className={`${styles.numCell} ${styles.numCellNeg}`}>−{c.qty_consumed.toLocaleString('en-MY')}</td>
-                  <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(c.unit_cost_sen)}</td>
-                  <td className={styles.numCell} style={{ fontWeight: 700 }}>{fmtRm(c.total_cost_sen)}</td>
-                  <td className={styles.numCellZero}>{c.lot_source_doc_no ?? '—'}</td>
+        {/* Movements ledger — collapsed by default. Header is a button. */}
+        <button type="button"
+          onClick={() => setMovementsOpen((v) => !v)}
+          style={{
+            marginTop: 'var(--space-4)', cursor: 'pointer', background: 'transparent',
+            border: 'none', padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}>
+          <span className={styles.eyebrow} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {movementsOpen ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
+            Movements ({(movements.data ?? []).length}) — every stock change for this SKU
+          </span>
+        </button>
+        {movementsOpen && (
+          <div className={styles.tableCard}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Type</th>
+                  <th>Warehouse</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th>
+                  <th style={{ textAlign: 'right' }}>Running</th>
+                  <th>Source Doc</th>
+                  <th>Notes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {movements.isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
+                {!movements.isLoading && movementsWithBalance.length === 0 && (
+                  <tr><td colSpan={7} className={styles.emptyRow}>No movements yet for this SKU.</td></tr>
+                )}
+                {movementsWithBalance.map((m) => {
+                  const href = docHrefFor(m);
+                  const qtySign = m.movement_type === 'IN' ? '+' : m.movement_type === 'OUT' ? '−' : (m.qty > 0 ? '+' : m.qty < 0 ? '−' : '');
+                  const qtyClass = m.qty > 0 ? styles.numCellPos : m.qty < 0 ? styles.numCellNeg : styles.numCellZero;
+                  const wh = m.warehouse_id ? whById.get(m.warehouse_id) : null;
+                  return (
+                    <tr key={m.id}>
+                      <td className={styles.numCellZero}>{fmtDateTime(m.created_at)}</td>
+                      <td>
+                        <span className={`${styles.movementPill} ${
+                          m.movement_type === 'IN' ? styles.movementIn
+                          : m.movement_type === 'OUT' ? styles.movementOut
+                          : styles.movementAdj}`}>{m.movement_type}</span>
+                      </td>
+                      <td>{wh ? wh.code : (m.warehouse_id ? '—' : '—')}</td>
+                      <td className={`${styles.numCell} ${qtyClass}`}>{qtySign}{Math.abs(m.qty).toLocaleString('en-MY')}</td>
+                      <td className={`${styles.numCell}`} style={{ fontWeight: 700 }}>
+                        {m.runningBalance.toLocaleString('en-MY')}
+                      </td>
+                      <td>
+                        {m.source_doc_no ? (
+                          href
+                            ? <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
+                            : <span className={styles.docLink}>{m.source_doc_no}</span>
+                        ) : <span className={styles.numCellZero}>—</span>}
+                      </td>
+                      <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* COGS — collapsed by default. */}
+        <button type="button"
+          onClick={() => setCogsOpen((v) => !v)}
+          style={{
+            marginTop: 'var(--space-4)', cursor: 'pointer', background: 'transparent',
+            border: 'none', padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}>
+          <span className={styles.eyebrow} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {cogsOpen ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
+            COGS ({(cogs.data ?? []).length}) — FIFO consumptions for this SKU
+          </span>
+        </button>
+        {cogsOpen && (
+          <div className={styles.tableCard}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Consumed at</th>
+                  <th>Source Doc</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th>
+                  <th style={{ textAlign: 'right' }}>Unit Cost</th>
+                  <th style={{ textAlign: 'right' }}>Total Cost</th>
+                  <th>From Lot</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cogs.isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
+                {!cogs.isLoading && (cogs.data ?? []).length === 0 && (
+                  <tr><td colSpan={6} className={styles.emptyRow}>No COGS entries yet for this SKU.</td></tr>
+                )}
+                {(cogs.data ?? []).map((c) => (
+                  <tr key={c.id}>
+                    <td className={styles.numCellZero}>{fmtDateTime(c.consumed_at)}</td>
+                    <td><span className={styles.docLink}>{c.source_doc_no ?? '—'}</span></td>
+                    <td className={`${styles.numCell} ${styles.numCellNeg}`}>−{c.qty_consumed.toLocaleString('en-MY')}</td>
+                    <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(c.unit_cost_sen)}</td>
+                    <td className={styles.numCell} style={{ fontWeight: 700 }}>{fmtRm(c.total_cost_sen)}</td>
+                    <td className={styles.numCellZero}>{c.lot_source_doc_no ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
