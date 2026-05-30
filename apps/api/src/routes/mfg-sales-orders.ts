@@ -32,6 +32,7 @@ import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
+import { soDeliverableRemaining } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -408,11 +409,26 @@ mfgSalesOrders.get('/', async (c) => {
       }
     }
 
+    /* "Has undelivered qty" per SO (Wei Siang 2026-05-30) — drives the Issue
+       Delivery Order menu gate. Recomputed LIVE (remaining = qty − delivered +
+       returned, cancelled DOs excluded) by the same helper the line-level
+       picker uses, so it re-opens after a DO is cancelled / a DO line is
+       deleted and closes once every line is fully delivered. Replaces the old
+       status-only gate that hid the action at SHIPPED/DELIVERED. */
+    const hasUndelivered = new Set<string>();
+    {
+      const deliverableMap = await soDeliverableRemaining(sb, docNos);
+      for (const line of deliverableMap.values()) {
+        if (line.remaining > 0) hasUndelivered.add(line.docNo);
+      }
+    }
+
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
       const perGroup = agg.get(docNo);
       (r as Record<string, unknown>).item_categories = [...(cats.get(docNo) ?? [])].sort();
       (r as Record<string, unknown>).has_children = downstreamDocNos.has(docNo);
+      (r as Record<string, unknown>).has_undelivered = hasUndelivered.has(docNo);
       const readiness = readinessByDoc.get(docNo);
       (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
       (r as Record<string, unknown>).is_main_ready = readiness?.isMainReady ?? false;

@@ -402,7 +402,7 @@ type DeliverableLine = {
   remaining: number;
 };
 
-async function soDeliverableRemaining(
+export async function soDeliverableRemaining(
   sb: any,
   soDocNos: string[],
 ): Promise<Map<string, DeliverableLine>> {

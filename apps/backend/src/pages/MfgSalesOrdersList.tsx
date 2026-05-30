@@ -195,6 +195,11 @@ type SoRow = {
      ANY non-cancelled DO / SI. Hides Edit + Cancel from the context menu;
      Convert-to-DO stays available (partial delivery). */
   has_children?: boolean;
+  /* List endpoint stamps this when the SO still has at least one line that can
+     be delivered (remaining = qty − delivered + returned > 0), recomputed live
+     so it re-opens after a DO is cancelled / a DO line is deleted. Drives the
+     "Issue Delivery Order" menu entry instead of a status-only gate. */
+  has_undelivered?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -1134,9 +1139,13 @@ export const MfgSalesOrdersList = () => {
           items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
           items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
           items.push({ divider: true as const });
-          // Issue DO (开单) — available before goods ship. Stays visible even
-          // with downstream children (partial delivery allowed).
-          if (['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'].includes(status)) {
+          // Issue DO — show whenever the SO still has undelivered qty, NOT by
+          // status. A status-only gate hid this once the SO hit SHIPPED/DELIVERED
+          // even with lines left to deliver, and failed to re-show it after a DO
+          // was cancelled. has_undelivered is recomputed live (qty − delivered +
+          // returned > 0), so it tracks cancel / delete / partial-delivery
+          // correctly. Hidden only on terminal/paused states.
+          if (Boolean(row.has_undelivered) && !['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(status)) {
             items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
           }
           // Issue SI — available once the customer has accepted delivery.
