@@ -388,15 +388,75 @@ mfgSalesOrders.get('/', async (c) => {
    captured as a doc-no param. */
 mfgSalesOrders.get('/mine', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
+  /* Read the BASE table (NOT the mfg_sales_orders_with_payment_totals view):
+     a Postgres view fixes its column list at creation, and that view predates
+     proceeded_at (migration 0110) — selecting proceeded_at from the view 500s
+     at runtime. The base table has every column incl. proceeded_at +
+     deposit_centi. Paid is summed from the payments ledger separately below. */
   const { data, error } = await sb
     .from('mfg_sales_orders')
-    .select('doc_no, debtor_name, phone, status, so_date, proceeded_at, customer_delivery_date, total_revenue_centi, paid_centi, deposit_centi, line_count, created_at')
+    .select(
+      'doc_no, debtor_name, phone, email, address1, address2, city, postcode, customer_state, ' +
+      'customer_delivery_date, status, payment_method, approval_code, note, so_date, created_at, ' +
+      'proceeded_at, total_revenue_centi, line_count, deposit_centi',
+    )
     .eq('salesperson_id', user.id)
     .not('status', 'in', '("CANCELLED","ON_HOLD")')
     .order('created_at', { ascending: false })
     .limit(80);
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ salesOrders: data ?? [] });
+
+  // Cast via `unknown` first — supabase-js types a view select as
+  // GenericStringError[] until the schema cache materialises (same pattern as
+  // the list route's joined-select casts above).
+  const rows = (data ?? []) as unknown as Array<{ doc_no?: string; deposit_centi?: number } & Record<string, unknown>>;
+
+  /* Attach the line items so the drawer can render the cart without a second
+     fetch. Group non-cancelled lines by doc_no → each item the board needs:
+     { item_code, description, qty, total_centi, variants }. */
+  const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
+  const itemsByDoc = new Map<string, Array<{ item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown }>>();
+  if (docNos.length > 0) {
+    const { data: itemRows } = await sb
+      .from('mfg_sales_order_items')
+      .select('doc_no, item_code, description, qty, total_centi, variants')
+      .in('doc_no', docNos)
+      .eq('cancelled', false)
+      .order('created_at', { ascending: true });
+    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown }>) {
+      const arr = itemsByDoc.get(it.doc_no) ?? [];
+      arr.push({ item_code: it.item_code, description: it.description, qty: it.qty, total_centi: it.total_centi, variants: it.variants });
+      itemsByDoc.set(it.doc_no, arr);
+    }
+  }
+
+  /* Live paid = the handover deposit (stored in deposit_centi at create — the
+     SO create path does NOT write a ledger row for it) PLUS any payments
+     recorded since (mfg_sales_order_payments). The header `paid_centi` is being
+     deprecated, so we don't read it. One batched ledger query. */
+  const paidLedgerByDoc = new Map<string, number>();
+  if (docNos.length > 0) {
+    const { data: payRows } = await sb
+      .from('mfg_sales_order_payments')
+      .select('so_doc_no, amount_centi')
+      .in('so_doc_no', docNos);
+    for (const p of (payRows ?? []) as Array<{ so_doc_no: string; amount_centi: number }>) {
+      paidLedgerByDoc.set(p.so_doc_no, (paidLedgerByDoc.get(p.so_doc_no) ?? 0) + (p.amount_centi ?? 0));
+    }
+  }
+
+  const salesOrders = rows.map((r) => {
+    const deposit = typeof r.deposit_centi === 'number' ? r.deposit_centi : 0;
+    const ledger = paidLedgerByDoc.get(r.doc_no ?? '') ?? 0;
+    return {
+      ...r,
+      // Total received = handover deposit + subsequent ledger payments.
+      paid_centi_total: deposit + ledger,
+      items: itemsByDoc.get(r.doc_no ?? '') ?? [],
+    };
+  });
+
+  return c.json({ salesOrders });
 });
 
 mfgSalesOrders.get('/:docNo', async (c) => {

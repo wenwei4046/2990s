@@ -19,7 +19,6 @@ import {
   Receipt,
   Store,
   Loader2,
-  Printer,
 } from 'lucide-react';
 import { Button, IconButton } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
@@ -28,7 +27,6 @@ import { Topbar } from '../components/Topbar';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalities, useSalesStats } from '../lib/queries';
 import { useStaff } from '../lib/staff';
-import { SlipUploadStep } from '../components/SlipUploadStep';
 import styles from './OrderStatus.module.css';
 
 const PIN_LEN = 6;
@@ -37,7 +35,18 @@ const PIN_LEN = 6;
 const SESSION_KEY_PREFIX = 'pos-orders-unlocked-v2:';
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
-type Lane = 'received' | 'proceed' | 'logistics' | 'ready' | 'dispatched' | 'delivered' | 'cancelled';
+// mfg_so_status enum. The 3-column board buckets these (see LANES).
+// ON_HOLD / CANCELLED are excluded server-side, so the board never sees them.
+type SoStatus =
+  | 'CONFIRMED'
+  | 'IN_PRODUCTION'
+  | 'READY_TO_SHIP'
+  | 'SHIPPED'
+  | 'DELIVERED'
+  | 'INVOICED'
+  | 'CLOSED'
+  | 'ON_HOLD'
+  | 'CANCELLED';
 
 interface OrderItem {
   qty: number;
@@ -61,7 +70,8 @@ interface MyOrderRow {
   subtotal: number;
   addonTotal: number;
   paid: number;
-  lane: Lane;
+  status: SoStatus;
+  proceededAt: string | null;
   deliveryDate: string | null;
   deliverySlot: string | null;
   paymentMethod: string | null;
@@ -74,73 +84,120 @@ interface MyOrderRow {
   items: OrderItem[];
 }
 
+// Shape of one Sales Order row from GET /mfg-sales-orders/mine.
+interface MineSoRow {
+  doc_no: string;
+  debtor_name: string | null;
+  phone: string | null;
+  email: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  postcode: string | null;
+  customer_state: string | null;
+  customer_delivery_date: string | null;
+  status: SoStatus;
+  payment_method: string | null;
+  approval_code: string | null;
+  note: string | null;
+  so_date: string | null;
+  created_at: string;
+  proceeded_at: string | null;
+  total_revenue_centi: number | null;
+  line_count: number | null;
+  paid_centi_total: number | null;
+  items: Array<{
+    item_code: string;
+    description: string | null;
+    qty: number | null;
+    total_centi: number | null;
+    variants: unknown;
+  }> | null;
+}
+
 const useMyOrders = () =>
   useQuery({
     queryKey: ['my-orders'],
+    // Reads the salesperson's own Backend Sales Orders via the API (the board
+    // is unified onto mfg_sales_orders; the legacy retail `orders` table is no
+    // longer used here). salesperson_id filtering + CANCELLED/ON_HOLD exclusion
+    // happen server-side in GET /mfg-sales-orders/mine.
     queryFn: async (): Promise<MyOrderRow[]> => {
-      // RLS scopes sales to own orders automatically. No explicit filter needed.
-      // Embed staff (placing salesperson) + order_items (qty, line_total, product
-      // for photo). Disambiguate staff embed via the explicit FK name because
-      // orders has 4 FKs to staff (staff_id, salesperson_id, po_issued_by,
-      // slip_verified_by).
-      const { data, error } = await supabase
-        .from('orders')
-        .select(`
-          id, placed_at,
-          customer_name, customer_phone, customer_email,
-          customer_address, customer_address_line2,
-          customer_postcode, customer_city, customer_state,
-          subtotal, addon_total, total, paid, lane,
-          delivery_date, delivery_slot,
-          payment_method, approval_code, notes,
-          staff:orders_staff_id_staff_id_fk (name, initials),
-          order_items (qty, kind, line_total, products:product_id (name, img_key, thumb_key))
-        `)
-        .order('placed_at', { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return (data ?? []).map((r: any) => {
-        const items: OrderItem[] = (r.order_items ?? [])
-          .filter((it: any) => it.kind === 'product')
-          .map((it: any) => ({
-            qty: it.qty ?? 0,
-            lineTotal: it.line_total ?? 0,
-            productName: it.products?.name ?? null,
-            productImage: it.products?.thumb_key ?? it.products?.img_key ?? null,
-          }));
-        const pieces = items.reduce((s, it) => s + it.qty, 0);
-        const firstImage = items.find((it) => it.productImage)?.productImage ?? null;
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/mfg-sales-orders/mine`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /mfg-sales-orders/mine failed (${res.status})`);
+      const body = (await res.json()) as { salesOrders: MineSoRow[] };
+      return (body.salesOrders ?? []).map((r): MyOrderRow => {
+        const items: OrderItem[] = (r.items ?? []).map((it) => ({
+          qty: it.qty ?? 0,
+          lineTotal: Math.round((it.total_centi ?? 0) / 100),
+          productName: it.description ?? it.item_code,
+          productImage: null,
+        }));
+        const total = Math.round((r.total_revenue_centi ?? 0) / 100);
         return {
-          id: r.id,
-          placedAt: r.placed_at,
-          customerName: r.customer_name,
-          customerPhone: r.customer_phone ?? null,
-          customerEmail: r.customer_email ?? null,
-          customerCity: r.customer_city ?? null,
-          customerAddress: r.customer_address ?? null,
-          customerAddressLine2: r.customer_address_line2 ?? null,
-          customerPostcode: r.customer_postcode ?? null,
+          id: r.doc_no,
+          placedAt: r.created_at,
+          customerName: r.debtor_name ?? '',
+          customerPhone: r.phone ?? null,
+          customerEmail: r.email ?? null,
+          customerCity: r.city ?? null,
+          customerAddress: r.address1 ?? null,
+          customerAddressLine2: r.address2 ?? null,
+          customerPostcode: r.postcode ?? null,
           customerState: r.customer_state ?? null,
-          subtotal: r.subtotal ?? 0,
-          addonTotal: r.addon_total ?? 0,
-          total: r.total,
-          paid: r.paid ?? 0,
-          lane: r.lane as Lane,
-          deliveryDate: r.delivery_date ?? null,
-          deliverySlot: r.delivery_slot ?? null,
+          // No separate subtotal on the SO — the total stands in for it; add-ons
+          // ride inside the line totals so there's no separate add-on bucket.
+          subtotal: total,
+          addonTotal: 0,
+          total,
+          paid: Math.round((r.paid_centi_total ?? 0) / 100),
+          status: r.status,
+          proceededAt: r.proceeded_at ?? null,
+          deliveryDate: r.customer_delivery_date ?? null,
+          deliverySlot: null,
           paymentMethod: r.payment_method ?? null,
           approvalCode: r.approval_code ?? null,
-          notes: r.notes ?? null,
-          staffName: r.staff?.name ?? null,
-          staffInitials: r.staff?.initials ?? null,
-          pieces,
-          firstImage,
+          notes: r.note ?? null,
+          // The salesperson is the viewer — no per-order staff badge needed.
+          staffName: null,
+          staffInitials: null,
+          pieces: r.line_count ?? items.reduce((s, it) => s + it.qty, 0),
+          firstImage: null,
           items,
         };
       });
     },
     staleTime: 10_000,
+    // Fallback to a poll if Supabase Realtime is blocked on the tablet network.
+    refetchInterval: 30_000,
   });
+
+// Realtime invalidate on mfg_sales_orders edits so the board refetches within
+// ~300ms (mirrors useCatalogRealtime in lib/queries.ts). Mounted in OrderBoard.
+const useMyOrdersRealtime = () => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const channel = supabase
+      .channel('my-orders-so')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mfg_sales_orders' },
+        () => {
+          void qc.invalidateQueries({ queryKey: ['my-orders'] });
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [qc]);
+};
 
 const fmtMoney = (n: number) => n.toLocaleString('en-MY');
 const fmtTimeAgo = (iso: string): string => {
@@ -358,25 +415,25 @@ interface LaneDef {
   title: string;
   sub: string;
   Icon: typeof Inbox;
-  matches: Lane[];
+  matches: SoStatus[];
 }
 
 const LANES: ReadonlyArray<LaneDef> = [
   {
     id: 'place',
     num: '01',
-    title: 'Place order',
+    title: 'Order placed',
     sub: 'Just placed · may need detail tweaks',
     Icon: Inbox,
-    matches: ['received'],
+    matches: ['CONFIRMED'],
   },
   {
     id: 'proceed',
     num: '02',
-    title: 'Proceed order',
+    title: 'Proceed',
     sub: 'Locked · coordinator handling',
     Icon: Send,
-    matches: ['proceed', 'logistics', 'ready', 'dispatched'],
+    matches: ['IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED'],
   },
   {
     id: 'delivered',
@@ -384,7 +441,7 @@ const LANES: ReadonlyArray<LaneDef> = [
     title: 'Delivered',
     sub: 'Closed · signed off',
     Icon: CheckCircle2,
-    matches: ['delivered'],
+    matches: ['DELIVERED', 'INVOICED', 'CLOSED'],
   },
 ];
 
@@ -392,6 +449,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
   const orders = useMyOrders();
   const stats = useSalesStats();
   const staff = useStaff();
+  useMyOrdersRealtime();
   const list = orders.data ?? [];
   const [active, setActive] = useState<MyOrderRow | null>(null);
 
@@ -412,7 +470,7 @@ const OrderBoard = ({ sessionKey }: { sessionKey: string | null }) => {
     };
     for (const o of list) {
       for (const lane of LANES) {
-        if (lane.matches.includes(o.lane)) {
+        if (lane.matches.includes(o.status)) {
           map[lane.id].push(o);
           break;
         }
@@ -634,14 +692,16 @@ const OrderTile = ({ order, onOpen }: {
 
 /* ─── Order Detail Drawer ─── */
 
-const LANE_LABEL: Record<Lane, string> = {
-  received: 'Place',
-  proceed: 'Proceed',
-  logistics: 'Logistics',
-  ready: 'Ready',
-  dispatched: 'Dispatched',
-  delivered: 'Delivered',
-  cancelled: 'Cancelled',
+const LANE_LABEL: Record<SoStatus, string> = {
+  CONFIRMED: 'Order placed',
+  IN_PRODUCTION: 'In production',
+  READY_TO_SHIP: 'Ready to ship',
+  SHIPPED: 'Shipped',
+  DELIVERED: 'Delivered',
+  INVOICED: 'Invoiced',
+  CLOSED: 'Closed',
+  ON_HOLD: 'On hold',
+  CANCELLED: 'Cancelled',
 };
 
 const fmtAbsDate = (iso: string | null): string => {
@@ -654,7 +714,8 @@ const OrderDetail = ({ order, onClose }: {
   onClose: () => void;
 }) => {
   const queryClient = useQueryClient();
-  const editable = order.lane === 'received';
+  const { user } = useAuth();
+  const editable = order.status === 'CONFIRMED';
 
   // Local edit state. Resync ONLY when switching orders, not on background
   // refetches of the same order — otherwise typing would get blown away.
@@ -663,7 +724,12 @@ const OrderDetail = ({ order, onClose }: {
 
   // Payment recorded this session (added on top of order.paid).
   const [paymentAdd, setPaymentAdd] = useState<string>('');
-  const [slipSessionId, setSlipSessionId] = useState<string | null>(null);
+
+  // "Paid so far" = the order's recorded paid total from /mine (handover
+  // deposit + any ledger payments). After recording a payment we invalidate
+  // ['my-orders']; the board refetches and syncs the open drawer's order, so
+  // this reflects the new total without a separate ledger fetch here.
+  const paidSoFar = order.paid;
 
   // Earliest delivery date = order placed_at + 30 days (production + logistics
   // window). Sales can't quote a date earlier than that — matches the
@@ -705,19 +771,22 @@ const OrderDetail = ({ order, onClose }: {
   const set = <K extends keyof MyOrderRow>(k: K, v: MyOrderRow[K]) =>
     setEdited((prev) => ({ ...prev, [k]: v }));
 
+  // Live ledger paid + a preview of the amount currently typed in the
+  // "Record payment" field (the POST hasn't fired yet, so show it optimistically
+  // on the progress bar). Once recorded + refetched, paidSoFar absorbs it.
   const additionalPaid = Math.max(0, Number(paymentAdd) || 0);
-  const effectivePaid = Math.min(order.total, edited.paid + additionalPaid);
+  const effectivePaid = Math.min(order.total, paidSoFar + additionalPaid);
   const paidPct = order.total > 0 ? Math.min(100, Math.round((effectivePaid / order.total) * 100)) : 0;
 
   const customerInfoOk = !!(edited.customerName.trim() && edited.customerEmail?.trim());
   const addressOk = !!(edited.customerAddress?.trim() && edited.customerPostcode?.trim());
   const dateOk = !!edited.deliveryDate;
-  const paidOk = order.total > 0 && effectivePaid / order.total >= 0.5;
-  // When recording additional payment, slip upload is required as proof.
-  const slipOk = additionalPaid === 0 || slipSessionId !== null;
-  const allOk = customerInfoOk && addressOk && paidOk && slipOk;
+  // Gate on the live ledger (paidSoFar), the recorded source of truth.
+  const paidOk = order.total > 0 && paidSoFar / order.total >= 0.5;
+  const allOk = customerInfoOk && addressOk && paidOk;
 
-  // Dirty check: any of the editable string fields changed, or payment recorded
+  // Dirty check: any of the editable header fields changed. (Payment is now
+  // recorded via its own action against the SO ledger, not folded into Save.)
   const dirty =
     edited.customerName !== order.customerName ||
     edited.customerPhone !== order.customerPhone ||
@@ -727,68 +796,117 @@ const OrderDetail = ({ order, onClose }: {
     edited.customerPostcode !== order.customerPostcode ||
     edited.customerCity !== order.customerCity ||
     edited.customerState !== order.customerState ||
-    edited.deliveryDate !== order.deliveryDate ||
-    edited.approvalCode !== order.approvalCode ||
-    additionalPaid > 0 ||
-    slipSessionId !== null;
+    edited.deliveryDate !== order.deliveryDate;
 
-  const buildPatch = (extra: Record<string, unknown> = {}) => {
+  // SO header PATCH body — camelCase keys per the API contract. We deliberately
+  // DON'T send internalExpectedDd / processingDate (they trip the pairing guard).
+  const buildPatch = (): Record<string, unknown> => {
     const patch: Record<string, unknown> = {
-      customer_name: edited.customerName.trim() || null,
-      customer_phone: edited.customerPhone?.trim() || null,
-      customer_email: edited.customerEmail?.trim() || null,
-      customer_address: edited.customerAddress?.trim() || null,
-      customer_address_line2: edited.customerAddressLine2?.trim() || null,
-      customer_postcode: edited.customerPostcode?.trim() || null,
-      customer_city: edited.customerCity?.trim() || null,
-      customer_state: edited.customerState?.trim() || null,
-      delivery_date: edited.deliveryDate || null,
-      approval_code: edited.approvalCode?.trim() || null,
-      paid: effectivePaid,
-      ...extra,
+      debtorName: edited.customerName.trim() || null,
+      phone: edited.customerPhone?.trim() || null,
+      email: edited.customerEmail?.trim() || null,
+      address1: edited.customerAddress?.trim() || null,
+      address2: edited.customerAddressLine2?.trim() || null,
+      city: edited.customerCity?.trim() || null,
+      postcode: edited.customerPostcode?.trim() || null,
+      customerState: edited.customerState?.trim() || null,
     };
+    // Only send the delivery date when it actually changed — re-sending an
+    // unchanged PAST date would trip the API's delivery_date_past guard.
+    if (edited.deliveryDate !== order.deliveryDate) {
+      patch.customerDeliveryDate = edited.deliveryDate || null;
+    }
     return patch;
   };
 
+  const authedFetch = async (path: string, init: RequestInit) => {
+    if (!API_URL) throw new Error('VITE_API_URL is not set');
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) throw new Error('not_authenticated');
+    const res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers ?? {}) },
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ''); }
+      throw new Error(`${init.method ?? 'GET'} ${path} failed (${res.status})${detail ? `: ${detail}` : ''}`);
+    }
+    return res;
+  };
+
+  // Header edit → PATCH /mfg-sales-orders/:docNo.
   const saveMutation = useMutation({
-    mutationFn: async (extra: Record<string, unknown>) => {
-      const patch = buildPatch(extra);
-      // If user uploaded a slip with the top-up, store its r2_key on the order
-      // and promote the pending row (mirrors create_order_with_items pattern).
-      if (slipSessionId) {
-        const { data: session } = await supabase
-          .from('pending_slip_uploads')
-          .select('r2_key')
-          .eq('id', slipSessionId)
-          .maybeSingle();
-        if (session?.r2_key) {
-          patch.slip_key = session.r2_key;
-          patch.slip_state = 'pending';
-        }
-        await supabase
-          .from('pending_slip_uploads')
-          .update({ status: 'promoted', promoted_at: new Date().toISOString(), promoted_to_order_id: order.id })
-          .eq('id', slipSessionId);
-      }
-      const { error } = await supabase.from('orders').update(patch).eq('id', order.id);
-      if (error) throw error;
+    mutationFn: async () => {
+      await authedFetch(`/mfg-sales-orders/${order.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(buildPatch()),
+      });
     },
     onSuccess: () => {
-      setPaymentAdd('');
-      setSlipSessionId(null);
       queryClient.invalidateQueries({ queryKey: ['my-orders'] });
     },
   });
 
-  const onSave = () => saveMutation.mutate({});
+  // Map the SO header payment_method → the ledger's 3-method enum. The SO can
+  // carry 'installment' (a merchant plan); the payments ledger only knows
+  // merchant / transfer / cash, so installment folds into 'merchant'. We don't
+  // forward an installmentMonths term here — the /mine payload doesn't carry
+  // it, and the SO header already tracks the plan length. Anything
+  // unrecognised defaults to cash.
+  const paymentMethodFor = (): { method: 'merchant' | 'transfer' | 'cash' } => {
+    const m = (order.paymentMethod ?? '').toLowerCase();
+    if (m === 'installment') return { method: 'merchant' };
+    if (m === 'merchant' || m === 'transfer' || m === 'cash') return { method: m };
+    return { method: 'cash' };
+  };
+
+  // Record payment → POST /mfg-sales-orders/:docNo/payments (SO ledger). The SO
+  // has no slip-image field; approval_code is the proof (matches how the backend
+  // records SO payments).
+  const paymentMutation = useMutation({
+    mutationFn: async () => {
+      const amount = additionalPaid;
+      if (amount <= 0) return;
+      const { method } = paymentMethodFor();
+      const today = new Date().toISOString().slice(0, 10);
+      await authedFetch(`/mfg-sales-orders/${order.id}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          paidAt: today,
+          method,
+          amountCenti: Math.round(amount * 100),
+          ...(edited.approvalCode?.trim() ? { approvalCode: edited.approvalCode.trim() } : {}),
+          ...(user?.id ? { collectedBy: user.id } : {}),
+        }),
+      });
+    },
+    onSuccess: () => {
+      setPaymentAdd('');
+      queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+    },
+  });
+
+  // Proceed → flip status to IN_PRODUCTION (server auto-stamps proceeded_at).
+  const proceedMutation = useMutation({
+    mutationFn: async () => {
+      await authedFetch(`/mfg-sales-orders/${order.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'IN_PRODUCTION', notes: 'Proceed from POS' }),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['my-orders'] });
+      onClose();
+    },
+  });
+
+  const onSave = () => saveMutation.mutate();
+  const onRecordPayment = () => { if (additionalPaid > 0) paymentMutation.mutate(); };
   const onProceed = () => {
     if (!allOk) return;
-    saveMutation.mutate({ lane: 'proceed' }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ['my-orders'] });
-        onClose();
-      },
-    });
+    proceedMutation.mutate();
   };
 
   useEffect(() => {
@@ -806,7 +924,7 @@ const OrderDetail = ({ order, onClose }: {
       <aside className={styles.detail} onClick={(e) => e.stopPropagation()}>
         <header className={styles.detailHead}>
           <div>
-            <div className={styles.detailEyebrow}>Order · {LANE_LABEL[order.lane]}</div>
+            <div className={styles.detailEyebrow}>Order · {LANE_LABEL[order.status]}</div>
             <h2 className={styles.detailTitle}>{order.id}</h2>
             <div className={styles.detailSub}>
               {order.customerName} · placed {fmtTimeAgo(order.placedAt)} by {order.staffName ?? '—'}
@@ -1010,11 +1128,11 @@ const OrderDetail = ({ order, onClose }: {
             {editable && (
               <>
                 <div className={styles.detailFieldGrid} style={{ marginTop: 12 }}>
-                  <DetailField label="Record additional payment (RM)" disabled={false}>
+                  <DetailField label="Record payment (RM)" disabled={false}>
                     <input
                       type="number"
                       min={0}
-                      max={order.total - order.paid}
+                      max={Math.max(0, order.total - paidSoFar)}
                       value={paymentAdd}
                       onChange={(e) => setPaymentAdd(e.target.value)}
                       placeholder="0"
@@ -1030,17 +1148,22 @@ const OrderDetail = ({ order, onClose }: {
                   </DetailField>
                 </div>
 
-                {additionalPaid > 0 && (
-                  <div className={styles.detailSlipWrap}>
-                    <div className={styles.detailFieldLabel}>
-                      Payment slip <span className={styles.detailRequired}>*</span>
-                    </div>
-                    <SlipUploadStep
-                      onConfirmed={(id) => setSlipSessionId(id)}
-                      onCleared={() => setSlipSessionId(null)}
-                    />
-                  </div>
+                {paymentMutation.error && (
+                  <p className={styles.detailFootError}>
+                    Payment failed: {String((paymentMutation.error as Error).message)}
+                  </p>
                 )}
+                <div className={styles.detailCta}>
+                  <button
+                    type="button"
+                    className={styles.detailSaveBtn}
+                    onClick={onRecordPayment}
+                    disabled={additionalPaid <= 0 || paymentMutation.isPending}
+                  >
+                    <Receipt size={14} strokeWidth={1.75} />
+                    {paymentMutation.isPending ? 'Recording…' : 'Record payment'}
+                  </button>
+                </div>
               </>
             )}
           </section>
@@ -1054,19 +1177,9 @@ const OrderDetail = ({ order, onClose }: {
         </div>
 
         <footer className={styles.detailFoot}>
-          {order.lane !== 'delivered' && order.lane !== 'cancelled' && (
-            <div className={styles.detailFootActions}>
-              <a
-                href={`/print/sales-order/${order.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={styles.detailPrintBtn}
-              >
-                <Printer size={14} strokeWidth={1.75} />
-                Generate Sales Order
-              </a>
-            </div>
-          )}
+          {/* TODO: re-add a "Generate Sales Order" print action once a print
+              route resolves an SO doc_no. The old /print/sales-order/:id route
+              reads the legacy retail `orders` table and can't render an SO. */}
           {editable && (
             <>
               <div className={styles.detailChecklist}>
@@ -1080,12 +1193,17 @@ const OrderDetail = ({ order, onClose }: {
                   Save failed: {String((saveMutation.error as Error).message)}
                 </p>
               )}
+              {proceedMutation.error && (
+                <p className={styles.detailFootError}>
+                  Proceed failed: {String((proceedMutation.error as Error).message)}
+                </p>
+              )}
               <div className={styles.detailCta}>
                 <button
                   type="button"
                   className={styles.detailSaveBtn}
                   onClick={onSave}
-                  disabled={!dirty || saveMutation.isPending}
+                  disabled={!dirty || saveMutation.isPending || proceedMutation.isPending}
                 >
                   <Save size={14} strokeWidth={1.75} />
                   {saveMutation.isPending ? 'Saving…' : 'Save changes'}
@@ -1094,7 +1212,7 @@ const OrderDetail = ({ order, onClose }: {
                   type="button"
                   className={styles.detailProceedBtn}
                   onClick={onProceed}
-                  disabled={!allOk || saveMutation.isPending}
+                  disabled={!allOk || saveMutation.isPending || proceedMutation.isPending}
                 >
                   Move to Proceed
                   <ArrowRight size={14} strokeWidth={1.75} />
@@ -1104,7 +1222,9 @@ const OrderDetail = ({ order, onClose }: {
           )}
           {!editable && (
             <span className={styles.detailFootInfo}>
-              {order.lane === 'delivered' ? 'Delivered · managed in backend' : 'Locked · coordinator handling'}
+              {LANES[2]?.matches.includes(order.status)
+                ? 'Delivered · managed in backend'
+                : 'Locked · coordinator handling'}
             </span>
           )}
         </footer>
