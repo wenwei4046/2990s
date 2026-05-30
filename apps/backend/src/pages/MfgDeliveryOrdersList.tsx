@@ -631,14 +631,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
   {
     key: 'do_number', label: 'DO No.', width: 150, sortable: true,
     accessor: (r) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
-        {/* Commander 2026-05-29 — every DO is SHIPPED on creation, so the inline
-            "Shipped" pill was just noise next to every row. Only flag the
-            exceptions (Invoiced / Cancelled) inline; the full state still lives
-            in the dedicated Status column. */}
-        {r.status && !['LOADED', 'DISPATCHED'].includes(r.status) && <StatusPill status={r.status} />}
-      </span>
+      <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
     ),
     searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
   },

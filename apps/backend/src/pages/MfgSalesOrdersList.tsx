@@ -1199,14 +1199,13 @@ const buildColumns = (
     key: 'doc_no', label: 'Doc. No.', width: 160, sortable: true, groupable: false,
     /* HOUZS-style — burnt-bold doc number followed by a status pill so the
        user sees state without scrolling 20 columns right. */
+    /* Status is shown in the dedicated Status column further right — don't
+       duplicate it next to the doc number (Wei Siang 2026-05-30). */
     accessor: (r) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{
-          fontWeight: 700, color: 'var(--c-burnt)',
-          fontVariantNumeric: 'tabular-nums',
-        }}>{r.doc_no}</span>
-        {r.status && r.status !== 'CONFIRMED' && <StatusPill status={r.status} />}
-      </span>
+      <span style={{
+        fontWeight: 700, color: 'var(--c-burnt)',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{r.doc_no}</span>
     ),
     searchValue: (r) => `${r.doc_no} ${r.status ?? ''}`,
   },

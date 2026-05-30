@@ -603,12 +603,11 @@ export const SalesInvoicesList = () => {
 /* ── Columns — mirrors the DO list set, adapted to SI fields. ───────────── */
 const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] => [
   {
-    key: 'invoice_number', label: 'Invoice No.', width: 160, sortable: true,
+    /* Status pill is shown in the dedicated Status column further right —
+       don't duplicate it here (Wei Siang 2026-05-30). */
+    key: 'invoice_number', label: 'Invoice No.', width: 140, sortable: true,
     accessor: (r) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.invoice_number}</span>
-        <StatusPill status={r.status} />
-      </span>
+      <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.invoice_number}</span>
     ),
     searchValue: (r) => `${r.invoice_number} ${r.status ?? ''}`,
   },
