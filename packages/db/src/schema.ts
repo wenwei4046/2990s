@@ -1606,6 +1606,11 @@ export const consignmentNotes = pgTable('consignment_notes', {
   signedAt:            timestamp('signed_at', { withTimezone: true }),
   signatureData:       text('signature_data'),
   notes:               text('notes'),
+  /* Migration 0110 — cancel/unpost sentinel. NULL = active / posted;
+     not NULL = unposted (the inventory movement has been reversed and the
+     parent consignment_order_items consumption rolled back). The consignment
+     header's edit-lock + has_children flag both filter on cancelled_at IS NULL. */
+  cancelledAt:         timestamp('cancelled_at', { withTimezone: true }),
   createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy:           uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
 }, (t) => ({
