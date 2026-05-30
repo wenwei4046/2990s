@@ -28,6 +28,7 @@ import {
   loadProductAndModel,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -465,6 +466,13 @@ mfgSalesOrders.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  // Edge #4 — itemCode catalog guard. Reject typos / stale codes before any
+  // pricing / variant / inventory work runs.
+  if (items.length > 0) {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
      path so the API matches what the SO Detail edit page already blocks.
@@ -1374,6 +1382,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   /* Tier 2 downstream-lock — line-add is blocked once a DO / SI exists. */
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
@@ -1507,6 +1521,12 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   /* Tier 2 downstream-lock — line-edit is blocked once a DO / SI exists. */
   const childLock = await soHasDownstream(sb, docNo);

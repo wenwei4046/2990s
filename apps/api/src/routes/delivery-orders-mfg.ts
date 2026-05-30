@@ -18,6 +18,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
@@ -590,6 +591,12 @@ deliveryOrdersMfg.post('/', async (c) => {
 
   const sb = c.get('supabase'); const user = c.get('user');
 
+  /* Edge #4 — itemCode catalog guard. */
+  if (items.length > 0) {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   /* Commander 2026-05-30 — the old whole-SO "already_converted" binary lock is
      GONE. Delivery is now line-level + quantity-based (see
      soDeliverableRemaining): an SO line can be split across several DOs until
@@ -955,6 +962,12 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   /* Tier 2 downstream-lock — line-add is blocked once a DR / SI exists. */
   const childLock = await doHasDownstream(sb, id);
   if (childLock) return c.json(childLock, 409);
@@ -977,6 +990,12 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   /* Tier 2 downstream-lock — line-edit is blocked once a DR / SI exists. */
   const childLock = await doHasDownstream(sb, id);

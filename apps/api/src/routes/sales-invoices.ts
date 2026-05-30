@@ -24,6 +24,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue } from '../lib/post-si-revenue';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
 export const salesInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 salesInvoices.use('*', supabaseAuth);
@@ -206,6 +207,13 @@ salesInvoices.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Edge #4 — itemCode catalog guard. */
+  if (items.length > 0) {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   const invoiceNumber = await nextNum(sb);
 
   const phoneRaw = (body.phone as string | undefined) ?? null;
@@ -582,6 +590,12 @@ salesInvoices.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   const { data: header } = await sb.from('sales_invoices').select('id, invoice_number').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
@@ -600,6 +614,12 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   const { data: prev } = await sb.from('sales_invoice_items')
     .select('qty, unit_price_centi, discount_centi, tax_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes')

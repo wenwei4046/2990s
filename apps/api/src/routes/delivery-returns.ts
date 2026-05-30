@@ -20,6 +20,7 @@ import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
 export const deliveryReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryReturns.use('*', supabaseAuth);
@@ -385,6 +386,12 @@ deliveryReturns.post('/', async (c) => {
 
   const sb = c.get('supabase'); const user = c.get('user');
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   const { data: header, error: hErr } = await insertHeader(sb, user.id, body);
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const h = header as unknown as { id: string; return_number: string };
@@ -622,6 +629,12 @@ deliveryReturns.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   const { data: header } = await sb.from('delivery_returns').select('id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
@@ -636,6 +649,12 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   const { data: prev } = await sb.from('delivery_return_items')
     .select('qty_returned, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, condition')
