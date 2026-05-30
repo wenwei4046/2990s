@@ -50,6 +50,8 @@ export const useGrnFromPos = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      /* Force picker refetch so received PO lines drop off. */
+      qc.invalidateQueries({ queryKey: ['grns', 'outstanding-po-items'], refetchType: 'all' });
     },
   });
 };
@@ -64,6 +66,8 @@ export const usePurchaseReturnFromGrns = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-returns'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
+      /* Force picker refetch so returned/invoiced GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 };
@@ -77,6 +81,9 @@ export const usePoFromSos = () => {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      /* Force PO-picker refetch so converted SO lines drop off. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'], refetchType: 'all' });
     },
   });
 };
@@ -192,6 +199,8 @@ export const usePurchaseInvoiceFromGrn = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
+      /* Force picker refetch so already-invoiced GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 };
@@ -206,6 +215,8 @@ export const usePurchaseReturnFromGrn = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-returns'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
+      /* Force picker refetch so returned GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 };
@@ -1089,6 +1100,9 @@ export const useAppendDoToSalesInvoice = () => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
       qc.invalidateQueries({ queryKey: ['journal-entries'] });
       qc.invalidateQueries({ queryKey: ['account-balances'] });
+      /* Force picker refetch — both pickers share the same DO Pending pool. */
+      qc.invalidateQueries({ queryKey: ['sales-invoices', 'invoiceable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['delivery-returns', 'returnable-do-lines'], refetchType: 'all' });
     },
   });
 };

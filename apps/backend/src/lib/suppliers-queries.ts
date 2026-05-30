@@ -610,6 +610,8 @@ export function useCreatePisFromGrnItems() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+      /* Force picker refetch so already-invoiced GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 }
@@ -654,7 +656,9 @@ export function useCreatePosFromSoItems() {
       ),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
-      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'] });
+      /* Force picker refetch — refetchType:'all' kicks the query even when
+         not currently mounted, so the next view sees only outstanding lines. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'], refetchType: 'all' });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       if (vars.targetPoId) qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.targetPoId] });
     },
