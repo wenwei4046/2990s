@@ -1,82 +1,86 @@
-# Sofa Quick Pick — two-layer (Master-Admin base + salesperson personal) + Master-Admin build flow
+# Sofa Quick Pick rework + combo cost/sell split (Phase 5)
 
-> Created 2026-05-31. Owner: Loo (Chairman). Status: **DESIGN — approved verbally, pending written-spec review.**
-> Implements `COST-SELL-SPLIT-PLAN.md` Phase 5 (QuickPick rework, D6), reframed to the Chairman's unified-modular model (2026-05-31).
+> Created 2026-05-31. Owner: Loo (Chairman). Status: **DESIGN — pending written-spec review.**
+> Implements `COST-SELL-SPLIT-PLAN.md` Phase 5 (QuickPick rework, D6) **plus the combo cost/sell split that completes the cost-sell-split** (combos were its one remaining exception). Reframed to the Chairman's unified-modular model (2026-05-31).
 
 ---
 
 ## Context & current state
 
-- **Sofa pricing is already fully modular + combo** (shipped 2026-05-31, `ad1e876`). Every sofa is priced by **module à-la-carte sum + Combo override**, where a matched Combo (set by Master Admin) takes priority (Q2 always-combo). Per-module selling prices come from each Model's module SKU `sell_price_sen` (`computeSofaPrice` / `computeSofaSellingSen`).
-- **Chairman direction (2026-05-31): ALL sofas go fully modular.** Every sofa — including the 10 Models that today carry only `1S`/`2S` SKUs — is built from modules in Custom Made. There is **no separate whole-unit (1S/2S) pricing path**; the shipped module engine covers everything once a Model has module SKUs.
-- **Current Quick Pick is single-layer and global.** "Save as Quick Pick" (`CustomBuilder` → `SaveComboModal` → `useCreateSofaCombo` → `POST /sofa-combos`) creates a **global** `sofa_combo_pricing` row visible to everyone, for **any role**. `useSofaCombos(baseModel)` fetches global combos; the Configurator renders them as Quick Pick cards. There is no per-salesperson layer and no per-kit default size.
+- **Sofa pricing is already fully modular + combo** (shipped 2026-05-31, `ad1e876`). Price = **module à-la-carte sum + Combo override** (matched Combo takes priority, Q2). Per-module selling prices come from each Model's module SKU `sell_price_sen`.
+- **Chairman 2026-05-31 — ALL sofas go fully modular.** Every sofa, including the 10 Models that today carry only `1S`/`2S` SKUs, is built from modules in Custom Made. **No whole-unit (1S/2S) pricing path** — the shipped module engine covers everything once a Model has module SKUs.
+- **Combos were the cost-sell-split EXCEPTION.** `sofa_combo_pricing.prices_by_height` is a single value used as *both* the benchmark and the charged price. **Chairman 2026-05-31: split it like products** — the Backend value is **COST**; Master Admin sets the **SELLING** combo price; the app charges selling.
+- **Quick Pick today is single-layer + global.** "Save as Quick Pick" (`CustomBuilder` → `SaveComboModal` → `useCreateSofaCombo` → `POST /sofa-combos`) creates a **global** `sofa_combo_pricing` row visible to everyone, for **any role**. No per-salesperson layer, no per-kit default size.
 
 ## The unified model (Chairman's logic)
 
-- A **Quick Pick is a saved module layout.** Picking one drops those modules into the build; the price follows the same modular + Combo engine. A layout that matches a global Combo gets the Combo price (priority) — whether the salesperson picked the Quick Pick or manually built the same layout.
-- Quick Pick has **two layers**:
-  1. **Global base** — pre-set by Master Admin. Everyone sees the same standard set.
-  2. **Personal favorites** — each salesperson adds their own from Custom Made; visible only on their own device.
-- **Master Admin builds Quick Picks the same way salespeople do** — assemble modules in Custom Made → save → (set the Combo price on the existing Combo page). The difference is only *where the save lands* (global vs personal) and that Master Admin can pre-set a default size.
+- A **Quick Pick is a saved module layout.** Picking it — or manually building the same layout — prices through the same engine: module à-la-carte + Combo override (combo priority).
+- **Two layers:** Global base (Master Admin) + Personal favorites (salesperson, per-device).
+- **The combo price is a SELLING price owned by Master Admin** (the Backend value is cost). Master Admin builds in Custom Made → saves → sets the combo selling price — the same "Backend = cost, Master Admin = sell" rule as products.
 
 ## Scope — this phase (CODE)
 
-### 1. Two-layer Quick Pick
+### Part 1 — Combo cost/sell split (completes the cost-sell-split)
+- **Reclassify** Backend's existing combo price `sofa_combo_pricing.prices_by_height` as **COST** (cost / PO views keep reading it).
+- **NEW combo SELLING price:** add `selling_prices_by_height` (jsonb, per-height, sen) to `sofa_combo_pricing`, **backfilled = `prices_by_height`** so no displayed price changes on day one (mirrors the module migration `0109` backfill). Master Admin edits it.
+- **The whole app charges the SELLING combo price.** The shared engine's combo override (`computeSofaPrice`) and the server drift gate both source SELLING: `useSofaCombos` (POS) + `loadActiveSofaCombos` (server) fill `SofaComboRow.pricesByHeight` from `selling_prices_by_height` (the same data-source repoint as the module `sell_price_sen ?? base_price_sen`). **The pure engine is untouched — only the data source changes.**
+- **POS combo SELLING-price editor for `master_account`** — the surface where Master Admin sets the combo price. (Resolves the earlier open question: the combo price Master Admin sets *is* the selling price, on POS.)
+- **Backend `SofaComboTab.tsx`:** relabel its price field as COST (the cost / PO benchmark).
+- *Impl note:* confirm `sofa_combo_pricing` write path roles — `master_account` must be allowed to write the selling column via the JWT-scoped API (same pattern as the `mfg_products` selling writes). If an RLS policy gates it, that is a separate Chairman-approved step (red line).
+
+### Part 2 — Two-layer Quick Pick
 - **Role-branch the save.** "Save as Quick Pick":
   - `master_account` → global combo (`useCreateSofaCombo`, **unchanged** — this IS the central base).
   - any other role → **new personal local store** (per-device), not global.
-- **New personal store** `apps/pos/src/state/quickpicks.ts` — Zustand + `localStorage` (mirrors `state/quotes.ts`). Entry shape: `{ id, staffId, baseModel, label, modules: string[], depth, savedAt }`. Ops: `add`, `remove`, `listForStaff(staffId, baseModel)`. localStorage key `pos-quickpicks-v1`.
-- **Configurator Quick Pick UI** renders both layers: the global base (existing `useSofaCombos`) plus a separate **"Yours"** group for this staff's personal entries (filtered by `staffId` + current Model's `base_model`). A personal entry, when picked, builds its cells and prices through `computeSofaPrice` (combo-aware) — identical to a global pick. Personal entries are deletable from the card.
+- **New personal store** `apps/pos/src/state/quickpicks.ts` — Zustand + `localStorage` (mirrors `state/quotes.ts`). Entry: `{ id, staffId, baseModel, label, modules: string[], depth, savedAt }`. Ops: `add`, `remove`, `listForStaff(staffId, baseModel)`. Key `pos-quickpicks-v1`.
+- **Configurator Quick Pick UI** renders both layers: the global base (existing `useSofaCombos`) plus a separate **"Yours"** group for this staff's personal entries (filtered by `staffId` + current Model's `base_model`). A personal pick builds its cells and prices through `computeSofaPrice` (combo-aware) — identical to a global pick. Personal entries are deletable.
 
-### 2. Master-Admin build → save → set Combo price + per-kit default size
-- **Build → save → price** for Master Admin **largely already exists**: building in Custom Made + "Save as Quick Pick" creates a priced global combo; the Backend Combo page adjusts price/tier/effective date. Keep it; gate the global write to `master_account`.
-- **Per-kit default size (new):**
-  - DB: add nullable `default_height` (text, e.g. `'24'`) to `sofa_combo_pricing`.
-  - API: `GET`/`POST`/`PATCH /sofa-combos` carry `default_height`.
-  - Backend Sofa Combo tab (`SofaComboTab.tsx`): a field to set it per row.
-  - POS: when a Quick Pick kit is picked, pre-select `activeDepth` from its `default_height` (fallback to the Model's first depth). Salesperson can still change it.
+### Part 3 — Per-kit default size
+- DB: add nullable `default_height` (text, e.g. `'24'`) to `sofa_combo_pricing` (same migration as Part 1's column).
+- API: `GET`/`POST`/`PATCH /sofa-combos` carry `default_height`.
+- Backend `SofaComboTab.tsx`: field to set it per row.
+- POS: picking a Quick Pick kit pre-selects `activeDepth` from its `default_height` (fallback to the Model's first depth). Salesperson can still change it.
 
 ## Out of scope / prerequisites (NOT code this phase)
-- **Modularizing the 10 fixed Models** (create their module SKUs + `allowed_options`, like Booqit) — a **catalog/data task** done by Master Admin in the Backend. Runs in parallel; the Quick Pick code does not depend on it. Once a Model has modules, it is buildable and priced automatically.
-- **Cross-device personal sync** — personal Quick Picks are `localStorage` per-device at pilot (D6). DB-backed sync is post-pilot.
-- **Retiring the legacy `<MODEL>-1S`/`-2S` SKUs** for fixed Models — handled when those Models are modularized, not here.
-
-## Open question for review
-- **Where does Master Admin set/adjust the Combo price?** Combo prices today live on the **Backend** Sofa Combo tab, but `master_account` is a **POS-only** role and can't reach the Backend. Saving a Quick Pick on POS already captures a price (the live à-la-carte total), so an *initial* price exists — but *adjusting* it later needs a surface `master_account` can reach. Two readings:
-  - **(a)** The Backend tab is enough — an admin/coordinator adjusts combo prices; Master Admin only assembles + saves the initial price. (No new POS surface.)
-  - **(b)** Add a Combo-price editor to the POS for `master_account`, so Master Admin owns the full build → save → price loop without leaving POS. (More scope.)
-  - Needs the Chairman's call — it changes scope.
+- **Modularizing the 10 fixed Models** (create their module SKUs + `allowed_options`, like Booqit) — a **catalog/data task** by Master Admin in the Backend. Parallel; the code does not depend on it.
+- **Cross-device personal sync** — personal Quick Picks are `localStorage` per-device at pilot (D6); DB-backed sync is post-pilot.
+- **Retiring the legacy `<MODEL>-1S`/`-2S` SKUs** — when those Models are modularized, not here.
 
 ## Components & changes (delta)
 | File | Change |
 |---|---|
-| `apps/pos/src/state/quickpicks.ts` | **NEW** — personal Quick Pick store (Zustand + localStorage). |
-| `apps/pos/src/pages/CustomBuilder.tsx` (`SaveComboModal` + Save button) | Role-branch: `master_account` → global (`useCreateSofaCombo`); else → personal store add. |
-| `apps/pos/src/pages/Configurator.tsx` (Quick Pick render) | Merge global combos + personal "Yours" group (filtered by staff + base_model); pick personal → build cells; delete personal; pre-select depth from `default_height`. |
-| `packages/db/migrations/01XX_sofa_combo_default_height.sql` | **NEW** — add `default_height` to `sofa_combo_pricing`. |
-| `apps/api/src/routes/sofa-combos.ts` | Carry `default_height` in GET/POST/PATCH. |
-| `apps/backend/src/components/SofaComboTab.tsx` | Field to set `default_height` per combo. |
-| POS `useStaff()` | Read role string to branch the save (`master_account` vs other). |
+| `packages/db/migrations/01XX_sofa_combo_selling_and_default.sql` | **NEW** — add `selling_prices_by_height` (backfill = `prices_by_height`) + `default_height` to `sofa_combo_pricing`. |
+| `apps/api/src/routes/sofa-combos.ts` | Carry `selling_prices_by_height` + `default_height` in GET/POST/PATCH; selling write reachable by `master_account`. |
+| `apps/pos/src/lib/queries.ts` (`useSofaCombos`, combo edit) | Read `selling_prices_by_height` into `SofaComboRow.pricesByHeight`; add a Master-Admin combo selling-price edit mutation. |
+| `apps/api/src/routes/mfg-sales-orders.ts` (`loadActiveSofaCombos`) | Read `selling_prices_by_height` into `pricesByHeight` (server gate uses SELLING). |
+| POS Master-Admin combo selling editor | **NEW** POS surface for `master_account` to set combo selling prices. |
+| `apps/backend/src/components/SofaComboTab.tsx` | Relabel price as COST; add `default_height` field. |
+| `apps/pos/src/state/quickpicks.ts` | **NEW** personal Quick Pick store (Zustand + localStorage). |
+| `apps/pos/src/pages/CustomBuilder.tsx` (`SaveComboModal` + Save button) | Role-branch: `master_account` → global; else → personal store. |
+| `apps/pos/src/pages/Configurator.tsx` (Quick Pick render) | Merge global + personal "Yours"; pick/delete personal; pre-select depth from `default_height`. |
+| POS `useStaff()` | Read role string to branch the save. |
 
 ## Data flow
-- **Salesperson save:** CustomBuilder → `quickpicks` store (local) → Configurator reads store → renders "Yours".
-- **Master Admin save:** CustomBuilder → `useCreateSofaCombo` → global `sofa_combo_pricing` → all tablets via `useSofaCombos`.
-- **Pricing (unchanged):** pick (global or personal) → build cells → `computeSofaPrice` (module à-la-carte + Combo priority). Server-side gate already reprices configured sofas (cells) and is untouched.
+- **Pricing:** pick (global/personal) or manual build → `computeSofaPrice` using the combo **SELLING** price (combo priority). Server gate reprices configured sofas using the combo SELLING price. Pure engine unchanged; only the combo data source is repointed to selling.
+- **Salesperson save:** CustomBuilder → `quickpicks` store (local) → Configurator "Yours".
+- **Master Admin save:** CustomBuilder → `useCreateSofaCombo` → global combo (base); combo selling price set via the POS Master-Admin editor.
 
 ## Error handling / edges
-- Personal store is per-device; clearing browser storage loses personal picks (acceptable at pilot; DB later). No server dependency, so it works offline.
-- A personal pick whose Model is deactivated or whose modules are unpriced prices à-la-carte / 0 — same inert behavior as any unpriced build (never a false charge).
-- `staffId` from `useStaff()`; if absent, entries are tagged `null` and still work locally.
-- `default_height` null → POS falls back to the Model's first offered depth (today's behavior).
+- Combo with selling unset: backfilled = cost, so the override still applies (no visual break); Master Admin adjusts upward. Same pattern as the module `sell_price_sen` backfill.
+- Personal store is per-device; clearing storage loses personal picks (acceptable at pilot). No server dependency → works offline.
+- A personal pick whose Model is deactivated / modules unpriced prices à-la-carte or 0 — same inert behavior, never a false charge.
+- `staffId` from `useStaff()`; absent → tagged `null`, still works locally.
+- `default_height` null → fallback to the Model's first offered depth.
 
 ## Testing
-- `quickpicks.ts` unit tests (add / remove / `listForStaff` / persistence shape) — mirror `quotes.test.ts`.
-- Role-branch: a `master_account` save calls the global mutation; a salesperson save adds to the store and does **not** call the global mutation.
-- `default_height`: API round-trip (POST then GET) + POS pre-select picks it up.
-- Pricing: a personal pick that matches a global Combo prices at the Combo price (relies on the already-tested `computeSofaPrice` combo path; add a thin integration check if practical).
+- **Combo selling:** the engine override and the server drift gate price against the combo **SELLING** value (not cost). Update the existing combo tests (`sofa-build.test.ts`, `mfg-pricing-recompute.test.ts`) to source selling; add a drift case proving cost ≠ charged once selling diverges from cost.
+- **`quickpicks.ts`** unit tests (add / remove / `listForStaff` / persistence) — mirror `quotes.test.ts`.
+- **Role-branch save:** `master_account` save calls the global mutation; salesperson save adds to the store and does **not** call the global mutation.
+- **`default_height`:** API round-trip + POS pre-select.
 
 ## Order of work
-1. Personal store + salesperson/master save role-branch + Configurator "Yours" render.
-2. `default_height` (migration + API + Backend UI + POS pre-select).
+1. **Combo cost/sell split** (migration + backfill + API + engine/gate data-source repoint + Master-Admin POS editor + Backend relabel). Foundational — it makes the combo price truly a selling price.
+2. **Two-layer Quick Pick** (personal store + role-branch save + Configurator "Yours").
+3. **Per-kit default size.**
 
 *(Modularizing the 10 fixed Models is a parallel catalog task, not part of this code plan.)*
