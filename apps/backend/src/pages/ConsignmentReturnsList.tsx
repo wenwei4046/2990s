@@ -1,13 +1,13 @@
-// Delivery Returns list — DataGrid clone of the Delivery Orders list
+// Consignment Returns list — DataGrid clone of the Consignments list
 // (MfgDeliveryOrdersList.tsx), which is itself an SO-clone. Same chrome:
 // 4 KPI tiles, draggable filter bar (search · brand · venue · date range),
 // status chips, ~visible/hidden column set, right-click context menu,
 // click-to-expand line drill-down, and double-click-to-open. Wired to the DR
 // list hook + the rebuilt DR API.
 //
-// A Delivery Return = goods coming BACK from the customer → processing one
+// A Consignment Return = goods coming BACK from the customer → processing one
 // INCREASES stock (handled server-side on create). Returns can ONLY come from
-// a Delivery Order, so the toolbar carries a "Convert From DO" picker entry.
+// a Consignment, so the toolbar carries a "Convert From DO" picker entry.
 //
 // UNIQUE localStorage keys ('pr-g.dr-list.layout.v1' /
 // 'pr-g.dr-list.filter-order.v1') — never reuse the DO/SO keys.
@@ -21,7 +21,7 @@ import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  useDeliveryReturns, useUpdateDeliveryReturnStatus, useDeliveryReturnDetail,
+  useConsignmentReturns, useUpdateConsignmentReturnStatus, useConsignmentReturnDetail,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { BrandingPill, badgeFor } from '../lib/category-badges';
@@ -33,7 +33,7 @@ type DrRow = {
   id: string;
   return_number: string;
   do_doc_no: string | null;
-  delivery_order_id: string | null;
+  consignment_id: string | null;
   return_date: string;
   debtor_code: string | null;
   debtor_name: string;
@@ -160,7 +160,7 @@ const CategoryPill = ({ group }: { group: string | null | undefined }) => {
 };
 
 const ExpandedDrLines = ({ id }: { id: string }) => {
-  const q = useDeliveryReturnDetail(id);
+  const q = useConsignmentReturnDetail(id);
   if (q.isLoading) {
     return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading lines…</div>;
   }
@@ -327,12 +327,12 @@ const DraggableFilter = ({
 
 const STORAGE_KEY = 'pr-g.dr-list.layout.v1';
 
-export const DeliveryReturnsList = () => {
+export const ConsignmentReturnsList = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
-  const { data, isLoading, error } = useDeliveryReturns(undefined);
+  const { data, isLoading, error } = useConsignmentReturns(undefined);
   const allRows = useMemo<DrRow[]>(() => (data?.deliveryReturns ?? []) as DrRow[], [data]);
 
   const [search, setSearch] = useState('');
@@ -405,12 +405,12 @@ export const DeliveryReturnsList = () => {
   }, [staffQ.data]);
   const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
-  const updateStatus = useUpdateDeliveryReturnStatus();
+  const updateStatus = useUpdateConsignmentReturnStatus();
 
-  const onNew = () => navigate('/delivery-returns/new');
-  const onConvertFromDo = () => navigate('/delivery-returns/from-do');
+  const onNew = () => navigate('/consignment-returns/new');
+  const onConvertFromDo = () => navigate('/consignment-returns/from-do');
   const openDetail = (row: DrRow, edit = false) =>
-    navigate(`/delivery-returns/${row.id}${edit ? '?edit=1' : ''}`);
+    navigate(`/consignment-returns/${row.id}${edit ? '?edit=1' : ''}`);
 
   const doCancel = (row: DrRow) => {
     if (!window.confirm(`Cancel return ${row.return_number}? This sets status = CANCELLED.`)) return;
@@ -435,7 +435,7 @@ export const DeliveryReturnsList = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Delivery Returns</h1>
+          <h1 className={styles.title}>Consignment Returns</h1>
           <p className={styles.subtitle}>
             Customer returning previously-delivered goods · stock goes back IN
             {' · '}{isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} total`}
@@ -449,7 +449,7 @@ export const DeliveryReturnsList = () => {
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
-            <span>New Delivery Return</span>
+            <span>New Consignment Return</span>
           </Button>
         </div>
       </div>

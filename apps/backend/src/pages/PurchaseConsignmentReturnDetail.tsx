@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// PurchaseInvoiceDetail — full-page route at /purchase-invoices/:id.
+// PurchaseConsignmentReturnDetail — full-page route at /purchase-consignment-returns/:id.
 //
 // EXACT clone of PurchaseOrderDetail / GoodsReceivedDetail (the gold standard):
 // a draft-style View → Edit → Save/Back machine, Print PDF, Cancel. A Purchase
@@ -36,11 +36,11 @@ import {
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  usePurchaseInvoiceDetail,
-  useUpdatePurchaseInvoiceHeader,
-  useUpdatePurchaseInvoiceItem,
-  useDeletePurchaseInvoiceItem,
-  useCancelPurchaseInvoice,
+  usePurchaseConsignmentReturnDetail,
+  useUpdatePurchaseConsignmentReturnHeader,
+  useUpdatePurchaseConsignmentReturnItem,
+  useDeletePurchaseConsignmentReturnItem,
+  useCancelPurchaseConsignmentReturn,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
@@ -117,14 +117,14 @@ const lineSnapshot = (it: PiItemRow): LineDraft => ({
   discountCenti:  it.discount_centi ?? 0,
 });
 
-export const PurchaseInvoiceDetail = () => {
+export const PurchaseConsignmentReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const detail = usePurchaseInvoiceDetail(id ?? null);
-  const updateHeader = useUpdatePurchaseInvoiceHeader();
-  const updateItem = useUpdatePurchaseInvoiceItem();
-  const deleteItem = useDeletePurchaseInvoiceItem();
-  const cancel = useCancelPurchaseInvoice();
+  const detail = usePurchaseConsignmentReturnDetail(id ?? null);
+  const updateHeader = useUpdatePurchaseConsignmentReturnHeader();
+  const updateItem = useUpdatePurchaseConsignmentReturnItem();
+  const deleteItem = useDeletePurchaseConsignmentReturnItem();
+  const cancel = useCancelPurchaseConsignmentReturn();
 
   const pi = detail.data?.purchaseInvoice ?? null;
   const items = (detail.data?.items ?? []) as PiItemRow[];
@@ -164,7 +164,7 @@ export const PurchaseInvoiceDetail = () => {
   if (detail.isError || !pi) {
     return (
       <div className={styles.page}>
-        <Link to="/purchase-invoices" className={styles.backBtn}>
+        <Link to="/purchase-consignment-returns" className={styles.backBtn}>
           <ArrowLeft {...ICON} />
           <span>Back</span>
         </Link>
@@ -243,8 +243,8 @@ export const PurchaseInvoiceDetail = () => {
   const handlePrint = () => {
     // PI PDF (AutoCount layout) — mirrors PO/GRN's handlePrint wiring its own
     // purchase-invoice-pdf helper.
-    import('../lib/purchase-invoice-pdf').then(({ generatePurchaseInvoicePdf }) =>
-      generatePurchaseInvoicePdf(pi, items as any),
+    import('../lib/purchase-invoice-pdf').then(({ generatePurchaseConsignmentReturnPdf }) =>
+      generatePurchaseConsignmentReturnPdf(pi, items as any),
     ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
@@ -253,14 +253,14 @@ export const PurchaseInvoiceDetail = () => {
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/purchase-invoices" className={styles.backBtn}>
+          <Link to="/purchase-consignment-returns" className={styles.backBtn}>
             <ArrowLeft {...ICON} />
             <span>Back</span>
           </Link>
           <div>
             <h1 className={styles.title}>
               <FileText size={14} strokeWidth={1.75} style={{ color: 'var(--c-burnt)' }} />
-              {pi.invoice_number} — {pi.supplier?.name ?? pi.supplier?.code ?? '—'}
+              {pi.pcr_number} — {pi.supplier?.name ?? pi.supplier?.code ?? '—'}
             </h1>
           </div>
         </div>
@@ -285,7 +285,7 @@ export const PurchaseInvoiceDetail = () => {
           {!isLocked && (
             <Button variant="ghost" size="md"
               onClick={() => {
-                if (!confirm(`Cancel invoice ${pi.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
+                if (!confirm(`Cancel invoice ${pi.pcr_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
                 cancel.mutate(pi.id, {
                   onError: (err) => window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`),
                 });

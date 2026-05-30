@@ -1,12 +1,12 @@
 // ----------------------------------------------------------------------------
-// DeliveryReturnDetail — full-page route at /delivery-returns/:id.
+// ConsignmentReturnDetail — full-page route at /consignment-returns/:id.
 //
 // Editable clone of DeliveryOrderDetail (itself an SO clone). View→Edit gate;
 // editable Customer / Return Info / Emergency Contact / Delivery Address /
 // Line Items / Totals. Reuses the shared SoLineCard + SalesOrderDetail.module.css
 // so the DR Detail reads identically to the DO Detail.
 //
-// A Delivery Return = goods coming BACK. Stock was already INCREASED when the
+// A Consignment Return = goods coming BACK. Stock was already INCREASED when the
 // return was created (server-side, idempotent). There is no payments ledger on
 // a return (unlike the DO), so the PaymentsTable is intentionally omitted.
 //
@@ -25,12 +25,12 @@ import {
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
-  useDeliveryReturnDetail,
-  useUpdateDeliveryReturnHeader,
-  useUpdateDeliveryReturnStatus,
-  useAddDeliveryReturnItem,
-  useUpdateDeliveryReturnItem,
-  useDeleteDeliveryReturnItem,
+  useConsignmentReturnDetail,
+  useUpdateConsignmentReturnHeader,
+  useUpdateConsignmentReturnStatus,
+  useAddConsignmentReturnItem,
+  useUpdateConsignmentReturnItem,
+  useDeleteConsignmentReturnItem,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import { buildVariantSummary } from '@2990s/shared';
@@ -72,7 +72,7 @@ type DrHeader = {
   id: string;
   return_number: string;
   do_doc_no: string | null;
-  delivery_order_id: string | null;
+  consignment_id: string | null;
   status: DrStatus;
   return_date: string;
   reason: string | null;
@@ -150,16 +150,16 @@ const draftFromItem = (it: DrItem): SoLineDraft => ({
   remark: it.notes ?? '',
 });
 
-export const DeliveryReturnDetail = () => {
+export const ConsignmentReturnDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const detail = useDeliveryReturnDetail(id ?? null);
-  const updateHeader = useUpdateDeliveryReturnHeader();
-  const updateStatus = useUpdateDeliveryReturnStatus();
-  const addItem = useAddDeliveryReturnItem();
-  const updateItem = useUpdateDeliveryReturnItem();
-  const deleteItem = useDeleteDeliveryReturnItem();
+  const detail = useConsignmentReturnDetail(id ?? null);
+  const updateHeader = useUpdateConsignmentReturnHeader();
+  const updateStatus = useUpdateConsignmentReturnStatus();
+  const addItem = useAddConsignmentReturnItem();
+  const updateItem = useUpdateConsignmentReturnItem();
+  const deleteItem = useDeleteConsignmentReturnItem();
 
   const header = (detail.data?.deliveryReturn as DrHeader | undefined) ?? null;
   const items = (detail.data?.items as DrItem[] | undefined) ?? [];
@@ -308,7 +308,7 @@ export const DeliveryReturnDetail = () => {
   if (detail.isError || !header) {
     return (
       <div className={styles.page}>
-        <Link to="/delivery-returns" className={styles.backBtn}>
+        <Link to="/consignment-returns" className={styles.backBtn}>
           <ArrowLeft {...ICON} /><span>Back</span>
         </Link>
         <div className={styles.bannerWarn}>
@@ -336,7 +336,7 @@ export const DeliveryReturnDetail = () => {
       {/* ── Header ── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/delivery-returns" className={styles.backBtn}>
+          <Link to="/consignment-returns" className={styles.backBtn}>
             <ArrowLeft {...ICON} /><span>Back</span>
           </Link>
           <div>
@@ -359,7 +359,7 @@ export const DeliveryReturnDetail = () => {
             {header.status.replace(/_/g, ' ')}
           </span>
           {isEditing && (
-            <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns/from-do')}>
+            <Button variant="ghost" size="md" onClick={() => navigate('/consignment-returns/from-do')}>
               <ArrowDownToLine {...ICON} /><span>Convert from DO</span>
             </Button>
           )}

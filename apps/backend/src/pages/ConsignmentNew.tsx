@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------------
-// DeliveryOrderNew — full-page Create DO at /mfg-delivery-orders/new.
+// ConsignmentNew — full-page Create DO at /consignments/new.
 //
-// Replaces the old window.confirm() "Issue Delivery Order" dialog. This is an
+// Replaces the old window.confirm() "Issue Consignment" dialog. This is an
 // SO-style editable Create form (clone of SalesOrderNew): the same Customer /
 // Delivery Info / Emergency / Delivery Address cards + SoLineCard list +
 // PaymentsTable in DRAFT mode.
@@ -12,7 +12,7 @@
 // operator can review/edit before Saving to create the DO. Without ?fromSo it
 // is a blank Create-DO form.
 //
-// On Save: POST /delivery-orders-mfg (header + items), then replay the payment
+// On Save: POST /consignments (header + items), then replay the payment
 // drafts through POST /:id/payments before navigating to the new DO detail.
 // ----------------------------------------------------------------------------
 
@@ -22,7 +22,7 @@ import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
-  useCreateMfgDeliveryOrder, useAddDeliveryOrderPayment,
+  useCreateConsignment, useAddConsignmentPayment,
   useMfgSalesOrderDetail, useSalesOrderPayments,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
@@ -51,13 +51,13 @@ const newLine = (): DraftLine => ({
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const DeliveryOrderNew = () => {
+export const ConsignmentNew = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromSo = searchParams.get('fromSo');
 
-  const create = useCreateMfgDeliveryOrder();
-  const addPayment = useAddDeliveryOrderPayment();
+  const create = useCreateConsignment();
+  const addPayment = useAddConsignmentPayment();
   const staffQ = useStaff();
   const driversQ = useDrivers();
   const loc = useLocalities();
@@ -296,16 +296,16 @@ export const DeliveryOrderNew = () => {
         })),
       },
       {
-        onSuccess: async (res: { id: string; doNumber: string }) => {
+        onSuccess: async (res: { id: string; consignmentNumber: string }) => {
           const { failed } = await flushPaymentDrafts(res.id);
           if (failed > 0) {
             window.alert(
-              `Delivery order ${res.doNumber} was created, but ${failed} payment ` +
+              `Delivery order ${res.consignmentNumber} was created, but ${failed} payment ` +
               `row${failed === 1 ? '' : 's'} failed to save. Please re-enter ` +
               `${failed === 1 ? 'it' : 'them'} on the Detail page.`,
             );
           }
-          navigate(`/mfg-delivery-orders/${res.id}`);
+          navigate(`/consignments/${res.id}`);
         },
         onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
@@ -318,15 +318,15 @@ export const DeliveryOrderNew = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/mfg-delivery-orders" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Delivery Orders</span>
+          <Link to="/consignments" className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>Consignments</span>
           </Link>
           <h1 className={styles.title}>
-            New Delivery Order{fromSo ? ` — from ${fromSo}` : ''}
+            New Consignment{fromSo ? ` — from ${fromSo}` : ''}
           </h1>
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders')}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/consignments')}>
             <X {...ICON} /> Cancel
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>

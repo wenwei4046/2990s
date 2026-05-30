@@ -1,19 +1,19 @@
 // ----------------------------------------------------------------------------
-// PurchaseInvoicesList — Purchase Invoice (PI) list, cloned from the polished
+// PurchaseConsignmentsList — Purchase Consignment (PI) list, cloned from the polished
 // Purchase Returns list (PurchaseReturnsList.tsx). Same DataGrid UX:
 //   • double-click a row → open the PI detail page
 //   • right-click → context menu ("Open")
 //
-// A Purchase Invoice is born from a Goods Receipt: the user converts a GRN
+// A Purchase Consignment is born from a Goods Receipt: the user converts a GRN
 // (right-click "Convert to PI" on the GRN list, or the "From GRN" button here
-// routes to /grns). A manual New Invoice page exists at /purchase-invoices/new.
+// routes to /grns). A manual New Invoice page exists at /purchase-consignments/new.
 // ----------------------------------------------------------------------------
 
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, FileText } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { usePurchaseInvoices, useCancelPurchaseInvoice } from '../lib/flow-queries';
+import { usePurchaseConsignments, useCancelPurchaseConsignment } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
@@ -44,7 +44,7 @@ const PI_LIST_STORAGE_KEY = 'pi-list.layout.v1';
    total_centi. Rows stay loosely typed — accessors read by name. */
 type PiRow = Record<string, unknown> & {
   id: string;
-  invoice_number: string;
+  pc_number: string;
   status: string;
   invoice_date: string | null;
   due_date: string | null;
@@ -58,10 +58,10 @@ type PiRow = Record<string, unknown> & {
 
 const buildPiColumns = (): DataGridColumn<PiRow>[] => [
   {
-    key: 'invoice_number', label: 'Invoice No.', width: 150, sortable: true,
-    accessor: (r) => <span className={styles.codeChip}>{r.invoice_number}</span>,
-    searchValue: (r) => r.invoice_number,
-    sortFn: (a, b) => a.invoice_number.localeCompare(b.invoice_number),
+    key: 'pc_number', label: 'Invoice No.', width: 150, sortable: true,
+    accessor: (r) => <span className={styles.codeChip}>{r.pc_number}</span>,
+    searchValue: (r) => r.pc_number,
+    sortFn: (a, b) => a.pc_number.localeCompare(b.pc_number),
   },
   {
     key: 'supplier', label: 'Supplier', width: 220, sortable: true, groupable: true,
@@ -114,10 +114,10 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
   },
 ];
 
-export const PurchaseInvoices = () => {
+export const PurchaseConsignments = () => {
   const navigate = useNavigate();
-  const { data, isLoading, error } = usePurchaseInvoices();
-  const cancelPi = useCancelPurchaseInvoice();
+  const { data, isLoading, error } = usePurchaseConsignments();
+  const cancelPi = useCancelPurchaseConsignment();
 
   const rows = useMemo<PiRow[]>(() => (data?.purchaseInvoices ?? []) as PiRow[], [data]);
   const columns = useMemo(() => buildPiColumns(), []);
@@ -125,7 +125,7 @@ export const PurchaseInvoices = () => {
   // Cancel a PI (right-click) — flips status → CANCELLED (PI is AP-only, no
   // inventory). Confirm first; the endpoint blocks a PAID invoice.
   const doCancelPi = (r: PiRow) => {
-    if (!window.confirm(`Cancel invoice ${r.invoice_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
+    if (!window.confirm(`Cancel invoice ${r.pc_number}? This sets status to CANCELLED — line items stay for audit.`)) return;
     cancelPi.mutate(r.id, {
       onError: (e) => alert(`Cancel failed: ${e instanceof Error ? e.message : String(e)}`),
     });
@@ -135,17 +135,17 @@ export const PurchaseInvoices = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Purchase Invoices</h1>
+          <h1 className={styles.title}>Purchase Consignments</h1>
           <p className={styles.subtitle}>Supplier bills against received goods</p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          {/* A Purchase Invoice starts from a Goods Receipt — this routes to the
+          {/* A Purchase Consignment starts from a Goods Receipt — this routes to the
               GRN list where the user right-clicks "Convert to PI". */}
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <FileText {...ICON} />
             <span>From GRN</span>
           </Button>
-          <Button variant="primary" size="md" onClick={() => navigate('/purchase-invoices/new')}>
+          <Button variant="primary" size="md" onClick={() => navigate('/purchase-consignments/new')}>
             <Plus {...ICON} />
             <span>New Invoice</span>
           </Button>
@@ -170,7 +170,7 @@ export const PurchaseInvoices = () => {
         rowKey={(r) => r.id}
         searchPlaceholder="Search invoices…"
         /* Open on DOUBLE-click; right-click → context menu (mirrors the GRN/PR list). */
-        onRowDoubleClick={(r) => navigate(`/purchase-invoices/${r.id}`)}
+        onRowDoubleClick={(r) => navigate(`/purchase-consignments/${r.id}`)}
         /* Cancelled invoices grey out so they read as locked / void. */
         rowStyle={(r) => r.status === 'CANCELLED'
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
@@ -181,10 +181,10 @@ export const PurchaseInvoices = () => {
           // when not eligible. View always available.
           const locked = r.status === 'CANCELLED' || (r.paid_centi ?? 0) > 0;
           const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
-            { label: 'View', onClick: () => navigate(`/purchase-invoices/${r.id}`) },
+            { label: 'View', onClick: () => navigate(`/purchase-consignments/${r.id}`) },
           ];
           if (!locked) {
-            menu.push({ label: 'Edit', onClick: () => navigate(`/purchase-invoices/${r.id}?edit=1`) });
+            menu.push({ label: 'Edit', onClick: () => navigate(`/purchase-consignments/${r.id}?edit=1`) });
             menu.push({ divider: true as const });
             menu.push({ label: 'Cancel', danger: true, onClick: () => doCancelPi(r) });
           }

@@ -1,6 +1,6 @@
 // ----------------------------------------------------------------------------
-// PurchaseInvoiceNew — full-page Create Purchase Invoice at
-// /purchase-invoices/new (PR — Phase 3 of Purchasing rebuild,
+// PurchaseConsignmentReturnNew — full-page Create Purchase Consignment Return at
+// /purchase-consignment-returns/new (PR — Phase 3 of Purchasing rebuild,
 // Commander 2026-05-26).
 //
 // Two ways in (Commander 2026-05-29 — PI must have its OWN create form like
@@ -15,7 +15,7 @@
 //      bedframe/sofa variant editor with auto-computed Total Height). Saves
 //      with grnId:null + each line carrying its own item_group + variants.
 //
-// PR-DRAFT-removal (2026-05-27, migration 0078): POST /purchase-invoices
+// PR-DRAFT-removal (2026-05-27, migration 0078): POST /purchase-consignment-returns
 // now creates the PI as POSTED directly. PI does NOT touch inventory
 // (already done at GRN time per AutoCount standard) — it just establishes
 // the AP liability for paying the supplier.
@@ -28,8 +28,8 @@ import { ItemGroupPill } from '../lib/category-badges';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  useCreatePurchaseInvoice,
-  usePostPurchaseInvoice,
+  useCreatePurchaseConsignmentReturn,
+  usePostPurchaseConsignmentReturn,
   useGrnDetail,
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
@@ -88,7 +88,7 @@ type DraftLine = {
   materialCode:   string;
   materialName:   string;
   /* Commander 2026-05-29 — PI lines must show the same content as PO/GRN
-     ("PO 有什么内容，Purchase Invoice 也应该随之对应"). GRN-sourced lines carry
+     ("PO 有什么内容，Purchase Consignment Return 也应该随之对应"). GRN-sourced lines carry
      the GRN line's category + variants; manual lines pick them below. */
   itemGroup:      string | null;
   variants:       Record<string, unknown> | null;
@@ -97,7 +97,7 @@ type DraftLine = {
   notes:          string;
 };
 
-export const PurchaseInvoiceNew = () => {
+export const PurchaseConsignmentReturnNew = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const grnId    = params.get('grnId');
@@ -106,8 +106,8 @@ export const PurchaseInvoiceNew = () => {
   // Manual mode = no ?grnId= in the URL (Commander 2026-05-29 — blank PI).
   const isManual = !grnId;
 
-  const create = useCreatePurchaseInvoice();
-  const post   = usePostPurchaseInvoice();
+  const create = useCreatePurchaseConsignmentReturn();
+  const post   = usePostPurchaseConsignmentReturn();
   const saving = create.isPending || post.isPending;
 
   // Manual-mode supplier (mirrors GrnNew).
@@ -333,7 +333,7 @@ export const PurchaseInvoiceNew = () => {
           unitPriceCenti: l.unitPriceCenti,
           notes:          l.notes || undefined,
           // Commander 2026-05-29 — persist the line's category + variant
-          // selections (columns exist on purchase_invoice_items, migration 0057)
+          // selections (columns exist on purchase_consignment_return_items, migration 0057)
           // so the PI reflects WHAT was billed, same as the GRN/PO upstream.
           itemGroup:      l.itemGroup,
           variants:       l.variants,
@@ -342,9 +342,9 @@ export const PurchaseInvoiceNew = () => {
       // Auto-post so PI lands in POSTED state (matches PO + GRN behaviour).
       await post.mutateAsync(createRes.id);
       setDialog({
-        title: `PI ${createRes.invoiceNumber} created`,
+        title: `PI ${createRes.pcrNumber} created`,
         body: 'Created + posted — AP liability recorded.',
-        goTo: `/purchase-invoices/${createRes.id}`,
+        goTo: `/purchase-consignment-returns/${createRes.id}`,
       });
     } catch (err) {
       setDialog({ title: 'Save failed', body: err instanceof Error ? err.message : String(err) });
@@ -356,19 +356,19 @@ export const PurchaseInvoiceNew = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/purchase-invoices" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Purchase Invoices</span>
+          <Link to="/purchase-consignment-returns" className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>Purchase Consignment Returns</span>
           </Link>
-          <h1 className={styles.title}>New Purchase Invoice{!isManual && grn?.grn_number ? ` · ${grn.grn_number}` : ''}</h1>
+          <h1 className={styles.title}>New Purchase Consignment Return{!isManual && grn?.grn_number ? ` · ${grn.grn_number}` : ''}</h1>
         </div>
         <div className={styles.actions}>
           {/* Keep the GRN→Invoice path: jump to the multi-GRN-line picker. */}
           {isManual && (
-            <Button variant="ghost" size="md" onClick={() => navigate('/purchase-invoices/from-grn')}>
+            <Button variant="ghost" size="md" onClick={() => navigate('/purchase-consignment-returns/from-grn')}>
               From GRN (multi)
             </Button>
           )}
-          <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-invoices' : (grn ? `/grns/${grn.id}` : '/grns'))}>
+          <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-consignment-returns' : (grn ? `/grns/${grn.id}` : '/grns'))}>
             <X {...ICON} /> Cancel
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>

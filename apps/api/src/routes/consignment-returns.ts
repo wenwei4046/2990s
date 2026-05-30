@@ -22,16 +22,16 @@ import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 
-export const deliveryReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
-deliveryReturns.use('*', supabaseAuth);
+export const consignmentReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
+consignmentReturns.use('*', supabaseAuth);
 
 /* Full DR header — mirrors the editable DO header shape. The pre-rebuild
-   columns (delivery_order_id / sales_invoice_id / reason / received-inspected-
+   columns (consignment_id / sales_invoice_id / reason / received-inspected-
    refunded timestamps / inspection_notes) stay; the DO-clone fields added in
    migration 0102 (debtor metadata / salesperson / address / per-category
    totals + costs / branding / venue / ref / warehouse) extend it. */
 const HEADER =
-  'id, return_number, do_doc_no, delivery_order_id, sales_invoice_id, ' +
+  'id, return_number, do_doc_no, consignment_id, sales_invoice_id, ' +
   'debtor_code, debtor_name, return_date, reason, status, ' +
   'received_at, inspected_at, refunded_at, refund_centi, inspection_notes, ' +
   'salesperson_id, agent, email, customer_type, building_type, branding, venue, venue_id, ref, ' +
@@ -44,24 +44,24 @@ const HEADER =
   'currency, warehouse_id, notes, created_at, created_by, updated_at';
 
 const ITEM =
-  'id, delivery_return_id, do_item_id, item_code, item_group, description, description2, ' +
+  'id, consignment_return_id, do_item_id, item_code, item_group, description, description2, ' +
   'uom, qty_returned, condition, unit_price_centi, discount_centi, line_total_centi, ' +
   'unit_cost_centi, line_cost_centi, line_margin_centi, refund_centi, variants, notes, created_at';
 
 const nextNum = async (sb: any): Promise<string> => {
   const d = new Date();
   const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb.from('delivery_returns').select('id', { head: true, count: 'exact' }).like('return_number', `DR-${yymm}-%`);
+  const { count } = await sb.from('consignment_returns').select('id', { head: true, count: 'exact' }).like('return_number', `DR-${yymm}-%`);
   return `DR-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
 };
 
 /* Re-derive the DR header's per-category revenue/cost totals + grand total from
    its line items. Mirrors the DO recomputeTotals plain per-category rollup.
    Called after every item mutation. */
-async function recomputeTotals(sb: any, deliveryReturnId: string) {
-  const { data: items } = await sb.from('delivery_return_items')
+async function recomputeTotals(sb: any, consignmentReturnId: string) {
+  const { data: items } = await sb.from('consignment_return_items')
     .select('item_group, line_total_centi, line_cost_centi')
-    .eq('delivery_return_id', deliveryReturnId);
+    .eq('consignment_return_id', consignmentReturnId);
   let mattressSofa = 0, bedframe = 0, accessories = 0, others = 0, total = 0, totalCost = 0;
   let mattressSofaCost = 0, bedframeCost = 0, accessoriesCost = 0, othersCost = 0;
   for (const it of (items ?? []) as Array<{ item_group: string | null; line_total_centi: number | null; line_cost_centi: number | null }>) {
@@ -76,7 +76,7 @@ async function recomputeTotals(sb: any, deliveryReturnId: string) {
     else { others += lineTotal; othersCost += lineCost; }
   }
   const margin = total - totalCost;
-  await sb.from('delivery_returns').update({
+  await sb.from('consignment_returns').update({
     mattress_sofa_centi: mattressSofa,
     bedframe_centi: bedframe,
     accessories_centi: accessories,
@@ -94,7 +94,7 @@ async function recomputeTotals(sb: any, deliveryReturnId: string) {
     // refund_centi column the list + report still read).
     refund_centi: total,
     updated_at: new Date().toISOString(),
-  }).eq('id', deliveryReturnId);
+  }).eq('id', consignmentReturnId);
 }
 
 /* INCREASE inventory for a DR exactly once. ROBUST: fires on create (goods are
@@ -109,25 +109,25 @@ async function recomputeTotals(sb: any, deliveryReturnId: string) {
    per IN row), one row per (product_code, variant_key) bucket. The lot's unit
    cost is seeded from the line's unit_cost_centi (sen) so returned stock
    re-enters at its original cost rather than zero. */
-async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
+async function increaseInventoryForReturn(sb: any, consignmentReturnId: string, performedBy: string) {
   // Idempotency guard #1 — has this DR already written IN movements?
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
-    .eq('source_doc_type', 'DR')
-    .eq('source_doc_id', deliveryReturnId)
+    .eq('source_doc_type', 'CONSIGNMENT_RETURN')
+    .eq('source_doc_id', consignmentReturnId)
     .eq('movement_type', 'IN');
   if ((existing ?? 0) > 0) return; // already increased — no-op
 
-  const { data: drHeader } = await sb.from('delivery_returns')
+  const { data: drHeader } = await sb.from('consignment_returns')
     .select('return_number, warehouse_id')
-    .eq('id', deliveryReturnId).maybeSingle();
-  const { data: items } = await sb.from('delivery_return_items')
+    .eq('id', consignmentReturnId).maybeSingle();
+  const { data: items } = await sb.from('consignment_return_items')
     .select('item_code, description, qty_returned, item_group, variants, unit_cost_centi')
-    .eq('delivery_return_id', deliveryReturnId);
+    .eq('consignment_return_id', consignmentReturnId);
   const warehouseId = (drHeader as { warehouse_id: string | null } | null)?.warehouse_id
     ?? (await defaultWarehouseId(sb));
-  const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
+  const drNo = (drHeader as { return_number: string } | null)?.return_number ?? consignmentReturnId;
   if (!warehouseId || !items) return;
 
   /* Collapse identical (product_code, variant_key) lines into one IN row.
@@ -165,8 +165,8 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
     // original cost (the DO deduction leaves OUT rows costless — the trigger
     // computes the consumed cost — but IN rows must carry the lot cost).
     unit_cost_sen: m.unit_cost_sen,
-    source_doc_type: 'DR' as const,
-    source_doc_id: deliveryReturnId,
+    source_doc_type: 'CONSIGNMENT_RETURN' as const,
+    source_doc_id: consignmentReturnId,
     source_doc_no: drNo,
     performed_by: performedBy,
   }));
@@ -183,32 +183,32 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
    qty subtracts exactly what the IN added — net stock impact of the return
    becomes zero. We deliberately do NOT write an 'OUT' row here:
      • an OUT would FIFO-consume an arbitrary lot + compute a spurious COGS, and
-     • source_doc_type 'DR' carries a UNIQUE index (uq_inv_mov_dr_source on
+     • source_doc_type 'CONSIGNMENT_RETURN' carries a UNIQUE index (uq_inv_mov_dr_source on
        doc+product+variant, migration 0102) that an OUT reusing the DR id would
        collide with. An ADJUSTMENT row is unindexed and FIFO-neutral.
 
    IDEMPOTENT: an existence check for a prior ADJUSTMENT row tagged with this
    DR's id skips a re-reversal. Best-effort — a movement failure never un-cancels
    the DR (audit-DLQ pattern, same as increaseInventoryForReturn). */
-async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
+async function reverseInventoryForReturn(sb: any, consignmentReturnId: string, performedBy: string) {
   // Idempotency guard — has this DR already been reversed?
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
     .eq('source_doc_type', 'ADJUSTMENT')
-    .eq('source_doc_id', deliveryReturnId)
+    .eq('source_doc_id', consignmentReturnId)
     .eq('movement_type', 'ADJUSTMENT');
   if ((existing ?? 0) > 0) return; // already reversed — no-op
 
-  const { data: drHeader } = await sb.from('delivery_returns')
+  const { data: drHeader } = await sb.from('consignment_returns')
     .select('return_number, warehouse_id')
-    .eq('id', deliveryReturnId).maybeSingle();
-  const { data: items } = await sb.from('delivery_return_items')
+    .eq('id', consignmentReturnId).maybeSingle();
+  const { data: items } = await sb.from('consignment_return_items')
     .select('item_code, description, qty_returned, item_group, variants')
-    .eq('delivery_return_id', deliveryReturnId);
+    .eq('consignment_return_id', consignmentReturnId);
   const warehouseId = (drHeader as { warehouse_id: string | null } | null)?.warehouse_id
     ?? (await defaultWarehouseId(sb));
-  const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
+  const drNo = (drHeader as { return_number: string } | null)?.return_number ?? consignmentReturnId;
   if (!warehouseId || !items) return;
 
   // Collapse identical (product_code, variant_key) lines into one reversal row,
@@ -231,7 +231,7 @@ async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, perf
     product_name: m.product_name,
     qty: -m.qty, // signed: negative removes the stock the return added
     source_doc_type: 'ADJUSTMENT' as const,
-    source_doc_id: deliveryReturnId,
+    source_doc_id: consignmentReturnId,
     source_doc_no: drNo,
     performed_by: performedBy,
     notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
@@ -248,11 +248,11 @@ async function doReturnableRemaining(sb: any, doIds: string[]): Promise<Map<stri
   return doLineRemaining(sb, doIds);
 }
 
-/* Build one delivery_return_items insert row from a client line payload.
+/* Build one consignment_return_items insert row from a client line payload.
    Shared by POST / (bulk create), POST /:id/items (single add), and the
    convert-from-DO copy. Computes line_total / line_cost / margin so
    recomputeTotals can roll them up. */
-function buildItemRow(deliveryReturnId: string, it: Record<string, unknown>) {
+function buildItemRow(consignmentReturnId: string, it: Record<string, unknown>) {
   const qty = Number(it.qtyReturned ?? it.qty ?? 1);
   const unitPrice = Number(it.unitPriceCenti ?? 0);
   const discount = Number(it.discountCenti ?? 0);
@@ -263,7 +263,7 @@ function buildItemRow(deliveryReturnId: string, it: Record<string, unknown>) {
   const variants = (it.variants as unknown) ?? null;
   const refund = it.refundCenti !== undefined ? Number(it.refundCenti) : lineTotal;
   return {
-    delivery_return_id: deliveryReturnId,
+    consignment_return_id: consignmentReturnId,
     do_item_id: (it.doItemId as string | undefined) ?? null,
     item_code: it.itemCode,
     item_group: itemGroup,
@@ -285,13 +285,13 @@ function buildItemRow(deliveryReturnId: string, it: Record<string, unknown>) {
 }
 
 // ── List ────────────────────────────────────────────────────────────────
-deliveryReturns.get('/', async (c) => {
+consignmentReturns.get('/', async (c) => {
   const sb = c.get('supabase');
-  let q = sb.from('delivery_returns').select(HEADER).order('return_date', { ascending: false }).limit(500);
+  let q = sb.from('consignment_returns').select(HEADER).order('return_date', { ascending: false }).limit(500);
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ deliveryReturns: data ?? [] });
+  return c.json({ consignmentReturns: data ?? [] });
 });
 
 // ── Returnable DO lines (line-level partial-return picker) ────────────────
@@ -302,7 +302,7 @@ deliveryReturns.get('/', async (c) => {
 
    IMPORTANT (route ordering): this STATIC path MUST be registered BEFORE the
    `/:id` param route below, or Hono tries to cast it to an id. */
-deliveryReturns.get('/returnable-do-lines', async (c) => {
+consignmentReturns.get('/returnable-do-lines', async (c) => {
   const sb = c.get('supabase');
   const doIds = await resolveCandidateDoIds(sb, c.req.query('doIds'));
   if (doIds.length === 0) return c.json({ lines: [] });
@@ -312,15 +312,15 @@ deliveryReturns.get('/returnable-do-lines', async (c) => {
 });
 
 // ── Detail ──────────────────────────────────────────────────────────────
-deliveryReturns.get('/:id', async (c) => {
+consignmentReturns.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
-    sb.from('delivery_returns').select(HEADER).eq('id', id).maybeSingle(),
-    sb.from('delivery_return_items').select(ITEM).eq('delivery_return_id', id).order('created_at'),
+    sb.from('consignment_returns').select(HEADER).eq('id', id).maybeSingle(),
+    sb.from('consignment_return_items').select(ITEM).eq('consignment_return_id', id).order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ deliveryReturn: h.data, items: i.data ?? [] });
+  return c.json({ consignmentReturn: h.data, items: i.data ?? [] });
 });
 
 /* Insert the DR header from a client body. Shared by POST / and the
@@ -329,10 +329,10 @@ async function insertHeader(sb: any, userId: string, body: Record<string, unknow
   const returnNumber = await nextNum(sb);
   const phoneRaw = (body.phone as string | undefined) ?? null;
   const emPhoneRaw = (body.emergencyContactPhone as string | undefined) ?? null;
-  return sb.from('delivery_returns').insert({
+  return sb.from('consignment_returns').insert({
     return_number: returnNumber,
     do_doc_no: (body.doDocNo as string) ?? null,
-    delivery_order_id: (body.deliveryOrderId as string) ?? null,
+    consignment_id: (body.consignmentId as string) ?? null,
     sales_invoice_id: (body.salesInvoiceId as string) ?? null,
     debtor_code: (body.debtorCode as string) ?? null,
     debtor_name: (body.debtorName ?? body.customerName) as string,
@@ -376,7 +376,7 @@ async function insertHeader(sb: any, userId: string, body: Record<string, unknow
 // ── Create ──────────────────────────────────────────────────────────────
 // Accepts the full DO-cloned header + line items. A return is RECEIVED on
 // creation → stock is increased immediately (idempotent).
-deliveryReturns.post('/', async (c) => {
+consignmentReturns.post('/', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const debtorName = (body.debtorName ?? body.customerName) as string | undefined;
@@ -397,8 +397,8 @@ deliveryReturns.post('/', async (c) => {
   const h = header as unknown as { id: string; return_number: string };
 
   const rows = items.map((it) => buildItemRow(h.id, it));
-  const { error: iErr } = await sb.from('delivery_return_items').insert(rows);
-  if (iErr) { await sb.from('delivery_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+  const { error: iErr } = await sb.from('consignment_return_items').insert(rows);
+  if (iErr) { await sb.from('consignment_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   await recomputeTotals(sb, h.id);
 
   /* A DR = goods received back on creation → increase stock now (idempotent:
@@ -452,11 +452,11 @@ const convertDoLinesToReturn = async (c: any) => {
   const pickedIds = [...pickQtyById.keys()];
   const { data: pickedItemRows, error: pErr } = await sb
     .from('delivery_order_items')
-    .select('id, delivery_order_id')
+    .select('id, consignment_id')
     .in('id', pickedIds);
   if (pErr) return c.json({ error: 'load_failed', reason: pErr.message }, 500);
   const idToDo = new Map<string, string>();
-  for (const r of (pickedItemRows ?? []) as Array<{ id: string; delivery_order_id: string }>) idToDo.set(r.id, r.delivery_order_id);
+  for (const r of (pickedItemRows ?? []) as Array<{ id: string; consignment_id: string }>) idToDo.set(r.id, r.consignment_id);
   const missing = pickedIds.filter((id) => !idToDo.has(id));
   if (missing.length > 0) return c.json({ error: 'do_item_not_found', missing }, 404);
 
@@ -502,11 +502,11 @@ const convertDoLinesToReturn = async (c: any) => {
   const sortedPicks = pickedIds
     .map((id) => remainingMap.get(id)!)
     .sort((a, b) => a.doNumber.localeCompare(b.doNumber) || a.doItemId.localeCompare(b.doItemId));
-  const firstDoId = sortedPicks[0]!.deliveryOrderId;
+  const firstDoId = sortedPicks[0]!.consignmentId;
   const distinctDoNumbers = [...new Set(sortedPicks.map((l) => l.doNumber))].sort();
 
   // Pull the FIRST DO's header for the return header snapshot.
-  const { data: doHeader, error: dhErr } = await sb.from('delivery_orders')
+  const { data: doHeader, error: dhErr } = await sb.from('consignments')
     .select('id, do_number, debtor_code, debtor_name, phone, email, salesperson_id, agent, ' +
             'customer_type, building_type, branding, venue, venue_id, ref, customer_so_no, ' +
             'sales_location, customer_state, customer_country, address1, address2, city, state, postcode, ' +
@@ -519,7 +519,7 @@ const convertDoLinesToReturn = async (c: any) => {
 
   const { data: header, error: hErr } = await insertHeader(sb, user.id, {
     doDocNo: doh.do_number,
-    deliveryOrderId: doh.id,
+    consignmentId: doh.id,
     debtorCode: doh.debtor_code,
     debtorName: doh.debtor_name,
     phone: doh.phone,
@@ -569,8 +569,8 @@ const convertDoLinesToReturn = async (c: any) => {
     unitCostCenti: line.unitCostCenti,
     variants: line.variants,
   }));
-  const { error: iErr } = await sb.from('delivery_return_items').insert(rows);
-  if (iErr) { await sb.from('delivery_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+  const { error: iErr } = await sb.from('consignment_return_items').insert(rows);
+  if (iErr) { await sb.from('consignment_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   await recomputeTotals(sb, h.id);
 
   // Goods received back → increase stock (idempotent).
@@ -578,11 +578,11 @@ const convertDoLinesToReturn = async (c: any) => {
 
   return c.json({ id: h.id, returnNumber: h.return_number, lineCount: rows.length }, 201);
 };
-deliveryReturns.post('/from-do', convertDoLinesToReturn);
-deliveryReturns.post('/from-dos', convertDoLinesToReturn);
+consignmentReturns.post('/from-do', convertDoLinesToReturn);
+consignmentReturns.post('/from-dos', convertDoLinesToReturn);
 
 // ── Header PATCH (editable SO/DO-style fields) ─────────────────────────────
-deliveryReturns.patch('/:id', async (c) => {
+consignmentReturns.patch('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -616,14 +616,14 @@ deliveryReturns.patch('/:id', async (c) => {
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
-  const { data, error } = await sb.from('delivery_returns').update(updates).eq('id', id).select('id').maybeSingle();
+  const { data, error } = await sb.from('consignment_returns').update(updates).eq('id', id).select('id').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);
   return c.json({ ok: true, id });
 });
 
 // ── Item CRUD ─────────────────────────────────────────────────────────────
-deliveryReturns.post('/:id/items', async (c) => {
+consignmentReturns.post('/:id/items', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -635,17 +635,17 @@ deliveryReturns.post('/:id/items', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
-  const { data: header } = await sb.from('delivery_returns').select('id').eq('id', id).maybeSingle();
+  const { data: header } = await sb.from('consignment_returns').select('id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
   const row = buildItemRow(id, it);
-  const { data, error } = await sb.from('delivery_return_items').insert(row).select(ITEM).single();
+  const { data, error } = await sb.from('consignment_return_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
   return c.json({ item: data }, 201);
 });
 
-deliveryReturns.patch('/:id/items/:itemId', async (c) => {
+consignmentReturns.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -656,7 +656,7 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
-  const { data: prev } = await sb.from('delivery_return_items')
+  const { data: prev } = await sb.from('consignment_return_items')
     .select('qty_returned, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, condition')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
@@ -686,15 +686,15 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
     updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
-  const { error } = await sb.from('delivery_return_items').update(updates).eq('id', itemId);
+  const { error } = await sb.from('consignment_return_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
   return c.json({ ok: true });
 });
 
-deliveryReturns.delete('/:id/items/:itemId', async (c) => {
+consignmentReturns.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
-  const { error } = await sb.from('delivery_return_items').delete().eq('id', itemId);
+  const { error } = await sb.from('consignment_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
   return c.json({ ok: true });
@@ -710,19 +710,19 @@ deliveryReturns.delete('/:id/items/:itemId', async (c) => {
 // shared reverseMovements helper (#375). Idempotent: we read the current status
 // first and skip if already CANCELLED. The cancelled return's qty also returns to
 // Pending automatically (the do-line-remaining formula filters non-cancelled DRs).
-deliveryReturns.patch('/:id/status', async (c) => {
+consignmentReturns.patch('/:id/status', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string; inspectionNotes?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!body.status) return c.json({ error: 'status_required' }, 400);
 
   // Read the current status so the CANCELLED reversal is idempotent.
-  const { data: cur } = await sb.from('delivery_returns').select('status').eq('id', id).maybeSingle();
+  const { data: cur } = await sb.from('consignment_returns').select('status').eq('id', id).maybeSingle();
   if (!cur) return c.json({ error: 'not_found' }, 404);
   const prevStatus = (cur as { status: string }).status;
   // Already cancelled → echo back without re-reversing (would double-deduct).
   if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
-    return c.json({ deliveryReturn: { id, status: 'CANCELLED' } });
+    return c.json({ consignmentReturn: { id, status: 'CANCELLED' } });
   }
 
   const now = new Date().toISOString();
@@ -730,14 +730,14 @@ deliveryReturns.patch('/:id/status', async (c) => {
   if (body.status === 'RECEIVED') ts.received_at = now;
   if (body.status === 'INSPECTED') { ts.inspected_at = now; if (body.inspectionNotes) ts.inspection_notes = body.inspectionNotes; }
   if (body.status === 'REFUNDED') ts.refunded_at = now;
-  const { data, error } = await sb.from('delivery_returns').update(ts).eq('id', id).select('id, status').single();
+  const { data, error } = await sb.from('consignment_returns').update(ts).eq('id', id).select('id, status').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
   // Cancelling a DR → reverse the inventory IN it wrote on create (balancing
   // OUT per line, via the shared reverseMovements helper). Best-effort.
   if (body.status === 'CANCELLED') {
-    try { await reverseMovements(sb, 'DR', id, user.id); } catch { /* best-effort */ }
+    try { await reverseMovements(sb, 'CONSIGNMENT_RETURN', id, user.id); } catch { /* best-effort */ }
   }
 
-  return c.json({ deliveryReturn: data });
+  return c.json({ consignmentReturn: data });
 });

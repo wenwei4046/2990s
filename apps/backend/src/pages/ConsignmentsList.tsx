@@ -1,4 +1,4 @@
-// Delivery Orders list — DataGrid clone of the Sales Orders list
+// Consignments list — DataGrid clone of the Sales Orders list
 // (MfgSalesOrdersList.tsx). Same chrome: 4 KPI tiles, draggable filter bar
 // (search · brand · venue · date range), status chips, ~visible/hidden column
 // set, right-click context menu, click-to-expand line drill-down, and
@@ -17,7 +17,7 @@ import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  useMfgDeliveryOrders, useUpdateMfgDeliveryOrderStatus, useMfgDeliveryOrderDetail,
+  useConsignments, useUpdateConsignmentStatus, useConsignmentDetail,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { supabase } from '../lib/supabase';
@@ -28,7 +28,7 @@ import soDetailStyles from './SalesOrderDetail.module.css';
 /* ── Row shape (DO header) ─────────────────────────────────────────────── */
 type DoRow = {
   id: string;
-  do_number: string;
+  consignment_number: string;
   so_doc_no: string | null;
   do_date: string;
   expected_delivery_at: string | null;
@@ -162,7 +162,7 @@ const CategoryPill = ({ group }: { group: string | null | undefined }) => {
 };
 
 const ExpandedDoLines = ({ id }: { id: string }) => {
-  const q = useMfgDeliveryOrderDetail(id);
+  const q = useConsignmentDetail(id);
   if (q.isLoading) {
     return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading lines…</div>;
   }
@@ -329,12 +329,12 @@ const DraggableFilter = ({
 
 const STORAGE_KEY = 'pr-g.do-list.layout.v1';
 
-export const MfgDeliveryOrdersList = () => {
+export const ConsignmentsList = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
-  const { data, isLoading, error } = useMfgDeliveryOrders(undefined);
+  const { data, isLoading, error } = useConsignments(undefined);
   const allRows = useMemo<DoRow[]>(() => (data?.deliveryOrders ?? []) as DoRow[], [data]);
 
   const [search, setSearch] = useState('');
@@ -376,7 +376,7 @@ export const MfgDeliveryOrdersList = () => {
       if (dateTo && (r.do_date ?? '') > dateTo) return false;
       if (q) {
         const blob = [
-          r.do_number, r.so_doc_no, r.debtor_name, r.debtor_code, r.venue,
+          r.consignment_number, r.so_doc_no, r.debtor_name, r.debtor_code, r.venue,
           deriveBranding(r), r.customer_so_no, r.ref, r.po_doc_no, r.phone, r.driver_name,
         ].filter(Boolean).join(' ').toLowerCase();
         if (!blob.includes(q)) return false;
@@ -407,28 +407,28 @@ export const MfgDeliveryOrdersList = () => {
   }, [staffQ.data]);
   const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
-  const updateStatus = useUpdateMfgDeliveryOrderStatus();
+  const updateStatus = useUpdateConsignmentStatus();
 
-  const onNew = () => navigate('/mfg-delivery-orders/new');
+  const onNew = () => navigate('/consignments/new');
   const openDetail = (row: DoRow, edit = false) =>
-    navigate(`/mfg-delivery-orders/${row.id}${edit ? '?edit=1' : ''}`);
+    navigate(`/consignments/${row.id}${edit ? '?edit=1' : ''}`);
 
   const renderPdf = (row: DoRow) => {
     void (async () => {
       const { data: session } = await supabase.auth.getSession();
       const token = session.session?.access_token ?? '';
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/delivery-orders-mfg/${row.id}`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/consignments/${row.id}`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      if (!res.ok) { alert(`Failed to load DO ${row.do_number}`); return; }
+      if (!res.ok) { alert(`Failed to load DO ${row.consignment_number}`); return; }
       const json = (await res.json()) as { deliveryOrder: unknown; items: unknown[] };
-      const { generateDeliveryOrderPdf } = await import('../lib/delivery-order-pdf');
-      await generateDeliveryOrderPdf(json.deliveryOrder as never, json.items as never);
+      const { generateConsignmentPdf } = await import('../lib/delivery-order-pdf');
+      await generateConsignmentPdf(json.deliveryOrder as never, json.items as never);
     })().catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   const doCancel = (row: DoRow) => {
-    if (!window.confirm(`Cancel DO ${row.do_number}? This sets status = CANCELLED.`)) return;
+    if (!window.confirm(`Cancel DO ${row.consignment_number}? This sets status = CANCELLED.`)) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
       { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
   };
@@ -450,7 +450,7 @@ export const MfgDeliveryOrdersList = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Delivery Orders</h1>
+          <h1 className={styles.title}>Consignments</h1>
           <p className={styles.subtitle}>
             AutoCount-style ledger view
             {' · '}{isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} total`}
@@ -458,13 +458,13 @@ export const MfgDeliveryOrdersList = () => {
           </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
-          <Button variant="ghost" size="sm" onClick={() => navigate('/mfg-delivery-orders/from-so')}>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/consignments/from-so')}>
             <ArrowRightLeft size={14} strokeWidth={1.75} />
             <span>Convert From Sales Order</span>
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
-            <span>New Delivery Order</span>
+            <span>New Consignment</span>
           </Button>
         </div>
       </div>
@@ -572,7 +572,7 @@ export const MfgDeliveryOrdersList = () => {
         onRowDoubleClick={(r) => openDetail(r)}
         rowStyle={(r) => r.status === 'CANCELLED' ? { opacity: 0.55, filter: 'grayscale(0.6)' } : undefined}
         isLoading={isLoading}
-        emptyMessage='No delivery orders yet — click "+ New Delivery Order" to start.'
+        emptyMessage='No delivery orders yet — click "+ New Consignment" to start.'
         expandable={{
           renderExpansion: (row) => <ExpandedDoLines id={row.id} />,
           rowExpansionKey: (row) => row.id,
@@ -614,7 +614,7 @@ export const MfgDeliveryOrdersList = () => {
             items.push({
               label: 'Reopen DO',
               onClick: () => {
-                if (!window.confirm(`Reopen ${row.do_number} back to LOADED?`)) return;
+                if (!window.confirm(`Reopen ${row.consignment_number} back to LOADED?`)) return;
                 updateStatus.mutate({ id: row.id, status: 'LOADED' });
               },
             });
@@ -629,10 +629,10 @@ export const MfgDeliveryOrdersList = () => {
 /* ── Columns — mirrors the SO list set, adapted to DO fields. ───────────── */
 const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] => [
   {
-    key: 'do_number', label: 'DO No.', width: 150, sortable: true,
+    key: 'consignment_number', label: 'DO No.', width: 150, sortable: true,
     accessor: (r) => (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
+        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.consignment_number}</span>
         {/* Commander 2026-05-29 — every DO is SHIPPED on creation, so the inline
             "Shipped" pill was just noise next to every row. Only flag the
             exceptions (Invoiced / Cancelled) inline; the full state still lives
@@ -640,7 +640,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
         {r.status && !['LOADED', 'DISPATCHED'].includes(r.status) && <StatusPill status={r.status} />}
       </span>
     ),
-    searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
+    searchValue: (r) => `${r.consignment_number} ${r.status ?? ''}`,
   },
   {
     key: 'so_doc_no', label: 'SO Ref', width: 130, sortable: true,

@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// DeliveryReturnNew — full-page Create Delivery Return at /delivery-returns/new.
+// ConsignmentReturnNew — full-page Create Consignment Return at /consignment-returns/new.
 //
 // DO-style editable Create form (clone of DeliveryOrderNew): the same Customer /
 // Return Info / Emergency / Delivery Address cards + SoLineCard list. There is
@@ -10,11 +10,11 @@
 // with variants + prices/costs) so the operator can review/edit before Saving.
 // Without ?fromDo it is a blank Create-Return form (free-entry lines).
 //
-// On Save: POST /delivery-returns (header + items). The server INCREASES stock
+// On Save: POST /consignment-returns (header + items). The server INCREASES stock
 // on create (idempotent) and lands us on the new return's Detail page.
 //
 // NOTE: the primary "from a DO" path is the dedicated picker
-// (/delivery-returns/from-do). This page is the blank form + the ?fromDo
+// (/consignment-returns/from-do). This page is the blank form + the ?fromDo
 // prefill convenience (mirrors DeliveryOrderNew's ?fromSo).
 // ----------------------------------------------------------------------------
 
@@ -24,7 +24,7 @@ import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
-  useCreateDeliveryReturn, useMfgDeliveryOrderDetail,
+  useCreateConsignmentReturn, useConsignmentDetail,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import {
@@ -48,17 +48,17 @@ const newLine = (): DraftLine => ({
 const fmtRm = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const DeliveryReturnNew = () => {
+export const ConsignmentReturnNew = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
 
-  const create = useCreateDeliveryReturn();
+  const create = useCreateConsignmentReturn();
   const staffQ = useStaff();
   const loc = useLocalities();
 
   // Prefill source — the DO this return is being issued from (if any).
-  const doDetail = useMfgDeliveryOrderDetail(fromDo);
+  const doDetail = useConsignmentDetail(fromDo);
 
   const customerTypeOptsQ = useSoDropdownOptions('customer_type');
   const buildingTypeOptsQ = useSoDropdownOptions('building_type');
@@ -229,7 +229,7 @@ export const DeliveryReturnNew = () => {
       },
       {
         onSuccess: (res: { id: string; returnNumber: string }) => {
-          navigate(`/delivery-returns/${res.id}`);
+          navigate(`/consignment-returns/${res.id}`);
         },
         onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
       },
@@ -242,15 +242,15 @@ export const DeliveryReturnNew = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/delivery-returns" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Delivery Returns</span>
+          <Link to="/consignment-returns" className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>Consignment Returns</span>
           </Link>
           <h1 className={styles.title}>
-            New Delivery Return{doDocNo ? ` — from ${doDocNo}` : ''}
+            New Consignment Return{doDocNo ? ` — from ${doDocNo}` : ''}
           </h1>
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns')}>
+          <Button variant="ghost" size="md" onClick={() => navigate('/consignment-returns')}>
             <X {...ICON} /> Cancel
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>

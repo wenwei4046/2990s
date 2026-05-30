@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// DeliveryOrderDetail — full-page route at /mfg-delivery-orders/:id.
+// ConsignmentDetail — full-page route at /consignments/:id.
 //
 // Editable clone of SalesOrderDetail. View→Edit gate; editable Customer /
 // Order Info (incl. driver + dates) / Emergency Contact / Delivery Address /
@@ -25,15 +25,15 @@ import {
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
-  useMfgDeliveryOrderDetail,
-  useUpdateMfgDeliveryOrderHeader,
-  useUpdateMfgDeliveryOrderStatus,
-  useAddMfgDeliveryOrderItem,
-  useUpdateMfgDeliveryOrderItem,
-  useDeleteMfgDeliveryOrderItem,
-  useDeliveryOrderPayments,
-  useAddDeliveryOrderPayment,
-  useDeleteDeliveryOrderPayment,
+  useConsignmentDetail,
+  useUpdateConsignmentHeader,
+  useUpdateConsignmentStatus,
+  useAddConsignmentItem,
+  useUpdateConsignmentItem,
+  useDeleteConsignmentItem,
+  useConsignmentPayments,
+  useAddConsignmentPayment,
+  useDeleteConsignmentPayment,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import {
@@ -82,7 +82,7 @@ const TOTALS_KPI_VALUE_STYLE: CSSProperties = { fontSize: 'var(--fs-15, 15px)' }
 
 type DoHeader = {
   id: string;
-  do_number: string;
+  consignment_number: string;
   so_doc_no: string | null;
   status: DoStatus;
   do_date: string;
@@ -169,24 +169,24 @@ const draftFromItem = (it: DoItem): SoLineDraft => ({
   remark: it.notes ?? '',
 });
 
-export const DeliveryOrderDetail = () => {
+export const ConsignmentDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const detail = useMfgDeliveryOrderDetail(id ?? null);
-  const updateHeader = useUpdateMfgDeliveryOrderHeader();
-  const updateStatus = useUpdateMfgDeliveryOrderStatus();
-  const addItem = useAddMfgDeliveryOrderItem();
-  const updateItem = useUpdateMfgDeliveryOrderItem();
-  const deleteItem = useDeleteMfgDeliveryOrderItem();
+  const detail = useConsignmentDetail(id ?? null);
+  const updateHeader = useUpdateConsignmentHeader();
+  const updateStatus = useUpdateConsignmentStatus();
+  const addItem = useAddConsignmentItem();
+  const updateItem = useUpdateConsignmentItem();
+  const deleteItem = useDeleteConsignmentItem();
 
   const header = (detail.data?.deliveryOrder as DoHeader | undefined) ?? null;
   const items = (detail.data?.items as DoItem[] | undefined) ?? [];
 
   // ── Payments (DRAFT-mode PaymentsTable + manual persistence) ──────────
-  const paymentsQ = useDeliveryOrderPayments(id ?? null);
-  const addPayment = useAddDeliveryOrderPayment();
-  const deletePayment = useDeleteDeliveryOrderPayment();
+  const paymentsQ = useConsignmentPayments(id ?? null);
+  const addPayment = useAddConsignmentPayment();
+  const deletePayment = useDeleteConsignmentPayment();
   const [paymentDrafts, setPaymentDrafts] = useState<PaymentDraft[]>([]);
 
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
@@ -393,7 +393,7 @@ export const DeliveryOrderDetail = () => {
   if (detail.isError || !header) {
     return (
       <div className={styles.page}>
-        <Link to="/mfg-delivery-orders" className={styles.backBtn}>
+        <Link to="/consignments" className={styles.backBtn}>
           <ArrowLeft {...ICON} /><span>Back</span>
         </Link>
         <div className={styles.bannerWarn}>
@@ -413,16 +413,16 @@ export const DeliveryOrderDetail = () => {
 
   const handlePrint = () => {
     import('../lib/delivery-order-pdf')
-      .then(({ generateDeliveryOrderPdf }) => generateDeliveryOrderPdf(header as never, items as never))
+      .then(({ generateConsignmentPdf }) => generateConsignmentPdf(header as never, items as never))
       .catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   const handleCancel = () => {
-    if (!window.confirm(`Cancel ${header.do_number}? This sets status = CANCELLED.`)) return;
+    if (!window.confirm(`Cancel ${header.consignment_number}? This sets status = CANCELLED.`)) return;
     updateStatus.mutate({ id: header.id, status: 'CANCELLED' });
   };
   const handleReopen = () => {
-    if (!window.confirm(`Reopen ${header.do_number} back to LOADED?`)) return;
+    if (!window.confirm(`Reopen ${header.consignment_number} back to LOADED?`)) return;
     updateStatus.mutate({ id: header.id, status: 'LOADED' });
   };
 
@@ -431,13 +431,13 @@ export const DeliveryOrderDetail = () => {
       {/* ── Header ── */}
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/mfg-delivery-orders" className={styles.backBtn}>
+          <Link to="/consignments" className={styles.backBtn}>
             <ArrowLeft {...ICON} /><span>Back</span>
           </Link>
           <div>
             <h1 className={styles.title}>
               <Truck size={16} strokeWidth={1.75} style={TITLE_ICON_STYLE} />
-              {header.do_number} — {header.debtor_name}
+              {header.consignment_number} — {header.debtor_name}
             </h1>
             <p className={styles.subtitle}>
               DO date {header.do_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
@@ -457,7 +457,7 @@ export const DeliveryOrderDetail = () => {
               (Edit mode), mirroring the PO detail's "Convert from SO" + the
               Return detail's "Convert from DO". Opens the SO picker. */}
           {isEditing && (
-            <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders/from-so')}>
+            <Button variant="ghost" size="md" onClick={() => navigate('/consignments/from-so')}>
               <ArrowRightLeft {...ICON} /><span>Convert from SO</span>
             </Button>
           )}

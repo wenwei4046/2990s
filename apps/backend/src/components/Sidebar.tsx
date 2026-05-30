@@ -132,8 +132,8 @@ export const Sidebar = () => {
         // the DO + DR split. COR list now lives at /consignment-returns —
         // flat view of RETURN consignment_notes; rows deep-link to the parent
         // CO detail page.
-        { to: '/consignment', icon: <PackagePlus {...ICON_PROPS} />, label: 'Consignment (CO)' },
-        { to: '/consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Returns (COR)' },
+        { to: '/consignments', icon: <PackagePlus {...ICON_PROPS} />, label: 'Consignment' },
+        { to: '/consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Returns' },
       ],
     },
     {
@@ -153,8 +153,8 @@ export const Sidebar = () => {
         // + PCR mirror the GRN + PR split. PC live as of migration 0111;
         // PCR list now lives at /purchase-consignment-returns — flat view of
         // RETURN PC notes; rows deep-link to the parent PC detail page.
-        { to: '/purchase-consignment', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment (PC)' },
-        { to: '/purchase-consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns (PCR)' },
+        { to: '/purchase-consignments', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment' },
+        { to: '/purchase-consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns' },
       ],
     },
     {
