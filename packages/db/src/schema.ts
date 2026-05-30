@@ -1793,8 +1793,9 @@ export const mfgProducts = pgTable('mfg_products', {
   unitM3:                 integer('unit_m3_milli').notNull().default(0),      // m³ × 1000 (e.g. 0.953 = 953)
   status:                 mfgProductStatus('status').notNull().default('ACTIVE'),
   costPriceSen:           integer('cost_price_sen').notNull().default(0),
-  basePriceSen:           integer('base_price_sen'),              // PRICE 2 (default)
-  price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier)
+  basePriceSen:           integer('base_price_sen'),              // PRICE 2 (default) — COST (computeMfgLineCost)
+  price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier) — COST
+  sellPriceSen:           integer('sell_price_sen'),              // SELLING price (POS customer-facing). 0109; backfilled = base_price_sen. Master Account edits this (Phase 2).
   productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
   subAssemblies:          jsonb('sub_assemblies'),                // string[] e.g. ['Divan','Headboard']
   skuCode:                text('sku_code'),
