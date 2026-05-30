@@ -184,4 +184,18 @@ describe('recomputeFromSnapshot — configured sofa selling drift (Phase 4b)', (
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(50000);
   });
+
+  it('sofa priced in the OTHER (retail) system → server computes 0 → trust operator, NO false reject', () => {
+    // Prod reality (verified 2026-05-30): sofa SELLING prices live in retail
+    // product_compartments, not the mfg sofaCompartmentMeta (empty for sofas).
+    // The meta here lacks the build's compartments → computeSofaSellingSen = 0.
+    // The gate must NOT reject the operator's real RM2480 price.
+    const metaWithoutBuild: Record<string, { defaultPriceCenti?: number }> = { '3S': {} };
+    const r = recomputeFromSnapshot(
+      { itemCode: 'ANNSA', itemGroup: 'sofa', qty: 1, unitPriceCenti: 248000, variants: sofaVariants },
+      sofaProduct, null, sofaConfig(metaWithoutBuild), [],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(248000);
+  });
 });

@@ -272,8 +272,21 @@ export function recomputeFromSnapshot(
       (c) => !product?.base_model || c.baseModel === product.base_model,
     );
     const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaMeta, lineCombos);
-    drift = driftThresholdExceeded(manualUnitSelling, sofaSellingSen);
-    unitToPersistSen = sofaSellingSen;
+    if (sofaSellingSen > 0) {
+      // Server has authoritative per-compartment SELLING prices for this build.
+      drift = driftThresholdExceeded(manualUnitSelling, sofaSellingSen);
+      unitToPersistSen = sofaSellingSen;
+    } else {
+      // Server could NOT price this sofa from the master maintenance config.
+      // In prod (verified 2026-05-30) sofa SELLING prices live in the retail
+      // `product_compartments` table, NOT the mfg `sofaCompartmentMeta` (empty
+      // for sofas: 72 SKUs, 0 priced). NEVER reject a sofa we can't
+      // independently price — trust the operator/client price. This keeps the
+      // gate inert until/unless sofa selling prices are populated in the mfg
+      // config; the legacy /orders path already protects retail-priced sofas.
+      drift = false;
+      unitToPersistSen = manualUnitSelling;
+    }
   } else if (hasAuthoritativeSelling) {
     drift = driftThresholdExceeded(manualUnitSelling, authoritativeSellingSen);
     unitToPersistSen = authoritativeSellingSen;
