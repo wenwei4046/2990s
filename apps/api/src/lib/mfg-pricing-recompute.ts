@@ -351,6 +351,33 @@ export async function loadModelSofaModulePrices(
   );
 }
 
+/** Load a Model's sofa module COST prices (per-Model module→sen map) from
+ *  mfg_products. Mirror of {@link loadModelSofaModulePrices} but reads the COST
+ *  field (`base_price_sen`) instead of `sell_price_sen`. Used to auto-detect a
+ *  Combo's COST = Σ its constituent module SKUs' costs (Phase 5, Chairman
+ *  2026-05-31) — a Combo is just existing module SKUs assembled, so its cost is
+ *  the sum of those SKUs' COST, auto-keyed and Backend-overridable. Returns null
+ *  when base_model is absent. Unpriced (null base_price_sen) modules drop out. */
+export async function loadModelSofaModuleCosts(
+  sb: any,
+  baseModel: string | null | undefined,
+): Promise<SofaModulePriceSen | null> {
+  if (!baseModel) return null;
+  const { data } = await sb
+    .from('mfg_products')
+    .select('code, base_price_sen')
+    .eq('base_model', baseModel)
+    .eq('category', 'SOFA');
+  if (!data) return null;
+  return sofaModulePricesFromSkus(
+    (data as Array<{ code: string; base_price_sen: number | null }>).map((r) => ({
+      code: r.code,
+      sellPriceSen: r.base_price_sen,   // reuse the SELLING builder; field carries COST here
+    })),
+    baseModel,
+  );
+}
+
 /** Load a single fabric tracking row by code (tier-resolution data only). */
 export async function loadFabricByCode(sb: any, code: string | null | undefined): Promise<FabricRowLite | null> {
   if (!code) return null;

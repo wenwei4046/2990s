@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { normalizePhone } from '@2990s/shared/phone';
 import {
   pickComboMatch, spreadComboTotal, splitSofaCode, sofaHeightKey,
-  buildVariantSummary, type SofaComboRow, type SofaPriceTier,
+  buildVariantSummary, comboChargedPrices, type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import { recordSoAudit, diffFields, type FieldChange } from '../lib/so-audit';
@@ -73,18 +73,20 @@ async function soHasDownstream(sb: any, soDocNo: string): Promise<{ error: strin
 async function loadActiveSofaCombos(sb: any): Promise<SofaComboRow[]> {
   const { data } = await sb
     .from('sofa_combo_pricing')
-    .select('id, base_model, modules, tier, customer_id, prices_by_height, label, effective_from, deleted_at')
+    .select('id, base_model, modules, tier, customer_id, prices_by_height, selling_prices_by_height, label, effective_from, deleted_at')
     .is('deleted_at', null)
     .is('customer_id', null)   // 2990 B2C — default-scope rows only
     .is('supplier_id', null);  // sales-side only — never auto-price a SO from a supplier's purchasing combos
   return ((data ?? []) as Array<{
     id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
     customer_id: string | null; prices_by_height: Record<string, number | null>;
+    selling_prices_by_height: Record<string, number | null>;
     label: string | null; effective_from: string; deleted_at: string | null;
   }>).map((r) => ({
     id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
     tier: r.tier, customerId: r.customer_id,
-    pricesByHeight: r.prices_by_height ?? {},
+    // Combo cost/sell split — the engine charges SELLING merged over cost.
+    pricesByHeight: comboChargedPrices(r.selling_prices_by_height, r.prices_by_height),
     label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
   }));
 }

@@ -635,7 +635,7 @@ function ComposerModal({
           </select>
         </Field>
 
-        <Field label="Prices by seat height (RM)">
+        <Field label="Cost by seat height (RM) — selling price is set by Master Admin on POS">
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 8 }}>
             {HEIGHTS.map((h) => (
               <div key={h}>

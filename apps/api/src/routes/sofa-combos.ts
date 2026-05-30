@@ -26,7 +26,8 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { canonicalizeComboModulesForStorage, comboSlotsKey, type ComboSlots } from '@2990s/shared';
+import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, type ComboSlots } from '@2990s/shared';
+import { loadModelSofaModuleCosts } from '../lib/mfg-pricing-recompute';
 
 export const sofaCombos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -46,6 +47,7 @@ type Row = {
   customer_id: string | null;
   supplier_id: string | null;
   prices_by_height: Record<string, number | null>;
+  selling_prices_by_height: Record<string, number | null>;
   label: string | null;
   effective_from: string;
   deleted_at: string | null;
@@ -64,6 +66,7 @@ function rowToWire(r: Row) {
     customerId: r.customer_id,
     supplierId: r.supplier_id,
     pricesByHeight: r.prices_by_height ?? {},
+    sellingPricesByHeight: r.selling_prices_by_height ?? {},
     label: r.label,
     effectiveFrom: r.effective_from,
     deletedAt: r.deleted_at,
@@ -138,7 +141,7 @@ sofaCombos.get('/', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .order('base_model', { ascending: true })
@@ -228,7 +231,7 @@ sofaCombos.get('/history', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .eq('base_model', baseModel)
@@ -280,6 +283,7 @@ sofaCombos.post('/', async (c) => {
     customerId?: string | null;
     supplierId?: string | null;
     pricesByHeight?: unknown;
+    sellingPricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -316,16 +320,51 @@ sofaCombos.post('/', async (c) => {
       ? null
       : body.supplierId;
 
-  const prices = validatePricesByHeight(body.pricesByHeight);
-  if (!prices) return c.json({ error: 'prices_by_height_invalid' }, 400);
+  const supabase = c.get('supabase');
+  const user = c.get('user');
+
+  // SELLING prices (Master Admin) — what the customer pays.
+  const sellingProvided = body.sellingPricesByHeight !== undefined;
+  const selling = sellingProvided ? validatePricesByHeight(body.sellingPricesByHeight) : null;
+  if (sellingProvided && !selling) return c.json({ error: 'selling_prices_by_height_invalid' }, 400);
+
+  // COST prices (Backend / PO benchmark). Three cases (Chairman 2026-05-31):
+  //   1. client sends pricesByHeight        → use it (Backend keys / overrides).
+  //   2. client omits it but sends selling  → AUTO-DETECT = Σ module SKU costs
+  //      (base_price_sen) for every height the selling covers. A combo is just
+  //      existing module SKUs assembled, so its cost = the sum of those SKUs'
+  //      cost (auto key-in; Backend can override later via PUT). A height the
+  //      module costs can't price stays null (no phantom cost).
+  //   3. client omits both                  → reject (nothing to price).
+  let prices: Record<string, number | null> | null;
+  if (body.pricesByHeight !== undefined) {
+    prices = validatePricesByHeight(body.pricesByHeight);
+    if (!prices) return c.json({ error: 'prices_by_height_invalid' }, 400);
+  } else if (selling) {
+    const moduleCosts = await loadModelSofaModuleCosts(supabase, baseModel);
+    const costSen = sofaComboCostSen(modules, moduleCosts); // sen == combo centi scale
+    prices = {};
+    for (const h of Object.keys(selling)) prices[h] = costSen > 0 ? costSen : null;
+  } else {
+    return c.json({ error: 'prices_by_height_required' }, 400);
+  }
+
+  // SELLING defaults to cost when not supplied (no silent free combo).
+  const sellingPrices = selling ?? prices;
+
+  // Never persist an all-null combo — there must be a price to charge. At least
+  // one height needs a non-null SELLING value. The Create-Combo POS modal always
+  // sends one; this rejects hand-crafted all-null payloads (Phase 5 review). COST
+  // may stay null (auto-detect can miss / Backend overrides later) — only the
+  // charged SELLING side is required.
+  if (!Object.values(sellingPrices).some((v) => v !== null)) {
+    return c.json({ error: 'selling_prices_all_null', message: 'At least one height needs a selling price' }, 400);
+  }
 
   const effectiveFrom = (body.effectiveFrom ?? '').trim();
   if (!ISO_DATE.test(effectiveFrom)) {
     return c.json({ error: 'effective_from_required', message: 'YYYY-MM-DD' }, 400);
   }
-
-  const supabase = c.get('supabase');
-  const user = c.get('user');
 
   const { data, error } = await supabase
     .from('sofa_combo_pricing')
@@ -336,13 +375,14 @@ sofaCombos.post('/', async (c) => {
       customer_id: customerId,
       supplier_id: supplierId,
       prices_by_height: prices,
+      selling_prices_by_height: sellingPrices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
@@ -375,6 +415,7 @@ sofaCombos.put('/:id', async (c) => {
 
   let body: {
     pricesByHeight?: unknown;
+    sellingPricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -388,6 +429,14 @@ sofaCombos.put('/:id', async (c) => {
 
   const prices = validatePricesByHeight(body.pricesByHeight);
   if (!prices) return c.json({ error: 'prices_by_height_invalid' }, 400);
+
+  // SELLING prices (Master Admin). Default = cost when not supplied, so a
+  // create/edit that only sets the cost keeps selling == cost (no silent
+  // free combo). Validated the same way (per-height centi).
+  const sellingPrices = body.sellingPricesByHeight === undefined
+    ? prices
+    : validatePricesByHeight(body.sellingPricesByHeight);
+  if (!sellingPrices) return c.json({ error: 'selling_prices_by_height_invalid' }, 400);
 
   const effectiveFrom = (body.effectiveFrom ?? '').trim();
   if (!ISO_DATE.test(effectiveFrom)) {
@@ -414,13 +463,14 @@ sofaCombos.put('/:id', async (c) => {
       customer_id: (orig as { customer_id: string | null }).customer_id,
       supplier_id: supplierId,
       prices_by_height: prices,
+      selling_prices_by_height: sellingPrices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();

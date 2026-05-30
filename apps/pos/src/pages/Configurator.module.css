@@ -779,6 +779,31 @@
   margin-top: 4px;
 }
 
+/* Quick Pick delete affordance — top-LEFT so it never collides with the
+   top-right "Edit in Customize" pill / L-R flip chip on the selected card. */
+.qpDeleteQuickPick {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  color: var(--fg-soft);
+  cursor: pointer;
+  z-index: 2;
+  opacity: 0.65;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.qpDeleteQuickPick:hover {
+  opacity: 1;
+  color: var(--c-burnt);
+}
+
 /* "Edit in Customize →" link — appears below the card body when a saved
    Quick Pick card is selected. Small, secondary, doesn't fight Add to Cart. */
 .qpEditCombo {

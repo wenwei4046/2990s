@@ -14,6 +14,7 @@ import {
   sofaModulePricesFromSkus,
   sofaCompartmentsFromModulePrices,
   computeSofaSellingSen,
+  sofaComboCostSen,
   type Cell,
   type SofaComboRow,
 } from '../sofa-build';
@@ -154,5 +155,34 @@ describe('computeSofaSellingSen', () => {
       { id: 'b', moduleId: 'L-RHF', x: 158, y: 0, rot: 0 },
     ];
     expect(computeSofaSellingSen(cells, '24', map, [combo])).toBe(380000);
+  });
+});
+
+describe('sofaComboCostSen (combo COST auto-detect)', () => {
+  // Module COSTs (base_price_sen) keyed by normalized code.
+  const costs = { '2A-LHF': 180000, '1NA': 70000, CNR: 40000 };
+
+  it('sums the cost of each slot’s representative (first) module code', () => {
+    // Singleton slots (a POS-created combo): 2A-LHF + 1NA + CNR.
+    expect(sofaComboCostSen([['2A-LHF'], ['1NA'], ['CNR']], costs)).toBe(290000);
+  });
+
+  it('uses the FIRST code of an OR-set slot as the representative', () => {
+    // OR-set slot [2A-LHF | 2A-RHF] → priced off 2A-LHF (180000) + CNR (40000).
+    expect(sofaComboCostSen([['2A-LHF', '2A-RHF'], ['CNR']], costs)).toBe(220000);
+  });
+
+  it('normalizes the slot code to the dash form before lookup', () => {
+    // Paren-form code from the SKU pool still resolves.
+    expect(sofaComboCostSen([['1A(LHF)']], { '1A-LHF': 150000 })).toBe(150000);
+  });
+
+  it('unpriced module contributes 0 (no phantom cost)', () => {
+    expect(sofaComboCostSen([['2A-LHF'], ['UNKNOWN']], costs)).toBe(180000);
+  });
+
+  it('null / empty cost map → 0', () => {
+    expect(sofaComboCostSen([['2A-LHF']], null)).toBe(0);
+    expect(sofaComboCostSen([['2A-LHF']], {})).toBe(0);
   });
 });

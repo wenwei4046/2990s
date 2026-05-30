@@ -311,6 +311,26 @@ export const computeSofaSellingSen = (
   return Math.round(computeSofaPrice(cells, depth, pricing).total * 100);
 };
 
+/** Auto-detect a Combo's COST (sen) = Σ COST of each slot's representative
+ *  (first) module code. A Combo is just existing module SKUs assembled, so its
+ *  cost is the sum of those SKUs' COST (`base_price_sen`). Used to auto-key the
+ *  Backend/PO cost when a Master Admin creates a Combo on POS with only the
+ *  SELLING price (Chairman 2026-05-31; Backend-overridable). Unpriced modules
+ *  contribute 0. Returns sen — the same ×100 scale as combo `pricesByHeight`. */
+export const sofaComboCostSen = (
+  modules: readonly string[][],
+  moduleCosts: SofaModulePriceSen | null | undefined,
+): number => {
+  if (!moduleCosts) return 0;
+  let sum = 0;
+  for (const slot of modules) {
+    const code = slot[0];
+    if (!code) continue;
+    sum += moduleCosts[normalizeCompartmentCode(code)] ?? 0;
+  }
+  return sum;
+};
+
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
 
 const RECLINER_RE = /^(1[AB]-[LR]HF|1NA|2[AB]-[LR]HF|2NA)$/;

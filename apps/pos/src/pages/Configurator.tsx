@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
-import type { SofaComboRow } from '../lib/queries';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -19,9 +18,14 @@ import {
   useSofaCustomizerData,
   useSofaCustomizerRealtime,
   useSofaCombos,
+  useSofaQuickPicks,
+  useSofaQuickPicksRealtime,
+  useDeleteSofaQuickPick,
   type AddonRow,
   type ProductFabricRow,
 } from '../lib/queries';
+import { useStaff, isGlobalCurator } from '../lib/staff';
+import { useQuickPicks } from '../state/quickpicks';
 import {
   useCart,
   type SofaConfigSnapshot,
@@ -158,6 +162,20 @@ const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number
 const isLShapeBundle = (id: string | null | undefined): boolean =>
   id === '2+L' || id === '3+L';
 
+/* A salesperson-facing Quick Pick — a saved sofa LAYOUT (Chairman 2026-05-31).
+   Unifies the two layers the configurator shows: GLOBAL (sofa_quick_picks,
+   Master-Admin-curated) + PERSONAL ("Yours", per-device localStorage). It
+   carries NO price — the card computes its price by running `modules` through
+   the engine (à-la-carte sum, or the Combo price on match). */
+interface QuickPickItem {
+  id: string;
+  source: 'global' | 'personal';
+  label: string | null;
+  /** OR-set per slot. Personal picks store flat ids → wrapped as singletons. */
+  modules: string[][];
+  depth: string;
+}
+
 export const Configurator = () => {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
@@ -179,10 +197,11 @@ export const Configurator = () => {
   useSofaCustomizerRealtime(productId);
 
   const [picked, setPicked] = useState<string | null>(null);
-  // Saved combo selection — mutually exclusive with `picked` (bundle).
-  // When non-null, the Quick Pick hero shows the combo's cells and
-  // "Add to Cart" builds from combo.modules instead of bundle presets.
-  const [pickedCombo, setPickedCombo] = useState<SofaComboRow | null>(null);
+  // Saved Quick Pick selection — mutually exclusive with `picked` (bundle).
+  // When non-null, the hero shows the pick's cells and "Add to Cart" builds
+  // from its modules. A Quick Pick is a LAYOUT (Chairman 2026-05-31); its price
+  // is computed by the engine (à-la-carte, or a matched Combo's price).
+  const [pickedQP, setPickedQP] = useState<QuickPickItem | null>(null);
   const [pickedSizeId, setPickedSizeId] = useState<string | null>(null);
   const [pillowExtras, setPillowExtras] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<'quick' | 'custom'>('quick');
@@ -217,8 +236,45 @@ export const Configurator = () => {
      2026-05-28). Null/undefined → no filter → shows all combos (safe
      fallback for legacy UUID products that don't have a base_model). */
   const sofaCombosQ = useSofaCombos(product.data?.base_model);
+  // Quick Picks (Phase 5) — saved LAYOUTS the salesperson taps to start.
+  // GLOBAL layer (Master-Admin-curated, shared) + PERSONAL "Yours" (per-device).
+  // Combos stay invisible: they auto-apply via the engine on module match.
+  const globalQPsQ = useSofaQuickPicks(product.data?.base_model);
+  useSofaQuickPicksRealtime();
+  const deleteGlobalQP = useDeleteSofaQuickPick();
+  const personalPicksAll = useQuickPicks((s) => s.picks);
+  const removePersonalPick = useQuickPicks((s) => s.removePick);
+  const { data: staff } = useStaff();
+  const canCurateQP = isGlobalCurator(staff?.role);
   const addConfigured = useCart((s) => s.addConfigured);
   const cartLines = useCart((s) => s.lines);
+
+  // Unified Quick Pick list: global first, then this salesperson's personal
+  // picks for this Model. Personal picks store flat module ids → wrap each as a
+  // singleton OR-set slot so both layers share the cells/preview path.
+  const baseModelStr = product.data?.base_model ?? '';
+  const globalQPItems = useMemo<QuickPickItem[]>(
+    // Re-filter by base model client-side too: a sofa SKU with no base_model
+    // (legacy/orphan) must NOT show other Models' shared layouts (Phase 5
+    // review — defends alongside the server's required-scope guard).
+    () => (globalQPsQ.data ?? [])
+      .filter((r) => !!baseModelStr && r.baseModel === baseModelStr)
+      .map((r) => ({
+        id: r.id, source: 'global' as const, label: r.label, modules: r.modules, depth: r.depth,
+      })),
+    [globalQPsQ.data, baseModelStr],
+  );
+  const personalQPItems = useMemo<QuickPickItem[]>(
+    // Wait for the staff identity before showing personal picks — otherwise a
+    // mid-load `staff?.id ?? null` would match no real pick and flash empty.
+    () => (!staff?.id ? [] : personalPicksAll
+      .filter((p) => p.staffId === staff.id && p.baseModel === baseModelStr)
+      .map((p) => ({
+        id: p.id, source: 'personal' as const, label: p.label,
+        modules: p.modules.map((m) => [m]), depth: p.depth,
+      }))),
+    [personalPicksAll, staff?.id, baseModelStr],
+  );
 
   // ─── Edit mode ───────────────────────────────────────────────────────────
   // The cart's Edit button navigates to /configure/:productId?edit=<lineKey>.
@@ -373,6 +429,10 @@ export const Configurator = () => {
        lands on productFabrics, wire it here. */
     fabricTier: 'PRICE_2',
     comboHeight: activeDepth,
+    /* Empty = wildcard match. The combos fed in are ALREADY scoped to this
+       Model by useSofaCombos(base_model), and the server drift gate
+       (computeSofaSellingSen) also passes '' — keep them identical so the POS
+       live price and the server recompute never diverge (Phase 5 review). */
     baseModel: '',
   }), [
     compartments.data, bundles.data, sofaCustomizer.data?.compartments,
@@ -383,6 +443,17 @@ export const Configurator = () => {
     activeDepth,
   ]);
 
+  // Price a Quick Pick LAYOUT (Chairman 2026-05-31): run its modules through the
+  // SAME engine the build uses — à-la-carte module sum, or the Combo price when
+  // the layout matches a Combo. One price source (the engine); the QP table
+  // stores none. Returns whole MYR, or null when nothing prices (unpriced).
+  const priceForLayout = useCallback((modules: string[][]): number | null => {
+    const cells = cellsFromComboModules(modules, activeDepth);
+    if (cells.length === 0) return null;
+    const total = computeSofaPrice(cells, activeDepth, sofaPricing).total;
+    return total > 0 ? Math.round(total) : null;
+  }, [activeDepth, sofaPricing]);
+
   // F5: per-Model seat depths ('24,30' → ['24','30']). Fallback ['24'] so the
   // toggle always has a value (only rendered for sofas, which always seed it).
   //
@@ -392,14 +463,20 @@ export const Configurator = () => {
   // through to depth_options when the customizer isn't available (orphan
   // SKUs / unmigrated Models) so existing Models keep their toggles.
   const depthOptions = useMemo<Depth[]>(() => {
+    // Sorted ascending so the toggle reads small→large AND depthOptions[0] is
+    // the smallest — the configurator defaults to the smallest seat depth, the
+    // salesperson picks larger if the customer wants (Chairman 2026-05-31: no
+    // per-kit default-size setting; just default smallest).
+    const sortAsc = (xs: Depth[]) => [...xs].sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
     const fromAllowed = (sofaCustomizer.data?.sizes ?? []).filter(Boolean);
-    if (fromAllowed.length > 0) return fromAllowed as Depth[];
+    if (fromAllowed.length > 0) return sortAsc(fromAllowed as Depth[]);
     const raw: string = product.data?.depth_options ?? '';
     const parsed = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    return parsed.length > 0 ? parsed : ['24'];
+    return parsed.length > 0 ? sortAsc(parsed) : ['24'];
   }, [product.data?.depth_options, sofaCustomizer.data?.sizes]);
 
-  // Keep activeDepth within the Model's offered depths (default to the first).
+  // Keep activeDepth within the Model's offered depths (default to the smallest
+  // — depthOptions is sorted ascending, so [0] is the smallest).
   useEffect(() => {
     if (!depthOptions.includes(activeDepth)) setActiveDepth(depthOptions[0] ?? '24');
   }, [depthOptions, activeDepth]);
@@ -574,21 +651,19 @@ export const Configurator = () => {
   });
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
 
-  // Combo selection price: pricesByHeight[activeDepth] in centi → RM.
-  const comboPickPrice = pickedCombo
-    ? (() => { const c = pickedCombo.pricesByHeight?.[activeDepth]; return typeof c === 'number' ? Math.round(c / 100) : 0; })()
-    : 0;
+  // Quick Pick selection price: computed from its layout via the engine.
+  const qpPickPrice = pickedQP ? (priceForLayout(pickedQP.modules) ?? 0) : 0;
 
-  // Fabric surcharge folds onto the bundle/combo price (spec §3.2).
-  const sofaTotal = pickedCombo
-    ? comboPickPrice + (fabricSel?.surcharge ?? 0)
+  // Fabric surcharge folds onto the bundle/Quick-Pick price (spec §3.2).
+  const sofaTotal = pickedQP
+    ? qpPickPrice + (fabricSel?.surcharge ?? 0)
     : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? (fabricSel?.surcharge ?? 0) : 0);
 
   // Sofas require a fabric + colour before Add-to-Cart (G6).
   const canAddSofa =
     fabricSel != null &&
     ((pickedSofaRow != null && pickedSofaRow.active && pickedSofaRow.price != null) ||
-     (pickedCombo != null && comboPickPrice > 0));
+     (pickedQP != null && qpPickPrice > 0));
 
   // Bundle Quick Pick → Add to Cart.
   const handleAddSofa = () => {
@@ -620,12 +695,13 @@ export const Configurator = () => {
     navigate(isEditing ? '/cart' : '/catalog');
   };
 
-  // Saved Quick Pick (combo) → Add to Cart. Builds cells from combo.modules
-  // so the order line carries the exact modular arrangement the staff picked.
-  const handleAddCombo = () => {
-    if (pickedCombo == null || fabricSel == null) return;
-    const cells = cellsFromComboModules(pickedCombo.modules, activeDepth);
-    const label = pickedCombo.label || buildComboLabel(pickedCombo.modules);
+  // Quick Pick → Add to Cart. Builds cells from the pick's modules so the order
+  // line carries the exact modular arrangement (and the engine reprices it,
+  // applying any matched Combo, server-side on submit).
+  const handleAddQuickPick = () => {
+    if (pickedQP == null || fabricSel == null) return;
+    const cells = cellsFromComboModules(pickedQP.modules, activeDepth);
+    const label = pickedQP.label || buildComboLabel(pickedQP.modules);
     const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
@@ -640,7 +716,7 @@ export const Configurator = () => {
       fabricLabel: fabricSel.fabricLabel,
       colourLabel: fabricSel.colourLabel,
       colourHex: fabricSel.colourHex ?? undefined,
-      total: comboPickPrice + (fabricSel.surcharge ?? 0),
+      total: qpPickPrice + (fabricSel.surcharge ?? 0),
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
@@ -750,16 +826,16 @@ export const Configurator = () => {
           {(p.name ?? '').toUpperCase()} · {(p.category_id ?? '').toUpperCase()}
         </span>
         <span className={styles.topbarChipName}>
-          {pickedCombo
-            ? `${pickedCombo.label || buildComboLabel(pickedCombo.modules)} · ${activeDepth}"`
+          {pickedQP
+            ? `${pickedQP.label || buildComboLabel(pickedQP.modules)} · ${activeDepth}"`
             : pickedSofaRow
               ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
               : p.name}
         </span>
-        {(pickedCombo || pickedSofaRow) && (
+        {(pickedQP || pickedSofaRow) && (
           <span className={styles.topbarChipSub}>
-            {pickedCombo
-              ? 'Saved Quick Pick'
+            {pickedQP
+              ? (pickedQP.source === 'personal' ? 'Quick Pick · Yours' : 'Quick Pick')
               : `Quick Pick${isLShapeBundle(pickedSofaRow!.bundle.id) ? ` · ${quickFlip}-facing` : ''}`}
           </span>
         )}
@@ -784,7 +860,7 @@ export const Configurator = () => {
         type="button"
         className={styles.topbarBtnPrimary}
         disabled={!canAddSofa}
-        onClick={pickedCombo ? handleAddCombo : handleAddSofa}
+        onClick={pickedQP ? handleAddQuickPick : handleAddSofa}
       >
         {isEditing ? 'Save changes' : '+ Add to Cart'}
       </button>
@@ -898,22 +974,34 @@ export const Configurator = () => {
             isLoading={bundles.isLoading}
             rows={sofaBundleRows}
             picked={picked}
-            onPick={(id) => { setPicked(id); setPickedCombo(null); }}
+            onPick={(id) => { setPicked(id); setPickedQP(null); }}
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
             depth={activeDepth}
-            combos={sofaCombosQ.data ?? []}
-            pickedComboId={pickedCombo?.id ?? null}
-            onComboSelect={(combo) => {
+            globalQuickPicks={globalQPItems}
+            personalQuickPicks={personalQPItems}
+            pickedQuickPickId={pickedQP?.id ?? null}
+            priceForLayout={priceForLayout}
+            canDeleteGlobal={canCurateQP}
+            onQuickPickSelect={(item) => {
               // Select the saved Quick Pick — stay in Quick Pick mode.
-              // Topbar shows its price + "Add to Cart" just like a bundle.
-              setPickedCombo(combo);
+              // Topbar shows its computed price + "Add to Cart". Restore the
+              // pick's saved seat depth so it prices as it was saved, not at
+              // whatever the depth toggle currently sits on (Phase 5 review).
+              if (item.depth && depthOptions.includes(item.depth as Depth)) {
+                setActiveDepth(item.depth as Depth);
+              }
+              setPickedQP(item);
               setPicked(null);
             }}
-            onComboEdit={(combo) => {
+            onQuickPickEdit={(item) => {
               // Load into Customize for further adjustment.
-              setSofaCells(cellsFromComboModules(combo.modules, activeDepth));
+              setSofaCells(cellsFromComboModules(item.modules, activeDepth));
               setMode('custom');
+            }}
+            onQuickPickDelete={(item) => {
+              if (item.source === 'personal') removePersonalPick(item.id);
+              else deleteGlobalQP.mutate(item.id);
             }}
             fabricBlock={
               <FabricColourPicker
@@ -1384,14 +1472,23 @@ interface SofaQuickPickProps {
   depth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
-  /** Saved Quick Pick / Sofa Combo rows from Backend. */
-  combos?: SofaComboRow[];
-  /** Currently selected saved combo id (highlights the card + drives hero). */
-  pickedComboId?: string | null;
-  /** Select a saved combo — stay in Quick Pick mode, topbar shows price + Add to Cart. */
-  onComboSelect?: (combo: SofaComboRow) => void;
-  /** Load a saved combo into Customize mode for further editing. */
-  onComboEdit?: (combo: SofaComboRow) => void;
+  /** Global Quick Picks (Master-Admin-curated, shared). */
+  globalQuickPicks?: QuickPickItem[];
+  /** This salesperson's personal Quick Picks ("Yours", per-device). */
+  personalQuickPicks?: QuickPickItem[];
+  /** Currently selected Quick Pick id (highlights the card + drives hero). */
+  pickedQuickPickId?: string | null;
+  /** Price a layout via the engine (à-la-carte sum, or a matched Combo's
+   *  price). Whole MYR, or null when the layout doesn't price. */
+  priceForLayout?: (modules: string[][]) => number | null;
+  /** true → this user may delete GLOBAL picks (Master Admin / backend admin). */
+  canDeleteGlobal?: boolean;
+  /** Select a Quick Pick — stay in Quick Pick mode, topbar shows price + Add. */
+  onQuickPickSelect?: (item: QuickPickItem) => void;
+  /** Load a Quick Pick into Customize mode for further editing. */
+  onQuickPickEdit?: (item: QuickPickItem) => void;
+  /** Remove a Quick Pick (personal → own device; global → Master Admin). */
+  onQuickPickDelete?: (item: QuickPickItem) => void;
 }
 
 // Maps a bundle id (+ flip orientation for L-shape variants) to the public
@@ -1508,7 +1605,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, combos, pickedComboId, onComboSelect, onComboEdit }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1519,33 +1616,42 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
   // Auto-pick the first active bundle on first paint so the hero always
   // has something to render. Staff can change it after.
   useEffect(() => {
-    if (picked == null && pickedComboId == null && activeRows.length > 0) {
+    if (picked == null && pickedQuickPickId == null && activeRows.length > 0) {
       onPick(activeRows[0]!.bundle.id);
     }
-  }, [picked, pickedComboId, activeRows, onPick]);
+  }, [picked, pickedQuickPickId, activeRows, onPick]);
+
+  // Unified Quick Pick list — global first, then personal "Yours".
+  const allQuickPicks = useMemo(
+    () => [...(globalQuickPicks ?? []), ...(personalQuickPicks ?? [])],
+    [globalQuickPicks, personalQuickPicks],
+  );
 
   // Resolve hero pick up front so the silhouette-bounds hook is called on
   // every render path. Hooks must not sit behind the loading/empty early
   // returns — that'd violate the rules-of-hooks (see "rendered more hooks
   // than during the previous render").
   const pickedRow = activeRows.find((r) => r.bundle.id === picked) ?? activeRows[0] ?? null;
-  // When a saved combo is selected, its cells drive the hero; otherwise use
-  // the picked bundle's preset cells / PNG.
-  const pickedComboRow = (combos ?? []).find((c) => c.id === pickedComboId) ?? null;
-  const heroSrc = (!pickedComboRow && pickedRow) ? bundleArtSrc(pickedRow.bundle.id, quickFlip) : '';
+  // When a saved Quick Pick is selected, its cells drive the hero; otherwise
+  // use the picked bundle's preset cells / PNG.
+  const pickedQPRow = allQuickPicks.find((q) => q.id === pickedQuickPickId) ?? null;
+  const heroSrc = (!pickedQPRow && pickedRow) ? bundleArtSrc(pickedRow.bundle.id, quickFlip) : '';
   const heroBounds = useSilhouetteBounds(heroSrc);
 
   if (isLoading) return <p className={styles.empty}>Loading bundles…</p>;
-  if (activeRows.length === 0 || !pickedRow) {
-    return <p className={styles.empty}>No Quick-Pick layouts activated for this Model yet.</p>;
+  // Render when EITHER bundles OR Quick Picks exist. Fully-modular Models may
+  // carry no whole-unit bundles — the Quick Pick layer is then the surface.
+  if (activeRows.length === 0 && allQuickPicks.length === 0) {
+    return <p className={styles.empty}>No Quick-Pick layouts yet — switch to Customize to build one.</p>;
   }
 
-  const dims = quickPresetDims(pickedRow.bundle.id, depth);
+  // Bundle-hero geometry only applies when a bundle is the active hero.
+  const dims = pickedRow ? quickPresetDims(pickedRow.bundle.id, depth) : { w: 0, d: 0 };
   // 28" seat widens each cushion by 10cm — stretch the silhouette by the
   // same width ratio so the visual matches the cm label.
-  const baseW = QUICK_PRESET_META[pickedRow.bundle.id]?.baseW ?? dims.w;
+  const baseW = (pickedRow && QUICK_PRESET_META[pickedRow.bundle.id]?.baseW) ?? dims.w;
   const depthScale = baseW > 0 ? dims.w / baseW : 1;
-  const heroCells = buildPresetCells(pickedRow.bundle.id, depth);
+  const heroCells = pickedRow ? buildPresetCells(pickedRow.bundle.id, depth) : undefined;
 
   return (
     <>
@@ -1556,7 +1662,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
         </header>
         <div className={styles.qpGrid}>
           {activeRows.map(({ bundle, price }) => {
-            const isPicked = bundle.id === pickedRow.bundle.id;
+            const isPicked = bundle.id === pickedRow?.bundle.id;
             const lShape = isLShapeBundle(bundle.id);
             const meta = QUICK_PRESET_META[bundle.id];
             const presetCells = buildPresetCells(bundle.id, depth);
@@ -1609,47 +1715,66 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             );
           })}
         </div>
-        {/* Saved Quick Picks — combos saved from POS Customize or Backend
-            Sofa Combos. Click a card to SELECT it (stay in Quick Pick,
-            topbar shows price + Add to Cart). "Edit" on the selected card
-            loads the cells into Customize for further adjustment. */}
-        {combos && combos.length > 0 && (
-          <>
+        {/* Quick Picks (Phase 5, Chairman 2026-05-31) — saved sofa LAYOUTS for
+            easy selection. Global layer (Master-Admin-curated, shared) +
+            personal "Yours" (per-device). A Quick Pick carries NO price; the
+            card computes its price by running the layout through the engine
+            (à-la-carte sum, or the matched Combo's price). Combos themselves
+            stay invisible — they auto-apply on module match. Tap a card to
+            SELECT (stay in Quick Pick); "Edit" loads it into Customize. */}
+        {[
+          { key: 'global' as const, items: globalQuickPicks ?? [], title: 'Quick Picks', sub: 'tap to select' },
+          { key: 'personal' as const, items: personalQuickPicks ?? [], title: 'Yours', sub: 'saved on this tablet' },
+        ].map(({ key, items, title, sub }) => items.length > 0 && (
+          <Fragment key={key}>
             <header className={styles.qpRailHead} style={{ marginTop: 12 }}>
-              <span className={styles.qpRailEyebrow}>Saved Quick Picks</span>
-              <span className={styles.qpRailDetail}>{depth}″ seat · tap to select</span>
+              <span className={styles.qpRailEyebrow}>{title}</span>
+              <span className={styles.qpRailDetail}>{depth}″ seat · {sub}</span>
             </header>
             <div className={styles.qpGrid}>
-              {combos.map((combo) => {
-                const priceCenti = combo.pricesByHeight?.[depth];
-                const priceRm = typeof priceCenti === 'number' ? Math.round(priceCenti / 100) : null;
-                const label = combo.label || buildComboLabel(combo.modules);
-                const isPickedCombo = combo.id === pickedComboId;
+              {items.map((item) => {
+                const priceRm = priceForLayout?.(item.modules) ?? null;
+                const label = item.label || buildComboLabel(item.modules);
+                const isPicked = item.id === pickedQuickPickId;
+                const canDelete = item.source === 'personal' || canDeleteGlobal;
                 return (
                   <button
-                    key={combo.id}
+                    key={item.id}
                     type="button"
-                    className={`${styles.qpCard} ${isPickedCombo ? styles.qpCardPicked : ''}`}
-                    onClick={() => onComboSelect?.(combo)}
-                    title={combo.modules.join(' + ')}
+                    className={`${styles.qpCard} ${isPicked ? styles.qpCardPicked : ''}`}
+                    onClick={() => onQuickPickSelect?.(item)}
+                    title={item.modules.map((s) => s[0] ?? '').join(' + ')}
                   >
                     <div className={styles.qpCardArt}>
-                      <SofaCellsPreview cells={cellsFromComboModules(combo.modules, depth)} depth={depth} />
+                      <SofaCellsPreview cells={cellsFromComboModules(item.modules, depth)} depth={depth} />
                     </div>
                     <div className={styles.qpCardBody}>
                       <span className={styles.qpCardLabel}>{label}</span>
                       <span className={styles.qpCardSub}>
-                        {combo.modules.length} compartment{combo.modules.length !== 1 ? 's' : ''}
+                        {item.modules.length} compartment{item.modules.length !== 1 ? 's' : ''}
                       </span>
                       <span className={styles.qpCardPrice}>
                         {priceRm == null ? '— (no price)' : `RM${priceRm.toLocaleString('en-MY')}`}
                       </span>
                     </div>
-                    {isPickedCombo && (
+                    {canDelete && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className={styles.qpDeleteQuickPick}
+                        onClick={(e) => { e.stopPropagation(); onQuickPickDelete?.(item); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onQuickPickDelete?.(item); } }}
+                        title={item.source === 'personal' ? 'Remove from this tablet' : 'Remove shared Quick Pick'}
+                        aria-label="Remove Quick Pick"
+                      >
+                        <Trash2 size={14} strokeWidth={1.75} />
+                      </span>
+                    )}
+                    {isPicked && (
                       <button
                         type="button"
                         className={styles.qpEditCombo}
-                        onClick={(e) => { e.stopPropagation(); onComboEdit?.(combo); }}
+                        onClick={(e) => { e.stopPropagation(); onQuickPickEdit?.(item); }}
                         title="Load into Customize to adjust"
                       >
                         Edit in Customize →
@@ -1659,18 +1784,18 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                 );
               })}
             </div>
-          </>
-        )}
+          </Fragment>
+        ))}
         {fabricBlock}
       </aside>
 
       <section className={styles.qpHero}>
         <div className={styles.qpHeroFrame}>
-          {pickedComboRow ? (
-            // Saved Quick Pick selected — show its cells in the hero.
+          {pickedQPRow ? (
+            // Quick Pick selected — show its layout cells in the hero.
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview
-                cells={cellsFromComboModules(pickedComboRow.modules, depth)}
+                cells={cellsFromComboModules(pickedQPRow.modules, depth)}
                 depth={depth}
                 showDims
               />
@@ -1679,7 +1804,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview cells={heroCells} depth={depth} showDims />
             </div>
-          ) : (
+          ) : pickedRow ? (
           <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
             <img
               src={heroSrc}
@@ -1709,6 +1834,8 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
               </span>
             </div>
           </div>
+          ) : (
+            <div className={styles.qpHeroCells} />
           )}
         </div>
         <footer className={styles.qpHeroFoot}>

@@ -1769,7 +1769,8 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   // default, read + written by the Products page). Non-NULL = combo scoped to
   // that supplier's purchasing side (Supplier detail Combo Pricing tab).
   supplierId:      uuid('supplier_id').references(() => suppliers.id, { onDelete: 'cascade' }),
-  pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null }
+  pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null } — COST benchmark (Backend / PO side)
+  sellingPricesByHeight: jsonb('selling_prices_by_height').notNull().default({}),  // SELLING (Master Admin, POS) — what the app charges
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),
   deletedAt:       timestamp('deleted_at', { withTimezone: true }),
@@ -1784,6 +1785,36 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
     .on(t.baseModel, t.tier, t.customerId, t.supplierId, t.effectiveFrom, t.createdAt),
   idxSupplier: index('idx_sofa_combo_pricing_supplier')
     .on(t.supplierId),
+}));
+
+/* ─────────────────────────── sofa_quick_picks ──────────────────────────
+   Phase 5 (Chairman 2026-05-31) — global Quick Pick LAYOUTS. A Quick Pick is
+   a VISIBLE saved sofa layout for easy selection (it may be unpriced); the
+   card price is computed by the pricing engine (à-la-carte module sum, or the
+   Combo price when the build matches a Combo). So there is NO price column —
+   the price lives in ONE place (the engine). Separate from sofa_combo_pricing,
+   which is the invisible selling-price logic that auto-applies on module match.
+
+   Two QP layers: this GLOBAL table (Master-Admin-curated, shared) + a PERSONAL
+   per-device layer in apps/pos/src/state/quickpicks.ts (localStorage).
+   See migration 0115 for full spec.
+   ──────────────────────────────────────────────────────────────────────── */
+export const sofaQuickPicks = pgTable('sofa_quick_picks', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  baseModel:   text('base_model').notNull(),
+  label:       text('label'),                                    // null = auto-build from modules
+  // OR-set per slot (string[][]), same shape as sofaComboPricing.modules.
+  modules:     jsonb('modules').$type<string[][]>().notNull().default([]),
+  depth:       text('depth').notNull(),                          // saved seat depth ('24')
+  sortOrder:   integer('sort_order').notNull().default(0),
+  active:      boolean('active').notNull().default(true),
+  deletedAt:   timestamp('deleted_at', { withTimezone: true }),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:   uuid('created_by'),
+}, (t) => ({
+  idxLookup: index('idx_sofa_quick_picks_lookup')
+    .on(t.baseModel, t.sortOrder).where(sql`${t.deletedAt} IS NULL`),
 }));
 
 /* ─────────────────────────── product_models ─────────────────────────────
