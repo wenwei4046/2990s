@@ -2,7 +2,11 @@
   flex: 1;
   display: grid;
   grid-template-columns: 240px 1fr;
-  min-height: 100vh;
+  /* Cap the shell to the viewport so neither column can grow the page.
+     Each column scrolls on its own: the sidebar (overflow-y:auto, 100vh in
+     Sidebar.module.css) and the right .col / .main below. */
+  height: 100vh;
+  overflow: hidden;
 }
 
 .col {

@@ -3,33 +3,118 @@
   bottom: var(--space-5);
   right: var(--space-5);
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
   z-index: 200;
   pointer-events: none;
+  max-width: calc(100vw - var(--space-7));
 }
 
 .toast {
-  background: var(--c-ink);
-  color: var(--c-cream);
-  padding: 10px 16px;
-  border-radius: var(--radius-pill);
-  font-family: var(--font-button);
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 340px;
+  max-width: 100%;
+  padding: 10px var(--space-4) 12px var(--space-4);
+  background: #fff;
+  color: var(--c-ink);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--c-ink);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
   font-size: var(--fs-13);
-  font-weight: var(--w-semibold);
+  line-height: var(--lh-13);
   box-shadow: var(--shadow-3);
-  animation: slideUp 200ms ease-out;
   pointer-events: auto;
-  max-width: 420px;
+  overflow: hidden;
+  animation: slideIn 200ms var(--ease-out);
 }
 
-@keyframes slideUp {
+@keyframes slideIn {
   from {
-    transform: translateY(8px);
+    transform: translateX(16px);
     opacity: 0;
   }
   to {
-    transform: translateY(0);
+    transform: translateX(0);
     opacity: 1;
   }
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.message {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--fg-soft);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.close:hover {
+  background: rgba(34, 31, 32, 0.06);
+  color: var(--c-ink);
+}
+
+.progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: currentColor;
+  opacity: 0.5;
+  transition: width 60ms linear;
+}
+
+/* Variants — set the left-edge stripe + the icon/progress colour via
+   currentColor on the icon span. */
+.success {
+  border-left-color: var(--c-success);
+}
+.success .icon,
+.success .progress {
+  color: var(--c-success);
+}
+
+.error {
+  border-left-color: var(--c-error);
+}
+.error .icon,
+.error .progress {
+  color: var(--c-error);
+}
+
+.warning {
+  border-left-color: var(--c-warn);
+}
+.warning .icon,
+.warning .progress {
+  color: var(--c-warn);
+}
+
+.info {
+  border-left-color: var(--c-burnt);
+}
+.info .icon,
+.info .progress {
+  color: var(--c-burnt);
 }

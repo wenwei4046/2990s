@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Link } from 'react-router';
-import { Trash2, BookmarkPlus, Check } from 'lucide-react';
+import { Link, useNavigate } from 'react-router';
+import { Trash2, BookmarkPlus, Check, Pencil, Plus } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
 import { fmtRM } from '@2990s/shared';
 import { useCart, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useSaveQuote } from '../lib/quotes';
+import { ProductThumb } from './ProductThumb';
 import styles from './CartContents.module.css';
 
 export type CartContentsVariant = 'page' | 'rail';
@@ -15,10 +16,12 @@ interface Props {
 }
 
 export const CartContents = ({ variant, onContinue }: Props) => {
+  const navigate = useNavigate();
   const lines = useCart((s) => s.lines);
   const remove = useCart((s) => s.remove);
   const setQty = useCart((s) => s.setQty);
   const clear = useCart((s) => s.clear);
+  const sourceQuoteId = useCart((s) => s.sourceQuoteId);
   const subtotal = cartSubtotal(lines);
   const saveQuote = useSaveQuote();
 
@@ -81,6 +84,11 @@ export const CartContents = ({ variant, onContinue }: Props) => {
             variant={variant}
             onRemove={remove}
             onSetQty={setQty}
+            onEdit={
+              variant === 'page' && l.config.kind !== 'flat'
+                ? () => navigate(`/configure/${l.config.productId}?edit=${l.key}`)
+                : undefined
+            }
           />
         ))}
       </ul>
@@ -141,14 +149,23 @@ export const CartContents = ({ variant, onContinue }: Props) => {
         <div className={styles.actions}>
           <Button variant="secondary" onClick={clear}>Clear</Button>
           {!savingQuote && variant === 'page' && (
-            <Button
-              variant="secondary"
-              onClick={() => setSavingQuote(true)}
-              disabled={lines.length === 0}
-            >
-              <BookmarkPlus size={14} strokeWidth={1.75} />
-              Save quote
-            </Button>
+            sourceQuoteId ? (
+              // Loaded from a quote: keep the cart and go back to the catalog
+              // to add more. (Saving back to the quote lives in the cart sheet.)
+              <Button variant="secondary" onClick={() => navigate('/catalog')}>
+                <Plus size={14} strokeWidth={1.75} />
+                Continue add on
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                onClick={() => setSavingQuote(true)}
+                disabled={lines.length === 0}
+              >
+                <BookmarkPlus size={14} strokeWidth={1.75} />
+                Save quote
+              </Button>
+            )
           )}
           <Button variant="primary" onClick={onContinue}>
             Continue to handover
@@ -159,13 +176,19 @@ export const CartContents = ({ variant, onContinue }: Props) => {
   );
 };
 
-const Line = ({ line, variant, onRemove, onSetQty }: {
+const Line = ({ line, variant, onRemove, onSetQty, onEdit }: {
   line: CartLine;
   variant: CartContentsVariant;
   onRemove: (k: string) => void;
   onSetQty: (k: string, q: number) => void;
+  onEdit?: () => void;
 }) => (
   <li className={`${styles.line} ${variant === 'rail' ? styles.lineRail : ''}`}>
+    <ProductThumb
+      className={styles.linePhoto}
+      productId={line.config.productId}
+      name={line.config.productName}
+    />
     <div className={styles.lineMain}>
       <div className={styles.lineName}>{line.config.productName}</div>
       <div className={styles.lineSummary}>{cartSummary(line.config)}</div>
@@ -186,10 +209,19 @@ const Line = ({ line, variant, onRemove, onSetQty }: {
       >+</button>
     </div>
     <div className={styles.lineTotal}>{fmtRM(line.qty * line.config.total)}</div>
-    <IconButton
-      icon={<Trash2 size={18} strokeWidth={1.75} />}
-      aria-label="Remove line"
-      onClick={() => onRemove(line.key)}
-    />
+    <div className={styles.lineActions}>
+      {onEdit && (
+        <IconButton
+          icon={<Pencil size={16} strokeWidth={1.75} />}
+          aria-label="Edit line"
+          onClick={onEdit}
+        />
+      )}
+      <IconButton
+        icon={<Trash2 size={18} strokeWidth={1.75} />}
+        aria-label="Remove line"
+        onClick={() => onRemove(line.key)}
+      />
+    </div>
   </li>
 );

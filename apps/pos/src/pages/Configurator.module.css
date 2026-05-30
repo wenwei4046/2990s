@@ -216,7 +216,8 @@
   flex-direction: column;
   gap: var(--space-4);
   position: sticky;
-  top: var(--space-3);
+  /* Clear the now-sticky topbar so the rail parks just below it when scrolling. */
+  top: 76px;
 }
 
 .railSection {
@@ -317,6 +318,38 @@
   color: var(--c-burnt);
 }
 .sizeCardPicked .sizeCardPrice { color: var(--c-cream); }
+
+/* Special-size free-text (bedframe configurator) — sits under the size grid. */
+.sizeOtherField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.sizeOtherLabel {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.sizeOtherInput {
+  appearance: none;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--c-paper);
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  color: var(--c-ink);
+}
+.sizeOtherInput:focus {
+  outline: none;
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.14);
+}
 
 /* About */
 .aboutText {
@@ -700,11 +733,24 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 8px;
+  /* Query container so a composed <SofaCellsPreview> thumbnail (console/corner
+     presets) sizes to this 76px box, not the viewport. PNG-preset <img> below
+     is unaffected (max-width/height already cap it). */
+  container-type: size;
 }
-.qpCardArt img {
+/* Single-PNG preset thumbnail = DIRECT child only. These max/contain rules must
+   NOT reach the nested <img>s of a composed <SofaCellsPreview> (2WC console /
+   CORNER): each of those carries an inline width/height >100% that scales its
+   silhouette to fill its cell, and clamping them to 100% + object-fit:contain is
+   exactly what made the corner card render as tiny, gap-separated modules. The
+   hero never hit this because it puts the composed preview in its own container
+   (qpHeroCells), separate from the PNG hero (qpHeroBox). */
+.qpCardArt > img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+.qpCardArt img {
   user-select: none;
   -webkit-user-drag: none;
 }
@@ -732,6 +778,23 @@
   letter-spacing: 0.02em;
   margin-top: 4px;
 }
+
+/* "Edit in Customize →" link — appears below the card body when a saved
+   Quick Pick card is selected. Small, secondary, doesn't fight Add to Cart. */
+.qpEditCombo {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--fg-soft);
+  text-align: center;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.qpEditCombo:hover { color: var(--c-burnt); }
 
 /* L/R flip chip — small pill on the picked L-shape card's top-right. */
 .qpFlip {
@@ -808,6 +871,24 @@
   display: block;
   transition: transform 220ms ease-out;
 }
+
+/* Composed-preview hero (2WC console, CORNER) — no single PNG, so it renders
+   via <SofaCellsPreview>. Same vertical envelope as the 2:1 PNG box (≤55% frame
+   height, ≤80% frame width); the preview contains itself to this box at its real
+   cm aspect ratio. Establishes a query container so the preview sizes here
+   instead of filling the whole canvas. */
+.qpHeroCells {
+  width: 80cqw;
+  height: 55cqh;
+  margin: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  filter: drop-shadow(0 16px 24px rgba(60, 40, 20, 0.12));
+}
+
 @property --sil-left {
   syntax: '<percentage>';
   inherits: true;

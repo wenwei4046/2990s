@@ -1,0 +1,86 @@
+/* Fabric + Colour picker — sits inside the Quick-Pick / Custom-Build rail,
+   styled to match qpRail / qpCard (see Configurator.module.css). */
+
+.block {
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+}
+.block:first-of-type {
+  border-top: none;
+  margin-top: 8px;
+}
+
+.head {
+  margin-bottom: 10px;
+}
+.eyebrow {
+  font-family: var(--font-button);
+  font-size: 11px;
+  font-weight: var(--w-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+
+.muted {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+  padding: 12px 0;
+}
+
+.fabricRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.fabricChip {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  text-align: left;
+  min-width: 84px;
+  padding: 8px 12px;
+  background: var(--c-paper);
+  border: 1.5px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.fabricChip:hover { border-color: var(--line-strong); }
+.fabricChipOn {
+  background: #fff;
+  border-color: var(--c-orange);
+  box-shadow: 0 0 0 3px rgba(232, 107, 58, 0.14);
+}
+.fabricName {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink);
+}
+.fabricMeta {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.colourRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.swatch {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(34, 31, 32, 0.2);
+  cursor: pointer;
+}
+.swatchOn {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--c-orange);
+}

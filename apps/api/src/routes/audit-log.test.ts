@@ -21,8 +21,11 @@ type FakeRow = {
   id: string;
   placed_at: string;
   customer_name: string;
+  customer_phone: string | null;
   total: number;
+  paid: number;
   payment_method: string;
+  installment_months: number | null;
   approval_code: string | null;
   slip_key: string | null;
   showroom_id: string;
@@ -108,8 +111,11 @@ describe('GET /admin/audit-log', () => {
       id: 'SO-2990',
       placed_at: '2026-05-22T10:14:00Z',
       customer_name: 'Tan Wei Ming',
+      customer_phone: null,
       total: 5980,
+      paid: 5980,
       payment_method: 'transfer',
+      installment_months: null,
       approval_code: 'BNK-784512',
       slip_key: 'slips/SO-2990/abc.jpg',
       showroom_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -132,5 +138,22 @@ describe('GET /admin/audit-log', () => {
     const app = buildApp('coordinator');
     const res = await app.request('/admin/audit-log?amountMin=abc', {}, baseEnv);
     expect(res.status).toBe(400);
+  });
+
+  it('returns paid, customerPhone, installmentMonths', async () => {
+    const app = buildApp('coordinator', [{
+      id: 'SO-2991', placed_at: '2026-05-21T15:01:00Z',
+      customer_name: 'Hafiz Rahman', customer_phone: '+60 11 998 7766',
+      total: 6819, paid: 4466,
+      payment_method: 'installment', installment_months: 12,
+      approval_code: 'CONTRACT-1', slip_key: null,
+      showroom_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      salesperson_id: 'sp-1', staff_id: 'staff-1',
+    }]);
+    const res = await app.request('/admin/audit-log', {}, baseEnv);
+    const body = await res.json() as any;
+    expect(body.rows[0]).toMatchObject({
+      paid: 4466, customerPhone: '+60 11 998 7766', installmentMonths: 12,
+    });
   });
 });

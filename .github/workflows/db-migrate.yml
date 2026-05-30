@@ -1,0 +1,131 @@
+name: Apply DB migration
+
+# Manual-only workflow — never auto-runs.
+# Use this to apply a specific migration .sql file to the production Supabase
+# Postgres, optionally followed by a seed file.
+#
+# Setup (one-time):
+#   1. Repo → Settings → Secrets and variables → Actions → New repository secret
+#   2. Name: DATABASE_URL
+#   3. Value: postgresql://postgres.<ref>:<pw>@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
+#      (from Supabase dashboard → Project Settings → Database → Connection string → URI)
+#
+# Trigger:
+#   GitHub UI → Actions → "Apply DB migration" → Run workflow → choose inputs
+#   OR `gh workflow run db-migrate.yml -f migration=0039_hookka_products_port.sql -f seed=hookka-products-import.sql`
+#
+# Idempotency:
+#   - Migrations 0039+ use CREATE TABLE without IF NOT EXISTS and CREATE TYPE,
+#     so re-running on an already-applied DB will fail loudly. Don't re-run unless intended.
+#   - The seed file uses INSERT ... ON CONFLICT DO UPDATE/NOTHING, so re-running it is safe.
+
+on:
+  workflow_dispatch:
+    inputs:
+      migration:
+        description: 'Migration file to apply (under packages/db/migrations/), or "skip"'
+        required: true
+        default: '0039_hookka_products_port.sql'
+      seed:
+        description: 'Seed file to apply after migration (under packages/db/seeds/), or "skip"'
+        required: true
+        default: 'hookka-products-import.sql'
+      dry_run:
+        description: 'Print files + connection check only, do NOT execute SQL'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          MIG="${{ github.event.inputs.migration }}"
+          SEED="${{ github.event.inputs.seed }}"
+
+          if [ "$MIG" != "skip" ]; then
+            if [ ! -f "packages/db/migrations/$MIG" ]; then
+              echo "::error::Migration file not found: packages/db/migrations/$MIG"
+              ls packages/db/migrations/ | tail -10
+              exit 1
+            fi
+            echo "Migration: packages/db/migrations/$MIG ($(wc -l < packages/db/migrations/$MIG) lines)"
+          else
+            echo "Migration: SKIP"
+          fi
+
+          if [ "$SEED" != "skip" ]; then
+            if [ ! -f "packages/db/seeds/$SEED" ]; then
+              echo "::error::Seed file not found: packages/db/seeds/$SEED"
+              ls packages/db/seeds/ | tail -10
+              exit 1
+            fi
+            echo "Seed: packages/db/seeds/$SEED ($(wc -l < packages/db/seeds/$SEED) lines)"
+          else
+            echo "Seed: SKIP"
+          fi
+
+      - name: Check DATABASE_URL secret is set
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::DATABASE_URL secret is not set in repo settings"
+            exit 1
+          fi
+          # Mask any DATABASE_URL-derived strings from this point on.
+          echo "::add-mask::$DATABASE_URL"
+          # Sanity: psql is preinstalled on ubuntu-latest
+          psql --version
+
+      - name: Connection check
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          psql "$DATABASE_URL" -c "SELECT current_database(), current_user, version();" \
+            -v ON_ERROR_STOP=1
+
+      - name: Apply migration
+        if: github.event.inputs.migration != 'skip' && github.event.inputs.dry_run != 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          MIG="packages/db/migrations/${{ github.event.inputs.migration }}"
+          echo "Applying $MIG ..."
+          psql "$DATABASE_URL" -f "$MIG" -v ON_ERROR_STOP=1 --echo-errors
+
+      - name: Apply seed
+        if: github.event.inputs.seed != 'skip' && github.event.inputs.dry_run != 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          SEED="packages/db/seeds/${{ github.event.inputs.seed }}"
+          echo "Applying $SEED ..."
+          # Seed files are wrapped in BEGIN/COMMIT — psql exits non-zero on any
+          # failure inside the txn.
+          psql "$DATABASE_URL" -f "$SEED" -v ON_ERROR_STOP=1
+
+      - name: Verify post-apply
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          echo "── mfg_products row count by category ──"
+          psql "$DATABASE_URL" -c "SELECT category, count(*) FROM mfg_products GROUP BY category ORDER BY 1;" \
+            -v ON_ERROR_STOP=1 || echo "(mfg_products not present yet — skipped)"
+
+          echo ""
+          echo "── maintenance_config_history scopes ──"
+          psql "$DATABASE_URL" -c "SELECT scope, effective_from, jsonb_array_length(config->'divanHeights') AS divan_n, jsonb_array_length(config->'specials') AS specials_n FROM maintenance_config_history ORDER BY scope, effective_from DESC;" \
+            -v ON_ERROR_STOP=1 || echo "(maintenance_config_history not present yet — skipped)"
+
+          echo ""
+          echo "── fabrics + fabric_trackings counts ──"
+          psql "$DATABASE_URL" -c "SELECT 'fabrics' AS tbl, count(*) FROM fabrics UNION ALL SELECT 'fabric_trackings', count(*) FROM fabric_trackings;" \
+            -v ON_ERROR_STOP=1 || echo "(skipped)"

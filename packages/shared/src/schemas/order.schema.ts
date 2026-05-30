@@ -15,11 +15,17 @@ const cellSchema = z.object({
 });
 
 const sofaConfigSchema = z.object({
-  depth: z.enum(['24', '28']),
+  depth: z.string().regex(/^\d{2,3}$/),  // inches; F5 widened from '24'|'28'
   mode: z.enum(['preset', 'custom']),
   presetId: z.string().optional(),
   quickFlip: z.enum(['L', 'R']).optional(),
   customCells: z.array(cellSchema),
+  // Upholstery fabric + colour (spec 2026-05-24). Optional in shape; server
+  // recompute enforces presence + validity for sofas. Labels are display-only.
+  fabricId: z.string().optional(),
+  colourId: z.string().optional(),
+  fabricLabel: z.string().optional(),
+  colourLabel: z.string().optional(),
 });
 
 const mattressConfigSchema = z.object({

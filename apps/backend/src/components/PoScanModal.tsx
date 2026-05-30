@@ -276,7 +276,8 @@ export function PoScanModal({ orders, onClose, onIssued }: Props) {
                       <th>SKU</th>
                       <th>Item</th>
                       <th>Size</th>
-                      <th>Colour</th>
+                      {/* Commander 2026-05-28 — unify fabric/colour label → "Fabrics". */}
+                      <th>Fabrics</th>
                       <th className={styles.colRight}>Qty</th>
                       <th>From orders</th>
                     </tr>
@@ -326,7 +327,8 @@ export function PoScanModal({ orders, onClose, onIssued }: Props) {
                     <th>Item</th>
                     <th>Supplier</th>
                     <th>Size</th>
-                    <th>Colour</th>
+                    {/* Commander 2026-05-28 — unify fabric/colour label → "Fabrics". */}
+                    <th>Fabrics</th>
                     <th className={styles.colRight}>Qty</th>
                   </tr>
                 </thead>

@@ -111,6 +111,19 @@ export type SofaLineConfig = {
   bundleId?: string;
   cells?: Cell[];
   depth?: Depth;
+  /** Snapshot of the Model's per-seat upgrade label at order time (F3).
+   *  Display only — computeOrderTotal ignores it (price = reclinerUpgradePrice). */
+  seatUpgradeLabel?: string | null;
+  /** Footrest flag snapshot (F3). false = auto-included headrest → invoice shows
+   *  "+ N <label>" on a quick-pick line. Display only. */
+  seatUpgradeFootrest?: boolean;
+  /** Chosen upholstery fabric + colour (spec 2026-05-24). The sofa branch
+   *  REQUIRES fabricId/colourId when the Model offers active fabrics, validates
+   *  them, and adds the fabric surcharge. Labels are display-only snapshots. */
+  fabricId?: string;
+  colourId?: string;
+  fabricLabel?: string | null;
+  colourLabel?: string | null;
 };
 export type SizeLineConfig = {
   kind: 'size';
@@ -124,7 +137,55 @@ export type FlatLineConfig = {
   kind: 'flat';
   productId: string;
 };
-export type OrderLineConfig = SofaLineConfig | SizeLineConfig | FlatLineConfig;
+export type BedframeLineConfig = {
+  kind: 'bedframe';
+  productId: string;
+  sizeId: string;
+  /** Free-text special size (e.g. "200 x 200"). Display only — no structured price. */
+  sizeOther?: string;
+  colourId: string;
+  colourLabel?: string | null;
+  gapId?: string;
+  legHeightId: string;
+  divanHeightId?: string;
+  totalHeightId?: string;
+  specialIds?: string[];
+  // Display-only label snapshots (mirrors the Zod schema). The recompute
+  // ignores these; they ride along in configJson for the printed SO / Backend.
+  gapLabel?: string | null;
+  legHeightLabel?: string | null;
+  divanHeightLabel?: string | null;
+  totalHeightLabel?: string | null;
+  specialLabels?: string[];
+};
+export type OrderLineConfig = SofaLineConfig | SizeLineConfig | FlatLineConfig | BedframeLineConfig;
+
+// The four standard bed sizes → display labels (sizeId is persisted, not the
+// label). Falls back to a Title-cased id for any non-standard size.
+const BEDFRAME_SIZE_LABELS: Record<string, string> = {
+  single: 'Single', 'super-single': 'Super Single', queen: 'Queen', king: 'King',
+};
+
+/** Display-only spec line for a persisted bedframe order line, built from the
+ *  label snapshots in configJson (no DB join). e.g.
+ *  "Queen · Sand · Gap 6\" · Leg 4\" · Divan 8\" · Total 14\"". Used by the
+ *  printed Sales Order + Backend PO sheet, mirroring describeSofaLine. */
+export const describeBedframeLine = (cfg: Partial<BedframeLineConfig>): string => {
+  const parts: string[] = [];
+  if (cfg.sizeId) {
+    const lbl = BEDFRAME_SIZE_LABELS[cfg.sizeId] ?? (cfg.sizeId.charAt(0).toUpperCase() + cfg.sizeId.slice(1));
+    parts.push(cfg.sizeOther ? `${lbl} (${cfg.sizeOther})` : lbl);
+  } else if (cfg.sizeOther) {
+    parts.push(cfg.sizeOther);
+  }
+  if (cfg.colourLabel) parts.push(cfg.colourLabel);
+  if (cfg.gapLabel) parts.push(`Gap ${cfg.gapLabel}`);
+  if (cfg.legHeightLabel) parts.push(`Leg ${cfg.legHeightLabel}`);
+  if (cfg.divanHeightLabel) parts.push(`Divan ${cfg.divanHeightLabel}`);
+  if (cfg.totalHeightLabel) parts.push(`Total ${cfg.totalHeightLabel}`);
+  if (cfg.specialLabels && cfg.specialLabels.length > 0) parts.push(cfg.specialLabels.join(' + '));
+  return parts.join(' · ');
+};
 
 export interface OrderLineInput {
   qty: number;
@@ -133,10 +194,14 @@ export interface OrderLineInput {
 
 export interface ServerProductInfo {
   productId: string;
-  pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricingKind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   flatPrice: number | null;
   sofa?: SofaProductPricing;
   sizes?: { sizeId: string; price: number; active: boolean }[];
+  /** Bedframe (bedframe_build): colours active for THIS Model + surcharge (0 pilot). */
+  bedframeColours?: { id: string; surcharge: number; active: boolean }[];
+  /** Bedframe (bedframe_build): global option choice-list (all kinds) + surcharge. */
+  bedframeOptions?: { id: string; surcharge: number; active: boolean }[];
 }
 
 export interface OrderLineResult {
@@ -182,8 +247,14 @@ export type OrderTotalError =
   | { code: 'wrong_pricing_kind'; productId: string; expected: string; got: string }
   | { code: 'no_geometry_or_bundle'; productId: string }
   | { code: 'inactive_bundle'; productId: string; bundleId: string }
+  | { code: 'unknown_fabric'; productId: string; fabricId?: string }
+  | { code: 'inactive_fabric'; productId: string; fabricId: string }
+  | { code: 'invalid_colour'; productId: string; fabricId: string; colourId?: string }
   | { code: 'inactive_size'; productId: string; sizeId: string }
   | { code: 'unknown_size'; productId: string; sizeId: string }
+  | { code: 'unknown_bedframe_colour'; productId: string; colourId?: string }
+  | { code: 'inactive_bedframe_colour'; productId: string; colourId: string }
+  | { code: 'unknown_bedframe_option'; productId: string; optionId: string }
   | { code: 'unknown_addon'; productId: string; addonId: string }
   | { code: 'flat_price_missing'; productId: string };
 
@@ -249,6 +320,30 @@ export const computeOrderTotal = (
         throw new OrderPricingError({ code: 'no_geometry_or_bundle', productId: info.productId });
       }
 
+      // Fabric surcharge + colour validation (spec 2026-05-24, G1/G6). Honest
+      // pricing: a tampered POS can't fake or skip the surcharge. Required only
+      // when this Model actually offers active fabrics — every real sofa does
+      // (product schema enforces >=1 active + the 0044 cross-join), so this is
+      // "always required" in practice while staying backward-compatible with
+      // fixtures that carry no fabric rows.
+      const activeFabrics = info.sofa.fabrics?.filter((f) => f.active) ?? [];
+      if (cfg.fabricId) {
+        const fabric = info.sofa.fabrics?.find((f) => f.fabricId === cfg.fabricId);
+        if (!fabric) {
+          throw new OrderPricingError({ code: 'unknown_fabric', productId: info.productId, fabricId: cfg.fabricId });
+        }
+        if (!fabric.active) {
+          throw new OrderPricingError({ code: 'inactive_fabric', productId: info.productId, fabricId: cfg.fabricId });
+        }
+        if (!cfg.colourId || !fabric.colourIds.includes(cfg.colourId)) {
+          throw new OrderPricingError({ code: 'invalid_colour', productId: info.productId, fabricId: cfg.fabricId, colourId: cfg.colourId });
+        }
+        unitPrice += fabric.surcharge;
+        breakdown.push(`Fabric ${fabric.fabricId} (+RM ${fabric.surcharge.toLocaleString('en-MY')})`);
+      } else if (activeFabrics.length > 0) {
+        throw new OrderPricingError({ code: 'unknown_fabric', productId: info.productId });
+      }
+
       out.push({
         productId: info.productId,
         qty: line.qty,
@@ -284,6 +379,47 @@ export const computeOrderTotal = (
       }
 
       const unitPrice = variant.price + extrasTotal;
+      out.push({
+        productId: info.productId,
+        qty: line.qty,
+        unitPrice,
+        lineTotal: unitPrice * line.qty,
+        configJson: cfg,
+        breakdown,
+      });
+    } else if (line.config.kind === 'bedframe') {
+      // bedframe_build: size variant (placeholder retail) + colour surcharge +
+      // Σ option surcharges (gap/leg/divan/total/specials). All surcharges 0 for
+      // pilot, but the math is enforced so future SKU-Master surcharges can't be
+      // tampered away. size + colour + leg always present; gap/divan/total/
+      // specials present for full frames, absent for DIVAN ONLY.
+      const cfg: BedframeLineConfig = line.config;
+      if (info.pricingKind !== 'bedframe_build') {
+        throw new OrderPricingError({ code: 'wrong_pricing_kind', productId: info.productId, expected: 'bedframe_build', got: info.pricingKind });
+      }
+      const variant = info.sizes?.find((s) => s.sizeId === cfg.sizeId);
+      if (!variant) throw new OrderPricingError({ code: 'unknown_size', productId: info.productId, sizeId: cfg.sizeId });
+      if (!variant.active) throw new OrderPricingError({ code: 'inactive_size', productId: info.productId, sizeId: cfg.sizeId });
+
+      let unitPrice = variant.price;
+      const breakdown = [`Bedframe · ${cfg.sizeId}: RM ${variant.price.toLocaleString('en-MY')}`];
+      if (cfg.sizeOther) breakdown.push(`Special size: ${cfg.sizeOther}`);
+
+      const colour = info.bedframeColours?.find((c) => c.id === cfg.colourId);
+      if (!colour) throw new OrderPricingError({ code: 'unknown_bedframe_colour', productId: info.productId, colourId: cfg.colourId });
+      if (!colour.active) throw new OrderPricingError({ code: 'inactive_bedframe_colour', productId: info.productId, colourId: cfg.colourId });
+      unitPrice += colour.surcharge;
+      if (colour.surcharge > 0) breakdown.push(`Colour ${cfg.colourId} (+RM ${colour.surcharge.toLocaleString('en-MY')})`);
+
+      const optionIds = [cfg.gapId, cfg.legHeightId, cfg.divanHeightId, cfg.totalHeightId, ...(cfg.specialIds ?? [])]
+        .filter((id): id is string => Boolean(id));
+      for (const oid of optionIds) {
+        const opt = info.bedframeOptions?.find((o) => o.id === oid);
+        if (!opt || !opt.active) throw new OrderPricingError({ code: 'unknown_bedframe_option', productId: info.productId, optionId: oid });
+        unitPrice += opt.surcharge;
+        if (opt.surcharge > 0) breakdown.push(`${oid} (+RM ${opt.surcharge.toLocaleString('en-MY')})`);
+      }
+
       out.push({
         productId: info.productId,
         qty: line.qty,

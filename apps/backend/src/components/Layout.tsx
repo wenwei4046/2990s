@@ -1,8 +1,12 @@
+import { Suspense, useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router';
-import { useAuth } from '../lib/auth';
+import { useAuth, POS_ONLY_ROLES } from '../lib/auth';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
+import { CommandPalette } from './CommandPalette';
 import { ToastProvider } from './Toast';
+import { ErrorBoundary } from './ErrorBoundary';
+import { SkeletonDetailPage } from './Skeleton';
 import styles from './Layout.module.css';
 
 // Auth-gated layout shell. Redirects to /login if no session, /no-access if
@@ -41,9 +45,40 @@ export const Layout = () => {
   const { user, staff, loading } = useAuth();
   const location = useLocation();
 
+  // Global Ctrl/Cmd+K command palette. Hook runs unconditionally (before any
+  // early return) to satisfy the rules of hooks.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   if (loading) return <div className={styles.loading}>Loading…</div>;
   if (!user) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+
+  // PR #48 — first-login onboarding. Invited staff land here via the magic
+  // link with `user_metadata.password_set === false` (set by inviteUserByEmail
+  // in admin.ts). Force them through /set-password so they have a real password
+  // before they can do anything else. Existing users have no flag (undefined),
+  // so they're untouched. Recovery sessions land directly on /set-password and
+  // never hit this guard.
+  if (user.user_metadata?.password_set === false && location.pathname !== '/set-password') {
+    return <Navigate to="/set-password" replace />;
+  }
+
   if (!staff) return <Navigate to="/no-access" replace />;
+
+  /* Migration 0086 — POS-only roles (sales / sales_executive / outlet_manager)
+     are blocked from the Backend portal at the route guard level. */
+  if (POS_ONLY_ROLES.has(staff.role)) {
+    return <Navigate to="/no-access" replace />;
+  }
 
   const meta: RouteMeta = ROUTE_META[location.pathname] ?? { title: 'Backend', sub: '' };
 
@@ -56,11 +91,21 @@ export const Layout = () => {
             title={meta.title}
             sub={meta.sub}
             searchPlaceholder={meta.searchPlaceholder}
+            onOpenSearch={() => setPaletteOpen(true)}
           />
           <main className={styles.main}>
-            <Outlet />
+            {/* Single Suspense boundary for all lazy-loaded route pages.
+                See router.tsx — per-route code splitting means each page
+                module is fetched on demand, with this fallback shown while
+                its chunk downloads. */}
+            <Suspense fallback={<SkeletonDetailPage />}>
+              <ErrorBoundary>
+                <Outlet />
+              </ErrorBoundary>
+            </Suspense>
           </main>
         </div>
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       </div>
     </ToastProvider>
   );

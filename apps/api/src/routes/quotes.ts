@@ -117,6 +117,58 @@ quotes.post('/', async (c) => {
   return c.json({ quote: data }, 201);
 });
 
+// PATCH /quotes/:id — update an OPEN quote's cart in place (sales own; RLS-scoped
+// by quotes_update). Used when a loaded quote is edited and re-saved, so the
+// salesperson doesn't re-enter the customer name and spawn a duplicate quote.
+// Customer name/phone are intentionally left untouched (the cart is what changes).
+// PATCH (not PUT) because the CORS allowlist already permits it and it's a
+// partial update.
+quotes.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const cart = body?.cart ?? body?.lines;
+  const subtotal = Number(body?.subtotal);
+  const total = Number(body?.total);
+  if (!Array.isArray(cart) || cart.length === 0) {
+    return c.json({ error: 'missing_cart' }, 400);
+  }
+  if (!Number.isFinite(subtotal) || subtotal < 0) {
+    return c.json({ error: 'invalid_subtotal' }, 400);
+  }
+  if (!Number.isFinite(total) || total < 0) {
+    return c.json({ error: 'invalid_total' }, 400);
+  }
+
+  const { data, error } = await supabase
+    .from('quotes')
+    .update({
+      cart,
+      subtotal: Math.round(subtotal),
+      total: Math.round(total),
+    })
+    .eq('id', id)
+    .is('promoted_to_order_id', null) // never edit an already-converted quote
+    .select('id, customer_name, total, updated_at')
+    .maybeSingle();
+
+  if (error) {
+    return c.json({ error: 'db_update_failed', detail: error.message }, 500);
+  }
+  if (!data) {
+    // RLS-denied, missing, or already promoted to an order.
+    return c.json({ error: 'not_found_or_converted' }, 404);
+  }
+  return c.json({ quote: data });
+});
+
 // DELETE /quotes/:id — sales delete own (RLS-scoped).
 quotes.delete('/:id', async (c) => {
   const id = c.req.param('id');

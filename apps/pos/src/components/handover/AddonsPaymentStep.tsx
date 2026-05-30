@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, Clock } from 'lucide-react';
+import { Banknote, CreditCard, Clock, Wallet } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { HandoverForm, AddonSelection } from '../../lib/handover-helpers';
 import type { AddonRow } from '../../lib/queries';
@@ -83,36 +83,68 @@ export const AddonsPaymentStep = ({
       <h3 className="subTitle">Payment method</h3>
       <div className="fieldRow">
         <MethodButton
-          active={form.paymentMethod === 'credit'}
+          active={form.paymentMethod === 'merchant'}
           icon={CreditCard}
-          label="Credit Card"
-          hint="Approval code from terminal"
-          onClick={() => update('paymentMethod', 'credit')}
+          label="Merchant"
+          hint="Card via GHL / HLB / MBB / PBB terminal"
+          onClick={() => { update('paymentMethod', 'merchant'); update('installmentMonths', null); }}
         />
-        <MethodButton
-          active={form.paymentMethod === 'debit'}
-          icon={CreditCard}
-          label="Debit Card"
-          hint="Approval code from terminal"
-          onClick={() => update('paymentMethod', 'debit')}
-        />
-      </div>
-      <div className="fieldRow">
         <MethodButton
           active={form.paymentMethod === 'transfer'}
           icon={Banknote}
           label="Bank transfer / DuitNow"
           hint="Slip required"
-          onClick={() => update('paymentMethod', 'transfer')}
+          onClick={() => { update('paymentMethod', 'transfer'); update('installmentMonths', null); update('merchantProvider', null); }}
         />
+      </div>
+      <div className="fieldRow">
         <MethodButton
           active={form.paymentMethod === 'installment'}
           icon={Clock}
           label="Installment"
           hint="Agreement / contract no."
-          onClick={() => update('paymentMethod', 'installment')}
+          onClick={() => { update('paymentMethod', 'installment'); update('merchantProvider', null); }}
+        />
+        <MethodButton
+          active={form.paymentMethod === 'cash'}
+          icon={Wallet}
+          label="Cash"
+          hint="Cash received at counter"
+          onClick={() => { update('paymentMethod', 'cash'); update('installmentMonths', null); update('merchantProvider', null); }}
         />
       </div>
+      {form.paymentMethod === 'merchant' && (
+        <div className={styles.installmentTerm} role="group" aria-label="Merchant">
+          <span className={styles.installmentTermLabel}>Merchant</span>
+          {(['GHL', 'HLB', 'MBB', 'PBB'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={`${styles.termChip} ${form.merchantProvider === p ? styles.termChipActive : ''}`}
+              aria-pressed={form.merchantProvider === p}
+              onClick={() => update('merchantProvider', p)}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+      {form.paymentMethod === 'installment' && (
+        <div className={styles.installmentTerm} role="group" aria-label="Installment term">
+          <span className={styles.installmentTermLabel}>Term</span>
+          {([6, 12] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`${styles.termChip} ${form.installmentMonths === m ? styles.termChipActive : ''}`}
+              aria-pressed={form.installmentMonths === m}
+              onClick={() => update('installmentMonths', m)}
+            >
+              {m} months
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 };

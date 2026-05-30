@@ -2,17 +2,22 @@ import { Controller, useFormContext, useWatch } from 'react-hook-form';
 import {
   useBundleLibrary,
   useCompartmentLibrary,
+  useFabricLibrary,
   useSizeLibrary,
   type CompartmentLibrary,
 } from '../lib/queries';
 import styles from './PricingEditor.module.css';
 
 interface SkuFormData {
-  pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricingKind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   categoryId: string;
   reclinerUpgradePrice?: number;
+  seatUpgradeLabel?: string | null;
+  seatUpgradeFootrest?: boolean;
+  depthOptions?: string | null;
   compartments?: { compartmentId: string; active: boolean; price: number }[];
   bundles?: { bundleId: string; active: boolean; price: number }[];
+  fabrics?: { fabricId: string; active: boolean; surcharge: number }[];
   sizes?: { sizeId: string; active: boolean; price: number }[];
   flatPrice?: number;
 }
@@ -23,7 +28,9 @@ export const PricingEditor = () => {
   const categoryId = useWatch({ control, name: 'categoryId' });
 
   if (pricingKind === 'sofa_build') return <SofaEditor />;
-  if (pricingKind === 'size_variants') return <SizeEditor catLabel={categoryId === 'mattress' ? 'Mattress' : 'Bedframe'} />;
+  // Bedframes price by size like mattresses — same editor, "Bedframe" label.
+  if (pricingKind === 'size_variants' || pricingKind === 'bedframe_build')
+    return <SizeEditor catLabel={categoryId === 'mattress' ? 'Mattress' : 'Bedframe'} />;
   if (pricingKind === 'flat') return <FlatEditor />;
   return <TbcPlaceholder categoryId={categoryId} />;
 };
@@ -85,29 +92,38 @@ const COMP_GROUPS: CompartmentLibrary['compGroup'][] = [
   'Accessory',
 ];
 
+// F5: depths a sofa Model can offer (inches). The editor stores the chosen
+// subset as a CSV in products.depth_options; the POS depth toggle reads it.
+const DEPTH_CHOICES = [24, 26, 28, 30, 32] as const;
+
 const SofaEditor = () => {
   const { control, setValue, formState: { errors } } = useFormContext<SkuFormData>();
   const compartments = useWatch({ control, name: 'compartments' }) ?? [];
   const bundles = useWatch({ control, name: 'bundles' }) ?? [];
-  // Surfaces the superRefine() error from productSchema when admin tries to
-  // save with 0 active+priced bundles. Cleared automatically on next submit.
+  const fabrics = useWatch({ control, name: 'fabrics' }) ?? [];
+  // Surfaces the superRefine() errors from productSchema when admin tries to
+  // save with 0 active bundles / fabrics. Cleared automatically on next submit.
   const bundlesErr = (errors as { bundles?: { message?: string } }).bundles?.message;
+  const fabricsErr = (errors as { fabrics?: { message?: string } }).fabrics?.message;
 
   const compLib = useCompartmentLibrary();
   const bundleLib = useBundleLibrary();
+  const fabricLib = useFabricLibrary();
 
-  if (compLib.isLoading || bundleLib.isLoading) {
+  if (compLib.isLoading || bundleLib.isLoading || fabricLib.isLoading) {
     return <section className={styles.section}><p className="t-body fg-muted">Loading library…</p></section>;
   }
-  if (compLib.error || bundleLib.error) {
-    return <section className={styles.section}><p className={styles.error}>Failed to load compartment / bundle library.</p></section>;
+  if (compLib.error || bundleLib.error || fabricLib.error) {
+    return <section className={styles.section}><p className={styles.error}>Failed to load compartment / bundle / fabric library.</p></section>;
   }
 
   const lib = compLib.data ?? [];
   const blib = bundleLib.data ?? [];
+  const flib = fabricLib.data ?? [];
 
   const activeC = compartments.filter((c) => c.active).length;
   const activeB = bundles.filter((b) => b.active).length;
+  const activeF = fabrics.filter((f) => f.active).length;
 
   const setCompField = (i: number, patch: Partial<{ active: boolean; price: number }>) => {
     const next = compartments.map((c, idx) => (idx === i ? { ...c, ...patch } : c));
@@ -131,13 +147,20 @@ const SofaEditor = () => {
       { shouldDirty: true },
     );
   };
+  const setFabricField = (i: number, patch: Partial<{ active: boolean; surcharge: number }>) => {
+    const next = fabrics.map((f, idx) => (idx === i ? { ...f, ...patch } : f));
+    setValue('fabrics', next, { shouldDirty: true });
+  };
+  const bulkFabric = (active: boolean) => {
+    setValue('fabrics', fabrics.map((f) => ({ ...f, active })), { shouldDirty: true });
+  };
 
   return (
     <section className={styles.section}>
       <header className={styles.sectionHead}>
         <h3 className={styles.sectionTitle}>Sofa pricing</h3>
         <span className={styles.stat}>
-          {activeC}/{compartments.length} compartments · {activeB}/{bundles.length} bundles
+          {activeC}/{compartments.length} compartments · {activeB}/{bundles.length} bundles · {activeF}/{fabrics.length} fabrics
         </span>
       </header>
 
@@ -214,16 +237,74 @@ const SofaEditor = () => {
         </div>
       </div>
 
-      {/* Recliner */}
+      {/* Fabrics — per-Model availability + surcharge (spec 2026-05-24) */}
       <div className={styles.block}>
         <div className={styles.blockHead}>
           <div>
-            <div className={styles.blockTitle}>Power-recliner upgrade</div>
-            <div className={styles.blockSub}>Per-seat add-on for 1A/2A/1NA/2NA modules. RM 0 disables it for this Model.</div>
+            <div className={styles.blockTitle}>Fabrics</div>
+            <div className={styles.blockSub}>
+              Which fabrics this Model offers + the surcharge for each (RM 0 = included).
+              Colour is free and comes with each fabric. At least one must be active.
+            </div>
+            {fabricsErr && <div className={styles.error} style={{ marginTop: 6 }}>{fabricsErr}</div>}
+          </div>
+          <div className={styles.blockActions}>
+            <button type="button" className={styles.miniBtn} onClick={() => bulkFabric(true)}>All on</button>
+            <button type="button" className={styles.miniBtn} onClick={() => bulkFabric(false)}>All off</button>
+          </div>
+        </div>
+        <div className={styles.rows}>
+          {fabrics.map((f, i) => {
+            const def = flib.find((l) => l.id === f.fabricId);
+            return (
+              <div key={f.fabricId} className={`${styles.row} ${f.active ? '' : styles.rowOff}`}>
+                <ActiveToggle value={f.active} onChange={(v) => setFabricField(i, { active: v })} />
+                <code className={styles.rowId}>{f.fabricId}</code>
+                <span className={styles.rowLabel}>
+                  {def?.label ?? f.fabricId}
+                  {def?.tier && <span className={styles.rowSub}> · {def.tier}</span>}
+                </span>
+                <PriceInput value={f.surcharge} onChange={(v) => setFabricField(i, { surcharge: v })} disabled={!f.active} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Per-seat upgrade (F3) — one named upgrade per Model */}
+      <div className={styles.block}>
+        <div className={styles.blockHead}>
+          <div>
+            <div className={styles.blockTitle}>Per-seat upgrade</div>
+            <div className={styles.blockSub}>
+              One named upgrade staff can add per seat in Custom Build (1A/2A/1NA/2NA modules).
+              Leave the name blank to offer none. Order lines read &ldquo;+ N {'{name}'}&rdquo;.
+            </div>
           </div>
         </div>
         <div className={styles.reclinerRow}>
-          <span className={styles.rowLabel}>Add a power recliner to a single seat</span>
+          <span className={styles.rowLabel}>Upgrade name</span>
+          <Controller
+            control={control}
+            name="seatUpgradeLabel"
+            render={({ field }) => (
+              <input
+                type="text"
+                maxLength={40}
+                placeholder="e.g. Power slide — blank = none"
+                value={field.value ?? ''}
+                onChange={(e) => field.onChange(e.target.value)}
+                style={{
+                  flex: 1, minWidth: 0, padding: '8px 10px',
+                  border: '1px solid rgba(34,31,32,0.15)', borderRadius: 8,
+                  font: 'inherit', color: 'var(--c-ink)', background: '#fff',
+                }}
+              />
+            )}
+          />
+        </div>
+        <div className={styles.reclinerRow}>
+          <span className={styles.rowLabel}>Price per seat</span>
           <Controller
             control={control}
             name="reclinerUpgradePrice"
@@ -231,8 +312,70 @@ const SofaEditor = () => {
               <PriceInput value={field.value ?? 0} onChange={field.onChange} />
             )}
           />
-          <span className={styles.rowSub}>per seat</span>
+          <span className={styles.rowSub}>RM 0 = free (e.g. headrest)</span>
         </div>
+        <div className={styles.reclinerRow}>
+          <span className={styles.rowLabel}>Opens a footrest</span>
+          <Controller
+            control={control}
+            name="seatUpgradeFootrest"
+            render={({ field }) => (
+              <ActiveToggle value={field.value ?? true} onChange={field.onChange} />
+            )}
+          />
+          <span className={styles.rowSub}>power = yes · headrest = no</span>
+        </div>
+      </div>
+
+      {/* Seat depths (F5) — per-Model selectable depths */}
+      <div className={styles.block}>
+        <div className={styles.blockHead}>
+          <div>
+            <div className={styles.blockTitle}>Seat depths</div>
+            <div className={styles.blockSub}>
+              Which depths this Model offers (inches). Staff pick one in the configurator;
+              it&rsquo;s recorded on the order + invoice. Same price across depths.
+            </div>
+          </div>
+        </div>
+        <Controller
+          control={control}
+          name="depthOptions"
+          render={({ field }) => {
+            const selected = (field.value ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+            const toggle = (d: string) => {
+              const set = new Set(selected);
+              if (set.has(d)) set.delete(d); else set.add(d);
+              // Keep canonical ascending order; empty → null (no depth choice).
+              const next = DEPTH_CHOICES.filter((c) => set.has(String(c))).join(',');
+              field.onChange(next || null);
+            };
+            return (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '4px 0' }}>
+                {DEPTH_CHOICES.map((d) => {
+                  const on = selected.includes(String(d));
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggle(String(d))}
+                      style={{
+                        padding: '8px 14px', borderRadius: 8, font: 'inherit',
+                        fontWeight: on ? 600 : 400, cursor: 'pointer',
+                        border: on ? '1.5px solid var(--c-burnt)' : '1px solid rgba(34,31,32,0.15)',
+                        background: on ? 'var(--c-burnt)' : '#fff',
+                        color: on ? '#fff' : 'var(--c-ink)',
+                      }}
+                    >
+                      {d}&Prime;
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          }}
+        />
       </div>
     </section>
   );

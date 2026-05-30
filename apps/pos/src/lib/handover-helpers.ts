@@ -1,6 +1,7 @@
 export type CustomerType = 'new' | 'existing';
 export type BuildingType = '' | 'condo' | 'landed' | 'apartment' | 'office' | 'shop' | 'other';
-export type PaymentMethod = '' | 'credit' | 'debit' | 'transfer' | 'installment';
+export type PaymentMethod = '' | 'merchant' | 'transfer' | 'installment' | 'cash';
+export type MerchantProvider = 'GHL' | 'HLB' | 'MBB' | 'PBB';
 export type PaymentPreset = 'half' | 'full' | 'seventy' | 'custom';
 
 export interface AddonSelection {
@@ -38,6 +39,10 @@ export interface HandoverForm {
 
   addons: Record<string, AddonSelection>;
   paymentMethod: PaymentMethod;
+  /** Installment term in months. Required when paymentMethod === 'installment'. */
+  installmentMonths: 6 | 12 | null;
+  /** Merchant acquirer / terminal. Required when paymentMethod === 'merchant'. */
+  merchantProvider: MerchantProvider | null;
 
   amountPaid: number;
   /** Additional delivery fee keyed in by sales at handover. Whole RM, 0 if none. */
@@ -85,8 +90,12 @@ export const validateEmergency = (f: HandoverForm): boolean => {
 export const validateTargetDate = (f: HandoverForm): boolean =>
   f.deliveryDateLater || f.deliveryAsap || f.deliveryDate.length > 0;
 
-export const validateAddonsPayment = (f: HandoverForm): boolean =>
-  f.paymentMethod !== '';
+export const validateAddonsPayment = (f: HandoverForm): boolean => {
+  if (f.paymentMethod === '') return false;
+  if (f.paymentMethod === 'installment' && f.installmentMonths == null) return false;
+  if (f.paymentMethod === 'merchant' && f.merchantProvider == null) return false;
+  return true;
+};
 
 export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonTotal: number): boolean => {
   if (f.paymentMethod === '') return false;  // method must be chosen (defense-in-depth — orchestrator step 5 already gates this)
@@ -95,7 +104,7 @@ export const validateConfirmPayment = (f: HandoverForm, subtotal: number, addonT
   if (f.amountPaid < halfTotal || f.amountPaid > total) return false;
   if (f.approvalCode.trim().length === 0) return false;
   if (!f.paymentRecorded) return false;
-  if (f.paymentMethod === 'transfer' && f.slipUploadSessionId === null) return false;
+  if (f.slipUploadSessionId === null) return false;  // slip / proof compulsory for ALL payment methods
   return true;
 };
 
@@ -147,8 +156,14 @@ const targetDateBlockers = (f: HandoverForm): string[] => {
 };
 
 const addonsPaymentBlockers = (f: HandoverForm): string[] => {
-  if (f.paymentMethod) return [];
-  return ['Pick a payment method'];
+  if (!f.paymentMethod) return ['Pick a payment method'];
+  if (f.paymentMethod === 'installment' && f.installmentMonths == null) {
+    return ['Pick the installment term (6 or 12 months)'];
+  }
+  if (f.paymentMethod === 'merchant' && f.merchantProvider == null) {
+    return ['Pick the merchant (GHL / HLB / MBB / PBB)'];
+  }
+  return [];
 };
 
 const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: number): string[] => {
@@ -159,7 +174,7 @@ const confirmPaymentBlockers = (f: HandoverForm, subtotal: number, addonTotal: n
   if (f.amountPaid < halfTotal) b.push(`Amount paid must be at least RM ${halfTotal.toLocaleString('en-MY')} (50% deposit)`);
   else if (f.amountPaid > total) b.push('Amount paid exceeds total');
   if (!f.approvalCode.trim()) b.push('Approval code required');
-  if (f.paymentMethod === 'transfer' && f.slipUploadSessionId === null) b.push('Payment slip required for bank transfer');
+  if (f.slipUploadSessionId === null) b.push('Payment slip / proof required');
   if (!f.paymentRecorded) b.push('Click "Confirm payment received" first to record');
   return b;
 };

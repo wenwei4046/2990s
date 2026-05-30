@@ -72,7 +72,9 @@
   flex-direction: column;
   gap: 4px;
   position: sticky;
-  top: var(--space-3);
+  /* Clear the sticky topbar (~60px) so the category rail parks just below it
+     instead of tucking underneath. */
+  top: 76px;
   /* White panel + subtle shadow lifts the rail off the cream page so categories
      read as a distinct card instead of blending in (matches Order summary +
      Quotes card treatment). */
@@ -81,7 +83,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--space-4) var(--space-3);
-  max-height: calc(100vh - var(--space-7));
+  max-height: calc(100vh - 92px);
   overflow-y: auto;
 }
 
@@ -345,6 +347,24 @@
   box-shadow: 0 1px 3px rgba(34, 31, 32, 0.1);
 }
 
+/* Per-brand badge tints (mattress sub-brands). Loo-approved deviation from the
+   uniform burnt badge, 2026-05-24, using each brand's own identity colour:
+   - 2990's    → house orange (--c-orange) on cream
+   - Carres    → Carres red-orange #D44210 on cream (sampled from brand wordmark)
+   - HappiSleep → inverted: purple #6259B2 fill + yellow #FCE84D text (sampled
+                  from brand artwork). See UI_REFERENCE.md "Approved deviations". */
+.photoBadge[data-brand='brand-2990s'] {
+  color: var(--c-orange);
+}
+.photoBadge[data-brand='brand-carres'] {
+  color: #d44210;
+}
+.photoBadge[data-brand='brand-happisleep'] {
+  background: #6259b2;
+  color: #fce84d;
+  box-shadow: 0 1px 3px rgba(34, 31, 32, 0.18);
+}
+
 /* Stock badge — top-right per prototype. Ample stock = dark pill with cream
    checkmark (reads "all good"). Low/out = burnt-orange pill with alert icon. */
 .photoStock {
@@ -366,6 +386,28 @@
 }
 .photoStockLow { background: var(--c-burnt); color: var(--c-cream); }
 .photoStockOut { background: var(--c-burnt); color: var(--c-cream); }
+
+/* Subtle "no photo uploaded" hint on the photo placeholder. Bottom-left
+   corner, low-contrast so it doesn't fight the monogram. Shown only when
+   the Model has no photo_url yet — gives commander an at-a-glance signal
+   for which Models still need a hero photo via Backend → Products →
+   Modular. */
+.photoEmptyHint {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(166, 71, 30, 0.08);
+  color: rgba(166, 71, 30, 0.55);
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+}
 
 /* Orange round configure button — bottom-right corner of the photo area.
    Visual handle the staff can tap to skip into the configurator quickly. */

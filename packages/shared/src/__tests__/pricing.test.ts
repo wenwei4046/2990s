@@ -3,6 +3,7 @@ import {
   computeOrderTotal,
   computeDeliveryFee,
   pricingDriftExceeds,
+  describeBedframeLine,
   OrderPricingError,
   type ServerProductInfo,
   type OrderLineInput,
@@ -43,6 +44,125 @@ const flatInfo = (productId = 'flat-1', flatPrice: number | null = 2990): Server
   productId,
   pricingKind: 'flat',
   flatPrice,
+});
+
+const bedframeInfo = (productId = 'bed-1'): ServerProductInfo => ({
+  productId,
+  pricingKind: 'bedframe_build',
+  flatPrice: null,
+  sizes: [
+    { sizeId: 'queen', active: true,  price: 2990 },
+    { sizeId: 'king',  active: false, price: 2990 },
+  ],
+  bedframeColours: [
+    { id: 'sand',   surcharge: 0,   active: true },
+    { id: 'premium', surcharge: 200, active: true },
+    { id: 'retired', surcharge: 0,  active: false },
+  ],
+  bedframeOptions: [
+    { id: 'gap-6',              surcharge: 0,   active: true },
+    { id: 'gap-14',             surcharge: 0,   active: true },
+    { id: 'gap-16',             surcharge: 0,   active: true },
+    { id: 'leg-4',              surcharge: 0,   active: true },
+    { id: 'leg-7',              surcharge: 160, active: true },
+    { id: 'divan-8',            surcharge: 0,   active: true },
+    { id: 'total-14',           surcharge: 0,   active: true },
+    { id: 'special-left-drawer', surcharge: 150, active: true },
+  ],
+});
+
+describe('computeOrderTotal — bedframe', () => {
+  const bedLine = (cfg: Record<string, unknown>) => ({
+    qty: 1,
+    config: { kind: 'bedframe' as const, productId: 'bed-1', ...cfg },
+  });
+  const map = new Map<string, ServerProductInfo>([['bed-1', bedframeInfo()]]);
+
+  it('all-free options → total is just the size price', () => {
+    const t = computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'sand', gapId: 'gap-6', legHeightId: 'leg-4', divanHeightId: 'divan-8', totalHeightId: 'total-14' })] as never,
+      map,
+    );
+    // size 2990 + 0 colour + 0 options
+    expect(t.total).toBe(2990);
+  });
+
+  it('reprices with no totalHeightId (Total height removed from the POS configurator)', () => {
+    const t = computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'sand', gapId: 'gap-6', legHeightId: 'leg-4', divanHeightId: 'divan-8' })] as never,
+      map,
+    );
+    expect(t.total).toBe(2990);
+  });
+
+  it('accepts the newly-seeded 14" / 16" mattress gap options', () => {
+    for (const gapId of ['gap-14', 'gap-16']) {
+      const t = computeOrderTotal(
+        [bedLine({ sizeId: 'queen', colourId: 'sand', gapId, legHeightId: 'leg-4', divanHeightId: 'divan-8' })] as never,
+        map,
+      );
+      expect(t.total).toBe(2990);
+    }
+  });
+
+  it('priced colour + priced options add surcharges', () => {
+    const t = computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'premium', legHeightId: 'leg-7', specialIds: ['special-left-drawer'] })] as never,
+      map,
+    );
+    // 2990 + 200 (premium) + 160 (leg-7) + 150 (left drawer)
+    expect(t.total).toBe(2990 + 200 + 160 + 150);
+  });
+
+  it('DIVAN-style minimal config (size + colour + leg only) works', () => {
+    const t = computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'sand', legHeightId: 'leg-7' })] as never,
+      map,
+    );
+    expect(t.total).toBe(2990 + 160);
+  });
+
+  it('rejects unknown colour', () => {
+    expect(() => computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'nope', legHeightId: 'leg-7' })] as never, map,
+    )).toThrow(/unknown_bedframe_colour/);
+  });
+
+  it('rejects inactive size', () => {
+    expect(() => computeOrderTotal(
+      [bedLine({ sizeId: 'king', colourId: 'sand', legHeightId: 'leg-7' })] as never, map,
+    )).toThrow(/inactive_size/);
+  });
+
+  it('rejects unknown option id', () => {
+    expect(() => computeOrderTotal(
+      [bedLine({ sizeId: 'queen', colourId: 'sand', legHeightId: 'leg-999' })] as never, map,
+    )).toThrow(/unknown_bedframe_option/);
+  });
+});
+
+describe('describeBedframeLine', () => {
+  it('builds a full spec line from the label snapshots', () => {
+    expect(describeBedframeLine({
+      kind: 'bedframe', productId: 'p', sizeId: 'queen', colourId: 'sand',
+      colourLabel: 'Sand', gapLabel: '6"', legHeightId: 'leg-4', legHeightLabel: '4"',
+      divanHeightLabel: '8"', totalHeightLabel: '14"',
+    })).toBe('Queen · Sand · Gap 6" · Leg 4" · Divan 8" · Total 14"');
+  });
+  it('maps the four standard size ids to labels', () => {
+    expect(describeBedframeLine({ kind: 'bedframe', productId: 'p', sizeId: 'super-single', colourId: 'c', legHeightId: 'l' }))
+      .toBe('Super Single');
+  });
+  it('appends a free-text special size in parentheses', () => {
+    expect(describeBedframeLine({ kind: 'bedframe', productId: 'p', sizeId: 'king', sizeOther: '200 x 200', colourId: 'c', legHeightId: 'l' }))
+      .toBe('King (200 x 200)');
+  });
+  it('joins specials and renders a DIVAN minimal line (size + colour + leg)', () => {
+    expect(describeBedframeLine({
+      kind: 'bedframe', productId: 'p', sizeId: 'queen', colourId: 'c', colourLabel: 'Stone',
+      legHeightId: 'l', legHeightLabel: '2"', specialLabels: ['Left Drawer', 'HB Straight'],
+    })).toBe('Queen · Stone · Leg 2" · Left Drawer + HB Straight');
+  });
 });
 
 describe('computeOrderTotal', () => {
@@ -382,5 +502,40 @@ describe('computeDeliveryFee', () => {
     expect(computeDeliveryFee(['sofa', 'mattress'], free, 0)).toEqual({
       base: 0, crossCategory: 0, additional: 0, total: 0,
     });
+  });
+});
+
+describe('computeOrderTotal — sofa fabric surcharge', () => {
+  const info = (): Map<string, ServerProductInfo> => new Map([['P1', {
+    productId: 'P1', pricingKind: 'sofa_build', flatPrice: null,
+    sofa: {
+      reclinerUpgradePrice: 0, compartments: [],
+      bundles: [{ bundleId: '2S', active: true, price: 1990 }],
+      fabrics: [
+        { fabricId: 'linen',   active: true,  surcharge: 0,   colourIds: ['sand', 'stone'] },
+        { fabricId: 'velvet',  active: true,  surcharge: 300, colourIds: ['sand'] },
+        { fabricId: 'retired', active: false, surcharge: 999, colourIds: ['sand'] },
+      ],
+    },
+  }]]);
+  const line = (fabricId?: string, colourId?: string): OrderLineInput[] => ([{
+    qty: 1, config: { kind: 'sofa', productId: 'P1', bundleId: '2S', depth: '24', fabricId, colourId },
+  }]);
+
+  it('adds the active fabric surcharge to the sofa line', () => {
+    expect(computeOrderTotal(line('velvet', 'sand'), info()).subtotal).toBe(2290); // 1990 + 300
+  });
+  it('adds 0 for a standard fabric', () => {
+    expect(computeOrderTotal(line('linen', 'stone'), info()).subtotal).toBe(1990);
+  });
+  it('rejects a sofa with no fabric when the Model offers fabrics', () => {
+    expect(() => computeOrderTotal(line(undefined, undefined), info())).toThrow(OrderPricingError);
+  });
+  it('rejects an inactive or unknown fabric', () => {
+    expect(() => computeOrderTotal(line('retired', 'sand'), info())).toThrow(OrderPricingError);
+    expect(() => computeOrderTotal(line('nope', 'sand'), info())).toThrow(OrderPricingError);
+  });
+  it('rejects a colour that does not belong to the fabric', () => {
+    expect(() => computeOrderTotal(line('velvet', 'charcoal'), info())).toThrow(OrderPricingError);
   });
 });

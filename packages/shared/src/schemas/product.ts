@@ -32,6 +32,8 @@ const productBase = z.object({
   name:            z.string().min(1).max(120),
   detail:          z.string().max(280).nullable(),
   sizeDisplay:     z.string().max(80).nullable(),
+  // F5: per-Model seat depths — CSV of inches, e.g. '24,30'. null = no choice.
+  depthOptions:    z.string().max(40).nullable(),
   imgKey:          z.string().max(200).nullable(),
   thumbKey:        z.string().max(200).nullable(),
   stock:           z.number().int().min(0),
@@ -53,12 +55,25 @@ const sofaBundleRow = z.object({
   active:   z.boolean(),
   price:    money,
 });
+// Per-Model fabric availability + surcharge (spec 2026-05-24). fabricId is
+// checked against fabric_library server-side; schema only validates shape.
+const sofaFabricRow = z.object({
+  fabricId:  z.string().min(1),
+  active:    z.boolean(),
+  surcharge: money,
+});
 
 export const sofaProductSchema = productBase.extend({
   pricingKind:          z.literal('sofa_build'),
   reclinerUpgradePrice: money,
+  // F3 (2026-05-23): per-Model name for the single per-seat upgrade. null =
+  // this Model offers no upgrade (POS hides the add button). footrest=false
+  // for headrest (no footrest), true for power recliner/incliner/slide/leg.
+  seatUpgradeLabel:     z.string().max(40).nullable().optional(),
+  seatUpgradeFootrest:  z.boolean().optional(),
   compartments:         z.array(sofaPricingRow).min(1),
   bundles:              z.array(sofaBundleRow).min(1),
+  fabrics:              z.array(sofaFabricRow).min(1),
 });
 
 // Mattress / bedframe: 4 sizes (Single, Super Single, Queen, King).
@@ -70,6 +85,15 @@ const sizeRow = z.object({
 
 export const sizeProductSchema = productBase.extend({
   pricingKind: z.literal('size_variants'),
+  sizes:       z.array(sizeRow).min(1),
+});
+
+// Bedframe configurator (spec 2026-05-25). Prices by size exactly like
+// size_variants (placeholder retail per size, owned by SKU Master); the
+// colour + dimension options carry 0 surcharge for pilot and live in their
+// own tables, so the SKU-Master form is identical to the mattress size grid.
+export const bedframeProductSchema = productBase.extend({
+  pricingKind: z.literal('bedframe_build'),
   sizes:       z.array(sizeRow).min(1),
 });
 
@@ -93,10 +117,11 @@ export const tbcProductSchema = productBase.extend({
 export const productSchema = z.discriminatedUnion('pricingKind', [
   sofaProductSchema,
   sizeProductSchema,
+  bedframeProductSchema,
   flatProductSchema,
   tbcProductSchema,
 ]).superRefine((val, ctx) => {
-  if (val.pricingKind === 'size_variants') {
+  if (val.pricingKind === 'size_variants' || val.pricingKind === 'bedframe_build') {
     const ok = val.sizes.some((s) => s.active && s.price > 0);
     if (!ok) {
       ctx.addIssue({
@@ -114,11 +139,21 @@ export const productSchema = z.discriminatedUnion('pricingKind', [
         message: 'Activate at least one Quick-Pick bundle and fill in its price.',
       });
     }
+    // Sofas require a fabric choice (spec 2026-05-24, G6) — at least one active.
+    const fabricOk = val.fabrics.some((f) => f.active);
+    if (!fabricOk) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fabrics'],
+        message: 'Activate at least one fabric — sofas require a fabric choice.',
+      });
+    }
   }
 });
 
-export type ProductInput      = z.infer<typeof productSchema>;
-export type SofaProductInput  = z.infer<typeof sofaProductSchema>;
-export type SizeProductInput  = z.infer<typeof sizeProductSchema>;
-export type FlatProductInput  = z.infer<typeof flatProductSchema>;
-export type TbcProductInput   = z.infer<typeof tbcProductSchema>;
+export type ProductInput        = z.infer<typeof productSchema>;
+export type SofaProductInput    = z.infer<typeof sofaProductSchema>;
+export type SizeProductInput    = z.infer<typeof sizeProductSchema>;
+export type BedframeProductInput = z.infer<typeof bedframeProductSchema>;
+export type FlatProductInput    = z.infer<typeof flatProductSchema>;
+export type TbcProductInput     = z.infer<typeof tbcProductSchema>;

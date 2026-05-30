@@ -65,6 +65,11 @@ export interface StaffRow {
   name: string;
   role: StaffRoleValue;
   showroomId: string | null;
+  /* Migration 0086 — `staff.venue_id` is the staff's home venue (POS-side
+     roles only; backend roles leave it NULL). Surfaced here so the New SO
+     + Edit SO pages can auto-fill the Venue field from the picked
+     salesperson's venue_id. */
+  venueId: string | null;
   initials: string;
   color: string;
   active: boolean;
@@ -78,7 +83,7 @@ export const useStaff = () =>
     queryFn: async (): Promise<StaffRow[]> => {
       const { data, error } = await supabase
         .from('staff')
-        .select('id, staff_code, name, role, showroom_id, initials, color, active, email, phone')
+        .select('id, staff_code, name, role, showroom_id, venue_id, initials, color, active, email, phone')
         .order('staff_code');
       if (error) throw error;
       return (data ?? []).map((r) => ({
@@ -87,6 +92,7 @@ export const useStaff = () =>
         name: r.name,
         role: r.role as StaffRoleValue,
         showroomId: r.showroom_id,
+        venueId: r.venue_id,
         initials: r.initials,
         color: r.color,
         active: r.active,
@@ -94,7 +100,11 @@ export const useStaff = () =>
         phone: r.phone,
       }));
     },
-    staleTime: 60_000,
+    /* Task #61 (aggressive perf) — staff list is near-static; 10min
+       staleTime kills repeat refetches when navigating between SO Detail,
+       New SO, PaymentsTable, and the Customer card autocomplete. The
+       Settings page mutates with explicit invalidations. */
+    staleTime: 10 * 60_000,
   });
 
 export const useUpdateStaffActive = () => {
@@ -154,6 +164,7 @@ export const useCreateStaff = () => {
           name: string;
           role: StaffRoleValue;
           showroom_id: string | null;
+          venue_id?: string | null;
           initials: string;
           color: string;
           active: boolean;
@@ -167,6 +178,7 @@ export const useCreateStaff = () => {
         name:       json.staff.name,
         role:       json.staff.role,
         showroomId: json.staff.showroom_id,
+        venueId:    json.staff.venue_id ?? null,
         initials:   json.staff.initials,
         color:      json.staff.color,
         active:     json.staff.active,

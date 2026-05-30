@@ -1,0 +1,148 @@
+// TanStack Query hook for /mrp — the trading-company Stock Status Report.
+// Mirrors the authedFetch pattern in suppliers-queries.ts.
+
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { supabase } from './supabase';
+
+const API_URL = import.meta.env.VITE_API_URL;
+
+async function authedFetch<T>(path: string): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+  }
+  return (await res.json()) as T;
+}
+
+export type MrpAllocSource = 'stock' | 'po' | 'shortage';
+
+export type MrpLine = {
+  soItemId: string;
+  soDocNo: string;
+  debtorName: string | null;
+  soDate: string | null;
+  deliveryDate: string | null;
+  processingDate: string | null;
+  /* Commander 2026-05-29 — order-by date = delivery − category lead days. */
+  orderByDate: string | null;
+  qty: number;
+  source: MrpAllocSource;
+  poNumber: string | null;
+  poEta: string | null;
+  shortageQty: number;
+};
+
+export type MrpSku = {
+  itemCode: string;
+  variantKey: string;
+  variantLabel: string | null;
+  description: string | null;
+  category: string | null;
+  qtyNeeded: number;
+  stock: number;
+  poOutstanding: number;
+  shortage: number;
+  mainSupplierCode: string | null;
+  mainSupplierName: string | null;
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
+  lines: MrpLine[];
+};
+
+export type MrpWarehouse = { id: string; code: string; name: string };
+
+/* Sofa is ordered as a colour-matched SET, one per SO line ("每张 SO 一套"). */
+export type SofaSet = {
+  soItemId: string;
+  soDocNo: string;
+  debtorName: string | null;
+  soDate: string | null;
+  deliveryDate: string | null;
+  processingDate: string | null;
+  orderByDate: string | null; // delivery − category lead days
+  itemCode: string;
+  description: string | null;
+  modules: string[];
+  colour: string | null;
+  qty: number;
+  orderedQty: number;
+  shortageQty: number;
+  suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
+};
+
+export type MrpResponse = {
+  asOf: string;
+  categories: string[];
+  warehouses: MrpWarehouse[];
+  skus: MrpSku[];
+  sofaSets: SofaSet[];
+  totals: {
+    skuCount: number;
+    shortageSkuCount: number;
+    shortageUnits: number;
+    sofaSetCount: number;
+    sofaSetShortageCount: number;
+  };
+};
+
+/** Stock Status Report / MRP — recomputed server-side on every call. */
+export function useMrp(params: { category: string; warehouseId: string; includeUndated?: boolean }) {
+  const { category, warehouseId, includeUndated } = params;
+  return useQuery({
+    queryKey: ['mrp', category, warehouseId, includeUndated ?? false],
+    queryFn: () => {
+      const q = new URLSearchParams();
+      if (category && category !== 'all') q.set('category', category);
+      if (warehouseId && warehouseId !== 'all') q.set('warehouseId', warehouseId);
+      if (includeUndated) q.set('includeUndated', 'true');
+      const qs = q.toString();
+      return authedFetch<MrpResponse>(`/mrp${qs ? `?${qs}` : ''}`);
+    },
+    staleTime: 30_000,
+  });
+}
+
+/* ── Per-category lead times (Commander 2026-05-29) ──────────────────────── */
+export type LeadCategory = 'sofa' | 'bedframe' | 'mattress' | 'accessory' | 'service';
+export type CategoryLeadTimes = Record<LeadCategory, number>;
+export const LEAD_CATEGORIES: LeadCategory[] = ['sofa', 'bedframe', 'mattress', 'accessory', 'service'];
+
+export function useCategoryLeadTimes() {
+  return useQuery({
+    queryKey: ['mrp-lead-times'],
+    queryFn: () => authedFetch<{ leadTimes: CategoryLeadTimes }>(`/mrp-lead-times`),
+    staleTime: 60_000,
+  });
+}
+
+export function useUpdateCategoryLeadTime() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { category: LeadCategory; leadDays: number }) => {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/mrp-lead-times`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+        throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+      }
+      return (await res.json()) as { ok: true; category: LeadCategory; leadDays: number };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mrp-lead-times'] });
+      qc.invalidateQueries({ queryKey: ['mrp'] }); // order-by dates recompute
+    },
+  });
+}

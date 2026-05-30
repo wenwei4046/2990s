@@ -6,10 +6,16 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
+import { pickComboMatch } from './sofa-combo-pricing';
+
 /* ─── Public types ─────────────────────────────────────────────────── */
 
 export type Rot = 0 | 90 | 180 | 270;
-export type Depth = '24' | '28';
+// Seat depth in inches, as a string (e.g. '24', '28', '30', '32'). Was a
+// '24'|'28' union; widened (F5) so the configurator can offer each Model's real
+// depths from products.depth_options. Display + plan-view width only — never a
+// pricing dimension.
+export type Depth = string;
 
 export interface Cell {
   /** Optional client-side cell id for grouping by reference. */
@@ -48,6 +54,43 @@ export interface SofaProductPricing {
   compartments: SofaProductPricingRow[];
   bundles: SofaProductPricingBundle[];
   reclinerUpgradePrice: number;
+  /** Per-Model name for the per-seat upgrade ('Power slide','Headrest', …).
+   *  null/undefined → this Model offers no per-seat upgrade (POS hides the add
+   *  button). Display only — the upgrade price is `reclinerUpgradePrice`.
+   *  F3, 2026-05-23 (migration 0039). */
+  seatUpgradeLabel?: string | null;
+  /** true → upgraded seat opens a footrest (power recliner/incliner/slide/leg);
+   *  false → no footrest (headrest). Defaults to true when omitted. */
+  seatUpgradeFootrest?: boolean;
+  /** Per-Model fabric availability + surcharge (spec 2026-05-24). Optional so
+   *  callers that don't price fabric (e.g. plan-view) can omit it.
+   *  `computeSofaPrice` ignores this — surcharge is a caller-applied line add. */
+  fabrics?: SofaProductPricingFabric[];
+  /** Sofa Combo Pricing rows (Commander 2026-05-28). When the group's modules
+   *  + tier match a combo row's modules + tier, the combo price OVERRIDES the
+   *  à la carte / bundle pricing. Pass [] to disable; pass a SofaComboRow[]
+   *  fetched per-call to enable. The picker is tolerant of empty baseModel
+   *  (POS doesn't have the retail↔mfg base_model bridge yet — relies on
+   *  modules-match alone). */
+  combos?: import('./sofa-combo-pricing').SofaComboRow[];
+  /** Fabric tier of the currently-selected fabric (PRICE_1 / PRICE_2 / PRICE_3).
+   *  Used when looking up a combo override. Combos with tier=null match any
+   *  tier; combos with a specific tier require an exact match. */
+  fabricTier?: import('./sofa-combo-pricing').SofaPriceTier | null;
+  /** Seat height as combos store it (e.g. '24'). Defaults to the depth param
+   *  cast as string when omitted. */
+  comboHeight?: string;
+  /** Base model code for combo lookup. POS sets to '' for wildcard match. */
+  baseModel?: string;
+}
+
+export interface SofaProductPricingFabric {
+  fabricId: string;
+  active: boolean;
+  surcharge: number;
+  /** Active colour ids for this fabric — the server uses them to validate the
+   *  chosen colour. Display labels/hex are loaded separately for the UI. */
+  colourIds: string[];
 }
 
 export interface BundleDef {
@@ -77,7 +120,23 @@ export interface SofaGroupPrice {
   /** What the customer pays for this group. min(bundle, à la carte) + recliners. */
   finalPrice: number;
   /** Where finalPrice came from. */
-  basis: 'bundle' | 'a_la_carte';
+  basis: 'combo' | 'bundle' | 'a_la_carte';
+  /** When basis='combo', the matched combo's price for the current height
+   *  (before recliner extras). This covers ONLY the matched subset of cells.
+   *  null otherwise. */
+  comboPrice?: number | null;
+  /** When basis='combo', the à-la-carte sum of the SUBSET the combo replaced
+   *  (HOOKKA's subsetSum). null otherwise. */
+  comboSubsetALaCarte?: number | null;
+  /** When basis='combo', the à-la-carte sum of the EXTRA cells outside the
+   *  matched subset — they stay at full master price and are added on top of
+   *  the combo price. 0 when the combo covered the whole group. null when
+   *  basis !== 'combo'. */
+  comboExtrasALaCarte?: number | null;
+  /** When basis='combo', the cellIds of the matched subset (the cells the
+   *  combo price covers). Extras = cellIds − comboMatchedCellIds. Lets the
+   *  cart show "combo applied + extras separate" like HOOKKA. null otherwise. */
+  comboMatchedCellIds?: string[] | null;
 }
 
 export interface SofaPriceResult {
@@ -109,6 +168,9 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   // Accessory — 45cm wood console. Slots between sofa pieces; doesn't count
   // toward bundles or closure.
   { id: 'WC-45',  group: 'Accessory', label: 'Wood console · 45cm',    w: 45,  d: 95,  cushions: 0, accessory: true },
+  // Ottoman / stool — 75×75 free-standing accessory (F1). Doesn't count toward
+  // bundles or closure. Art: STOOL.png (Loo provides).
+  { id: 'STOOL',  group: 'Accessory', label: 'Ottoman / stool',        w: 75,  d: 75,  cushions: 0, accessory: true },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -116,6 +178,52 @@ const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.
 export const findModule = (id: string): SofaModuleSpec | undefined => MODULE_BY_ID.get(id);
 
 export const isAccessoryModule = (id: string): boolean => MODULE_BY_ID.get(id)?.accessory === true;
+
+/* ─── Maintenance compartment code helpers (PR — Commander 2026-05-28) ──
+ *
+ * Commander's Maintenance compartment pool stores codes in either dash form
+ * (`1A-LHF`) or parens form (`1A(LHF)`). The POS shared lib expects the
+ * dash form. `normalizeCompartmentCode` collapses both to the dash form so
+ * lookups (findModule, palette filtering) hit regardless of which form
+ * commander typed.
+ *
+ * `classifySofaCompartment` groups a code into the POS palette buckets so
+ * CustomBuilder can build "1-SEATER / 2-SEATER / CORNER / L-SHAPE / OTHER"
+ * sections from the Model's allowed-options list. Mirrors SOFA_MODULES.group
+ * for codes the shared lib already knows about; codes unique to the
+ * Maintenance pool (recliner variants like `1A(P)(LHF)`, the `Console`
+ * alias) fall back to a prefix heuristic so unknown commander codes still
+ * show up under the right header.
+ * ─────────────────────────────────────────────────────────────────────── */
+
+export const normalizeCompartmentCode = (raw: string): string =>
+  raw.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+
+export type SofaCompartmentGroup =
+  | '1-seater'
+  | '2-seater'
+  | 'Corner'
+  | 'L-Shape'
+  | 'Accessory'
+  | 'Other';
+
+/** Best-effort classifier for a compartment code → POS palette group.
+ *  Tries SOFA_MODULES first (canonical), falls back to a prefix heuristic
+ *  so any recliner / console variant still lands in a sensible group. */
+export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup => {
+  const norm = normalizeCompartmentCode(rawCode);
+  const known = MODULE_BY_ID.get(norm);
+  if (known) return known.group;
+  // Heuristic fallback for codes outside SOFA_MODULES (recliner variants,
+  // Console alias, etc.). Matches the descriptions in
+  // COMPARTMENT_DESCRIPTION_OVERRIDE on the Backend side.
+  if (/^L[-(]/i.test(norm) || /^L$/i.test(norm)) return 'L-Shape';
+  if (/^CNR$/i.test(norm) || /^CORNER/i.test(norm)) return 'Corner';
+  if (/^STOOL|^Console|^WC-/i.test(norm)) return 'Accessory';
+  if (/^2/.test(norm)) return '2-seater';
+  if (/^1/.test(norm)) return '1-seater';
+  return 'Other';
+};
 
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
 
@@ -169,9 +277,26 @@ const bundleSignature = (modIds: string[]): string =>
 export const BUNDLES: readonly BundleDef[] = [
   { id: '1S',  label: '1-Seater', signature: '1A',       canonicalModules: ['1A'] },
   { id: '2S',  label: '2-Seater', signature: '2A',       canonicalModules: ['2A'] },
+  // 2.5-Seater — a widened 2-seater sold via Quick Pick only (Loo 2026-05-23).
+  // No distinct module/art: the POS reuses 2S.png rendered wider (see
+  // Configurator QUICK_PRESET_META + bundleArtSrc). The signature is an
+  // intentionally non-matchable family ('2.5A') so detectBundle never
+  // auto-selects it from a custom build — there is no 2.5A module to compose.
+  { id: '2.5S',label: '2.5-Seater',signature: '2.5A',    canonicalModules: ['2A'] },
   { id: '3S',  label: '3-Seater', signature: '1A+2A',    canonicalModules: ['1A', '2A'] },
   { id: '2+L', label: '2 + L',    signature: '2A+L',     canonicalModules: ['2A', 'L'] },
   { id: '3+L', label: '3 + L',    signature: '1NA+2A+L', canonicalModules: ['2A', '1NA', 'L'] },
+  // 2-Seater + Console (F6) — two single-arm 1-seaters flanking a wood console,
+  // Quick-Pick only. Non-matchable signature so a custom 1A+WC+1A never
+  // auto-detects as this priced preset.
+  { id: '2WC', label: '2-Seater + Console', signature: '2WC-PRESET', canonicalModules: ['1A', 'WC-45', '1A'] },
+  // 2-Seater + 2 Power slide combo (F7, DSL 8027) — a 2-seater sold as a fixed
+  // Quick-Pick at the combo price; per-seat power slide stays available in Custom
+  // Build too. Label IS the invoice text. Non-matchable signature.
+  { id: '2PS', label: '2-Seater + 2 Power slide', signature: '2PS-PRESET', canonicalModules: ['2A'] },
+  // Corner package (F4, 5539) — 1A + corner + 2A, Quick-Pick only, composed
+  // preview (no composite PNG). Non-matchable signature.
+  { id: 'CORNER', label: 'Corner', signature: 'CORNER-PRESET', canonicalModules: ['1A', 'CNR', '2A'] },
 ];
 
 // Each entry is a signature → bundle. Multiple signatures map to the same
@@ -208,15 +333,129 @@ export const detectBundle = (modIds: string[]): BundleDef | null =>
  * Anything else → `Custom (<family-signature>)` so distinct custom builds in
  * the same cart stay distinguishable.
  */
-export const summarizeSofaCells = (cells: Cell[], depth: Depth): string => {
+export const summarizeSofaCells = (
+  cells: Cell[],
+  depth: Depth,
+  /** Per-Model upgrade label — when set AND any seat is upgraded, the summary
+   *  gets a "+ N <label>" suffix (e.g. "2-Seater + 2 Power slide"). Omitted by
+   *  callers that lack pricing in hand; then no suffix is added. F3 2026-05-23. */
+  seatUpgradeLabel?: string | null,
+): string => {
   if (cells.length === 0) return 'Custom (empty)';
   const modIds = cells.map((c) => c.moduleId);
   const candidate = detectBundle(modIds);
-  if (candidate) {
-    const closed = cells.length === 1 || analyzeSofa(cells, depth).closed;
-    if (closed) return candidate.label;
+  let base: string;
+  if (candidate && (cells.length === 1 || analyzeSofa(cells, depth).closed)) {
+    base = candidate.label;
+  } else {
+    base = `Custom (${familySignature(modIds)})`;
   }
-  return `Custom (${familySignature(modIds)})`;
+  const upgradeCount = cells.reduce((n, c) => n + (c.recliners?.length ?? 0), 0);
+  if (seatUpgradeLabel && upgradeCount > 0) {
+    base += ` + ${upgradeCount} ${seatUpgradeLabel}`;
+  }
+  return base;
+};
+
+/* ─── Invoice / order line description (Track 2 §8.1) ──────────────── */
+// Single-piece bundles (1S/2S/2.5S) show the bundle name; multi-piece bundles
+// (3S/2+L/3+L/corner/console) decompose to oriented module ids. Reads the
+// persisted order_items.config (bundleId = Quick-Pick, cells = Custom Build).
+// Display only — never used for pricing.
+
+const SINGLE_PIECE_BUNDLES = new Set(['1S', '2S', '2.5S']);
+
+// Canonical oriented decomposition for a Quick-Pick bundle (no cells to read).
+// Outer arms face out (leftmost LHF, rightmost RHF); mirror is equally valid
+// (Loo 2026-05-24). Keyed by bundle id; single-piece bundles aren't listed here
+// (they render as their name).
+const BUNDLE_INVOICE_DECOMP: Record<string, string> = {
+  '3S':  '1A-LHF + 2A-RHF',
+  '2+L': '2A-LHF + L-RHF',
+  '3+L': '2A-LHF + 1NA + L-RHF',
+  // Console (F6): two single-arm 1-seaters flanking a wood console.
+  '2WC': '1A-LHF + WC-45 + 1A-RHF',
+  // Corner package (F4, 5539): 1A + corner + 2A (1A is the chaise leg).
+  'CORNER': '1A-LHF + CNR + 2A-RHF',
+};
+
+const bundleLabelById = (bundleId: string): string =>
+  BUNDLES.find((b) => b.id === bundleId)?.label ?? bundleId;
+
+// Seats in a bundle, from its canonical module families (1x → 1, 2x → 2, L/CNR → 0).
+// Counts auto-included headrests on a quick-pick (F3).
+const bundleSeatCount = (bundleId: string): number => {
+  const b = BUNDLES.find((x) => x.id === bundleId);
+  if (!b) return 0;
+  return b.canonicalModules.reduce(
+    (n, fam) => n + (fam.startsWith('2') ? 2 : fam.startsWith('1') ? 1 : 0),
+    0,
+  );
+};
+
+export interface SofaLineDescriptor {
+  /** Quick-Pick: the chosen bundle id. */
+  bundleId?: string;
+  /** Custom Build: the laid-out cells (module ids already carry orientation). */
+  cells?: Cell[];
+  depth?: Depth;
+  /** Per-Model upgrade label snapshot; suffixes "+ N <label>" when seats upgraded. */
+  seatUpgradeLabel?: string | null;
+  /** Upgrade footrest flag. false = auto-included (headrest) → shown on a quick-pick
+   *  as "+ N <label>" (N = seat count). true/undefined = opt-in power upgrade added
+   *  per seat in Custom Build, NOT auto-appended on quick-pick. F3. */
+  seatUpgradeFootrest?: boolean;
+}
+
+/**
+ * Human-readable description for a sofa order/invoice line (Track 2 §8.1):
+ *   - single-piece bundle (1S/2S/2.5S) → bundle name ("2-Seater")
+ *   - multi-piece bundle (3S/2+L/…)    → decomposed module ids ("1A-LHF + 2A-RHF")
+ *   - Custom Build cells               → the cells' own oriented ids, left-to-right
+ *     (a console / any accessory in the cells forces decomposition so it stays visible)
+ *   - any seat upgrades                → "+ N <seatUpgradeLabel>" appended
+ */
+export const describeSofaLine = (cfg: SofaLineDescriptor): string => {
+  const depth: Depth = cfg.depth ?? '24';
+
+  if (cfg.cells && cfg.cells.length > 0) {
+    const cells = cfg.cells;
+    const modIds = cells.map((c) => c.moduleId);
+    const hasAccessory = modIds.some(isAccessoryModule);
+    const candidate = detectBundle(modIds);
+    const closed = cells.length === 1 || analyzeSofa(cells, depth).closed;
+
+    let base: string;
+    if (candidate && closed && !hasAccessory && SINGLE_PIECE_BUNDLES.has(candidate.id)) {
+      base = candidate.label;
+    } else {
+      base = [...cells]
+        .sort((a, b) => a.x - b.x || a.y - b.y)
+        .map((c) => c.moduleId)
+        .join(' + ');
+    }
+
+    const upgradeCount = cells.reduce((n, c) => n + (c.recliners?.length ?? 0), 0);
+    if (cfg.seatUpgradeLabel && upgradeCount > 0) {
+      base += ` + ${upgradeCount} ${cfg.seatUpgradeLabel}`;
+    }
+    return base;
+  }
+
+  if (cfg.bundleId) {
+    const base = SINGLE_PIECE_BUNDLES.has(cfg.bundleId)
+      ? bundleLabelById(cfg.bundleId)
+      : (BUNDLE_INVOICE_DECOMP[cfg.bundleId] ?? bundleLabelById(cfg.bundleId));
+    // Auto-included non-footrest upgrade (headrest) → "+ N <label>" (N = seat count).
+    // Opt-in footrest upgrades (power) are added per seat in Custom Build, not here.
+    if (cfg.seatUpgradeLabel && cfg.seatUpgradeFootrest === false) {
+      const n = bundleSeatCount(cfg.bundleId);
+      if (n > 0) return `${base} + ${n} ${cfg.seatUpgradeLabel}`;
+    }
+    return base;
+  }
+
+  return 'Sofa';
 };
 
 /* ─── Edge typing & rotation ───────────────────────────────────────── */
@@ -244,6 +483,7 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   'L-LHF':  ['open', 'back', 'open', 'front'],
   'L-RHF':  ['open', 'back', 'open', 'front'],
   'WC-45':  ['open', 'open', 'open', 'open'],
+  'STOOL':  ['open', 'open', 'open', 'open'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
@@ -263,7 +503,12 @@ export const cellEdges = (cell: Cell): EdgeType[] => {
 
 /* ─── Footprint + bbox ─────────────────────────────────────────────── */
 
-const widthOffsetPerCushion = (depth: Depth): number => (depth === '28' ? 10 : 0);
+// Plan-view length grows with seat depth: 2.5cm per inch per cushion, anchored
+// on the 24″ baseline (24→0, 28→+10, 30→+15, 32→+20). Non-numeric/below-baseline → 0.
+const widthOffsetPerCushion = (depth: Depth): number => {
+  const inch = parseInt(depth, 10);
+  return Number.isFinite(inch) ? Math.max(0, (inch - 24) * 2.5) : 0;
+};
 
 export const moduleFootprint = (m: SofaModuleSpec, rot: Rot, depth: Depth): { w: number; h: number } => {
   const w = m.w + widthOffsetPerCushion(depth) * m.cushions;
@@ -386,6 +631,25 @@ const compRow = (pricing: SofaProductPricing, compartmentId: string): SofaProduc
 const bundleRow = (pricing: SofaProductPricing, bundleId: string): SofaProductPricingBundle | undefined =>
   pricing.bundles.find((b) => b.bundleId === bundleId);
 
+/** Surcharge for an ACTIVE fabric on this Model, else 0. Pure; used by the POS
+ *  LIVE TOTAL. The server (`computeOrderTotal`) does strict validation before
+ *  adding the same value. */
+export const fabricSurchargeFor = (
+  pricing: SofaProductPricing,
+  fabricId: string | undefined,
+): number => {
+  if (!fabricId) return 0;
+  const f = pricing.fabrics?.find((x) => x.fabricId === fabricId && x.active);
+  return f?.surcharge ?? 0;
+};
+
+/** Display-only " · <fabric> / <colour>" suffix for an invoice / cart sofa line.
+ *  Empty string when either label is missing. */
+export const fabricColourSuffix = (
+  fabricLabel?: string | null,
+  colourLabel?: string | null,
+): string => (fabricLabel && colourLabel ? ` · ${fabricLabel} / ${colourLabel}` : '');
+
 const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): SofaGroupPrice => {
   const cellIds = group.map((c, i) => c.id ?? `__cell_${i}`);
   const modIds = group.map((c) => c.moduleId);
@@ -413,7 +677,7 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   const candidate = detectBundle(modIds);
   let bundle: BundleDef | null = null;
   let bundlePrice: number | null = null;
-  let basis: 'bundle' | 'a_la_carte' = 'a_la_carte';
+  let basis: 'combo' | 'bundle' | 'a_la_carte' = 'a_la_carte';
 
   if (candidate) {
     const row = bundleRow(pricing, candidate.id);
@@ -429,6 +693,68 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     }
   }
 
+  // Combo override — Commander 2026-05-28, HOOKKA `comboMatches` 1:1. When a
+  // SUBSET of the group's cells covers a Sofa Combo Pricing row's slots (with
+  // a price at the current height), the combo price replaces that SUBSET's
+  // à-la-carte total — but ONLY when the combo is strictly cheaper than the
+  // subset's à-la-carte sum (HOOKKA's `subsetSum − comboTotal > 0`). The EXTRA
+  // cells outside the matched subset keep their full master price. Recliner
+  // extras still add on top.
+  let comboPrice: number | null = null;
+  let comboSubsetALaCarte: number | null = null;
+  let comboExtrasALaCarte: number | null = null;
+  let comboMatchedCellIds: string[] | null = null;
+  if (pricing.combos && pricing.combos.length > 0) {
+    const heightStr = pricing.comboHeight ?? String(depth);
+    const match = pickComboMatch(
+      {
+        baseModel: pricing.baseModel ?? '',
+        modules: modIds,
+        customerId: null,        // 2990 B2C — only default-scope rows in play
+        tier: pricing.fabricTier ?? 'PRICE_2',
+        height: heightStr,
+      },
+      pricing.combos,
+    );
+    if (match) {
+      // UNIT FIX (Commander 2026-05-28): `match.comboPriceCenti` is CENTI (the
+      // combo dialog stores `Math.round(rm * 100)`), but EVERYTHING else in
+      // groupPrice — compartment `.price`, bundle price, recliner upgrade — is
+      // whole-MYR in the POS pricing object (apps/pos/src/lib/queries.ts:169
+      // divides base_price_sen by 100; product_compartments/bundles.price are
+      // whole-MYR). Convert the combo total to whole-MYR ONCE here so the
+      // cheaper-only guard, the stored comboPrice, and basePrice all compare /
+      // sum in the same unit. (The SERVER recompute keeps centi — it works in
+      // unit_price_sen throughout — so the fix lives at the call site, not in
+      // pickComboMatch's returned unit.)
+      const comboPriceMyr = Math.round(match.comboPriceCenti / 100);
+      // À-la-carte sum of the matched subset (the cells the combo replaces).
+      // Whole-MYR — sums compartment `.price` which is whole-MYR.
+      const matchedSet = new Set(match.matchedIndices);
+      let subsetSum = 0;
+      for (let i = 0; i < group.length; i++) {
+        if (!matchedSet.has(i)) continue;
+        const cell = group[i]!;
+        subsetSum += compRow(pricing, cell.moduleId)?.price ?? 0;
+      }
+      // HOOKKA cheaper-only guard: apply the combo only when it actually saves
+      // money against the matched subset's own à-la-carte sum. Equal / dearer
+      // combos are ignored so a "combo" never inflates the line. Both operands
+      // are now whole-MYR.
+      if (subsetSum - comboPriceMyr > 0) {
+        basis = 'combo';
+        comboPrice = comboPriceMyr;
+        comboSubsetALaCarte = subsetSum;
+        comboExtrasALaCarte = Math.max(0, aLaCarteTotal - subsetSum);
+        comboMatchedCellIds = match.matchedIndices.map((i) => cellIds[i]!);
+        // A combo match overrides the bundle path — clear bundle so
+        // SofaGroupPrice.basis reads cleanly as 'combo'.
+        bundle = null;
+        bundlePrice = null;
+      }
+    }
+  }
+
   // Recliner extras add on top regardless of basis.
   let reclinerCount = 0;
   for (const cell of group) {
@@ -437,7 +763,17 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   }
   const reclinerExtra = reclinerCount * pricing.reclinerUpgradePrice;
 
-  const basePrice = basis === 'bundle' ? (bundlePrice ?? aLaCarteTotal) : aLaCarteTotal;
+  // Base price by basis. For 'combo', the subset price + extras-at-full-price
+  // (HOOKKA: comboTotal + Σ extras). For 'bundle' / à la carte, unchanged.
+  let basePrice: number;
+  if (basis === 'combo' && comboPrice != null) {
+    basePrice = comboPrice + (comboExtrasALaCarte ?? 0);
+  } else if (basis === 'bundle' && bundlePrice != null) {
+    basePrice = bundlePrice;
+  } else {
+    basePrice = aLaCarteTotal;
+  }
+
   const finalPrice = basePrice + reclinerExtra;
 
   return {
@@ -450,6 +786,10 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
     reclinerExtra,
     finalPrice,
     basis,
+    comboPrice,
+    comboSubsetALaCarte,
+    comboExtrasALaCarte,
+    comboMatchedCellIds,
   };
 };
 

@@ -1,29 +1,27 @@
-import { useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
-
-export type SlipFilter = 'any' | 'uploaded' | 'missing';
 
 export interface AuditLogFilters {
   from?: string;
   to?: string;
   salespersonIds?: string[];
-  staffIds?: string[];
   paymentMethods?: string[];
-  showroomIds?: string[];
   amountMin?: number;
   amountMax?: number;
-  slipUploaded?: SlipFilter;
 }
 
 export interface AuditLogRow {
   id: string;
   placedAt: string;
   customerName: string;
+  customerPhone: string | null;
   total: number;
+  paid: number;
   paymentMethod: string;
+  installmentMonths: number | null;
+  merchantProvider: string | null;
   approvalCode: string | null;
   slipKey: string | null;
   slipUploaded: boolean;
@@ -42,13 +40,9 @@ function buildQueryString(f: AuditLogFilters): string {
   if (f.from) params.set('from', f.from);
   if (f.to) params.set('to', f.to);
   for (const id of f.salespersonIds ?? []) params.append('salespersonId', id);
-  for (const id of f.staffIds ?? []) params.append('staffId', id);
   for (const m of f.paymentMethods ?? []) params.append('paymentMethod', m);
-  for (const id of f.showroomIds ?? []) params.append('showroomId', id);
   if (f.amountMin !== undefined) params.set('amountMin', String(f.amountMin));
   if (f.amountMax !== undefined) params.set('amountMax', String(f.amountMax));
-  if (f.slipUploaded === 'uploaded') params.set('slipUploaded', 'true');
-  if (f.slipUploaded === 'missing') params.set('slipUploaded', 'false');
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -73,19 +67,8 @@ export const useAuditLog = (filters: AuditLogFilters) =>
     staleTime: 30_000,
   });
 
-export const useAuditLogRealtime = () => {
-  const qc = useQueryClient();
-  useEffect(() => {
-    const channel = supabase
-      .channel('audit-log-orders')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => void qc.invalidateQueries({ queryKey: ['audit-log'] }),
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [qc]);
-};
+// useAuditLogRealtime removed (perf-router-realtime-sidebar). It duplicated
+// useOrdersRealtime's subscription on `public.orders` — two WebSocket channels
+// for the same underlying table. AuditLog now relies on staleTime-driven
+// refetch; if a live feed is needed later, fold it into useOrdersRealtime's
+// single channel rather than reopening a second one.

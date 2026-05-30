@@ -17,8 +17,8 @@ export const COMPANY_LEGAL = {
 
 export const RECEIPT_TERMS: readonly string[] = [
   'This sales order becomes a binding tax invoice once goods are delivered and full payment is reconciled.',
-  'Balance due is payable in full on or before delivery. Cash, bank transfer, DuitNow QR, and cheque accepted.',
+  'Balance due is payable in full before delivery. Bank transfer, DuitNow QR, and cheque accepted.',
   'Delivery date is best-effort and may shift ±3 working days subject to operation confirmation.',
   'Stair-carry surcharges (if any) are billed on this sales order and are not invoiced separately on the DO.',
-  'Reschedule requests after delivery confirmation: changes within 3 working days of the confirmed date incur a rescheduling surcharge.',
+  'Once the delivery date has been confirmed, any subsequent request to change or extend the date will incur a rescheduling surcharge.',
 ] as const;

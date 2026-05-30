@@ -148,10 +148,13 @@ purchaseOrders.post('/', async (c) => {
 
   const itemsByOrder = new Map<string, Set<string>>();
   for (const row of itemsRows ?? []) {
-    const sku = (row as any).products?.sku;
+    // Supabase joins type embedded selects as `GenericStringError`; the runtime
+    // shape is the joined object. Cast through `unknown` to recover access.
+    const joined = row as unknown as { order_id: string; products: { sku?: string } | null };
+    const sku = joined.products?.sku;
     if (!sku) continue;
-    let set = itemsByOrder.get(row.order_id);
-    if (!set) { set = new Set(); itemsByOrder.set(row.order_id, set); }
+    let set = itemsByOrder.get(joined.order_id);
+    if (!set) { set = new Set(); itemsByOrder.set(joined.order_id, set); }
     set.add(sku);
   }
   const coveredByOrder = new Map<string, Set<string>>();

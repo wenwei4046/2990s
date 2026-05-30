@@ -1,0 +1,872 @@
+// TanStack Query hooks for /suppliers + /mfg-purchase-orders. Mirrors the
+// pattern in mfg-products-queries.ts.
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { supabase } from './supabase';
+
+const API_URL = import.meta.env.VITE_API_URL;
+
+async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('not_authenticated');
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+      authorization: `Bearer ${token}`,
+      ...(init?.body ? { 'content-type': 'application/json' } : {}),
+    },
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export type SupplierStatus = 'ACTIVE' | 'INACTIVE' | 'BLOCKED';
+export type Currency = 'MYR' | 'RMB' | 'USD' | 'SGD';
+export type MaterialKind = 'mfg_product' | 'fabric' | 'raw';
+// PR-DRAFT-removal — DRAFT dropped from po_status (migration 0078).
+export type PoStatus = 'SUBMITTED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'CANCELLED';
+
+export type StatementType = 'OPEN_ITEM' | 'BALANCE_FORWARD' | 'NO_STATEMENT';
+export type AgingBasis    = 'INVOICE_DATE' | 'DUE_DATE';
+
+export type SupplierRow = {
+  id: string;
+  code: string;
+  name: string;
+  whatsapp_number: string | null;
+  email: string | null;
+  contact_person: string | null;
+  phone: string | null;
+  address: string | null;
+  state: string | null;
+  payment_terms: string | null;
+  status: SupplierStatus;
+  rating: number;
+  notes: string | null;
+  /* PR #40 — full master record (Commander 2026-05-26 AutoCount parity) */
+  supplier_type: string | null;
+  category: string | null;
+  tin_number: string | null;
+  business_reg_no: string | null;
+  postcode: string | null;
+  area: string | null;
+  mobile: string | null;
+  fax: string | null;
+  website: string | null;
+  attention: string | null;
+  business_nature: string | null;
+  country: string;                          // PR #47 — default 'Malaysia'
+  currency: Currency;
+  statement_type: StatementType;
+  aging_basis: AgingBasis;
+  credit_limit_sen: number;
+  created_at: string;
+  updated_at: string;
+  /* PR — Commander 2026-05-27: auto-derived from the supplier's assigned
+     SKUs (distinct mfg_products.category across supplier_material_bindings).
+     Populated ONLY on the list endpoint (suppliers_with_derived_category
+     view in migration 0088); detail/create/patch responses omit it.
+     Values: 'SOFA' / 'BEDFRAME' / 'MATTRESS' / 'ACCESSORY' / 'SERVICE'
+     / 'MIXED' (≥2 distinct) / null (no SKUs assigned yet). */
+  derived_category?: string | null;
+};
+
+/** PR — Commander 2026-05-27 ("跟着 Product Maintenance 的排版"):
+ *  Per-category supplier cost matrix on supplier_material_bindings
+ *  (migration 0089). Two concrete shapes the UI cares about; everything
+ *  else (or null) → fall back to unit_price_centi.
+ *
+ *  SOFA:     { [seatHeight]: { P1?: centi, P2?: centi, P3?: centi } }
+ *  BEDFRAME: { P1?: centi, P2?: centi }
+ *
+ *  Stored cell type is `number` (centi); we widen to `unknown` on the wire
+ *  because the column is JSONB and the server is the source of truth.
+ */
+export type SofaPriceMatrix     = Record<string, { P1?: number; P2?: number; P3?: number }>;
+export type BedframePriceMatrix = { P1?: number; P2?: number };
+export type PriceMatrix         = SofaPriceMatrix | BedframePriceMatrix | Record<string, unknown>;
+
+export type BindingRow = {
+  id: string;
+  supplier_id: string;
+  material_kind: MaterialKind;
+  material_code: string;
+  material_name: string;
+  supplier_sku: string;
+  unit_price_centi: number;
+  currency: Currency;
+  lead_time_days: number;
+  payment_terms_override: string | null;
+  moq: number;
+  price_valid_from: string | null;
+  price_valid_to: string | null;
+  is_main_supplier: boolean;
+  notes: string | null;
+  /** PR — Commander 2026-05-27: per-category cost matrix mirroring the
+   *  Products Maintenance page shape. NULL on existing rows + on categories
+   *  that use the single unit_price_centi (mattress / accessory / service). */
+  price_matrix: PriceMatrix | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PoHeaderRow = {
+  id: string;
+  po_number: string;
+  supplier_id: string;
+  status: PoStatus;
+  po_date: string;
+  expected_at: string | null;
+  currency: Currency;
+  subtotal_centi: number;
+  tax_centi: number;
+  total_centi: number;
+  notes: string | null;
+  submitted_at: string | null;
+  received_at: string | null;
+  cancelled_at: string | null;
+  /** PR #77 — default ship-to warehouse for every line on this PO. */
+  purchase_location_id: string | null;
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  // Detail endpoint also includes contact_person/phone/email/address; list
+  // endpoint only fills id/code/name. Both shapes assignable here.
+  supplier?: {
+    id: string;
+    code: string;
+    name: string;
+    contact_person?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    address?: string | null;
+  } | null;
+  /** PR — Commander 2026-05-27: list endpoint embeds a tiny items summary
+      (material_code + qty per line) so the buyer can scan what's inside each
+      PO row without drilling in. Detail endpoint returns full items[]
+      separately, not on the header. Optional because not every consumer
+      wants the join. */
+  items?: PoItemSummary[];
+};
+
+export type PoItemSummary = {
+  material_code: string;
+  material_name: string;
+  qty: number;
+};
+
+export type PoItemRow = {
+  id: string;
+  purchase_order_id: string;
+  binding_id: string | null;
+  material_kind: MaterialKind;
+  material_code: string;
+  material_name: string;
+  supplier_sku: string | null;
+  qty: number;
+  unit_price_centi: number;
+  line_total_centi: number;
+  received_qty: number;
+  notes: string | null;
+  /* PR #41 — variant fields (migration 0056) */
+  item_group?: string | null;
+  description?: string | null;
+  description2?: string | null;
+  uom?: string;
+  discount_centi?: number;
+  unit_cost_centi?: number;
+  gap_inches?: number | null;
+  divan_height_inches?: number | null;
+  divan_price_sen?: number;
+  leg_height_inches?: number | null;
+  leg_price_sen?: number;
+  custom_specials?: unknown;
+  line_suffix?: string | null;
+  special_order_price_sen?: number;
+  variants?: Record<string, unknown> | null;
+  /** PR #77 — per-line delivery date + ship-to warehouse (both inherit from
+      PO header when null). */
+  delivery_date?: string | null;
+  warehouse_id?: string | null;
+};
+
+/* ── Suppliers ──────────────────────────────────────────────────────── */
+
+export function useSuppliers(opts?: { status?: SupplierStatus; search?: string }) {
+  return useQuery({
+    queryKey: ['suppliers', opts?.status ?? 'all', opts?.search ?? ''],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (opts?.status) params.set('status', opts.status);
+      if (opts?.search) params.set('search', opts.search);
+      const res = await authedFetch<{ suppliers: SupplierRow[] }>(
+        `/suppliers${params.toString() ? `?${params.toString()}` : ''}`,
+      );
+      return res.suppliers;
+    },
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export function useSupplierDetail(id: string | null) {
+  return useQuery({
+    queryKey: ['supplier-detail', id],
+    queryFn: () => authedFetch<{ supplier: SupplierRow; bindings: BindingRow[] }>(`/suppliers/${id}`),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type SupplierScorecard = {
+  supplierId: string;
+  onTimeRate: number;
+  defectRate: number;
+  averageLeadDays: number;
+  totalPOs: number;
+  receivedPOs: number;
+  onTimeCount: number;
+  last10POs: Array<{
+    id: string;
+    poNo: string;
+    status: PoStatus;
+    poDate: string;
+    expectedDate: string | null;
+    receivedDate: string | null;
+    totalCenti: number;
+    orderedQty: number;
+    receivedQty: number;
+  }>;
+};
+
+export function useSupplierScorecard(id: string | null) {
+  return useQuery({
+    queryKey: ['supplier-scorecard', id],
+    queryFn: () => authedFetch<SupplierScorecard>(`/suppliers/${id}/scorecard`),
+    enabled: Boolean(id),
+    staleTime: 60_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export function useCreateSupplier() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<SupplierRow>) =>
+      authedFetch<{ supplier: SupplierRow }>(`/suppliers`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['suppliers'] }),
+  });
+}
+
+export function useUpdateSupplier() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: Partial<SupplierRow> & { id: string }) =>
+      authedFetch<{ supplier: SupplierRow }>(`/suppliers/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['suppliers'] });
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.id] });
+    },
+  });
+}
+
+/* ── Bindings ───────────────────────────────────────────────────────── */
+
+export type NewBinding = {
+  materialKind: MaterialKind;
+  materialCode: string;
+  materialName: string;
+  supplierSku: string;
+  unitPriceCenti?: number;
+  currency?: Currency;
+  leadTimeDays?: number;
+  moq?: number;
+  isMainSupplier?: boolean;
+  paymentTermsOverride?: string;
+  priceValidFrom?: string;
+  priceValidTo?: string;
+  notes?: string;
+  /** PR — Commander 2026-05-27: optional per-category cost matrix.
+   *  Validated server-side against the SKU's category (see
+   *  apps/api/src/routes/suppliers.ts validatePriceMatrix). */
+  priceMatrix?: PriceMatrix | null;
+};
+
+export function useCreateBinding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ supplierId, ...body }: NewBinding & { supplierId: string }) =>
+      authedFetch<{ binding: BindingRow }>(`/suppliers/${supplierId}/bindings`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
+      qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+    },
+  });
+}
+
+// Batch-create N bindings in one round-trip. Backend de-dupes against any
+// material already bound for this supplier and returns counts.
+export function useCreateBindingsBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ supplierId, bindings }: { supplierId: string; bindings: NewBinding[] }) =>
+      authedFetch<{ inserted: number; skipped: number; bindings: BindingRow[] }>(
+        `/suppliers/${supplierId}/bindings/batch`,
+        { method: 'POST', body: JSON.stringify({ bindings }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
+      qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+    },
+  });
+}
+
+export function useUpdateBinding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ supplierId, bindingId, ...body }: Partial<NewBinding> & { supplierId: string; bindingId: string }) =>
+      authedFetch<{ binding: BindingRow }>(`/suppliers/${supplierId}/bindings/${bindingId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
+      qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+    },
+  });
+}
+
+export function useDeleteBinding() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ supplierId, bindingId }: { supplierId: string; bindingId: string }) =>
+      authedFetch<void>(`/suppliers/${supplierId}/bindings/${bindingId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['supplier-detail', vars.supplierId] });
+      qc.invalidateQueries({ queryKey: ['suppliers-for-material'] });
+    },
+  });
+}
+
+export function useSuppliersForMaterial(kind: MaterialKind | null, code: string | null) {
+  return useQuery({
+    queryKey: ['suppliers-for-material', kind, code],
+    queryFn: () => authedFetch<{ bindings: (BindingRow & { supplier: { id: string; code: string; name: string; status: SupplierStatus } })[] }>(
+      `/suppliers/material/${kind}/${encodeURIComponent(code ?? '')}`,
+    ),
+    enabled: Boolean(kind && code),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+/* ── Purchase Orders ────────────────────────────────────────────────── */
+
+export function usePurchaseOrders(opts?: { status?: PoStatus; supplierId?: string }) {
+  return useQuery({
+    queryKey: ['mfg-purchase-orders', opts?.status ?? 'all', opts?.supplierId ?? 'all'],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (opts?.status) params.set('status', opts.status);
+      if (opts?.supplierId) params.set('supplierId', opts.supplierId);
+      const res = await authedFetch<{ purchaseOrders: PoHeaderRow[] }>(
+        `/mfg-purchase-orders${params.toString() ? `?${params.toString()}` : ''}`,
+      );
+      return res.purchaseOrders;
+    },
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export function usePurchaseOrderDetail(id: string | null) {
+  return useQuery({
+    queryKey: ['mfg-purchase-order-detail', id],
+    queryFn: () => authedFetch<{ purchaseOrder: PoHeaderRow; items: PoItemRow[] }>(`/mfg-purchase-orders/${id}`),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type NewPoItem = {
+  materialKind: MaterialKind;
+  materialCode: string;
+  materialName: string;
+  supplierSku?: string;
+  qty: number;
+  unitPriceCenti: number;
+  bindingId?: string;
+  notes?: string;
+  /* PR #41 — variant fields */
+  itemGroup?: string;
+  description?: string;
+  description2?: string;
+  uom?: string;
+  discountCenti?: number;
+  unitCostCenti?: number;
+  gapInches?: number | null;
+  divanHeightInches?: number | null;
+  divanPriceSen?: number;
+  legHeightInches?: number | null;
+  legPriceSen?: number;
+  customSpecials?: unknown;
+  lineSuffix?: string;
+  specialOrderPriceSen?: number;
+  variants?: Record<string, unknown>;
+  /* PR #77 — per-line ship-to overrides; both null = inherit from PO header */
+  deliveryDate?: string | null;
+  warehouseId?: string | null;
+  /* Commander 2026-05-29 (BUG 1) — source SO line id for lines added via the
+     "From SO" picker. The generic create handler increments this SO line's
+     po_qty_picked so it drops from the picker. NULL for manual PO lines. */
+  soItemId?: string | null;
+};
+
+/** PR — Phase 1: outstanding SO items for the "From SO" picker.
+    Returns SO lines where qty - po_qty_picked > 0 (i.e. still convertible). */
+export type OutstandingSoItem = {
+  soItemId:       string;
+  soDocNo:        string;
+  debtorName:     string | null;
+  branding:       string | null;
+  soStatus:       string;
+  soDate:         string;
+  deliveryDate:   string | null;
+  itemCode:       string;
+  description:    string | null;
+  itemGroup:      string;
+  qty:            number;
+  poQtyPicked:    number;
+  remainingQty:   number;
+  unitPriceCenti: number;
+  variants:       unknown;
+  lineSuffix:     string | null;
+  /* Commander 2026-05-28 — PO-from-SO redesign extras. processingDate +
+     salesLocation come off the SO header; lineDeliveryDate is the SO LINE's
+     own delivery date (used to derive the PO line's warehouse + date). */
+  processingDate:   string | null;
+  salesLocation:    string | null;
+  lineDeliveryDate: string | null;
+  /* Commander 2026-05-28 — the SKU's MAIN supplier (null when unbound, i.e.
+     the line can't be converted to a PO until it's assigned a supplier). */
+  mainSupplierCode: string | null;
+  mainSupplierName: string | null;
+};
+
+export function useOutstandingSoItems() {
+  return useQuery({
+    queryKey: ['mfg-purchase-orders', 'outstanding-so-items'],
+    queryFn: () => authedFetch<{ items: OutstandingSoItem[] }>(
+      `/mfg-purchase-orders/outstanding-so-items`,
+    ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** PR — Multi-select GRN-from-PO picker (task #52, Commander 2026-05-27).
+    Lists PO LINES with remaining qty (qty - received_qty > 0) on outstanding
+    POs (SUBMITTED ∪ PARTIALLY_RECEIVED). Used by /grns/from-po. */
+export type OutstandingPoItem = {
+  poItemId:       string;
+  poId:           string;
+  poDocNo:        string;
+  itemCode:       string;
+  description:    string | null;
+  itemGroup:      string;
+  qty:            number;
+  receivedQty:    number;
+  remainingQty:   number;
+  unitPriceCenti: number;
+  warehouseId:    string | null;
+  variants:       unknown;
+  /* Delivery-carry — the PO line's delivery date, carried into the GRN line. */
+  deliveryDate:   string | null;
+  supplierId:     string;
+  supplierCode:   string;
+  supplierName:   string;
+  poDate:         string;
+  expectedAt:     string | null;
+  /* The PO's purchase_location (header warehouse) — the GRN's receive-into
+     warehouse. One warehouse per GRN: the from-PO picker locks to it. */
+  warehouseLocationId:   string | null;
+  warehouseLocationCode: string | null;
+  warehouseLocationName: string | null;
+};
+
+export function useOutstandingPoItems() {
+  return useQuery({
+    queryKey: ['grns', 'outstanding-po-items'],
+    queryFn: () => authedFetch<{ items: OutstandingPoItem[] }>(
+      `/grns/outstanding-po-items`,
+    ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** PR — Multi-select GRN-from-PO creator (task #52). One GRN per PO
+    (grns.purchase_order_id is a single FK), auto-posted (writes inventory
+    IN + rolls received_qty onto PO items + flips PO status). */
+export function useCreateGrnsFromPoItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      picks: Array<{ poItemId: string; qty: number }>;
+      receivedDate?: string;
+      notes?: string;
+    }) =>
+      authedFetch<{
+        created: Array<{ id: string; grnNumber: string; purchaseOrderId: string; poNumber: string; lineCount: number }>;
+        total: number;
+      }>(`/grns/from-po-items`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+}
+
+/** PR — Multi-select PI-from-GRN picker (task #52). Lists GRN LINES from
+    POSTED GRNs that have NOT yet been invoiced (header-level dedupe per MVP
+    — see /outstanding-grn-items handler for the trade-off note). */
+export type OutstandingGrnItem = {
+  grnItemId:       string;
+  grnId:           string;
+  grnDocNo:        string;
+  receivedAt:      string;
+  supplierId:      string;
+  supplierCode:    string;
+  supplierName:    string;
+  purchaseOrderId: string | null;
+  poDocNo:         string | null;
+  itemCode:        string;
+  description:     string | null;
+  itemGroup:       string;
+  qtyAccepted:     number;
+  unitPriceCenti:  number;
+  variants:        unknown;
+};
+
+export function useOutstandingGrnItems() {
+  return useQuery({
+    queryKey: ['purchase-invoices', 'outstanding-grn-items'],
+    queryFn: () => authedFetch<{ items: OutstandingGrnItem[] }>(
+      `/purchase-invoices/outstanding-grn-items`,
+    ).then((r) => r.items),
+    staleTime: 30_000,
+  });
+}
+
+/** PR — Multi-select PI-from-GRN creator (task #52). One PI per GRN (since
+    purchase_invoices.grn_id is a single FK). Auto-posted (matches Commander
+    preference: documents land in POSTED, not DRAFT). PI does NOT touch
+    inventory (PI is AP-only — inventory landed at GRN time). */
+export function useCreatePisFromGrnItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      picks: Array<{ grnItemId: string; qty: number }>;
+      supplierInvoiceNumber?: string;
+      invoiceDate?: string;
+      dueDate?: string;
+      notes?: string;
+    }) =>
+      authedFetch<{
+        created: Array<{ id: string; invoiceNumber: string; supplierId: string; grnCount: number; lineCount: number }>;
+        total: number;
+      }>(`/purchase-invoices/from-grn-items`, { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['grns'] });
+      qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+    },
+  });
+}
+
+/** PR — Phase 1: create POs (one per supplier) from multi-selected SO
+    items with partial qty. Increments po_qty_picked on success.
+    PR #157 — expectedAt + purchaseLocationId now required (applied to every
+    PO created from the batch). */
+export function useCreatePosFromSoItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      picks: Array<{ soItemId: string; qty: number }>;
+      /* Commander 2026-05-28 — Expected Delivery + Purchase Location are no
+         longer asked: the server derives them per-line from the source SO.
+         Kept optional for any legacy caller that still wants to force them. */
+      expectedAt?: string;
+      purchaseLocationId?: string;
+      /* Commander 2026-05-28 — PO generation mode:
+         'combined' = one PO per supplier (mattresses: many SOs → 1 PO);
+         'per-so'   = one PO per (supplier × SO) (sofa/bedframe: 1 SO → 1 PO). */
+      mode?: 'combined' | 'per-so';
+      /* Commander 2026-05-29 — per-SKU supplier override picked in the MRP
+         ({ itemCode: supplierId }); wins over the main-supplier binding. */
+      supplierByCode?: Record<string, string>;
+      /* Commander 2026-05-29 — when set, APPEND the picked lines to this existing
+         PO (the "Convert from SO" / "Add Line Item" picker scoped to a PO)
+         instead of creating new POs. */
+      targetPoId?: string;
+    }) =>
+      authedFetch<{
+        // Create-new-POs shape:
+        created?: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }>;
+        total?: number;
+        // Append-to-existing-PO shape (targetPoId):
+        targetPoId?: string;
+        poNumber?: string;
+        added?: number;
+      }>(
+        `/mfg-purchase-orders/from-sos`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      if (vars.targetPoId) qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.targetPoId] });
+    },
+  });
+}
+
+/** PR #78 — Convert a Sales Order's items into the current PO. Returns the
+    server's { copied, skipped } counts so the UI can toast. */
+export function useConvertPoFromSo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, soDocNo, itemIds }: { poId: string; soDocNo: string; itemIds?: string[] }) =>
+      authedFetch<{ copied: number; skipped: number; sourceDocNo: string }>(
+        `/mfg-purchase-orders/${poId}/convert-from-so`,
+        { method: 'POST', body: JSON.stringify({ soDocNo, itemIds }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+}
+
+export function useCreatePurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      supplierId: string;
+      currency?: Currency;
+      poDate?: string;
+      expectedAt?: string;
+      notes?: string;
+      items?: NewPoItem[];                     // PR #41 — optional, allow blank-draft
+      /** PR #97 — AutoCount Purchase Location at create time. NULL → can be
+          set on the detail page after creation. */
+      purchaseLocationId?: string | null;
+    }) =>
+      authedFetch<{ id: string; poNumber: string }>(`/mfg-purchase-orders`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+  });
+}
+
+/* PR #41 — header PATCH + item CRUD endpoints for the new PO detail page */
+export function useUpdatePurchaseOrderHeader() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: {
+      id: string; poDate?: string; expectedAt?: string;
+      currency?: Currency; notes?: string; supplierId?: string;
+      /** PR #77 — default ship-to warehouse for every line on this PO. */
+      purchaseLocationId?: string | null;
+    }) => authedFetch<{ purchaseOrder: PoHeaderRow }>(`/mfg-purchase-orders/${id}`, {
+      method: 'PATCH', body: JSON.stringify(body),
+    }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+}
+
+export function useAddPurchaseOrderItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, ...body }: NewPoItem & { poId: string }) =>
+      authedFetch<{ item: PoItemRow }>(`/mfg-purchase-orders/${poId}/items`, {
+        method: 'POST', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+    },
+  });
+}
+
+export function useUpdatePurchaseOrderItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, itemId, ...body }: Partial<NewPoItem> & { poId: string; itemId: string }) =>
+      authedFetch<{ ok: true }>(`/mfg-purchase-orders/${poId}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(body),
+      }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+    },
+  });
+}
+
+export function useDeletePurchaseOrderItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ poId, itemId }: { poId: string; itemId: string }) =>
+      authedFetch<void>(`/mfg-purchase-orders/${poId}/items/${itemId}`, { method: 'DELETE' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.poId] });
+      /* Commander 2026-05-29 (BUG 1) — deleting a PO line releases the source
+         SO line's po_qty_picked back. Refresh the PO list (new total) AND the
+         From-SO picker (the released line should reappear). The prefix key
+         ['mfg-purchase-orders'] also matches ['mfg-purchase-orders',
+         'outstanding-so-items']. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+    },
+  });
+}
+
+export function useSubmitPurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ purchaseOrder: { id: string; status: PoStatus; submitted_at: string } }>(
+        `/mfg-purchase-orders/${id}/submit`,
+        { method: 'PATCH' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+  });
+}
+
+export function useCancelPurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ purchaseOrder: { id: string; status: PoStatus; cancelled_at: string } }>(
+        `/mfg-purchase-orders/${id}/cancel`,
+        { method: 'PATCH' },
+      ),
+    onSuccess: (_, id) => {
+      // Prefix key also matches ['mfg-purchase-orders','outstanding-so-items'],
+      // so the released SO lines reappear in the From-SO picker.
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', id] });
+    },
+  });
+}
+
+/** Hard-delete PO. Only allowed when status is CANCELLED (post-0078). */
+export function useDeletePurchaseOrder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      authedFetch<{ ok: true; deleted: string }>(
+        `/mfg-purchase-orders/${id}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] }),
+  });
+}
+
+/* ── Smart Buttons / Document linkage (Odoo-style fan-out) ───────────
+   Each procurement-document detail page renders a row of pill buttons
+   ("2 GRNs", "1 Invoice", "0 Returns") that point at child docs. The
+   /linked endpoint per module returns the minimal shape needed to count
+   and link. Counters are NOT live — they refetch on mount with the
+   30s staleTime. Add invalidation hooks downstream when needed. */
+
+export type LinkedGrnSummary     = { id: string; grn_number: string;    status: string; received_at: string };
+export type LinkedInvoiceSummary = { id: string; invoice_number: string; status: string; invoice_date: string };
+export type LinkedReturnSummary  = { id: string; return_number: string;  status: string; return_date: string };
+export type LinkedPoRef          = { id: string; po_number: string } | null;
+export type LinkedGrnRef         = { id: string; grn_number: string } | null;
+
+export type PoLinkedDocs = {
+  grns:     LinkedGrnSummary[];
+  invoices: LinkedInvoiceSummary[];
+  returns:  LinkedReturnSummary[];
+};
+export function usePurchaseOrderLinked(poId: string | null) {
+  return useQuery({
+    queryKey: ['mfg-purchase-orders', poId, 'linked'],
+    queryFn: () => authedFetch<PoLinkedDocs>(`/mfg-purchase-orders/${poId}/linked`),
+    enabled: Boolean(poId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type GrnLinkedDocs = {
+  purchaseOrder: LinkedPoRef;
+  invoices:      LinkedInvoiceSummary[];
+  returns:       LinkedReturnSummary[];
+};
+export function useGrnLinked(grnId: string | null) {
+  return useQuery({
+    queryKey: ['grns', grnId, 'linked'],
+    queryFn: () => authedFetch<GrnLinkedDocs>(`/grns/${grnId}/linked`),
+    enabled: Boolean(grnId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type PiLinkedDocs = {
+  grn:           LinkedGrnRef;
+  purchaseOrder: LinkedPoRef;
+};
+export function usePurchaseInvoiceLinked(piId: string | null) {
+  return useQuery({
+    queryKey: ['purchase-invoices', piId, 'linked'],
+    queryFn: () => authedFetch<PiLinkedDocs>(`/purchase-invoices/${piId}/linked`),
+    enabled: Boolean(piId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}
+
+export type PrLinkedDocs = {
+  grn:           LinkedGrnRef;
+  purchaseOrder: LinkedPoRef;
+};
+export function usePurchaseReturnLinked(prId: string | null) {
+  return useQuery({
+    queryKey: ['purchase-returns', prId, 'linked'],
+    queryFn: () => authedFetch<PrLinkedDocs>(`/purchase-returns/${prId}/linked`),
+    enabled: Boolean(prId),
+    staleTime: 30_000,
+    retry: 1,
+    retryDelay: 800,
+  });
+}

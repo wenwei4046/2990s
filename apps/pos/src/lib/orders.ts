@@ -64,6 +64,10 @@ export interface OrderSubmitInput {
   /** Amount actually collected at handover (MYR integer). Threaded to the
    *  RPC's `paid` field; the Confirmed page surfaces this as "PAID RM X". */
   paid?: number;
+  /** Installment term (6 or 12 months); only set when paymentMethod==='installment'. */
+  installmentMonths?: 6 | 12 | null;
+  /** Merchant acquirer / terminal; only set when paymentMethod==='merchant'. */
+  merchantProvider?: 'GHL' | 'HLB' | 'MBB' | 'PBB' | null;
   /** Additional delivery fee keyed in by POS sales at handover (MYR integer).
    *  Forwarded to POST /orders; server adds it to baseFee + crossCategoryFee
    *  to compute the canonical delivery total. (Migration 0029) */
@@ -91,6 +95,12 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
           ...(l.config.bundleId ? { bundleId: l.config.bundleId } : {}),
           ...(l.config.cells ? { cells: l.config.cells } : {}),
           ...(l.config.depth ? { depth: l.config.depth } : {}),
+          ...(l.config.seatUpgradeLabel ? { seatUpgradeLabel: l.config.seatUpgradeLabel } : {}),
+          ...(l.config.seatUpgradeFootrest !== undefined ? { seatUpgradeFootrest: l.config.seatUpgradeFootrest } : {}),
+          ...(l.config.fabricId ? { fabricId: l.config.fabricId } : {}),
+          ...(l.config.colourId ? { colourId: l.config.colourId } : {}),
+          ...(l.config.fabricLabel ? { fabricLabel: l.config.fabricLabel } : {}),
+          ...(l.config.colourLabel ? { colourLabel: l.config.colourLabel } : {}),
         },
       };
     }
@@ -104,6 +114,29 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
           ...(l.config.addonExtras && l.config.addonExtras.length > 0
             ? { addonExtras: l.config.addonExtras }
             : {}),
+        },
+      };
+    }
+    if (l.config.kind === 'bedframe') {
+      return {
+        qty: l.qty,
+        config: {
+          kind: 'bedframe' as const,
+          productId: l.config.productId,
+          sizeId: l.config.sizeId,
+          ...(l.config.sizeOther ? { sizeOther: l.config.sizeOther } : {}),
+          colourId: l.config.colourId,
+          ...(l.config.colourLabel ? { colourLabel: l.config.colourLabel } : {}),
+          ...(l.config.gapId ? { gapId: l.config.gapId } : {}),
+          ...(l.config.gapLabel ? { gapLabel: l.config.gapLabel } : {}),
+          legHeightId: l.config.legHeightId,
+          ...(l.config.legHeightLabel ? { legHeightLabel: l.config.legHeightLabel } : {}),
+          ...(l.config.divanHeightId ? { divanHeightId: l.config.divanHeightId } : {}),
+          ...(l.config.divanHeightLabel ? { divanHeightLabel: l.config.divanHeightLabel } : {}),
+          ...(l.config.totalHeightId ? { totalHeightId: l.config.totalHeightId } : {}),
+          ...(l.config.totalHeightLabel ? { totalHeightLabel: l.config.totalHeightLabel } : {}),
+          ...(l.config.specialIds && l.config.specialIds.length > 0 ? { specialIds: l.config.specialIds } : {}),
+          ...(l.config.specialLabels && l.config.specialLabels.length > 0 ? { specialLabels: l.config.specialLabels } : {}),
         },
       };
     }
@@ -140,6 +173,8 @@ const buildPostBody = (input: OrderSubmitInput): OrderV1PostBody => {
     ...(input.addressLater !== undefined ? { addressLater: input.addressLater } : {}),
     ...(input.addons && input.addons.length > 0 ? { addons: input.addons } : {}),
     ...(input.paid !== undefined ? { paid: input.paid } : {}),
+    ...(input.installmentMonths != null ? { installmentMonths: input.installmentMonths } : {}),
+    ...(input.merchantProvider != null ? { merchantProvider: input.merchantProvider } : {}),
     ...(input.additionalDeliveryFee !== undefined
       ? { additionalDeliveryFee: input.additionalDeliveryFee }
       : {}),

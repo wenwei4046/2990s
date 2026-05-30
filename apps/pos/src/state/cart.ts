@@ -14,8 +14,22 @@ export interface SofaConfigSnapshot {
   bundleId?: string;     // set when Quick-Pick
   cells?: Cell[];        // set when Custom-build
   depth?: Depth;
+  /** Per-Model upgrade label, stored so cartSummary can re-derive the
+   *  "+ N <label>" suffix for Custom-build lines already in the cart. F3. */
+  seatUpgradeLabel?: string | null;
+  /** Upgrade footrest flag. false = auto-included headrest → invoice shows
+   *  "+ N <label>" on a quick-pick line (F3). */
+  seatUpgradeFootrest?: boolean;
+  /** Chosen upholstery fabric + colour (spec 2026-05-24). fabricId/colourId
+   *  feed the order POST (server validates + prices); the labels + hex are
+   *  display snapshots so the cart/invoice render without a DB join. */
+  fabricId?: string;
+  colourId?: string;
+  fabricLabel?: string;
+  colourLabel?: string;
+  colourHex?: string;
   total: number;
-  summary: string;       // e.g. "3+L · Bundle"
+  summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
 
 export interface SizeConfigSnapshot {
@@ -42,7 +56,40 @@ export interface FlatConfigSnapshot {
   summary: string;       // e.g. "Flat price"
 }
 
-export type CartConfig = SofaConfigSnapshot | SizeConfigSnapshot | FlatConfigSnapshot;
+// Bedframe configurator (spec 2026-05-25). Field names mirror the Zod
+// BedframeLineConfig so buildPostBody maps 1:1. Labels + hex are display
+// snapshots for the cart/invoice; the server revalidates ids + reprices.
+// sizeOther is a free-text special size (e.g. "200 x 200"), display-only.
+export interface BedframeConfigSnapshot {
+  kind: 'bedframe';
+  productId: string;
+  productName: string;
+  sizeId: string;
+  sizeOther?: string;
+  colourId: string;
+  colourLabel: string | null;
+  colourHex?: string;
+  gapId?: string;
+  legHeightId: string;
+  divanHeightId?: string;
+  totalHeightId?: string;
+  specialIds?: string[];
+  // Display-label snapshots (parallel to the *Id fields) so the cart, printed
+  // Sales Order, and Backend detail render the spec without a join.
+  gapLabel?: string | null;
+  legHeightLabel?: string | null;
+  divanHeightLabel?: string | null;
+  totalHeightLabel?: string | null;
+  specialLabels?: string[];
+  total: number;
+  summary: string;       // e.g. "Queen · Sand · Gap 6\" · Leg 4\""
+}
+
+export type CartConfig =
+  | SofaConfigSnapshot
+  | SizeConfigSnapshot
+  | FlatConfigSnapshot
+  | BedframeConfigSnapshot;
 
 export interface CartLine {
   key: string;
@@ -52,17 +99,22 @@ export interface CartLine {
 
 interface CartState {
   lines: CartLine[];
+  /** Set when the cart was loaded from a saved quote. The quote is consumed
+   *  (deleted) only when the order is confirmed — NOT on load — so reviewing a
+   *  quote never destroys the saved draft. Cleared on clear()/restore(). */
+  sourceQuoteId: string | null;
   addConfigured: (config: CartConfig, opts?: { editingKey?: string }) => string;
   setQty: (key: string, qty: number) => void;
   remove: (key: string) => void;
   clear: () => void;
-  restore: (lines: CartLine[]) => void;
+  restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
 
 export const useCart = create<CartState>()(
   persist(
     (set, get) => ({
       lines: [],
+      sourceQuoteId: null,
 
       addConfigured(config, opts) {
         const editingKey = opts?.editingKey;
@@ -88,11 +140,11 @@ export const useCart = create<CartState>()(
       },
 
       clear() {
-        set({ lines: [] });
+        set({ lines: [], sourceQuoteId: null });
       },
 
-      restore(lines) {
-        set({ lines: lines.map((l) => ({ ...l })) });
+      restore(lines, sourceQuoteId = null) {
+        set({ lines: lines.map((l) => ({ ...l })), sourceQuoteId });
       },
     }),
     {
@@ -123,7 +175,7 @@ export const cartSummary = (config: CartConfig): string => {
     config.cells.length > 0 &&
     config.depth
   ) {
-    return summarizeSofaCells(config.cells, config.depth);
+    return summarizeSofaCells(config.cells, config.depth, config.seatUpgradeLabel);
   }
   return config.summary;
 };

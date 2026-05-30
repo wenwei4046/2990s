@@ -4,7 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from './supabase';
-import { BUNDLES, cellsToPoSkus, type Cell, type Depth } from '@2990s/shared';
+import { BUNDLES, cellsToPoSkus, describeBedframeLine, type Cell, type Depth } from '@2990s/shared';
 
 export interface Category {
   id: string;
@@ -45,6 +45,15 @@ export interface BundleLibrary {
   sortOrder: number;
 }
 
+export interface FabricLibrary {
+  id: string;
+  label: string;
+  tier: string;
+  defaultSurcharge: number;
+  active: boolean;
+  sortOrder: number;
+}
+
 export interface SizeLibrary {
   id: string;
   label: string;
@@ -58,7 +67,7 @@ export interface ProductRow {
   sku: string;
   categoryId: string;
   seriesId: string | null;
-  pricingKind: 'sofa_build' | 'size_variants' | 'flat' | 'tbc';
+  pricingKind: 'sofa_build' | 'size_variants' | 'bedframe_build' | 'flat' | 'tbc';
   name: string;
   detail: string | null;
   sizeDisplay: string | null;
@@ -69,6 +78,9 @@ export interface ProductRow {
   visible: boolean;
   flatPrice: number | null;
   reclinerUpgradePrice: number | null;
+  seatUpgradeLabel: string | null;
+  seatUpgradeFootrest: boolean;
+  depthOptions: string | null;
   includedAddons: { addonId: string; qty: number }[];
   updatedAt: string;
 }
@@ -162,6 +174,28 @@ export const useBundleLibrary = () =>
     ...LIBRARY_OPTS,
   });
 
+// All fabrics (incl. inactive) so admin can re-enable; SofaEditor filters/labels.
+export const useFabricLibrary = () =>
+  useQuery({
+    queryKey: ['library', 'fabrics'],
+    queryFn: async (): Promise<FabricLibrary[]> => {
+      const { data, error } = await supabase
+        .from('fabric_library')
+        .select('id, label, tier, default_surcharge, active, sort_order')
+        .order('sort_order');
+      if (error) throw error;
+      return (data ?? []).map((r) => ({
+        id: r.id,
+        label: r.label,
+        tier: r.tier,
+        defaultSurcharge: r.default_surcharge,
+        active: r.active,
+        sortOrder: r.sort_order,
+      }));
+    },
+    ...LIBRARY_OPTS,
+  });
+
 export const useSizeLibrary = () =>
   useQuery({
     queryKey: ['library', 'sizes'],
@@ -189,7 +223,7 @@ export const useProducts = () =>
       const { data, error } = await supabase
         .from('products')
         .select(
-          'id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, stock, low_at, visible, flat_price, recliner_upgrade_price, included_addons, updated_at',
+          'id, sku, category_id, series_id, pricing_kind, name, detail, size_display, img_key, thumb_key, stock, low_at, visible, flat_price, recliner_upgrade_price, seat_upgrade_label, seat_upgrade_footrest, depth_options, included_addons, updated_at',
         )
         .order('updated_at', { ascending: false });
       if (error) throw error;
@@ -209,6 +243,9 @@ export const useProducts = () =>
         visible: r.visible,
         flatPrice: r.flat_price,
         reclinerUpgradePrice: r.recliner_upgrade_price,
+        seatUpgradeLabel: (r as { seat_upgrade_label: string | null }).seat_upgrade_label ?? null,
+        seatUpgradeFootrest: (r as { seat_upgrade_footrest: boolean | null }).seat_upgrade_footrest ?? true,
+        depthOptions: (r as { depth_options: string | null }).depth_options ?? null,
         includedAddons: (r.included_addons ?? []) as { addonId: string; qty: number }[],
         updatedAt: r.updated_at,
       }));
@@ -235,13 +272,13 @@ export interface ProductSizeRow {
 
 export const useProductPricing = (productId: string | null, pricingKind: ProductRow['pricingKind'] | null) =>
   useQuery({
-    enabled: !!productId && (pricingKind === 'sofa_build' || pricingKind === 'size_variants'),
+    enabled: !!productId && (pricingKind === 'sofa_build' || pricingKind === 'size_variants' || pricingKind === 'bedframe_build'),
     queryKey: ['product', productId, 'pricing', pricingKind],
     queryFn: async () => {
       if (!productId) throw new Error('no productId');
 
       if (pricingKind === 'sofa_build') {
-        const [comps, bundles] = await Promise.all([
+        const [comps, bundles, fabrics] = await Promise.all([
           supabase
             .from('product_compartments')
             .select('compartment_id, active, price')
@@ -250,9 +287,14 @@ export const useProductPricing = (productId: string | null, pricingKind: Product
             .from('product_bundles')
             .select('bundle_id, active, price')
             .eq('product_id', productId),
+          supabase
+            .from('product_fabrics')
+            .select('fabric_id, active, surcharge')
+            .eq('product_id', productId),
         ]);
         if (comps.error) throw comps.error;
         if (bundles.error) throw bundles.error;
+        if (fabrics.error) throw fabrics.error;
         return {
           kind: 'sofa_build' as const,
           compartments: (comps.data ?? []).map((r) => ({
@@ -264,6 +306,11 @@ export const useProductPricing = (productId: string | null, pricingKind: Product
             bundleId: r.bundle_id,
             active: r.active,
             price: r.price,
+          })),
+          fabrics: (fabrics.data ?? []).map((r) => ({
+            fabricId: r.fabric_id,
+            active: r.active,
+            surcharge: r.surcharge,
           })),
         };
       }
@@ -444,7 +491,22 @@ export const useOrders = () =>
                 purchased: purchased.has(`${r.id}|${line.sku}`),
               }));
             }
-            // Non-sofa products (mattress / bedframe / flat): unchanged.
+            // Bedframe configurator (spec 2026-05-25): full spec from the
+            // persisted config label snapshots, appended to the product name
+            // so the factory PO sheet reads size/colour/gap/leg/divan/total/
+            // specials — mirrors how sofa folds its build into productName.
+            if (p.pricing_kind === 'bedframe_build') {
+              const spec = describeBedframeLine(it.config ?? {});
+              return [{
+                ...base,
+                sku: p.sku,
+                size: null,
+                colour: null,
+                productName: spec ? `${p.name} · ${spec}` : p.name,
+                purchased: purchased.has(`${r.id}|${p.sku}`),
+              }];
+            }
+            // Other non-sofa products (mattress / flat): unchanged.
             return [{
               ...base,
               sku: p.sku,
@@ -658,7 +720,12 @@ export const usePurchaseOrders = (orderId: string | null) =>
       const seen = new Set<string>();
       const result: { id: string; poNumber: string; createdAt: string }[] = [];
       for (const row of data ?? []) {
-        const po = (row as any).purchase_orders;
+        // Supabase typed embedded selects as `GenericStringError`; runtime
+        // shape is the join. Cast through `unknown` to recover access.
+        const joined = row as unknown as {
+          purchase_orders: { id: string; po_number: string; created_at: string } | null;
+        };
+        const po = joined.purchase_orders;
         if (po && !seen.has(po.id)) {
           seen.add(po.id);
           result.push({ id: po.id, poNumber: po.po_number, createdAt: po.created_at });

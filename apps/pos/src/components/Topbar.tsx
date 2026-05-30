@@ -87,6 +87,11 @@ export function Topbar({ step, rightSlot, centerSlot, backTo, backLabel }: Topba
               <ListOrdered size={13} strokeWidth={1.75} />
               <span>My orders</span>
             </Link>
+            {/* Products + SO Maintenance moved to the Catalog left sidebar
+                (Commander 2026-05-28 "搬过去左边左下角那一边"). Removed from
+                the topbar to keep selling-flow chrome focused on Quotes /
+                My orders / Cart. Links live in pages/Catalog.tsx's sidebar
+                under the "Maintain" heading. */}
             {count > 0 && (
               <Link to="/cart" className={styles.cartChip} aria-label="Cart">
                 <ShoppingBag size={13} strokeWidth={1.75} />

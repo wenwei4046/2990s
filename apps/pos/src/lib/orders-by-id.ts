@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { describeSofaLine, fabricColourSuffix, describeBedframeLine } from '@2990s/shared';
 import { supabase } from './supabase';
 
 export interface OrderDetail {
@@ -28,9 +29,15 @@ export interface OrderDetail {
     product_id:   string;
     product_name: string;
     product_sku:  string | null;
+    /** Technical model code (e.g. "SF 5130"). Sofa-only; null otherwise.
+     *  Shown ONLY on the Sales Order as "<model_code> · <product_name>". */
+    product_model_code: string | null;
     qty:          number;
     unit_price:   number;
     line_total:   number;
+    /** Config-derived line description (e.g. "2-Seater + 2 Power slide",
+     *  "1A-LHF + 2A-RHF"). null when the product has no describable config. */
+    description:  string | null;
   }[];
 }
 
@@ -63,21 +70,36 @@ export const useOrderById = (orderId: string | undefined) =>
       const { data: items, error: itemErr } = await supabase
         .from('order_items')
         .select(`
-          product_id, qty, unit_price, line_total,
-          products ( name, sku, category_id )
+          product_id, qty, unit_price, line_total, config,
+          products ( name, sku, category_id, model_code )
         `)
         .eq('order_id', orderId)
         .eq('kind', 'product');
       if (itemErr) throw itemErr;
 
-      const lines = (items ?? []).map((i: any) => ({
-        product_id:   i.product_id,
-        product_name: i.products?.name ?? '',
-        product_sku:  i.products?.sku ?? null,
-        qty:          i.qty,
-        unit_price:   i.unit_price ?? 0,
-        line_total:   i.line_total,
-      }));
+      const lines = (items ?? []).map((i: any) => {
+        const config = i.config;
+        let description: string | null = null;
+        if (config && config.kind === 'sofa') {
+          description = describeSofaLine(config);
+          if (config.depth) description += ` · ${config.depth}"`;  // F5: show depth
+          // Fabric + colour on the invoice line (spec 2026-05-24).
+          description += fabricColourSuffix(config.fabricLabel, config.colourLabel);
+        } else if (config && config.kind === 'bedframe') {
+          // Bedframe spec from the persisted config labels (spec 2026-05-25).
+          description = describeBedframeLine(config);
+        }
+        return {
+          product_id:   i.product_id,
+          product_name: i.products?.name ?? '',
+          product_sku:  i.products?.sku ?? null,
+          product_model_code: i.products?.model_code ?? null,
+          qty:          i.qty,
+          unit_price:   i.unit_price ?? 0,
+          line_total:   i.line_total,
+          description,
+        };
+      });
 
       let showroom: OrderDetail['showroom'] = null;
       if (row.showroom_id) {
@@ -91,7 +113,10 @@ export const useOrderById = (orderId: string | undefined) =>
 
       const byCat = new Map<string, number>();
       for (const i of items ?? []) {
-        const cat: string | null = (i as any).products?.category_id ?? null;
+        // Supabase types embedded m2o joins as arrays; runtime is the
+        // single related row. Cast via unknown to recover the actual shape.
+        const products = (i as unknown as { products: { category_id: string | null } | null }).products;
+        const cat: string | null = products?.category_id ?? null;
         if (cat) byCat.set(cat, (byCat.get(cat) ?? 0) + (i.line_total as number));
       }
       const dominantId = [...byCat.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
@@ -103,7 +128,9 @@ export const useOrderById = (orderId: string | undefined) =>
           .select('id, label, hero_image_key')
           .eq('id', dominantId)
           .maybeSingle();
-        if (cat) dominantCategory = cat as any;
+        // Cast through `unknown` — Supabase typed selects return
+        // `GenericStringError` until generated types exist.
+        if (cat) dominantCategory = cat as unknown as OrderDetail['dominantCategory'];
       }
 
       return {

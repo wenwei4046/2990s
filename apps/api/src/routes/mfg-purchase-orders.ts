@@ -1,0 +1,1477 @@
+// ----------------------------------------------------------------------------
+// /mfg-purchase-orders — manufacturer-side POs to suppliers.
+//
+// Separate from the existing /purchase-orders route (which serves the
+// retail-order → supplier-PO flow via purchase_order_lines). This route
+// serves manufacturer POs against purchase_order_items (the extended PO
+// table from migration 0041).
+//
+// Endpoints:
+//   GET   /mfg-purchase-orders                — list with filters
+//   GET   /mfg-purchase-orders/:id            — detail (header + items)
+//   POST  /mfg-purchase-orders                — create draft PO from items
+//   PATCH /mfg-purchase-orders/:id            — update header (status/notes/etc)
+//   PATCH /mfg-purchase-orders/:id/submit     — flip DRAFT → SUBMITTED
+//   PATCH /mfg-purchase-orders/:id/cancel     — flip → CANCELLED
+// ----------------------------------------------------------------------------
+
+import { Hono } from 'hono';
+import {
+  buildVariantSummary, computeVariantKey, pickComboMatch, spreadComboTotal,
+  splitSofaCode, sofaHeightKey,
+  type VariantAttrs, type SofaComboRow, type SofaPriceTier,
+} from '@2990s/shared';
+import {
+  computeMfgPoUnitCost,
+  type MfgFabricTier,
+  type MaintenanceConfig,
+  type PoPriceMatrix,
+} from '@2990s/shared/mfg-pricing';
+import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
+import { supabaseAuth } from '../middleware/auth';
+import type { Env, Variables } from '../env';
+
+/* ── Supplier sofa-combo auto-pricing (Commander 2026-05-29) ─────────────────
+   The supplier prices a sofa SET (a colour-matched bundle of modules) as a
+   single deal. When a PO sofa line's modules MATCH one of the supplier's own
+   combo rows, the combo price is the cost — exactly mirroring how the sales
+   order side overrides a sofa's à-la-carte total with a combo (sofa-build.ts
+   `groupPrice`), but on the COST side and scoped to the supplier's combos
+   (sofa_combo_pricing.supplier_id = the PO's supplier, NOT the NULL sales-side
+   rows). When nothing matches, the line keeps its per-seat-size matrix cost. */
+
+/** Load the involved suppliers' OWN combo rows, grouped by supplier_id. Sales-
+    side rows (supplier_id IS NULL) are intentionally excluded — those are the
+    Products-page master combos and must never leak into purchasing cost. */
+async function loadSupplierSofaCombos(
+  sb: any,
+  supplierIds: readonly string[],
+): Promise<Map<string, SofaComboRow[]>> {
+  const out = new Map<string, SofaComboRow[]>();
+  if (supplierIds.length === 0) return out;
+  const { data } = await sb
+    .from('sofa_combo_pricing')
+    .select('id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, effective_from, deleted_at')
+    .is('deleted_at', null)
+    .in('supplier_id', supplierIds);
+  for (const r of (data ?? []) as Array<{
+    id: string; base_model: string; modules: string[][]; tier: SofaPriceTier | null;
+    customer_id: string | null; supplier_id: string; prices_by_height: Record<string, number | null>;
+    label: string | null; effective_from: string; deleted_at: string | null;
+  }>) {
+    const row: SofaComboRow = {
+      id: r.id, baseModel: r.base_model, modules: r.modules ?? [],
+      tier: r.tier, customerId: r.customer_id,
+      pricesByHeight: r.prices_by_height ?? {},
+      label: r.label, effectiveFrom: r.effective_from, deletedAt: r.deleted_at,
+    };
+    const arr = out.get(r.supplier_id) ?? [];
+    arr.push(row);
+    out.set(r.supplier_id, arr);
+  }
+  return out;
+}
+
+export const mfgPurchaseOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+mfgPurchaseOrders.use('*', supabaseAuth);
+
+const VALID_STATUSES = new Set(['SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED']);
+const VALID_CURRENCIES = new Set(['MYR', 'RMB', 'USD', 'SGD']);
+const VALID_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
+
+const HEADER_COLS =
+  'id, po_number, supplier_id, status, po_date, expected_at, currency, ' +
+  'subtotal_centi, tax_centi, total_centi, notes, submitted_at, received_at, ' +
+  'cancelled_at, created_at, created_by, updated_at, ' +
+  /* PR #77 — default ship-to warehouse for every line on this PO */
+  'purchase_location_id';
+
+const ITEM_COLS =
+  'id, purchase_order_id, binding_id, material_kind, material_code, material_name, ' +
+  'supplier_sku, qty, unit_price_centi, line_total_centi, received_qty, notes, created_at, ' +
+  /* PR #41 — variant fields (migration 0056) */
+  'item_group, description, description2, uom, discount_centi, unit_cost_centi, ' +
+  'gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, ' +
+  'custom_specials, line_suffix, special_order_price_sen, variants, ' +
+  /* PR #77 — per-line delivery date + ship-to warehouse */
+  'delivery_date, warehouse_id';
+
+// ── List ──────────────────────────────────────────────────────────────
+mfgPurchaseOrders.get('/', async (c) => {
+  const status = c.req.query('status');
+  const supplierId = c.req.query('supplierId');
+  const supabase = c.get('supabase');
+
+  let q = supabase
+    .from('purchase_orders')
+    .select(
+      // PR — Commander 2026-05-27: PO list rows now surface a per-row items
+      // summary (AutoCount-style) so the buyer can see at a glance what's
+      // inside each PO without drilling in. Nested select keeps it to one
+      // query — Postgres / Supabase joins purchase_order_items on
+      // purchase_order_id for every row.
+      `${HEADER_COLS}, supplier:suppliers(id, code, name), items:purchase_order_items(material_code, material_name, qty)`,
+    )
+    .order('po_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (status && VALID_STATUSES.has(status)) q = q.eq('status', status);
+  if (supplierId) q = q.eq('supplier_id', supplierId);
+
+  const { data, error } = await q;
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ purchaseOrders: data ?? [] });
+});
+
+/* ── PR — Outstanding SO items (qty > po_qty_picked) for the
+ * "From SO" picker on the New PO page. Returns a flat list grouped by
+ * doc_no so the frontend can render checkboxes per SO + per-line qty
+ * inputs. Filters out:
+ *   - cancelled SO line rows
+ *   - cancelled SO header status (CANCELLED)
+ *   - lines already fully picked (qty - po_qty_picked <= 0)
+ * Caller can filter further by supplierId via ?supplierId= once item
+ * → main supplier binding is known.
+ *
+ * IMPORTANT (route ordering): this STATIC path MUST be registered before
+ * the `/:id` param route below — otherwise Hono matches `/:id` first and
+ * tries to cast "outstanding-so-items" to a uuid → 500. (Bug fix
+ * 2026-05-28: the PO-from-SO page showed "no outstanding lines" because
+ * this endpoint was 500-ing from being shadowed by `/:id`.) */
+mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
+  const supabase = c.get('supabase');
+  // Pull SO items with remaining qty > 0, joining the parent SO so we
+  // can filter cancelled SOs + show debtor + branding + dates.
+  /* Commander 2026-05-28 — PO-from-SO redesign. Surface three extra fields
+     so the frontend grid can render Processing Date + derive each PO line's
+     warehouse (from the SO's sales_location) + delivery date (from the SO
+     LINE's own line_delivery_date). internal_expected_dd + sales_location
+     come off the SO header; line_delivery_date off the item. */
+  const { data: items, error } = await supabase
+    .from('mfg_sales_order_items')
+    .select(`
+      id, doc_no, item_code, description, item_group, qty, po_qty_picked, unit_price_centi,
+      variants, line_suffix, cancelled, line_delivery_date,
+      so:mfg_sales_orders!inner ( doc_no, debtor_name, branding, status, so_date, customer_delivery_date, internal_expected_dd, sales_location )
+    `)
+    .eq('cancelled', false)
+    .order('doc_no', { ascending: false })
+    .limit(500);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  type Row = {
+    id: string; doc_no: string; item_code: string; description: string | null;
+    item_group: string; qty: number; po_qty_picked: number; unit_price_centi: number;
+    variants: unknown; line_suffix: string | null; cancelled: boolean;
+    line_delivery_date: string | null;
+    so: {
+      doc_no: string; debtor_name: string | null; branding: string | null; status: string;
+      so_date: string; customer_delivery_date: string | null;
+      internal_expected_dd: string | null; sales_location: string | null;
+    };
+  };
+
+  /* Commander 2026-05-28 — resolve each SKU's MAIN supplier so the PO-from-SO
+     grid can show it (and the user sees which lines are even convertible — an
+     unbound SKU can't be PO'd). One batched query over the distinct codes;
+     prefer is_main_supplier, else first binding. */
+  const skuCodes = [...new Set(((items ?? []) as unknown as Row[]).map((r) => r.item_code).filter(Boolean))];
+  const mainSupplierByCode = new Map<string, { code: string; name: string }>();
+  if (skuCodes.length > 0) {
+    const { data: binds } = await supabase
+      .from('supplier_material_bindings')
+      .select('material_code, is_main_supplier, supplier:suppliers(code, name)')
+      .eq('material_kind', 'mfg_product')
+      .in('material_code', skuCodes)
+      .order('is_main_supplier', { ascending: false });
+    for (const b of (binds ?? []) as Array<{ material_code: string; supplier: { code: string; name: string } | Array<{ code: string; name: string }> | null }>) {
+      if (mainSupplierByCode.has(b.material_code)) continue;
+      const s = Array.isArray(b.supplier) ? b.supplier[0] : b.supplier;
+      if (s) mainSupplierByCode.set(b.material_code, { code: s.code, name: s.name });
+    }
+  }
+
+  const outstanding = ((items ?? []) as unknown as Row[])
+    .filter((r) => r.so.status !== 'CANCELLED')
+    .filter((r) => r.qty - r.po_qty_picked > 0)
+    .map((r) => ({
+      soItemId:        r.id,
+      soDocNo:         r.doc_no,
+      debtorName:      r.so.debtor_name,
+      branding:        r.so.branding,
+      soStatus:        r.so.status,
+      soDate:          r.so.so_date,
+      deliveryDate:    r.so.customer_delivery_date,
+      itemCode:        r.item_code,
+      description:     r.description,
+      itemGroup:       r.item_group,
+      qty:             r.qty,
+      poQtyPicked:     r.po_qty_picked,
+      remainingQty:    r.qty - r.po_qty_picked,
+      unitPriceCenti:  r.unit_price_centi,
+      variants:        r.variants,
+      lineSuffix:      r.line_suffix,
+      // Commander 2026-05-28 — new fields for the redesigned PO-from-SO grid.
+      processingDate:   r.so.internal_expected_dd,
+      salesLocation:    r.so.sales_location,
+      lineDeliveryDate: r.line_delivery_date,
+      mainSupplierCode: mainSupplierByCode.get(r.item_code)?.code ?? null,
+      mainSupplierName: mainSupplierByCode.get(r.item_code)?.name ?? null,
+    }));
+
+  return c.json({ items: outstanding });
+});
+
+// ── Detail ────────────────────────────────────────────────────────────
+mfgPurchaseOrders.get('/:id', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  const [headerRes, itemsRes] = await Promise.all([
+    supabase
+      .from('purchase_orders')
+      .select(`${HEADER_COLS}, supplier:suppliers(id, code, name, contact_person, phone, email, address)`)
+      .eq('id', id)
+      .maybeSingle(),
+    supabase.from('purchase_order_items').select(ITEM_COLS).eq('purchase_order_id', id).order('created_at'),
+  ]);
+
+  if (headerRes.error) return c.json({ error: 'load_failed', reason: headerRes.error.message }, 500);
+  if (!headerRes.data) return c.json({ error: 'not_found' }, 404);
+
+  return c.json({ purchaseOrder: headerRes.data, items: itemsRes.data ?? [] });
+});
+
+// ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
+// Returns the GRNs, Purchase Invoices and Purchase Returns that descend
+// from this PO. Tiny shape per child — counters + clickable link only.
+mfgPurchaseOrders.get('/:id/linked', async (c) => {
+  const id = c.req.param('id');
+  const sb = c.get('supabase');
+
+  const [grnRes, piRes, prRes] = await Promise.all([
+    sb.from('grns')
+      .select('id, grn_number, status, received_at')
+      .eq('purchase_order_id', id)
+      .order('received_at', { ascending: false }),
+    sb.from('purchase_invoices')
+      .select('id, invoice_number, status, invoice_date')
+      .eq('purchase_order_id', id)
+      .order('invoice_date', { ascending: false }),
+    sb.from('purchase_returns')
+      .select('id, return_number, status, return_date')
+      .eq('purchase_order_id', id)
+      .order('return_date', { ascending: false }),
+  ]);
+
+  if (grnRes.error) return c.json({ error: 'load_failed', reason: grnRes.error.message }, 500);
+  if (piRes.error)  return c.json({ error: 'load_failed', reason: piRes.error.message  }, 500);
+  if (prRes.error)  return c.json({ error: 'load_failed', reason: prRes.error.message  }, 500);
+
+  return c.json({
+    grns:     grnRes.data ?? [],
+    invoices: piRes.data  ?? [],
+    returns:  prRes.data  ?? [],
+  });
+});
+
+// ── Create ────────────────────────────────────────────────────────────
+// body: {
+//   supplierId, currency?, expectedAt?, notes?,
+//   items: [{ materialKind, materialCode, materialName, supplierSku?, qty, unitPriceCenti, bindingId? }]
+// }
+mfgPurchaseOrders.post('/', async (c) => {
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch {
+    return c.json({ error: 'invalid_json' }, 400);
+  }
+
+  const supplierId = body.supplierId as string | undefined;
+  if (!supplierId) return c.json({ error: 'supplier_id_required' }, 400);
+
+  // PR #157 — Commander 2026-05-26: Expected Delivery + Purchase Location are
+  // required on submit. Both fields fan out to per-line warehouse + delivery
+  // date and are required downstream for GRN. Defense-in-depth: frontend also
+  // blocks the submit button until both are filled.
+  const expectedAt = body.expectedAt as string | undefined;
+  if (!expectedAt) return c.json({ error: 'expected_at_required' }, 400);
+  const purchaseLocationId = body.purchaseLocationId as string | undefined;
+  if (!purchaseLocationId) return c.json({ error: 'purchase_location_id_required' }, 400);
+
+  // PR #41 — allow blank-draft creation (no items). Commander 2026-05-26:
+  // PO needs to be "raw" — start with just supplier + date, add items
+  // line-by-line on the detail page (matches SO flow).
+  const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
+
+  const currency = ((body.currency as string) ?? 'MYR').toUpperCase();
+  if (!VALID_CURRENCIES.has(currency)) return c.json({ error: 'invalid_currency' }, 400);
+
+  // Generate human-readable PO number. Format: PO-YYMM-NNN (counts within month).
+  const supabase = c.get('supabase');
+  const user = c.get('user');
+
+  const yymm = (() => {
+    const d = new Date();
+    return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+
+  // Crude PO# generation: count current-month POs + 1. Race-prone in theory;
+  // in practice 4-staff org with <100 POs/month — we'll lose race only with
+  // simultaneous clicks. Fine for now; harden with a SEQUENCE later.
+  const { count: monthCount } = await supabase
+    .from('purchase_orders')
+    .select('id', { head: true, count: 'exact' })
+    .like('po_number', `PO-${yymm}-%`);
+  const poNumber = `PO-${yymm}-${String((monthCount ?? 0) + 1).padStart(3, '0')}`;
+
+  // Compute totals
+  let subtotal = 0;
+  /* Commander 2026-05-29 (BUG 1) — collect (soItemId, qty) for any line that
+     came from the From-SO picker so we can roll po_qty_picked forward AFTER the
+     items insert (mirrors the /from-sos picks handler). Grouped by soItemId in
+     case the same SO line shows up on more than one PO line. soItemId is NOT a
+     purchase_order_items column — it's stripped from the insert payload. */
+  const pickedQtyBySoItem = new Map<string, number>();
+  const itemRows = items.map((it) => {
+    const kind = it.materialKind as string;
+    if (!VALID_KINDS.has(kind)) throw new Error(`invalid material_kind: ${kind}`);
+    if (!it.materialCode || !it.materialName) throw new Error('material_code + material_name required per item');
+    const qty = Math.max(0, Number(it.qty ?? 0));
+    // BUG 1 — tally per-SO-line picked qty (only for From-SO lines).
+    const soItemId = (it.soItemId as string | undefined) ?? null;
+    if (soItemId && qty > 0) {
+      pickedQtyBySoItem.set(soItemId, (pickedQtyBySoItem.get(soItemId) ?? 0) + qty);
+    }
+    const unit = Math.max(0, Number(it.unitPriceCenti ?? 0));
+    const discountCenti = Math.max(0, Number(it.discountCenti ?? 0));
+    // PR #97 — line total honours per-line discount when computed up front
+    // (matches the AutoCount "Total" column in the new full-page form).
+    const lineTotal = Math.max(0, qty * unit - discountCenti);
+    subtotal += lineTotal;
+    return {
+      binding_id: (it.bindingId as string | undefined) ?? null,
+      material_kind: kind,
+      material_code: it.materialCode,
+      material_name: it.materialName,
+      supplier_sku: (it.supplierSku as string | undefined) ?? null,
+      qty,
+      unit_price_centi: unit,
+      line_total_centi: lineTotal,
+      notes: (it.notes as string | undefined) ?? null,
+      /* PR #97 — pass-through per-line variant + AutoCount fields. NULL
+         when absent so the column default / nullable behaviour kicks in. */
+      discount_centi: discountCenti,
+      delivery_date: (it.deliveryDate as string | undefined) ?? null,
+      warehouse_id:  (it.warehouseId  as string | undefined) ?? null,
+      /* Commander 2026-05-28 — persist the per-line category + variants the PO
+         form now collects (mirroring SO), and auto-generate Description 2 from
+         them (server-owned, like the SO route). */
+      item_group:   (it.itemGroup as string | undefined) ?? null,
+      variants:     (it.variants as unknown) ?? null,
+      description:  (it.description as string | undefined) ?? null,
+      description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+      /* Commander 2026-05-29 (BUG 1) — persist the source SO line (migration
+         0098) so deleting this PO line can release po_qty_picked back to the
+         From-SO picker. NULL for manually-added lines. */
+      so_item_id:   soItemId,
+    };
+  });
+
+  /* PR #131 — Commander 2026-05-26: "PO 是直接 create 的，不需要进入 DRAFT".
+     POST creates SUBMITTED directly. Migration 0078 (2026-05-27) removed
+     DRAFT from po_status entirely. PATCH /submit is kept as an idempotent
+     no-op for any legacy callers. */
+  const headerInsert: Record<string, unknown> = {
+    po_number: poNumber,
+    supplier_id: supplierId,
+    status: 'SUBMITTED',
+    submitted_at: new Date().toISOString(),
+    currency,
+    expected_at: expectedAt,
+    notes: (body.notes as string | undefined) ?? null,
+    subtotal_centi: subtotal,
+    tax_centi: 0,
+    total_centi: subtotal,
+    created_by: user.id,
+    /* PR #97 — AutoCount Purchase Location at create time.
+       PR #157 — now required (see validation above). */
+    purchase_location_id: purchaseLocationId,
+  };
+  // Optional poDate — if absent, the column default (now()) wins.
+  if (body.poDate) headerInsert.po_date = body.poDate;
+
+  const { data: headerData, error: hErr } = await supabase
+    .from('purchase_orders')
+    .insert(headerInsert)
+    .select(HEADER_COLS)
+    .single();
+
+  if (hErr) {
+    if (hErr.code === '42501') return c.json({ error: 'forbidden', reason: hErr.message }, 403);
+    return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
+  }
+
+  // Cast through `unknown` — Supabase JS without generated types returns
+  // `GenericStringError` from `.select(string).single()` even when data is
+  // populated. Project-wide pattern; see apps/api/src/routes/admin.ts L97.
+  const header = headerData as unknown as { id: string; po_number: string };
+
+  if (itemRows.length > 0) {
+    const itemsToInsert = itemRows.map((r) => ({ ...r, purchase_order_id: header.id }));
+    const { error: iErr } = await supabase.from('purchase_order_items').insert(itemsToInsert);
+    if (iErr) {
+      // Best-effort rollback of header so we don't leak a no-items PO.
+      await supabase.from('purchase_orders').delete().eq('id', header.id);
+      return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+    }
+  }
+
+  /* Commander 2026-05-29 (BUG 1) — roll po_qty_picked forward on every source
+     SO line this PO converted (the items came from the From-SO picker). This is
+     what makes converted lines drop out of /outstanding-so-items (which filters
+     qty - po_qty_picked > 0). Mirrors the /from-sos picks handler increment.
+     Best-effort: read current counters, then UPDATE each; never fail the PO if
+     this errors — the PO already exists and the counter can be fixed later. */
+  if (pickedQtyBySoItem.size > 0) {
+    try {
+      const soItemIds = [...pickedQtyBySoItem.keys()];
+      const { data: soRows } = await supabase
+        .from('mfg_sales_order_items')
+        .select('id, po_qty_picked')
+        .in('id', soItemIds);
+      await Promise.all(((soRows ?? []) as Array<{ id: string; po_qty_picked: number }>).map(async (row) => {
+        const add = pickedQtyBySoItem.get(row.id) ?? 0;
+        if (add <= 0) return;
+        await supabase
+          .from('mfg_sales_order_items')
+          .update({ po_qty_picked: (row.po_qty_picked ?? 0) + add })
+          .eq('id', row.id);
+      }));
+    } catch { /* best-effort — PO already created, don't fail on counter roll */ }
+  }
+
+  return c.json({ id: header.id, poNumber: header.po_number }, 201);
+});
+
+// ── POST /from-sos ────────────────────────────────────────────────────
+// Create POs from selected Sales Order items. For each SO item, looks up
+// the MAIN supplier binding via supplier_material_bindings. Groups items
+// by supplier_id and creates ONE PO per supplier. Returns the list of
+// created PO ids/numbers so the UI can summarize.
+//
+// Body: { soItems: [{ soDocNo, itemCode, itemName, qty }] }
+/* PR — Commander 2026-05-26: SO → PO multi-select + partial.
+ * Body shape now: `{ picks: [{ soItemId, qty }] }` (camelCase).
+ * Legacy shape `{ soItems: [{ soDocNo, itemCode, itemName, qty }] }`
+ * still accepted — when given, we look up the SO items by (soDocNo, itemCode)
+ * and convert. New shape is preferred because we can validate qty <= remaining
+ * (qty - po_qty_picked) and increment po_qty_picked atomically. */
+mfgPurchaseOrders.post('/from-sos', async (c) => {
+  const supabase = c.get('supabase');
+  const user = c.get('user');
+  let body: {
+    picks?:    Array<{ soItemId: string; qty: number }>;
+    soItems?:  Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }>;
+    expectedAt?: string;
+    purchaseLocationId?: string;
+    /* Commander 2026-05-28 — PO generation mode:
+         'combined' (default) = one PO per supplier (all picked SOs merged) —
+                                 good for mattresses (dozens of SOs → 1 PO).
+         'per-so'             = one PO per (supplier × SO) — good for sofa /
+                                 bedframe where 1 SO → 1 PO. */
+    mode?: 'combined' | 'per-so';
+    /* Commander 2026-05-29 — per-SKU supplier override. The MRP lets the user
+       switch an item to an alternate supplier in-place; { itemCode: supplierId }
+       wins over the SKU's main-supplier binding. */
+    supplierByCode?: Record<string, string>;
+    /* Commander 2026-05-29 — "Convert from SO" / "Add Line Item" on an EXISTING
+       PO open this same picker scoped to that PO. When targetPoId is set we do
+       NOT create new POs — we APPEND the picked lines to that PO (only the lines
+       whose supplier matches the PO's supplier), keeping each line's so_item_id
+       so a later delete releases the SO quota. */
+    targetPoId?: string;
+  };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
+  const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
+  const targetPoId = body.targetPoId as string | undefined;
+
+  /* Commander 2026-05-28 — PO-from-SO redesign. expectedAt + purchaseLocationId
+     are NO LONGER asked or required. They are derived per-line from the source
+     SO instead:
+       - each PO line's warehouse  = the SO header's `sales_location` resolved
+         to a warehouse id (case-insensitive name/code match; null if no match)
+       - each PO line's delivery date = the SO LINE's `line_delivery_date`,
+         falling back to the SO header `customer_delivery_date`
+       - PO header expected_at = earliest non-null line delivery date, else null
+       - PO header purchase_location_id = most-common resolved line warehouse,
+         else null
+     Optional overrides are still honoured if a caller sends them (defense-in-
+     depth for legacy callers), but neither is mandatory. */
+  const expectedAtOverride = body.expectedAt;
+  const purchaseLocationOverride = body.purchaseLocationId;
+
+  // Preload the warehouses list ONCE for the sales_location text → id match.
+  const { data: whRows } = await supabase
+    .from('warehouses')
+    .select('id, code, name');
+  type Wh = { id: string; code: string | null; name: string | null };
+  const warehouses = (whRows ?? []) as Wh[];
+  const resolveWarehouseId = (salesLocation: string | null | undefined): string | null => {
+    const needle = (salesLocation ?? '').trim().toLowerCase();
+    if (!needle) return null;
+    const hit = warehouses.find(
+      (w) => (w.name ?? '').trim().toLowerCase() === needle
+          || (w.code ?? '').trim().toLowerCase() === needle,
+    );
+    return hit?.id ?? null;
+  };
+
+  // ── Resolve picks → SO item rows ─────────────────────────────────
+  // Commander 2026-05-28 — also load line_delivery_date + the parent SO's
+  // sales_location + customer_delivery_date so we can derive per-line warehouse
+  // + delivery date below.
+  type SoItem = {
+    id: string; doc_no: string; item_code: string; description: string | null;
+    qty: number; po_qty_picked: number; unit_price_centi: number;
+    line_delivery_date: string | null;
+    // Phase 3 (2026-05-29) — carry the SO line's category + variant bag so the
+    // PO line cost can auto-price from the supplier matrix + maintenance
+    // surcharges (mirrors the client recompute), instead of a flat copy. Also
+    // used by #300 to consolidate same SKU+variant lines + carry the variant
+    // through to the PO line.
+    item_group: string | null;
+    variants: Record<string, unknown> | null;
+    so: { sales_location: string | null; customer_delivery_date: string | null } | null;
+  };
+  const SO_ITEM_SELECT =
+    'id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
+    'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
+  // supabase-js returns the embedded parent as an object OR a 1-element array
+  // depending on the relationship — normalise to a single object.
+  const normSo = (r: { so: unknown }): SoItem['so'] => {
+    const raw = (r as { so: unknown }).so;
+    if (Array.isArray(raw)) return (raw[0] as SoItem['so']) ?? null;
+    return (raw as SoItem['so']) ?? null;
+  };
+  let pickedItems: Array<{ row: SoItem; qty: number }> = [];
+
+  if (body.picks && body.picks.length > 0) {
+    const ids = body.picks.map((p) => p.soItemId);
+    const { data: rows, error } = await supabase
+      .from('mfg_sales_order_items')
+      .select(SO_ITEM_SELECT)
+      .in('id', ids);
+    if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+    const byId = new Map<string, SoItem>();
+    for (const r of (rows ?? []) as unknown as SoItem[]) byId.set(r.id, { ...r, so: normSo(r) });
+    // Validate qty ≤ (row.qty - row.po_qty_picked)
+    for (const p of body.picks) {
+      const row = byId.get(p.soItemId);
+      if (!row) return c.json({ error: 'item_not_found', soItemId: p.soItemId }, 400);
+      const remaining = row.qty - row.po_qty_picked;
+      if (p.qty <= 0)         return c.json({ error: 'qty_must_be_positive', soItemId: p.soItemId }, 400);
+      if (p.qty > remaining)  return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
+      pickedItems.push({ row, qty: p.qty });
+    }
+  } else {
+    // Legacy soItems path — kept so old callers don't break.
+    const soItems = body.soItems ?? [];
+    if (soItems.length === 0) return c.json({ error: 'so_items_required' }, 400);
+    // Best-effort match by (doc_no, item_code). Doesn't update po_qty_picked.
+    const codes  = [...new Set(soItems.map((it) => it.itemCode))];
+    const docNos = [...new Set(soItems.map((it) => it.soDocNo))];
+    const { data: rows } = await supabase
+      .from('mfg_sales_order_items')
+      .select(SO_ITEM_SELECT)
+      .in('doc_no', docNos)
+      .in('item_code', codes);
+    const byKey = new Map<string, SoItem>();
+    for (const r of (rows ?? []) as unknown as SoItem[]) byKey.set(`${r.doc_no}|${r.item_code}`, { ...r, so: normSo(r) });
+    for (const it of soItems) {
+      const row = byKey.get(`${it.soDocNo}|${it.itemCode}`);
+      // Even if no SO row found, fabricate a minimal one so PO still gets created.
+      pickedItems.push({
+        row: row ?? {
+          id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName,
+          qty: it.qty, po_qty_picked: 0, unit_price_centi: 0,
+          line_delivery_date: null, item_group: null, variants: null, so: null,
+        },
+        qty: it.qty,
+      });
+    }
+  }
+
+  if (pickedItems.length === 0) return c.json({ error: 'no_pickable_lines' }, 400);
+
+  // Re-project into the legacy soItems shape for the rest of the handler.
+  // Commander 2026-05-28 — carry the per-line derived warehouse + delivery
+  // date so they survive the supplier grouping below.
+  const soItems = pickedItems.map(({ row, qty }) => {
+    // Per-line warehouse = SO header sales_location resolved to a warehouse id;
+    // a caller-sent purchaseLocationId override wins if present.
+    const lineWarehouseId =
+      (purchaseLocationOverride as string | undefined) ?? resolveWarehouseId(row.so?.sales_location);
+    // Per-line delivery date = SO LINE's own date, falling back to the SO
+    // header customer_delivery_date; an explicit override wins if present.
+    const lineDeliveryDate =
+      (expectedAtOverride as string | undefined)
+      ?? row.line_delivery_date
+      ?? row.so?.customer_delivery_date
+      ?? null;
+    return {
+      soDocNo:  row.doc_no,
+      itemCode: row.item_code,
+      itemName: row.description ?? row.item_code,
+      qty,
+      lineWarehouseId,
+      lineDeliveryDate,
+      // Phase 3 — carry the SO line's category + variants for PO auto-pricing
+      // (#300 also uses these to consolidate same SKU+variant lines + carry the
+      // variant through to the PO line).
+      itemGroup: row.item_group,
+      variants:  row.variants,
+      // Commander 2026-05-29 — the source SO line id, threaded to the PO line so
+      // the append-to-existing-PO path can persist so_item_id (release-on-delete).
+      soItemId:  row.id || null,
+    };
+  });
+
+  // Resolve main supplier per item via supplier_material_bindings.
+  // Phase 3 (2026-05-29) — also load price_matrix so the PO line cost can
+  // auto-price from the supplier's own per-category price table.
+  const codes = [...new Set(soItems.map((it) => it.itemCode))];
+  const { data: bindings } = await supabase
+    .from('supplier_material_bindings')
+    .select('material_code, supplier_id, supplier_sku, unit_price_centi, currency, price_matrix')
+    .in('material_code', codes)
+    .eq('material_kind', 'mfg_product')
+    .order('is_main_supplier', { ascending: false });
+
+  /* Commander 2026-05-29 — drop ORPHANED bindings (supplier was deleted but the
+     binding row survived, e.g. after a supplier reset). An orphan would slip a
+     dead supplier_id into the PO insert → FK violation → silent 0-PO "success".
+     Resolve which referenced suppliers actually exist and skip the rest, so the
+     SKU is reported as "needs a supplier" via missing_bindings below. */
+  const supplierIds = [...new Set(((bindings ?? []) as Array<{ supplier_id: string }>).map((b) => b.supplier_id))];
+  const liveSupplierIds = new Set<string>();
+  if (supplierIds.length > 0) {
+    const { data: liveSuppliers } = await supabase
+      .from('suppliers').select('id').in('id', supplierIds);
+    for (const s of (liveSuppliers ?? []) as Array<{ id: string }>) liveSupplierIds.add(s.id);
+  }
+
+  /* Group by material_code → the chosen supplier's binding. Commander
+     2026-05-29: an explicit supplierByCode[itemCode] override (picked in the
+     MRP) wins; otherwise the first LIVE row (is_main_supplier first via ORDER
+     BY). Orphaned bindings (deleted supplier) are skipped.
+     Phase 3 (2026-05-29) — the binding also carries price_matrix so the PO line
+     cost can auto-price from the supplier's own per-category price table. */
+  type MainBinding = {
+    material_code: string; supplier_id: string; supplier_sku: string;
+    unit_price_centi: number; currency: string;
+    price_matrix: Record<string, unknown> | null;
+  };
+  const mainByCode = new Map<string, MainBinding>();
+  for (const b of (bindings ?? []) as MainBinding[]) {
+    if (!liveSupplierIds.has(b.supplier_id)) continue; // orphaned binding — skip
+    const override = supplierByCode[b.material_code];
+    const existing = mainByCode.get(b.material_code);
+    if (override) {
+      // Only accept the binding that matches the chosen supplier.
+      if (b.supplier_id === override) mainByCode.set(b.material_code, b);
+      continue;
+    }
+    if (!existing) mainByCode.set(b.material_code, b);
+  }
+
+  /* Phase 3 — resolve the fabric tier for each SO line's fabricCode (split
+     per category: sofa_price_tier vs bedframe_price_tier), mirroring the
+     client. Load every distinct fabricCode that appears on a picked line so
+     a PRICE_1 fabric flips the cost to the supplier's P1 cell. When no fabric
+     / tier is set the cost engine defaults to P2. */
+  const fabricCodes = [...new Set(
+    soItems
+      .map((it) => String((it.variants as Record<string, unknown> | null)?.fabricCode ?? ''))
+      .filter(Boolean),
+  )];
+  type FabricTierRow = {
+    fabric_code: string;
+    price_tier: MfgFabricTier | null;
+    sofa_price_tier: MfgFabricTier | null;
+    bedframe_price_tier: MfgFabricTier | null;
+  };
+  const fabricByCode = new Map<string, FabricTierRow>();
+  if (fabricCodes.length > 0) {
+    const { data: fabricRows } = await supabase
+      .from('fabric_trackings')
+      .select('fabric_code, price_tier, sofa_price_tier, bedframe_price_tier')
+      .in('fabric_code', fabricCodes);
+    for (const f of (fabricRows ?? []) as FabricTierRow[]) fabricByCode.set(f.fabric_code, f);
+  }
+  const resolveFabricTier = (
+    category: string | null,
+    variants: Record<string, unknown> | null,
+  ): MfgFabricTier | null => {
+    const code = String(variants?.fabricCode ?? '');
+    if (!code) return null;
+    const f = fabricByCode.get(code);
+    if (!f) return null;
+    const cat = (category ?? '').toLowerCase();
+    if (cat === 'sofa')     return f.sofa_price_tier ?? f.price_tier ?? null;
+    if (cat === 'bedframe') return f.bedframe_price_tier ?? f.price_tier ?? null;
+    return null;
+  };
+
+  /* Phase 3 — maintenance config per supplier (supplier scope → master
+     fallback), resolved ONCE per supplier that owns a picked line. The cost
+     engine reads each option's priceSen as the cost surcharge. */
+  const supplierIdsInvolved = [...new Set([...mainByCode.values()].map((b) => b.supplier_id))];
+  const maintBySupplier = new Map<string, MaintenanceConfig | null>();
+  await Promise.all(supplierIdsInvolved.map(async (sid) => {
+    const { config } = await resolveMaintenanceConfigForSupplier(supabase, sid);
+    maintBySupplier.set(sid, config);
+  }));
+
+  /* Commander 2026-05-29 — also load each involved supplier's own sofa combos
+     so a sofa line whose modules MATCH a combo is costed at the combo price
+     (the supplier's set deal) instead of the per-seat-size matrix. */
+  const combosBySupplier = await loadSupplierSofaCombos(supabase, supplierIdsInvolved);
+
+  // Items with no LIVE supplier binding can't be PO'd.
+  const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
+  if (noBinding.length > 0) {
+    return c.json({
+      error: 'missing_bindings',
+      message: 'Some items have no main supplier binding',
+      itemCodes: [...new Set(noBinding.map((it) => it.itemCode))],
+    }, 400);
+  }
+
+  /* ── Per-line cost + sofa-combo redistribution (Commander 2026-05-29) ──────
+     Step 1: base per-unit cost for EVERY pickable line — the supplier's
+     price_matrix (P2 default; P1 when the fabric resolves to PRICE_1) + the
+     supplier's maintenance surcharges, via computeMfgPoUnitCost. Falls back to
+     the flat binding price when there's no category/matrix.
+
+     Step 2: sofa-combo redistribution, a faithful cost-side port of HOOKKA's
+     sales-order combo logic (src/pages/sales/create.tsx). A sectional sofa is
+     bought as PER-MODULE lines (e.g. BOOQIT-1A(LHF), BOOQIT-L(LHF) …). We group
+     those lines by (supplier, SO, base model), require a uniform tier + seat
+     height, match the group's module set against that supplier's combo, and —
+     when the combo total is cheaper than the matched lines' summed base cost —
+     re-spread the combo total across the matched lines (spreadComboTotal).
+     Extra modules outside the matched subset keep their full per-module cost.
+     Simple seat-count sofas (BLATT-2S) carry no module/orientation → never
+     match → untouched. */
+  type SoLine = (typeof soItems)[number];
+  const baseCostByItem = new Map<SoLine, number>();
+  for (const it of soItems) {
+    const b = mainByCode.get(it.itemCode);
+    if (!b) continue; // guarded by the missing_bindings check above
+    const category = (it.itemGroup?.toUpperCase() ?? '') as
+      'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
+    const variants = (it.variants ?? {}) as Record<string, unknown>;
+    const specials = Array.isArray(variants.specials) ? (variants.specials as string[]) : [];
+    const base = category
+      ? computeMfgPoUnitCost(
+          {
+            category,
+            priceMatrix:    (b.price_matrix ?? null) as PoPriceMatrix,
+            unitPriceCenti: b.unit_price_centi,
+            fabricTier:     resolveFabricTier(it.itemGroup, it.variants),
+            seatSize:       category === 'SOFA' ? (variants.seatHeight as string | undefined) ?? null : null,
+            divanHeight:    (variants.divanHeight as string | undefined) ?? null,
+            legHeight:      category === 'BEDFRAME' ? (variants.legHeight as string | undefined) ?? null : null,
+            sofaLegHeight:  category === 'SOFA' ? (variants.legHeight as string | undefined) ?? null : null,
+            specials,
+          },
+          maintBySupplier.get(b.supplier_id) ?? null,
+        ).unitPriceSen
+      // No category on the SO line → can't project a matrix; keep the flat price.
+      : b.unit_price_centi;
+    baseCostByItem.set(it, base);
+  }
+
+  // Combo redistribution → overrides baseCostByItem for matched sofa lines.
+  const adjustedCostByItem = new Map<SoLine, number>();
+  const sofaGroups = new Map<string, SoLine[]>();
+  for (const it of soItems) {
+    if ((it.itemGroup?.toUpperCase() ?? '') !== 'SOFA') continue;
+    const b = mainByCode.get(it.itemCode);
+    if (!b) continue;
+    const { baseModel, sizeCode } = splitSofaCode(it.itemCode);
+    if (!sizeCode.includes('-')) continue; // not a module (e.g. BLATT-2S) → no combo
+    const key = `${b.supplier_id}|${it.soDocNo}|${baseModel.toUpperCase()}`;
+    const arr = sofaGroups.get(key) ?? [];
+    arr.push(it);
+    sofaGroups.set(key, arr);
+  }
+  for (const [key, members] of sofaGroups) {
+    const supplierId = key.slice(0, key.indexOf('|'));
+    const baseModelU = key.slice(key.lastIndexOf('|') + 1);
+    const supplierCombos = combosBySupplier.get(supplierId) ?? [];
+    if (supplierCombos.length === 0) continue;
+    // Uniform tier + seat height across the group, else the combo can't apply.
+    const tiers = new Set(members.map((m) => resolveFabricTier(m.itemGroup, m.variants)));
+    if (tiers.size !== 1) continue;
+    const tier = [...tiers][0];
+    if (!tier) continue;
+    const heights = new Set(members.map((m) => sofaHeightKey(m.variants)));
+    if (heights.size !== 1) continue;
+    const height = [...heights][0]!;
+    if (!height) continue;
+    // Scope to this base model's combos (case-insensitive — products are
+    // BOOQIT-… while combos store "Booqit"); fall back to all of the supplier's
+    // combos if none match by name (different spelling), relying on module match.
+    const named = supplierCombos.filter((cmb) => (cmb.baseModel ?? '').toUpperCase() === baseModelU);
+    const rows = named.length > 0 ? named : supplierCombos;
+    const match = pickComboMatch(
+      { baseModel: '', modules: members.map((m) => splitSofaCode(m.itemCode).sizeCode), customerId: null, tier, height },
+      rows,
+    );
+    if (!match) continue;
+    const matched = match.matchedIndices.map((i) => members[i]).filter((m): m is SoLine => !!m);
+    if (matched.length === 0) continue;
+    // The combo price IS the supplier's set deal — on the COST side it's
+    // authoritative whether or not it beats the sum of the individual modules
+    // (unlike HOOKKA's SELLING side, which only applies a combo when it's
+    // cheaper to avoid inflating the customer price — that guard is dropped
+    // here). e.g. 2A+L = 2200 → those two lines cost 2200 together; an extra
+    // 1NA outside the matched subset keeps its own per-module cost (2200 + 1NA).
+    const comboTotal = match.comboPriceCenti;
+    if (comboTotal <= 0) continue; // no price for this height → keep base cost
+    const baseUnits = matched.map((m) => baseCostByItem.get(m) ?? 0);
+    const spread = spreadComboTotal(baseUnits, comboTotal);
+    matched.forEach((m, i) => adjustedCostByItem.set(m, spread[i] ?? 0));
+  }
+
+  // Group items into PO buckets.
+  // Commander 2026-05-28 — each line carries its own derived warehouse +
+  // delivery date (from the source SO), so they ride through to the insert.
+  // Grouping key depends on poMode:
+  //   'combined' → supplier_id            (one PO per supplier)
+  //   'per-so'   → supplier_id :: soDocNo (one PO per supplier × SO)
+  type Line = {
+    itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
+    warehouseId: string | null; deliveryDate: string | null;
+    itemGroup: string | null; variants: Record<string, unknown> | null;
+    soItemId: string | null;
+  };
+  type Bucket = { supplierId: string; currency: string; lines: Line[]; soDocNos: Set<string> };
+  const byGroup = new Map<string, Bucket>();
+  for (const it of soItems) {
+    const b = mainByCode.get(it.itemCode)!;
+    const groupKey = poMode === 'per-so' ? `${b.supplier_id}::${it.soDocNo}` : b.supplier_id;
+    const bucket = byGroup.get(groupKey)
+      ?? { supplierId: b.supplier_id, currency: b.currency, lines: [], soDocNos: new Set<string>() };
+
+    // Cost was resolved in the pre-pass above: a combo-redistributed cost wins,
+    // else the per-line base cost (matrix + surcharges), else the flat price.
+    const autoCostCenti = adjustedCostByItem.get(it)
+      ?? baseCostByItem.get(it)
+      ?? b.unit_price_centi;
+
+    bucket.lines.push({
+      itemCode: it.itemCode,
+      itemName: it.itemName,
+      qty: it.qty,
+      supplierSku: b.supplier_sku,
+      unitPriceCenti: autoCostCenti,
+      warehouseId: it.lineWarehouseId,
+      deliveryDate: it.lineDeliveryDate,
+      itemGroup: it.itemGroup,
+      variants: it.variants,
+      soItemId: it.soItemId,
+    });
+    bucket.soDocNos.add(it.soDocNo);
+    byGroup.set(groupKey, bucket);
+  }
+
+  /* Commander 2026-05-29 — consolidate lines: the SAME SKU + variant from
+     different SOs merges into ONE PO line with the qty summed (e.g. (K)×2 +
+     (K)×3 → (K)×5), instead of two separate lines. Keep the earliest delivery
+     date (turnover-safe — order to the soonest need) and the most-common
+     warehouse. po_qty_picked tracking is unaffected (it's keyed by SO item id,
+     handled separately below). */
+  const consolidateLines = (lines: Line[]): Line[] => {
+    const merged = new Map<string, Line>();
+    for (const l of lines) {
+      const vkey = computeVariantKey(l.itemGroup, (l.variants ?? null) as VariantAttrs | null);
+      const key = `${l.itemCode}${vkey}`;
+      const cur = merged.get(key);
+      if (!cur) { merged.set(key, { ...l }); continue; }
+      cur.qty += l.qty;
+      // earliest non-null delivery date wins
+      if (l.deliveryDate && (!cur.deliveryDate || l.deliveryDate < cur.deliveryDate)) {
+        cur.deliveryDate = l.deliveryDate;
+      }
+      cur.warehouseId = cur.warehouseId ?? l.warehouseId;
+    }
+    return [...merged.values()];
+  };
+  /* Consolidate same SKU+variant lines — but ONLY when creating fresh POs.
+     When appending to an existing PO (targetPoId) we keep each picked SO line
+     as its own PO line so its so_item_id stays 1:1 (clean release on delete). */
+  if (!targetPoId) {
+    for (const bucket of byGroup.values()) bucket.lines = consolidateLines(bucket.lines);
+  }
+
+  /* ── Commander 2026-05-29 — APPEND to an existing PO ─────────────────────
+     "Convert from SO" / "Add Line Item" on a PO open this picker scoped to that
+     PO. Append the picked lines (only those whose supplier matches the PO's
+     supplier — the picker locks to it) instead of creating new POs. */
+  if (targetPoId) {
+    const { data: po, error: poErr } = await supabase
+      .from('purchase_orders')
+      .select('id, status, supplier_id, po_number')
+      .eq('id', targetPoId)
+      .maybeSingle();
+    if (poErr) return c.json({ error: 'load_failed', reason: poErr.message }, 500);
+    if (!po) return c.json({ error: 'po_not_found' }, 404);
+    const target = po as { id: string; status: string; supplier_id: string; po_number: string };
+    if (target.status !== 'SUBMITTED' && target.status !== 'PARTIALLY_RECEIVED') {
+      return c.json({ error: 'po_not_editable', reason: `Cannot add lines to a ${target.status} PO.` }, 409);
+    }
+    const bucket = byGroup.get(target.supplier_id);
+    if (!bucket || bucket.lines.length === 0) {
+      return c.json({ error: 'supplier_mismatch', reason: 'None of the picked SO lines belong to this PO’s supplier.' }, 409);
+    }
+    const rows = bucket.lines.map((l) => ({
+      purchase_order_id: target.id,
+      material_kind: 'mfg_product',
+      material_code: l.itemCode,
+      material_name: l.itemName,
+      supplier_sku: l.supplierSku,
+      qty: l.qty,
+      unit_price_centi: l.unitPriceCenti,
+      line_total_centi: l.qty * l.unitPriceCenti,
+      delivery_date: l.deliveryDate,
+      warehouse_id:  l.warehouseId,
+      item_group: l.itemGroup,
+      variants: l.variants,
+      description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
+      // Release-on-delete link (migration 0098).
+      so_item_id: l.soItemId,
+    }));
+    const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
+    if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
+    await recomputePoTotals(supabase, target.id);
+    // Bump po_qty_picked on the picked SO lines (drops them from the picker).
+    await Promise.all(pickedItems
+      .filter(({ row }) => row.id && (mainByCode.get(row.item_code)?.supplier_id === target.supplier_id))
+      .map(async ({ row, qty }) => {
+        await supabase
+          .from('mfg_sales_order_items')
+          .update({ po_qty_picked: row.po_qty_picked + qty })
+          .eq('id', row.id);
+      }));
+    return c.json({ targetPoId: target.id, poNumber: target.po_number, added: bucket.lines.length }, 200);
+  }
+
+  // Generate PO numbers + create one PO per supplier.
+  const d = new Date();
+  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const { count: monthCount } = await supabase
+    .from('purchase_orders')
+    .select('id', { head: true, count: 'exact' })
+    .like('po_number', `PO-${yymm}-%`);
+  let counter = monthCount ?? 0;
+
+  const created: Array<{ id: string; poNumber: string; supplierId: string; lineCount: number }> = [];
+  for (const bucket of byGroup.values()) {
+    const supplierId = bucket.supplierId;
+    counter += 1;
+    const poNumber = `PO-${yymm}-${String(counter).padStart(3, '0')}`;
+    const subtotal = bucket.lines.reduce((s, l) => s + l.qty * l.unitPriceCenti, 0);
+
+    /* Commander 2026-05-28 — derive the PO HEADER fields from this PO's lines:
+         expected_at          = earliest non-null line delivery date, else null
+         purchase_location_id = most-common resolved line warehouse, else first,
+                                else null */
+    const lineDates = bucket.lines
+      .map((l) => l.deliveryDate)
+      .filter((d): d is string => Boolean(d))
+      .sort();
+    const headerExpectedAt = lineDates[0] ?? null;
+
+    const whCounts = new Map<string, number>();
+    for (const l of bucket.lines) {
+      if (l.warehouseId) whCounts.set(l.warehouseId, (whCounts.get(l.warehouseId) ?? 0) + 1);
+    }
+    let headerPurchaseLocationId: string | null = null;
+    let bestCount = 0;
+    for (const [wid, n] of whCounts.entries()) {
+      if (n > bestCount) { bestCount = n; headerPurchaseLocationId = wid; }
+    }
+
+    const { data: headerData, error: hErr } = await supabase
+      .from('purchase_orders')
+      .insert({
+        po_number: poNumber,
+        supplier_id: supplierId,
+        // PR #131 — Convert-from-SO bulk path also lands SUBMITTED.
+        status: 'SUBMITTED',
+        submitted_at: new Date().toISOString(),
+        currency: bucket.currency,
+        subtotal_centi: subtotal,
+        tax_centi: 0,
+        total_centi: subtotal,
+        notes: `From SOs: ${[...bucket.soDocNos].join(', ')}`,
+        created_by: user.id,
+        /* Commander 2026-05-28 — derived from the source SO lines, not asked. */
+        expected_at: headerExpectedAt,
+        purchase_location_id: headerPurchaseLocationId,
+      })
+      .select('id, po_number')
+      .single();
+    if (hErr) continue;
+    const header = headerData as unknown as { id: string; po_number: string };
+
+    const rows = bucket.lines.map((l) => ({
+      purchase_order_id: header.id,
+      material_kind: 'mfg_product',
+      material_code: l.itemCode,
+      material_name: l.itemName,
+      supplier_sku: l.supplierSku,
+      qty: l.qty,
+      unit_price_centi: l.unitPriceCenti,
+      line_total_centi: l.qty * l.unitPriceCenti,
+      /* Commander 2026-05-28 — per-line delivery date = the source SO LINE's
+         date; per-line warehouse = the SO's sales_location warehouse. Both
+         may be null when the SO didn't carry them — that's allowed. */
+      delivery_date: l.deliveryDate,
+      warehouse_id:  l.warehouseId,
+      /* Commander 2026-05-29 — carry the variant through to the PO so the line
+         shows its config + the MRP can match outstanding PO supply by variant. */
+      item_group: l.itemGroup,
+      variants: l.variants,
+      description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
+    }));
+    const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
+    if (iErr) {
+      await supabase.from('purchase_orders').delete().eq('id', header.id);
+      continue;
+    }
+    created.push({ id: header.id, poNumber: header.po_number, supplierId, lineCount: bucket.lines.length });
+  }
+
+  // ── PR — increment po_qty_picked on every SO item we just emitted ──
+  // Best-effort UPDATEs (one per item, no transaction). If any fails we
+  // log + continue — the PO still exists; commander can manually fix the
+  // counter via Maintenance later if needed.
+  if (body.picks && created.length > 0) {
+    await Promise.all(pickedItems
+      .filter(({ row }) => row.id)
+      .map(async ({ row, qty }) => {
+        await supabase
+          .from('mfg_sales_order_items')
+          .update({ po_qty_picked: row.po_qty_picked + qty })
+          .eq('id', row.id);
+      }));
+  }
+
+  return c.json({ created, total: created.length }, 201);
+});
+
+/* ── PR #41 — PATCH header (po_date, expected_at, currency, notes) ── */
+mfgPurchaseOrders.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  let body: Record<string, unknown>;
+  try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [from, to] of [
+    ['poDate', 'po_date'], ['expectedAt', 'expected_at'], ['currency', 'currency'],
+    ['notes', 'notes'], ['supplierId', 'supplier_id'],
+    // PR #77 — default ship-to warehouse for every line on this PO
+    ['purchaseLocationId', 'purchase_location_id'],
+  ] as const) {
+    if (body[from] !== undefined) updates[to] = body[from];
+  }
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_orders').update(updates).eq('id', id).select('*').single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  return c.json({ purchaseOrder: data });
+});
+
+/* ── PR #41 — PO line items: add / edit / delete ─────────────────────── */
+async function recomputePoTotals(sb: any, poId: string) {
+  const { data: items } = await sb.from('purchase_order_items')
+    .select('line_total_centi')
+    .eq('purchase_order_id', poId);
+  const subtotal = (items ?? []).reduce((s: number, r: any) => s + (r.line_total_centi ?? 0), 0);
+  await sb.from('purchase_orders').update({
+    subtotal_centi: subtotal,
+    total_centi: subtotal,
+    updated_at: new Date().toISOString(),
+  }).eq('id', poId);
+}
+
+mfgPurchaseOrders.post('/:id/items', async (c) => {
+  const poId = c.req.param('id');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
+  if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const qty = Number(it.qty ?? 1);
+  const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
+  const discountCenti = Number(it.discountCenti ?? 0);
+  const lineTotal = (qty * unitPriceCenti) - discountCenti;
+
+  const row: Record<string, unknown> = {
+    purchase_order_id: poId,
+    binding_id: (it.bindingId as string) ?? null,
+    material_kind: (it.materialKind as string) ?? 'mfg_product',
+    material_code: it.materialCode,
+    material_name: it.materialName,
+    supplier_sku: (it.supplierSku as string) ?? null,
+    qty,
+    unit_price_centi: unitPriceCenti,
+    line_total_centi: lineTotal,
+    notes: (it.notes as string) ?? null,
+    /* PR #41 — variant fields */
+    gap_inches: (it.gapInches as number) ?? null,
+    divan_height_inches: (it.divanHeightInches as number) ?? null,
+    divan_price_sen: Number(it.divanPriceSen ?? 0),
+    leg_height_inches: (it.legHeightInches as number) ?? null,
+    leg_price_sen: Number(it.legPriceSen ?? 0),
+    custom_specials: (it.customSpecials as unknown) ?? null,
+    line_suffix: (it.lineSuffix as string) ?? null,
+    special_order_price_sen: Number(it.specialOrderPriceSen ?? 0),
+    variants: (it.variants as unknown) ?? null,
+    item_group: (it.itemGroup as string) ?? null,
+    description: (it.description as string) ?? null,
+    /* Commander 2026-05-28 — Description 2 auto-generated from variants. */
+    description2: buildVariantSummary(String(it.itemGroup ?? ''), (it.variants as Record<string, unknown> | null) ?? null) || null,
+    uom: (it.uom as string) ?? 'UNIT',
+    discount_centi: discountCenti,
+    unit_cost_centi: Number(it.unitCostCenti ?? 0),
+    // PR #77 — per-line ship-to. Both nullable; empty = inherit from header.
+    delivery_date: (it.deliveryDate as string) ?? null,
+    warehouse_id: (it.warehouseId as string) ?? null,
+  };
+  const sb = c.get('supabase');
+  const { data, error } = await sb.from('purchase_order_items').insert(row).select('*').single();
+  if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+  await recomputePoTotals(sb, poId);
+  return c.json({ item: data }, 201);
+});
+
+mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
+  const poId = c.req.param('id'); const itemId = c.req.param('itemId');
+  let it: Record<string, unknown>;
+  try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+
+  const { data: prev } = await sb.from('purchase_order_items')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_group, variants')
+    .eq('id', itemId).maybeSingle();
+  if (!prev) return c.json({ error: 'not_found' }, 404);
+
+  const qty = it.qty !== undefined ? Number(it.qty) : prev.qty;
+  const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : prev.unit_price_centi;
+  const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : prev.discount_centi;
+  const lineTotal = (qty * unit) - discount;
+
+  const updates: Record<string, unknown> = {
+    qty, unit_price_centi: unit, discount_centi: discount, line_total_centi: lineTotal,
+  };
+  for (const [from, to] of [
+    ['materialCode', 'material_code'], ['materialName', 'material_name'],
+    ['supplierSku', 'supplier_sku'], ['itemGroup', 'item_group'],
+    ['description', 'description'], ['description2', 'description2'],
+    ['uom', 'uom'], ['unitCostCenti', 'unit_cost_centi'], ['notes', 'notes'],
+    ['gapInches', 'gap_inches'], ['divanHeightInches', 'divan_height_inches'],
+    ['divanPriceSen', 'divan_price_sen'], ['legHeightInches', 'leg_height_inches'],
+    ['legPriceSen', 'leg_price_sen'], ['customSpecials', 'custom_specials'],
+    ['lineSuffix', 'line_suffix'], ['specialOrderPriceSen', 'special_order_price_sen'],
+    ['variants', 'variants'],
+    // PR #77 — per-line delivery + ship-to overrides
+    ['deliveryDate', 'delivery_date'], ['warehouseId', 'warehouse_id'],
+  ] as const) {
+    if (it[from] !== undefined) updates[to] = it[from];
+  }
+  /* Commander 2026-05-28 — Description 2 is server-owned: recompute from the
+     effective itemGroup + variants (incoming patch, else stored row). */
+  {
+    const effGroup = (it.itemGroup ?? (prev as { item_group?: string }).item_group) as string | null | undefined;
+    const effVariants = (it.variants ?? (prev as { variants?: unknown }).variants) as Record<string, unknown> | null | undefined;
+    updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
+  }
+
+  const { error } = await sb.from('purchase_order_items').update(updates).eq('id', itemId);
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  await recomputePoTotals(sb, poId);
+  return c.json({ ok: true });
+});
+
+mfgPurchaseOrders.delete('/:id/items/:itemId', async (c) => {
+  const poId = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase');
+
+  /* Commander 2026-05-29 (BUG 1) — before deleting, read the source SO line
+     (migration 0098) + this line's qty so we can hand the quota back. */
+  const { data: doomed } = await sb.from('purchase_order_items')
+    .select('so_item_id, qty')
+    .eq('id', itemId)
+    .maybeSingle();
+
+  const { error } = await sb.from('purchase_order_items').delete().eq('id', itemId);
+  if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
+  await recomputePoTotals(sb, poId);
+
+  /* Release po_qty_picked back to the SO line so it reappears in the From-SO
+     picker (qty - po_qty_picked > 0 again). Best-effort: never fail the delete
+     if the counter roll-back errors — the line is already gone and the counter
+     can be corrected later. Clamp at 0 to avoid going negative. */
+  const releasedSoItem = (doomed as { so_item_id?: string | null; qty?: number } | null)?.so_item_id ?? null;
+  const releasedQty = Math.max(0, Number((doomed as { qty?: number } | null)?.qty ?? 0));
+  if (releasedSoItem && releasedQty > 0) {
+    try {
+      const { data: soRow } = await sb.from('mfg_sales_order_items')
+        .select('po_qty_picked')
+        .eq('id', releasedSoItem)
+        .maybeSingle();
+      const current = Number((soRow as { po_qty_picked?: number } | null)?.po_qty_picked ?? 0);
+      const next = Math.max(0, current - releasedQty);
+      await sb.from('mfg_sales_order_items')
+        .update({ po_qty_picked: next })
+        .eq('id', releasedSoItem);
+    } catch { /* best-effort — line already deleted, don't fail on counter roll */ }
+  }
+
+  return c.body(null, 204);
+});
+
+/* ── PR #78 — Convert from Sales Order ─────────────────────────────────
+   Commander 2026-05-26 (AutoCount parity): "可以点击 Convert from Sales
+   Order，也可以点击 Convert from Purchase Request 或者 Quotation 这种
+   类型的". Copies an SO's items into the current draft PO. SO items
+   keep their existing variants / description / pricing as snapshots.
+
+   Body: { soDocNo: string, itemIds?: string[] }
+   - When itemIds is omitted, every non-cancelled SO item is copied.
+   - When provided, only those item ids get copied.
+   - Skips SO items whose item_code is already on this PO (no dupes).
+   - Returns count copied + skipped + the new PO item rows.
+   ────────────────────────────────────────────────────────────────────── */
+mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
+  const poId = c.req.param('id');
+  let body: { soDocNo?: string; itemIds?: string[] } = {};
+  try { body = (await c.req.json().catch(() => ({}))) as typeof body; } catch { /* allow empty */ }
+  const soDocNo = (body.soDocNo ?? '').trim();
+  if (!soDocNo) return c.json({ error: 'so_doc_no_required' }, 400);
+  const filterIds = Array.isArray(body.itemIds) && body.itemIds.length > 0
+    ? new Set(body.itemIds)
+    : null;
+
+  const sb = c.get('supabase');
+
+  // Verify the target PO exists + is editable.
+  const { data: po, error: poErr } = await sb
+    .from('purchase_orders')
+    .select('id, status, supplier_id')
+    .eq('id', poId)
+    .maybeSingle();
+  if (poErr) return c.json({ error: 'load_failed', reason: poErr.message }, 500);
+  if (!po) return c.json({ error: 'po_not_found' }, 404);
+  // PR-DRAFT-removal — DRAFT no longer exists. SUBMITTED + PARTIALLY_RECEIVED
+  // are both editable for convert-from-so (commander can keep adding lines
+  // until the PO is fully received or cancelled).
+  if (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED') {
+    return c.json({ error: 'po_not_editable', reason: `Cannot convert into a ${po.status} PO.` }, 409);
+  }
+
+  // Read SO items (non-cancelled only).
+  const { data: soItems, error: soErr } = await sb
+    .from('mfg_sales_order_items')
+    .select('id, item_code, description, description2, item_group, qty, unit_price_centi, discount_centi, unit_cost_centi, variants, uom, remark')
+    .eq('doc_no', soDocNo)
+    .eq('cancelled', false);
+  if (soErr) return c.json({ error: 'so_load_failed', reason: soErr.message }, 500);
+  if (!soItems || soItems.length === 0) {
+    return c.json({ error: 'so_has_no_items', reason: `Sales Order ${soDocNo} has no items to convert.` }, 404);
+  }
+
+  const wanted = filterIds
+    ? (soItems as Array<{ id: string }>).filter((r) => filterIds!.has(r.id))
+    : soItems;
+
+  if (wanted.length === 0) {
+    return c.json({ error: 'no_items_selected', reason: 'None of the picked SO items matched.' }, 400);
+  }
+
+  // Find which item_codes already exist on the PO so we don't double-insert.
+  const codes = (wanted as Array<{ item_code: string }>).map((r) => r.item_code);
+  const { data: existing } = await sb
+    .from('purchase_order_items')
+    .select('material_code')
+    .eq('purchase_order_id', poId)
+    .in('material_code', codes);
+  const existingSet = new Set((existing ?? []).map((r: { material_code: string }) => r.material_code));
+
+  type SoItem = {
+    item_code: string; description: string | null; description2: string | null;
+    item_group: string | null; qty: number; unit_price_centi: number;
+    discount_centi: number | null; unit_cost_centi: number | null;
+    variants: unknown; uom: string | null; remark: string | null;
+  };
+  const toInsert = (wanted as SoItem[]).filter((r) => !existingSet.has(r.item_code));
+  if (toInsert.length === 0) {
+    return c.json({ copied: 0, skipped: wanted.length, reason: 'All matching SO items already exist on the PO.' });
+  }
+
+  const rows = toInsert.map((it) => {
+    const qty = Number(it.qty ?? 1);
+    const unit = Number(it.unit_price_centi ?? 0);
+    const disc = Number(it.discount_centi ?? 0);
+    return {
+      purchase_order_id: poId,
+      material_kind:    'mfg_product',
+      material_code:    it.item_code,
+      material_name:    it.description ?? it.item_code,
+      supplier_sku:     null,
+      qty,
+      unit_price_centi: unit,
+      line_total_centi: (qty * unit) - disc,
+      received_qty:     0,
+      notes:            it.remark ?? null,
+      item_group:       it.item_group ?? null,
+      description:      it.description ?? null,
+      description2:     it.description2 ?? null,
+      uom:              it.uom ?? 'UNIT',
+      discount_centi:   disc,
+      unit_cost_centi:  Number(it.unit_cost_centi ?? 0),
+      variants:         (it.variants as unknown) ?? null,
+    };
+  });
+
+  const { data: inserted, error: insErr } = await sb
+    .from('purchase_order_items')
+    .insert(rows)
+    .select(ITEM_COLS);
+  if (insErr) return c.json({ error: 'insert_failed', reason: insErr.message }, 500);
+
+  await recomputePoTotals(sb, poId);
+
+  return c.json({
+    copied: rows.length,
+    skipped: existingSet.size,
+    sourceDocNo: soDocNo,
+    items: inserted ?? [],
+  });
+});
+
+// ── Submit / cancel ──────────────────────────────────────────────────
+// PR-DRAFT-removal — POST creates SUBMITTED directly. This endpoint is kept
+// as an idempotent no-op so legacy callers still work.
+mfgPurchaseOrders.patch('/:id/submit', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+  const { data } = await supabase
+    .from('purchase_orders')
+    .select('id, status, submitted_at')
+    .eq('id', id)
+    .maybeSingle();
+  if (!data) return c.json({ error: 'not_found' }, 404);
+  const row = data as { id: string; status: string; submitted_at: string | null };
+  if (row.status === 'SUBMITTED') return c.json({ purchaseOrder: row });
+  return c.json({ error: 'cannot_submit', message: `PO is ${row.status}` }, 409);
+});
+
+mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+
+  /* Commander 2026-05-29 — BUGFIX: the old `.update(...).select().single()`
+     threw "Cannot coerce the result to a single JSON object" (PostgREST
+     PGRST116) whenever the UPDATE's RETURNING yielded ≠ 1 visible rows. Split
+     into read → guard → update → re-read so the cancel can't 500 on that. */
+  const { data: cur, error: readErr } = await supabase
+    .from('purchase_orders')
+    .select('id, status')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return c.json({ error: 'load_failed', reason: readErr.message }, 500);
+  if (!cur) return c.json({ error: 'not_found' }, 404);
+  const curStatus = (cur as { status: string }).status;
+  if (curStatus === 'RECEIVED') return c.json({ error: 'cannot_cancel', message: 'PO already received' }, 409);
+  // Idempotent — already cancelled, just echo back.
+  if (curStatus === 'CANCELLED') {
+    return c.json({ purchaseOrder: { id, status: 'CANCELLED' } });
+  }
+
+  const { error: updErr } = await supabase
+    .from('purchase_orders')
+    .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+
+  /* Commander 2026-05-29 (BUG 1) — "cancel 了之后 代表这些 SO 有释放出来了是吧":
+     YES. Cancelling a PO releases EVERY converted SO line's quota back so they
+     reappear in the From-SO picker (mirrors the per-line delete release).
+     Read each line's so_item_id + qty, then decrement po_qty_picked (clamped
+     ≥ 0). Best-effort — never fail the cancel on a counter roll-back. */
+  try {
+    const { data: lines } = await supabase
+      .from('purchase_order_items')
+      .select('so_item_id, qty')
+      .eq('purchase_order_id', id);
+    const releaseBySoItem = new Map<string, number>();
+    for (const ln of (lines ?? []) as Array<{ so_item_id: string | null; qty: number }>) {
+      if (ln.so_item_id && ln.qty > 0) {
+        releaseBySoItem.set(ln.so_item_id, (releaseBySoItem.get(ln.so_item_id) ?? 0) + ln.qty);
+      }
+    }
+    if (releaseBySoItem.size > 0) {
+      const soItemIds = [...releaseBySoItem.keys()];
+      const { data: soRows } = await supabase
+        .from('mfg_sales_order_items')
+        .select('id, po_qty_picked')
+        .in('id', soItemIds);
+      await Promise.all(((soRows ?? []) as Array<{ id: string; po_qty_picked: number }>).map(async (row) => {
+        const back = releaseBySoItem.get(row.id) ?? 0;
+        if (back <= 0) return;
+        const next = Math.max(0, (row.po_qty_picked ?? 0) - back);
+        await supabase.from('mfg_sales_order_items').update({ po_qty_picked: next }).eq('id', row.id);
+      }));
+    }
+  } catch { /* best-effort — PO already cancelled, don't fail on counter roll */ }
+
+  const { data: after } = await supabase
+    .from('purchase_orders')
+    .select('id, status, cancelled_at')
+    .eq('id', id)
+    .maybeSingle();
+  return c.json({ purchaseOrder: after ?? { id, status: 'CANCELLED' } });
+});
+
+// ── Delete ────────────────────────────────────────────────────────────
+// Hard-delete a PO + its line items. PR-DRAFT-removal: DRAFT no longer
+// exists. Only CANCELLED POs may be deleted (SUBMITTED+ have downstream
+// docs that reference them — use Cancel first).
+mfgPurchaseOrders.delete('/:id', async (c) => {
+  const id = c.req.param('id');
+  const supabase = c.get('supabase');
+  // Status guard first — get current row.
+  const { data: cur, error: readErr } = await supabase
+    .from('purchase_orders')
+    .select('id, status, po_number')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return c.json({ error: 'read_failed', reason: readErr.message }, 500);
+  if (!cur)    return c.json({ error: 'not_found' }, 404);
+  const row = cur as { id: string; status: string; po_number: string };
+  if (row.status !== 'CANCELLED') {
+    return c.json({
+      error: 'cannot_delete',
+      message: `PO ${row.po_number} is ${row.status}. Only CANCELLED POs can be deleted. Use Cancel first.`,
+    }, 409);
+  }
+  // Items cascade via FK ON DELETE CASCADE.
+  const { error: delErr } = await supabase.from('purchase_orders').delete().eq('id', id);
+  if (delErr) return c.json({ error: 'delete_failed', reason: delErr.message }, 500);
+  return c.json({ ok: true, deleted: row.po_number });
+});

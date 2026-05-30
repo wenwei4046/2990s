@@ -22,15 +22,35 @@ const cellSchema = z.object({
 
 const sofaLineConfigSchema = z.object({
   kind: z.literal('sofa'),
-  productId: z.string().uuid(),
+  /* Commander 2026-05-28: POS catalog switched to mfg_products (mfg-<12hex>
+     ids). Relaxed from .uuid() to allow both legacy UUID and mfg- text keys.
+     Server re-validates the id exists in products OR mfg_products. */
+  productId: z.string().min(1),
   bundleId: z.string().optional(),
   cells: z.array(cellSchema).optional(),
-  depth: z.enum(['24', '28']).optional(),
+  // Seat depth in inches (F5: per-Model options, e.g. '24'/'30'/'32'). Widened
+  // from the old '24'|'28' enum. Non-pricing — the server recompute ignores it.
+  depth: z.string().regex(/^\d{2,3}$/).optional(),
+  // Snapshot of the Model's per-seat upgrade name at order time (F3) so the
+  // saved order / invoice / Backend drawer can render "+ N <label>" without a
+  // products join. Display only — never affects the server recompute.
+  seatUpgradeLabel: z.string().max(40).nullable().optional(),
+  // Footrest flag snapshot (F3) so the invoice can show auto-included headrests
+  // ("+ N Headrest") on a quick-pick. Display only — recompute ignores it.
+  seatUpgradeFootrest: z.boolean().optional(),
+  // Upholstery fabric + colour (spec 2026-05-24). Optional in shape; the server
+  // recompute REQUIRES them when the Model offers active fabrics, validates them,
+  // and adds the fabric surcharge. Labels are display-only snapshots for the
+  // invoice / Backend drawer (no products join needed).
+  fabricId: z.string().optional(),
+  colourId: z.string().optional(),
+  fabricLabel: z.string().max(60).nullable().optional(),
+  colourLabel: z.string().max(60).nullable().optional(),
 });
 
 const sizeLineConfigSchema = z.object({
   kind: z.literal('size'),
-  productId: z.string().uuid(),
+  productId: z.string().min(1), // relaxed from .uuid() — mfg-<12hex> ids also valid
   sizeId: z.string(),
   // Paid-extra add-ons attached to this configured line (e.g. extra pillows
   // beyond the included free ones). Server recomputes these against the
@@ -45,13 +65,44 @@ const sizeLineConfigSchema = z.object({
 // canonical amount; client only needs to identify the product. (Bug #2 fix)
 const flatLineConfigSchema = z.object({
   kind: z.literal('flat'),
-  productId: z.string().uuid(),
+  productId: z.string().min(1), // relaxed from .uuid() — mfg-<12hex> ids also valid
+});
+
+// Bedframe configurator (spec 2026-05-25). size + colour + leg are always
+// present; gap/divan/total/specials are present for full bedframes but ABSENT
+// for DIVAN ONLY (hence optional in shape — the UI enforces required-ness per
+// Model, the server recompute validates ids + sums surcharges). sizeOther is a
+// free-text special size (e.g. "200 x 200"), display-only, no structured price.
+// colourLabel is a display-only snapshot for the invoice (no products join).
+const bedframeLineConfigSchema = z.object({
+  kind: z.literal('bedframe'),
+  productId: z.string().min(1), // relaxed from .uuid() — mfg-<12hex> ids also valid
+  sizeId: z.string(),
+  sizeOther: z.string().max(60).optional(),
+  colourId: z.string(),
+  colourLabel: z.string().max(60).nullable().optional(),
+  gapId: z.string().optional(),
+  legHeightId: z.string(),
+  divanHeightId: z.string().optional(),
+  totalHeightId: z.string().optional(),
+  specialIds: z.array(z.string()).optional(),
+  // Display-only label snapshots (like sofa fabricLabel/seatUpgradeLabel) so the
+  // printed Sales Order + Backend detail render the full spec without a join to
+  // bedframe_options. The server recompute ignores these — it reprices off the
+  // *Ids above. Captured at order time, so a later Backend label edit doesn't
+  // rewrite what the customer signed.
+  gapLabel: z.string().max(40).nullable().optional(),
+  legHeightLabel: z.string().max(40).nullable().optional(),
+  divanHeightLabel: z.string().max(40).nullable().optional(),
+  totalHeightLabel: z.string().max(40).nullable().optional(),
+  specialLabels: z.array(z.string().max(60)).optional(),
 });
 
 export const orderLineConfigSchema = z.discriminatedUnion('kind', [
   sofaLineConfigSchema,
   sizeLineConfigSchema,
   flatLineConfigSchema,
+  bedframeLineConfigSchema,
 ]);
 
 export const orderLineSchema = z.object({
@@ -81,8 +132,14 @@ export const orderV1PostSchema = z.object({
     city: z.string().optional(),
     state: z.string().optional(),
   }),
-  paymentMethod: z.enum(['credit', 'debit', 'installment', 'transfer']),
+  // credit/debit folded into 'merchant' (2026-05-23). POS sends merchant/installment/transfer/cash.
+  paymentMethod: z.enum(['merchant', 'installment', 'transfer', 'cash']),
   approvalCode: z.string().optional(),
+  // Installment term — 6 or 12 months. Required iff paymentMethod = 'installment'
+  // (enforced by the .superRefine below). 0% installment — never affects pricing.
+  installmentMonths: z.union([z.literal(6), z.literal(12)]).nullable().optional(),
+  // Merchant acquirer / terminal. Required iff paymentMethod = 'merchant'.
+  merchantProvider: z.enum(['GHL', 'HLB', 'MBB', 'PBB']).nullable().optional(),
   notes: z.string().optional(),
   // ISO YYYY-MM-DD; omit when customer wants delivery TBD.
   deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'invalid_date_format').optional(),
@@ -132,6 +189,26 @@ export const orderV1PostSchema = z.object({
   // POS clients still parse), but Handover gates submit on form.signed, so
   // in practice every new order arrives with one.
   signatureData: z.string().optional(),
+}).superRefine((v, ctx) => {
+  if (v.paymentMethod === 'installment') {
+    if (v.installmentMonths !== 6 && v.installmentMonths !== 12) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installmentMonths'],
+        message: 'installment_term_required' });
+    }
+  } else if (v.installmentMonths !== undefined && v.installmentMonths !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installmentMonths'],
+      message: 'installment_term_only_for_installment' });
+  }
+
+  if (v.paymentMethod === 'merchant') {
+    if (!v.merchantProvider) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['merchantProvider'],
+        message: 'merchant_provider_required' });
+    }
+  } else if (v.merchantProvider !== undefined && v.merchantProvider !== null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['merchantProvider'],
+      message: 'merchant_provider_only_for_merchant' });
+  }
 });
 
 export type OrderV1PostBody = z.infer<typeof orderV1PostSchema>;

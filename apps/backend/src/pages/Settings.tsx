@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Pencil, X, Save, MessageCircle, Mail, CheckCircle2, Circle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useAuth } from '../lib/auth';
+import { useAuth, isAdminLevel } from '../lib/auth';
 import { useDrivers, useSuppliers, type DriverRow, type Supplier } from '../lib/queries';
 import {
   useShowrooms,
@@ -20,25 +20,31 @@ import {
   type ShowroomRow,
 } from '../lib/admin-queries';
 import { PinDrawer } from '../components/PinDrawer';
+import { PhoneInput } from '../components/PhoneInput';
+import { formatPhone, normalizePhone } from '@2990s/shared/phone';
 import styles from './Settings.module.css';
 
 type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'app';
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'suppliers', label: 'Suppliers' },
-  { id: 'drivers',   label: 'Drivers' },
-  { id: 'showrooms', label: 'Showrooms' },
-  { id: 'staff',     label: 'Staff' },
-  { id: 'delivery',  label: 'Delivery fees' },
-  { id: 'app',       label: 'App config' },
+  { id: 'suppliers',  label: 'Suppliers' },
+  { id: 'drivers',    label: 'Drivers' },
+  { id: 'showrooms',  label: 'Showrooms' },
+  { id: 'staff',      label: 'Staff' },
+  { id: 'delivery',   label: 'Delivery fees' },
+  /* Task #110 — Localities tab moved to /mfg-sales-orders/maintenance
+     (Commander 2026-05-27). It only powers the SO module's cascading
+     customer-address dropdowns + the state→warehouse mapping that
+     auto-suggests Sales Location, so it lives next to the SO list now. */
+  { id: 'app',        label: 'App config' },
 ];
 
 export const Settings = () => {
   const { staff } = useAuth();
   const [tab, setTab] = useState<TabId>('suppliers');
 
-  const isAdmin = staff?.role === 'admin';
-  const isCoordOrAdmin = staff?.role === 'admin' || staff?.role === 'coordinator';
+  const isAdmin = isAdminLevel(staff?.role);
+  const isCoordOrAdmin = isAdminLevel(staff?.role) || staff?.role === 'coordinator';
 
   return (
     <div className={styles.page}>
@@ -83,6 +89,12 @@ export const Settings = () => {
     </div>
   );
 };
+
+/* Task #110 — LocalitiesTab (State → Warehouse mapping + my_localities CRUD)
+   moved to apps/backend/src/pages/SalesOrderMaintenance.tsx
+   (Commander 2026-05-27). Reachable from the SO list toolbar + the
+   sidebar's B2B Sales group. Don't reintroduce it here — keep the
+   maintenance data next to the module that actually consumes it. */
 
 /* ─── Suppliers ─── */
 
@@ -368,7 +380,7 @@ const DriversTab = ({ canEdit }: { canEdit: boolean }) => {
                 <tr key={d.id}>
                   <td><code className={styles.code}>{d.driverCode}</code></td>
                   <td>{d.name}</td>
-                  <td>{d.phone}</td>
+                  <td>{formatPhone(d.phone)}</td>
                   <td>{d.vehicle ? d.vehicle : <span className={styles.muted}>—</span>}</td>
                   <td>
                     {d.active ? (
@@ -434,12 +446,16 @@ const DriverDrawer = ({
       setError('Code, name, and phone are required.');
       return;
     }
+    /* Task #91 — defensively re-normalize before submit. PhoneInput already
+       does this on blur, but a user can click Save while the input is still
+       focused, skipping blur. */
+    const normalizedPhone = normalizePhone(phone) ?? phone.trim();
     try {
       if (mode === 'create') {
         await createDriver.mutateAsync({
           driverCode: code.trim(),
           name: name.trim(),
-          phone: phone.trim(),
+          phone: normalizedPhone,
           icNumber: icNumber.trim() || null,
           vehicle: vehicle.trim() || null,
           active,
@@ -450,7 +466,7 @@ const DriverDrawer = ({
           patch: {
             driverCode: code.trim(),
             name: name.trim(),
-            phone: phone.trim(),
+            phone: normalizedPhone,
             icNumber: icNumber.trim() || null,
             vehicle: vehicle.trim() || null,
             active,
@@ -505,11 +521,11 @@ const DriverDrawer = ({
 
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Phone</span>
-            <input
+            {/* Task #91 — driver phones stored as E.164 via PhoneInput. */}
+            <PhoneInput
               className={styles.input}
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="+60 12 345 6789"
+              onChange={setPhone}
             />
           </label>
 
@@ -598,7 +614,7 @@ const ShowroomsTab = () => {
                   <td><code className={styles.code}>{s.showroomCode}</code></td>
                   <td>{s.name}</td>
                   <td>{s.address ? s.address : <span className={styles.muted}>—</span>}</td>
-                  <td>{s.phone ? s.phone : <span className={styles.muted}>—</span>}</td>
+                  <td>{s.phone ? formatPhone(s.phone) : <span className={styles.muted}>—</span>}</td>
                   <td>
                     {s.active ? (
                       <span className={styles.statusActive}><CheckCircle2 size={14} strokeWidth={1.75} /> Active</span>
@@ -816,6 +832,9 @@ const StaffDrawer = ({
       }
     }
     try {
+      /* Task #91 — defensively normalize phone on submit (user may click
+         Create while the PhoneInput is still focused, skipping blur). */
+      const normalizedPhone = phone.trim() ? (normalizePhone(phone) ?? phone.trim()) : null;
       await createStaff.mutateAsync({
         staffCode,
         name:       name.trim(),
@@ -824,7 +843,7 @@ const StaffDrawer = ({
         initials,
         color,
         showroomId: showroomId || null,
-        phone:      phone.trim() || null,
+        phone:      normalizedPhone,
         pin:        isSales ? pin : undefined,
       });
       onClose();
@@ -980,11 +999,11 @@ const StaffDrawer = ({
 
           <label className={styles.field}>
             <span className={styles.fieldLabel}>Phone (optional)</span>
-            <input
+            {/* Task #91 — staff phones normalize to E.164 on blur. */}
+            <PhoneInput
               className={styles.input}
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="+60 12 345 6789"
+              onChange={setPhone}
             />
           </label>
         </div>

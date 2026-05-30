@@ -28,6 +28,23 @@ export const fmtTime = (d: Date | string | number): string => {
   });
 };
 
+/** "4 May 2026, 11:20 AM" — the canonical date+time stamp.
+ *  System-wide standard (Commander 2026-05-29) — use this everywhere a
+ *  timestamp is shown instead of ad-hoc toLocaleString() calls. */
+export const fmtDateTime = (d: Date | string | number): string => {
+  const date = d instanceof Date ? d : new Date(d);
+  if (!Number.isFinite(date.getTime())) return '—';
+  return `${fmtDate(date)}, ${fmtTime(date)}`;
+};
+
+/** Null-safe date — returns "—" for empty/invalid, else fmtDate.
+ *  The standard for table cells / detail fields that may be blank. */
+export const fmtDateOrDash = (d: Date | string | number | null | undefined): string => {
+  if (d == null || d === '') return '—';
+  const date = d instanceof Date ? d : new Date(d);
+  return Number.isFinite(date.getTime()) ? fmtDate(date) : '—';
+};
+
 /** "3 days ago" / "today" / "yesterday" / "in 2 days". */
 export const daysAgo = (d: Date | string | number, now: Date = new Date()): string => {
   const date = d instanceof Date ? d : new Date(d);

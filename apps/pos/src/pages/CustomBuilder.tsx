@@ -13,6 +13,7 @@ import {
   findSnap,
   hasArmConflict,
   reclinerEligible,
+  isAccessoryModule,
   summarizeSofaCells,
   type Cell,
   type Depth,
@@ -21,6 +22,8 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
+import { useProductFabrics, useCreateSofaCombo, type SofaCustomizerData } from '../lib/queries';
+import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import styles from './CustomBuilder.module.css';
 
 const ROOM_W_CM = 600;   // 6 m wide
@@ -187,6 +190,23 @@ interface CustomBuilderProps {
   cells: Cell[];
   setCells: Dispatch<SetStateAction<Cell[]>>;
   onAdded: () => void;
+  /** Cart line key when editing an existing custom-sofa line. The first split
+   *  group replaces this line in place; any extra groups append as new lines. */
+  editingKey?: string;
+  /** Fabric to pre-select when editing (re-derived from the line snapshot). */
+  initialFabric?: FabricSelection | null;
+  /** PR — Commander 2026-05-28: when present, the palette filters to ONLY the
+   *  compartments commander ticked on this Model (Backend → Products →
+   *  Modular → [Model] → Allowed Options), and per-row images resolve from
+   *  the master maintenance config's sofaCompartmentMeta (uploaded photos
+   *  via Backend → Maintenance → Sofa Compartments). Absent the prop the
+   *  builder falls back to its legacy pricing.compartments filter + bundled
+   *  /sofa-modules/*.png assets. */
+  modelCustomizer?: SofaCustomizerData | null;
+  /** mfg_products.base_model — pins the saved Quick Pick to this Model so
+   *  it only appears in Quick Pick for this exact sofa Model. Empty/absent
+   *  = wildcard (shows for all models). */
+  baseModel?: string;
 }
 
 // Cell ids must survive HMR (which resets module locals) and a future cells-
@@ -209,7 +229,7 @@ const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   'Accessory',
 ];
 
-export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded }: CustomBuilderProps) => {
+export const CustomBuilder = ({ productId, productName, pricing, depth, cells, setCells, onAdded, editingKey, initialFabric, modelCustomizer, baseModel }: CustomBuilderProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Whole-sofa group selection — when set, dragging any cell inside moves all
   // cells in the group together by the same delta. Tools above the outline let
@@ -235,16 +255,38 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     moved: boolean;
     group: { id: string; x: number; y: number }[];
   } | null>(null);
+  /* PR — Commander 2026-05-28: per-module art resolver. When the parent
+   * Configurator passes a modelCustomizer (Model's allowed-options +
+   * resolved compartment meta), individual module imageUrls override the
+   * legacy /sofa-modules/<id>.png path. Falls back to the bundled asset so
+   * unconfigured Models and unmapped module ids still render.
+   *
+   * Looks up by NORMALIZED code (1A-LHF) AND by the raw code (1A(LHF)) so
+   * commander's pool form doesn't have to match the POS shared lib form.
+   *
+   * Hoisted above the bbox-measuring effect so JS's TDZ doesn't blow up
+   * the dependency array. */
+  const resolveModuleArtSrc = useCallback((moduleId: string): string => {
+    if (modelCustomizer) {
+      const norm = moduleId.trim().replace(/\(([^)]*)\)/g, '-$1').replace(/-+$/, '');
+      const hit = modelCustomizer.compartments.find(
+        (cc) => cc.code === moduleId || cc.normalizedCode === norm,
+      );
+      if (hit?.imageUrl) return hit.imageUrl;
+    }
+    return `${ASSET_BASE}/${moduleId}.png`;
+  }, [modelCustomizer]);
+
   // Force a re-render once a PNG's silhouette bbox finishes measuring so the
   // img can switch from the placeholder fit to the cropped-to-silhouette sizing.
   const [, setBboxVer] = useState(0);
   useEffect(() => {
-    const srcs = new Set<string>(cells.map((c) => `${ASSET_BASE}/${c.moduleId}.png`));
+    const srcs = new Set<string>(cells.map((c) => resolveModuleArtSrc(c.moduleId)));
     srcs.forEach((src) => {
       if (bboxCache.has(src)) return;
       measureArtBbox(src).then(() => setBboxVer((v) => v + 1));
     });
-  }, [cells]);
+  }, [cells, resolveModuleArtSrc]);
 
   // Room scale — multiplier on the base 600×480cm room. 1× = single sofa
   // layout (default), 2.5× = multi-sofa layout (visually ~40% per module).
@@ -279,6 +321,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [roomW, roomH]);
 
   const addConfigured = useCart((s) => s.addConfigured);
+
 
   /* ─── Module-add (palette → canvas) ─────────────────────────────── */
 
@@ -559,6 +602,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       if (!analysis?.closed) return;
       const groupCells = analysis.group;
       if (groupCells.length === 0) return;
+      // Never rewrite a group that includes an accessory (console / stool) to
+      // its canonical seat-only SKUs — that would delete the accessory cell
+      // entirely (e.g. 1A + WC-45 + 2A matches the 3S signature, whose canonical
+      // [1A,2A] is closed and would replace the console). The PO layer
+      // (cellsToPoSkus) already splits accessories onto their own lines, so the
+      // canvas safely keeps the user's modules exactly as laid out.
+      if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return;
       const groupIds = new Set(
         groupCells.map((c) => c.id).filter((x): x is string => x != null),
       );
@@ -648,7 +698,35 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [analyses]);
 
   const allClosed = analyses.every((a) => a.closed);
-  const canAdd = cells.length > 0 && allClosed;
+  // Fabric + colour (spec 2026-05-24) — required before Add-to-Cart, surcharge
+  // folds onto each sofa line.
+  const productFabrics = useProductFabrics(productId);
+  const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
+  /* Commander 2026-05-28 — "Save as Quick Pick" modal. Lets the staff
+     persist the current cell composition as a new Sofa Combo Pricing row
+     so it appears in the Quick Pick row next time. */
+  const [saveComboOpen, setSaveComboOpen] = useState(false);
+  // When editing an existing custom-sofa line, seed the fabric picker once from
+  // the line snapshot (resolved + passed by the parent). Guarded so the staff's
+  // manual changes after hydration aren't clobbered on re-render.
+  const fabricHydratedRef = useRef(false);
+  useEffect(() => {
+    if (initialFabric && !fabricHydratedRef.current) {
+      setFabricSel(initialFabric);
+      fabricHydratedRef.current = true;
+    }
+  }, [initialFabric]);
+  const fabricSurcharge = fabricSel?.surcharge ?? 0;
+  const canAdd = cells.length > 0 && allClosed && fabricSel != null;
+
+  // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
+  // offersUpgrade gates the per-seat add button; footrest distinguishes
+  // power (opens a footrest) from headrest (no footrest). Price stays
+  // pricing.reclinerUpgradePrice.
+  const upgradeLabel = pricing.seatUpgradeLabel ?? null;
+  const upgradeHasFootrest = pricing.seatUpgradeFootrest ?? true;
+  const upgradePrice = pricing.reclinerUpgradePrice;
+  const offersUpgrade = !!upgradeLabel;
 
   const handleAdd = () => {
     if (!canAdd) return;
@@ -660,6 +738,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // adjust (qty / remove) individually rather than as one merged blob.
     const cellById = new Map<string, Cell>();
     for (const c of cells) { if (c.id) cellById.set(c.id, c); }
+    // When editing, the first emitted line replaces the original; extra groups
+    // (staff added a second sofa during the edit) append as new lines.
+    let usedEditKey = false;
     for (let i = 0; i < priceResult.groups.length; i++) {
       const g = priceResult.groups[i]!;
       const groupCells = g.cellIds
@@ -670,17 +751,27 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       // Single source of truth for sofa-line labels — see summarizeSofaCells.
       // Note this is also re-derived at cart-render time, so updating the
       // rule here propagates to existing cart items too.
-      const summary = summarizeSofaCells(groupCells, depth);
+      const fabricSuffix = fabricSel ? ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}` : '';
+      const summary = summarizeSofaCells(groupCells, depth, pricing.seatUpgradeLabel) + fabricSuffix;
       const snapshot: SofaConfigSnapshot = {
         kind: 'sofa',
         productId,
         productName,
         cells: groupCells,
         depth,
-        total: g.finalPrice,
+        seatUpgradeLabel: pricing.seatUpgradeLabel ?? null,
+        // Fabric + colour applies to each sofa line in the build (server
+        // recompute adds the surcharge per line).
+        fabricId: fabricSel?.fabricId,
+        colourId: fabricSel?.colourId,
+        fabricLabel: fabricSel?.fabricLabel,
+        colourLabel: fabricSel?.colourLabel,
+        colourHex: fabricSel?.colourHex ?? undefined,
+        total: g.finalPrice + fabricSurcharge,
         summary,
       };
-      addConfigured(snapshot);
+      addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
+      usedEditKey = true;
     }
     onAdded();
   };
@@ -695,39 +786,77 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           <span className={styles.hint}>Tap to add</span>
         </div>
         <div className={styles.paletteList}>
-          {PALETTE_GROUPS.map((g) => {
-            const items = SOFA_MODULES.filter((m) => m.group === g)
-              .filter((m) => pricing.compartments.find((cc) => cc.compartmentId === m.id)?.active);
-            if (items.length === 0) return null;
-            return (
-              <div key={g} className={styles.paletteGroup}>
-                <div className={styles.paletteGroupHead}>{g}</div>
-                {items.map((m) => {
-                  const row = pricing.compartments.find((cc) => cc.compartmentId === m.id);
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={styles.paletteItem}
-                      onClick={() => addCell(m.id)}
-                      title={m.label}
-                    >
-                      <div className={styles.paletteArt}>
-                        <img src={`${ASSET_BASE}/${m.id}.png`} alt={m.label} draggable={false} />
-                      </div>
-                      <div className={styles.paletteInfo}>
-                        <div className={styles.paletteCode}>{m.id}</div>
-                        <div className={styles.paletteSub}>{m.label.replace(`${m.id} · `, '')}</div>
-                        <div className={styles.palettePrice}>{row ? fmtRM(row.price) : 'TBC'}</div>
-                      </div>
-                      <span className={styles.paletteAdd} aria-hidden>+</span>
-                    </button>
-                  );
-                })}
-              </div>
+          {(() => {
+            /* PR — Commander 2026-05-28: when the parent passed a
+             * modelCustomizer, use its compartment list (Backend allowed
+             * options ∩ master sofaCompartments pool) as the source of
+             * truth for palette membership AND per-row price. Falls back
+             * to the legacy pricing.compartments tick map when the
+             * customizer isn't available (orphan SKUs / unmigrated Models).
+             *
+             * Membership rule: a SOFA_MODULES row is shown when its id (or
+             * its normalized code) matches a ticked compartment. Price
+             * resolves from the customizer's per-row defaultPriceCenti
+             * (cents → ringgit). Legacy pricing.compartments still
+             * supplies the price when no customizer hit exists, so partial
+             * migrations (commander mid-edit) don't blank every cell. */
+            const customizerByNormId = new Map(
+              (modelCustomizer?.compartments ?? []).map((cc) => [cc.normalizedCode, cc] as const),
             );
-          })}
+            return PALETTE_GROUPS.map((g) => {
+              const items = SOFA_MODULES.filter((m) => m.group === g).filter((m) => {
+                if (modelCustomizer) {
+                  return customizerByNormId.has(m.id);
+                }
+                return pricing.compartments.find((cc) => cc.compartmentId === m.id)?.active;
+              });
+              if (items.length === 0) return null;
+              return (
+                <div key={g} className={styles.paletteGroup}>
+                  <div className={styles.paletteGroupHead}>{g}</div>
+                  {items.map((m) => {
+                    const legacyRow = pricing.compartments.find((cc) => cc.compartmentId === m.id);
+                    const customRow = customizerByNormId.get(m.id);
+                    // Prefer the customizer's defaultPriceCenti (cents → RM).
+                    // Legacy row.price is whole RM. Fall back through both.
+                    const priceRm = customRow?.priceSen != null && customRow.priceSen > 0
+                      ? Math.round(customRow.priceSen / 100)
+                      : legacyRow?.price ?? null;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={styles.paletteItem}
+                        onClick={() => addCell(m.id)}
+                        title={m.label}
+                      >
+                        <div className={styles.paletteArt}>
+                          <img src={resolveModuleArtSrc(m.id)} alt={m.label} draggable={false} />
+                        </div>
+                        <div className={styles.paletteInfo}>
+                          <div className={styles.paletteCode}>{m.id}</div>
+                          <div className={styles.paletteSub}>
+                            {customRow?.label && customRow.label !== m.id
+                              ? customRow.label
+                              : m.label.replace(`${m.id} · `, '')}
+                          </div>
+                          <div className={styles.palettePrice}>{priceRm != null ? fmtRM(priceRm) : 'TBC'}</div>
+                        </div>
+                        <span className={styles.paletteAdd} aria-hidden>+</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            });
+          })()}
         </div>
+        <FabricColourPicker
+          productFabrics={productFabrics.data ?? []}
+          fabricId={fabricSel?.fabricId ?? null}
+          colourId={fabricSel?.colourId ?? null}
+          onChange={setFabricSel}
+        />
       </aside>
 
       <section className={styles.canvasCol}>
@@ -974,7 +1103,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                   }}
                 >
                   {(() => {
-                    const artSrc = `${ASSET_BASE}/${c.moduleId}.png`;
+                    const artSrc = resolveModuleArtSrc(c.moduleId);
                     const bbox = bboxCache.get(artSrc);
                     let imgStyle: CSSProperties;
                     if (bbox) {
@@ -995,10 +1124,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     return <img src={artSrc} style={imgStyle} alt={m.label} draggable={false} />;
                   })()}
 
-                  {/* Per-seat recliner overlays — render inside the rotated
+                  {/* Per-seat upgrade overlays — render inside the rotated
                       cellArt so wash + badge + footrest auto-orient with the
-                      module. Positioned in NATIVE module cm coords. */}
-                  {(() => {
+                      module. Positioned in NATIVE module cm coords. Only shown
+                      when this Model offers an upgrade (F3). */}
+                  {offersUpgrade && (() => {
                     const rects = seatRectsCm(m, depth);
                     const recs = c.recliners ?? [];
                     return rects.map((rect, i) => {
@@ -1022,9 +1152,9 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                             aria-hidden
                             style={{ left: sx + sw / 2, top: sy + sh / 2 }}
                           >
-                            {recState.open ? 'RECLINED' : 'RECLINER'}
+                            {upgradeLabel}
                           </div>
-                          {recState.open && (
+                          {upgradeHasFootrest && recState.open && (
                             <div
                               className={styles.reclineFootrestWrap}
                               aria-hidden
@@ -1049,10 +1179,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     });
                   })()}
 
-                  {/* Per-seat controls — only on the selected cell. Each
-                      eligible seat gets a +R upgrade button OR a R / R.O
-                      footrest toggle plus a ✕ to drop the upgrade. */}
-                  {isSelected && c.id != null && (() => {
+                  {/* Per-seat controls — only on the selected cell, and only
+                      when this Model offers an upgrade (F3). Each eligible seat
+                      gets an add (+) button; once added, a footrest open/close
+                      toggle (power upgrades only — not headrest) plus a ✕ to
+                      drop it. Label + price come from the Model's pricing. */}
+                  {isSelected && c.id != null && offersUpgrade && (() => {
                     const rects = seatRectsCm(m, depth);
                     const recs = c.recliners ?? [];
                     const cid = c.id;
@@ -1076,26 +1208,28 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                               type="button"
                               className={`${styles.seatBtn} ${styles.seatBtnAdd}`}
                               onClick={() => toggleSeatRecliner(cid, i)}
-                              title="Upgrade this seat to a power recliner (+RM 990)"
+                              title={`Add ${upgradeLabel}${upgradePrice > 0 ? ` (+RM ${upgradePrice.toLocaleString('en-MY')})` : ''}`}
                             >
-                              + R
+                              +
                             </button>
                           )}
                           {isRec && (
                             <div className={styles.seatCtlStack}>
-                              <button
-                                type="button"
-                                className={`${styles.seatBtn} ${isOpenSeat ? styles.seatBtnOn : ''}`}
-                                onClick={() => toggleSeatReclinerOpen(cid, i)}
-                                title={isOpenSeat ? 'Close footrest' : 'Open footrest'}
-                              >
-                                {isOpenSeat ? 'R.O' : 'R'}
-                              </button>
+                              {upgradeHasFootrest && (
+                                <button
+                                  type="button"
+                                  className={`${styles.seatBtn} ${isOpenSeat ? styles.seatBtnOn : ''}`}
+                                  onClick={() => toggleSeatReclinerOpen(cid, i)}
+                                  title={isOpenSeat ? 'Close footrest' : 'Open footrest'}
+                                >
+                                  {isOpenSeat ? 'R.O' : 'R'}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className={`${styles.seatBtn} ${styles.seatBtnRemove}`}
                                 onClick={() => toggleSeatRecliner(cid, i)}
-                                title="Remove recliner upgrade"
+                                title={`Remove ${upgradeLabel}`}
                               >
                                 ✕
                               </button>
@@ -1139,6 +1273,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             if (!g.bundle) return null;
             const groupCells = analyses[i]?.group;
             if (!groupCells || groupCells.length === 0) return null;
+            // Skip when the group includes an accessory (console / stool). The
+            // bundle composite PNG depicts only the seat shell but is sized to
+            // the WHOLE group bbox — including the accessory's width — so it
+            // paints over and hides the console underneath (it only reappeared
+            // in "Edit modules", which suppresses this overlay). Mirror
+            // describeSofaLine's hasAccessory rule: keep every compartment
+            // visible by drawing the individual module silhouettes instead.
+            if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return null;
             // Skip when the modular shape isn't actually closed. groupPrice
             // intentionally treats a lone handed module (1A-RHF, 2B-RHF, …)
             // as a 1S/2S bundle for PO + pricing (factory ships a complete
@@ -1242,17 +1384,166 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
-            <PriceTag amount={priceResult.total} size="lg" />
+            <PriceTag amount={priceResult.total + fabricSurcharge * priceResult.groups.length} size="lg" />
+            {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
+                show the savings the combo gave over the matched subset's own
+                à-la-carte sum. Extra modules outside the combo subset stay at
+                full price and are already folded into the Total above. */}
+            {(() => {
+              const comboSavings = priceResult.groups.reduce(
+                (s, g) =>
+                  g.basis === 'combo' && g.comboSubsetALaCarte != null && g.comboPrice != null
+                    ? s + Math.max(0, g.comboSubsetALaCarte - g.comboPrice)
+                    : s,
+                0,
+              );
+              const hasExtras = priceResult.groups.some(
+                (g) => g.basis === 'combo' && (g.comboExtrasALaCarte ?? 0) > 0,
+              );
+              if (comboSavings <= 0) return null;
+              return (
+                <span className={styles.comboCue}>
+                  Combo applied · saves RM {comboSavings.toLocaleString('en-MY', { maximumFractionDigits: 0 })}
+                  {hasExtras ? ' · extras at full price' : ''}
+                </span>
+              );
+            })()}
           </div>
-          <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
-            {!cells.length
-              ? 'Add modules to start'
-              : !allClosed
-                ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
-                : 'Add to cart'}
-          </Button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* Commander 2026-05-28: save the current layout as a Quick Pick
+                Combo so it auto-renders for future sales. Only visible when
+                the sofa is closed (no point persisting an unfinishable
+                layout) and has at least one cell. */}
+            {cells.length > 0 && allClosed && (
+              <Button
+                variant="ghost"
+                onClick={() => setSaveComboOpen(true)}
+              >
+                Save as Quick Pick
+              </Button>
+            )}
+            <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
+              {!cells.length
+                ? 'Add modules to start'
+                : !allClosed
+                  ? `Resolve · ${analyses.find((a) => !a.closed)?.reason ?? 'sofa not closed'}`
+                  : !fabricSel
+                    ? 'Choose a fabric'
+                    : editingKey
+                      ? 'Save changes'
+                      : 'Add to cart'}
+            </Button>
+          </div>
         </footer>
+        {saveComboOpen && (
+          <SaveComboModal
+            modules={cells.map((c) => c.moduleId)}
+            depth={depth}
+            currentPriceCenti={priceResult.total}
+            baseModel={baseModel ?? ''}
+            onClose={() => setSaveComboOpen(false)}
+            onSaved={() => setSaveComboOpen(false)}
+          />
+        )}
       </section>
     </div>
   );
+};
+
+/* ─── SaveComboModal ─────────────────────────────────────────────────────
+   "Save as Quick Pick" UX. Staff give the layout a friendly name; price
+   is auto-computed from the live à la carte total. Tier defaults to null
+   (wildcard — applies to any fabric tier). Commander can tweak price/tier
+   later in Backend → Products → Sofa Combos. */
+function SaveComboModal({
+  modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
+}: {
+  modules: string[];
+  depth: string;
+  currentPriceCenti: number;
+  /** mfg_products.base_model — pins the saved pick to this sofa Model. */
+  baseModel: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const create = useCreateSofaCombo();
+  const [label, setLabel] = useState('');
+
+  const submit = async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      await create.mutateAsync({
+        baseModel,
+        // OR-set storage (PR #272/#273/#274): combo `modules` is string[][] —
+        // each slot an OR-set of alternative codes. A POS "Save from Customize"
+        // pick is a concrete build, so every module code becomes its own
+        // singleton required slot.
+        modules: modules.map((m) => [m]),
+        tier: null,   // wildcard — any fabric tier
+        pricesByHeight: { [String(depth)]: currentPriceCenti },
+        label: label.trim() || null,
+        effectiveFrom: today,
+        notes: 'Saved from POS Customize',
+      });
+      onSaved();
+    } catch (e) {
+      alert(`Save failed: ${String(e)}`);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+      padding: '8vh 16px', zIndex: 1000,
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
+        padding: 24, width: '100%', maxWidth: 480,
+        display: 'flex', flexDirection: 'column', gap: 16,
+      }}>
+        <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
+          Save as Quick Pick
+        </h3>
+        <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
+          Saves this {modules.length}-compartment layout so it appears in Quick Pick next time.
+          Price (RM{Math.round(currentPriceCenti / 100).toLocaleString('en-MY')}) is set from the
+          current à la carte total — adjust it later in Backend if needed.
+        </p>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
+            Name (optional)
+          </span>
+          <input
+            autoFocus
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { void submit(); } }}
+            placeholder={modules.join(' + ')}
+            style={inputStyle}
+          />
+        </label>
+        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          Modules: {modules.join(' · ')}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={() => { void submit(); }} disabled={create.isPending}>
+            {create.isPending ? 'Saving…' : 'Save Quick Pick'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputStyle: CSSProperties = {
+  fontFamily: 'var(--font-sans)',
+  fontSize: 'var(--fs-14)',
+  padding: '8px 10px',
+  border: '1px solid var(--line-strong)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--c-cream)',
+  outline: 'none',
+  width: '100%',
 };

@@ -46,7 +46,7 @@
 
 .line {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -69,13 +69,18 @@
 }
 
 .lineRail {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   font-size: var(--fs-12);
 }
 .lineRail .qtyBox { display: none; }
 .lineRail .lineTotal { font-size: var(--fs-13); min-width: auto; }
+
+/* Product photo — leading column. Bigger on the full /cart page, tighter in
+   the rail. ProductThumb paints the photo (or initial) inside this box. */
+.linePhoto { width: 56px; height: 56px; }
+.lineRail .linePhoto { width: 40px; height: 40px; }
 
 .lineMain { min-width: 0; }
 .lineName {
@@ -126,6 +131,12 @@
   font-size: var(--fs-16);
   min-width: 100px;
   text-align: right;
+}
+
+.lineActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .quotePanel {
@@ -212,6 +223,11 @@
   justify-content: flex-end;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+/* Pushes the "Back to catalog" button to the far left while the commit
+   actions (Clear / Save / Continue) stay right-aligned. */
+.backWrap {
+  margin-right: auto;
 }
 .rail .actions {
   flex-direction: column;

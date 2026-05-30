@@ -10,10 +10,11 @@ import {
   ArrowRight,
   ShoppingBag,
   Check,
+  Pencil,
 } from 'lucide-react';
 import { useCart, cartItemCount, cartSubtotal, cartSummary, type CartLine } from '../state/cart';
 import { useCatalog, type CatalogProduct } from '../lib/queries';
-import { useSaveQuote } from '../lib/quotes';
+import { useSaveQuote, useUpdateQuote } from '../lib/quotes';
 import styles from './CustomerOrderSheet.module.css';
 
 interface Props {
@@ -33,6 +34,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
   const remove = useCart((s) => s.remove);
   const setQty = useCart((s) => s.setQty);
   const clear = useCart((s) => s.clear);
+  const sourceQuoteId = useCart((s) => s.sourceQuoteId);
   const itemCount = cartItemCount(lines);
   const subtotal = cartSubtotal(lines);
 
@@ -44,10 +46,12 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
   }, [catalog.data]);
 
   const saveQuote = useSaveQuote();
+  const updateQuote = useUpdateQuote();
   const [savingQuote, setSavingQuote] = useState(false);
   const [quoteName, setQuoteName] = useState('');
   const [quotePhone, setQuotePhone] = useState('');
   const [savedConfirm, setSavedConfirm] = useState(false);
+  const [savedAsUpdate, setSavedAsUpdate] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
   // Esc closes the sheet. Body scroll locks while open so the catalog
@@ -86,10 +90,27 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
       setSavingQuote(false);
       setQuoteName('');
       setQuotePhone('');
+      setSavedAsUpdate(false);
       setSavedConfirm(true);
       setTimeout(() => setSavedConfirm(false), 2400);
     } catch (err) {
       setSaveErr(err instanceof Error ? err.message : 'Failed to save quote');
+    }
+  };
+
+  // Save the current cart back into the loaded quote, then clear (the draft is
+  // parked). "Continue add on" is the keep-cart-and-shop-more path instead.
+  const handleUpdateQuote = async () => {
+    if (!sourceQuoteId) return;
+    setSaveErr(null);
+    try {
+      await updateQuote.mutateAsync({ id: sourceQuoteId, cart: lines, subtotal, total: subtotal });
+      clear();
+      setSavedAsUpdate(true);
+      setSavedConfirm(true);
+      setTimeout(() => setSavedConfirm(false), 2400);
+    } catch (err) {
+      setSaveErr(err instanceof Error ? err.message : 'Failed to update quote');
     }
   };
 
@@ -133,7 +154,7 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
         {savedConfirm && (
           <div className={styles.savedBanner}>
             <Check size={16} strokeWidth={1.75} />
-            Quote saved. Open <Link to="/quotes" onClick={onClose}>Saved quotes</Link> to load it later.
+            {savedAsUpdate ? 'Quote updated.' : 'Quote saved.'} Open <Link to="/quotes" onClick={onClose}>Saved quotes</Link> to load it later.
           </div>
         )}
 
@@ -155,6 +176,11 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 onRemove={() => remove(line.key)}
                 onDec={() => setQty(line.key, line.qty - 1)}
                 onInc={() => setQty(line.key, line.qty + 1)}
+                onEdit={
+                  line.config.kind !== 'flat'
+                    ? () => { onClose(); navigate(`/configure/${line.config.productId}?edit=${line.key}`); }
+                    : undefined
+                }
               />
             ))
           )}
@@ -226,20 +252,33 @@ export const CustomerOrderSheet = ({ open, onClose }: Props) => {
                 <sup>RM</sup>{fmtMYR(subtotal)}
               </span>
             </div>
+            {saveErr && !savingQuote && <p className={styles.quoteErr}>{saveErr}</p>}
             <div className={styles.cta}>
               <button type="button" className={styles.ghost} onClick={clear}>
                 <Trash2 size={14} strokeWidth={1.75} />
                 Clear
               </button>
               {!savingQuote && (
-                <button
-                  type="button"
-                  className={styles.ghost}
-                  onClick={() => setSavingQuote(true)}
-                >
-                  <BookmarkPlus size={14} strokeWidth={1.75} />
-                  Save Quote
-                </button>
+                sourceQuoteId ? (
+                  <button
+                    type="button"
+                    className={styles.ghost}
+                    onClick={handleUpdateQuote}
+                    disabled={updateQuote.isPending}
+                  >
+                    <BookmarkPlus size={14} strokeWidth={1.75} />
+                    {updateQuote.isPending ? 'Updating…' : 'Update Quote'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.ghost}
+                    onClick={() => setSavingQuote(true)}
+                  >
+                    <BookmarkPlus size={14} strokeWidth={1.75} />
+                    Save Quote
+                  </button>
+                )
               )}
               <button
                 type="button"
@@ -263,9 +302,12 @@ interface CartItemProps {
   onRemove: () => void;
   onDec: () => void;
   onInc: () => void;
+  /** Re-open the configurator pre-filled to edit this line. Omitted for flat
+   *  products (no options to change). */
+  onEdit?: () => void;
 }
 
-const CartItem = ({ line, product, onRemove, onDec, onInc }: CartItemProps) => {
+const CartItem = ({ line, product, onRemove, onDec, onInc, onEdit }: CartItemProps) => {
   const photo = product?.thumb_key ?? product?.img_key ?? null;
   const lineTotal = line.qty * line.config.total;
   return (
@@ -293,14 +335,26 @@ const CartItem = ({ line, product, onRemove, onDec, onInc }: CartItemProps) => {
         </div>
       </div>
       <div className={styles.itemRight}>
-        <button
-          type="button"
-          className={styles.itemRemove}
-          onClick={onRemove}
-          aria-label="Remove"
-        >
-          <X size={14} strokeWidth={1.75} />
-        </button>
+        <div className={styles.itemActions}>
+          {onEdit && (
+            <button
+              type="button"
+              className={styles.itemEdit}
+              onClick={onEdit}
+              aria-label="Edit"
+            >
+              <Pencil size={14} strokeWidth={1.75} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={styles.itemRemove}
+            onClick={onRemove}
+            aria-label="Remove"
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </div>
         <span className={styles.itemPrice}>
           <sup>RM</sup>{fmtMYR(lineTotal)}
         </span>

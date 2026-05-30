@@ -1,0 +1,23 @@
+/* Product photo thumbnail — shared by the cart line + order summary item.
+   Dimensions come from the caller's className; this only paints the photo
+   (cover-fit background-image set inline) or the initial-letter fallback. */
+.thumb {
+  background-color: var(--bg-warm);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.fallback {
+  font-family: var(--font-title);
+  font-weight: var(--w-bold);
+  font-size: var(--fs-16);
+  line-height: 1;
+  color: var(--fg-soft);
+}

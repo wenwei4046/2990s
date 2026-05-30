@@ -1,15 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import {
+  BUNDLES,
   detectBundle,
   familySignature,
   groupSofas,
   cellEffectiveBbox,
   cellBbox,
+  moduleFootprint,
+  findModule,
   computeSofaPrice,
   analyzeSofa,
   hasArmConflict,
   findSnap,
   cellsToPoSkus,
+  summarizeSofaCells,
+  describeSofaLine,
+  fabricSurchargeFor,
+  fabricColourSuffix,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -58,9 +65,131 @@ describe('detectBundle', () => {
   it('returns null when no signature matches', () => {
     expect(detectBundle(['1NA', '1NA'])).toBeNull();
   });
+  // 2.5-Seater is a Quick-Pick-only widened 2-seater (Loo 2026-05-23). It must
+  // exist in BUNDLES (so the POS quick-pick list renders it) but must NEVER be
+  // auto-detected from a custom build — there is no 2.5A module to compose, so
+  // its signature '2.5A' is unreachable. These guard that contract.
+  it('exposes a 2.5S bundle labelled 2.5-Seater', () => {
+    const b = BUNDLES.find((x) => x.id === '2.5S');
+    expect(b?.label).toBe('2.5-Seater');
+  });
+  it('never auto-detects 2.5S from real modules', () => {
+    expect(detectBundle(['2A-LHF'])?.id).toBe('2S');           // wider-looking 2-seater still maps to 2S
+    expect(detectBundle(['2A-LHF', '2A-RHF'])?.id).not.toBe('2.5S');
+    expect(detectBundle(['1A-LHF', '1NA', '2A-RHF'])?.id).not.toBe('2.5S');
+  });
+});
+
+/* F3 — per-seat upgrade label suffix on the cart/order summary. */
+describe('summarizeSofaCells upgrade suffix', () => {
+  const cell = (moduleId: string, recliners: { seatIdx: number; open: boolean }[]): Cell =>
+    ({ id: 'c1', moduleId, x: 0, y: 0, rot: 0, recliners });
+
+  it('appends "+ N <label>" when seats are upgraded and a label is given', () => {
+    const cells = [cell('2A-LHF', [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
+    expect(summarizeSofaCells(cells, '24', 'Power slide')).toBe('2-Seater + 2 Power slide');
+  });
+  it('omits the suffix when no label is passed (back-compat)', () => {
+    const cells = [cell('1A-LHF', [{ seatIdx: 0, open: false }])];
+    expect(summarizeSofaCells(cells, '24')).toBe('1-Seater');
+  });
+  it('omits the suffix when no seat is upgraded', () => {
+    const cells = [cell('1A-LHF', [])];
+    expect(summarizeSofaCells(cells, '24', 'Headrest')).toBe('1-Seater');
+  });
   it('drops accessories before signing', () => {
     expect(familySignature(['1A-LHF', 'WC-45', '2A-RHF'])).toBe('1A+2A');
     expect(detectBundle(['1A-LHF', 'WC-45', '2A-RHF'])?.id).toBe('3S');
+  });
+});
+
+/* Invoice/order line description (Track 2 §8.1 decomposition rule). Single-piece
+ * bundles show the name; multi-piece decompose to oriented module ids. Reads the
+ * stored order_items.config (bundleId for Quick-Pick, cells for Custom Build). */
+describe('describeSofaLine', () => {
+  const cell = (
+    moduleId: string,
+    x: number,
+    recliners: { seatIdx: number; open: boolean }[] = [],
+  ): Cell => ({ id: `${moduleId}@${x}`, moduleId, x, y: 0, rot: 0, recliners });
+
+  it('quick-pick single-piece bundles show the bundle name', () => {
+    expect(describeSofaLine({ bundleId: '1S' })).toBe('1-Seater');
+    expect(describeSofaLine({ bundleId: '2S' })).toBe('2-Seater');
+    expect(describeSofaLine({ bundleId: '2.5S' })).toBe('2.5-Seater');
+  });
+
+  it('quick-pick multi-piece bundles decompose to oriented module ids', () => {
+    expect(describeSofaLine({ bundleId: '3S' })).toBe('1A-LHF + 2A-RHF');
+    expect(describeSofaLine({ bundleId: '2+L' })).toBe('2A-LHF + L-RHF');
+  });
+
+  it('quick-pick console bundle (2WC) shows 1A-LHF + WC-45 + 1A-RHF (F6)', () => {
+    expect(describeSofaLine({ bundleId: '2WC' })).toBe('1A-LHF + WC-45 + 1A-RHF');
+  });
+
+  it('quick-pick power-slide combo (2PS) shows its bundle name (F7)', () => {
+    expect(describeSofaLine({ bundleId: '2PS' })).toBe('2-Seater + 2 Power slide');
+  });
+
+  it('quick-pick corner bundle (CORNER) shows 1A-LHF + CNR + 2A-RHF (F4)', () => {
+    expect(describeSofaLine({ bundleId: 'CORNER' })).toBe('1A-LHF + CNR + 2A-RHF');
+  });
+
+  it('custom single-piece keeps the name and appends "+ N <upgrade>"', () => {
+    const cells = [cell('2A-LHF', 0, [{ seatIdx: 0, open: false }, { seatIdx: 1, open: true }])];
+    expect(describeSofaLine({ cells, depth: '24', seatUpgradeLabel: 'Power slide' }))
+      .toBe('2-Seater + 2 Power slide');
+  });
+
+  it('custom multi-piece lists its oriented cell ids left-to-right', () => {
+    const cells = [cell('2A-RHF', 95), cell('1A-LHF', 0)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + 2A-RHF');
+  });
+
+  it('custom with a console lists the accessory inline (not collapsed to a bundle)', () => {
+    const cells = [cell('1A-LHF', 0), cell('WC-45', 95), cell('1A-RHF', 140)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + WC-45 + 1A-RHF');
+  });
+
+  it('falls back gracefully when neither bundleId nor cells are present', () => {
+    expect(describeSofaLine({})).toBe('Sofa');
+  });
+
+  // F3: an auto-included headrest (non-footrest upgrade) shows "+ N Headrest" on a
+  // quick-pick line, N = the bundle's seat count. Opt-in power upgrades (footrest)
+  // are NOT auto-appended on quick-pick (they're added per seat in Custom Build).
+  it('appends "+ N Headrest" for a non-footrest upgrade (N = bundle seat count)', () => {
+    const hr = { seatUpgradeLabel: 'Headrest', seatUpgradeFootrest: false };
+    expect(describeSofaLine({ bundleId: '1S', ...hr })).toBe('1-Seater + 1 Headrest');
+    expect(describeSofaLine({ bundleId: '2S', ...hr })).toBe('2-Seater + 2 Headrest');
+    expect(describeSofaLine({ bundleId: '2.5S', ...hr })).toBe('2.5-Seater + 2 Headrest');
+  });
+  it('does NOT auto-append a footrest (opt-in power) upgrade on quick-pick', () => {
+    expect(describeSofaLine({ bundleId: '2S', seatUpgradeLabel: 'Power slide', seatUpgradeFootrest: true }))
+      .toBe('2-Seater');
+  });
+});
+
+// F1: STOOL is a placeable accessory module in Custom Build (was in the DB
+// compartment_library but absent from SOFA_MODULES → previously dead).
+describe('STOOL accessory module', () => {
+  it('is a placeable accessory module (group Accessory, accessory=true)', () => {
+    const m = findModule('STOOL');
+    expect(m?.accessory).toBe(true);
+    expect(m?.group).toBe('Accessory');
+  });
+});
+
+/* F5: depth widened beyond 24/28. Plan-view width grows 2.5cm per inch per
+ * cushion, anchored on the existing 24″=base / 28″=+10cm/cushion behaviour. */
+describe('moduleFootprint depth scaling', () => {
+  it('widens 2.5cm per inch per cushion (24 base, 28 +10, 30 +15, 32 +20)', () => {
+    const m = findModule('2A-LHF')!; // w 158cm, 2 cushions
+    expect(moduleFootprint(m, 0, '24').w).toBe(158);
+    expect(moduleFootprint(m, 0, '28').w).toBe(178);
+    expect(moduleFootprint(m, 0, '30').w).toBe(188);
+    expect(moduleFootprint(m, 0, '32').w).toBe(198);
   });
 });
 
@@ -194,6 +323,167 @@ describe('computeSofaPrice basis selection', () => {
     ];
     const g = computeSofaPrice(cells, '24', p).groups[0]!;
     expect(g.basis).toBe('a_la_carte');
+  });
+});
+
+/* Case 4b — combo override applies to a SUBSET, extras stay at full price,
+   and only when the combo is strictly cheaper than the matched subset's own
+   à-la-carte sum (HOOKKA `comboMatches` 1:1).
+
+   UNIT NOTE (Commander 2026-05-28 unit fix): the combo dialog stores prices
+   in CENTI (`Math.round(rm * 100)`), so `pricesByHeight` here is in CENTI —
+   matching production. The compartment / bundle fixtures are whole-MYR (the
+   POS pricing object divides base_price_sen by 100). groupPrice converts the
+   combo centi → whole-MYR before the cheaper-only guard and before adding
+   extras, so every `comboPrice` / `finalPrice` assertion below is whole-MYR.
+   Combo "2+L" = [{2A-LHF,2A-RHF},{L-LHF,L-RHF}]. Subset à-la-carte for a
+   2A + L pair = 2400 + 1900 = 4300 MYR; combo 380000 centi = RM 3800
+   (< 4300 → applies). */
+describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
+  const comboPricing = (over: Partial<SofaProductPricing> = {}) =>
+    pricing({
+      baseModel: '',
+      fabricTier: 'PRICE_2',
+      comboHeight: '24',
+      combos: [
+        {
+          id: 'cmb',
+          baseModel: '',
+          modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+          tier: 'PRICE_2',
+          customerId: null,
+          pricesByHeight: { '24': 380000 }, // CENTI — RM 3800
+          label: null,
+          effectiveFrom: '2026-01-01',
+          deletedAt: null,
+        },
+      ],
+      ...over,
+    });
+
+  it('applies combo to the matched subset and keeps extras at full price', () => {
+    // 2A + L cover the combo (subset à-la-carte 4300 MYR, combo RM 3800). An
+    // extra 1NA (1200) sits apart so it forms its OWN group at à-la-carte —
+    // proving extras never ride the combo. The combo group base = RM 3800.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,    y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L-RHF',  x: 158,  y: 0, rot: 0 },
+      // far-away standalone extra (separate group)
+      { id: 'c', moduleId: '1NA',    x: 2000, y: 0, rot: 0 },
+    ];
+    const result = computeSofaPrice(cells, '24', comboPricing());
+    const comboGroup = result.groups.find((g) => g.basis === 'combo')!;
+    expect(comboGroup).toBeTruthy();
+    // Whole-MYR — NOT the raw 380000 centi and NOT 38 (would be a double-÷100).
+    expect(comboGroup.comboPrice).toBe(3800);
+    expect(comboGroup.comboSubsetALaCarte).toBe(4300);
+    expect(comboGroup.comboExtrasALaCarte).toBe(0); // both cells in the combo group are matched
+    expect(comboGroup.finalPrice).toBe(3800);
+    // standalone 1NA priced à-la-carte (1200), never folded into the combo.
+    const extraGroup = result.groups.find((g) => g.basis === 'a_la_carte')!;
+    expect(extraGroup.finalPrice).toBe(1200);
+  });
+
+  /* Standalone unit-consistency proof (Commander 2026-05-28). Compartments at
+     RM 990 + RM 990 (whole-MYR); combo pricesByHeight['24'] = 180000 centi
+     (= RM 1800). subsetSum = 1980 MYR; 1980 − 1800 = 180 > 0 → combo applies.
+     basePrice must be RM 1800 — never 180000 (raw centi) or 18 (double-÷100).
+     Uses the same 2A-LHF + L-RHF geometry at height '24' the other combo cases
+     prove forms one connected group. */
+  it('converts combo centi → whole-MYR (RM 990 + RM 990 vs RM 1800 combo)', () => {
+    const p = pricing({
+      baseModel: '',
+      fabricTier: 'PRICE_2',
+      comboHeight: '24',
+      compartments: [
+        { compartmentId: '2A-LHF', active: true, price: 990 },
+        { compartmentId: '2A-RHF', active: true, price: 990 },
+        { compartmentId: 'L-LHF',  active: true, price: 990 },
+        { compartmentId: 'L-RHF',  active: true, price: 990 },
+      ],
+      // Drop bundles so the test isolates the combo vs à-la-carte unit path
+      // (a 2+L bundle would otherwise compete for basis selection).
+      bundles: [],
+      combos: [
+        {
+          id: 'cmb-990',
+          baseModel: '',
+          modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+          tier: 'PRICE_2',
+          customerId: null,
+          pricesByHeight: { '24': 180000 }, // CENTI — RM 1800
+          label: null,
+          effectiveFrom: '2026-01-01',
+          deletedAt: null,
+        },
+      ],
+    });
+    const g = computeSofaPrice(
+      [
+        { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+      ],
+      '24',
+      p,
+    ).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboSubsetALaCarte).toBe(1980); // 990 + 990, whole-MYR
+    expect(g.comboPrice).toBe(1800);          // 180000 centi ÷ 100 = RM 1800
+    expect(g.finalPrice).toBe(1800);          // NOT 180000, NOT 18
+  });
+
+  it('extra module WITHIN the same connected group stays at full price', () => {
+    // 2A + L + a touching 1NA all in ONE group. Combo covers {2A, L}; the 1NA
+    // is an extra inside the group → group base = combo 3800 + 1NA full 1200.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '1NA',    x: 158, y: 0, rot: 0 },
+      { id: 'c', moduleId: 'L-RHF',  x: 233, y: 0, rot: 0 },
+    ];
+    const g = computeSofaPrice(cells, '24', comboPricing()).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(3800);          // RM 3800, whole-MYR
+    expect(g.comboSubsetALaCarte).toBe(4300); // 2A 2400 + L 1900
+    expect(g.comboExtrasALaCarte).toBe(1200); // the 1NA extra at full price
+    expect(g.finalPrice).toBe(3800 + 1200);
+  });
+
+  it('cheaper-only guard: combo NOT applied when it is dearer than the subset', () => {
+    // Combo RM 9999 (999900 centi) > subset à-la-carte 4300 MYR → guard
+    // refuses; the shape falls back to its bundle / à-la-carte basis (here the
+    // 2+L bundle 4000). This is the case the unit bug used to BREAK: comparing
+    // 4300 MYR against a raw centi combo made the guard misfire ~100×.
+    const g = computeSofaPrice(
+      [
+        { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+      ],
+      '24',
+      comboPricing({
+        combos: [
+          {
+            id: 'cmb', baseModel: '', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+            tier: 'PRICE_2', customerId: null, pricesByHeight: { '24': 999900 }, // CENTI — RM 9999
+            label: null, effectiveFrom: '2026-01-01', deletedAt: null,
+          },
+        ],
+      }),
+    ).groups[0]!;
+    expect(g.basis).not.toBe('combo');
+    expect(g.comboPrice).toBeNull();
+  });
+
+  it('OR-alternative within a slot — RHF variant covers the slot too', () => {
+    const g = computeSofaPrice(
+      [
+        { id: 'a', moduleId: '2A-RHF', x: 0,   y: 0, rot: 0 },
+        { id: 'b', moduleId: 'L-LHF',  x: 158, y: 0, rot: 0 },
+      ],
+      '24',
+      comboPricing(),
+    ).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(3800); // RM 3800, whole-MYR
   });
 });
 
@@ -525,5 +815,41 @@ describe('cellsToPoSkus', () => {
     const cells: Cell[] = [{ id: 'w', moduleId: 'WC-45', x: 0, y: 0, rot: 0 }];
     const skus = cellsToPoSkus(cells, '24');
     expect(skus).toEqual([{ sku: 'WC-45', label: 'Wood console · 45cm', qty: 1 }]);
+  });
+});
+
+describe('fabricSurchargeFor', () => {
+  const withFabrics = pricing({
+    fabrics: [
+      { fabricId: 'linen',   active: true,  surcharge: 0,   colourIds: ['sand', 'stone'] },
+      { fabricId: 'velvet',  active: true,  surcharge: 300, colourIds: ['sand'] },
+      { fabricId: 'retired', active: false, surcharge: 999, colourIds: [] },
+    ],
+  });
+
+  it('returns the surcharge of an active fabric', () => {
+    expect(fabricSurchargeFor(withFabrics, 'velvet')).toBe(300);
+    expect(fabricSurchargeFor(withFabrics, 'linen')).toBe(0);
+  });
+
+  it('returns 0 for missing, unknown, or inactive fabric', () => {
+    expect(fabricSurchargeFor(withFabrics, undefined)).toBe(0);
+    expect(fabricSurchargeFor(withFabrics, 'nope')).toBe(0);
+    expect(fabricSurchargeFor(withFabrics, 'retired')).toBe(0);
+  });
+
+  it('handles a Model with no fabrics array', () => {
+    expect(fabricSurchargeFor(pricing(), 'velvet')).toBe(0);
+  });
+});
+
+describe('fabricColourSuffix', () => {
+  it('formats fabric + colour', () => {
+    expect(fabricColourSuffix('Velvet', 'Sand')).toBe(' · Velvet / Sand');
+  });
+  it('returns empty when either is missing', () => {
+    expect(fabricColourSuffix(null, null)).toBe('');
+    expect(fabricColourSuffix('Velvet', null)).toBe('');
+    expect(fabricColourSuffix(undefined, 'Sand')).toBe('');
   });
 });

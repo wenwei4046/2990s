@@ -5,6 +5,13 @@
   padding: var(--space-5) var(--space-3);
   background: var(--c-paper);
   border-right: 1px solid var(--line);
+  /* Independent scroll: the shell (Layout.module.css) is capped at 100vh, so
+     this grid track is exactly the viewport height. A tall (all-modules-
+     expanded) nav now scrolls WITHIN the sidebar instead of growing the page
+     and dragging the main content with it. The right column (.col / .main)
+     already scrolls on its own. */
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .brand {
@@ -68,6 +75,76 @@
 }
 .navGroup:first-of-type {
   padding-top: 0;
+}
+
+/* Supply Chain Management umbrella header — a clear section divider above the
+   5 collapsible modules. Brand burnt + a hairline rule so it reads as a break,
+   not just another group label. */
+.scmHeader {
+  margin-top: var(--space-3);
+  padding: var(--space-4) var(--space-3) var(--space-2);
+  border-top: 1px solid var(--line);
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--c-burnt);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Clickable collapsible module header (Sales Order Management, etc.). */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-button);
+  font-size: var(--fs-11);
+  font-weight: var(--w-semibold);
+  letter-spacing: var(--tk-loud);
+  text-transform: uppercase;
+  color: var(--fg-soft);
+  white-space: nowrap;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+.sectionHeader:hover {
+  background: rgba(34, 31, 32, 0.05);
+  color: var(--fg);
+}
+.sectionChevron {
+  flex-shrink: 0;
+  color: var(--fg-soft);
+  transition: transform 150ms ease-out;
+}
+.sectionChevronClosed {
+  transform: rotate(-90deg);
+}
+
+/* Items nested under a module — indented behind a hairline guide so the
+   hierarchy reads cleanly (module header → its items). */
+.sectionItems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 2px 0 var(--space-2) var(--space-4);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--line);
+}
+.sectionItems.collapsed {
+  display: none;
 }
 
 .nav {
@@ -194,6 +271,13 @@
   .brand { display: none; }
   .roleHint { display: none; }
   .navGroup { display: none; }
+  /* Icon-rail mode: collapsing makes no sense without labels — hide the
+     module headers and force every module's items visible so all icons
+     stay reachable. */
+  .scmHeader { display: none; }
+  .sectionHeader { display: none; }
+  .sectionItems { margin: 0; padding-left: 0; border-left: 0; }
+  .sectionItems.collapsed { display: flex; }
   .userMeta { display: none; }
   .navItem { justify-content: center; }
   .signOut { justify-content: center; }

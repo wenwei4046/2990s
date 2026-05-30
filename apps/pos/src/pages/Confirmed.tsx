@@ -12,10 +12,10 @@ import styles from './Confirmed.module.css';
 import './Confirmed.print.css';
 
 const PAYMENT_LABEL: Record<string, string> = {
-  credit: 'Credit Card',
-  debit: 'Debit Card',
+  merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
+  cash: 'Cash',
 };
 
 export const Confirmed = () => {

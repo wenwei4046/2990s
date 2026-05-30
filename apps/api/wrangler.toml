@@ -11,6 +11,17 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 SUPABASE_URL = "https://dolvxrchzbnqvahocwsu.supabase.co"
 
+# PR #48 — invite + recovery magic links anchor here. Must match the
+# production Backend portal URL and be on the Supabase Redirect URLs
+# allow-list (Authentication → URL Configuration).
+#
+# 2026-05-27 (role-based redirect) — POS-only roles (sales,
+# sales_executive, outlet_manager) get their magic link anchored to
+# POS_PORTAL_URL instead so they land in the POS app on first sign-in.
+# Both URLs must be on the Supabase Redirect URLs allow-list.
+BACKEND_PORTAL_URL = "https://2990s-backend.pages.dev"
+POS_PORTAL_URL = "https://2990s-pos.pages.dev"
+
 # Allowed CORS origins (dev + prod). Update when domain is set.
 ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:6273,http://localhost:6274,http://localhost:6275,http://localhost:6276,http://127.0.0.1:5174,http://127.0.0.1:6273,http://127.0.0.1:6274,http://127.0.0.1:6275,http://127.0.0.1:6276,https://2990s-pos.pages.dev,https://2990s-backend.pages.dev"
 
@@ -19,10 +30,30 @@ ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:5174,http://localhost:
 R2_BUCKET_NAME = "2990s-slips"
 R2_ENDPOINT = "https://e2494242a0fd563cacee5a301cf95dd3.r2.cloudflarestorage.com"
 
+# Task #92 — SO item photos bucket name used for S3 SigV4 presigning.
+# Distinct from R2_BUCKET_NAME (which is slips). The Worker binding is
+# named SO_ITEM_PHOTOS (below) and shares the same R2_ENDPOINT +
+# R2_ACCESS_KEY_ID/SECRET credentials (account-scoped R2 token).
+SO_ITEM_PHOTOS_BUCKET_NAME = "2990s-so-item-photos"
+
 # R2 binding for slip storage (Slip MVP).
 [[r2_buckets]]
 binding = "SLIPS"
 bucket_name = "2990s-slips"
+
+# R2 binding for per-line SO item photos (Task #79 — PR-F).
+# Commander must create the bucket `2990s-so-item-photos` (production)
+# + `2990s-so-item-photos-preview` (wrangler dev preview) in the
+# Cloudflare dashboard before `wrangler deploy`. Bucket stays PRIVATE —
+# images are served via the proxy endpoint
+#   GET /mfg-sales-orders/:docNo/items/:itemId/photos/:photoKey
+# so the bucket does not need public access. Custom public domain
+# (e.g. r2.2990s.com) can be wired later; until then the proxy is the
+# only entry point.
+[[r2_buckets]]
+binding = "SO_ITEM_PHOTOS"
+bucket_name = "2990s-so-item-photos"
+preview_bucket_name = "2990s-so-item-photos-preview"
 
 # R2 binding for public assets (Task 18 — category hero photos).
 # TODO(Task 18): create the 2990s-public bucket in the Cloudflare dashboard,

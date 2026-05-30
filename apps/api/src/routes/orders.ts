@@ -85,6 +85,12 @@ orders.post('/', async (c) => {
   // Addon prices are loaded once and passed to computeOrderTotal so paid
   // pillow extras on size lines are recomputed against current addons table.
   const productIds = Array.from(new Set(dto.lines.map((l) => l.config.productId)));
+  // Split ids: mfg-{12hex} TEXT keys come from the Catalog (mfg_products table).
+  // Legacy UUID keys come from the prototype's `products` table. All UUID-column
+  // queries below use legacyIds only — passing a text key to a UUID column would
+  // cause Postgres "invalid input syntax for type uuid".
+  const legacyProductIds = productIds.filter((id) => !id.startsWith('mfg-'));
+  const mfgProductIds    = productIds.filter((id) => id.startsWith('mfg-'));
   // Two distinct addon-id sources flow through the same `addons` select:
   // 1) per-size-line addonExtras (e.g. paid extra pillows)
   // 2) handover-time logistics addons from `dto.addons` (dispose, lift, assemble)
@@ -97,23 +103,35 @@ orders.post('/', async (c) => {
   const handoverAddonIds = (dto.addons ?? []).map((a) => a.addonId);
   const addonIds = Array.from(new Set([...sizeLineAddonIds, ...handoverAddonIds]));
 
-  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes] = await Promise.all([
-    supabase
-      .from('products')
-      .select('id, category_id, pricing_kind, flat_price, recliner_upgrade_price')
-      .in('id', productIds),
-    supabase
-      .from('product_compartments')
-      .select('product_id, compartment_id, active, price')
-      .in('product_id', productIds),
-    supabase
-      .from('product_bundles')
-      .select('product_id, bundle_id, active, price')
-      .in('product_id', productIds),
-    supabase
-      .from('product_size_variants')
-      .select('product_id, size_id, active, price')
-      .in('product_id', productIds),
+  // Empty-array guard type for all gated queries below.
+  type EmptyResult<T> = { data: T[]; error: null };
+  const emptyResult = <T>(): EmptyResult<T> => ({ data: [] as T[], error: null });
+
+  const [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes] = await Promise.all([
+    legacyProductIds.length > 0
+      ? supabase
+          .from('products')
+          .select('id, category_id, pricing_kind, flat_price, recliner_upgrade_price')
+          .in('id', legacyProductIds)
+      : Promise.resolve(emptyResult<{ id: string; category_id: string | null; pricing_kind: string; flat_price: number | null; recliner_upgrade_price: number | null }>()),
+    legacyProductIds.length > 0
+      ? supabase
+          .from('product_compartments')
+          .select('product_id, compartment_id, active, price')
+          .in('product_id', legacyProductIds)
+      : Promise.resolve(emptyResult<{ product_id: string; compartment_id: string; active: boolean; price: number }>()),
+    legacyProductIds.length > 0
+      ? supabase
+          .from('product_bundles')
+          .select('product_id, bundle_id, active, price')
+          .in('product_id', legacyProductIds)
+      : Promise.resolve(emptyResult<{ product_id: string; bundle_id: string; active: boolean; price: number }>()),
+    legacyProductIds.length > 0
+      ? supabase
+          .from('product_size_variants')
+          .select('product_id, size_id, active, price')
+          .in('product_id', legacyProductIds)
+      : Promise.resolve(emptyResult<{ product_id: string; size_id: string; active: boolean; price: number }>()),
     addonIds.length > 0
       ? supabase
           .from('addons')
@@ -134,9 +152,38 @@ orders.post('/', async (c) => {
       .select('base_fee, cross_category_fee, mattress_bedframe_lead_days, sofa_lead_days')
       .eq('id', 1)
       .single(),
+    // Sofa fabric availability + per-Model surcharge (spec 2026-05-24).
+    legacyProductIds.length > 0
+      ? supabase
+          .from('product_fabrics')
+          .select('product_id, fabric_id, active, surcharge')
+          .in('product_id', legacyProductIds)
+      : Promise.resolve(emptyResult<{ product_id: string; fabric_id: string; active: boolean; surcharge: number }>()),
+    // Active fabric colours (global, small table) — used to validate the chosen
+    // colour belongs to the chosen fabric in the recompute.
+    supabase
+      .from('fabric_colours')
+      .select('fabric_id, colour_id, active'),
+    // Bedframe colour library (global) + per-Model ticks + option lists
+    // (spec 2026-05-25). The recompute validates the chosen colour is ticked
+    // active on the Model and each dimension option id is active, then sums
+    // surcharges (all 0 for pilot). Tiny tables — fetched unconditionally,
+    // same as the fabric tables above.
+    supabase
+      .from('bedframe_colours')
+      .select('id, surcharge, active'),
+    legacyProductIds.length > 0
+      ? supabase
+          .from('product_bedframe_colours')
+          .select('product_id, colour_id, active')
+          .in('product_id', legacyProductIds)
+      : Promise.resolve(emptyResult<{ product_id: string; colour_id: string; active: boolean }>()),
+    supabase
+      .from('bedframe_options')
+      .select('id, surcharge, active'),
   ]);
 
-  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes]) {
+  for (const r of [productsRes, compartmentsRes, bundlesRes, sizesRes, addonsRes, deliveryCfgRes, fabricsRes, fabricColoursRes, bedframeColoursRes, productBedframeColoursRes, bedframeOptionsRes]) {
     if (r.error) return c.json({ error: 'pricing_fetch_failed', reason: r.error.message }, 500);
   }
 
@@ -185,7 +232,37 @@ orders.post('/', async (c) => {
   }
   const compartments = compartmentsRes.data ?? [];
   const bundles = bundlesRes.data ?? [];
+  // Per-Model fabric rows + a fabric→active-colour-ids map for the recompute.
+  const productFabrics = fabricsRes.data ?? [];
+  const activeColourIdsByFabric = new Map<string, string[]>();
+  for (const col of fabricColoursRes.data ?? []) {
+    if (!col.active) continue;
+    const arr = activeColourIdsByFabric.get(col.fabric_id) ?? [];
+    arr.push(col.colour_id);
+    activeColourIdsByFabric.set(col.fabric_id, arr);
+  }
   const sizes = sizesRes.data ?? [];
+
+  // Bedframe (spec 2026-05-25): global colour surcharge/active + per-Model
+  // ticks + the global option list. Per-Model bedframeColours = colours TICKED
+  // active on the Model, carrying the global surcharge + active flag — so the
+  // recompute rejects an un-ticked colour (unknown) AND a globally-retired one
+  // (inactive). Options are global, identical for every bedframe Model.
+  const bedframeColourGlobalById = new Map<string, { surcharge: number; active: boolean }>();
+  for (const col of bedframeColoursRes.data ?? []) {
+    bedframeColourGlobalById.set(col.id, { surcharge: col.surcharge, active: col.active });
+  }
+  const tickedColourIdsByProduct = new Map<string, string[]>();
+  for (const t of productBedframeColoursRes.data ?? []) {
+    if (!t.active) continue;
+    const arr = tickedColourIdsByProduct.get(t.product_id) ?? [];
+    arr.push(t.colour_id);
+    tickedColourIdsByProduct.set(t.product_id, arr);
+  }
+  const bedframeOptionsList = (bedframeOptionsRes.data ?? []).map((o) => ({
+    id: o.id, surcharge: o.surcharge, active: o.active,
+  }));
+
   const addonPricesById = new Map<string, number>();
   // Static catalog info for handover-time addons (logistics: dispose, lift,
   // assemble) — fed into computeOrderTotal so addonPrice() canonical formula
@@ -220,13 +297,207 @@ orders.post('/', async (c) => {
         bundles: bundles
           .filter((r) => r.product_id === p.id)
           .map((r) => ({ bundleId: r.bundle_id, active: r.active, price: r.price })),
+        fabrics: productFabrics
+          .filter((r) => r.product_id === p.id)
+          .map((r) => ({
+            fabricId: r.fabric_id,
+            active: r.active,
+            surcharge: r.surcharge,
+            colourIds: activeColourIdsByFabric.get(r.fabric_id) ?? [],
+          })),
       } : undefined,
-      sizes: p.pricing_kind === 'size_variants'
+      // Bedframes price off product_size_variants too — load sizes for both.
+      sizes: (p.pricing_kind === 'size_variants' || p.pricing_kind === 'bedframe_build')
         ? sizes
             .filter((r) => r.product_id === p.id)
             .map((r) => ({ sizeId: r.size_id, active: r.active, price: r.price }))
         : undefined,
+      bedframeColours: p.pricing_kind === 'bedframe_build'
+        ? (tickedColourIdsByProduct.get(p.id) ?? [])
+            .map((cid) => {
+              const g = bedframeColourGlobalById.get(cid);
+              return g ? { id: cid, surcharge: g.surcharge, active: g.active } : null;
+            })
+            .filter((x): x is { id: string; surcharge: number; active: boolean } => x != null)
+        : undefined,
+      bedframeOptions: p.pricing_kind === 'bedframe_build' ? bedframeOptionsList : undefined,
     });
+  }
+
+  // ─── mfg product pricing (mfg-{12hex} ids from Catalog) ─────────────────
+  // Legacy `products` table is production-empty (PORT_DESIGN.md §10 Decision 10).
+  // All Catalog cards link to mfg_products rows. We fetch them in a second stage
+  // (after the parallel legacy fetch) so the existing legacy path is untouched.
+  if (mfgProductIds.length > 0) {
+    const MFG_SIZE_CODE_TO_LIB: Record<string, string> = {
+      K: 'king', Q: 'queen', S: 'single', SS: 'super-single',
+    };
+    const MFG_CAT_TO_PRICING_KIND: Record<string, 'sofa_build' | 'bedframe_build' | 'size_variants' | 'flat'> = {
+      SOFA: 'sofa_build', BEDFRAME: 'bedframe_build', MATTRESS: 'size_variants',
+    };
+    const MFG_CAT_TO_DELIVERY_CATEGORY: Record<string, string> = {
+      SOFA: 'sofa', BEDFRAME: 'bedframe', MATTRESS: 'mattress',
+    };
+
+    // Step 1: fetch the mfg product rows themselves.
+    const { data: mfgRows, error: mfgRowsErr } = await supabase
+      .from('mfg_products')
+      .select('id, category, base_model, model_id, size_code, base_price_sen')
+      .in('id', mfgProductIds);
+    if (mfgRowsErr) return c.json({ error: 'pricing_fetch_failed', reason: mfgRowsErr.message }, 500);
+
+    // Populate delivery lead-time category map for mfg products.
+    for (const mfg of mfgRows ?? []) {
+      const deliveryCat = MFG_CAT_TO_DELIVERY_CATEGORY[mfg.category];
+      if (deliveryCat) categoryIdByProductId.set(mfg.id, deliveryCat);
+    }
+
+    // Collect unique model_ids by purpose.
+    const sizeModelIds = [...new Set(
+      (mfgRows ?? [])
+        .filter((r) => (r.category === 'MATTRESS' || r.category === 'BEDFRAME') && r.model_id)
+        .map((r) => r.model_id as string),
+    )];
+    const sofaModelIds = [...new Set(
+      (mfgRows ?? []).filter((r) => r.category === 'SOFA' && r.model_id).map((r) => r.model_id as string),
+    )];
+    const mfgBaseModels = [...new Set(
+      (mfgRows ?? []).map((r) => r.base_model).filter((b): b is string => Boolean(b)),
+    )];
+
+    // Step 2: parallel sub-fetches for size siblings, sofa models + maintenance config, sofa combos.
+    const [siblingsRes, modelsRes, maintenanceCfgRes, mfgSofaCombosRes] = await Promise.all([
+      sizeModelIds.length > 0
+        ? supabase
+            .from('mfg_products')
+            .select('model_id, size_code, base_price_sen, status')
+            .in('model_id', sizeModelIds)
+            .eq('status', 'ACTIVE')
+        : Promise.resolve(emptyResult<{ model_id: string; size_code: string | null; base_price_sen: number | null; status: string }>()),
+      sofaModelIds.length > 0
+        ? supabase
+            .from('product_models')
+            .select('id, allowed_options')
+            .in('id', sofaModelIds)
+        : Promise.resolve(emptyResult<{ id: string; allowed_options: unknown }>()),
+      sofaModelIds.length > 0
+        ? supabase
+            .from('maintenance_config_history')
+            .select('config')
+            .eq('scope', 'master')
+            .lte('effective_from', new Date().toISOString().slice(0, 10))
+            .order('effective_from', { ascending: false })
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null as null | { config: unknown }, error: null }),
+      mfgBaseModels.length > 0
+        ? supabase
+            .from('sofa_combos')
+            .select('id, base_model, price_sen, active')
+            .in('base_model', mfgBaseModels)
+            .eq('active', true)
+        : Promise.resolve(emptyResult<{ id: string; base_model: string | null; price_sen: number | null; active: boolean }>()),
+    ]);
+
+    if (siblingsRes.error)      return c.json({ error: 'pricing_fetch_failed', reason: siblingsRes.error.message }, 500);
+    if (modelsRes.error)        return c.json({ error: 'pricing_fetch_failed', reason: modelsRes.error.message }, 500);
+    if (maintenanceCfgRes.error) return c.json({ error: 'pricing_fetch_failed', reason: maintenanceCfgRes.error.message }, 500);
+    if (mfgSofaCombosRes.error) return c.json({ error: 'pricing_fetch_failed', reason: mfgSofaCombosRes.error.message }, 500);
+
+    // Build size map from mfg siblings (model_id → sizes array).
+    const mfgSizesByModelId = new Map<string, { sizeId: string; active: boolean; price: number }[]>();
+    for (const sib of siblingsRes.data ?? []) {
+      if (!sib.model_id || !sib.size_code || !(sib.size_code in MFG_SIZE_CODE_TO_LIB)) continue;
+      const arr = mfgSizesByModelId.get(sib.model_id) ?? [];
+      arr.push({
+        sizeId: MFG_SIZE_CODE_TO_LIB[sib.size_code] as string,  // in-check above guarantees non-null
+        active: sib.status === 'ACTIVE',
+        price: sib.base_price_sen != null ? Math.round(sib.base_price_sen / 100) : 0,
+      });
+      mfgSizesByModelId.set(sib.model_id, arr);
+    }
+
+    // Sofa compartment pricing from the master maintenance config.
+    const mainCfg = ((maintenanceCfgRes.data?.config ?? {}) as {
+      sofaCompartmentMeta?: Record<string, { defaultPriceCenti?: number }>;
+    });
+    const compartmentMetaMap = mainCfg.sofaCompartmentMeta ?? {};
+
+    // Sofa combos grouped by base_model — used as bundle pricing.
+    const combosByBaseModel = new Map<string, { bundleId: string; active: boolean; price: number }[]>();
+    for (const combo of mfgSofaCombosRes.data ?? []) {
+      if (!combo.base_model || !combo.active) continue;
+      const arr = combosByBaseModel.get(combo.base_model) ?? [];
+      arr.push({
+        bundleId: combo.id,
+        active: true,
+        price: combo.price_sen != null ? Math.round(combo.price_sen / 100) : 0,
+      });
+      combosByBaseModel.set(combo.base_model, arr);
+    }
+
+    // Product models (for sofa allowed_options.compartments).
+    const mfgModelById = new Map<string, { allowed_options: unknown }>();
+    for (const m of modelsRes.data ?? []) mfgModelById.set(m.id, m);
+
+    // All globally active bedframe colours — mfg bedframe products have no
+    // per-model colour ticking (product_bedframe_colours.product_id is UUID FK).
+    // Accept any globally active colour for mfg bedframes.
+    const allActiveBedframeColours = (bedframeColoursRes.data ?? [])
+      .filter((c) => c.active)
+      .map((c) => ({ id: c.id, surcharge: c.surcharge, active: c.active }));
+
+    // Build ServerProductInfo for each mfg product.
+    for (const mfg of mfgRows ?? []) {
+      const pricingKind = MFG_CAT_TO_PRICING_KIND[mfg.category] ?? 'flat';
+
+      let sofaInfo: ServerProductInfo['sofa'] | undefined;
+      if (pricingKind === 'sofa_build' && mfg.model_id) {
+        const model = mfgModelById.get(mfg.model_id);
+        const allowed = (model?.allowed_options ?? {}) as { compartments?: string[] };
+        sofaInfo = {
+          reclinerUpgradePrice: 0,
+          compartments: (allowed.compartments ?? []).map((code) => ({
+            compartmentId: code,
+            active: true,
+            price: compartmentMetaMap[code]?.defaultPriceCenti != null
+              ? Math.round(compartmentMetaMap[code].defaultPriceCenti! / 100)
+              : 0,
+          })),
+          // sofa_combos rows as bundles (Quick Pick chosen path).
+          bundles: combosByBaseModel.get(mfg.base_model ?? '') ?? [],
+          fabrics: [],  // no per-mfg-product fabric pricing at pilot
+        };
+      }
+
+      let mfgSizes: ServerProductInfo['sizes'] | undefined;
+      if (pricingKind === 'size_variants' || pricingKind === 'bedframe_build') {
+        if (mfg.model_id) {
+          mfgSizes = mfgSizesByModelId.get(mfg.model_id) ?? [];
+        }
+        // Orphan fallback: derive from own size_code.
+        if (!mfgSizes || mfgSizes.length === 0) {
+          if (mfg.size_code && mfg.size_code in MFG_SIZE_CODE_TO_LIB) {
+            mfgSizes = [{
+              sizeId: MFG_SIZE_CODE_TO_LIB[mfg.size_code] as string,  // in-check above guarantees non-null
+              active: true,
+              price: mfg.base_price_sen != null ? Math.round(mfg.base_price_sen / 100) : 0,
+            }];
+          }
+        }
+      }
+
+      infoById.set(mfg.id, {
+        productId: mfg.id,
+        pricingKind,
+        flatPrice: mfg.base_price_sen != null ? Math.round(mfg.base_price_sen / 100) : null,
+        sofa: sofaInfo,
+        sizes: mfgSizes,
+        bedframeColours: pricingKind === 'bedframe_build' ? allActiveBedframeColours : undefined,
+        bedframeOptions: pricingKind === 'bedframe_build' ? bedframeOptionsList : undefined,
+      });
+    }
   }
 
   // Run the shared recompute. Any catalog mismatch throws OrderPricingError → 422.
@@ -342,13 +613,16 @@ orders.post('/', async (c) => {
     ...(dto.specialInstructions ? { specialInstructions: dto.specialInstructions } : {}),
     ...(dto.addressLater !== undefined ? { addressLater: dto.addressLater } : {}),
     ...(dto.addons && dto.addons.length > 0 ? { addons: dto.addons } : {}),
+    ...(dto.installmentMonths != null ? { installmentMonths: dto.installmentMonths } : {}),
+    ...(dto.merchantProvider != null ? { merchantProvider: dto.merchantProvider } : {}),
   };
 
   const { data, error } = await supabase.rpc('create_order_with_items', { p: rpcPayload });
   if (error) {
     const msg = error.message ?? '';
-    // Slip-specific RAISE EXCEPTION codes from migration 0010
-    if (msg.includes('slip_required_for_transfer'))    return c.json({ error: 'slip_required_for_transfer' }, 400);
+    // Slip-specific RAISE EXCEPTION codes (slip_required: 0035 — slip now
+    // compulsory for ALL payment methods, not just transfer).
+    if (msg.includes('slip_required'))                 return c.json({ error: 'slip_required' }, 400);
     if (msg.includes('slip_not_ready'))                return c.json({ error: 'slip_not_ready' }, 409);
     if (msg.includes('slip_session_not_found'))        return c.json({ error: 'slip_session_not_found' }, 404);
     if (msg.includes('not_session_owner'))             return c.json({ error: 'not_session_owner' }, 403);

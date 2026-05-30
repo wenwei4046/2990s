@@ -449,11 +449,13 @@
 }
 
 /* ─── Other table cells ─── */
+/* Commander 2026-05-29 — Product Code uses the same system font as the
+   Description (was monospace, which read as a different/odd typeface). */
 .sku {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--fs-13);
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
+  font-weight: var(--w-semibold);
+  color: var(--fg);
 }
 
 .seriesChip {

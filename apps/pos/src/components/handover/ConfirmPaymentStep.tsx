@@ -7,10 +7,10 @@ import type { HandoverForm } from '../../lib/handover-helpers';
 import styles from '../../pages/Handover.module.css';
 
 const METHOD_LABEL: Record<string, string> = {
-  credit: 'Credit Card',
-  debit: 'Debit Card',
+  merchant: 'Merchant',
   transfer: 'Bank transfer / DuitNow',
   installment: 'Installment',
+  cash: 'Cash',
 };
 
 export const ConfirmPaymentStep = ({
@@ -111,13 +111,15 @@ export const ConfirmPaymentStep = ({
               ? 'DuitNow / bank reference'
               : form.paymentMethod === 'installment'
                 ? 'Agreement / contract no.'
-                : 'Approval code from POS terminal'
+                : form.paymentMethod === 'cash'
+                  ? 'Cash receipt / reference no.'
+                  : 'Approval code from POS terminal'
           }
         />
       </Field>
 
       <h3 className="subTitle">
-        Payment slip / proof {form.paymentMethod === 'transfer' && <span className={styles.required}>*</span>}
+        Payment slip / proof <span className={styles.required}>*</span>
       </h3>
       <SlipUploadStep
         onConfirmed={(id) => update('slipUploadSessionId', id)}

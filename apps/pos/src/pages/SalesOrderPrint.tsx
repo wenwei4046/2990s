@@ -5,10 +5,10 @@ import { COMPANY_LEGAL, RECEIPT_TERMS } from '../lib/legal';
 import styles from './SalesOrderPrint.module.css';
 
 const PAYMENT_LABEL: Record<string, string> = {
-  credit:      'Credit Card',
-  debit:       'Debit Card',
+  merchant:    'Merchant',
   transfer:    'Bank transfer / DuitNow',
   installment: 'Installment',
+  cash:        'Cash',
 };
 
 const fmtMoney = (n: number) =>
@@ -33,10 +33,30 @@ export const SalesOrderPrint = () => {
 
   useEffect(() => {
     if (isLoading || !data) return;
-    // One paint cycle before snapshotting — gives the signature <img> time
-    // to load so it's included in the print output.
-    const t = window.setTimeout(() => window.print(), 350);
-    return () => window.clearTimeout(t);
+    // Don't print until the customer signature image has decoded — otherwise
+    // window.print() can snapshot the page before the <img> paints and the
+    // e-signature is missing from the PDF. We preload the same data URL the
+    // SignatureBlock <img> uses; once it loads (cached, so the DOM img is
+    // painted too) we print. Fallback timer covers no-signature orders and
+    // any decode failure so the print never hangs.
+    let printed = false;
+    const doPrint = () => {
+      if (printed) return;
+      printed = true;
+      // Two rAFs guarantee the frame holding the signature <img> has painted
+      // before the (blocking) print snapshot.
+      requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+    };
+    if (data.signature_data) {
+      const img = new Image();
+      img.onload = doPrint;
+      img.onerror = doPrint;
+      img.src = data.signature_data;
+      const fallback = window.setTimeout(doPrint, 1500);
+      return () => { printed = true; window.clearTimeout(fallback); };
+    }
+    const t = window.setTimeout(doPrint, 250);
+    return () => { printed = true; window.clearTimeout(t); };
   }, [isLoading, data]);
 
   if (isLoading) return <main className={styles.shell}>Loading…</main>;
@@ -113,6 +133,16 @@ const PartiesRow = ({ order }: { order: OrderDetail }) => {
       .join(' '),
   ].filter(Boolean) as string[];
 
+  // Showroom address → 2 lines: street, then "postcode city state". The address
+  // is one string, so split at the 5-digit Malaysian postcode rather than at
+  // every comma (which would stack 5 short lines).
+  const showroomAddr = order.showroom?.address || COMPANY_LEGAL.showroomLine;
+  const showroomParts = showroomAddr.split(',').map((p) => p.trim()).filter(Boolean);
+  const pcIdx = showroomParts.findIndex((p) => /^\d{5}\b/.test(p));
+  const showroomAddrLines = pcIdx > 0
+    ? [showroomParts.slice(0, pcIdx).join(', '), showroomParts.slice(pcIdx).join(', ')]
+    : [showroomAddr];
+
   return (
     <div className={styles.partiesRow}>
       <div className={styles.partyBox}>
@@ -128,7 +158,7 @@ const PartiesRow = ({ order }: { order: OrderDetail }) => {
       <div className={styles.partyBox}>
         <div className={styles.partyLabel}>Sold by</div>
         <div className={styles.partyName}>{order.showroom?.name ?? 'Showroom'}</div>
-        {(order.showroom?.address || COMPANY_LEGAL.showroomLine).split(', ').map((line, i) => (
+        {showroomAddrLines.map((line, i) => (
           <div key={i} className={styles.partyLine}>{line}</div>
         ))}
       </div>
@@ -151,7 +181,10 @@ const ItemsTable = ({ order }: { order: OrderDetail }) => (
       {order.lines.map((l, i) => (
         <tr key={i}>
           <td className={styles.colSku}>{l.product_sku ?? '—'}</td>
-          <td className={styles.colDesc}>{l.product_name}</td>
+          <td className={styles.colDesc}>
+            {l.product_model_code ? `${l.product_model_code} · ${l.product_name}` : l.product_name}
+            {l.description && <span className={styles.lineDesc}>{l.description}</span>}
+          </td>
           <td className={styles.colQty}>{l.qty}</td>
           <td className={styles.colMoney}>{fmtMoney(l.unit_price)}</td>
           <td className={styles.colMoney}>{fmtMoney(l.line_total)}</td>
@@ -198,7 +231,6 @@ const SignatureBlock = ({ order }: { order: OrderDetail }) => (
         />
       )}
     </div>
-    <div className={styles.signatureLine} />
     <div className={styles.signatureLabel}>Customer signature</div>
     <div className={styles.signatureSub}>
       {order.customer_name}

@@ -15,6 +15,36 @@ import { auditLog } from './routes/audit-log';
 import { categoriesApi } from './routes/categories';
 import { deliveryFees } from './routes/delivery-fees';
 import { pos } from './routes/pos';
+import { mfgProducts } from './routes/mfg-products';
+import { productModels } from './routes/product-models';
+import { maintenanceConfig } from './routes/maintenance-config';
+import { sofaCompartmentPhotos } from './routes/sofa-compartment-photos';
+import { sofaCombos } from './routes/sofa-combos';
+import { fabricTracking } from './routes/fabric-tracking';
+import { suppliers } from './routes/suppliers';
+import { mfgPurchaseOrders } from './routes/mfg-purchase-orders';
+import { grns } from './routes/grns';
+import { purchaseInvoices } from './routes/purchase-invoices';
+import { mfgSalesOrders } from './routes/mfg-sales-orders';
+import { stateWarehouseMappings } from './routes/state-warehouse-mappings';
+import { localities } from './routes/localities';
+import { soDropdownOptions } from './routes/so-dropdown-options';
+import { deliveryOrdersMfg } from './routes/delivery-orders-mfg';
+import { salesInvoices } from './routes/sales-invoices';
+import { consignment } from './routes/consignment';
+import { deliveryReturns } from './routes/delivery-returns';
+import { purchaseReturns } from './routes/purchase-returns';
+import { inventory } from './routes/inventory';
+import { warehouse } from './routes/warehouse';
+import { stockTransfers } from './routes/stock-transfers';
+import { stockTakes } from './routes/stock-takes';
+import { drivers } from './routes/drivers';
+import { venues } from './routes/venues';
+import { accounting } from './routes/accounting';
+import { outstanding } from './routes/outstanding';
+import { reports } from './routes/reports';
+import { mrp } from './routes/mrp';
+import { mrpLeadTimes } from './routes/mrp-lead-times';
 import { supabaseAuth } from './middleware/auth';
 import { reapOnce } from './lib/reaper';
 
@@ -27,7 +57,10 @@ app.use('*', async (c, next) => {
   const handler = cors({
     origin: (origin) => (origins.includes(origin) ? origin : null),
     credentials: true,
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    /* PUT added 2026-05-27 — state_warehouse_mappings upsert uses PUT,
+       and PUT missing from the allowMethods list caused the CORS preflight
+       to reject the call ("Save failed: Failed to fetch" toast). */
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['authorization', 'content-type', 'x-client-info'],
     maxAge: 600,
   });
@@ -44,6 +77,40 @@ app.route('/admin/audit-log', auditLog);
 app.route('/admin/categories', categoriesApi);
 app.route('/delivery-fees', deliveryFees);
 app.route('/pos', pos);
+app.route('/mfg-products', mfgProducts);
+app.route('/product-models', productModels);
+// PR — Commander 2026-05-28: Sofa Compartment photos. Mount BEFORE
+// /maintenance-config so the public GET .../photo/:key proxy doesn't get
+// caught by maintenance-config's app-wide supabaseAuth middleware. The
+// authed POST/DELETE routes inside this sub-app re-apply supabaseAuth.
+app.route('/maintenance-config/sofa-compartments', sofaCompartmentPhotos);
+app.route('/maintenance-config', maintenanceConfig);
+app.route('/sofa-combos', sofaCombos);
+app.route('/fabric-tracking', fabricTracking);
+app.route('/suppliers', suppliers);
+app.route('/mfg-purchase-orders', mfgPurchaseOrders);
+app.route('/grns', grns);
+app.route('/purchase-invoices', purchaseInvoices);
+app.route('/mfg-sales-orders', mfgSalesOrders);
+app.route('/state-warehouse-mappings', stateWarehouseMappings);
+app.route('/localities', localities);
+app.route('/so-dropdown-options', soDropdownOptions);
+app.route('/delivery-orders-mfg', deliveryOrdersMfg);
+app.route('/sales-invoices', salesInvoices);
+app.route('/consignment', consignment);
+app.route('/delivery-returns', deliveryReturns);
+app.route('/purchase-returns', purchaseReturns);
+app.route('/inventory', inventory);
+app.route('/warehouse', warehouse);
+app.route('/stock-transfers', stockTransfers);
+app.route('/stock-takes', stockTakes);
+app.route('/drivers', drivers);
+app.route('/venues', venues);
+app.route('/accounting', accounting);
+app.route('/outstanding', outstanding);
+app.route('/reports', reports);
+app.route('/mrp', mrp);
+app.route('/mrp-lead-times', mrpLeadTimes);
 
 // Slip routes need auth; applied at mount because slipRoutes itself has no
 // middleware (so it stays unit-testable with mocked context).

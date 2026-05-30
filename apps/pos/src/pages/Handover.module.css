@@ -335,3 +335,34 @@
   color: var(--fg-soft);
   margin: var(--space-3) 0;
 }
+
+.installmentTerm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.installmentTermLabel {
+  font-family: var(--font-button);
+  font-size: var(--fs-12);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.termChip {
+  padding: 8px 18px;
+  min-height: 44px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--c-ink);
+  font: inherit;
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+}
+.termChipActive {
+  background: var(--c-burnt);
+  border-color: var(--c-burnt);
+  color: var(--c-cream);
+}

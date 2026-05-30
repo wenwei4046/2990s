@@ -214,6 +214,20 @@ These are intentional changes from the prototype's current state. Anything not o
 
 **Not changed:** `prototype/` files (tablet-canonical and not desktop-aware), PWA manifest (`orientation: 'landscape'` is a no-op in desktop browsers), design tokens, routes, schema, API contracts.
 
+### §4 · Per-brand catalog badge colours (mattress sub-brands)
+
+**Approved on:** 2026-05-24 (Loo, with brand reference artwork for each).
+**Status:** Implemented in `apps/pos/src/pages/Catalog.tsx` + `Catalog.module.css`.
+
+**Why:** the mattress catalogue carries three real sub-brands (2990's / Carres / HappiSleep), seeded as `series` rows. The POS catalog card badge (`.photoBadge`, which renders `series.label`) was a single burnt-orange treatment for all. Loo wants each badge in its own brand identity so staff/customers read the brand at a glance.
+
+**What changed:** the badge is keyed by `data-brand={series.id}`:
+- `brand-2990s` → house orange (`--c-orange` #E86B3A) text on cream — the 2990's brand orange.
+- `brand-carres` → Carres red-orange **#D44210** text on cream (sampled from the Carres wordmark).
+- `brand-happisleep` → **inverted**: purple **#6259B2** fill + yellow **#FCE84D** text (sampled from HappiSleep brand artwork).
+
+**Note on brand colours:** #D44210 / #6259B2 / #FCE84D are **sub-brand** identity colours, intentionally outside the 2990's house palette (cream/orange/burnt/ink). This is the one sanctioned place they appear — scoped to the brand badge only. The "Don't change the brand colours" rule still holds everywhere else.
+
 ---
 
 ## What NOT to do
@@ -254,6 +268,51 @@ The prototype always reflects current spec. If a change is approved but the prot
 - **Live order flow test:** open both at once. Place an order in POS → it appears in Backend's Dashboard within 200ms (via `localStorage` bridge in prototype; production uses Supabase Realtime).
 - **Inspect the CSS:** `prototype/pos-styles.css` and `prototype/backend-styles.css` are the visual source of truth. Grep for any class name you encounter.
 - **Inspect the data shape:** `prototype/pos-data.jsx` (categories, products with pricing, addons, staff) and `prototype/order-bridge.jsx` (order payload) define the API contract.
+
+---
+
+## Typography, Color & Format Standard (locked 2026-05-29)
+
+Loo signed off: **accent colour stays orange**; fonts + sizes stay as the
+existing tokens. This section is the single reference — every page must use
+these tokens, never hard-coded fonts/sizes/hex. Tokens live in
+`packages/design-system/src/tokens.css`.
+
+### Fonts — NATIVE SYSTEM FONT (Loo 2026-05-29: serif strained the eyes)
+The backend ERP uses the OS system font (Segoe UI on Windows, SF on macOS) for
+titles, body, and buttons — all three tokens resolve to `--font-system`.
+| Role | Token | Family |
+|---|---|---|
+| Page/section titles, KPI numbers | `--font-title` | system-ui (Segoe UI / SF) |
+| Body, tables, inputs, labels | `--font-sans` | system-ui |
+| Buttons, chips, tabs, eyebrow labels | `--font-button` | system-ui |
+| Codes / SKUs / monospace cells | `--font-mono` | JetBrains Mono / system mono |
+| 2990S wordmark only | `--font-mark` | Archivo (unchanged) |
+
+### Type scale (use the token, not px)
+- Page title `--fs-20` bold · subtitle `--fs-12` muted
+- Section heading `--fs-14` semibold
+- Table header `--fs-11` uppercase tracked, muted · body cell `--fs-13`
+- Caption / hint `--fs-11`–`--fs-12` muted
+- Weights: `--w-medium 500` · `--w-semibold 600` · `--w-bold 700`
+
+### Colour
+- Ink (body): `--c-ink` #221F20 · muted: `--fg-muted` #5C5455
+- **Accent: `--c-orange` #E86B3A — accent ONLY** (CTAs, active state, shortage/warn). Never large fills.
+- Surfaces: `--c-paper` (cards) on `--c-cream` (page). Lines: `--line` / `--line-strong`.
+- Status: green = healthy/stock, blue = info/PO, orange = warn/shortage, red = error.
+
+### Numbers & dates — ALWAYS via `@2990s/shared`
+- Money (display): `fmtRM` / `fmtMoney`. Editing: `<MoneyInput>` (`components/MoneyInput.tsx`) — never a raw `<input type="number">`.
+- Date: `fmtDate` → "4 May 2026" · `fmtDateOrDash` (→ "—" when null) · `fmtDateTime` → "4 May 2026, 11:20 AM". No ad-hoc `toLocaleDateString`.
+- Phone: `formatPhone` (`@2990s/shared/phone`).
+
+### Page frame
+- Every page: `Breadcrumbs` (in Topbar) → title (`--fs-20` / title font) → subtitle (`--fs-12` / muted) → actions (right). Global Ctrl/Cmd+K palette always available.
+- Empty/zero states show **"—"** + a short reason, never a bare `0.0%`.
+
+*Rollout: new pages conform now; existing pages are swept onto these
+helpers/components round by round (date helpers + a shared PageHeader).*
 
 ---
 

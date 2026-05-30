@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { Button } from '@2990s/design-system';
 import { useAuth } from '../lib/auth';
+import { supabase } from '../lib/supabase';
 import styles from './Login.module.css';
 
 export const Login = () => {
@@ -11,6 +12,8 @@ export const Login = () => {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Inline "forgot password" affordance — same pattern as Backend Login.
+  const [resetState, setResetState] = useState<'idle' | 'sending' | 'sent'>('idle');
 
   if (loading) return <div className={styles.shell}>Loading…</div>;
 
@@ -26,6 +29,25 @@ export const Login = () => {
     const result = await signIn(email.trim(), password);
     setSubmitting(false);
     if (result.error) setError(result.error);
+  };
+
+  const onForgot = async () => {
+    const target = email.trim();
+    if (!target) {
+      setError('Enter your email above first, then click Forgot password.');
+      return;
+    }
+    setError(null);
+    setResetState('sending');
+    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(target, {
+      redirectTo: `${window.location.origin}/set-password`,
+    });
+    if (resetErr) {
+      setError(resetErr.message);
+      setResetState('idle');
+      return;
+    }
+    setResetState('sent');
   };
 
   return (
@@ -66,6 +88,31 @@ export const Login = () => {
         <Button type="submit" disabled={submitting} fullWidth size="lg">
           {submitting ? 'Signing in…' : 'Sign in'}
         </Button>
+
+        {resetState === 'sent' ? (
+          <p className={styles.helper}>
+            Recovery email sent. Check <strong>{email}</strong> (incl. spam) for the link.
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={onForgot}
+            disabled={resetState === 'sending'}
+            className={styles.helper}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+            }}
+          >
+            {resetState === 'sending' ? 'Sending recovery email…' : 'Forgot password?'}
+          </button>
+        )}
+
+        <p className={styles.helper}>
+          First time? Check your inbox for the magic-link invite an admin emailed you.
+        </p>
       </form>
     </main>
   );

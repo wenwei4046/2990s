@@ -9,6 +9,24 @@ export interface Env {
   ALLOWED_ORIGINS: string;
   R2_BUCKET_NAME: string;
   R2_ENDPOINT: string;
+  // Task #92 — bucket name used when presigning SO item photo URLs.
+  // The binding (`SO_ITEM_PHOTOS` below) is sufficient for Worker-side
+  // get/put/delete, but S3 SigV4 needs the literal bucket name in the URL
+  // path. Kept separate from R2_BUCKET_NAME (which is the slips bucket).
+  SO_ITEM_PHOTOS_BUCKET_NAME: string;
+  // PR #48 — anchor for invite + recovery magic links. The link's redirectTo
+  // points to `${BACKEND_PORTAL_URL}/set-password` so invited staff land on
+  // the onboarding screen, not the wrong-by-default Supabase Site URL.
+  //
+  // 2026-05-27 (role-based redirect) — POS-only roles (sales /
+  // sales_executive / outlet_manager) now anchor the magic link to
+  // `${POS_PORTAL_URL}/set-password` instead, so a sales person lands in
+  // the POS app and can immediately start taking orders. Backend roles
+  // (admin / sales_director / coordinator / finance / showroom_lead) still
+  // anchor to BACKEND_PORTAL_URL. Both URLs must be on the Supabase Auth
+  // → URL Configuration → Redirect URLs allow-list.
+  BACKEND_PORTAL_URL: string;
+  POS_PORTAL_URL: string;
 
   // Secrets — run `wrangler secret put SUPABASE_ANON_KEY` etc.
   SUPABASE_ANON_KEY: string;
@@ -25,6 +43,11 @@ export interface Env {
   // wrangler.toml. Until then this is typed for compile-time but the
   // endpoint will error at runtime with "env.PUBLIC_ASSETS is undefined".
   PUBLIC_ASSETS: R2Bucket;
+
+  // R2 binding for per-line SO item photos (Task #79 — PR-F).
+  // Bucket stays private; the SO photo routes proxy reads through the
+  // Worker so callers never hit R2 directly.
+  SO_ITEM_PHOTOS: R2Bucket;
 }
 
 // Hono context augmentation — middleware sets these.
