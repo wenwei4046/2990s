@@ -242,18 +242,30 @@ export const GrnFromPo = () => {
       searchValue: (r) => r.itemCode ?? '',
     },
     {
+      /* Render is deterministic across rows so the column reads cleanly:
+         - Variant summary (computed LIVE from r.variants) is the single
+           source of truth for the detail line. Stored description is unused
+           when it's just the item_code repeat OR a stray variant string
+           (some legacy PO lines stored variants in description). */
       key: 'description', label: 'Description', width: 240, sortable: true,
       accessor: (r) => {
         const summary = buildVariantSummary(
           r.itemGroup,
           r.variants as Record<string, unknown> | null | undefined,
         );
+        const desc = (r.description ?? '').trim();
+        /* Only show the stored description when it actually adds info:
+             - non-empty
+             - not equal to the item code (the Item Code column already has it)
+             - doesn't look like a variant string (no slash) — avoids the
+               legacy "BF-01 / DIVAN ..." rows from showing twice. */
+        const showDesc = desc && desc !== r.itemCode && !desc.includes(' / ');
         return (
           <div>
-            <div>{r.description ?? '—'}</div>
-            {summary && (
-              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-            )}
+            {showDesc && <div>{desc}</div>}
+            <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>
+              {summary || 'Standard'}
+            </div>
           </div>
         );
       },
