@@ -15,7 +15,6 @@ export type NavItem = {
 export const NAV_ITEMS: NavItem[] = [
   // Workspace
   { label: 'Dashboard', path: '/dashboard', group: 'Workspace', keywords: 'home today' },
-  { label: 'Orders', path: '/orders', group: 'Workspace' },
   { label: 'Payment audit log', path: '/audit-log', group: 'Workspace', keywords: 'finance' },
 
   // Sales Order
