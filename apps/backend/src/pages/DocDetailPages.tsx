@@ -36,6 +36,7 @@ import {
   useUpdateConsignmentStatus,
   useAddConsignmentNote,
   usePostConsignmentNote,
+  useCancelConsignmentNote,
   usePurchaseReturnDetail,
   useCreatePurchaseReturn,
   usePostPurchaseReturn,
@@ -733,6 +734,7 @@ export const ConsignmentDetail = () => {
   const detail = useConsignmentDetail(id ?? null);
   const updateStatus = useUpdateConsignmentStatus();
   const postNote = usePostConsignmentNote();
+  const cancelNote = useCancelConsignmentNote();
   const [noteModal, setNoteModal] = useState<'OUT' | 'RETURN' | null>(null);
 
   if (detail.isLoading) return <Loading />;
@@ -742,7 +744,10 @@ export const ConsignmentDetail = () => {
     consignment_number: string; status: string; placed_at: string;
     debtor_code: string | null; debtor_name: string; branch_location: string | null;
     notes: string | null;
+    // Migration 0110 — flags surfaced by the GET handler.
+    has_children?: boolean; fully_sold?: boolean; fully_returned?: boolean;
   };
+  const hasChildren = Boolean(co.has_children);
   const items = (detail.data.items as Array<Record<string, unknown> & {
     item_code: string; description: string | null;
     qty_placed: number; qty_sold: number; qty_returned: number; qty_damaged: number;
@@ -751,6 +756,9 @@ export const ConsignmentDetail = () => {
   const notes = (detail.data.notes as Array<Record<string, unknown> & {
     note_number: string; note_type: 'OUT' | 'RETURN'; note_date: string;
     driver_name: string | null; signed_at: string | null;
+    // Migration 0110 — cancelled_at marks the note as unposted (inventory reversed,
+    // qty_returned rolled back). UI gates the Cancel button on this.
+    cancelled_at: string | null;
   }>) ?? [];
 
   const totalPlaced = items.reduce((s, it) => s + it.qty_placed, 0);
@@ -778,6 +786,19 @@ export const ConsignmentDetail = () => {
           <span className={`${styles.statusPill} ${CONSIGN_STATUS_CLASS[co.status] ?? ''}`}>{co.status.replace('_', ' ')}</span>
         </div>
       </div>
+
+      {hasChildren && (
+        /* Migration 0110 — header + items lock once any active note exists.
+           Mirrors the GRN downstream-lock banner pattern. */
+        <section className={styles.card} style={{ borderColor: 'var(--c-orange)' }}>
+          <div className={styles.cardBody} style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+            <AlertCircle {...ICON} style={{ color: 'var(--c-orange)', flexShrink: 0 }} />
+            <span className={styles.muted}>
+              Locked — has posted notes. Cancel a note first to edit the consignment or items.
+            </span>
+          </div>
+        </section>
+      )}
 
       <section className={styles.card}>
         <header className={styles.cardHeader}><h2 className={styles.cardTitle}>Customer · Placement</h2></header>
@@ -861,31 +882,55 @@ export const ConsignmentDetail = () => {
               <th>Note #</th><th>Type</th><th>Date</th><th>Driver</th><th>Status</th><th className={styles.tableRight}>Action</th>
             </tr></thead>
             <tbody>
-              {notes.map((n) => (
-                <tr key={n.id as string}>
-                  <td className={styles.codeCell}>{n.note_number}</td>
-                  <td>
-                    <span className={`${styles.statusPill} ${n.note_type === 'OUT' ? styles.statusInProgress : styles.statusOk}`}>
-                      {n.note_type}
-                    </span>
-                  </td>
-                  <td className={styles.muted}>{fmtDate(n.note_date)}</td>
-                  <td className={styles.muted}>{n.driver_name ?? '—'}</td>
-                  <td className={styles.muted}>{n.signed_at ? `Posted ${fmtDate(n.signed_at)}` : 'Draft'}</td>
-                  <td className={styles.tableRight}>
-                    {!n.signed_at && (
-                      <LoadingButton
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => postNote.mutate({ id: id!, noteId: n.id as string })}
-                        loading={postNote.isPending}
-                      >
-                        <CheckCircle2 {...ICON} />Post
-                      </LoadingButton>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {notes.map((n) => {
+                const isCancelled = Boolean(n.cancelled_at);
+                const isPosted = Boolean(n.signed_at) && !isCancelled;
+                return (
+                  <tr key={n.id as string} style={isCancelled ? { opacity: 0.55 } : undefined}>
+                    <td className={styles.codeCell}>{n.note_number}</td>
+                    <td>
+                      <span className={`${styles.statusPill} ${n.note_type === 'OUT' ? styles.statusInProgress : styles.statusOk}`}>
+                        {n.note_type}
+                      </span>
+                    </td>
+                    <td className={styles.muted}>{fmtDate(n.note_date)}</td>
+                    <td className={styles.muted}>{n.driver_name ?? '—'}</td>
+                    <td className={styles.muted}>
+                      {isCancelled
+                        ? `Cancelled ${fmtDate(n.cancelled_at as string)}`
+                        : n.signed_at ? `Posted ${fmtDate(n.signed_at)}` : 'Draft'}
+                    </td>
+                    <td className={styles.tableRight}>
+                      {!n.signed_at && !isCancelled && (
+                        <LoadingButton
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => postNote.mutate({ id: id!, noteId: n.id as string })}
+                          loading={postNote.isPending}
+                        >
+                          <CheckCircle2 {...ICON} />Post
+                        </LoadingButton>
+                      )}
+                      {isPosted && (
+                        /* Migration 0110 — cancel/unpost a posted note. Reverses
+                           the inventory movement + rolls back qty_returned (for
+                           RETURN notes). Idempotent on the server. */
+                        <LoadingButton
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (!confirm(`Cancel ${n.note_number}? This will reverse the inventory movement.`)) return;
+                            cancelNote.mutate({ id: id!, noteId: n.id as string });
+                          }}
+                          loading={cancelNote.isPending}
+                        >
+                          <X {...ICON} />Cancel
+                        </LoadingButton>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

@@ -1181,6 +1181,24 @@ export const usePostConsignmentNote = () => {
       authedFetch(`/consignment/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
+    },
+  });
+};
+/* ── Cancel / unpost a consignment note (Tier-3 unified state-machine) ────
+   PATCH /consignment/:id/notes/:noteId/cancel — server flips cancelled_at,
+   reverses the inventory movement via reverseMovements, and rolls back the
+   per-item qty_returned counter for RETURN notes. Invalidates detail +
+   list (has_children flag flips) + inventory (balance changes). */
+export const useCancelConsignmentNote = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
+      authedFetch(`/consignment/${id}/notes/${noteId}/cancel`, { method: 'PATCH' }),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
+      qc.invalidateQueries({ queryKey: ['consignments'] });
+      qc.invalidateQueries({ queryKey: ['inventory'] });
     },
   });
 };
