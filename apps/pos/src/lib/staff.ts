@@ -39,6 +39,13 @@ export function useStaff() {
   });
 }
 
+/** POS roles that curate the GLOBAL Quick Pick layer + create Combos on POS
+ *  (mirror of the API WRITE_ROLES on /sofa-quick-picks). Anyone else saving a
+ *  Quick Pick saves it to their personal per-device store. One source of truth
+ *  so the curator predicate can't drift between Configurator + CustomBuilder. */
+export const isGlobalCurator = (role: string | undefined): boolean =>
+  role === 'master_account' || role === 'admin' || role === 'super_admin';
+
 export interface StaffOption { id: string; name: string; }
 
 export function useAllStaff() {

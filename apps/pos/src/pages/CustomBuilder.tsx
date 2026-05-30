@@ -22,7 +22,9 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useCreateSofaCombo, type SofaCustomizerData } from '../lib/queries';
+import { useProductFabrics, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData } from '../lib/queries';
+import { useStaff, isGlobalCurator } from '../lib/staff';
+import { useQuickPicks } from '../state/quickpicks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import styles from './CustomBuilder.module.css';
 
@@ -706,6 +708,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
      persist the current cell composition as a new Sofa Combo Pricing row
      so it appears in the Quick Pick row next time. */
   const [saveComboOpen, setSaveComboOpen] = useState(false);
+  // Master-Admin "Create Combo" surface (Phase 5) — sets the SELLING price for
+  // the current build; the server auto-detects COST from the module SKUs.
+  const [createComboOpen, setCreateComboOpen] = useState(false);
+  const { data: staff } = useStaff();
+  const canCurate = isGlobalCurator(staff?.role);
   // When editing an existing custom-sofa line, seed the fabric picker once from
   // the line snapshot (resolved + passed by the parent). Guarded so the staff's
   // manual changes after hydration aren't clobbered on re-render.
@@ -1422,6 +1429,19 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 Save as Quick Pick
               </Button>
             )}
+            {/* Master Admin only — turn the current build into a priced Combo
+                (set SELLING; server auto-detects COST). A Combo is the invisible
+                selling-price logic; it auto-applies on future module matches.
+                Needs a base_model (the combo is scoped to one Model + the server
+                rejects an empty one), so hide it on legacy/orphan SKUs. */}
+            {cells.length > 0 && allClosed && canCurate && (baseModel ?? '').trim() !== '' && (
+              <Button
+                variant="ghost"
+                onClick={() => setCreateComboOpen(true)}
+              >
+                Create Combo
+              </Button>
+            )}
             <Button variant="primary" disabled={!canAdd} onClick={handleAdd}>
               {!cells.length
                 ? 'Add modules to start'
@@ -1436,13 +1456,24 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           </div>
         </footer>
         {saveComboOpen && (
-          <SaveComboModal
+          <SaveQuickPickModal
+            modules={cells.map((c) => c.moduleId)}
+            depth={depth}
+            baseModel={baseModel ?? ''}
+            staffId={staff?.id ?? null}
+            curator={canCurate}
+            onClose={() => setSaveComboOpen(false)}
+            onSaved={() => setSaveComboOpen(false)}
+          />
+        )}
+        {createComboOpen && (
+          <CreateComboModal
             modules={cells.map((c) => c.moduleId)}
             depth={depth}
             currentPriceCenti={priceResult.total}
             baseModel={baseModel ?? ''}
-            onClose={() => setSaveComboOpen(false)}
-            onSaved={() => setSaveComboOpen(false)}
+            onClose={() => setCreateComboOpen(false)}
+            onSaved={() => setCreateComboOpen(false)}
           />
         )}
       </section>
@@ -1450,47 +1481,59 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   );
 };
 
-/* ─── SaveComboModal ─────────────────────────────────────────────────────
-   "Save as Quick Pick" UX. Staff give the layout a friendly name; price
-   is auto-computed from the live à la carte total. Tier defaults to null
-   (wildcard — applies to any fabric tier). Commander can tweak price/tier
-   later in Backend → Products → Sofa Combos. */
-function SaveComboModal({
-  modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
+/* ─── SaveQuickPickModal ─────────────────────────────────────────────────
+   "Save as Quick Pick" — saves the current build as a LAYOUT (Chairman
+   2026-05-31: a Quick Pick is a visible saved layout, NOT a Combo, and may be
+   unpriced). Role-branch: a curator (Master Admin / backend admin) saves to the
+   GLOBAL layer (sofa_quick_picks, every tablet sees it); anyone else saves to
+   their PERSONAL per-device layer (state/quickpicks.ts). The card's price is
+   computed by the engine when shown — nothing is priced here. */
+function SaveQuickPickModal({
+  modules, depth, baseModel, staffId, curator, onClose, onSaved,
 }: {
   modules: string[];
   depth: string;
-  currentPriceCenti: number;
   /** mfg_products.base_model — pins the saved pick to this sofa Model. */
   baseModel: string;
+  /** Current salesperson (auth.users.id) — tags personal picks. */
+  staffId: string | null;
+  /** true → save to the global layer (Master Admin); false → personal. */
+  curator: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const create = useCreateSofaCombo();
+  const createGlobal = useCreateSofaQuickPick();
+  const addPersonal = useQuickPicks((s) => s.addPick);
   const [label, setLabel] = useState('');
 
   const submit = async () => {
-    const today = new Date().toISOString().slice(0, 10);
     try {
-      await create.mutateAsync({
-        baseModel,
-        // OR-set storage (PR #272/#273/#274): combo `modules` is string[][] —
-        // each slot an OR-set of alternative codes. A POS "Save from Customize"
-        // pick is a concrete build, so every module code becomes its own
-        // singleton required slot.
-        modules: modules.map((m) => [m]),
-        tier: null,   // wildcard — any fabric tier
-        pricesByHeight: { [String(depth)]: currentPriceCenti },
-        label: label.trim() || null,
-        effectiveFrom: today,
-        notes: 'Saved from POS Customize',
-      });
+      if (curator) {
+        // Global layer — every tablet sees it. OR-set storage: each module
+        // code becomes its own singleton slot (a save is a concrete build).
+        await createGlobal.mutateAsync({
+          baseModel,
+          modules: modules.map((m) => [m]),
+          depth: String(depth),
+          label: label.trim() || null,
+        });
+      } else {
+        // Personal layer — per-device localStorage, this salesperson only.
+        addPersonal({
+          staffId,
+          baseModel,
+          label: label.trim() || modules.join(' + '),
+          modules,
+          depth: String(depth),
+        });
+      }
       onSaved();
     } catch (e) {
       alert(`Save failed: ${String(e)}`);
     }
   };
 
+  const pending = createGlobal.isPending;
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
@@ -1506,9 +1549,11 @@ function SaveComboModal({
           Save as Quick Pick
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-          Saves this {modules.length}-compartment layout so it appears in Quick Pick next time.
-          Price (RM{Math.round(currentPriceCenti / 100).toLocaleString('en-MY')}) is set from the
-          current à la carte total — adjust it later in Backend if needed.
+          Saves this {modules.length}-compartment layout so it&apos;s one tap away next time.
+          {curator
+            ? ' It joins the shared Quick Picks every tablet sees.'
+            : ' It&apos;s saved to this tablet, under “Yours”.'}
+          {' '}The price shown follows the live module + combo pricing — nothing is fixed here.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
@@ -1528,8 +1573,99 @@ function SaveComboModal({
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={() => { void submit(); }} disabled={pending}>
+            {pending ? 'Saving…' : curator ? 'Save to shared' : 'Save to “Yours”'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── CreateComboModal ───────────────────────────────────────────────────
+   Master Admin only (Phase 5). Turns the current build into a priced Combo —
+   the INVISIBLE selling-price logic that auto-applies whenever a future build
+   matches this module-set. The Master Admin keys the SELLING price for the
+   current seat depth; the server auto-detects the COST = Σ the constituent
+   module SKUs' costs (Backend-overridable later). Stored in sofa_combo_pricing,
+   so it also appears on the Backend for cost review. */
+function CreateComboModal({
+  modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
+}: {
+  modules: string[];
+  depth: string;
+  /** Live à-la-carte total (centi) — a sensible default for the selling price. */
+  currentPriceCenti: number;
+  baseModel: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const create = useCreateSofaCombo();
+  const [sellingRm, setSellingRm] = useState(String(Math.round(currentPriceCenti / 100)));
+
+  const submit = async () => {
+    const selling = Math.max(0, Math.round(Number(sellingRm)));
+    if (!selling) { alert('Enter a selling price.'); return; }
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      await create.mutateAsync({
+        baseModel,
+        // Concrete build → each module is its own singleton OR-set slot.
+        modules: modules.map((m) => [m]),
+        tier: null,   // wildcard — any fabric tier
+        // SELLING for the current seat depth (centi). COST is auto-detected
+        // server-side (Σ module SKU costs); pricesByHeight is intentionally
+        // omitted so the server fills it. Backend can add other heights later.
+        sellingPricesByHeight: { [String(depth)]: selling * 100 },
+        label: null,
+        effectiveFrom: today,
+        notes: 'Combo created from POS Customize',
+      });
+      onSaved();
+    } catch (e) {
+      alert(`Create failed: ${String(e)}`);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+      padding: '8vh 16px', zIndex: 1000,
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
+        padding: 24, width: '100%', maxWidth: 480,
+        display: 'flex', flexDirection: 'column', gap: 16,
+      }}>
+        <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
+          Create Combo
+        </h3>
+        <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
+          Sets a fixed selling price for this {modules.length}-compartment set at {depth}&quot; seat.
+          It applies automatically whenever a build matches these modules. Cost is filled
+          automatically from the module prices — adjust it on the Backend if needed.
+        </p>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
+            Selling price (RM) · {depth}&quot; seat
+          </span>
+          <input
+            autoFocus
+            inputMode="numeric"
+            value={sellingRm}
+            onChange={(e) => setSellingRm(e.target.value.replace(/[^0-9]/g, ''))}
+            onKeyDown={(e) => { if (e.key === 'Enter') { void submit(); } }}
+            style={inputStyle}
+          />
+        </label>
+        <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+          Modules: {modules.join(' · ')}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" onClick={() => { void submit(); }} disabled={create.isPending}>
-            {create.isPending ? 'Saving…' : 'Save Quick Pick'}
+            {create.isPending ? 'Creating…' : 'Create Combo'}
           </Button>
         </div>
       </div>

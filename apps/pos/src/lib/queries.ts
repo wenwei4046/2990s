@@ -1342,7 +1342,13 @@ export const useCreateSofaCombo = () => {
       baseModel: string;       // '' allowed (wildcard)
       modules: string[][];     // OR-set per slot
       tier: SofaPriceTier | null;
-      pricesByHeight: Record<string, number | null>;  // centi
+      /** COST per height (centi). Optional — when omitted, the server
+       *  auto-detects it = Σ the constituent module SKUs' costs (Master Admin
+       *  creates a Combo on POS knowing only the SELLING price; Chairman
+       *  2026-05-31). Backend-overridable later. */
+      pricesByHeight?: Record<string, number | null>;  // centi (COST)
+      /** SELLING per height (centi) — what the customer pays (Master Admin). */
+      sellingPricesByHeight?: Record<string, number | null>;  // centi (SELLING)
       label?: string | null;
       effectiveFrom: string;   // 'YYYY-MM-DD'
       notes?: string | null;
@@ -1362,7 +1368,9 @@ export const useCreateSofaCombo = () => {
           modules: body.modules,
           tier: body.tier,
           customerId: null,  // 2990 is B2C
-          pricesByHeight: body.pricesByHeight,
+          // Omit pricesByHeight when not set so the server auto-detects COST.
+          ...(body.pricesByHeight !== undefined ? { pricesByHeight: body.pricesByHeight } : {}),
+          ...(body.sellingPricesByHeight !== undefined ? { sellingPricesByHeight: body.sellingPricesByHeight } : {}),
           label: body.label ?? null,
           effectiveFrom: body.effectiveFrom,
           notes: body.notes ?? null,
@@ -1378,6 +1386,124 @@ export const useCreateSofaCombo = () => {
     onSuccess: () => {
       // Combos refetch so the new card lands in Quick Pick on next render.
       void qc.invalidateQueries({ queryKey: ['sofa-combos'] });
+    },
+  });
+};
+
+/* ─── Sofa Quick Picks (global layer) ─────────────────────────────────────
+   Phase 5 (Chairman 2026-05-31): a Quick Pick is a VISIBLE saved sofa LAYOUT
+   for easy selection (it may be unpriced). The card price is computed by the
+   pricing engine — these rows carry NO price. Master Admin curates the global
+   layer (sofa_quick_picks); the personal layer lives in state/quickpicks.ts.
+   Combos stay invisible (they auto-apply on module match via the engine). */
+export interface SofaQuickPickRow {
+  id: string;
+  baseModel: string;
+  label: string | null;
+  /** OR-set per slot (string[][]); the layout the salesperson taps to start. */
+  modules: string[][];
+  depth: string;
+  sortOrder: number;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+/** Active global Quick Picks for one Model (or all when baseModel omitted). */
+export const useSofaQuickPicks = (baseModel?: string | null) =>
+  useQuery({
+    queryKey: ['sofa-quick-picks', baseModel ?? 'all'],
+    queryFn: async (): Promise<SofaQuickPickRow[]> => {
+      if (!API_URL) return [];
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) return [];  // POS may render anonymously; quietly skip
+      const params = new URLSearchParams();
+      if (baseModel) params.set('baseModel', baseModel);
+      const res = await fetch(
+        `${API_URL}/sofa-quick-picks${params.toString() ? `?${params.toString()}` : ''}`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) return [];
+      const body = (await res.json()) as { picks: SofaQuickPickRow[] };
+      return body.picks ?? [];
+    },
+    staleTime: 30_000,
+  });
+
+/** Realtime: invalidate the global Quick Picks when Master Admin curates. */
+export const useSofaQuickPicksRealtime = () => {
+  const qc = useQueryClient();
+  useEffect(() => {
+    const channel = supabase
+      .channel('sofa-quick-picks')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'sofa_quick_picks' },
+        () => { void qc.invalidateQueries({ queryKey: ['sofa-quick-picks'] }); },
+      )
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [qc]);
+};
+
+/** Create a GLOBAL Quick Pick (Master Admin curates; server role-gates). */
+export const useCreateSofaQuickPick = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      baseModel: string;
+      modules: string[][];   // OR-set per slot (a POS save = singleton slots)
+      depth: string;
+      label?: string | null;
+    }): Promise<SofaQuickPickRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/sofa-quick-picks`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          baseModel: body.baseModel,
+          modules: body.modules,
+          depth: body.depth,
+          label: body.label ?? null,
+        }),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+        throw new Error(`POST /sofa-quick-picks failed (${res.status}): ${detail}`);
+      }
+      return (await res.json()) as SofaQuickPickRow;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['sofa-quick-picks'] });
+    },
+  });
+};
+
+/** Soft-delete a GLOBAL Quick Pick (server role-gates). */
+export const useDeleteSofaQuickPick = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string): Promise<void> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/sofa-quick-picks/${id}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
+        throw new Error(`DELETE /sofa-quick-picks failed (${res.status}): ${detail}`);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['sofa-quick-picks'] });
     },
   });
 };

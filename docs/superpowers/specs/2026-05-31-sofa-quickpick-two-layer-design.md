@@ -23,6 +23,10 @@ The salesperson sees Quick Picks (global + a "Yours" group), taps one to start, 
 
 **Relationship:** Quick Pick = visible convenience layout. Combo = invisible priced deal that auto-applies on match. A Combo may be *created by referencing* a Quick Pick, but they are separate entities (a Quick Pick can exist with no Combo).
 
+### Chairman decisions (2026-05-31, this session) — LOCKED
+1. **Global Quick Pick table stores NO price.** A QP card's displayed price is computed by running its module layout through the EXISTING engine (`computeSofaPrice`): if the build matches a Combo → the Combo price shows; otherwise → the à-la-carte module sum shows. One price source, rule→code 1:1. (Honors "QP may be unpriced; Combo is the price logic.") So `sofa_quick_picks` = `{ id, base_model, label, modules jsonb string[][], depth, active/sort, created_by, timestamps }` — no `price` / `prices_by_height` column.
+2. **Deliver A–E in one shot**, then review.
+
 ---
 
 ## Already done (committed on `feat/sofa-quickpick`, NOT deployed)
@@ -35,24 +39,29 @@ Evidence at checkpoint: typecheck 6/6, shared 276/276, api 178/181 (3 pre-existi
 
 ---
 
-## Remaining work (CODE)
+## Remaining work (CODE) — ✅ A–E DONE 2026-05-31 (committed-not-deployed)
 
-### A. Global Quick Pick store
-- **NEW table** (e.g. `sofa_quick_picks`): `{ id, base_model, label, modules jsonb (flat module ids), depth, active/sort, created_by, timestamps }`. Global scope (no customer/supplier).
-- API CRUD + POS realtime invalidate (like `useMfgCatalogRealtime`). Master Admin curates.
+### A. Global Quick Pick store — ✅ DONE
+- **NEW table `sofa_quick_picks`**: `{ id, base_model, label, modules jsonb (string[][]), depth, sort_order, active, deleted_at, created_at/updated_at, created_by }`. NO price column (Chairman decision 1). Migration `0115_sofa_quick_picks.sql` + Drizzle `sofaQuickPicks` in `schema.ts`. No RLS (app-layer gated, mirrors `sofa_combo_pricing`/`mfg_products`).
+- API `apps/api/src/routes/sofa-quick-picks.ts` (GET list / POST create / DELETE soft-delete), mounted in `index.ts`. Writes role-gated `WRITE_ROLES = {admin, super_admin, master_account}`.
+- POS hooks `useSofaQuickPicks` + `useSofaQuickPicksRealtime` + `useCreateSofaQuickPick` + `useDeleteSofaQuickPick` in `queries.ts`.
 
-### B. Salesperson Quick Pick UI — replace the combo cards
-- `SofaQuickPick` (`apps/pos/src/pages/Configurator.tsx`): **REMOVE the combo cards** (combos are invisible now). Render **Quick Picks** instead — global (new table) + personal "Yours" (`quickpicks.ts`, `listForStaff(staffId, baseModel)`). Tap a pick → `cellsFromComboModules` → build cells. Personal entries are deletable.
+### B. Salesperson Quick Pick UI — ✅ DONE (combo cards REMOVED)
+- `SofaQuickPick` (`Configurator.tsx`): combo cards gone; renders two Quick Pick groups — "Quick Picks" (global) + "Yours" (personal, `quickpicks.ts`). Unified `QuickPickItem` type. Card price = `priceForLayout(modules)` via `computeSofaPrice` (à-la-carte, or matched Combo). Tap → `pickedQP` → topbar price + Add; "Edit in Customize"; per-card delete (personal always, global if curator). `SofaQuickPick` now renders even when a Model has 0 bundles (fully-modular).
 - Combos keep auto-applying via the engine on match (no UI).
 
-### C. "Save as Quick Pick" — role-branch (creates a LAYOUT, never a Combo)
-- `CustomBuilder` `SaveComboModal`: `master_account` → global Quick Pick (new table); any other role → personal store (`useQuickPicks.addPick`). `useStaff()` (`lib/staff.ts`) gives `.role` / `.id`.
+### C. "Save as Quick Pick" — ✅ DONE (role-branch → LAYOUT, never a Combo)
+- `CustomBuilder` `SaveQuickPickModal` (renamed from `SaveComboModal`): curator (`master_account`/`admin`/`super_admin`) → global QP API; else → personal `useQuickPicks.addPick`. No price collected.
 
-### D. Master Admin "Create Combo" (POS)
-- A POS surface for `master_account`: pick modules (or **reference an existing Quick Pick**) + set the **SELLING** price per height → insert/update a `sofa_combo_pricing` row (`selling_prices_by_height`; API Part-1 already carries it). Needs `useCreateSofaCombo` to send `sellingPricesByHeight`.
+### D. Master Admin "Create Combo" (POS) — ✅ DONE
+- `CustomBuilder` `CreateComboModal` (curator-only button). Sets SELLING (RM→centi) for the current depth → `useCreateSofaCombo` sends `sellingPricesByHeight`, omits `pricesByHeight` so the server auto-detects COST. `useCreateSofaCombo` now sends selling + omits cost when unset.
 
-### E. Combo COST auto-detect (Backend / server)
-- A combo's COST = **sum of its constituent module SKUs' costs** (`mfg_products.base_price_sen` / cost), auto-filled into `prices_by_height`, Backend-overridable. Surfaces on the Backend `SofaComboTab` as the auto-keyed cost.
+### E. Combo COST auto-detect (server) — ✅ DONE
+- Shared pure `sofaComboCostSen(modules, moduleCosts)` (`sofa-build.ts`, +5 tests). Server `loadModelSofaModuleCosts(sb, baseModel)` (`mfg-pricing-recompute.ts`) reads `base_price_sen`. `/sofa-combos` POST: cost provided→use; cost omitted + selling provided→auto-detect (Σ module costs per selling height); both omitted→reject. Backend-overridable via PUT.
+
+**Evidence:** typecheck 6/6 ✓; shared 281/281 ✓; api 178/181 ✓ (3 pre-existing `slips` R2-env); POS+Backend build ✓.
+
+**⚠️ Deploy ordering:** migrations `0114` (selling col) AND `0115` (sofa_quick_picks) MUST both be applied to prod BEFORE this code deploys — the code SELECTs `selling_prices_by_height` and the new table. Apply via Supabase MCP after Chairman GO.
 
 ---
 
