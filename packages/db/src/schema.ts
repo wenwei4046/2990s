@@ -1529,14 +1529,17 @@ export const salesInvoiceItems = pgTable('sales_invoice_items', {
    Migration 0042 (same).
    ════════════════════════════════════════════════════════════════════════ */
 
+/* Hard reset 2026-05-30 (migration 0113):
+   Consignment is now a flat DO clone. The old "agreement + notes" model
+   (consignment_orders, consignment_notes, etc.) is dropped. */
 export const consignmentStatus = pgEnum('consignment_status', [
-  'AT_BRANCH',  // stock physically at customer's place, ours
-  'SOLD',       // customer reports sold, we invoice
-  'RETURNED',   // pulled back, restocked
-  'DAMAGED',    // written off
+  'LOADED', 'DISPATCHED', 'IN_TRANSIT', 'SIGNED',
+  'DELIVERED', 'INVOICED', 'CANCELLED',
 ]);
 
-export const consignmentNoteType = pgEnum('consignment_note_type', ['OUT', 'RETURN']);
+export const consignmentReturnStatus = pgEnum('consignment_return_status', [
+  'PENDING', 'RECEIVED', 'INSPECTED', 'REFUNDED', 'CANCELLED',
+]);
 
 export const deliveryReturnStatus = pgEnum('delivery_return_status', [
   'PENDING',      // customer flagged, not yet picked up
@@ -1548,35 +1551,51 @@ export const deliveryReturnStatus = pgEnum('delivery_return_status', [
   'CANCELLED',    // migration 0107 — DR voided; its inventory IN is reversed
 ]);
 
-/* Consignment orders — stock placed at a customer branch */
-export const consignmentOrders = pgTable('consignment_orders', {
-  id:                uuid('id').primaryKey().defaultRandom(),
-  consignmentNumber: text('consignment_number').notNull().unique(),  // 'CO-2605-001'
-  debtorCode:        text('debtor_code'),
-  debtorName:        text('debtor_name').notNull(),
-  branchLocation:    text('branch_location'),                        // physical site
-  placedAt:          date('placed_at').notNull().defaultNow(),
-  notes:             text('notes'),
-  status:            consignmentStatus('status').notNull().default('AT_BRANCH'),
-  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
-  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+/* Consignments — flat DO clone (one shipment per doc, no agreement) */
+export const consignments = pgTable('consignments', {
+  id:                   uuid('id').primaryKey().defaultRandom(),
+  consignmentNumber:    text('consignment_number').notNull().unique(),  // 'CN-2605-001'
+  debtorCode:           text('debtor_code'),
+  debtorName:           text('debtor_name').notNull(),
+  consignmentDate:      date('consignment_date').notNull().defaultNow(),
+  expectedDeliveryAt:   date('expected_delivery_at'),
+  signedAt:             timestamp('signed_at', { withTimezone: true }),
+  deliveredAt:          timestamp('delivered_at', { withTimezone: true }),
+  dispatchedAt:         timestamp('dispatched_at', { withTimezone: true }),
+  cancelledAt:          timestamp('cancelled_at', { withTimezone: true }),
+  driverId:             uuid('driver_id').references(() => drivers.id, { onDelete: 'set null' }),
+  driverName:           text('driver_name'),
+  vehicle:              text('vehicle'),
+  m3TotalMilli:         integer('m3_total_milli').notNull().default(0),
+  warehouseId:          uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  address1:             text('address1'),
+  address2:             text('address2'),
+  city:                 text('city'),
+  state:                text('state'),
+  postcode:             text('postcode'),
+  phone:                text('phone'),
+  podR2Key:             text('pod_r2_key'),
+  signatureData:        text('signature_data'),
+  status:               consignmentStatus('status').notNull().default('LOADED'),
+  notes:                text('notes'),
+  createdAt:            timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:            uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:            timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxDebtor: index('idx_co_debtor').on(t.debtorCode),
-  idxStatus: index('idx_co_status').on(t.status),
+  idxStatus: index('idx_cn_status').on(t.status),
+  idxDate:   index('idx_cn_date').on(t.consignmentDate),
+  idxDebtor: index('idx_cn_debtor').on(t.debtorCode),
 }));
 
-export const consignmentOrderItems = pgTable('consignment_order_items', {
-  id:                  uuid('id').primaryKey().defaultRandom(),
-  consignmentOrderId:  uuid('consignment_order_id').notNull().references(() => consignmentOrders.id, { onDelete: 'cascade' }),
-  itemCode:            text('item_code').notNull(),
-  description:         text('description'),
-  qtyPlaced:           integer('qty_placed').notNull(),
-  qtySold:             integer('qty_sold').notNull().default(0),
-  qtyReturned:         integer('qty_returned').notNull().default(0),
-  qtyDamaged:          integer('qty_damaged').notNull().default(0),
-  unitPriceCenti:      integer('unit_price_centi').notNull().default(0),
-  /* PR #43 — variant fields (migration 0058) */
+export const consignmentItems = pgTable('consignment_items', {
+  id:                    uuid('id').primaryKey().defaultRandom(),
+  consignmentId:         uuid('consignment_id').notNull().references(() => consignments.id, { onDelete: 'cascade' }),
+  itemCode:              text('item_code').notNull(),
+  description:           text('description'),
+  qty:                   integer('qty').notNull(),
+  m3Milli:               integer('m3_milli').notNull().default(0),
+  unitPriceCenti:        integer('unit_price_centi').notNull().default(0),
+  notes:                 text('notes'),
   gapInches:             integer('gap_inches'),
   divanHeightInches:     integer('divan_height_inches'),
   divanPriceSen:         integer('divan_price_sen').notNull().default(0),
@@ -1587,52 +1606,56 @@ export const consignmentOrderItems = pgTable('consignment_order_items', {
   specialOrderPriceSen:  integer('special_order_price_sen').notNull().default(0),
   variants:              jsonb('variants'),
   itemGroup:             text('item_group'),
+  description2:          text('description2'),
   uom:                   text('uom').notNull().default('UNIT'),
-  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  discountCenti:         integer('discount_centi').notNull().default(0),
+  lineTotalCenti:        integer('line_total_centi').notNull().default(0),
+  createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxCo: index('idx_co_items_co').on(t.consignmentOrderId),
+  idxCn: index('idx_cn_items_cn').on(t.consignmentId),
 }));
 
-/* Consignment notes — movement receipts (OUT when placed, RETURN when pulled) */
-export const consignmentNotes = pgTable('consignment_notes', {
-  id:                  uuid('id').primaryKey().defaultRandom(),
-  noteNumber:          text('note_number').notNull().unique(),       // 'CN-2605-001'
-  consignmentOrderId:  uuid('consignment_order_id').notNull().references(() => consignmentOrders.id, { onDelete: 'restrict' }),
-  noteType:            consignmentNoteType('note_type').notNull(),
-  noteDate:            date('note_date').notNull().defaultNow(),
-  driverId:            uuid('driver_id').references(() => drivers.id, { onDelete: 'set null' }),
-  driverName:          text('driver_name'),
-  vehicle:             text('vehicle'),
-  signedAt:            timestamp('signed_at', { withTimezone: true }),
-  signatureData:       text('signature_data'),
-  notes:               text('notes'),
-  /* Migration 0110 — cancel/unpost sentinel. NULL = active / posted;
-     not NULL = unposted (the inventory movement has been reversed and the
-     parent consignment_order_items consumption rolled back). The consignment
-     header's edit-lock + has_children flag both filter on cancelled_at IS NULL. */
-  cancelledAt:         timestamp('cancelled_at', { withTimezone: true }),
-  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  createdBy:           uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+/* Consignment Returns — flat DR clone (debtor returns consignment stock) */
+export const consignmentReturns = pgTable('consignment_returns', {
+  id:                uuid('id').primaryKey().defaultRandom(),
+  returnNumber:      text('return_number').notNull().unique(),        // 'CNR-2605-001'
+  consignmentId:     uuid('consignment_id').references(() => consignments.id, { onDelete: 'set null' }),
+  debtorCode:        text('debtor_code'),
+  debtorName:        text('debtor_name').notNull(),
+  returnDate:        date('return_date').notNull().defaultNow(),
+  reason:            text('reason'),
+  warehouseId:       uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  status:            consignmentReturnStatus('status').notNull().default('PENDING'),
+  receivedAt:        timestamp('received_at', { withTimezone: true }),
+  inspectedAt:       timestamp('inspected_at', { withTimezone: true }),
+  refundedAt:        timestamp('refunded_at', { withTimezone: true }),
+  cancelledAt:       timestamp('cancelled_at', { withTimezone: true }),
+  refundCenti:       integer('refund_centi').notNull().default(0),
+  inspectionNotes:   text('inspection_notes'),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:         uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:         timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxCo:   index('idx_cn_co').on(t.consignmentOrderId),
-  idxType: index('idx_cn_type').on(t.noteType),
+  idxCn:     index('idx_cnr_cn').on(t.consignmentId),
+  idxStatus: index('idx_cnr_status').on(t.status),
+  idxDebtor: index('idx_cnr_debtor').on(t.debtorCode),
 }));
 
-export const consignmentNoteItems = pgTable('consignment_note_items', {
-  id:                  uuid('id').primaryKey().defaultRandom(),
-  consignmentNoteId:   uuid('consignment_note_id').notNull().references(() => consignmentNotes.id, { onDelete: 'cascade' }),
-  consignmentItemId:   uuid('consignment_item_id').references(() => consignmentOrderItems.id, { onDelete: 'set null' }),
-  itemCode:            text('item_code').notNull(),
-  description:         text('description'),
-  qty:                 integer('qty').notNull(),
-  notes:               text('notes'),
-  /* PR #43 — variant fields (migration 0058) */
-  variants:            jsonb('variants'),
-  itemGroup:           text('item_group'),
-  uom:                 text('uom').notNull().default('UNIT'),
-  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+export const consignmentReturnItems = pgTable('consignment_return_items', {
+  id:                    uuid('id').primaryKey().defaultRandom(),
+  consignmentReturnId:   uuid('consignment_return_id').notNull().references(() => consignmentReturns.id, { onDelete: 'cascade' }),
+  consignmentItemId:     uuid('consignment_item_id').references(() => consignmentItems.id, { onDelete: 'set null' }),
+  itemCode:              text('item_code').notNull(),
+  description:           text('description'),
+  qtyReturned:           integer('qty_returned').notNull(),
+  condition:             text('condition'),
+  unitPriceCenti:        integer('unit_price_centi').notNull().default(0),
+  refundCenti:           integer('refund_centi').notNull().default(0),
+  notes:                 text('notes'),
+  createdAt:             timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxCn: index('idx_cn_items_cn').on(t.consignmentNoteId),
+  idxCnr: index('idx_cnr_items_cnr').on(t.consignmentReturnId),
 }));
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1642,47 +1665,49 @@ export const consignmentNoteItems = pgTable('consignment_note_items', {
      • RETURN note → you ship back to supplier            (inventory OUT)
    ════════════════════════════════════════════════════════════════════════ */
 
+/* Purchase Consignment — flat PI clone + warehouse_id + inventory IN write */
 export const purchaseConsignmentStatus = pgEnum('purchase_consignment_status', [
-  'AT_WAREHOUSE', 'SOLD', 'RETURNED', 'DAMAGED',
+  'DRAFT', 'POSTED', 'CANCELLED',
 ]);
 
-export const purchaseConsignmentNoteType = pgEnum('purchase_consignment_note_type', [
-  'IN', 'RETURN',
+export const purchaseConsignmentReturnStatus = pgEnum('purchase_consignment_return_status', [
+  'DRAFT', 'POSTED', 'CANCELLED',
 ]);
 
-export const purchaseConsignmentOrders = pgTable('purchase_consignment_orders', {
-  id:              uuid('id').primaryKey().defaultRandom(),
-  pcNumber:        text('pc_number').notNull().unique(),                          // 'PC-2605-001'
-  supplierId:      uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
-  status:          purchaseConsignmentStatus('status').notNull().default('AT_WAREHOUSE'),
-  warehouseId:     uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
-  agreementDate:   date('agreement_date').notNull().defaultNow(),
-  notes:           text('notes'),
-  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  createdBy:       uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
-  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+export const purchaseConsignments = pgTable('purchase_consignments', {
+  id:                  uuid('id').primaryKey().defaultRandom(),
+  pcNumber:            text('pc_number').notNull().unique(),
+  supplierInvoiceRef:  text('supplier_invoice_ref'),
+  supplierId:          uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  warehouseId:         uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  consignmentDate:     date('consignment_date').notNull().defaultNow(),
+  dueDate:             date('due_date'),
+  currency:            currencyCode('currency').notNull().default('MYR'),
+  subtotalCenti:       integer('subtotal_centi').notNull().default(0),
+  taxCenti:            integer('tax_centi').notNull().default(0),
+  totalCenti:          integer('total_centi').notNull().default(0),
+  status:              purchaseConsignmentStatus('status').notNull().default('DRAFT'),
+  notes:               text('notes'),
+  postedAt:            timestamp('posted_at', { withTimezone: true }),
+  cancelledAt:         timestamp('cancelled_at', { withTimezone: true }),
+  createdAt:           timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:           uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:           timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxSupplier: index('idx_pc_supplier').on(t.supplierId),
   idxStatus:   index('idx_pc_status').on(t.status),
 }));
 
-export const purchaseConsignmentOrderItems = pgTable('purchase_consignment_order_items', {
+export const purchaseConsignmentItems = pgTable('purchase_consignment_items', {
   id:                     uuid('id').primaryKey().defaultRandom(),
-  pcId:                   uuid('pc_id').notNull().references(() => purchaseConsignmentOrders.id, { onDelete: 'cascade' }),
+  purchaseConsignmentId:  uuid('purchase_consignment_id').notNull().references(() => purchaseConsignments.id, { onDelete: 'cascade' }),
   materialKind:           materialKind('material_kind').notNull().default('mfg_product'),
   materialCode:           text('material_code').notNull(),
   materialName:           text('material_name').notNull(),
-  itemGroup:              text('item_group'),
-  description:            text('description'),
-  description2:           text('description2'),
-  uom:                    text('uom').notNull().default('UNIT'),
-  qtyPlaced:              integer('qty_placed').notNull(),
-  qtySold:                integer('qty_sold').notNull().default(0),
-  qtyReturned:            integer('qty_returned').notNull().default(0),
-  qtyDamaged:             integer('qty_damaged').notNull().default(0),
-  unitPriceCenti:         integer('unit_price_centi').notNull().default(0),
-  variants:               jsonb('variants'),
-  /* Variant fields mirrored from consignment_order_items (post-0058) */
+  qty:                    integer('qty').notNull(),
+  unitPriceCenti:         integer('unit_price_centi').notNull(),
+  lineTotalCenti:         integer('line_total_centi').notNull(),
+  notes:                  text('notes'),
   gapInches:              integer('gap_inches'),
   divanHeightInches:      integer('divan_height_inches'),
   divanPriceSen:          integer('divan_price_sen').notNull().default(0),
@@ -1691,47 +1716,73 @@ export const purchaseConsignmentOrderItems = pgTable('purchase_consignment_order
   customSpecials:         jsonb('custom_specials'),
   lineSuffix:             text('line_suffix'),
   specialOrderPriceSen:   integer('special_order_price_sen').notNull().default(0),
+  variants:               jsonb('variants'),
+  itemGroup:              text('item_group'),
+  description:            text('description'),
+  description2:           text('description2'),
+  uom:                    text('uom').notNull().default('UNIT'),
+  discountCenti:          integer('discount_centi').notNull().default(0),
+  unitCostCenti:          integer('unit_cost_centi').notNull().default(0),
   createdAt:              timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxPc: index('idx_pc_items_pc').on(t.pcId),
+  idxPc: index('idx_pc_items_pc').on(t.purchaseConsignmentId),
 }));
 
-export const purchaseConsignmentNotes = pgTable('purchase_consignment_notes', {
-  id:            uuid('id').primaryKey().defaultRandom(),
-  noteNumber:    text('note_number').notNull().unique(),                         // 'PCN-2605-001'
-  pcId:          uuid('pc_id').notNull().references(() => purchaseConsignmentOrders.id, { onDelete: 'restrict' }),
-  noteType:      purchaseConsignmentNoteType('note_type').notNull(),
-  noteDate:      date('note_date').notNull().defaultNow(),
-  warehouseId:   uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
-  driverId:      uuid('driver_id').references(() => drivers.id, { onDelete: 'set null' }),
-  driverName:    text('driver_name'),
-  vehicle:       text('vehicle'),
-  postedAt:      timestamp('posted_at', { withTimezone: true }),
-  signedAt:      timestamp('signed_at', { withTimezone: true }),
-  /* Cancel sentinel — mirrors consignment_notes.cancelled_at (migration 0110).
-     NULL = active / posted; not NULL = unposted (inventory reversed, qty_returned
-     rolled back for RETURN notes). The cancel/has_children/lock probes all
-     filter on cancelled_at IS NULL. */
-  cancelledAt:   timestamp('cancelled_at', { withTimezone: true }),
-  notes:         text('notes'),
-  createdAt:     timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  createdBy:     uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+/* Purchase Consignment Returns — flat PI clone + warehouse_id + inventory OUT */
+export const purchaseConsignmentReturns = pgTable('purchase_consignment_returns', {
+  id:                       uuid('id').primaryKey().defaultRandom(),
+  pcrNumber:                text('pcr_number').notNull().unique(),
+  supplierId:               uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  purchaseConsignmentId:    uuid('purchase_consignment_id').references(() => purchaseConsignments.id, { onDelete: 'set null' }),
+  warehouseId:              uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  returnDate:               date('return_date').notNull().defaultNow(),
+  reason:                   text('reason'),
+  status:                   purchaseConsignmentReturnStatus('status').notNull().default('DRAFT'),
+  postedAt:                 timestamp('posted_at', { withTimezone: true }),
+  cancelledAt:              timestamp('cancelled_at', { withTimezone: true }),
+  creditNoteRef:            text('credit_note_ref'),
+  subtotalCenti:            integer('subtotal_centi').notNull().default(0),
+  taxCenti:                 integer('tax_centi').notNull().default(0),
+  totalCenti:               integer('total_centi').notNull().default(0),
+  refundCenti:              integer('refund_centi').notNull().default(0),
+  notes:                    text('notes'),
+  createdAt:                timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:                uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:                timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxPc:   index('idx_pcn_pc').on(t.pcId),
-  idxType: index('idx_pcn_type').on(t.noteType),
+  idxSupplier: index('idx_pcr_supplier').on(t.supplierId),
+  idxPc:       index('idx_pcr_pc').on(t.purchaseConsignmentId),
+  idxStatus:   index('idx_pcr_status').on(t.status),
 }));
 
-export const purchaseConsignmentNoteItems = pgTable('purchase_consignment_note_items', {
-  id:           uuid('id').primaryKey().defaultRandom(),
-  pcNoteId:     uuid('pc_note_id').notNull().references(() => purchaseConsignmentNotes.id, { onDelete: 'cascade' }),
-  pcItemId:     uuid('pc_item_id').references(() => purchaseConsignmentOrderItems.id, { onDelete: 'set null' }),
-  itemCode:     text('item_code').notNull(),
-  description:  text('description'),
-  qty:          integer('qty').notNull(),
-  notes:        text('notes'),
-  createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+export const purchaseConsignmentReturnItems = pgTable('purchase_consignment_return_items', {
+  id:                              uuid('id').primaryKey().defaultRandom(),
+  purchaseConsignmentReturnId:     uuid('purchase_consignment_return_id').notNull().references(() => purchaseConsignmentReturns.id, { onDelete: 'cascade' }),
+  purchaseConsignmentItemId:       uuid('purchase_consignment_item_id').references(() => purchaseConsignmentItems.id, { onDelete: 'set null' }),
+  materialKind:                    materialKind('material_kind').notNull().default('mfg_product'),
+  materialCode:                    text('material_code').notNull(),
+  materialName:                    text('material_name').notNull(),
+  qtyReturned:                     integer('qty_returned').notNull(),
+  unitPriceCenti:                  integer('unit_price_centi').notNull().default(0),
+  lineRefundCenti:                 integer('line_refund_centi').notNull().default(0),
+  reason:                          text('reason'),
+  notes:                           text('notes'),
+  gapInches:                       integer('gap_inches'),
+  divanHeightInches:               integer('divan_height_inches'),
+  divanPriceSen:                   integer('divan_price_sen').notNull().default(0),
+  legHeightInches:                 integer('leg_height_inches'),
+  legPriceSen:                     integer('leg_price_sen').notNull().default(0),
+  customSpecials:                  jsonb('custom_specials'),
+  lineSuffix:                      text('line_suffix'),
+  specialOrderPriceSen:            integer('special_order_price_sen').notNull().default(0),
+  variants:                        jsonb('variants'),
+  itemGroup:                       text('item_group'),
+  description:                     text('description'),
+  description2:                    text('description2'),
+  uom:                             text('uom').notNull().default('UNIT'),
+  createdAt:                       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  idxPcn: index('idx_pcn_items_pcn').on(t.pcNoteId),
+  idxPcr: index('idx_pcr_items_pcr').on(t.purchaseConsignmentReturnId),
 }));
 
 /* Delivery Return — customer returning previously-delivered goods */
