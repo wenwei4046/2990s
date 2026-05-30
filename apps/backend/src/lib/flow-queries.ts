@@ -14,14 +14,27 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('not_authenticated');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-    },
-  });
+  const headers = {
+    ...(init?.headers ?? {}),
+    authorization: `Bearer ${token}`,
+    ...(init?.body ? { 'content-type': 'application/json' } : {}),
+  };
+  let res = await fetch(`${API_URL}${path}`, { ...init, headers });
+
+  /* Edge #J (systemic) — every ship path's server route returns HTTP 409
+     short_stock unless the JSON body carries confirmShortStock:true. Catch it
+     once here: prompt the operator "ship anyway?" and on confirm replay the
+     same request with confirmShortStock:true merged in. Doing it at the single
+     request chokepoint means no individual mutation hook has to opt in, so a
+     new ship endpoint can never regress to dumping the raw 409 at the user. */
+  if (res.status === 409 && typeof init?.body === 'string') {
+    const text = await res.clone().text();
+    if (text.includes('"short_stock"') && confirmShortStock(text)) {
+      const retryBody = JSON.stringify({ ...JSON.parse(init.body), confirmShortStock: true });
+      res = await fetch(`${API_URL}${path}`, { ...init, headers, body: retryBody });
+    }
+  }
+
   if (!res.ok) {
     let detail = '';
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
@@ -332,37 +345,30 @@ export const useCreateMfgSalesOrder = () => {
   });
 };
 
-/* Edge #J — catches the 409 short_stock thrown by authedFetch when a DO ship
-   path detects insufficient stock at the target warehouse. Pops the same
-   "stock not enough — continue?" prompt the from-sos picker uses, and on
-   confirm retries the call with confirmShortStock: true so the server lets
-   the OUT go through. Operator who hits Cancel sees the original error. */
-async function withShortStockRetry<T>(call: (extra: { confirmShortStock?: boolean }) => Promise<T>): Promise<T> {
-  try { return await call({}); }
-  catch (e) {
-    const raw = e instanceof Error ? e.message : String(e);
-    if (!raw.includes('"short_stock"')) throw e;
-    try {
-      const jsonStart = raw.indexOf('{');
-      const body = JSON.parse(raw.slice(jsonStart)) as {
-        shortages?: Array<{
-          itemCode: string; warehouseName: string | null;
-          needed: number; available: number; short: number;
-          alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
-        }>;
-      };
-      const lines = (body.shortages ?? []).map((s) => {
-        const alts = (s.alternatives ?? []).slice(0, 3)
-          .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
-          .join(', ');
-        const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
-        return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
-      }).join('\n\n');
-      if (window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`)) {
-        return await call({ confirmShortStock: true });
-      }
-    } catch { /* fall through */ }
-    throw e;
+/* Edge #J — render the shortage detail out of a 409 short_stock body and ask
+   the operator whether to ship anyway (stock goes negative). Returns true on
+   confirm. Called by authedFetch, which then replays the request with
+   confirmShortStock:true. Returns false (no ship) if the body can't be parsed. */
+function confirmShortStock(raw: string): boolean {
+  try {
+    const jsonStart = raw.indexOf('{');
+    const body = JSON.parse(raw.slice(jsonStart)) as {
+      shortages?: Array<{
+        itemCode: string; warehouseName: string | null;
+        needed: number; available: number; short: number;
+        alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
+      }>;
+    };
+    const lines = (body.shortages ?? []).map((s) => {
+      const alts = (s.alternatives ?? []).slice(0, 3)
+        .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
+        .join(', ');
+      const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
+      return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
+    }).join('\n\n');
+    return window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`);
+  } catch {
+    return false;
   }
 }
 
@@ -459,12 +465,7 @@ export const useDeliverableSoLines = () => useQuery({
 export const useConvertSoLinesToDo = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: {
-      picks: Array<{ soItemId: string; qty: number }>;
-      /* Edge #1+#2 — re-submit with confirmShortStock: true to ship anyway
-         after the operator confirmed the stock-shortage dialog. */
-      confirmShortStock?: boolean;
-    }) =>
+    mutationFn: (vars: { picks: Array<{ soItemId: string; qty: number }> }) =>
       authedFetch<{ id: string; doNumber: string }>(
         `/delivery-orders-mfg/from-sos`,
         { method: 'POST', body: JSON.stringify(vars) },
@@ -823,16 +824,10 @@ export const useMfgDeliveryOrderDetail = (id: string | null) => useQuery({
 export const useCreateMfgDeliveryOrder = () => {
   const qc = useQueryClient();
   return useMutation({
-    /* Edge #J — gate the blank "New Delivery Order" save behind the same
-       short-stock "Ship anyway?" prompt the from-sos picker uses, so a
-       create against an under-stocked warehouse offers to ship (stock goes
-       negative) instead of dead-ending on the raw 409. */
     mutationFn: (body: Record<string, unknown>) =>
-      withShortStockRetry((extra) =>
-        authedFetch<{ id: string; doNumber: string }>(
-          `/delivery-orders-mfg`,
-          { method: 'POST', body: JSON.stringify({ ...body, ...extra }) },
-        ),
+      authedFetch<{ id: string; doNumber: string }>(
+        `/delivery-orders-mfg`,
+        { method: 'POST', body: JSON.stringify(body) },
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] }),
   });
@@ -878,11 +873,9 @@ export const useAddMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
-      withShortStockRetry((extra) =>
-        authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
-          method: 'POST', body: JSON.stringify({ ...item, ...extra }),
-        }),
-      ),
+      authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
+        method: 'POST', body: JSON.stringify(item),
+      }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
@@ -894,11 +887,9 @@ export const useUpdateMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
-      withShortStockRetry((extra) =>
-        authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
-          method: 'PATCH', body: JSON.stringify({ ...item, ...extra }),
-        }),
-      ),
+      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(item),
+      }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
