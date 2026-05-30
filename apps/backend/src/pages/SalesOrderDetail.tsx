@@ -395,22 +395,24 @@ export const SalesOrderDetail = () => {
       setSaveError('Every line must have a product selected before saving.');
       return;
     }
-    // Guard (Commander 2026-05-28): every required variant on a sofa/bedframe
-    // line must be chosen — no proceeding with blanks (purchasing needs the
-    // full spec). Blocks Save listing each line + its missing fields.
-    const variantGaps = [
-      ...Object.values(editingDrafts),
-      ...(addingDraft ? [addingDraft] : []),
-    ]
-      .filter((d) => d.itemCode.trim())
-      .map((d) => ({ code: d.itemCode, miss: missingRequiredVariants(d.itemGroup, d.variants) }))
-      .filter((x) => x.miss.length > 0);
-    if (variantGaps.length > 0) {
-      setSaveError(
-        'Complete all variant selections before saving — '
-        + variantGaps.map((x) => `${x.code}: ${x.miss.join(', ')}`).join('; ') + '.',
-      );
-      return;
+    // Variants are only mandatory once a processing date is set: with a date
+    // the order is committed to production and purchasing needs the full spec.
+    // No processing date = still a draft, so allow saving with gaps.
+    if (header?.internal_expected_dd) {
+      const variantGaps = [
+        ...Object.values(editingDrafts),
+        ...(addingDraft ? [addingDraft] : []),
+      ]
+        .filter((d) => d.itemCode.trim())
+        .map((d) => ({ code: d.itemCode, miss: missingRequiredVariants(d.itemGroup, d.variants) }))
+        .filter((x) => x.miss.length > 0);
+      if (variantGaps.length > 0) {
+        setSaveError(
+          'Complete all variant selections before saving — '
+          + variantGaps.map((x) => `${x.code}: ${x.miss.join(', ')}`).join('; ') + '.',
+        );
+        return;
+      }
     }
 
     setSavingOrder(true);
