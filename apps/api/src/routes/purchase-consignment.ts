@@ -132,6 +132,97 @@ purchaseConsignment.get('/', async (c) => {
   return c.json({ purchaseConsignments });
 });
 
+/* ── GET /notes/returns — flat list of RETURN notes (PCR list page) ────────
+   Buyer-side mirror of the consignment COR endpoint. One row per RETURN
+   purchase_consignment_note (cancelled_at IS NULL), joined to the parent PC
+   header (supplier snapshot) + warehouse. Line items nested for L2 expansion.
+   MUST be declared BEFORE the `/:id` route so Hono doesn't match `notes` as
+   the :id param. */
+purchaseConsignment.get('/notes/returns', async (c) => {
+  const sb = c.get('supabase');
+  const { data: notes, error } = await sb.from('purchase_consignment_notes')
+    .select('id, note_number, note_type, note_date, signed_at, posted_at, cancelled_at, warehouse_id, notes, pc_id, created_at')
+    .eq('note_type', 'RETURN')
+    .is('cancelled_at', null)
+    .order('note_date', { ascending: false })
+    .limit(500);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  const noteRows = (notes ?? []) as Array<{
+    id: string; note_number: string; note_type: string; note_date: string | null;
+    signed_at: string | null; posted_at: string | null; cancelled_at: string | null;
+    warehouse_id: string | null; notes: string | null; pc_id: string; created_at: string;
+  }>;
+  if (noteRows.length === 0) return c.json({ notes: [] });
+
+  const parentIds = [...new Set(noteRows.map((n) => n.pc_id))];
+  const noteIds   = noteRows.map((n) => n.id);
+  const warehouseIds = [...new Set(noteRows.map((n) => n.warehouse_id).filter((x): x is string => Boolean(x)))];
+
+  const [parentsRes, linesRes, whRes] = await Promise.all([
+    sb.from('purchase_consignment_orders').select('id, pc_number, supplier_id').in('id', parentIds),
+    sb.from('purchase_consignment_note_items').select('id, pc_note_id, pc_item_id, item_code, description, qty').in('pc_note_id', noteIds),
+    warehouseIds.length ? sb.from('warehouses').select('id, code, name').in('id', warehouseIds) : Promise.resolve({ data: [] }),
+  ]);
+
+  type Parent = { id: string; pc_number: string; supplier_id: string | null };
+  type Line = { id: string; pc_note_id: string; pc_item_id: string | null; item_code: string; description: string | null; qty: number };
+  type Wh = { id: string; code: string; name: string };
+  type Sup = { id: string; code: string; name: string };
+
+  const parents = (parentsRes.data ?? []) as Parent[];
+  const supplierIds = [...new Set(parents.map((p) => p.supplier_id).filter((x): x is string => Boolean(x)))];
+  const supRes = supplierIds.length
+    ? await sb.from('suppliers').select('id, code, name').in('id', supplierIds)
+    : { data: [] };
+  const supById = new Map<string, Sup>();
+  for (const s of ((supRes as { data: unknown }).data ?? []) as Sup[]) supById.set(s.id, s);
+
+  const parentById = new Map<string, Parent>();
+  for (const p of parents) parentById.set(p.id, p);
+  const whById = new Map<string, Wh>();
+  for (const w of (whRes.data ?? []) as Wh[]) whById.set(w.id, w);
+
+  const linesByNote = new Map<string, Line[]>();
+  for (const l of (linesRes.data ?? []) as Line[]) {
+    const arr = linesByNote.get(l.pc_note_id) ?? [];
+    arr.push(l);
+    linesByNote.set(l.pc_note_id, arr);
+  }
+
+  const rows = noteRows.map((n) => {
+    const parent = parentById.get(n.pc_id);
+    const sup = parent?.supplier_id ? supById.get(parent.supplier_id) ?? null : null;
+    const wh = n.warehouse_id ? whById.get(n.warehouse_id) ?? null : null;
+    const lines = linesByNote.get(n.id) ?? [];
+    const itemCount = lines.length;
+    const lineTotalQty = lines.reduce((acc, l) => acc + (l.qty ?? 0), 0);
+    return {
+      id: n.id,
+      note_number: n.note_number,
+      note_type: n.note_type,
+      note_date: n.note_date,
+      signed_at: n.signed_at,
+      posted_at: n.posted_at,
+      cancelled_at: n.cancelled_at,
+      notes: n.notes,
+      parent_id: n.pc_id,
+      parent_doc_no: parent?.pc_number ?? null,
+      supplier_id: parent?.supplier_id ?? null,
+      supplier_code: sup?.code ?? null,
+      supplier_name: sup?.name ?? null,
+      warehouse_id: n.warehouse_id,
+      warehouse_code: wh?.code ?? null,
+      warehouse_name: wh?.name ?? null,
+      item_count: itemCount,
+      line_total_qty: lineTotalQty,
+      status: n.cancelled_at ? 'CANCELLED' : (n.signed_at ? 'POSTED' : 'DRAFT'),
+      items: lines,
+    };
+  });
+  return c.json({ notes: rows });
+});
+
 purchaseConsignment.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i, n] = await Promise.all([
