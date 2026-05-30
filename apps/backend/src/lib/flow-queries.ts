@@ -823,7 +823,17 @@ export const useMfgDeliveryOrderDetail = (id: string | null) => useQuery({
 export const useCreateMfgDeliveryOrder = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: unknown) => authedFetch<{ id: string; doNumber: string }>(`/delivery-orders-mfg`, { method: 'POST', body: JSON.stringify(body) }),
+    /* Edge #J — gate the blank "New Delivery Order" save behind the same
+       short-stock "Ship anyway?" prompt the from-sos picker uses, so a
+       create against an under-stocked warehouse offers to ship (stock goes
+       negative) instead of dead-ending on the raw 409. */
+    mutationFn: (body: Record<string, unknown>) =>
+      withShortStockRetry((extra) =>
+        authedFetch<{ id: string; doNumber: string }>(
+          `/delivery-orders-mfg`,
+          { method: 'POST', body: JSON.stringify({ ...body, ...extra }) },
+        ),
+      ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] }),
   });
 };
