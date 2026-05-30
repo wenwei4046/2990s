@@ -679,6 +679,7 @@ mfgSalesOrders.post('/', async (c) => {
       return c.json({ ...err, lineIdx: i, itemCode: code }, 400);
     }
   }
+  const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
@@ -693,7 +694,7 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -1536,10 +1537,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
+    loadActiveSofaCombos(sb),
   ]);
   const recomputed = recomputeFromSnapshot(
     {
@@ -1552,6 +1554,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     productLite,
     fabricLite,
     cachedConfig,
+    sofaCombosLite,
   );
   if (recomputed.drift) {
     return c.json({
@@ -1697,10 +1700,11 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
+      loadActiveSofaCombos(sb),
     ]);
     recomputedPatch = recomputeFromSnapshot(
       {
@@ -1713,6 +1717,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       prodLite,
       fabLite,
       cfg,
+      sofaCombosPatch,
     );
     if (recomputedPatch.drift) {
       return c.json({

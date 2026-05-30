@@ -6,7 +6,8 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
-import { pickComboMatch } from './sofa-combo-pricing';
+import { pickComboMatch, type SofaComboRow } from './sofa-combo-pricing';
+export type { SofaComboRow } from './sofa-combo-pricing';
 
 /* ─── Public types ─────────────────────────────────────────────────── */
 
@@ -223,6 +224,51 @@ export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup =
   if (/^2/.test(norm)) return '2-seater';
   if (/^1/.test(norm)) return '1-seater';
   return 'Other';
+};
+
+/* ─── SELLING helpers (Phase 4b, Chairman 2026-05-30) ─────────────────────
+ * A configured mfg sofa is priced from the master maintenance config's
+ * per-compartment SELLING prices (`sofaCompartmentMeta.defaultPriceCenti`):
+ * custom builds sum each module's price; a matched Combo overrides (always —
+ * Q2). The POS (so a custom build is no longer RM0) and the server selling
+ * recompute (so its drift-reject matches the POS by construction) both go
+ * through these pure helpers — same source, same math, zero divergence. */
+
+/** Build `SofaProductPricing.compartments` from the master config's
+ *  `sofaCompartmentMeta`. `compartmentId` is normalised (matches a laid-out
+ *  cell.moduleId); price is whole-MYR (`defaultPriceCenti` ÷ 100). */
+export const sofaCompartmentsFromMeta = (
+  meta: Record<string, { defaultPriceCenti?: number }> | null | undefined,
+): SofaProductPricingRow[] => {
+  if (!meta) return [];
+  return Object.entries(meta).map(([rawCode, m]) => ({
+    compartmentId: normalizeCompartmentCode(rawCode),
+    active: true,
+    price: m?.defaultPriceCenti != null ? Math.round(m.defaultPriceCenti / 100) : 0,
+  }));
+};
+
+/** Authoritative SELLING total (in sen) for a configured sofa. Reuses the
+ *  same `computeSofaPrice` the POS uses, fed compartments from
+ *  `sofaCompartmentMeta` + combos (sofa_combo_pricing). mfg sofas carry no
+ *  bundles and `reclinerUpgradePrice` 0 at pilot, so those are fixed here.
+ *  Returns whole-build sen (×100) for the server drift gate. */
+export const computeSofaSellingSen = (
+  cells: Cell[],
+  depth: Depth,
+  meta: Record<string, { defaultPriceCenti?: number }> | null | undefined,
+  combos: SofaComboRow[],
+): number => {
+  const pricing: SofaProductPricing = {
+    compartments: sofaCompartmentsFromMeta(meta),
+    bundles: [],
+    reclinerUpgradePrice: 0,
+    combos,
+    fabricTier: 'PRICE_2',
+    comboHeight: String(depth),
+    baseModel: '',
+  };
+  return Math.round(computeSofaPrice(cells, depth, pricing).total * 100);
 };
 
 /* ─── Recliner eligibility ─────────────────────────────────────────── */

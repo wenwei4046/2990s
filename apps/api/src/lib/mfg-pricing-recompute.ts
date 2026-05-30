@@ -29,6 +29,11 @@ import {
   type MfgFabricTier,
   type MfgSeatHeightPrice,
 } from '@2990s/shared/mfg-pricing';
+import {
+  computeSofaSellingSen,
+  type Cell,
+  type SofaComboRow,
+} from '@2990s/shared/sofa-build';
 
 export type MfgItemVariants = {
   fabricCode?:    string | null;
@@ -94,6 +99,9 @@ export type ProductRowLite = {
   price1_sen:         number | null;
   cost_price_sen:     number | null;
   seat_height_prices: MfgSeatHeightPrice[] | null;
+  /** Sofa Model grouping — used to scope combos to this Model (Phase 4b), so
+   *  the server matches the SAME combo set the POS did. */
+  base_model:         string | null;
   /** SELLING price — the Master Account store (Phase-1 migration 0109,
    *  backfilled = base_price_sen). The authoritative customer-facing price the
    *  D4 drift gate validates a client submission against (non-sofa lines). */
@@ -138,6 +146,7 @@ export function recomputeFromSnapshot(
   product: ProductRowLite | null,
   fabric:  FabricRowLite | null,
   config:  MaintenanceConfig | null,
+  sofaCombos: SofaComboRow[] | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -236,10 +245,42 @@ export function recomputeFromSnapshot(
   const sellBaseSen = Math.max(0, Math.round(Number(product?.sell_price_sen ?? 0)));
   const authoritativeSellingSen = sellBaseSen + breakdown.unitPriceSen;
   const hasAuthoritativeSelling = category !== 'SOFA' && sellBaseSen > 0;
-  const drift = hasAuthoritativeSelling
-    ? driftThresholdExceeded(manualUnitSelling, authoritativeSellingSen)
-    : false;
-  const unitToPersistSen = hasAuthoritativeSelling ? authoritativeSellingSen : manualUnitSelling;
+
+  /* Phase 4b (Chairman 2026-05-30) — a configurator sofa arrives as ONE line
+     carrying variants.cells + variants.depth. Recompute its authoritative
+     SELLING total from the SAME sofaCompartmentMeta + combos the POS used
+     (the shared computeSofaSellingSen → computeSofaPrice), so the drift gate
+     can't diverge from the POS submission. Sofa lines WITHOUT cells (a backend
+     manual module row) or with no loaded master config keep the operator's
+     price — no false reject. */
+  const sofaCells = category === 'SOFA'
+    ? (item.variants as { cells?: unknown } | null | undefined)?.cells
+    : null;
+  const sofaMeta = (config as { sofaCompartmentMeta?: Record<string, { defaultPriceCenti?: number }> } | null)
+    ?.sofaCompartmentMeta ?? null;
+  const canPriceSofa = Array.isArray(sofaCells) && sofaCells.length > 0 && sofaMeta != null;
+
+  let drift: boolean;
+  let unitToPersistSen: number;
+  if (canPriceSofa) {
+    const sofaDepth = String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24');
+    // Scope combos to this Model's base_model — the POS pre-filters the same
+    // way (useSofaCombos(base_model)); without it the server could match a
+    // same-shape combo from another Model and false-reject. No base_model
+    // (orphan) → consider all, mirroring the POS's null-filter fallback.
+    const lineCombos = (sofaCombos ?? []).filter(
+      (c) => !product?.base_model || c.baseModel === product.base_model,
+    );
+    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaMeta, lineCombos);
+    drift = driftThresholdExceeded(manualUnitSelling, sofaSellingSen);
+    unitToPersistSen = sofaSellingSen;
+  } else if (hasAuthoritativeSelling) {
+    drift = driftThresholdExceeded(manualUnitSelling, authoritativeSellingSen);
+    unitToPersistSen = authoritativeSellingSen;
+  } else {
+    drift = false;
+    unitToPersistSen = manualUnitSelling;
+  }
 
   return {
     itemCode:          item.itemCode,
@@ -264,7 +305,7 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen, base_model')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;

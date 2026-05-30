@@ -1,6 +1,6 @@
 # Cost / Sell Split + Master Account + QuickPick rework — Locked Plan
 
-> Created 2026-05-30. Owner: Loo (Chairman). Status: **Phases 1–3 done; Phase 4 (combo semantics Q2 + server selling drift-reject Q1) landed on `feat/cost-sell-split` (not deployed). Pending: sofa selling recompute (Phase 4b) + QuickPick (Phase 5). See RESUME HERE below.**
+> Created 2026-05-30. Owner: Loo (Chairman). Status: **Phases 1–4 done (incl. Phase 4b sofa selling drift-reject + the mfg custom-sofa RM0 pricing fix) on `feat/cost-sell-split` (not deployed). Pending: delivery-fee charging, QuickPick (Phase 5). See RESUME HERE below.**
 > Companion research: workflow `cost-sell-split-analysis` (run wf_e6a65512-521).
 > This plan reorganises pricing so **Backend = cost** and a new **POS "Master Account" role = selling**.
 
@@ -36,8 +36,9 @@ Migrations `0110`/`0111`/`0112` applied to Supabase (`dolvxrchzbnqvahocwsu`) via
 
 Evidence: shared 253/253, api 161/164 (3 unrelated `slips`/R2 SSL-env failures), typecheck 6/6, POS+Backend build clean.
 
-**▶ NEXT: Phase 4b + Phase 5.**
-- **Phase 4b** = sofa SELLING drift-reject: mirror the `recomputeTotals` master-combo COST spread (`mfg-sales-orders.ts:~1391`) onto the SELLING side so the server can compute an authoritative whole-build sofa price (compartmentMeta sum → combo override across module lines → recliner extras) and reject client drift on sofa too. Decoupled from this pass; no false-rejects today because sofa stays on operator price.
+**✅ Phase 4b DONE (sofa selling drift-reject + mfg custom-sofa RM0 fix; Chairman Option A à-la-carte).** The POS now prices mfg custom sofas by SUMMING per-module `sofaCompartmentMeta` prices (was RM0 — `product_compartments` is empty for mfg, so the prices never reached `computeSofaPrice`); the server reprices the submitted `variants.cells` via the shared `computeSofaSellingSen` (compartments-from-meta + combos, same source → zero divergence), `base_model`-scoped to the POS's combo set, and rejects drift. Sofa lines with no cell layout (backend manual) trust the operator. New shared helpers `sofaCompartmentsFromMeta`/`computeSofaSellingSen` (reuse existing `normalizeCompartmentCode`). ⚠️ changes DISPLAYED sofa prices → **staging price-diff + end-to-end verify before deploy**; fabric surcharge not modeled server-side (mfg fabrics=[] at pilot → 0).
+
+**▶ NEXT: Phase 5 + delivery-fee.**
 - **Delivery-fee carry-over** (still open): the delivery fee does NOT charge on live mfg orders (`Handover.tsx` reads the EMPTY retail catalog + no server-side mfg delivery recompute). ⚠️ Tied to the order-path reality below.
 - **Phase 5** = per-salesperson QuickPick (D6).
 - **Phase 3 photo→R2** (Q3): DEFERRED by Chairman — independent infra cleanup, prod catalog empty (no photos to migrate).

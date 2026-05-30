@@ -17,6 +17,7 @@
 //     authoritative price, no drift.
 
 import { describe, it, expect } from 'vitest';
+import type { MaintenanceConfig } from '@2990s/shared/mfg-pricing';
 import { recomputeFromSnapshot, type ProductRowLite } from './mfg-pricing-recompute';
 
 const mattress = (sell: number | null): ProductRowLite => ({
@@ -26,6 +27,7 @@ const mattress = (sell: number | null): ProductRowLite => ({
   price1_sen:         null,
   cost_price_sen:     30000,
   seat_height_prices: null,
+  base_model:         null,
   sell_price_sen:     sell,    // SELLING (authoritative)
 });
 
@@ -91,6 +93,7 @@ describe('recomputeFromSnapshot — authoritative selling drift (D4)', () => {
       price1_sen:         null,
       cost_price_sen:     40000,
       seat_height_prices: null,
+      base_model:         'NOOR',
       sell_price_sen:     60000,
     };
     const r = recomputeFromSnapshot(
@@ -108,5 +111,77 @@ describe('recomputeFromSnapshot — authoritative selling drift (D4)', () => {
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(5000);
+  });
+});
+
+/* ── Phase 4b — configured sofa selling drift (Chairman 2026-05-30) ──────────
+   A configurator sofa arrives as one line carrying variants.cells + depth. The
+   server recomputes its authoritative SELLING total from the SAME
+   sofaCompartmentMeta + combos the POS used (computeSofaSellingSen), and rejects
+   client drift. Two 1A modules @ RM1500 each, laid out apart (no combo match) →
+   RM3000 = 300000 sen. */
+
+const sofaProduct: ProductRowLite = {
+  code: 'NOOR', category: 'SOFA',
+  base_price_sen: 0, price1_sen: null, cost_price_sen: 0,
+  seat_height_prices: null, base_model: 'NOOR', sell_price_sen: null,
+};
+
+const sofaConfig = (meta: Record<string, { defaultPriceCenti?: number }>): MaintenanceConfig =>
+  ({
+    divanHeights: [], legHeights: [], totalHeights: [], gaps: [], specials: [],
+    sofaLegHeights: [], sofaSpecials: [], sofaSizes: [], sofaCompartmentMeta: meta,
+  } as unknown as MaintenanceConfig);
+
+const SOFA_META = { '1A-LHF': { defaultPriceCenti: 150000 }, '1A-RHF': { defaultPriceCenti: 150000 } };
+const sofaCells = [
+  { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
+  { id: 'b', moduleId: '1A-RHF', x: 400, y: 0, rot: 0 },
+];
+const sofaVariants = { cells: sofaCells, depth: '24' } as unknown as null;
+
+describe('recomputeFromSnapshot — configured sofa selling drift (Phase 4b)', () => {
+  it('client total == authoritative compartment sum → no drift, persists authoritative', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants: sofaVariants },
+      sofaProduct, null, sofaConfig(SOFA_META), [],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(300000);
+  });
+
+  it('tampered low total (RM1 vs RM3000) → drift true (route returns 400)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100, variants: sofaVariants },
+      sofaProduct, null, sofaConfig(SOFA_META), [],
+    );
+    expect(r.drift).toBe(true);
+  });
+
+  it('client 0 (not provided) → no drift, server fills the authoritative sofa total', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 0, variants: sofaVariants },
+      sofaProduct, null, sofaConfig(SOFA_META), [],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(300000);
+  });
+
+  it('sofa WITHOUT cells (backend manual module line) → trust operator, no drift', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'NOOR-2A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 50000, variants: null },
+      sofaProduct, null, sofaConfig(SOFA_META), [],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(50000);
+  });
+
+  it('configured sofa but config/meta missing → trust operator (no false reject)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 50000, variants: sofaVariants },
+      sofaProduct, null, null, [],
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(50000);
   });
 });
