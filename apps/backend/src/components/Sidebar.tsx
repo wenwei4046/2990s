@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   Inbox,
   FileSpreadsheet,
-  Package,
   Package2,
   UsersRound,
   Truck,
@@ -133,7 +132,6 @@ export const Sidebar = () => {
       id: 'procurement',
       label: 'Procurement',
       items: [
-        { to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
         { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
         { to: '/mrp', icon: <ListTree {...ICON_PROPS} />, label: 'MRP · Stock Status' },

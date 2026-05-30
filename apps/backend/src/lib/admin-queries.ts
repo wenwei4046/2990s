@@ -339,44 +339,6 @@ export const useCreateDriver = () => {
   });
 };
 
-/* ─── Product mutations (admin-only via RLS) ─── */
-
-export const useUpdateProduct = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({
-      id,
-      patch,
-    }: {
-      id: string;
-      patch: { visible?: boolean; stock?: number; lowAt?: number };
-    }) => {
-      const dbPatch: Record<string, unknown> = {};
-      if (patch.visible !== undefined) dbPatch.visible = patch.visible;
-      if (patch.stock !== undefined) dbPatch.stock = patch.stock;
-      if (patch.lowAt !== undefined) dbPatch.low_at = patch.lowAt;
-      const { error } = await supabase.from('products').update(dbPatch).eq('id', id);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['products'] });
-    },
-  });
-};
-
-export const useBulkSetProductVisibility = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ ids, visible }: { ids: string[]; visible: boolean }) => {
-      const { error } = await supabase.from('products').update({ visible }).in('id', ids);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['products'] });
-    },
-  });
-};
-
 /* ─── Delivery fee config ─── */
 
 export interface DeliveryFeeConfigRow {

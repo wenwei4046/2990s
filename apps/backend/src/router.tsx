@@ -40,7 +40,6 @@ function lazyRetry<T extends ComponentType<any>>(factory: () => Promise<{ defaul
 // .then(m => ({ default: m.X })) adapter to satisfy React.lazy's "default
 // export" contract.
 
-const SkuMaster = lazyRetry(() => import('./pages/SkuMaster').then(m => ({ default: m.SkuMaster })));
 const Orders = lazyRetry(() => import('./pages/Orders').then(m => ({ default: m.Orders })));
 const AuditLog = lazyRetry(() => import('./pages/AuditLog').then(m => ({ default: m.AuditLog })));
 const Addons = lazyRetry(() => import('./pages/Addons').then(m => ({ default: m.Addons })));
@@ -139,7 +138,6 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <Dashboard /> },
       { path: 'orders', element: <Orders /> },
-      { path: 'sku-master', element: <SkuMaster /> },
       { path: 'products', element: <Products /> },
       { path: 'product-models', element: <ProductModels /> },
       { path: 'product-models/:id', element: <ProductModelDetail /> },
