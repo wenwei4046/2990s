@@ -165,6 +165,162 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
+/* ── resyncInventoryForDo (Commander 2026-05-30, TASK #24) ────────────────────
+   Bring inventory in line with the CURRENT shape of a SHIPPED DO's lines, after
+   the operator edits a line qty / deletes a line / adds a line. The first ship
+   already wrote OUT rows via deductInventoryForDo; this helper writes DELTA
+   movements (IN to give stock back, OUT to take more) so the booked net OUT
+   per (product_code, variant_key) bucket matches the live sum of active lines.
+
+   Why DELTA inserts instead of UPDATE in place: the FIFO trigger (migration
+   0053) fires AFTER INSERT, not UPDATE. Updating qty on an existing OUT row
+   would leave the lot/consumption ledger stale. A fresh IN insert lets the
+   trigger create a new lot at the original cost basis; a fresh OUT insert lets
+   it consume more lots. Migration 0109 dropped the per-bucket UNIQUE so we can
+   freely write multiple delta rows over time.
+
+   IDEMPOTENT: re-running with no line changes yields delta 0 everywhere — no
+   writes. Cancel-reversal still works via reverseMovements (it nets per
+   bucket). Non-shipped DOs skip — deductInventoryForDo handles the first ship. */
+async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedBy: string) {
+  // Header — need warehouse_id, do_number, status.
+  const { data: doHeader } = await sb.from('delivery_orders')
+    .select('do_number, status, warehouse_id')
+    .eq('id', deliveryOrderId).maybeSingle();
+  if (!doHeader) return;
+  const status = ((doHeader as { status: string | null }).status ?? '').toUpperCase();
+  if (!SHIPPED_STATES.includes(status)) return; // not yet shipped → no OUT yet → nothing to sync
+  const warehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id
+    ?? (await defaultWarehouseId(sb));
+  if (!warehouseId) return;
+  const doNo = (doHeader as { do_number: string }).do_number;
+
+  // 1. Target qty per (product_code, variant_key) bucket — sum of current
+  //    active DO lines (mirror of deductInventoryForDo's collapsing).
+  const { data: items } = await sb.from('delivery_order_items')
+    .select('item_code, description, qty, item_group, variants')
+    .eq('delivery_order_id', deliveryOrderId);
+  type Bucket = { product_code: string; variant_key: string; product_name: string | null; qty: number };
+  const targetByBucket = new Map<string, Bucket>();
+  for (const it of (items as Array<{ item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
+    const qty = Number(it.qty ?? 0);
+    if (qty <= 0) continue;
+    const variant_key = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+    const k = `${it.item_code}::${variant_key}`;
+    const cur = targetByBucket.get(k);
+    if (cur) { cur.qty += qty; }
+    else targetByBucket.set(k, { product_code: it.item_code, variant_key, product_name: it.description, qty });
+  }
+
+  // 2. Aggregate existing movements per bucket — current OUT qty / IN qty.
+  //    Also accumulate OUT total_cost_sen so the reversing IN re-introduces
+  //    stock at the same weighted cost basis (matches reverseMovements).
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, product_code, variant_key, qty, unit_cost_sen, total_cost_sen, product_name')
+    .eq('source_doc_type', 'DO')
+    .eq('source_doc_id', deliveryOrderId);
+  type Agg = { out_qty: number; in_qty: number; out_total_cost: number; product_name: string | null };
+  const aggByBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{
+    movement_type: string; product_code: string; variant_key: string | null;
+    qty: number; unit_cost_sen: number | null; total_cost_sen: number | null; product_name: string | null;
+  }>) {
+    const k = `${m.product_code}::${m.variant_key ?? ''}`;
+    let agg = aggByBucket.get(k);
+    if (!agg) { agg = { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, agg); }
+    if (m.movement_type === 'OUT') {
+      agg.out_qty += Number(m.qty ?? 0);
+      agg.out_total_cost += Number(m.total_cost_sen ?? 0);
+    } else if (m.movement_type === 'IN') {
+      agg.in_qty += Number(m.qty ?? 0);
+    }
+    if (!agg.product_name) agg.product_name = m.product_name;
+  }
+
+  // 3. Per-bucket delta = target − current_net_out. Positive → need more OUT;
+  //    negative → need more IN (return some stock).
+  const allKeys = new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()]);
+  type MovOut = Parameters<typeof writeMovements>[1][number];
+  const writes: MovOut[] = [];
+  for (const k of allKeys) {
+    const t = targetByBucket.get(k);
+    const a = aggByBucket.get(k) ?? { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: null };
+    const target_qty = t?.qty ?? 0;
+    const current_net_out = a.out_qty - a.in_qty;
+    const delta = target_qty - current_net_out;
+    if (delta === 0) continue;
+    const parts = k.split('::');
+    const product_code = parts[0] ?? '';
+    const variant_key = parts[1] ?? '';
+    const product_name = t?.product_name ?? a.product_name ?? null;
+    if (delta > 0) {
+      // Need more OUT — operator increased a line qty or added a new line on a shipped DO.
+      writes.push({
+        movement_type: 'OUT',
+        warehouse_id: warehouseId,
+        product_code, variant_key, product_name,
+        qty: delta,
+        source_doc_type: 'DO',
+        source_doc_id: deliveryOrderId,
+        source_doc_no: doNo,
+        performed_by: performedBy,
+        notes: 'Resync: line qty increased / line added (shipped DO).',
+      });
+    } else {
+      // delta < 0 — operator reduced a line qty or deleted a line. Give stock back.
+      // Cost basis = weighted average of the original OUTs so the reversing IN
+      // re-opens the lot at the same cost (matches reverseMovements semantics).
+      const unit_cost_sen = a.out_qty > 0 ? Math.round(a.out_total_cost / a.out_qty) : 0;
+      writes.push({
+        movement_type: 'IN',
+        warehouse_id: warehouseId,
+        product_code, variant_key, product_name,
+        qty: -delta,
+        unit_cost_sen,
+        source_doc_type: 'DO',
+        source_doc_id: deliveryOrderId,
+        source_doc_no: doNo,
+        performed_by: performedBy,
+        notes: 'Resync: line qty reduced / line deleted (shipped DO).',
+      });
+    }
+  }
+  if (writes.length > 0) await writeMovements(sb, writes);
+}
+
+/* ── doLineConsumedQty (Commander 2026-05-30, TASK #24) ───────────────────────
+   Σ invoiced + Σ returned for a DO line — the downstream-paper-consumption
+   floor below which the line's qty can't shrink (and below which the line
+   can't be deleted). Mirrors the do-line-remaining "invoiced / returned"
+   formula but for a single line. Cancel-released → 0 (rows on cancelled
+   SI/DR are excluded). */
+async function doLineConsumedQty(sb: any, doItemId: string): Promise<number> {
+  let invoiced = 0, returned = 0;
+  // Σ invoiced via non-cancelled Sales Invoice.
+  const { data: siLines } = await sb.from('sales_invoice_items')
+    .select('qty, sales_invoice_id').eq('do_item_id', doItemId);
+  const siRows = (siLines ?? []) as Array<{ qty: number; sales_invoice_id: string }>;
+  const siIds = [...new Set(siRows.map((l) => l.sales_invoice_id).filter(Boolean))];
+  if (siIds.length > 0) {
+    const { data: sis } = await sb.from('sales_invoices').select('id, status').in('id', siIds);
+    const active = new Set(((sis ?? []) as Array<{ id: string; status: string | null }>)
+      .filter((s) => (s.status ?? '').toUpperCase() !== 'CANCELLED').map((s) => s.id));
+    for (const l of siRows) if (active.has(l.sales_invoice_id)) invoiced += Number(l.qty ?? 0);
+  }
+  // Σ returned via non-cancelled Delivery Return.
+  const { data: drLines } = await sb.from('delivery_return_items')
+    .select('qty_returned, delivery_return_id').eq('do_item_id', doItemId);
+  const drRows = (drLines ?? []) as Array<{ qty_returned: number; delivery_return_id: string }>;
+  const drIds = [...new Set(drRows.map((l) => l.delivery_return_id).filter(Boolean))];
+  if (drIds.length > 0) {
+    const { data: drs } = await sb.from('delivery_returns').select('id, status').in('id', drIds);
+    const active = new Set(((drs ?? []) as Array<{ id: string; status: string | null }>)
+      .filter((d) => (d.status ?? '').toUpperCase() !== 'CANCELLED').map((d) => d.id));
+    for (const l of drRows) if (active.has(l.delivery_return_id)) returned += Number(l.qty_returned ?? 0);
+  }
+  return invoiced + returned;
+}
+
 /* Commander 2026-05-30 — LINE-LEVEL, QUANTITY-BASED partial delivery.
    Replaces the old binary whole-SO conversion lock. For each SO line, the
    DELIVERABLE REMAINING quantity is DERIVED LIVE (no stored counter — that
@@ -733,7 +889,7 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
 
 // ── Item CRUD ─────────────────────────────────────────────────────────────
 deliveryOrdersMfg.post('/:id/items', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
@@ -745,11 +901,15 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  // TASK #24 — if the DO is already shipped, adding a line MUST extend the
+  // OUT booking for that bucket (otherwise the new line ships but inventory
+  // doesn't move). No-op when not shipped — deductInventoryForDo handles ship.
+  await resyncInventoryForDo(sb, id, user?.id);
   return c.json({ item: data }, 201);
 });
 
 deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
@@ -759,6 +919,21 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const qty = it.qty !== undefined ? Number(it.qty) : Number(prev.qty);
+
+  // TASK #24 — guard against orphaning downstream papers. If the operator is
+  // shrinking qty below what's already been invoiced + returned, those Invoice /
+  // Delivery Return rows would point at qty that no longer exists on the DO.
+  // Reject with a clear 409; the operator must cancel the SI / DR first.
+  if (it.qty !== undefined && qty < Number(prev.qty)) {
+    const consumed = await doLineConsumedQty(sb, itemId);
+    if (qty < consumed) {
+      return c.json({
+        error: 'qty_below_downstream_consumption',
+        message: `Cannot reduce qty to ${qty} — ${consumed} unit${consumed === 1 ? ' has' : 's have'} already been invoiced or returned for this line. Cancel the related Invoice / Delivery Return first.`,
+        currentQty: Number(prev.qty), newQty: qty, consumed,
+      }, 409);
+    }
+  }
   const unitPrice = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : Number(prev.unit_price_centi);
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : Number(prev.discount_centi);
   const unitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : Number(prev.unit_cost_centi);
@@ -788,43 +963,47 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('delivery_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  // TASK #24 — if the DO has shipped, propagate the qty change to inventory
+  // (delta OUT for increase, delta IN for decrease). No-op when not shipped.
+  await resyncInventoryForDo(sb, id, user?.id);
   return c.json({ ok: true });
 });
 
 /* ── DELETE /:id/items/:itemId — remove a DO line. ──────────────────────────
-   Commander 2026-05-30 — inventory integrity. A DO is created in DISPATCHED
-   (= shipped) state, so deductInventoryForDo has already written an OUT row for
-   every (product_code, variant_key) bucket on the DO. Deleting a line on a
-   shipped DO must not leave that OUT on the books with no matching line — that
-   silently loses stock.
+   Commander 2026-05-30 (TASK #24): unblocked on shipped DOs.
 
-   The clean per-line reversal (write a balancing IN for just this line's qty)
-   is structurally BLOCKED here: the partial UNIQUE index uq_inv_mov_do_source
-   (migration 0100) keys on (source_doc_type, source_doc_id, product_code,
-   variant_key) WITHOUT movement_type, so a reversing IN that reuses the DO's key
-   collides with the original OUT and is rejected — and the deduction COLLAPSES
-   same-(product,variant) lines into one OUT, so a per-line IN can't be keyed
-   distinctly either. Rather than corrupt stock with a silently-failed reversal,
-   we BLOCK line-delete on a shipped DO with a 409 (the spec-sanctioned fallback)
-   and steer the user to cancel the DO (whole-doc reversal works) or edit qty.
-   A non-shipped DO (LOADED) has no OUT yet, so its lines delete freely. */
+   Earlier this returned 409 do_shipped_line_locked because the partial UNIQUE
+   index uq_inv_mov_do_source (migration 0100) made a per-line balancing IN
+   structurally impossible — a reversing IN that reused the DO's bucket key
+   collided with the original OUT. Migrations 0108 (key includes movement_type)
+   and 0109 (drop the per-bucket UNIQUE so multiple delta rows can coexist)
+   removed that constraint, and resyncInventoryForDo writes the per-bucket
+   delta IN here. The FIFO trigger handles the new IN row by creating a fresh
+   lot at the original cost basis (weighted avg from the OUT rows).
+
+   Guard: if the deleted line has already been invoiced or returned (downstream
+   papers reference its do_item_id and qty), we refuse the delete — those Invoice
+   / DR rows would orphan. The operator must cancel the SI / DR first; that
+   releases the qty and the delete then succeeds. */
 deliveryOrdersMfg.delete('/:id/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
 
-  // Guard: a shipped DO has inventory OUT already written for this line's
-  // bucket; deleting it would desync stock (see header comment).
-  const { data: doRow } = await sb.from('delivery_orders').select('status').eq('id', id).maybeSingle();
-  const status = (doRow as { status: string } | null)?.status ?? null;
-  if (status && SHIPPED_STATES.includes(status)) {
+  // Downstream guard — never silently delete qty that's been invoiced/returned.
+  const consumed = await doLineConsumedQty(sb, itemId);
+  if (consumed > 0) {
     return c.json({
-      error: 'do_shipped_line_locked',
-      message: 'This Delivery Order has shipped — its stock OUT is already booked. Cancel the DO (which reverses stock) or adjust the line quantity instead of deleting the line.',
+      error: 'line_has_downstream_consumption',
+      message: `Cannot delete this line — ${consumed} unit${consumed === 1 ? ' has' : 's have'} already been invoiced or returned. Cancel the related Invoice / Delivery Return first to release the quantity.`,
+      consumed,
     }, 409);
   }
 
   const { error } = await sb.from('delivery_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  // TASK #24 — give the deleted qty back to stock (delta IN per bucket). No-op
+  // when the DO hasn't shipped yet.
+  await resyncInventoryForDo(sb, id, user?.id);
   return c.json({ ok: true });
 });
 
