@@ -22,6 +22,30 @@ import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
 
+/* ── DO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
+   A DO locks (read-only — no line edit / no CANCELLED transition) once it has
+   ANY non-cancelled Delivery Return (DR) OR Sales Invoice (SI) referencing it.
+   Convert-to-DR / convert-to-SI is NOT gated by this: the DO can keep emitting
+   children; only line MUTATIONS + the CANCELLED status transition are blocked,
+   mirroring grnHasDownstream in apps/api/src/routes/grns.ts. Returns the
+   blocking JSON, or null if the DO is free to edit. */
+async function doHasDownstream(sb: any, doId: string): Promise<{ error: string; message: string } | null> {
+  const [{ count: drCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_returns')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', doId)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', doId)
+      .neq('status', 'CANCELLED'),
+  ]);
+  if ((drCount ?? 0) > 0 || (siCount ?? 0) > 0) {
+    return { error: 'do_has_downstream', message: 'DO has a Delivery Return / Sales Invoice — delete or cancel it first to edit' };
+  }
+  return null;
+}
+
 /* Full DO header — mirrors the editable SO header shape. The pre-rebuild
    columns (driver / vehicle / pod / signature / m3 / dispatched-signed-
    delivered timestamps) stay; the SO-clone fields added in migration 0100
@@ -310,7 +334,28 @@ deliveryOrdersMfg.get('/', async (c) => {
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ deliveryOrders: data ?? [] });
+
+  /* Tier 2 downstream-lock — one extra batched read per doc set: pull every
+     non-cancelled DR/SI that points back to a listed DO and stamp has_children
+     on the row. The list grid uses this to hide Edit / Cancel actions on DOs
+     that are downstream-locked (mirrors computeGrnFlags in routes/grns.ts). */
+  const rows = (data ?? []) as unknown as Array<{ id: string } & Record<string, unknown>>;
+  const childIds = new Set<string>();
+  if (rows.length > 0) {
+    const ids = rows.map((r) => r.id);
+    const [drRes, siRes] = await Promise.all([
+      sb.from('delivery_returns').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
+      sb.from('sales_invoices').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
+    ]);
+    for (const d of ((drRes.data ?? []) as Array<{ delivery_order_id: string | null }>)) {
+      if (d.delivery_order_id) childIds.add(d.delivery_order_id);
+    }
+    for (const s of ((siRes.data ?? []) as Array<{ delivery_order_id: string | null }>)) {
+      if (s.delivery_order_id) childIds.add(s.delivery_order_id);
+    }
+  }
+  const deliveryOrders = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
+  return c.json({ deliveryOrders });
 });
 
 // ── Deliverable SO lines (line-level partial-delivery picker) ─────────────
@@ -357,7 +402,23 @@ deliveryOrdersMfg.get('/:id', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ deliveryOrder: h.data, items: i.data ?? [] });
+  /* Tier 2 downstream-lock — stamp has_children so the DO Detail page can lock
+     once any non-cancelled DR / SI references it. */
+  const [{ count: drCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_returns')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', id)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', id)
+      .neq('status', 'CANCELLED'),
+  ]);
+  const deliveryOrder = {
+    ...(h.data as unknown as Record<string, unknown>),
+    has_children: (drCount ?? 0) > 0 || (siCount ?? 0) > 0,
+  };
+  return c.json({ deliveryOrder, items: i.data ?? [] });
 });
 
 // ── Create ──────────────────────────────────────────────────────────────
@@ -738,6 +799,10 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Tier 2 downstream-lock — line-add is blocked once a DR / SI exists. */
+  const childLock = await doHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
+
   const { data: header } = await sb.from('delivery_orders').select('id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
@@ -752,6 +817,10 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Tier 2 downstream-lock — line-edit is blocked once a DR / SI exists. */
+  const childLock = await doHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('delivery_order_items')
     .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes')
@@ -810,6 +879,10 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
    A non-shipped DO (LOADED) has no OUT yet, so its lines delete freely. */
 deliveryOrdersMfg.delete('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+
+  /* Tier 2 downstream-lock — line-delete is blocked once a DR / SI exists. */
+  const childLock = await doHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
 
   // Guard: a shipped DO has inventory OUT already written for this line's
   // bucket; deleting it would desync stock (see header comment).
@@ -918,6 +991,14 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
   // Already cancelled → echo back without re-reversing (would double-credit).
   if (body.status === 'CANCELLED' && prevStatus === 'CANCELLED') {
     return c.json({ deliveryOrder: { id, status: 'CANCELLED' } });
+  }
+
+  /* Tier 2 downstream-lock — only the CANCELLED transition is gated. Other
+     status transitions ride through untouched so the existing state machine
+     (LOADED→DISPATCHED→IN_TRANSIT→SIGNED→DELIVERED→INVOICED) keeps working. */
+  if (body.status === 'CANCELLED') {
+    const childLock = await doHasDownstream(sb, id);
+    if (childLock) return c.json(childLock, 409);
   }
 
   const now = new Date().toISOString();

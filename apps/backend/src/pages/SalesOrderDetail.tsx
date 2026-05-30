@@ -660,7 +660,12 @@ export const SalesOrderDetail = () => {
     );
   }
 
-  const isLocked = lockedStatuses.includes(header.status) && !unlockOverride;
+  /* Tier 2 downstream-lock — once a non-cancelled DO/SI references this SO,
+     the page becomes read-only. unlockOverride NOT honoured for this case —
+     the child must be cancelled/deleted to edit. Convert-to-DO stays available
+     (partial delivery) via the list's right-click. */
+  const hasChildren = Boolean((header as { has_children?: boolean }).has_children);
+  const isLocked = (lockedStatuses.includes(header.status) && !unlockOverride) || hasChildren;
 
   // Cancel SO flow (Commander 2026-05-29) — a cancelled SO stops proceeding
   // (no PO / DO / production; the whole page greys out) and can be reopened

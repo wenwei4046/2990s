@@ -370,17 +370,24 @@ export const PurchaseOrders = () => {
           ? { opacity: 0.55, filter: 'grayscale(0.6)' }
           : undefined}
         contextMenu={(po) => {
+          /* Tier 2 downstream-lock — once a non-cancelled GRN exists for this
+             PO, hide Edit + Cancel. Convert-to-GRN STAYS visible because
+             partial receiving (more GRNs) is allowed. */
+          const hasChildren = Boolean(po.has_children);
           const menu: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
             { label: 'View', onClick: () => navigate(`/purchase-orders/${po.id}`) },
-            { label: 'Edit', onClick: () => navigate(`/purchase-orders/${po.id}?edit=1`) },
-            { divider: true as const },
           ];
-          // Convert to GRN — only while the PO still has goods inbound.
+          if (!hasChildren) {
+            menu.push({ label: 'Edit', onClick: () => navigate(`/purchase-orders/${po.id}?edit=1`) });
+          }
+          menu.push({ divider: true as const });
+          // Convert to GRN — only while the PO still has goods inbound. Stays
+          // visible even with downstream children (partial receiving allowed).
           if (po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') {
             menu.push({ label: 'Convert to GRN', onClick: () => convertOneToGrn(po) });
           }
-          // Cancel — soft-stop. Hidden once already cancelled / received.
-          if (po.status !== 'CANCELLED' && po.status !== 'RECEIVED') {
+          // Cancel — soft-stop. Hidden once already cancelled / received / locked.
+          if (po.status !== 'CANCELLED' && po.status !== 'RECEIVED' && !hasChildren) {
             menu.push({ divider: true as const });
             menu.push({ label: 'Cancel PO', danger: true, onClick: () => doCancelPo(po) });
           }

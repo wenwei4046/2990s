@@ -131,6 +131,10 @@ type DoHeader = {
   margin_pct_basis: number;
   line_count: number;
   currency: string;
+  /* Tier 2 downstream-lock — detail endpoint stamps this when any non-cancelled
+     DR / SI references the DO. Locks line edits + the Cancel transition;
+     convert-to-DR / convert-to-SI remain available via the list. */
+  has_children?: boolean;
 };
 
 type DoItem = {
@@ -400,7 +404,11 @@ export const DeliveryOrderDetail = () => {
     );
   }
 
-  const isLocked = lockedStatuses.includes(header.status);
+  /* Tier 2 downstream-lock — once a DR or SI references this DO the page is
+     read-only. Cancel + line edits stop; convert-to-DR / convert-to-SI stay
+     available via the list. */
+  const hasChildren = Boolean(header.has_children);
+  const isLocked = lockedStatuses.includes(header.status) || hasChildren;
   const isCancelled = header.status === 'CANCELLED';
 
   const handlePrint = () => {

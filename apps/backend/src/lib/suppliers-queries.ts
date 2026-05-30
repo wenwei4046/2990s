@@ -154,6 +154,11 @@ export type PoHeaderRow = {
       separately, not on the header. Optional because not every consumer
       wants the join. */
   items?: PoItemSummary[];
+  /** Tier 2 downstream-lock — list + detail endpoints stamp this flag when
+      the PO has ANY non-cancelled GRN. Once true the PO is read-only +
+      un-cancellable (the GRN must be cancelled / deleted first). Convert-to-
+      GRN (partial receiving) is NOT gated. Mirrors GRN's has_children. */
+  has_children?: boolean;
 };
 
 export type PoItemSummary = {
