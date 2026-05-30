@@ -449,10 +449,96 @@ mfgSalesOrders.get('/', async (c) => {
   return c.json({ salesOrders: rows });
 });
 
+/* POS "My orders" board — the salesperson's OWN Sales Orders, lightweight
+   columns for the 3-status board (Order Placed / Proceed / Delivered).
+   Filtered by salesperson_id = caller (staff.id === auth.users.id, schema.ts
+   line 162; the POS handover writes the placing salesperson's id into
+   salesperson_id) so a POS tablet sees only its own orders WITHOUT relying on
+   an RLS SELECT policy. Excludes CANCELLED / ON_HOLD (mirrors the legacy
+   board's cancelled exclusion). Registered BEFORE '/:docNo' so 'mine' is never
+   captured as a doc-no param. */
+mfgSalesOrders.get('/mine', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  /* Read the BASE table (NOT the mfg_sales_orders_with_payment_totals view):
+     a Postgres view fixes its column list at creation, and that view predates
+     proceeded_at (migration 0110) — selecting proceeded_at from the view 500s
+     at runtime. The base table has every column incl. proceeded_at +
+     deposit_centi. Paid is summed from the payments ledger separately below. */
+  const { data, error } = await sb
+    .from('mfg_sales_orders')
+    .select(
+      'doc_no, debtor_name, phone, email, address1, address2, city, postcode, customer_state, ' +
+      'customer_delivery_date, status, payment_method, approval_code, note, so_date, created_at, ' +
+      'proceeded_at, total_revenue_centi, line_count, deposit_centi',
+    )
+    .eq('salesperson_id', user.id)
+    .not('status', 'in', '("CANCELLED","ON_HOLD")')
+    .order('created_at', { ascending: false })
+    .limit(80);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  // Cast via `unknown` first — supabase-js types a view select as
+  // GenericStringError[] until the schema cache materialises (same pattern as
+  // the list route's joined-select casts above).
+  const rows = (data ?? []) as unknown as Array<{ doc_no?: string; deposit_centi?: number } & Record<string, unknown>>;
+
+  /* Attach the line items so the drawer can render the cart without a second
+     fetch. Group non-cancelled lines by doc_no → each item the board needs:
+     { item_code, description, qty, total_centi, variants }. */
+  const docNos = rows.map((r) => r.doc_no).filter((x): x is string => !!x);
+  const itemsByDoc = new Map<string, Array<{ item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown }>>();
+  if (docNos.length > 0) {
+    const { data: itemRows } = await sb
+      .from('mfg_sales_order_items')
+      .select('doc_no, item_code, description, qty, total_centi, variants')
+      .in('doc_no', docNos)
+      .eq('cancelled', false)
+      .order('created_at', { ascending: true });
+    for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_code: string; description: string | null; qty: number; total_centi: number; variants: unknown }>) {
+      const arr = itemsByDoc.get(it.doc_no) ?? [];
+      arr.push({ item_code: it.item_code, description: it.description, qty: it.qty, total_centi: it.total_centi, variants: it.variants });
+      itemsByDoc.set(it.doc_no, arr);
+    }
+  }
+
+  /* Live paid = the handover deposit (stored in deposit_centi at create — the
+     SO create path does NOT write a ledger row for it) PLUS any payments
+     recorded since (mfg_sales_order_payments). The header `paid_centi` is being
+     deprecated, so we don't read it. One batched ledger query. */
+  const paidLedgerByDoc = new Map<string, number>();
+  if (docNos.length > 0) {
+    const { data: payRows } = await sb
+      .from('mfg_sales_order_payments')
+      .select('so_doc_no, amount_centi')
+      .in('so_doc_no', docNos);
+    for (const p of (payRows ?? []) as Array<{ so_doc_no: string; amount_centi: number }>) {
+      paidLedgerByDoc.set(p.so_doc_no, (paidLedgerByDoc.get(p.so_doc_no) ?? 0) + (p.amount_centi ?? 0));
+    }
+  }
+
+  const salesOrders = rows.map((r) => {
+    const deposit = typeof r.deposit_centi === 'number' ? r.deposit_centi : 0;
+    const ledger = paidLedgerByDoc.get(r.doc_no ?? '') ?? 0;
+    return {
+      ...r,
+      // Total received = handover deposit + subsequent ledger payments.
+      paid_centi_total: deposit + ledger,
+      items: itemsByDoc.get(r.doc_no ?? '') ?? [],
+    };
+  });
+
+  return c.json({ salesOrders });
+});
+
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([
-    sb.from('mfg_sales_orders').select(HEADER).eq('doc_no', docNo).maybeSingle(),
+    /* `${HEADER}, proceeded_at` — proceeded_at lives ONLY on the base table,
+       NOT the mfg_sales_orders_with_payment_totals view that the LIST route
+       (LIST_COLS = HEADER + …) reads. Keeping it out of the shared HEADER and
+       appending it only here means the detail page still gets the Proceed Date
+       while the list view query stays valid. */
+    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at`).eq('doc_no', docNo).maybeSingle(),
     sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
@@ -1004,9 +1090,20 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     if (childLock) return c.json(childLock, 409);
   }
 
-  const { data, error } = await sb.from('mfg_sales_orders').update({
-    status: body.status, updated_at: new Date().toISOString(),
-  }).eq('doc_no', docNo).select('doc_no, status').single();
+  /* POS "Proceed" → stamp proceeded_at ONCE, on the first move into
+     IN_PRODUCTION. Read the existing value first so re-entering IN_PRODUCTION
+     (or toggling status back and forth) never overwrites the original Proceed
+     date the coordinator sees on the SO detail page. (Merged with main's
+     CANCELLED downstream-lock guard above — both apply.) */
+  const patch: Record<string, unknown> = { status: body.status, updated_at: new Date().toISOString() };
+  if (body.status === 'IN_PRODUCTION') {
+    const { data: cur } = await sb.from('mfg_sales_orders').select('proceeded_at').eq('doc_no', docNo).maybeSingle();
+    if (!(cur as { proceeded_at?: string } | null)?.proceeded_at) {
+      patch.proceeded_at = new Date().toISOString();
+    }
+  }
+  const { data, error } = await sb.from('mfg_sales_orders').update(patch)
+    .eq('doc_no', docNo).select('doc_no, status, proceeded_at').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
   // Audit row — best-effort. We keep writing the legacy mfg_so_status_changes

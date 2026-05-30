@@ -1148,6 +1148,12 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   remark4:           text('remark4'),
   note:              text('note'),
   processingDate:    date('processing_date'),
+  /* POS "Proceed" stamp — auto-set server-side on the FIRST transition to
+     IN_PRODUCTION (see PATCH /mfg-sales-orders/:docNo/status). Distinct from
+     internal_expected_dd (a future production-ready date that drives MRP) and
+     from the dead `processing_date` column above. Surfaced as "Proceed Date"
+     on the SO detail page. Migration 01XX_so_proceeded_at.sql. */
+  proceededAt:       timestamp('proceeded_at', { withTimezone: true }),
   salesExemptionExpiry: date('sales_exemption_expiry'),
 
   // ── Additions from PR #35 (HOOKKA-aligned + ERPNext-style naming) ────
