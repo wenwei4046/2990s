@@ -129,11 +129,11 @@ export const Sidebar = () => {
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
         // Commander 2026-05-30 — Consignment (outbound — you place goods on
         // consignment at a debtor) belongs with Sales Order. CO + COR mirror
-        // the DO + DR split. COR will route to its own list once #208 lands;
-        // for now both items deep-link into the existing /consignment page so
-        // the menu structure is in place + nothing 404s.
+        // the DO + DR split. COR list now lives at /consignment-returns —
+        // flat view of RETURN consignment_notes; rows deep-link to the parent
+        // CO detail page.
         { to: '/consignment', icon: <PackagePlus {...ICON_PROPS} />, label: 'Consignment (CO)' },
-        { to: '/consignment', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Returns (COR)' },
+        { to: '/consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Returns (COR)' },
       ],
     },
     {
@@ -150,10 +150,11 @@ export const Sidebar = () => {
         { to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
         // Commander 2026-05-30 — Purchase Consignment (inbound — supplier
         // places goods on consignment with you) belongs with Procurement. PC
-        // + PCR mirror the GRN + PR split. PC live as of migration 0111
-        // (#206); PCR stays a /consignment placeholder until #207 lands.
+        // + PCR mirror the GRN + PR split. PC live as of migration 0111;
+        // PCR list now lives at /purchase-consignment-returns — flat view of
+        // RETURN PC notes; rows deep-link to the parent PC detail page.
         { to: '/purchase-consignment', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment (PC)' },
-        { to: '/consignment', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns (PCR)' },
+        { to: '/purchase-consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns (PCR)' },
       ],
     },
     {

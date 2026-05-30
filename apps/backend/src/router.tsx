@@ -74,9 +74,15 @@ const SalesInvoicesList = lazyRetry(() => import('./pages/SalesInvoicesList').th
 const SalesInvoiceNew = lazyRetry(() => import('./pages/SalesInvoiceNew').then(m => ({ default: m.SalesInvoiceNew })));
 const SalesInvoiceFromDo = lazyRetry(() => import('./pages/SalesInvoiceFromDo').then(m => ({ default: m.SalesInvoiceFromDo })));
 const ConsignmentPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
+// COR (Consignment Returns) — flat list of RETURN consignment_notes, joined
+// to the parent CO header. New list lives at /consignment-returns; rows
+// double-click into the existing /consignment/:id parent detail page.
+const ConsignmentReturnsList = lazyRetry(() => import('./pages/ConsignmentReturnsList').then(m => ({ default: m.ConsignmentReturnsList })));
 // PC (Purchase Consignment) — buyer-side mirror of Consignment, migration 0111.
 const PurchaseConsignmentsList = lazyRetry(() => import('./pages/PurchaseConsignmentsList').then(m => ({ default: m.PurchaseConsignmentsList })));
 const PurchaseConsignmentDetail = lazyRetry(() => import('./pages/PurchaseConsignmentDetail').then(m => ({ default: m.PurchaseConsignmentDetail })));
+// PCR (Purchase Consignment Returns) — flat list of RETURN PC notes.
+const PurchaseConsignmentReturnsList = lazyRetry(() => import('./pages/PurchaseConsignmentReturnsList').then(m => ({ default: m.PurchaseConsignmentReturnsList })));
 const DeliveryReturnsList = lazyRetry(() => import('./pages/DeliveryReturnsList').then(m => ({ default: m.DeliveryReturnsList })));
 const DeliveryReturnDetail = lazyRetry(() => import('./pages/DeliveryReturnDetail').then(m => ({ default: m.DeliveryReturnDetail })));
 const DeliveryReturnNew = lazyRetry(() => import('./pages/DeliveryReturnNew').then(m => ({ default: m.DeliveryReturnNew })));
@@ -202,9 +208,14 @@ export const router = createBrowserRouter([
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
       { path: 'consignment', element: <ConsignmentPage /> },
       { path: 'consignment/:id', element: <ConsignmentDetail /> },
+      // COR — note-level list; rows deep-link to the parent CO detail page,
+      // so there is no `:id` segment here.
+      { path: 'consignment-returns', element: <ConsignmentReturnsList /> },
       // PC (Purchase Consignment) — buyer-side mirror.
       { path: 'purchase-consignment', element: <PurchaseConsignmentsList /> },
       { path: 'purchase-consignment/:id', element: <PurchaseConsignmentDetail /> },
+      // PCR — note-level list; rows deep-link to the parent PC detail page.
+      { path: 'purchase-consignment-returns', element: <PurchaseConsignmentReturnsList /> },
       { path: 'delivery-returns', element: <DeliveryReturnsList /> },
       // /new + /from-do must come BEFORE :id so they aren't caught as a DR id.
       { path: 'delivery-returns/new', element: <DeliveryReturnNew /> },

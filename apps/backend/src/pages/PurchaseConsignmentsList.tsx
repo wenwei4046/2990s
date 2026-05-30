@@ -9,7 +9,7 @@
 // behaviour (navigate stub).
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -21,6 +21,93 @@ import {
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
+
+/* ── L2 expansion for the PC parent list — items + notes summary ──────────
+   Fetches the PC detail (items + notes) when the row expands; gated by
+   `enabled: !!id` inside the hook. Mirrors ExpandedConsignmentLines in
+   FlowPages.tsx (CO list) — a small inline table the user can glance at
+   without leaving the list. */
+const ExpandedPcLines = ({ id }: { id: string }) => {
+  const q = usePurchaseConsignmentDetail(id);
+  if (q.isLoading) {
+    return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading PC…</div>;
+  }
+  if (q.error) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)' }}>
+        Failed to load: {q.error instanceof Error ? q.error.message : String(q.error)}
+      </div>
+    );
+  }
+  const items: any[] = q.data?.items ?? [];
+  const notes: any[] = q.data?.notes ?? [];
+  const TH: CSSProperties = { padding: '2px 8px', textAlign: 'left', color: 'var(--fg-muted)', fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase' };
+  const THR: CSSProperties = { ...TH, textAlign: 'right' };
+  const TD: CSSProperties = { padding: '3px 8px', verticalAlign: 'top' };
+  const TDR: CSSProperties = { ...TD, textAlign: 'right' };
+  const noteSummaries = notes.map((n: any) => ({
+    id: n.id, no: n.note_number, type: n.note_type, date: n.note_date,
+    status: n.cancelled_at ? 'Cancelled' : (n.signed_at ? 'Posted' : 'Draft'),
+  }));
+  return (
+    <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-2) 40px', background: 'var(--c-cream)', display: 'grid', gap: 'var(--space-3)' }}>
+      <div>
+        <div style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4 }}>Items placed</div>
+        {items.length === 0 ? (
+          <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No items.</div>
+        ) : (
+          <table style={{ width: 760, borderCollapse: 'collapse', fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)' }}>
+            <thead><tr style={{ borderBottom: '1px solid rgba(34,31,32,0.10)' }}>
+              <th style={{ ...TH, width: 160 }}>Material Code</th>
+              <th style={{ ...TH, width: 320 }}>Description</th>
+              <th style={{ ...THR, width: 70 }}>Placed</th>
+              <th style={{ ...THR, width: 70 }}>Sold</th>
+              <th style={{ ...THR, width: 80 }}>Returned</th>
+              <th style={{ ...THR, width: 80 }}>Damaged</th>
+            </tr></thead>
+            <tbody>
+              {items.map((it: any) => (
+                <tr key={it.id} style={{ borderTop: '1px solid rgba(34,31,32,0.05)' }}>
+                  <td style={{ ...TD, fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code ?? '—'}</td>
+                  <td style={TD}>{it.material_name ?? it.description ?? '—'}</td>
+                  <td style={TDR}>{it.qty_placed ?? 0}</td>
+                  <td style={TDR}>{it.qty_sold ?? 0}</td>
+                  <td style={TDR}>{it.qty_returned ?? 0}</td>
+                  <td style={TDR}>{it.qty_damaged ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div>
+        <div style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4 }}>Notes ({noteSummaries.length})</div>
+        {noteSummaries.length === 0 ? (
+          <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No notes posted yet.</div>
+        ) : (
+          <table style={{ width: 520, borderCollapse: 'collapse', fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)' }}>
+            <thead><tr style={{ borderBottom: '1px solid rgba(34,31,32,0.10)' }}>
+              <th style={{ ...TH, width: 150 }}>Note No.</th>
+              <th style={{ ...TH, width: 80 }}>Type</th>
+              <th style={{ ...TH, width: 120 }}>Date</th>
+              <th style={{ ...TH, width: 100 }}>Status</th>
+            </tr></thead>
+            <tbody>
+              {noteSummaries.map((n) => (
+                <tr key={n.id} style={{ borderTop: '1px solid rgba(34,31,32,0.05)' }}>
+                  <td style={{ ...TD, fontWeight: 700, color: 'var(--c-burnt)' }}>{n.no}</td>
+                  <td style={TD}>{n.type}</td>
+                  <td style={TD}>{(n.date ?? '').slice(0, 10) || '—'}</td>
+                  <td style={TD}>{n.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -158,6 +245,10 @@ export const PurchaseConsignmentsList = () => {
         rowKey={(g) => g.id}
         searchPlaceholder="Search PCs…"
         onRowDoubleClick={(g) => navigate(`/purchase-consignment/${g.id}`)}
+        expandable={{
+          renderExpansion: (row) => <ExpandedPcLines id={row.id} />,
+          rowExpansionKey: (row) => row.id,
+        }}
         rowStyle={(g) => (g.status === 'RETURNED' || g.status === 'DAMAGED')
           ? { opacity: 0.55, filter: 'grayscale(0.6)' }
           : undefined}

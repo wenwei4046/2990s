@@ -1285,6 +1285,41 @@ export const useCancelPurchaseConsignmentNote = () => {
   });
 };
 
+/* ── Consignment Returns (COR) — list of RETURN consignment_notes ──────
+   Flat-list endpoint for the new COR list page; one row per RETURN note
+   (cancelled_at IS NULL), joined to the parent CO header so the row can
+   display debtor + parent doc no without a second fetch. Items are nested
+   on the response for the L2 row-expansion. */
+export const useConsignmentReturns = () => baseQuery<{ notes: any[] }>(
+  ['consignment-returns'],
+  `/consignment/notes/returns`,
+);
+/* Per-note line items hook — used by the L2 expansion in the COR list and
+   the CO parent list (when a CO row is expanded we re-fetch the parent
+   detail anyway via useConsignmentDetail, so this hook is only for COR's
+   per-note expansion). Gated by `enabled: !!noteId` so the query only fires
+   once a row is expanded. The COR list endpoint nests items inline, so this
+   hook returns those same items from the nested payload to avoid an extra
+   round trip — implementation reads from cache when present. */
+export const useConsignmentNoteLines = (noteId: string | null) => useQuery({
+  queryKey: ['consignment-note-lines', noteId],
+  queryFn: () => authedFetch<{ notes: Array<{ id: string; items: any[] }> }>(`/consignment/notes/returns`)
+    .then((r) => ({ items: r.notes.find((n) => n.id === noteId)?.items ?? [] })),
+  enabled: Boolean(noteId), staleTime: 30_000, retry: 1, retryDelay: 800,
+});
+
+/* ── Purchase Consignment Returns (PCR) — list of RETURN PC notes ─────── */
+export const usePurchaseConsignmentReturns = () => baseQuery<{ notes: any[] }>(
+  ['purchase-consignment-returns'],
+  `/purchase-consignment/notes/returns`,
+);
+export const usePurchaseConsignmentNoteLines = (noteId: string | null) => useQuery({
+  queryKey: ['purchase-consignment-note-lines', noteId],
+  queryFn: () => authedFetch<{ notes: Array<{ id: string; items: any[] }> }>(`/purchase-consignment/notes/returns`)
+    .then((r) => ({ items: r.notes.find((n) => n.id === noteId)?.items ?? [] })),
+  enabled: Boolean(noteId), staleTime: 30_000, retry: 1, retryDelay: 800,
+});
+
 /* ── Purchase Returns ────────────────────────────────────────────────── */
 export const usePurchaseReturns = (status?: string) => baseQuery<{ purchaseReturns: any[] }>(
   ['purchase-returns', status ?? 'all'],
