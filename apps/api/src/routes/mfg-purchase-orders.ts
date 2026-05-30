@@ -1218,7 +1218,7 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
   if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('purchase_order_items')
-    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_group, variants')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_group, variants, so_item_id')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
@@ -1256,6 +1256,15 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('purchase_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputePoTotals(sb, poId);
+  /* Recount po_qty_picked on the source SO line. If this edit reduced qty, the
+     SO line releases that quota back to the From-SO picker (qty - picked > 0
+     again); if it raised qty, picked rises. Self-healing — see recomputeSoPicked.
+     Best-effort: never fail the edit on a recount error. */
+  const editedSoItem = (prev as { so_item_id?: string | null }).so_item_id ?? null;
+  if (editedSoItem) {
+    try { await recomputeSoPicked(sb, [editedSoItem]); }
+    catch { /* don't fail the edit on a counter recount */ }
+  }
   return c.json({ ok: true });
 });
 

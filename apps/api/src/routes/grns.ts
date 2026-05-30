@@ -404,6 +404,36 @@ grns.post('/', async (c) => {
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Over-receipt guard — PO-linked lines can't accept more than the PO line's
+     remaining (qty - received_qty). Mirrors the same 409 the From-PO flows
+     enforce, so the manual New-GRN form can't sneak past the gate. Lines with
+     no purchase_order_item_id (free / manual receipts) are uncapped. Picks that
+     target the SAME PO line within one GRN are summed. */
+  {
+    const acceptedByPoItem = new Map<string, number>();
+    for (const it of items) {
+      const poItemId = (it.purchaseOrderItemId as string | undefined) ?? null;
+      if (!poItemId) continue;
+      const accepted = Number(it.qtyAccepted ?? it.qtyReceived ?? 0);
+      acceptedByPoItem.set(poItemId, (acceptedByPoItem.get(poItemId) ?? 0) + accepted);
+    }
+    if (acceptedByPoItem.size > 0) {
+      const { data: poItems } = await sb.from('purchase_order_items')
+        .select('id, qty, received_qty').in('id', [...acceptedByPoItem.keys()]);
+      const remByPoItem = new Map<string, number>(
+        ((poItems ?? []) as Array<{ id: string; qty: number; received_qty: number }>)
+          .map((r) => [r.id, (r.qty ?? 0) - (r.received_qty ?? 0)]),
+      );
+      for (const [poItemId, accepted] of acceptedByPoItem) {
+        const remaining = remByPoItem.get(poItemId) ?? 0;
+        if (accepted > remaining) {
+          return c.json({ error: 'qty_exceeds_remaining', poItemId, requested: accepted, remaining }, 409);
+        }
+      }
+    }
+  }
+
   const grnNumber = await nextNumber(sb, 'GRN', 'grns', 'grn_number');
 
   /* PR-DRAFT-removal — Commander 2026-05-27: GRN is created as POSTED
@@ -908,6 +938,23 @@ grns.post('/:id/items', async (c) => {
   const discountCenti = Number(it.discountCenti ?? 0);
   const lineTotal = (qtyReceived * unitPriceCenti) - discountCenti;
 
+  /* Over-receipt guard — a PO-linked added line can't accept more than the PO
+     line's remaining (qty - received_qty). received_qty already counts every
+     other live GRN line for this PO item, so remaining is the true headroom.
+     Manual (no PO link) lines are uncapped. Same 409 the From-PO flows use. */
+  const addLinePoItemId = (it.purchaseOrderItemId as string) ?? null;
+  if (addLinePoItemId) {
+    const { data: poItem } = await sb.from('purchase_order_items')
+      .select('qty, received_qty').eq('id', addLinePoItemId).maybeSingle();
+    if (poItem) {
+      const p = poItem as { qty: number; received_qty: number };
+      const remaining = (p.qty ?? 0) - (p.received_qty ?? 0);
+      if (qtyReceived > remaining) {
+        return c.json({ error: 'qty_exceeds_remaining', poItemId: addLinePoItemId, requested: qtyReceived, remaining }, 409);
+      }
+    }
+  }
+
   const row: Record<string, unknown> = {
     grn_id: grnId,
     purchase_order_item_id: (it.purchaseOrderItemId as string) ?? null,
@@ -1001,6 +1048,27 @@ grns.patch('/:id/items/:itemId', async (c) => {
 
   // The editable quantity is qty_received (also keep qty_accepted in lockstep).
   const qtyReceived = it.qty !== undefined ? Number(it.qty) : (prev as { qty_received: number }).qty_received;
+
+  /* Over-receipt guard on edit — a PO-linked line can't be raised past the PO
+     line's headroom = qty - (received_qty - this line's current receipt). The
+     stored received_qty already includes this line, so we add its old qty back
+     before comparing. Manual (no PO link) lines are uncapped. */
+  {
+    const poItemId = (prev as { purchase_order_item_id: string | null }).purchase_order_item_id;
+    const prevQty = (prev as { qty_received: number }).qty_received ?? 0;
+    if (poItemId && qtyReceived > prevQty) {
+      const { data: poItem } = await sb.from('purchase_order_items')
+        .select('qty, received_qty').eq('id', poItemId).maybeSingle();
+      if (poItem) {
+        const p = poItem as { qty: number; received_qty: number };
+        const headroom = (p.qty ?? 0) - ((p.received_qty ?? 0) - prevQty);
+        if (qtyReceived > headroom) {
+          return c.json({ error: 'qty_exceeds_remaining', poItemId, requested: qtyReceived, remaining: headroom }, 409);
+        }
+      }
+    }
+  }
+
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
   const lineTotal = (qtyReceived * unit) - discount;
