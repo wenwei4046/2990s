@@ -440,6 +440,20 @@ export const useDeliverableSoLines = () => useQuery({
   retry: 1,
 });
 
+/* Remaining deliverable lines scoped to ONE Sales Order — feeds the SO-linked
+   DO Detail "Add Line" picker so it can only add the SO's still-undelivered
+   lines (qty capped to remaining), matching the line-level convert picker.
+   Disabled when the DO has no parent SO (ad-hoc DO keeps the free add). */
+export const useDeliverableSoLinesForDoc = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-delivery-orders', 'deliverable-so-lines', docNo],
+  enabled: !!docNo,
+  queryFn: () => authedFetch<{ lines: DeliverableSoLine[] }>(
+    `/delivery-orders-mfg/deliverable-so-lines?docNos=${encodeURIComponent(docNo!)}`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* Convert picked SO LINES (each with a partial qty) → ONE DO. Server validates
    the picks share one customer + each qty is 1..remaining, then creates one DO
    line per pick (status DISPATCHED) and deducts stock. Returns the new DO's
