@@ -17,9 +17,9 @@
 
 import { Hono } from 'hono';
 import {
-  buildVariantSummary, computeVariantKey, pickComboMatch, spreadComboTotal,
+  buildVariantSummary, pickComboMatch, spreadComboTotal,
   splitSofaCode, sofaHeightKey,
-  type VariantAttrs, type SofaComboRow, type SofaPriceTier,
+  type SofaComboRow, type SofaPriceTier,
 } from '@2990s/shared';
 import {
   computeMfgPoUnitCost,
@@ -474,28 +474,13 @@ mfgPurchaseOrders.post('/', async (c) => {
     }
   }
 
-  /* Commander 2026-05-29 (BUG 1) — roll po_qty_picked forward on every source
-     SO line this PO converted (the items came from the From-SO picker). This is
-     what makes converted lines drop out of /outstanding-so-items (which filters
-     qty - po_qty_picked > 0). Mirrors the /from-sos picks handler increment.
-     Best-effort: read current counters, then UPDATE each; never fail the PO if
-     this errors — the PO already exists and the counter can be fixed later. */
+  /* Commander 2026-05-30 — recount po_qty_picked from the live PO lines for
+     every source SO line this PO just converted, so they drop out of the
+     From-SO picker (qty - picked > 0). Self-healing — see recomputeSoPicked.
+     Best-effort: never fail the PO if the recount errors. */
   if (pickedQtyBySoItem.size > 0) {
-    try {
-      const soItemIds = [...pickedQtyBySoItem.keys()];
-      const { data: soRows } = await supabase
-        .from('mfg_sales_order_items')
-        .select('id, po_qty_picked')
-        .in('id', soItemIds);
-      await Promise.all(((soRows ?? []) as Array<{ id: string; po_qty_picked: number }>).map(async (row) => {
-        const add = pickedQtyBySoItem.get(row.id) ?? 0;
-        if (add <= 0) return;
-        await supabase
-          .from('mfg_sales_order_items')
-          .update({ po_qty_picked: (row.po_qty_picked ?? 0) + add })
-          .eq('id', row.id);
-      }));
-    } catch { /* best-effort — PO already created, don't fail on counter roll */ }
+    try { await recomputeSoPicked(supabase, [...pickedQtyBySoItem.keys()]); }
+    catch { /* PO already created — don't fail on counter recount */ }
   }
 
   return c.json({ id: header.id, poNumber: header.po_number }, 201);
@@ -936,34 +921,13 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     byGroup.set(groupKey, bucket);
   }
 
-  /* Commander 2026-05-29 — consolidate lines: the SAME SKU + variant from
-     different SOs merges into ONE PO line with the qty summed (e.g. (K)×2 +
-     (K)×3 → (K)×5), instead of two separate lines. Keep the earliest delivery
-     date (turnover-safe — order to the soonest need) and the most-common
-     warehouse. po_qty_picked tracking is unaffected (it's keyed by SO item id,
-     handled separately below). */
-  const consolidateLines = (lines: Line[]): Line[] => {
-    const merged = new Map<string, Line>();
-    for (const l of lines) {
-      const vkey = computeVariantKey(l.itemGroup, (l.variants ?? null) as VariantAttrs | null);
-      const key = `${l.itemCode}${vkey}`;
-      const cur = merged.get(key);
-      if (!cur) { merged.set(key, { ...l }); continue; }
-      cur.qty += l.qty;
-      // earliest non-null delivery date wins
-      if (l.deliveryDate && (!cur.deliveryDate || l.deliveryDate < cur.deliveryDate)) {
-        cur.deliveryDate = l.deliveryDate;
-      }
-      cur.warehouseId = cur.warehouseId ?? l.warehouseId;
-    }
-    return [...merged.values()];
-  };
-  /* Consolidate same SKU+variant lines — but ONLY when creating fresh POs.
-     When appending to an existing PO (targetPoId) we keep each picked SO line
-     as its own PO line so its so_item_id stays 1:1 (clean release on delete). */
-  if (!targetPoId) {
-    for (const bucket of byGroup.values()) bucket.lines = consolidateLines(bucket.lines);
-  }
+  /* Commander 2026-05-30 - every picked SO line stays as its OWN PO line (1:1
+     so_item_id), whether appending to an existing PO or creating fresh ones.
+     We no longer merge same-SKU lines from different SOs into one PO line: a
+     merged line could carry only ONE source link, which broke the release-on-
+     delete recount (recomputeSoPicked) for the other source SO lines. Keeping
+     lines 1:1 makes the source link authoritative, the From-SO release exact,
+     and every PO line traceable back to the exact SO line it serves. */
 
   /* ── Commander 2026-05-29 — APPEND to an existing PO ─────────────────────
      "Convert from SO" / "Add Line Item" on a PO open this picker scoped to that
@@ -1005,15 +969,10 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
     await recomputePoTotals(supabase, target.id);
-    // Bump po_qty_picked on the picked SO lines (drops them from the picker).
-    await Promise.all(pickedItems
-      .filter(({ row }) => row.id && (mainByCode.get(row.item_code)?.supplier_id === target.supplier_id))
-      .map(async ({ row, qty }) => {
-        await supabase
-          .from('mfg_sales_order_items')
-          .update({ po_qty_picked: row.po_qty_picked + qty })
-          .eq('id', row.id);
-      }));
+    // Recount po_qty_picked from the live PO lines for every appended SO line
+    // (drops them from the picker). Self-healing — see recomputeSoPicked.
+    try { await recomputeSoPicked(supabase, bucket.lines.map((l) => l.soItemId)); }
+    catch { /* lines already inserted — don't fail on counter recount */ }
     return c.json({ targetPoId: target.id, poNumber: target.po_number, added: bucket.lines.length }, 200);
   }
 
@@ -1095,6 +1054,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       item_group: l.itemGroup,
       variants: l.variants,
       description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
+      // Release-on-delete link (migration 0098) — every from-SO line carries
+      // its source SO line so recomputeSoPicked can release it on delete/cancel.
+      so_item_id: l.soItemId,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {
@@ -1104,19 +1066,12 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     created.push({ id: header.id, poNumber: header.po_number, supplierId, lineCount: bucket.lines.length });
   }
 
-  // ── PR — increment po_qty_picked on every SO item we just emitted ──
-  // Best-effort UPDATEs (one per item, no transaction). If any fails we
-  // log + continue — the PO still exists; commander can manually fix the
-  // counter via Maintenance later if needed.
+  // Recount po_qty_picked from the live PO lines for every SO line we picked,
+  // so converted lines drop out of the From-SO picker. Self-healing — see
+  // recomputeSoPicked. Best-effort: never fail the response on a recount error.
   if (body.picks && created.length > 0) {
-    await Promise.all(pickedItems
-      .filter(({ row }) => row.id)
-      .map(async ({ row, qty }) => {
-        await supabase
-          .from('mfg_sales_order_items')
-          .update({ po_qty_picked: row.po_qty_picked + qty })
-          .eq('id', row.id);
-      }));
+    try { await recomputeSoPicked(supabase, pickedItems.map(({ row }) => row.id)); }
+    catch { /* POs already created — don't fail on counter recount */ }
   }
 
   return c.json({ created, total: created.length }, 201);
@@ -1157,6 +1112,44 @@ async function recomputePoTotals(sb: any, poId: string) {
     total_centi: subtotal,
     updated_at: new Date().toISOString(),
   }).eq('id', poId);
+}
+
+/* ── Commander 2026-05-30 — self-healing SO "picked" counter ──────────────
+   Replaces the old scattered "+qty on create / -qty on delete" arithmetic on
+   mfg_sales_order_items.po_qty_picked. For each given SO line, recount how many
+   units LIVE (non-cancelled) PO lines claim from it via so_item_id, and write
+   that exact sum back. Because it recounts from the actual PO lines every time:
+     • delete / cancel a PO ⇒ those lines drop out of the count ⇒ the SO line
+       reappears in the From-SO picker automatically (qty - picked > 0 again);
+     • the counter can never get permanently stuck the way a forgotten -= could
+       — any later mutation that touches the SO line self-corrects it.
+   MRP keeps reading po_qty_picked, now always accurate. Two plain queries (no
+   PostgREST embedding) so behaviour is predictable in production. Best-effort:
+   callers wrap in try/catch and never fail the PO mutation on a recount error. */
+async function recomputeSoPicked(sb: any, soItemIds: Array<string | null | undefined>) {
+  const ids = [...new Set(soItemIds.filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return;
+  const { data: lines } = await sb
+    .from('purchase_order_items')
+    .select('so_item_id, qty, purchase_order_id')
+    .in('so_item_id', ids);
+  const rows = (lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string }>;
+  const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter(Boolean))];
+  const cancelled = new Set<string>();
+  if (poIds.length > 0) {
+    const { data: pos } = await sb.from('purchase_orders').select('id, status').in('id', poIds);
+    for (const p of (pos ?? []) as Array<{ id: string; status: string }>) {
+      if (p.status === 'CANCELLED') cancelled.add(p.id);
+    }
+  }
+  const pickedBySo = new Map<string, number>(ids.map((id) => [id, 0]));
+  for (const r of rows) {
+    if (cancelled.has(r.purchase_order_id)) continue;
+    pickedBySo.set(r.so_item_id, (pickedBySo.get(r.so_item_id) ?? 0) + Number(r.qty ?? 0));
+  }
+  await Promise.all([...pickedBySo.entries()].map(([soItemId, picked]) =>
+    sb.from('mfg_sales_order_items').update({ po_qty_picked: picked }).eq('id', soItemId),
+  ));
 }
 
 mfgPurchaseOrders.post('/:id/items', async (c) => {
@@ -1285,24 +1278,14 @@ mfgPurchaseOrders.delete('/:id/items/:itemId', async (c) => {
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputePoTotals(sb, poId);
 
-  /* Release po_qty_picked back to the SO line so it reappears in the From-SO
-     picker (qty - po_qty_picked > 0 again). Best-effort: never fail the delete
-     if the counter roll-back errors — the line is already gone and the counter
-     can be corrected later. Clamp at 0 to avoid going negative. */
-  const releasedSoItem = (doomed as { so_item_id?: string | null; qty?: number } | null)?.so_item_id ?? null;
-  const releasedQty = Math.max(0, Number((doomed as { qty?: number } | null)?.qty ?? 0));
-  if (releasedSoItem && releasedQty > 0) {
-    try {
-      const { data: soRow } = await sb.from('mfg_sales_order_items')
-        .select('po_qty_picked')
-        .eq('id', releasedSoItem)
-        .maybeSingle();
-      const current = Number((soRow as { po_qty_picked?: number } | null)?.po_qty_picked ?? 0);
-      const next = Math.max(0, current - releasedQty);
-      await sb.from('mfg_sales_order_items')
-        .update({ po_qty_picked: next })
-        .eq('id', releasedSoItem);
-    } catch { /* best-effort — line already deleted, don't fail on counter roll */ }
+  /* Recount po_qty_picked from the live PO lines so this SO line reappears in
+     the From-SO picker (qty - picked > 0 again). The deleted line is already
+     gone, so the recount naturally excludes it. Self-healing — see
+     recomputeSoPicked. Best-effort: never fail the delete on a recount error. */
+  const releasedSoItem = (doomed as { so_item_id?: string | null } | null)?.so_item_id ?? null;
+  if (releasedSoItem) {
+    try { await recomputeSoPicked(sb, [releasedSoItem]); }
+    catch { /* line already deleted — don't fail on counter recount */ }
   }
 
   return c.body(null, 204);
@@ -1376,6 +1359,7 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
   const existingSet = new Set((existing ?? []).map((r: { material_code: string }) => r.material_code));
 
   type SoItem = {
+    id: string;
     item_code: string; description: string | null; description2: string | null;
     item_group: string | null; qty: number; unit_price_centi: number;
     discount_centi: number | null; unit_cost_centi: number | null;
@@ -1408,6 +1392,10 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
       discount_centi:   disc,
       unit_cost_centi:  Number(it.unit_cost_centi ?? 0),
       variants:         (it.variants as unknown) ?? null,
+      // Release-on-delete link (migration 0098) — convert-from-SO now stamps the
+      // source SO line too, so these lines drop the SO from the picker and get
+      // released on delete/cancel, consistent with the From-SO picker paths.
+      so_item_id:       it.id,
     };
   });
 
@@ -1418,6 +1406,9 @@ mfgPurchaseOrders.post('/:id/convert-from-so', async (c) => {
   if (insErr) return c.json({ error: 'insert_failed', reason: insErr.message }, 500);
 
   await recomputePoTotals(sb, poId);
+  // Recount po_qty_picked from the live PO lines for every converted SO line.
+  try { await recomputeSoPicked(sb, toInsert.map((it) => it.id)); }
+  catch { /* lines already inserted — don't fail on counter recount */ }
 
   return c.json({
     copied: rows.length,
@@ -1485,28 +1476,12 @@ mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
   try {
     const { data: lines } = await supabase
       .from('purchase_order_items')
-      .select('so_item_id, qty')
+      .select('so_item_id')
       .eq('purchase_order_id', id);
-    const releaseBySoItem = new Map<string, number>();
-    for (const ln of (lines ?? []) as Array<{ so_item_id: string | null; qty: number }>) {
-      if (ln.so_item_id && ln.qty > 0) {
-        releaseBySoItem.set(ln.so_item_id, (releaseBySoItem.get(ln.so_item_id) ?? 0) + ln.qty);
-      }
-    }
-    if (releaseBySoItem.size > 0) {
-      const soItemIds = [...releaseBySoItem.keys()];
-      const { data: soRows } = await supabase
-        .from('mfg_sales_order_items')
-        .select('id, po_qty_picked')
-        .in('id', soItemIds);
-      await Promise.all(((soRows ?? []) as Array<{ id: string; po_qty_picked: number }>).map(async (row) => {
-        const back = releaseBySoItem.get(row.id) ?? 0;
-        if (back <= 0) return;
-        const next = Math.max(0, (row.po_qty_picked ?? 0) - back);
-        await supabase.from('mfg_sales_order_items').update({ po_qty_picked: next }).eq('id', row.id);
-      }));
-    }
-  } catch { /* best-effort — PO already cancelled, don't fail on counter roll */ }
+    // The PO is now CANCELLED, so recomputeSoPicked recounts every affected SO
+    // line excluding this PO's lines — releasing them back to the picker.
+    await recomputeSoPicked(supabase, ((lines ?? []) as Array<{ so_item_id: string | null }>).map((l) => l.so_item_id));
+  } catch { /* best-effort — PO already cancelled, don't fail on counter recount */ }
 
   const { data: after } = await supabase
     .from('purchase_orders')
@@ -1538,8 +1513,20 @@ mfgPurchaseOrders.delete('/:id', async (c) => {
       message: `PO ${row.po_number} is ${row.status}. Only CANCELLED POs can be deleted. Use Cancel first.`,
     }, 409);
   }
+  /* Capture the source SO links before the cascade wipes the lines, so we can
+     recount after. Cancel already released them, but this self-heals any legacy
+     CANCELLED PO whose SO lines were never released. */
+  const { data: doomedLines } = await supabase
+    .from('purchase_order_items')
+    .select('so_item_id')
+    .eq('purchase_order_id', id);
+
   // Items cascade via FK ON DELETE CASCADE.
   const { error: delErr } = await supabase.from('purchase_orders').delete().eq('id', id);
   if (delErr) return c.json({ error: 'delete_failed', reason: delErr.message }, 500);
+
+  try { await recomputeSoPicked(supabase, ((doomedLines ?? []) as Array<{ so_item_id: string | null }>).map((l) => l.so_item_id)); }
+  catch { /* PO already deleted — don't fail on counter recount */ }
+
   return c.json({ ok: true, deleted: row.po_number });
 });
