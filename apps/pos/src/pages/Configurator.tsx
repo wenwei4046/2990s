@@ -392,14 +392,20 @@ export const Configurator = () => {
   // through to depth_options when the customizer isn't available (orphan
   // SKUs / unmigrated Models) so existing Models keep their toggles.
   const depthOptions = useMemo<Depth[]>(() => {
+    // Sorted ascending so the toggle reads small→large AND depthOptions[0] is
+    // the smallest — the configurator defaults to the smallest seat depth, the
+    // salesperson picks larger if the customer wants (Chairman 2026-05-31: no
+    // per-kit default-size setting; just default smallest).
+    const sortAsc = (xs: Depth[]) => [...xs].sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
     const fromAllowed = (sofaCustomizer.data?.sizes ?? []).filter(Boolean);
-    if (fromAllowed.length > 0) return fromAllowed as Depth[];
+    if (fromAllowed.length > 0) return sortAsc(fromAllowed as Depth[]);
     const raw: string = product.data?.depth_options ?? '';
     const parsed = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    return parsed.length > 0 ? parsed : ['24'];
+    return parsed.length > 0 ? sortAsc(parsed) : ['24'];
   }, [product.data?.depth_options, sofaCustomizer.data?.sizes]);
 
-  // Keep activeDepth within the Model's offered depths (default to the first).
+  // Keep activeDepth within the Model's offered depths (default to the smallest
+  // — depthOptions is sorted ascending, so [0] is the smallest).
   useEffect(() => {
     if (!depthOptions.includes(activeDepth)) setActiveDepth(depthOptions[0] ?? '24');
   }, [depthOptions, activeDepth]);
