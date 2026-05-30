@@ -63,14 +63,18 @@ const fmtDate = (iso: string | null | undefined): string => {
 
 /** Best-effort route for a source doc on the ledger row. Inventory writes
  *  carry source_doc_id (the UUID of the originating GRN/DO/etc) — when
- *  present we can deep-link straight to the detail page. */
+ *  present we can deep-link straight to the detail page. ADJUSTMENT has no
+ *  per-document detail page, only a list — link there. */
 const docHrefFor = (m: InventoryMovement): string | null => {
-  if (!m.source_doc_id) return null;
   switch (m.source_doc_type) {
-    case 'GRN':              return `/grns/${m.source_doc_id}`;
-    case 'DO':               return `/mfg-delivery-orders/${m.source_doc_id}`;
-    case 'PURCHASE_RETURN':  return `/purchase-returns/${m.source_doc_id}`;
-    case 'CONSIGNMENT_NOTE': return `/consignment/${m.source_doc_id}`;
+    case 'GRN':              return m.source_doc_id ? `/grns/${m.source_doc_id}` : null;
+    case 'DO':               return m.source_doc_id ? `/mfg-delivery-orders/${m.source_doc_id}` : null;
+    case 'DR':               return m.source_doc_id ? `/delivery-returns/${m.source_doc_id}` : null;
+    case 'PURCHASE_RETURN':  return m.source_doc_id ? `/purchase-returns/${m.source_doc_id}` : null;
+    case 'CONSIGNMENT_NOTE': return m.source_doc_id ? `/consignment/${m.source_doc_id}` : null;
+    case 'STOCK_TRANSFER':   return m.source_doc_id ? `/inventory/transfers/${m.source_doc_id}` : null;
+    case 'STOCK_TAKE':       return m.source_doc_id ? `/inventory/stock-takes/${m.source_doc_id}` : null;
+    case 'ADJUSTMENT':       return '/inventory/adjustments';
     default:                 return null;
   }
 };
@@ -104,13 +108,16 @@ export const StockCard = () => {
   // re-render DESC. Running balance is the cumulative qty *after* the row's
   // movement is applied. Reflects whatever scope the user is viewing (All
   // warehouses or one).
+  // OUT rows store qty as a positive count but reduce on-hand; we subtract.
+  // IN adds. ADJUSTMENT / TRANSFER carry a SIGNED qty (positive = found stock,
+  // negative = write-off / transfer-out) — add as-is.
   const movementsDesc = movementsQ.data ?? [];
   const movementsWithBalance = useMemo(() => {
     const asc = [...movementsDesc].slice().reverse();
     let running = 0;
     const out: Array<InventoryMovement & { runningBalance: number }> = [];
     for (const m of asc) {
-      running += m.qty;
+      running += m.movement_type === 'OUT' ? -m.qty : m.qty;
       out.push({ ...m, runningBalance: running });
     }
     // newest-first render
