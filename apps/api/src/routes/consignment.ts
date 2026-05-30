@@ -431,7 +431,14 @@ consignment.patch('/:id/notes/:noteId/post', async (c) => {
         source_doc_no: n.note_number,
         performed_by: user.id,
       }));
-    if (movements.length > 0) await writeMovements(sb, movements);
+    if (movements.length > 0) {
+      await writeMovements(sb, movements);
+      /* Consignment note posted = stock IN/OUT → re-walk SO allocation. */
+      try {
+        const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+        await recomputeSoStockAllocation(sb);
+      } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-consignment failed:', e); }
+    }
   }
 
   return c.json({ ok: true, noteId, type: n.note_type });
@@ -485,6 +492,11 @@ consignment.patch('/:id/notes/:noteId/cancel', async (c) => {
   // note is a clean no-op (sb finds zero matching rows).
   try {
     await reverseMovements(sb, 'CONSIGNMENT_NOTE', noteId, user.id);
+    /* Consignment cancel reversed stock → re-walk SO allocation. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-consignment-cancel failed:', e); }
   } catch { /* best-effort: never un-cancel on a movement failure */ }
 
   // Roll back the per-item consumption counter for a RETURN note. For an OUT

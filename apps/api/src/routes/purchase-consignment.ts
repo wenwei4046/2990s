@@ -466,7 +466,14 @@ purchaseConsignment.patch('/:id/notes/:noteId/post', async (c) => {
           performed_by: user.id,
         };
       });
-    if (movements.length > 0) await writeMovements(sb, movements);
+    if (movements.length > 0) {
+      await writeMovements(sb, movements);
+      /* PC note posted = stock IN/OUT → re-walk SO allocation. */
+      try {
+        const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+        await recomputeSoStockAllocation(sb);
+      } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pc failed:', e); }
+    }
   }
 
   return c.json({ ok: true, noteId, type: n.note_type });
@@ -506,6 +513,11 @@ purchaseConsignment.patch('/:id/notes/:noteId/cancel', async (c) => {
   // as a clean no-op (sb finds zero matching rows).
   try {
     await reverseMovements(sb, 'PURCHASE_CONSIGNMENT_NOTE', noteId, user.id);
+    /* PC cancel reversed stock → re-walk SO allocation. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pc-cancel failed:', e); }
   } catch { /* best-effort */ }
 
   // RETURN-note rollback (mirror of consignment cancel — IN-note has no per-item

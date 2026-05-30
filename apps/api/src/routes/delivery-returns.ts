@@ -744,6 +744,12 @@ deliveryReturns.patch('/:id/status', async (c) => {
   // OUT per line, via the shared reverseMovements helper). Best-effort.
   if (body.status === 'CANCELLED') {
     try { await reverseMovements(sb, 'DR', id, user.id); } catch { /* best-effort */ }
+    /* DR cancel pulled stock back out → other READY SOs that relied on it may
+       now regress to PENDING. Re-walk allocation. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-dr-cancel failed:', e); }
   }
 
   return c.json({ deliveryReturn: data });

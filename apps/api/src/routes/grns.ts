@@ -831,7 +831,15 @@ grns.patch('/:id/cancel', async (c) => {
           performed_by: user.id,
           notes: 'GRN cancelled — reversing receipt',
         }));
-      if (movements.length > 0) await writeMovements(sb, movements);
+      if (movements.length > 0) {
+        await writeMovements(sb, movements);
+        /* GRN cancel pulled stock back out → other READY SOs that relied on
+           this stock may need to regress. Re-walk allocation. Best-effort. */
+        try {
+          const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+          await recomputeSoStockAllocation(sb);
+        } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn-cancel failed:', e); }
+      }
     }
   } catch { /* best-effort: never un-cancel on a movement failure */ }
 

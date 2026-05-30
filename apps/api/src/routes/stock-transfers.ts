@@ -167,6 +167,13 @@ async function writeTransferMovements(
     }]);
     if (!inOk.ok) movementErrors.push(`IN ${ln.product_code}: ${inOk.reason ?? 'unknown'}`);
   }
+  /* Stock Transfer = net-zero across warehouses, but B2C allocation sums all
+     warehouses anyway so the totals don't change. Still re-walk in case any
+     row failed (partial transfer) and the bucket has actually shifted. */
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-transfer failed:', e); }
   return movementErrors;
 }
 

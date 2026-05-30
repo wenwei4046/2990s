@@ -188,7 +188,15 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     source_doc_no: doNo,
     performed_by: performedBy,
   }));
-  if (movements.length > 0) await writeMovements(sb, movements);
+  if (movements.length > 0) {
+    await writeMovements(sb, movements);
+    /* B2C SO auto-allocation — stock just went out; other PENDING/READY SOs
+       might lose their claim. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-do-ship failed:', e); }
+  }
 }
 
 /* ── resyncInventoryForDo (Commander 2026-05-30, TASK #24) ────────────────────
@@ -311,7 +319,14 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
       });
     }
   }
-  if (writes.length > 0) await writeMovements(sb, writes);
+  if (writes.length > 0) {
+    await writeMovements(sb, writes);
+    /* Resync changed stock — re-walk SO allocation. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-do-resync failed:', e); }
+  }
 }
 
 /* ── doLineConsumedQty (Commander 2026-05-30, TASK #24) ───────────────────────
