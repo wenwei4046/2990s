@@ -228,6 +228,21 @@ These are intentional changes from the prototype's current state. Anything not o
 
 **Note on brand colours:** #D44210 / #6259B2 / #FCE84D are **sub-brand** identity colours, intentionally outside the 2990's house palette (cream/orange/burnt/ink). This is the one sanctioned place they appear — scoped to the brand badge only. The "Don't change the brand colours" rule still holds everywhere else.
 
+### §5 · Cost / Sell split + POS "Master Account" + QuickPick rework
+
+**Approved on:** 2026-05-30 (Loo).
+**Status:** Planning complete — see `COST-SELL-SPLIT-PLAN.md` (locked decisions D1–D8 + phased roadmap). Phase 0 (decisions + dead-code verification) done; Phases 1–5 pending. **This deviation modifies §1**: the per-Model SELLING-price editor role moves off the Backend SKU Master onto the POS Master Account; Backend pricing becomes COST-only.
+
+**What changes (vs current build / prototype):**
+- **Backend Product Maintenance = COST only.** Its prices are treated as cost (the mfg server path already does this); they no longer surface as the POS selling price.
+- **New POS-side "Master Account" role** (lives in `apps/pos`, reuses the existing `apps/pos/src/pages/Products.tsx` selling-editor prototype) owns **selling** prices: per-SKU base sell price, Combo Price, permanent free gifts (`included_addons` shape), and a per-SKU **POS on/off** toggle (new `pos_active`, distinct from the cost-side `mfg_products.status`). Master Account sees all SKUs, never sees cost.
+- **The standalone Backend `/sku-master` page is removed** (it edits the orphaned retail `products` table; the live catalog uses `mfg_products`). Its unique features relocate per the plan (gifts→Master Account, photo→Product Maintenance, on/off→`pos_active`, stock→mfg Inventory). The retail `products` *table* is NOT dropped yet (still has lingering readers).
+- **Combo Price = first-priority override** (already implemented; "applies only if cheaper" semantics retained unless Loo says otherwise — removing that guard would conflict with honest pricing).
+- **QuickPick:** fixed presets → a central **base** (Master-Account-managed, with default sizes) **plus** a per-salesperson "Add to QuickPick" convenience layer. Supersedes the relevant part of the "Don't change the order step machine" note for the sofa Quick Pick screen only. ⚠️ Note: this relaxes the prototype's fixed-preset Quick Pick — change scoped to Quick Pick, not the step machine.
+- **Server-side (production `/mfg-sales-orders`):** selling price is **recomputed from the Master Account store** (Master Account = source of truth); client mismatch is **logged, never rejected** — restoring the honest-pricing server-recompute red line on the live path without blocking legitimate manual prices.
+
+**Not changed:** the sofa configurator/CustomBuilder visuals + snap math (red line #2), brand tokens, Lucide icons, the cost engine / inventory / accounting stack (already built).
+
 ---
 
 ## What NOT to do
