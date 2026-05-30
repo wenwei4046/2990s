@@ -362,6 +362,19 @@ export const Mrp = () => {
   // Sofa (per-set) shortage list.
   const shortageSets = viewSets.filter((s) => s.shortageQty > 0);
   const selectedShortageSets = shortageSets.filter((s) => selected.has(s.soItemId));
+  /* A sofa is proceeded as ONE PO — every colour-matched module row of the
+     same SO is selected/deselected together. Group by SO doc + colour. */
+  const sofaGroupKey = (s: SofaSet) => `${s.soDocNo}|${s.colour ?? ''}`;
+  const toggleSofaSet = (set: SofaSet) => {
+    const groupKey = sofaGroupKey(set);
+    const ids = shortageSets.filter((s) => sofaGroupKey(s) === groupKey).map((s) => s.soItemId);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected = ids.every((id) => next.has(id));
+      for (const id of ids) { if (allSelected) next.delete(id); else next.add(id); }
+      return next;
+    });
+  };
 
   // View-agnostic counts the header / select-all / summary read from.
   const shortCount = view === 'sofa' ? shortageSets.length : shortageSkus.length;
@@ -667,7 +680,7 @@ export const Mrp = () => {
                   key={set.soItemId}
                   set={set}
                   selected={selected.has(set.soItemId)}
-                  onSelect={() => toggleSelect(set.soItemId)}
+                  onSelect={() => toggleSofaSet(set)}
                   chosenSupplierId={supplierOverride[set.itemCode] ?? null}
                   onSupplierChange={(sid) => setRowSupplier(set.itemCode, sid)}
                 />
