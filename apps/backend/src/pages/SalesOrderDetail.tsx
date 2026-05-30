@@ -212,6 +212,11 @@ type SoHeader = {
   hub_name: string | null;
   customer_delivery_date: string | null;
   internal_expected_dd: string | null;
+  /* POS "Proceed" timestamp (migration 0110). Auto-stamped server-side when the
+     SO first enters IN_PRODUCTION (the POS "Proceed" action). Read-only here —
+     surfaced as "Proceed Date" in the Order Info card so the coordinator can
+     see WHEN the salesperson proceeded the order. */
+  proceeded_at: string | null;
   linked_do_doc_no: string | null;
   ship_to_address: string | null;
   bill_to_address: string | null;
@@ -1619,6 +1624,29 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 disabled={inputsDisabled}
                 onChange={(e) => set('customerDeliveryDate', e.target.value)}
                 style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Proceed Date</span>
+              {/* Read-only — auto-stamped server-side (proceeded_at, migration
+                  0110) the first time the POS marks this order Proceed. */}
+              <input
+                className={styles.fieldInput}
+                value={header?.proceeded_at
+                  ? new Date(header.proceeded_at).toLocaleString('en-MY', {
+                      day: 'numeric', month: 'short', year: 'numeric',
+                      hour: '2-digit', minute: '2-digit',
+                    })
+                  : '—'}
+                disabled
+                readOnly
+                aria-label="Proceed Date (auto-stamped when the POS marks the order Proceed)" />
+              <span style={{
+                fontSize: 'var(--fs-11)',
+                color: 'var(--fg-muted)',
+                marginTop: 2,
+              }}>
+                Auto-stamped when the POS marks this order Proceed.
+              </span>
             </label>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Note</span>
