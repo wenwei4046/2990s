@@ -8,6 +8,7 @@ import {
   canonicalizeComboModulesForStorage,
   comboSlotsKey,
   buildComboLabel,
+  comboChargedPrices,
   type SofaComboRow,
 } from '../sofa-combo-pricing';
 
@@ -329,5 +330,29 @@ describe('buildComboLabel (HOOKKA renderComponentSizes 1:1)', () => {
   it('accepts a legacy flat string[]', () => {
     expect(buildComboLabel(['1A-LHF', 'CNR', '2A-RHF']))
       .toBe('1A(LHF) + CNR + 2A(RHF)');
+  });
+});
+
+/* Combo cost/sell split (Phase 5, Part 1) — the engine charges the SELLING
+ * price merged over COST per height. POS + server both call this so the
+ * engine input is identical (mirrors the module sell_price_sen ?? base_price_sen
+ * repoint). */
+describe('comboChargedPrices', () => {
+  it('uses selling per height when set', () => {
+    expect(comboChargedPrices({ '24': 380000 }, { '24': 300000 })).toEqual({ '24': 380000 });
+  });
+  it('falls back to cost for a height selling has not priced', () => {
+    expect(comboChargedPrices({ '24': 380000 }, { '24': 300000, '28': 320000 }))
+      .toEqual({ '24': 380000, '28': 320000 });
+  });
+  it('treats a null selling entry as "not set" → cost shows through', () => {
+    expect(comboChargedPrices({ '24': null }, { '24': 300000 })).toEqual({ '24': 300000 });
+  });
+  it('null / undefined selling → cost unchanged', () => {
+    expect(comboChargedPrices(null, { '24': 300000 })).toEqual({ '24': 300000 });
+    expect(comboChargedPrices(undefined, { '24': 300000 })).toEqual({ '24': 300000 });
+  });
+  it('null / undefined cost → just the set selling entries', () => {
+    expect(comboChargedPrices({ '24': 380000 }, null)).toEqual({ '24': 380000 });
   });
 });

@@ -64,6 +64,23 @@ export interface PickComboArgs {
   asOf?: string;                // ISO date; defaults to today
 }
 
+/** Merge a combo's SELLING prices over its COST prices, per height. The result
+ *  is what the app charges (the engine's `pricesByHeight`): a set selling entry
+ *  wins; a missing/null selling entry falls back to the cost entry for that
+ *  height. Pure — POS and server both call it so the engine input is identical.
+ *  (Mirrors the module `sell_price_sen ?? base_price_sen` repoint — combos were
+ *  the cost-sell-split's one exception; Chairman 2026-05-31.) */
+export const comboChargedPrices = (
+  selling: Record<string, number | null> | null | undefined,
+  cost: Record<string, number | null> | null | undefined,
+): Record<string, number | null> => {
+  const out: Record<string, number | null> = { ...(cost ?? {}) };
+  for (const [height, v] of Object.entries(selling ?? {})) {
+    if (v !== null && v !== undefined) out[height] = v;
+  }
+  return out;
+};
+
 /**
  * Coerce raw combo `modules` into the canonical `string[][]` slot shape.
  *
