@@ -15,7 +15,6 @@
 //   GET /outstanding/so              — SOs not yet delivered/invoiced/closed
 //   GET /outstanding/do              — DOs not yet invoiced
 //   GET /outstanding/si              — SIs not fully paid
-//   GET /outstanding/consignment     — Open consignment orders (status=AT_BRANCH)
 //
 // All endpoints accept query params:
 //   ?outstanding=true|false   (default: true — only outstanding rows)
@@ -39,7 +38,6 @@ const MODULES: Record<string, { view: string; dateCol: string; orderCol?: string
   so:           { view: 'v_so_outstanding',           dateCol: 'so_date'        },
   do:           { view: 'v_do_outstanding',           dateCol: 'do_date'        },
   si:           { view: 'v_si_outstanding',           dateCol: 'invoice_date'   },
-  consignment:  { view: 'v_consignment_outstanding',  dateCol: 'placed_at'      },
 };
 
 for (const [slug, { view, dateCol }] of Object.entries(MODULES)) {

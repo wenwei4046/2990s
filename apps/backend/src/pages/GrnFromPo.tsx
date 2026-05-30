@@ -21,7 +21,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { VariantDescription } from '../components/VariantDescription';
 import {
   useOutstandingPoItems,
   type OutstandingPoItem,
@@ -243,20 +243,15 @@ export const GrnFromPo = () => {
     },
     {
       key: 'description', label: 'Description', width: 240, sortable: true,
-      accessor: (r) => {
-        const summary = buildVariantSummary(
-          r.itemGroup,
-          r.variants as Record<string, unknown> | null | undefined,
-        );
-        return (
-          <div>
-            <div>{r.description ?? '—'}</div>
-            {summary && (
-              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-            )}
-          </div>
-        );
-      },
+      accessor: (r) => (
+        <VariantDescription
+          itemCode={r.itemCode}
+          itemGroup={r.itemGroup}
+          variants={r.variants}
+          description={r.description}
+          mutedClassName={styles.muted}
+        />
+      ),
       searchValue: (r) => r.description ?? '',
     },
     {

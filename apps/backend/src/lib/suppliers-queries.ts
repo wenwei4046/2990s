@@ -154,6 +154,11 @@ export type PoHeaderRow = {
       separately, not on the header. Optional because not every consumer
       wants the join. */
   items?: PoItemSummary[];
+  /** Tier 2 downstream-lock — list + detail endpoints stamp this flag when
+      the PO has ANY non-cancelled GRN. Once true the PO is read-only +
+      un-cancellable (the GRN must be cancelled / deleted first). Convert-to-
+      GRN (partial receiving) is NOT gated. Mirrors GRN's has_children. */
+  has_children?: boolean;
 };
 
 export type PoItemSummary = {
@@ -546,6 +551,9 @@ export function useCreateGrnsFromPoItems() {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* Picker must refetch so already-received PO lines drop off the list
+         (Wei Siang 2026-05-30). */
+      qc.invalidateQueries({ queryKey: ['grns', 'outstanding-po-items'], refetchType: 'all' });
     },
   });
 }
@@ -602,6 +610,8 @@ export function useCreatePisFromGrnItems() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
+      /* Force picker refetch so already-invoiced GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 }
@@ -646,7 +656,9 @@ export function useCreatePosFromSoItems() {
       ),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
-      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'] });
+      /* Force picker refetch — refetchType:'all' kicks the query even when
+         not currently mounted, so the next view sees only outstanding lines. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'], refetchType: 'all' });
       qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
       if (vars.targetPoId) qc.invalidateQueries({ queryKey: ['mfg-purchase-order-detail', vars.targetPoId] });
     },

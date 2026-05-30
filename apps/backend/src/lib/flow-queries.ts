@@ -1,7 +1,7 @@
 // TanStack Query hooks for the procurement + sales flow modules ported
 // from HOOKKA + HOUZS in PR #13:
 //   GRN / Purchase Invoice / Sales Order / Delivery Order /
-//   Sales Invoice / Consignment / Delivery Return
+//   Sales Invoice / Delivery Return
 //
 // Kept terse — each module has list/detail/create/status hooks.
 
@@ -50,6 +50,8 @@ export const useGrnFromPos = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      /* Force picker refetch so received PO lines drop off. */
+      qc.invalidateQueries({ queryKey: ['grns', 'outstanding-po-items'], refetchType: 'all' });
     },
   });
 };
@@ -64,6 +66,8 @@ export const usePurchaseReturnFromGrns = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-returns'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
+      /* Force picker refetch so returned/invoiced GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 };
@@ -77,6 +81,9 @@ export const usePoFromSos = () => {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      /* Force PO-picker refetch so converted SO lines drop off. */
+      qc.invalidateQueries({ queryKey: ['mfg-purchase-orders', 'outstanding-so-items'], refetchType: 'all' });
     },
   });
 };
@@ -192,6 +199,8 @@ export const usePurchaseInvoiceFromGrn = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-invoices'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
+      /* Force picker refetch so already-invoiced GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 };
@@ -206,6 +215,8 @@ export const usePurchaseReturnFromGrn = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchase-returns'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
+      /* Force picker refetch so returned GRN lines drop off. */
+      qc.invalidateQueries({ queryKey: ['purchase-invoices', 'outstanding-grn-items'], refetchType: 'all' });
     },
   });
 };
@@ -321,6 +332,72 @@ export const useCreateMfgSalesOrder = () => {
   });
 };
 
+/* Edge #J — catches the 409 short_stock thrown by authedFetch when a DO ship
+   path detects insufficient stock at the target warehouse. Pops the same
+   "stock not enough — continue?" prompt the from-sos picker uses, and on
+   confirm retries the call with confirmShortStock: true so the server lets
+   the OUT go through. Operator who hits Cancel sees the original error. */
+async function withShortStockRetry<T>(call: (extra: { confirmShortStock?: boolean }) => Promise<T>): Promise<T> {
+  try { return await call({}); }
+  catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    if (!raw.includes('"short_stock"')) throw e;
+    try {
+      const jsonStart = raw.indexOf('{');
+      const body = JSON.parse(raw.slice(jsonStart)) as {
+        shortages?: Array<{
+          itemCode: string; warehouseName: string | null;
+          needed: number; available: number; short: number;
+          alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
+        }>;
+      };
+      const lines = (body.shortages ?? []).map((s) => {
+        const alts = (s.alternatives ?? []).slice(0, 3)
+          .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
+          .join(', ');
+        const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
+        return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
+      }).join('\n\n');
+      if (window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`)) {
+        return await call({ confirmShortStock: true });
+      }
+    } catch { /* fall through */ }
+    throw e;
+  }
+}
+
+/* Manual "Re-allocate stock to SOs now" — walks every active SO line and
+   flips PENDING/READY against live inventory. Auto-advances SO header
+   CONFIRMED↔READY_TO_SHIP. Server-side helper at POST /recompute-allocation. */
+/* Manual SO priority override (#38). Bumps an SO to the head of the
+   allocation queue regardless of delivery date. Pass rank=null to clear. */
+export const useSetSoPriority = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, rank, reason }: { docNo: string; rank: number | null; reason?: string | null }) =>
+      authedFetch<{ salesOrder: { doc_no: string; priority_rank: number | null; priority_reason: string | null } }>(
+        `/mfg-sales-orders/${docNo}/priority`,
+        { method: 'PATCH', body: JSON.stringify({ rank, reason: reason ?? null }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+    },
+  });
+};
+
+export const useRecomputeSoAllocation = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      authedFetch<{ ok: boolean; linesFlipped: number; ordersAdvanced: number; ordersRegressed: number }>(
+        `/mfg-sales-orders/recompute-allocation`,
+        { method: 'POST', body: JSON.stringify({}) },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] }),
+  });
+};
+
 export const useUpdateMfgSalesOrderHeader = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -336,26 +413,11 @@ export const useUpdateMfgSalesOrderHeader = () => {
   });
 };
 
-/* Convert an SO → new DO. Server inserts the DO header + items, links
-   the SO back to the new DO, and emits a UPDATE_DETAILS audit row.
-   Invalidates both lists so the new DO shows up and the SO row reflects
-   the linked_do_doc_no change. */
-export const useConvertSoToDo = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ docNo, deliveryDate }: { docNo: string; deliveryDate?: string }) =>
-      authedFetch<{ doDocNo: string; deliveryOrderId: string; lineCount: number }>(
-        `/mfg-sales-orders/${docNo}/convert-to-do`,
-        { method: 'POST', body: JSON.stringify({ deliveryDate: deliveryDate ?? null }) },
-      ),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
-      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
-      qc.invalidateQueries({ queryKey: ['mfg-sales-order-audit-log', vars.docNo] });
-      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
-    },
-  });
-};
+/* Legacy whole-SO → DO converter REMOVED (#378). It wrote no inventory OUT
+   (left the DO at LOADED so deductInventoryForDo never fired) AND bypassed
+   the line-level deliverable-remaining cap (silent double-delivery). The
+   live convert path is `useConvertSoLinesToDo` — a line-level picker that
+   enforces remaining and writes inventory on dispatch. */
 
 /* Deliverable SO LINES for the line-level SO→DO picker (Commander 2026-05-30).
    Each row is an SO line that can still be delivered — remaining = qty −
@@ -397,14 +459,23 @@ export const useDeliverableSoLines = () => useQuery({
 export const useConvertSoLinesToDo = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ picks }: { picks: Array<{ soItemId: string; qty: number }> }) =>
+    mutationFn: (vars: {
+      picks: Array<{ soItemId: string; qty: number }>;
+      /* Edge #1+#2 — re-submit with confirmShortStock: true to ship anyway
+         after the operator confirmed the stock-shortage dialog. */
+      confirmShortStock?: boolean;
+    }) =>
       authedFetch<{ id: string; doNumber: string }>(
         `/delivery-orders-mfg/from-sos`,
-        { method: 'POST', body: JSON.stringify({ picks }) },
+        { method: 'POST', body: JSON.stringify(vars) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* Force the picker queries to refetch immediately so already-converted
+         lines disappear from the list on next view (Wei Siang 2026-05-30). */
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', 'deliverable-so-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
     },
   });
 };
@@ -797,9 +868,11 @@ export const useAddMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
-      authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
-        method: 'POST', body: JSON.stringify(item),
-      }),
+      withShortStockRetry((extra) =>
+        authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
+          method: 'POST', body: JSON.stringify({ ...item, ...extra }),
+        }),
+      ),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
@@ -811,9 +884,11 @@ export const useUpdateMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
-      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
-        method: 'PATCH', body: JSON.stringify(item),
-      }),
+      withShortStockRetry((extra) =>
+        authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
+          method: 'PATCH', body: JSON.stringify({ ...item, ...extra }),
+        }),
+      ),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
@@ -924,6 +999,11 @@ export const useUpdateSalesInvoiceStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
       qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
+      /* Cancel reverses revenue (contra JE) — refresh accounting + the
+         invoiceable-lines picker so the released qty re-appears as Pending. */
+      qc.invalidateQueries({ queryKey: ['journal-entries'] });
+      qc.invalidateQueries({ queryKey: ['account-balances'] });
+      qc.invalidateQueries({ queryKey: ['ar-aging'] });
     },
   });
 };
@@ -941,24 +1021,70 @@ export const useRecordSiPayment = () => {
   });
 };
 
-/* Convert SEVERAL same-customer Delivery Orders → ONE merged Sales Invoice.
-   Server validates the selected DOs share one customer, copies the first DO's
-   header, merges every DO's lines into one invoice (status SENT), recomputes
-   totals, then records revenue (Dr 1100 AR / Cr 4000 Sales Revenue), idempotent
-   on the invoice number. Returns the new invoice's { id, invoiceNumber }. */
+/* Line-level DO → conversion descriptor (Commander 2026-05-30, Phase B). Each
+   row is a DO line that can still be invoiced OR returned — remaining =
+   delivered − invoiced − returned, derived live by the server (no stored
+   counter). Invoicing + returning compete for the same Pending pool, so an
+   invoiced unit can't be returned and vice-versa. Shared by the invoiceable +
+   returnable pickers (same shape; `remaining` means remaining_to_invoice on the
+   SI side and remaining_to_return on the DR side). */
+export type DoRemainingLine = {
+  doItemId: string;
+  deliveryOrderId: string;
+  doNumber: string;
+  debtorCode: string | null;
+  debtorName: string | null;
+  itemCode: string;
+  itemGroup: string | null;
+  description: string | null;
+  description2: string | null;
+  uom: string | null;
+  delivered: number;
+  invoiced: number;
+  returned: number;
+  remaining: number;
+  unitPriceCenti: number;
+  unitCostCenti: number;
+  discountCenti: number;
+  variants: unknown;
+};
+
+/* Invoiceable DO LINES for the line-level DO→Sales Invoice picker. Each row is a
+   DO line with remaining_to_invoice > 0. A line can be invoiced across several
+   invoices until remaining hits 0. */
+export const useInvoiceableDoLines = () => useQuery({
+  queryKey: ['sales-invoices', 'invoiceable-do-lines'],
+  queryFn: () => authedFetch<{ lines: DoRemainingLine[] }>(
+    `/sales-invoices/invoiceable-do-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
+/* Convert picked DO LINES (each with a partial qty) → ONE Sales Invoice. Server
+   validates the picks share one customer + each qty is 1..remaining_to_invoice,
+   creates one invoice line per pick (status SENT), recomputes totals, then
+   records revenue (Dr 1100 AR / Cr 4000 Sales Revenue), idempotent on the
+   invoice number. Returns the new invoice's { id, invoiceNumber }. */
 export const useConvertDosToSi = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ doIds }: { doIds: string[] }) =>
+    mutationFn: ({ picks }: { picks: Array<{ doItemId: string; qty: number }> }) =>
       authedFetch<{ id: string; invoiceNumber: string; revenue: { posted: boolean; jeNo?: string; status: string } }>(
         `/sales-invoices/from-dos`,
-        { method: 'POST', body: JSON.stringify({ doIds }) },
+        { method: 'POST', body: JSON.stringify({ picks }) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
       qc.invalidateQueries({ queryKey: ['journal-entries'] });
       qc.invalidateQueries({ queryKey: ['account-balances'] });
       qc.invalidateQueries({ queryKey: ['ar-aging'] });
+      /* Picker must refetch so already-invoiced DO lines drop off the list
+         (Wei Siang 2026-05-30). Both pickers compete for the same DO Pending
+         pool, so refresh BOTH. */
+      qc.invalidateQueries({ queryKey: ['sales-invoices', 'invoiceable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['delivery-returns', 'returnable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
     },
   });
 };
@@ -974,6 +1100,9 @@ export const useAppendDoToSalesInvoice = () => {
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
       qc.invalidateQueries({ queryKey: ['journal-entries'] });
       qc.invalidateQueries({ queryKey: ['account-balances'] });
+      /* Force picker refetch — both pickers share the same DO Pending pool. */
+      qc.invalidateQueries({ queryKey: ['sales-invoices', 'invoiceable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['delivery-returns', 'returnable-do-lines'], refetchType: 'all' });
     },
   });
 };
@@ -1088,54 +1217,6 @@ export const useDeleteSalesInvoicePayment = () => {
       qc.invalidateQueries({ queryKey: ['sales-invoices', vars.id, 'payments'] });
       qc.invalidateQueries({ queryKey: ['sales-invoice-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['sales-invoices'] });
-    },
-  });
-};
-
-/* ── Consignment ─────────────────────────────────────────────────────── */
-export const useConsignments = (status?: string) => baseQuery<{ consignments: any[] }>(['consignments', status ?? 'all'], `/consignment${status ? `?status=${status}` : ''}`);
-export const useConsignmentDetail = (id: string | null) => useQuery({
-  queryKey: ['consignment-detail', id],
-  queryFn: () => authedFetch<{ consignment: any; items: any[]; notes: any[] }>(`/consignment/${id}`),
-  enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
-});
-export const useCreateConsignment = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: unknown) => authedFetch<{ id: string; consignmentNumber: string }>(`/consignment`, { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['consignments'] }),
-  });
-};
-export const useUpdateConsignmentStatus = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      authedFetch(`/consignment/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['consignments'] });
-      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
-    },
-  });
-};
-export const useAddConsignmentNote = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
-      authedFetch<{ id: string; noteNumber: string }>(`/consignment/${id}/notes`, {
-        method: 'POST', body: JSON.stringify(body),
-      }),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
-    },
-  });
-};
-export const usePostConsignmentNote = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
-      authedFetch(`/consignment/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
     },
   });
 };
@@ -1261,19 +1342,40 @@ export const useCreateDeliveryReturn = () => {
   });
 };
 
-/* Convert a DO → new Delivery Return. Server snapshots the DO header + copies
-   the picked lines (with variants + prices + costs) into a new return, then
-   increases stock. Returns can ONLY come from a DO. */
+/* Returnable DO LINES for the line-level DO→Delivery Return picker. Each row is
+   a DO line with remaining_to_return > 0 — the SAME Pending pool as
+   remaining_to_invoice, so invoiced units never appear here. A line can be
+   returned across several returns until remaining hits 0. */
+export const useReturnableDoLines = () => useQuery({
+  queryKey: ['delivery-returns', 'returnable-do-lines'],
+  queryFn: () => authedFetch<{ lines: DoRemainingLine[] }>(
+    `/delivery-returns/returnable-do-lines`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
+/* Convert picked DO LINES (each with a partial qty) → ONE Delivery Return.
+   Server validates the picks share one customer + each qty is
+   1..remaining_to_return, creates one return line per pick (status RECEIVED),
+   recomputes totals, then increases stock. Returns the new return's
+   { id, returnNumber, lineCount }. */
 export const useConvertDoToDeliveryReturn = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { deliveryOrderId: string; items?: Array<{ doItemId: string; qtyReturned: number; condition?: string }> }) =>
+    mutationFn: (body: { picks: Array<{ doItemId: string; qty: number; condition?: string }> }) =>
       authedFetch<{ id: string; returnNumber: string; lineCount: number }>(
         `/delivery-returns/from-do`, { method: 'POST', body: JSON.stringify(body) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['delivery-returns'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* Picker must refetch so returned DO lines drop off the list. Both
+         pickers (return + invoice) compete for the same DO Pending pool so
+         refresh both (Wei Siang 2026-05-30). */
+      qc.invalidateQueries({ queryKey: ['delivery-returns', 'returnable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['sales-invoices', 'invoiceable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
     },
   });
 };
@@ -1304,6 +1406,9 @@ export const useUpdateDeliveryReturnStatus = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['delivery-returns'] });
       qc.invalidateQueries({ queryKey: ['delivery-return-detail', vars.id] });
+      /* Cancel reverses the inventory increase (negative ADJUSTMENT) — refresh
+         inventory so on-hand reflects the removed stock. */
+      qc.invalidateQueries({ queryKey: ['inventory'] });
     },
   });
 };
@@ -1667,7 +1772,7 @@ export const useSalesOrderDetailListing = (filters: SoDetailListingFilters) => {
   });
 };
 
-/* ── Task #120 — L2 Detail Listings for DO / SI / Consignment / DR ────
+/* ── Task #120 — L2 Detail Listings for DO / SI / DR ────
    Mirrors the SO Detail Listing pattern (one row per line item, header
    denormalised onto each row). Server-side endpoints in
    apps/api/src/routes/reports.ts. */
@@ -1732,18 +1837,6 @@ export const useSalesInvoiceDetailListing = (filters: DetailListingFilters) => {
   });
 };
 
-export const useConsignmentDetailListing = (filters: DetailListingFilters) => {
-  const qs = buildDetailListingQs(filters);
-  return useQuery({
-    queryKey: ['reports', 'consignment-detail-listing', qs],
-    queryFn: () => authedFetch<{ rows: DetailListingRow[] }>(
-      `/reports/consignment-detail-listing${qs ? `?${qs}` : ''}`,
-    ),
-    placeholderData: (prev) => prev,
-    staleTime: 30_000,
-  });
-};
-
 export const useDeliveryReturnDetailListing = (filters: DetailListingFilters) => {
   const qs = buildDetailListingQs(filters);
   return useQuery({
@@ -1761,7 +1854,7 @@ export const useDeliveryReturnDetailListing = (filters: DetailListingFilters) =>
    ════════════════════════════════════════════════════════════════════════ */
 
 export type OutstandingModule =
-  | 'po' | 'grn' | 'pi' | 'pr' | 'so' | 'do' | 'si' | 'consignment';
+  | 'po' | 'grn' | 'pi' | 'pr' | 'so' | 'do' | 'si';
 
 export type OutstandingFilterMode = 'outstanding' | 'completed' | 'all';
 

@@ -18,9 +18,35 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
+
+/* ── DO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
+   A DO locks (read-only — no line edit / no CANCELLED transition) once it has
+   ANY non-cancelled Delivery Return (DR) OR Sales Invoice (SI) referencing it.
+   Convert-to-DR / convert-to-SI is NOT gated by this: the DO can keep emitting
+   children; only line MUTATIONS + the CANCELLED status transition are blocked,
+   mirroring grnHasDownstream in apps/api/src/routes/grns.ts. Returns the
+   blocking JSON, or null if the DO is free to edit. */
+async function doHasDownstream(sb: any, doId: string): Promise<{ error: string; message: string } | null> {
+  const [{ count: drCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_returns')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', doId)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', doId)
+      .neq('status', 'CANCELLED'),
+  ]);
+  if ((drCount ?? 0) > 0 || (siCount ?? 0) > 0) {
+    return { error: 'do_has_downstream', message: 'DO has a Delivery Return / Sales Invoice — delete or cancel it first to edit' };
+  }
+  return null;
+}
 
 /* Full DO header — mirrors the editable SO header shape. The pre-rebuild
    columns (driver / vehicle / pod / signature / m3 / dispatched-signed-
@@ -162,7 +188,178 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     source_doc_no: doNo,
     performed_by: performedBy,
   }));
-  if (movements.length > 0) await writeMovements(sb, movements);
+  if (movements.length > 0) {
+    await writeMovements(sb, movements);
+    /* B2C SO auto-allocation — stock just went out; other PENDING/READY SOs
+       might lose their claim. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-do-ship failed:', e); }
+  }
+}
+
+/* ── resyncInventoryForDo (Commander 2026-05-30, TASK #24) ────────────────────
+   Bring inventory in line with the CURRENT shape of a SHIPPED DO's lines, after
+   the operator edits a line qty / deletes a line / adds a line. The first ship
+   already wrote OUT rows via deductInventoryForDo; this helper writes DELTA
+   movements (IN to give stock back, OUT to take more) so the booked net OUT
+   per (product_code, variant_key) bucket matches the live sum of active lines.
+
+   Why DELTA inserts instead of UPDATE in place: the FIFO trigger (migration
+   0053) fires AFTER INSERT, not UPDATE. Updating qty on an existing OUT row
+   would leave the lot/consumption ledger stale. A fresh IN insert lets the
+   trigger create a new lot at the original cost basis; a fresh OUT insert lets
+   it consume more lots. Migration 0109 dropped the per-bucket UNIQUE so we can
+   freely write multiple delta rows over time.
+
+   IDEMPOTENT: re-running with no line changes yields delta 0 everywhere — no
+   writes. Cancel-reversal still works via reverseMovements (it nets per
+   bucket). Non-shipped DOs skip — deductInventoryForDo handles the first ship. */
+async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedBy: string) {
+  // Header — need warehouse_id, do_number, status.
+  const { data: doHeader } = await sb.from('delivery_orders')
+    .select('do_number, status, warehouse_id')
+    .eq('id', deliveryOrderId).maybeSingle();
+  if (!doHeader) return;
+  const status = ((doHeader as { status: string | null }).status ?? '').toUpperCase();
+  if (!SHIPPED_STATES.includes(status)) return; // not yet shipped → no OUT yet → nothing to sync
+  const warehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id
+    ?? (await defaultWarehouseId(sb));
+  if (!warehouseId) return;
+  const doNo = (doHeader as { do_number: string }).do_number;
+
+  // 1. Target qty per (product_code, variant_key) bucket — sum of current
+  //    active DO lines (mirror of deductInventoryForDo's collapsing).
+  const { data: items } = await sb.from('delivery_order_items')
+    .select('item_code, description, qty, item_group, variants')
+    .eq('delivery_order_id', deliveryOrderId);
+  type Bucket = { product_code: string; variant_key: string; product_name: string | null; qty: number };
+  const targetByBucket = new Map<string, Bucket>();
+  for (const it of (items as Array<{ item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
+    const qty = Number(it.qty ?? 0);
+    if (qty <= 0) continue;
+    const variant_key = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+    const k = `${it.item_code}::${variant_key}`;
+    const cur = targetByBucket.get(k);
+    if (cur) { cur.qty += qty; }
+    else targetByBucket.set(k, { product_code: it.item_code, variant_key, product_name: it.description, qty });
+  }
+
+  // 2. Aggregate existing movements per bucket — current OUT qty / IN qty.
+  //    Also accumulate OUT total_cost_sen so the reversing IN re-introduces
+  //    stock at the same weighted cost basis (matches reverseMovements).
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, product_code, variant_key, qty, unit_cost_sen, total_cost_sen, product_name')
+    .eq('source_doc_type', 'DO')
+    .eq('source_doc_id', deliveryOrderId);
+  type Agg = { out_qty: number; in_qty: number; out_total_cost: number; product_name: string | null };
+  const aggByBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{
+    movement_type: string; product_code: string; variant_key: string | null;
+    qty: number; unit_cost_sen: number | null; total_cost_sen: number | null; product_name: string | null;
+  }>) {
+    const k = `${m.product_code}::${m.variant_key ?? ''}`;
+    let agg = aggByBucket.get(k);
+    if (!agg) { agg = { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, agg); }
+    if (m.movement_type === 'OUT') {
+      agg.out_qty += Number(m.qty ?? 0);
+      agg.out_total_cost += Number(m.total_cost_sen ?? 0);
+    } else if (m.movement_type === 'IN') {
+      agg.in_qty += Number(m.qty ?? 0);
+    }
+    if (!agg.product_name) agg.product_name = m.product_name;
+  }
+
+  // 3. Per-bucket delta = target − current_net_out. Positive → need more OUT;
+  //    negative → need more IN (return some stock).
+  const allKeys = new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()]);
+  type MovOut = Parameters<typeof writeMovements>[1][number];
+  const writes: MovOut[] = [];
+  for (const k of allKeys) {
+    const t = targetByBucket.get(k);
+    const a = aggByBucket.get(k) ?? { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: null };
+    const target_qty = t?.qty ?? 0;
+    const current_net_out = a.out_qty - a.in_qty;
+    const delta = target_qty - current_net_out;
+    if (delta === 0) continue;
+    const parts = k.split('::');
+    const product_code = parts[0] ?? '';
+    const variant_key = parts[1] ?? '';
+    const product_name = t?.product_name ?? a.product_name ?? null;
+    if (delta > 0) {
+      // Need more OUT — operator increased a line qty or added a new line on a shipped DO.
+      writes.push({
+        movement_type: 'OUT',
+        warehouse_id: warehouseId,
+        product_code, variant_key, product_name,
+        qty: delta,
+        source_doc_type: 'DO',
+        source_doc_id: deliveryOrderId,
+        source_doc_no: doNo,
+        performed_by: performedBy,
+        notes: 'Resync: line qty increased / line added (shipped DO).',
+      });
+    } else {
+      // delta < 0 — operator reduced a line qty or deleted a line. Give stock back.
+      // Cost basis = weighted average of the original OUTs so the reversing IN
+      // re-opens the lot at the same cost (matches reverseMovements semantics).
+      const unit_cost_sen = a.out_qty > 0 ? Math.round(a.out_total_cost / a.out_qty) : 0;
+      writes.push({
+        movement_type: 'IN',
+        warehouse_id: warehouseId,
+        product_code, variant_key, product_name,
+        qty: -delta,
+        unit_cost_sen,
+        source_doc_type: 'DO',
+        source_doc_id: deliveryOrderId,
+        source_doc_no: doNo,
+        performed_by: performedBy,
+        notes: 'Resync: line qty reduced / line deleted (shipped DO).',
+      });
+    }
+  }
+  if (writes.length > 0) {
+    await writeMovements(sb, writes);
+    /* Resync changed stock — re-walk SO allocation. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-do-resync failed:', e); }
+  }
+}
+
+/* ── doLineConsumedQty (Commander 2026-05-30, TASK #24) ───────────────────────
+   Σ invoiced + Σ returned for a DO line — the downstream-paper-consumption
+   floor below which the line's qty can't shrink (and below which the line
+   can't be deleted). Mirrors the do-line-remaining "invoiced / returned"
+   formula but for a single line. Cancel-released → 0 (rows on cancelled
+   SI/DR are excluded). */
+async function doLineConsumedQty(sb: any, doItemId: string): Promise<number> {
+  let invoiced = 0, returned = 0;
+  // Σ invoiced via non-cancelled Sales Invoice.
+  const { data: siLines } = await sb.from('sales_invoice_items')
+    .select('qty, sales_invoice_id').eq('do_item_id', doItemId);
+  const siRows = (siLines ?? []) as Array<{ qty: number; sales_invoice_id: string }>;
+  const siIds = [...new Set(siRows.map((l) => l.sales_invoice_id).filter(Boolean))];
+  if (siIds.length > 0) {
+    const { data: sis } = await sb.from('sales_invoices').select('id, status').in('id', siIds);
+    const active = new Set(((sis ?? []) as Array<{ id: string; status: string | null }>)
+      .filter((s) => (s.status ?? '').toUpperCase() !== 'CANCELLED').map((s) => s.id));
+    for (const l of siRows) if (active.has(l.sales_invoice_id)) invoiced += Number(l.qty ?? 0);
+  }
+  // Σ returned via non-cancelled Delivery Return.
+  const { data: drLines } = await sb.from('delivery_return_items')
+    .select('qty_returned, delivery_return_id').eq('do_item_id', doItemId);
+  const drRows = (drLines ?? []) as Array<{ qty_returned: number; delivery_return_id: string }>;
+  const drIds = [...new Set(drRows.map((l) => l.delivery_return_id).filter(Boolean))];
+  if (drIds.length > 0) {
+    const { data: drs } = await sb.from('delivery_returns').select('id, status').in('id', drIds);
+    const active = new Set(((drs ?? []) as Array<{ id: string; status: string | null }>)
+      .filter((d) => (d.status ?? '').toUpperCase() !== 'CANCELLED').map((d) => d.id));
+    for (const l of drRows) if (active.has(l.delivery_return_id)) returned += Number(l.qty_returned ?? 0);
+  }
+  return invoiced + returned;
 }
 
 /* Commander 2026-05-30 — LINE-LEVEL, QUANTITY-BASED partial delivery.
@@ -310,7 +507,28 @@ deliveryOrdersMfg.get('/', async (c) => {
   const status = c.req.query('status'); if (status) q = q.eq('status', status);
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ deliveryOrders: data ?? [] });
+
+  /* Tier 2 downstream-lock — one extra batched read per doc set: pull every
+     non-cancelled DR/SI that points back to a listed DO and stamp has_children
+     on the row. The list grid uses this to hide Edit / Cancel actions on DOs
+     that are downstream-locked (mirrors computeGrnFlags in routes/grns.ts). */
+  const rows = (data ?? []) as unknown as Array<{ id: string } & Record<string, unknown>>;
+  const childIds = new Set<string>();
+  if (rows.length > 0) {
+    const ids = rows.map((r) => r.id);
+    const [drRes, siRes] = await Promise.all([
+      sb.from('delivery_returns').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
+      sb.from('sales_invoices').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
+    ]);
+    for (const d of ((drRes.data ?? []) as Array<{ delivery_order_id: string | null }>)) {
+      if (d.delivery_order_id) childIds.add(d.delivery_order_id);
+    }
+    for (const s of ((siRes.data ?? []) as Array<{ delivery_order_id: string | null }>)) {
+      if (s.delivery_order_id) childIds.add(s.delivery_order_id);
+    }
+  }
+  const deliveryOrders = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
+  return c.json({ deliveryOrders });
 });
 
 // ── Deliverable SO lines (line-level partial-delivery picker) ─────────────
@@ -357,7 +575,23 @@ deliveryOrdersMfg.get('/:id', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ deliveryOrder: h.data, items: i.data ?? [] });
+  /* Tier 2 downstream-lock — stamp has_children so the DO Detail page can lock
+     once any non-cancelled DR / SI references it. */
+  const [{ count: drCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_returns')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', id)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('delivery_order_id', id)
+      .neq('status', 'CANCELLED'),
+  ]);
+  const deliveryOrder = {
+    ...(h.data as unknown as Record<string, unknown>),
+    has_children: (drCount ?? 0) > 0 || (siCount ?? 0) > 0,
+  };
+  return c.json({ deliveryOrder, items: i.data ?? [] });
 });
 
 // ── Create ──────────────────────────────────────────────────────────────
@@ -372,6 +606,27 @@ deliveryOrdersMfg.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Edge #4 — itemCode catalog guard. */
+  if (items.length > 0) {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Edge #1+#2 — soft stock check, gated by confirmShortStock. */
+  if (items.length > 0 && !body.confirmShortStock) {
+    const targetWh = (body.warehouseId as string | undefined) ?? (await defaultWarehouseId(sb));
+    if (targetWh) {
+      const stockLines = items.map((it) => ({
+        itemCode: String(it.itemCode ?? ''),
+        productName: (it.description as string | null) ?? null,
+        variantKey: computeVariantKey((it.itemGroup as string | null) ?? null, (it.variants as VariantAttrs | null) ?? null),
+        qty: Number(it.qty ?? 0),
+      }));
+      const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+      if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+    }
+  }
 
   /* Commander 2026-05-30 — the old whole-SO "already_converted" binary lock is
      GONE. Delivery is now line-level + quantity-based (see
@@ -500,7 +755,7 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>) {
      4. recomputeTotals + deductInventoryForDo (both idempotent). */
 deliveryOrdersMfg.post('/from-sos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { picks?: Array<{ soItemId?: string; qty?: number }> };
+  let body: { picks?: Array<{ soItemId?: string; qty?: number }>; confirmShortStock?: boolean; warehouseId?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
   // Collapse duplicate soItemIds (sum their qty) so a line can't appear twice.
@@ -576,6 +831,23 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     .map((id) => remainingMap.get(id)!)
     .sort((a, b) => a.docNo.localeCompare(b.docNo) || a.soItemId.localeCompare(b.soItemId));
   const firstSoDocNo = sortedPicks[0]!.docNo;
+
+  // Edge #1+#2 — soft stock check at the target warehouse, gated by
+  // confirmShortStock. Returns 409 short_stock with cross-warehouse alternatives
+  // so the picker can offer "ship anyway / switch warehouse / reduce qty".
+  if (!body.confirmShortStock) {
+    const targetWh = body.warehouseId ?? (await defaultWarehouseId(sb));
+    if (targetWh) {
+      const stockLines = sortedPicks.map((line) => ({
+        itemCode: line.itemCode,
+        productName: line.description,
+        variantKey: computeVariantKey(line.itemGroup ?? null, (line.variants as VariantAttrs | null) ?? null),
+        qty: pickQtyById.get(line.soItemId) ?? 0,
+      }));
+      const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+      if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+    }
+  }
 
   // Pull the FIRST SO's header for the DO header snapshot (address / salesperson
   // / branding / venue / contact). Lines carry their own debtor snapshot.
@@ -680,6 +952,29 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
   }
 
+  /* Edge #E — race-condition guard. The Phase B over_remaining check above is
+     read-before-write, so two parallel converts on the same SO line could both
+     pass and over-allocate. After inserting, re-derive remaining for the picked
+     SO lines and ROLLBACK (delete the just-created DO) when any line has gone
+     negative. Cheap belt-and-suspenders on top of the front-end's optimism. */
+  {
+    const recheck = await soDeliverableRemaining(sb, docNos);
+    const overcommitted = pickedIds
+      .map((sid) => recheck.get(sid))
+      .filter((l): l is DeliverableLine => l !== undefined && l.remaining < 0);
+    if (overcommitted.length > 0) {
+      // Undo: delete the DO + its lines. Inventory wasn't deducted yet — we
+      // haven't called deductInventoryForDo at this point in the flow.
+      await sb.from('delivery_order_items').delete().eq('delivery_order_id', dh.id);
+      await sb.from('delivery_orders').delete().eq('id', dh.id);
+      return c.json({
+        error: 'race_conflict',
+        message: 'Another operator just converted overlapping qty from this Sales Order. Refresh the picker and try again.',
+        conflicts: overcommitted.map((l) => ({ docNo: l.docNo, itemCode: l.itemCode, remaining: l.remaining })),
+      }, 409);
+    }
+  }
+
   // 4. Roll up the header totals + deduct stock (both idempotent).
   await recomputeTotals(sb, dh.id);
   await deductInventoryForDo(sb, dh.id, user.id);
@@ -733,25 +1028,67 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
 
 // ── Item CRUD ─────────────────────────────────────────────────────────────
 deliveryOrdersMfg.post('/:id/items', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
-  const { data: header } = await sb.from('delivery_orders').select('id').eq('id', id).maybeSingle();
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Tier 2 downstream-lock — line-add is blocked once a DR / SI exists. */
+  const childLock = await doHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
+
+  const { data: header } = await sb.from('delivery_orders').select('id, status, warehouse_id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
+
+  /* Edge #1+#2 — if the DO is already shipped, an added line ships immediately
+     via resync; check stock first, gated by confirmShortStock. Skipped on a
+     not-yet-shipped DO (no OUT yet — first-ship deduction handles it). */
+  const h = header as { id: string; status: string | null; warehouse_id: string | null };
+  if (SHIPPED_STATES.includes((h.status ?? '').toUpperCase()) && !(it as { confirmShortStock?: boolean }).confirmShortStock) {
+    const targetWh = h.warehouse_id ?? (await defaultWarehouseId(sb));
+    if (targetWh) {
+      const stockLines = [{
+        itemCode: String(it.itemCode ?? ''),
+        productName: (it.description as string | null) ?? null,
+        variantKey: computeVariantKey((it.itemGroup as string | null) ?? null, (it.variants as VariantAttrs | null) ?? null),
+        qty: Number(it.qty ?? 0),
+      }];
+      const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+      if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+    }
+  }
 
   const row = buildItemRow(id, it);
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  // TASK #24 — if the DO is already shipped, adding a line MUST extend the
+  // OUT booking for that bucket (otherwise the new line ships but inventory
+  // doesn't move). No-op when not shipped — deductInventoryForDo handles ship.
+  await resyncInventoryForDo(sb, id, user?.id);
   return c.json({ item: data }, 201);
 });
 
 deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Tier 2 downstream-lock — line-edit is blocked once a DR / SI exists. */
+  const childLock = await doHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('delivery_order_items')
     .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes')
@@ -759,6 +1096,46 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const qty = it.qty !== undefined ? Number(it.qty) : Number(prev.qty);
+
+  /* Edge #1+#2 — when qty is being INCREASED on a shipped DO, the delta
+     needs more stock OUT. Check that delta against the warehouse, gated by
+     confirmShortStock. Decreases and non-qty edits skip the check. */
+  if (it.qty !== undefined && qty > Number(prev.qty) && !(it as { confirmShortStock?: boolean }).confirmShortStock) {
+    const { data: doHeader } = await sb.from('delivery_orders').select('status, warehouse_id').eq('id', id).maybeSingle();
+    const dh = (doHeader ?? { status: null, warehouse_id: null }) as { status: string | null; warehouse_id: string | null };
+    if (SHIPPED_STATES.includes((dh.status ?? '').toUpperCase())) {
+      const targetWh = dh.warehouse_id ?? (await defaultWarehouseId(sb));
+      if (targetWh) {
+        const delta = qty - Number(prev.qty);
+        const effGroup = (it.itemGroup ?? prev.item_group) as string | null;
+        const effVariants = (it.variants ?? prev.variants) as VariantAttrs | null;
+        const effCode = (it.itemCode as string | undefined) ?? (prev.item_code as string);
+        const stockLines = [{
+          itemCode: effCode,
+          productName: (prev.description as string | null) ?? null,
+          variantKey: computeVariantKey(effGroup, effVariants),
+          qty: delta,
+        }];
+        const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+        if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+      }
+    }
+  }
+
+  // TASK #24 — guard against orphaning downstream papers. If the operator is
+  // shrinking qty below what's already been invoiced + returned, those Invoice /
+  // Delivery Return rows would point at qty that no longer exists on the DO.
+  // Reject with a clear 409; the operator must cancel the SI / DR first.
+  if (it.qty !== undefined && qty < Number(prev.qty)) {
+    const consumed = await doLineConsumedQty(sb, itemId);
+    if (qty < consumed) {
+      return c.json({
+        error: 'qty_below_downstream_consumption',
+        message: `Cannot reduce qty to ${qty} — ${consumed} unit${consumed === 1 ? ' has' : 's have'} already been invoiced or returned for this line. Cancel the related Invoice / Delivery Return first.`,
+        currentQty: Number(prev.qty), newQty: qty, consumed,
+      }, 409);
+    }
+  }
   const unitPrice = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : Number(prev.unit_price_centi);
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : Number(prev.discount_centi);
   const unitCost = it.unitCostCenti !== undefined ? Number(it.unitCostCenti) : Number(prev.unit_cost_centi);
@@ -788,43 +1165,52 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('delivery_order_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  // TASK #24 — if the DO has shipped, propagate the qty change to inventory
+  // (delta OUT for increase, delta IN for decrease). No-op when not shipped.
+  await resyncInventoryForDo(sb, id, user?.id);
   return c.json({ ok: true });
 });
 
 /* ── DELETE /:id/items/:itemId — remove a DO line. ──────────────────────────
-   Commander 2026-05-30 — inventory integrity. A DO is created in DISPATCHED
-   (= shipped) state, so deductInventoryForDo has already written an OUT row for
-   every (product_code, variant_key) bucket on the DO. Deleting a line on a
-   shipped DO must not leave that OUT on the books with no matching line — that
-   silently loses stock.
+   Commander 2026-05-30 (TASK #24): unblocked on shipped DOs.
 
-   The clean per-line reversal (write a balancing IN for just this line's qty)
-   is structurally BLOCKED here: the partial UNIQUE index uq_inv_mov_do_source
-   (migration 0100) keys on (source_doc_type, source_doc_id, product_code,
-   variant_key) WITHOUT movement_type, so a reversing IN that reuses the DO's key
-   collides with the original OUT and is rejected — and the deduction COLLAPSES
-   same-(product,variant) lines into one OUT, so a per-line IN can't be keyed
-   distinctly either. Rather than corrupt stock with a silently-failed reversal,
-   we BLOCK line-delete on a shipped DO with a 409 (the spec-sanctioned fallback)
-   and steer the user to cancel the DO (whole-doc reversal works) or edit qty.
-   A non-shipped DO (LOADED) has no OUT yet, so its lines delete freely. */
+   Earlier this returned 409 do_shipped_line_locked because the partial UNIQUE
+   index uq_inv_mov_do_source (migration 0100) made a per-line balancing IN
+   structurally impossible — a reversing IN that reused the DO's bucket key
+   collided with the original OUT. Migrations 0108 (key includes movement_type)
+   and 0109 (drop the per-bucket UNIQUE so multiple delta rows can coexist)
+   removed that constraint, and resyncInventoryForDo writes the per-bucket
+   delta IN here. The FIFO trigger handles the new IN row by creating a fresh
+   lot at the original cost basis (weighted avg from the OUT rows).
+
+   Guard: if the deleted line has already been invoiced or returned (downstream
+   papers reference its do_item_id and qty), we refuse the delete — those Invoice
+   / DR rows would orphan. The operator must cancel the SI / DR first; that
+   releases the qty and the delete then succeeds. */
 deliveryOrdersMfg.delete('/:id/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
 
-  // Guard: a shipped DO has inventory OUT already written for this line's
-  // bucket; deleting it would desync stock (see header comment).
-  const { data: doRow } = await sb.from('delivery_orders').select('status').eq('id', id).maybeSingle();
-  const status = (doRow as { status: string } | null)?.status ?? null;
-  if (status && SHIPPED_STATES.includes(status)) {
+  // Per-line downstream guard (PR #24) — block delete only if THIS line's qty
+  // has been invoiced or returned. Tier 2's doc-level doHasDownstream is too
+  // coarse here (would block deleting any line if any OTHER line had children);
+  // PR #24's per-line check is the right granularity. The Tier-1 shipped-DO
+  // 409 block is also superseded: PR #24 added inventory re-sync on shipped-DO
+  // line delete, so deleting a non-consumed line on a shipped DO is now safe.
+  const consumed = await doLineConsumedQty(sb, itemId);
+  if (consumed > 0) {
     return c.json({
-      error: 'do_shipped_line_locked',
-      message: 'This Delivery Order has shipped — its stock OUT is already booked. Cancel the DO (which reverses stock) or adjust the line quantity instead of deleting the line.',
+      error: 'line_has_downstream_consumption',
+      message: `Cannot delete this line — ${consumed} unit${consumed === 1 ? ' has' : 's have'} already been invoiced or returned. Cancel the related Invoice / Delivery Return first to release the quantity.`,
+      consumed,
     }, 409);
   }
 
   const { error } = await sb.from('delivery_order_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  // TASK #24 — give the deleted qty back to stock (delta IN per bucket). No-op
+  // when the DO hasn't shipped yet.
+  await resyncInventoryForDo(sb, id, user?.id);
   return c.json({ ok: true });
 });
 
@@ -920,6 +1306,14 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
     return c.json({ deliveryOrder: { id, status: 'CANCELLED' } });
   }
 
+  /* Tier 2 downstream-lock — only the CANCELLED transition is gated. Other
+     status transitions ride through untouched so the existing state machine
+     (LOADED→DISPATCHED→IN_TRANSIT→SIGNED→DELIVERED→INVOICED) keeps working. */
+  if (body.status === 'CANCELLED') {
+    const childLock = await doHasDownstream(sb, id);
+    if (childLock) return c.json(childLock, 409);
+  }
+
   const now = new Date().toISOString();
   const ts: Record<string, string> = { updated_at: now };
   if (body.status === 'DISPATCHED') ts.dispatched_at = now;
@@ -950,6 +1344,12 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
      deviation note. */
   if (body.status === 'CANCELLED') {
     try { await reverseMovements(sb, 'DO', id, user.id); } catch { /* best-effort */ }
+    /* DO cancel reversed stock — re-walk SO lines so previously-PENDING orders
+       can flip back to READY now that stock is available again. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-do-cancel failed:', e); }
   }
 
   return c.json({ deliveryOrder: data });

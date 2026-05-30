@@ -28,10 +28,38 @@ import {
   loadProductAndModel,
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
+import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
+import { summariseReadiness } from '../lib/so-readiness';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
 mfgSalesOrders.use('*', supabaseAuth);
+
+/* ── SO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
+   An SO locks (read-only — no line edit / no CANCELLED transition) once it has
+   ANY non-cancelled Delivery Order OR Sales Invoice referencing it. Convert-to-
+   DO (partial delivery) is NOT gated by this: the SO can keep emitting DOs;
+   only line MUTATIONS + the CANCELLED status transition are blocked. Mirrors
+   grnHasDownstream in apps/api/src/routes/grns.ts. Returns the blocking JSON,
+   or null if the SO is free to edit. */
+async function soHasDownstream(sb: any, soDocNo: string): Promise<{ error: string; message: string } | null> {
+  const [{ count: doCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_orders')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', soDocNo)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', soDocNo)
+      .neq('status', 'CANCELLED'),
+  ]);
+  if ((doCount ?? 0) > 0 || (siCount ?? 0) > 0) {
+    return { error: 'so_has_downstream', message: 'SO has a Delivery Order / Sales Invoice — delete or cancel it first to edit' };
+  }
+  return null;
+}
 
 /* PR — Commander 2026-05-28 — Server-side combo recompute.
    Fetches all active sofa_combo_pricing rows once (small table; ~64 rows
@@ -341,10 +369,53 @@ mfgSalesOrders.get('/', async (c) => {
       }
     }
 
+    /* Tier 2 downstream-lock — one extra batched read per doc set: pull every
+       non-cancelled DO/SI that points back to a listed SO and mark has_children
+       on the row. The list grid uses this to hide Edit / Cancel from SOs that
+       are downstream-locked (mirrors computeGrnFlags in routes/grns.ts). */
+    const downstreamDocNos = new Set<string>();
+    const [doRowsRes, siRowsRes] = await Promise.all([
+      sb.from('delivery_orders')
+        .select('so_doc_no')
+        .in('so_doc_no', docNos)
+        .neq('status', 'CANCELLED'),
+      sb.from('sales_invoices')
+        .select('so_doc_no')
+        .in('so_doc_no', docNos)
+        .neq('status', 'CANCELLED'),
+    ]);
+    for (const d of ((doRowsRes.data ?? []) as Array<{ so_doc_no: string | null }>)) {
+      if (d.so_doc_no) downstreamDocNos.add(d.so_doc_no);
+    }
+    for (const s of ((siRowsRes.data ?? []) as Array<{ so_doc_no: string | null }>)) {
+      if (s.so_doc_no) downstreamDocNos.add(s.so_doc_no);
+    }
+
+    /* B2C readiness summary per SO (Commander 2026-05-30) — derive the
+       "Stock Remark" the operator's existing ERP shows: READY when everything
+       in, READY (PARTIAL) when MAIN done + ACC outstanding, else list the
+       categories still pending. */
+    const readinessByDoc = new Map<string, ReturnType<typeof summariseReadiness>>();
+    {
+      const linesByDoc = new Map<string, Array<{ item_group: string | null; stock_status: string; cancelled: boolean }>>();
+      for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean }>) {
+        const arr = linesByDoc.get(it.doc_no) ?? [];
+        arr.push({ item_group: it.item_group, stock_status: it.stock_status, cancelled: it.cancelled });
+        linesByDoc.set(it.doc_no, arr);
+      }
+      for (const [docNo, ls] of linesByDoc) {
+        readinessByDoc.set(docNo, summariseReadiness(ls));
+      }
+    }
+
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
       const perGroup = agg.get(docNo);
       (r as Record<string, unknown>).item_categories = [...(cats.get(docNo) ?? [])].sort();
+      (r as Record<string, unknown>).has_children = downstreamDocNos.has(docNo);
+      const readiness = readinessByDoc.get(docNo);
+      (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
+      (r as Record<string, unknown>).is_main_ready = readiness?.isMainReady ?? false;
       /* First-item branding source (PR #266). */
       const fCat = firstCat.get(docNo);
       (r as Record<string, unknown>).first_item_category = fCat ?? null;
@@ -386,7 +457,39 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ salesOrder: h.data, items: i.data ?? [] });
+  /* Tier 2 downstream-lock — stamp has_children so the SO Detail page can lock
+     once any non-cancelled DO / SI references it. */
+  const [{ count: doCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_orders')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', docNo)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', docNo)
+      .neq('status', 'CANCELLED'),
+  ]);
+  /* Edge #D — surface the customer's current credit balance on the SO Detail
+     response so the page can show "Customer has RM X available" without a
+     second round-trip. 0 when no debtor / no credit history. */
+  const debtorCode = (h.data as { debtor_code?: string | null }).debtor_code ?? null;
+  const customerCreditCenti = debtorCode ? await getCustomerCreditBalance(sb, debtorCode) : 0;
+  const salesOrder = {
+    ...(h.data as unknown as Record<string, unknown>),
+    has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
+    customer_credit_centi: customerCreditCenti,
+  };
+  return c.json({ salesOrder, items: i.data ?? [] });
+});
+
+/* Customer credit balance lookup — used by the New Sales Order form to flash
+   "Customer has RM X credit available" once the operator picks the customer.
+   Returns 0 (not 404) when there's no history yet. */
+mfgSalesOrders.get('/customer-credit/:debtorCode', async (c) => {
+  const sb = c.get('supabase');
+  const debtorCode = c.req.param('debtorCode');
+  const balance = await getCustomerCreditBalance(sb, debtorCode);
+  return c.json({ debtorCode, balanceCenti: balance });
 });
 
 mfgSalesOrders.post('/', async (c) => {
@@ -402,6 +505,13 @@ mfgSalesOrders.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  // Edge #4 — itemCode catalog guard. Reject typos / stale codes before any
+  // pricing / variant / inventory work runs.
+  if (items.length > 0) {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   /* PR — Commander 2026-05-28 — SO composition rules, enforced on the CREATE
      path so the API matches what the SO Detail edit page already blocks.
@@ -854,167 +964,62 @@ mfgSalesOrders.post('/', async (c) => {
     statusSnapshot: 'CONFIRMED',
   });
 
+  /* B2C auto-allocation — if stock is already on hand, the new SO's lines flip
+     to READY immediately and the header advances to READY_TO_SHIP. Best-effort:
+     a failure never sinks the SO create (status stays CONFIRMED). */
+  try { await recomputeSoStockAllocation(sb, docNo); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-create failed:', e); }
+
   return c.json({ docNo }, 201);
 });
 
-/* ── Convert SO → DO ───────────────────────────────────────────────────
-   Commander 2026-05-27: "不能 rightclick convert to DO". Mirrors the
-   AutoCount "Partial/Full Transfer to → Delivery Order" action.
-   Creates a fresh DO with the SO's header info + one DO line per
-   non-cancelled SO line, then links the SO header to the new DO so
-   the detail page's "Linked DO" hyperlink lights up.
-
-   The DO doc number generator follows DO-YYMM-NNN (matches
-   routes/delivery-orders-mfg.ts nextNum). Body accepts an optional
-   `deliveryDate` override; defaults to the SO's customer_delivery_date,
-   else today. */
-mfgSalesOrders.post('/:docNo/convert-to-do', async (c) => {
+/* ── POST /recompute-allocation — re-walk every active SO line, flip
+       PENDING/READY against live inventory, advance / regress SO header
+       status. Manual trigger from the SO list "Re-allocate stock" button or
+       admin debug. Best-effort. */
+mfgSalesOrders.post('/recompute-allocation', async (c) => {
   const sb = c.get('supabase');
-  const docNo = c.req.param('docNo');
-  const user = c.get('user');
-
-  let body: { deliveryDate?: string } = {};
-  // Body is optional — an empty POST is valid (use SO's own dates).
-  try { body = (await c.req.json()) as typeof body; } catch { /* no body */ }
-
-  // 1. Fetch SO header + items together.
-  const [hRes, iRes] = await Promise.all([
-    sb.from('mfg_sales_orders').select(HEADER).eq('doc_no', docNo).maybeSingle(),
-    sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).eq('cancelled', false).order('created_at'),
-  ]);
-  if (hRes.error) return c.json({ error: 'load_failed', reason: hRes.error.message }, 500);
-  if (!hRes.data) return c.json({ error: 'not_found' }, 404);
-  // Cast via `unknown` first — Supabase types the joined select result as
-  // `GenericStringError` until proven typed (same gotcha as the diffFields
-  // helper in the PATCH handler).
-  const so = hRes.data as unknown as Record<string, unknown> & {
-    doc_no: string;
-    status: string;
-    debtor_code: string | null;
-    debtor_name: string;
-    customer_delivery_date: string | null;
-    linked_do_doc_no: string | null;
-    address1: string | null;
-    address2: string | null;
-    address3: string | null;
-    address4: string | null;
-    city: string | null;
-    postcode: string | null;
-    customer_state: string | null;
-    phone: string | null;
-  };
-
-  // Commander 2026-05-29 — a cancelled SO must NOT proceed: block converting
-  // it to a Delivery Order. (PO-from-SO + MRP already exclude CANCELLED SOs.)
-  if (so.status === 'CANCELLED') {
-    return c.json(
-      { error: 'so_cancelled', message: `SO ${docNo} is cancelled — it cannot be converted to a Delivery Order.` },
-      409,
-    );
-  }
-  const soItems = (iRes.data ?? []) as unknown as Array<Record<string, unknown> & {
-    id: string;
-    item_code: string;
-    description: string | null;
-    description2: string | null;
-    item_group: string | null;
-    qty: number;
-    unit_price_centi: number;
-    discount_centi: number;
-    uom: string;
-    variants: unknown;
-  }>;
-  if (soItems.length === 0) return c.json({ error: 'no_items_to_convert' }, 400);
-  if (so.linked_do_doc_no) {
-    // Soft guard — duplicate conversions silently overwrite the link.
-    // Return a hint in the response so the UI can decide whether to warn.
-    // (The mutation still proceeds — commander may want to redo the DO.)
-  }
-
-  // 2. Generate next DO number (DO-YYMM-NNN, mirrors delivery-orders-mfg).
-  const d = new Date();
-  const yymm = `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const { count } = await sb
-    .from('delivery_orders')
-    .select('id', { head: true, count: 'exact' })
-    .like('do_number', `DO-${yymm}-%`);
-  const doNumber = `DO-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
-
-  // 3. Insert DO header. Address mapping: SO has address1-4 (free-form
-  //    multi-line). DO has address1 + address2 + city + state + postcode.
-  //    We bundle SO address3/4 into DO address2 if it's empty, so nothing
-  //    is dropped — DO PDFs will still show the full ship-to block.
-  const doAddress2 = so.address2
-    ?? ([so.address3, so.address4].filter(Boolean).join(', ') || null);
-  const expectedDelivery = body.deliveryDate
-    ?? so.customer_delivery_date
-    ?? new Date().toISOString().slice(0, 10);
-
-  const { data: doHeader, error: hErr } = await sb.from('delivery_orders').insert({
-    do_number: doNumber,
-    so_doc_no: docNo,
-    debtor_code: so.debtor_code,
-    debtor_name: so.debtor_name,
-    do_date: new Date().toISOString().slice(0, 10),
-    expected_delivery_at: expectedDelivery,
-    address1: so.address1,
-    address2: doAddress2,
-    city: so.city,
-    state: so.customer_state,
-    postcode: so.postcode,
-    phone: so.phone,
-    created_by: user.id,
-  }).select('id, do_number').single();
-  if (hErr) return c.json({ error: 'do_insert_failed', reason: hErr.message }, 500);
-  const dh = doHeader as unknown as { id: string; do_number: string };
-
-  // 4. Insert one DO line per non-cancelled SO line. Field names mirror
-  //    delivery-orders-mfg POST so PDFs + the detail screen agree.
-  const doRows = soItems.map((it) => {
-    const qty = Number(it.qty ?? 1);
-    const unit = Number(it.unit_price_centi ?? 0);
-    const discount = Number(it.discount_centi ?? 0);
-    return {
-      delivery_order_id: dh.id,
-      so_item_id: it.id,
-      item_code: it.item_code,
-      description: it.description ?? null,
-      description2: it.description2 ?? null,
-      item_group: it.item_group ?? null,
-      uom: it.uom ?? 'UNIT',
-      qty,
-      m3_milli: 0,
-      unit_price_centi: unit,
-      discount_centi: discount,
-      line_total_centi: (qty * unit) - discount,
-      variants: it.variants ?? null,
-    };
-  });
-  const { error: iErr } = await sb.from('delivery_order_items').insert(doRows);
-  if (iErr) {
-    // Roll the header back so we don't leave a headerless DO.
-    await sb.from('delivery_orders').delete().eq('id', dh.id);
-    return c.json({ error: 'do_items_insert_failed', reason: iErr.message }, 500);
-  }
-
-  // 5. Link the SO back to the new DO.
-  const prevLink = so.linked_do_doc_no ?? null;
-  await sb.from('mfg_sales_orders')
-    .update({ linked_do_doc_no: dh.do_number, updated_at: new Date().toISOString() })
-    .eq('doc_no', docNo);
-
-  // 6. Audit row — UPDATE_DETAILS with a single linkedDoDocNo from→to entry.
-  await recordSoAudit(sb, {
-    docNo,
-    action: 'UPDATE_DETAILS',
-    actorId: user.id,
-    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
-    fieldChanges: [{ field: 'linkedDoDocNo', from: prevLink, to: dh.do_number }],
-    note: `Converted SO ${docNo} → DO ${dh.do_number}`,
-  });
-
-  return c.json({ doDocNo: dh.do_number, deliveryOrderId: dh.id, lineCount: doRows.length }, 201);
+  const res = await recomputeSoStockAllocation(sb);
+  return c.json(res);
 });
+
+/* ── PATCH /:docNo/priority — manual urgent override (Commander #38).
+       Body: { rank: 1 | 2 | 3 … | null, reason?: string }
+       Lower rank = higher priority. NULL clears the override → SO falls back
+       into the default delivery_date FIFO. Triggers an allocation recompute
+       so the SO list refreshes immediately. */
+mfgSalesOrders.patch('/:docNo/priority', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+  let body: { rank?: number | null; reason?: string | null };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const rank = body.rank == null ? null : Math.max(1, Math.min(999, Math.round(Number(body.rank))));
+  const patch: Record<string, unknown> = {
+    priority_rank:   rank,
+    priority_set_at: rank == null ? null : new Date().toISOString(),
+    priority_set_by: rank == null ? null : user.id,
+    priority_reason: rank == null ? null : (body.reason ?? null),
+    updated_at:      new Date().toISOString(),
+  };
+  const { data, error } = await sb.from('mfg_sales_orders')
+    .update(patch).eq('doc_no', docNo)
+    .select('doc_no, priority_rank, priority_reason').single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  await recordSoAudit(sb, {
+    docNo, action: 'UPDATE_HEADER', actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [{ field: 'priorityRank', from: 'previous', to: String(rank ?? '(cleared)') }],
+    note: rank == null ? 'Priority override cleared' : `Marked urgent (rank ${rank}${body.reason ? ` — ${body.reason}` : ''})`,
+  });
+
+  /* Priority changed — re-walk allocation so older non-urgent SOs lose their
+     claim if this one now sorts to the head. Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-priority failed:', e); }
+
+  return c.json({ salesOrder: data });
+});
+
 
 // Status transition with audit row. Reads the prior status, updates, then
 // inserts to mfg_so_status_changes — best-effort (audit failure does NOT
@@ -1027,6 +1032,15 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
 
   const { data: prev } = await sb.from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
   const fromStatus = (prev as { status: string } | null)?.status ?? null;
+
+  /* Tier 2 downstream-lock — only the CANCELLED transition is gated (mirrors
+     the GRN cancel guard). Other status transitions (CONFIRMED ↔ READY_TO_SHIP
+     ↔ SHIPPED ↔ DELIVERED…) ride through untouched so the existing state
+     machine + auto-advance (e.g. all-lines-READY → READY_TO_SHIP) keep working. */
+  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
+    const childLock = await soHasDownstream(sb, docNo);
+    if (childLock) return c.json(childLock, 409);
+  }
 
   const { data, error } = await sb.from('mfg_sales_orders').update({
     status: body.status, updated_at: new Date().toISOString(),
@@ -1052,6 +1066,29 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     statusSnapshot: body.status,
     note: body.notes ?? undefined,
   });
+
+  /* SO status changed → recompute allocation. CANCELLED removes the SO from
+     the queue (its claim releases); terminal statuses (SHIPPED/DELIVERED/…)
+     also drop it out. Other PENDING SOs may move into READY. Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-status failed:', e); }
+
+  /* Edge #B — SO cancel with deposit paid turns the deposit into a customer
+     credit. Idempotent on (source_type, source_doc_no). Best-effort. */
+  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
+    try {
+      const { data: so } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name').eq('doc_no', docNo).maybeSingle();
+      const s = so as { debtor_code: string | null; debtor_name: string | null } | null;
+      if (s?.debtor_code) {
+        await creditFromCancelledSo(sb, {
+          docNo,
+          debtorCode: s.debtor_code,
+          debtorName: s.debtor_name,
+          createdBy: user.id,
+        });
+      }
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[customer-credit] so-cancel credit failed:', e); }
+  }
 
   return c.json({ salesOrder: data });
 });
@@ -1331,6 +1368,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
   }
 
+  /* SO header edit may have changed customer_delivery_date or
+     allocation_warehouse_id — both reshuffle the allocation queue. Recompute.
+     Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-header-patch failed:', e); }
+
   return c.json({ ok: true, docNo });
 });
 
@@ -1460,6 +1503,16 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Tier 2 downstream-lock — line-add is blocked once a DO / SI exists. */
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
+
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
@@ -1582,6 +1635,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     ],
   });
 
+  /* New line = new demand → recompute may flip this SO into READY (or
+     bump another SO out). Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-add failed:', e); }
+
   return c.json({ item: data }, 201);
 });
 
@@ -1589,6 +1647,16 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Tier 2 downstream-lock — line-edit is blocked once a DO / SI exists. */
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
 
   // Re-derive totals if qty/price/discount changed. PR-D — also pull the
   // human-facing columns (item_code, description, uom) for the audit diff.
@@ -1761,11 +1829,19 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     });
   }
 
+  /* Line qty / variants / category may have changed → recompute. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-patch failed:', e); }
+
   return c.json({ ok: true });
 });
 
 mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+
+  /* Tier 2 downstream-lock — line-delete is blocked once a DO / SI exists. */
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
 
   // PR-D — capture the line snapshot before delete so the timeline can
   // show what was removed (item code + qty + unit price).
@@ -1821,6 +1897,11 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
       ],
     });
   }
+
+  /* Line delete = demand drops → other queued SOs may move into READY. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-delete failed:', e); }
+
   return c.body(null, 204);
 });
 
@@ -2330,15 +2411,17 @@ mfgSalesOrders.patch('/:docNo/items/:itemId/stock-status', async (c) => {
     note: nextStatus === 'READY' ? 'Stock marked ready' : 'Stock marked pending',
   });
 
-  // Re-aggregate at the SO level. If every non-cancelled line is now READY
-  // AND the order is currently CONFIRMED or IN_PRODUCTION, auto-advance
-  // status to READY_TO_SHIP.
+  // Re-aggregate at the SO level. B2C semantic: an SO is ship-able once every
+  // MAIN product line (sofa/bedframe/mattress) is READY — accessories pending
+  // are OK ("READY (PARTIAL)"). So auto-advance fires on main-ready, not
+  // all-ready.
   const { data: allLines } = await sb
     .from('mfg_sales_order_items')
-    .select('stock_status, cancelled')
+    .select('item_group, stock_status, cancelled')
     .eq('doc_no', docNo);
-  const live = ((allLines ?? []) as Array<{ stock_status: string; cancelled: boolean }>).filter((l) => !l.cancelled);
-  const allReady = live.length > 0 && live.every((l) => l.stock_status === 'READY');
+  const liveRows = ((allLines ?? []) as Array<{ item_group: string; stock_status: string; cancelled: boolean }>).filter((l) => !l.cancelled);
+  const readiness = summariseReadiness(liveRows);
+  const allReady = readiness.isMainReady;
 
   let advancedTo: string | null = null;
   if (allReady) {

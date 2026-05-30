@@ -30,7 +30,7 @@ export const Warehouses = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Warehouses</h1>
-          <p className={styles.subtitle}>Physical stock locations — referenced by GRN / DO / Consignment / Inventory</p>
+          <p className={styles.subtitle}>Physical stock locations — referenced by GRN / DO / Inventory</p>
         </div>
         <Button variant="primary" size="md" onClick={() => setCreating(true)}>
           <Plus {...ICON} />

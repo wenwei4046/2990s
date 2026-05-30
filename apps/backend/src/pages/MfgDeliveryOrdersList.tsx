@@ -69,6 +69,10 @@ type DoRow = {
   currency: string;
   note: string | null;
   line_count?: number;
+  /* Tier 2 downstream-lock — list endpoint stamps this flag when the DO has
+     ANY non-cancelled DR / SI. Hides Edit + Cancel from the context menu;
+     convert-to-DR / convert-to-SI stay (partial flow allowed). */
+  has_children?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -574,14 +578,19 @@ export const MfgDeliveryOrdersList = () => {
           rowExpansionKey: (row) => row.id,
         }}
         contextMenu={(row) => {
+          /* Tier 2 downstream-lock — once any non-cancelled DR / SI references
+             this DO, hide Edit + Cancel. Convert-to-SI / Convert-to-DR STAY
+             visible (partial flow allowed — multiple DRs / SIs may be issued). */
           const status = row.status;
-          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
-            { label: 'Edit',    onClick: () => openDetail(row, true) },
-            { label: 'View',    onClick: () => openDetail(row) },
-            { label: 'Preview', onClick: () => renderPdf(row) },
-            { label: 'Print',   onClick: () => renderPdf(row) },
-            { divider: true as const },
-          ];
+          const hasChildren = Boolean(row.has_children);
+          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [];
+          if (!hasChildren) {
+            items.push({ label: 'Edit', onClick: () => openDetail(row, true) });
+          }
+          items.push({ label: 'View',    onClick: () => openDetail(row) });
+          items.push({ label: 'Preview', onClick: () => renderPdf(row) });
+          items.push({ label: 'Print',   onClick: () => renderPdf(row) });
+          items.push({ divider: true as const });
           /* Commander 2026-05-29 — a DO ships on creation, so the downstream
              converts are available for any non-cancelled DO (no waiting for a
              DELIVERED stage that no longer exists). "Convert to Sales Invoice"
@@ -598,7 +607,7 @@ export const MfgDeliveryOrdersList = () => {
             });
           }
           items.push({ divider: true as const });
-          if (!['CANCELLED', 'INVOICED'].includes(status)) {
+          if (!['CANCELLED', 'INVOICED'].includes(status) && !hasChildren) {
             items.push({ label: 'Cancel DO', danger: true, onClick: () => doCancel(row) });
           }
           if (status === 'CANCELLED') {
@@ -622,14 +631,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
   {
     key: 'do_number', label: 'DO No.', width: 150, sortable: true,
     accessor: (r) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
-        {/* Commander 2026-05-29 — every DO is SHIPPED on creation, so the inline
-            "Shipped" pill was just noise next to every row. Only flag the
-            exceptions (Invoiced / Cancelled) inline; the full state still lives
-            in the dedicated Status column. */}
-        {r.status && !['LOADED', 'DISPATCHED'].includes(r.status) && <StatusPill status={r.status} />}
-      </span>
+      <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
     ),
     searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
   },

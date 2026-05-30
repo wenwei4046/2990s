@@ -1,6 +1,6 @@
 // 7 list-view pages for the procurement/sales flow modules:
 //   GRN / Purchase Invoice / Sales Order (mfg) / Delivery Order (mfg) /
-//   Sales Invoice / Consignment / Delivery Return
+//   Sales Invoice / Delivery Return
 //
 // First-cut: list + status filter + "New" primary button (stub alert; full
 // create drawers come in follow-up). 2990s tokens, no Tailwind.
@@ -11,12 +11,12 @@ import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrns, usePurchaseInvoices,
-  useSalesInvoices, useConsignments,
+  useSalesInvoices,
   usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
 import {
   CreateGrnDrawer, CreatePurchaseInvoiceDrawer,
-  CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
+  CreateSalesInvoiceDrawer,
 } from './FlowDrawers';
 import {
   ListingPickerDialog, ListingPickerTrigger, type ListingChoice,
@@ -539,78 +539,6 @@ export const SalesInvoicesPage = () => {
           </tbody>
         </table>
       {open && <CreateSalesInvoiceDrawer onClose={() => setOpen(false)} />}
-      </div>
-    </div>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   Consignment
-   ════════════════════════════════════════════════════════════════════════ */
-const CO_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'AT_BRANCH', label: 'At Branch' },
-  { value: 'SOLD', label: 'Sold' }, { value: 'RETURNED', label: 'Returned' }, { value: 'DAMAGED', label: 'Damaged' },
-];
-
-export const ConsignmentPage = () => {
-  const navigate = useNavigate();
-  const [status, setStatus] = useState('all');
-  const [open, setOpen] = useState(false);
-  const { data, isLoading, error } = useConsignments(status === 'all' ? undefined : status);
-  const allRows = useMemo(() => data?.consignments ?? [], [data]);
-  const picker = useListingPicker('/reports/consignment-detail-listing');
-  /* Task #120 — Consignment outstanding = still at branch (status === 'AT_BRANCH'). */
-  const rows = useMemo(() => {
-    if (!picker.outstandingOnly) return allRows;
-    return allRows.filter((r: any) => String(r.status ?? '') === 'AT_BRANCH');
-  }, [allRows, picker.outstandingOnly]);
-
-  return (
-    <div className={styles.page}>
-      <Header
-        title={`Consignment${picker.outstandingOnly ? ' · At-branch only' : ''}`}
-        subtitle="Stock placed at customer branches — sells through / returns / damaged"
-        newLabel="New Consignment"
-        onNew={() => setOpen(true)}
-      />
-      <ListingPickerDialog
-        open={picker.open}
-        onClose={() => picker.setOpen(false)}
-        onChoose={picker.onPick}
-        detailListingAvailable={true}
-        initial={picker.initial}
-      />
-      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
-        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
-        <StatusChips chips={CO_CHIPS} active={status} onPick={setStatus} />
-      </div>
-      {picker.outstandingOnly && (
-        <OutstandingChip label={`At-branch only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
-      )}
-      <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} consignments`}</p>
-      {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead><tr><th>Consign #</th><th>Debtor</th><th>Branch</th><th>Placed</th><th>Status</th></tr></thead>
-          <tbody>
-            {isLoading && <tr><td colSpan={5} className={styles.emptyRow}>Loading…</td></tr>}
-            {!isLoading && rows.map((r: any) => (
-              <tr key={r.id}
-                onClick={() => navigate(`/consignment/${r.id}`)}
-                style={{ cursor: 'pointer' }}>
-                <td><span className={styles.codeChip}>{r.consignment_number}</span></td>
-                <td>{r.debtor_name}</td>
-                <td>{r.branch_location ?? '—'}</td>
-                <td>{r.placed_at}</td>
-                <td><span className={styles.statusPill}>{r.status.replace('_', ' ')}</span></td>
-              </tr>
-            ))}
-            {!isLoading && !error && rows.length === 0 && (
-              <tr><td colSpan={5} className={styles.emptyRow}>No consignments yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      {open && <CreateConsignmentDrawer onClose={() => setOpen(false)} />}
       </div>
     </div>
   );

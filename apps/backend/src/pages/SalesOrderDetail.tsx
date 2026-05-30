@@ -23,7 +23,7 @@ import {
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, X, Printer, Save,
-  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw,
+  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw, Flame,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
@@ -32,7 +32,7 @@ import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
-  useUpdateMfgSalesOrderStatus,
+  useUpdateMfgSalesOrderStatus, useSetSoPriority,
   useAddMfgSalesOrderItem,
   useUpdateMfgSalesOrderItem,
   useDeleteMfgSalesOrderItem,
@@ -292,6 +292,7 @@ export const SalesOrderDetail = () => {
   const detail = useMfgSalesOrderDetail(docNo ?? null);
   const updateHeader = useUpdateMfgSalesOrderHeader();
   const updateStatus = useUpdateMfgSalesOrderStatus();
+  const setPriority = useSetSoPriority();
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
@@ -660,7 +661,12 @@ export const SalesOrderDetail = () => {
     );
   }
 
-  const isLocked = lockedStatuses.includes(header.status) && !unlockOverride;
+  /* Tier 2 downstream-lock — once a non-cancelled DO/SI references this SO,
+     the page becomes read-only. unlockOverride NOT honoured for this case —
+     the child must be cancelled/deleted to edit. Convert-to-DO stays available
+     (partial delivery) via the list's right-click. */
+  const hasChildren = Boolean((header as { has_children?: boolean }).has_children);
+  const isLocked = (lockedStatuses.includes(header.status) && !unlockOverride) || hasChildren;
 
   // Cancel SO flow (Commander 2026-05-29) — a cancelled SO stops proceeding
   // (no PO / DO / production; the whole page greys out) and can be reopened
@@ -679,6 +685,20 @@ export const SalesOrderDetail = () => {
   const handleReopenSo = () => {
     if (!window.confirm(`Reopen ${header.doc_no} back to CONFIRMED so it can proceed again?`)) return;
     updateStatus.mutate({ docNo: header.doc_no, status: 'CONFIRMED' });
+  };
+  /* #38 — Mark / clear Urgent allocation priority. Lives down here next to
+     Cancel/Reopen so the `header` non-null guard above (Loading… return)
+     already applies — TypeScript narrowing keeps it happy. */
+  const onMarkUrgent = () => {
+    const reason = window.prompt(
+      'Mark this SO as urgent? Stock will be reserved for this order before older queued SOs.\n\nOptional reason (e.g. walk-in customer, VIP):',
+    );
+    if (reason === null) return; // operator hit Cancel
+    setPriority.mutate({ docNo: header.doc_no, rank: 1, reason: reason.trim() || null });
+  };
+  const onClearPriority = () => {
+    if (!window.confirm('Remove the urgent flag? This SO will fall back into delivery-date order.')) return;
+    setPriority.mutate({ docNo: header.doc_no, rank: null });
   };
 
   const handlePrint = () => {
@@ -722,6 +742,16 @@ export const SalesOrderDetail = () => {
               SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
               {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
+              {(() => {
+                const credit = Number((header as { customer_credit_centi?: number }).customer_credit_centi ?? 0);
+                if (credit <= 0) return null;
+                return (
+                  <span style={{ color: 'var(--c-burnt)', fontWeight: 600 }}>
+                    {' · Customer credit balance: '}
+                    RM {(credit / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                );
+              })()}
             </p>
           </div>
         </div>
@@ -750,6 +780,20 @@ export const SalesOrderDetail = () => {
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
+          {/* Mark Urgent / Clear Urgent (#38) — manual allocation override
+              that bumps the SO to the head of the stock-allocation queue
+              regardless of delivery date. Hidden on cancelled / completed. */}
+          {!isCancelled && !isEditing && (
+            (header as { priority_rank?: number | null }).priority_rank
+              ? <Button variant="ghost" size="md" onClick={onClearPriority} disabled={setPriority.isPending} title="Remove urgent flag — fall back to delivery-date FIFO">
+                  <Flame {...ICON} style={{ color: 'var(--c-burnt)' }} />
+                  <span>Urgent · clear</span>
+                </Button>
+              : <Button variant="ghost" size="md" onClick={onMarkUrgent} disabled={setPriority.isPending} title="Mark urgent — reserve stock before older queued SOs">
+                  <Flame {...ICON} />
+                  <span>Mark Urgent</span>
+                </Button>
+          )}
           {/* Cancel SO / Reopen SO (Commander 2026-05-29). A cancelled SO
               stops proceeding (greys out, no MRP/PO/DO). Reopen restores it. */}
           {isCancelled ? (

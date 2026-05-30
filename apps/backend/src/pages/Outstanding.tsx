@@ -11,7 +11,7 @@
 
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ClipboardList, FileText, Receipt, Truck, Undo2, Boxes, ScrollText, PackagePlus } from 'lucide-react';
+import { ClipboardList, FileText, Receipt, Truck, Undo2, ScrollText, PackagePlus } from 'lucide-react';
 import {
   useOutstanding,
   useOutstandingSummary,
@@ -28,7 +28,6 @@ const MODULES: { value: OutstandingModule; label: string; icon: React.ReactNode;
   { value: 'so',          label: 'SO',          icon: <ClipboardList size={14} strokeWidth={1.75} />, route: (r) => `/mfg-sales-orders/${r.doc_no}` },
   { value: 'do',          label: 'DO',          icon: <Truck size={14} strokeWidth={1.75} />,         route: (r) => `/mfg-delivery-orders/${r.id}` },
   { value: 'si',          label: 'SI',          icon: <FileText size={14} strokeWidth={1.75} />,      route: (r) => `/sales-invoices/${r.id}` },
-  { value: 'consignment', label: 'Consignment', icon: <Boxes size={14} strokeWidth={1.75} />,         route: (r) => `/consignment/${r.id}` },
 ];
 
 const fmtRm = (centi: number): string =>
@@ -53,7 +52,7 @@ export const Outstanding = () => {
         <div>
           <h1 className={styles.title}>Outstanding</h1>
           <p className={styles.subtitle}>
-            Outstanding / completed filter across all 8 doc modules · by date range
+            Outstanding / completed filter across all 7 doc modules · by date range
           </p>
         </div>
         <div className={styles.actionsRow}>
@@ -201,12 +200,6 @@ const ModuleTable = ({
         { key: 'paid_centi',     label: 'Paid',  format: (v) => fmtRm(Number(v) || 0) },
         { key: 'outstanding_centi', label: 'Outstanding', format: (v) => fmtRm(Number(v) || 0) },
         { key: 'status',         label: 'Status' },
-      ];
-      case 'consignment': return [
-        { key: 'consignment_number', label: 'CN No' },
-        { key: 'placed_at',          label: 'Date', format: dateFmt },
-        { key: 'debtor_name',        label: 'Customer' },
-        { key: 'status',             label: 'Status' },
       ];
     }
   })();

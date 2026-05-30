@@ -53,9 +53,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Warehouse', path: '/warehouse', group: 'Warehouse', keywords: 'rack bin' },
   { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'locations' },
 
-  // Consignment
-  { label: 'Consignment', path: '/consignment', group: 'Consignment' },
-
   // Finance
   { label: 'Accounting', path: '/accounting', group: 'Finance', keywords: 'gl journal ledger' },
   { label: 'Outstanding', path: '/outstanding', group: 'Finance', keywords: 'aging overdue' },

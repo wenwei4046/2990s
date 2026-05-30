@@ -593,10 +593,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
   {
     key: 'return_number', label: 'Return No.', width: 150, sortable: true,
     accessor: (r) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.return_number}</span>
-        {r.status && !['RECEIVED'].includes(r.status) && <StatusPill status={r.status} />}
-      </span>
+      <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.return_number}</span>
     ),
     searchValue: (r) => `${r.return_number} ${r.status ?? ''}`,
   },
