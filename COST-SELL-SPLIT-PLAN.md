@@ -1,6 +1,6 @@
 # Cost / Sell Split + Master Account + QuickPick rework — Locked Plan
 
-> Created 2026-05-30. Owner: Loo (Chairman). Status: **Phase 1 DONE (code + migration applied). Resume at Phase 2 — see RESUME HERE below.**
+> Created 2026-05-30. Owner: Loo (Chairman). Status: **Phase 2 DONE (code + migrations 0110/0111/0112 applied + verified; not yet committed). Resume at Phase 4 — see RESUME HERE below.**
 > Companion research: workflow `cost-sell-split-analysis` (run wf_e6a65512-521).
 > This plan reorganises pricing so **Backend = cost** and a new **POS "Master Account" role = selling**.
 
@@ -17,15 +17,19 @@
 
 **⚠️ Migration 0109 is ALREADY APPLIED to the live Supabase** (project `dolvxrchzbnqvahocwsu`) via the Supabase MCP `apply_migration`, and verified: 174 mfg_products rows, **0 mismatches** (sell_price_sen = base_price_sen everywhere) → displayed prices unchanged. **Do NOT re-apply 0109** (bare `ADD COLUMN` — a re-run fails). Applied via MCP, NOT the `db-migrate.yml` workflow (the `DATABASE_URL` repo secret is still unset — only matters for FUTURE workflow-applied migrations).
 
-**▶ NEXT: Phase 2 — Master Account role + selling editor + `pos_active` + delivery fee.** Concretely:
-1. Add `master_account` to the `staff_role` pgEnum (new migration) + the `StaffRole` unions in `apps/backend/src/lib/auth.tsx` & `apps/pos/src/lib/auth.tsx` + `STAFF_ROLES`/`POS_ONLY_ROLES` in `apps/api/src/routes/admin.ts` (POS-only; invite redirect → POS).
-2. Map `master_account` → `'full'` in `productsMode()` (`apps/pos/src/pages/Products.tsx:~121`); also fix `super_admin` currently falling to `'view'` there.
-3. Switch the POS selling editor to write `sell_price_sen` (today it edits `base_price_sen` = cost). Thread a `sellPriceSen` field through `apps/api/src/routes/mfg-products.ts` PATCH + `apps/pos/src/lib/products/mfg-products-queries.ts`.
-4. Add `mfg_products.pos_active` boolean (new migration) — Master Account writes it; POS selling reads filter on it (keep cost-side `status` for purchasing/PO).
-5. **Chairman's explicit ask:** move the cross-category **delivery-fee** setting into Master Account (today in Backend Settings → Delivery; `DeliveryFeeConfigRow` at `apps/backend/src/lib/queries.ts:382`). Also fixes the latent Handover delivery-fee gap (see risks).
-6. 🔴 **RED-LINE GATE:** Phase 2 needs a Supabase **RLS policy** for `master_account`. STOP and get the Chairman's explicit "yes" before applying any RLS change.
+**✅ Phase 2 DONE (2026-05-30 — code applied in working tree, migrations live + verified, NOT yet committed).** What landed:
+1. **`master_account` role** — enum (migration `0110`), `StaffRole` union + `POS_ONLY_ROLES` in `apps/backend/src/lib/auth.tsx`, `STAFF_ROLES`/`POS_ONLY_ROLES` in `apps/api/src/routes/admin.ts`, `ROLE_LABEL`+`INVITE_ROLES` in `Users.tsx`, redirect test in `admin.test.ts`. (POS has NO `StaffRole` union — `useStaff()` reads role as a raw string; the plan's mention of `apps/pos/src/lib/auth.tsx` was a no-op.)
+2. **`productsMode()`** maps `master_account` → `'full'` and the `super_admin`→`'view'` bug is fixed; same fix applied to the sibling `maintenanceMode()` (`SalesOrderMaintenance.tsx`).
+3. **Selling editor** writes `sell_price_sen` (mattress + "Price 2" cells) via `mfg-products.ts` PATCH (+ `master_price_history` audit) + `mfg-products-queries.ts`. Sofa selling stays on `sofaCompartmentMeta` (D3); Price-1 stays cost.
+4. **`mfg_products.pos_active`** boolean (migration `0111`): POS "Visible" toggle writes it; customer catalog read (`useMfgCatalog`) filters on it; cost-side `status` retained for purchasing/PO. (Orphaned POS `useUpdateMfgProductStatus` removed; Backend copy kept.)
+5. **Delivery-fee move (Chairman: move the WHOLE block):** new "Delivery fee" tab on the POS Master Account Products page owns base fee + cross-category surcharge + both lead-days; Backend Settings → Delivery tab + its hooks removed. RLS migration `0112` widened the `delivery_fee_config` UPDATE policy to include `master_account`; API `delivery-fees.ts` `WRITE_ROLES` widened in lockstep.
+6. **Bonus:** POS SKU CSV export no longer leaks COST (`base_price_sen`/`price1_sen`) — exports `sell_price_sen`.
 
-**Then:** Phase 4 (server-side selling recompute per D4 — recompute from Master Account store, log mismatch, never reject) and Phase 5 (per-salesperson QuickPick per D6). Sequence flexible; Phase 2 is next.
+Migrations `0110`/`0111`/`0112` applied to Supabase (`dolvxrchzbnqvahocwsu`) via MCP `apply_migration` + verified (enum has `master_account`; 174/174 `pos_active=true`, 0 price change; delivery RLS includes `master_account`). Evidence: typecheck 6/6, POS+Backend build clean, api tests 153/156 (3 unrelated `slips`/R2 SSL env failures).
+
+**⚠️ Phase-4 carry-over (logged, intentional):** the delivery fee still does NOT charge on live mfg orders — `Handover.tsx` derives cart categories from the EMPTY retail catalog and `mfg-sales-orders.ts` does no server-side delivery recompute. Phase 2 moved WHO owns the number, not whether it charges. Fixing that lives with Phase 4 (D4 server-side recompute).
+
+**▶ NEXT: Phase 4, then Phase 5.** Phase 4 = combo semantics + D4 server-side SELLING recompute on `/mfg-sales-orders` (recompute from the Master Account store, log mismatch, never reject) **+ the delivery-fee charging fix above**. Phase 5 = per-salesperson QuickPick (D6). Sequence flexible.
 
 ---
 
@@ -108,7 +112,7 @@ Every step staging-verified with a full before/after price diff before touching 
 - **Verify**: staging — every sofa/bedframe/mattress/addon displayed price **identical** before vs after (screenshot diff); Backend price edit → ~300ms to all tablets.
 - **Gate**: migration (pre-deploy, append-only). Full price-diff pass required before prod.
 
-### Phase 2 · `master_account` role + selling editor + `pos_active` toggle
+### Phase 2 · `master_account` role + selling editor + `pos_active` toggle + delivery-fee move — ✅ DONE (2026-05-30)
 - **Goal**: a non-owner Master Account logs into POS, edits selling + toggles per-SKU POS on/off, **sees no cost**.
 - **Scope**: append `master_account` enum; add to `POS_ONLY_ROLES` + invite redirect; map to `full` in `productsMode()` (also fix super_admin falling into `view`); add `pos_active` boolean (Master writes, POS selling read filters); wire the existing `sellingPriceSen` editor to the role.
 - **🔴 RED-LINE GATE**: add Supabase **RLS policy** for `master_account` → **STOP, get Chairman's explicit yes** before applying.

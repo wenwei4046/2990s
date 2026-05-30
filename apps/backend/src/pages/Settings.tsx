@@ -13,8 +13,6 @@ import {
   useCreateDriver,
   useUpdateStaffActive,
   useCreateStaff,
-  useDeliveryFeeConfig,
-  useUpdateDeliveryFeeConfig,
   type StaffRow,
   type StaffRoleValue,
   type ShowroomRow,
@@ -24,14 +22,13 @@ import { PhoneInput } from '../components/PhoneInput';
 import { formatPhone, normalizePhone } from '@2990s/shared/phone';
 import styles from './Settings.module.css';
 
-type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'delivery' | 'app';
+type TabId = 'suppliers' | 'drivers' | 'showrooms' | 'staff' | 'app';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'suppliers',  label: 'Suppliers' },
   { id: 'drivers',    label: 'Drivers' },
   { id: 'showrooms',  label: 'Showrooms' },
   { id: 'staff',      label: 'Staff' },
-  { id: 'delivery',   label: 'Delivery fees' },
   /* Task #110 — Localities tab moved to /mfg-sales-orders/maintenance
      (Commander 2026-05-27). It only powers the SO module's cascading
      customer-address dropdowns + the state→warehouse mapping that
@@ -84,7 +81,6 @@ export const Settings = () => {
       {tab === 'drivers' && <DriversTab canEdit={isCoordOrAdmin} />}
       {tab === 'showrooms' && <ShowroomsTab />}
       {tab === 'staff' && <StaffTab canEdit={isAdmin} />}
-      {tab === 'delivery' && <DeliveryFeesTab canEdit={isCoordOrAdmin} />}
       {tab === 'app' && <AppConfigTab />}
     </div>
   );
@@ -1049,171 +1045,6 @@ const AppConfigTab = () => {
           ))}
         </div>
       )}
-    </>
-  );
-};
-
-/* ─── Delivery fees (admin/coordinator) ─── */
-
-const DeliveryFeesTab = ({ canEdit }: { canEdit: boolean }) => {
-  const cfg = useDeliveryFeeConfig();
-  const update = useUpdateDeliveryFeeConfig();
-
-  const [baseFee, setBaseFee]                       = useState<number | ''>('');
-  const [crossCategoryFee, setCrossCategoryFee]     = useState<number | ''>('');
-  const [mattressDays, setMattressDays]             = useState<number | ''>('');
-  const [sofaDays, setSofaDays]                     = useState<number | ''>('');
-  const [error, setError]   = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-
-  // Hydrate inputs once the GET resolves.
-  useEffect(() => {
-    if (cfg.data) {
-      setBaseFee(cfg.data.baseFee);
-      setCrossCategoryFee(cfg.data.crossCategoryFee);
-      setMattressDays(cfg.data.mattressBedframeLeadDays);
-      setSofaDays(cfg.data.sofaLeadDays);
-    }
-  }, [cfg.data]);
-
-  const onSave = async () => {
-    setError(null);
-    setSuccess(false);
-    if (
-      typeof baseFee !== 'number' || typeof crossCategoryFee !== 'number' ||
-      typeof mattressDays !== 'number' || typeof sofaDays !== 'number'
-    ) {
-      setError('All four fields must be whole-number integers.');
-      return;
-    }
-    if (baseFee < 0 || crossCategoryFee < 0 || mattressDays < 0 || sofaDays < 0) {
-      setError('Values cannot be negative.');
-      return;
-    }
-    try {
-      await update.mutateAsync({
-        baseFee,
-        crossCategoryFee,
-        mattressBedframeLeadDays: mattressDays,
-        sofaLeadDays: sofaDays,
-      });
-      setSuccess(true);
-    } catch (err) {
-      setError(String((err as Error).message ?? err));
-    }
-  };
-
-  if (cfg.isLoading) return <div className={styles.appConfigCard}>Loading delivery fees…</div>;
-  if (cfg.error)     return <div className={styles.appConfigCard}>Failed to load: {String(cfg.error)}</div>;
-
-  return (
-    <>
-      <div className={styles.readOnlyBanner}>
-        <strong>Delivery fee rules.</strong> Every order is charged the base fee.
-        Orders with products from ≥2 categories (e.g. sofa + mattress) also pay
-        the cross-category surcharge — flat, once. Changes apply to NEW orders
-        only — existing orders keep the fees they were placed with.
-      </div>
-
-      <div className={styles.appConfigCard}>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="base-fee">Base fee (RM)</label>
-          <input
-            id="base-fee"
-            type="number"
-            min={0}
-            step={1}
-            className={styles.input}
-            value={baseFee}
-            disabled={!canEdit}
-            onChange={(e) => setBaseFee(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-          />
-          <span className={styles.fieldHint}>Charged on every order. Whole RM (no sen).</span>
-        </div>
-
-        <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="cross-cat-fee">Cross-category surcharge (RM)</label>
-          <input
-            id="cross-cat-fee"
-            type="number"
-            min={0}
-            step={1}
-            className={styles.input}
-            value={crossCategoryFee}
-            disabled={!canEdit}
-            onChange={(e) => setCrossCategoryFee(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-          />
-          <span className={styles.fieldHint}>
-            Added once, flat, when the order contains ≥2 distinct product categories.
-            Sofa Custom + Sofa Bundle count as one category.
-          </span>
-        </div>
-
-        <div className={styles.fieldGroupHead}>Delivery lead times</div>
-
-        <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="mattress-days">Mattress + bed frame (days)</label>
-          <input
-            id="mattress-days"
-            type="number"
-            min={0}
-            step={1}
-            className={styles.input}
-            value={mattressDays}
-            disabled={!canEdit}
-            onChange={(e) => setMattressDays(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-          />
-          <span className={styles.fieldHint}>
-            Minimum days from order date before a delivery date can be picked
-            when the cart contains a mattress or bed frame.
-          </span>
-        </div>
-
-        <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="sofa-days">Sofa (days)</label>
-          <input
-            id="sofa-days"
-            type="number"
-            min={0}
-            step={1}
-            className={styles.input}
-            value={sofaDays}
-            disabled={!canEdit}
-            onChange={(e) => setSofaDays(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
-          />
-          <span className={styles.fieldHint}>
-            Minimum days from order date when the cart contains a sofa. Mixed
-            carts use the larger of the two lead times.
-          </span>
-        </div>
-
-        {error && <div className={styles.errorBanner} role="alert">{error}</div>}
-        {success && <div className={styles.banner}>Saved.</div>}
-
-        {canEdit && (
-          <div className={styles.actionsRow}>
-            <Button
-              variant="primary"
-              onClick={() => void onSave()}
-              disabled={update.isPending}
-            >
-              <Save size={16} strokeWidth={1.75} />
-              {update.isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </div>
-        )}
-
-        <div className={styles.appConfigRow} style={{ marginTop: 'var(--space-3)' }}>
-          <div>
-            <div className={styles.appConfigKey}>Last updated</div>
-          </div>
-          <div className={styles.appConfigValue}>
-            {cfg.data?.updatedAt
-              ? new Date(cfg.data.updatedAt).toLocaleString('en-MY')
-              : '—'}
-          </div>
-        </div>
-      </div>
     </>
   );
 };

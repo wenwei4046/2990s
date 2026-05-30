@@ -13,13 +13,15 @@ export type StaffRole =
   | 'sales' | 'showroom_lead' | 'coordinator' | 'finance' | 'admin'
   | 'sales_executive' | 'outlet_manager' | 'sales_director'
   // Migration 0092 — owner role, FULL access to BOTH portals.
-  | 'super_admin';
+  | 'super_admin'
+  // Migration 0110 — POS-only selling-price editor (cost/sell split Phase 2).
+  | 'master_account';
 
 /* Roles that may NOT access the Backend portal. They land on POS only.
    Layout.tsx redirects them to /no-access. super_admin is NOT here — it
    accesses both portals. */
 export const POS_ONLY_ROLES: ReadonlySet<StaffRole> = new Set<StaffRole>([
-  'sales', 'sales_executive', 'outlet_manager',
+  'sales', 'sales_executive', 'outlet_manager', 'master_account',
 ]);
 
 /* Admin-level roles — anywhere the UI gated on role === 'admin', it should

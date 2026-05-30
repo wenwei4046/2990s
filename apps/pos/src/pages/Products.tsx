@@ -70,7 +70,7 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useUpdateMfgProductStatus,
+  useUpdateMfgProductPosActive,
   useCreateMfgProduct,
   useDeleteMfgProduct,
   useMaintenanceConfig,
@@ -88,6 +88,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -119,9 +120,11 @@ import styles from './Products.module.css';
 export type ProductsMode = 'view' | 'add-only' | 'full';
 
 function productsMode(role: string | undefined): ProductsMode {
-  if (role === 'admin') return 'full';
+  // master_account = POS-only selling editor (D1). super_admin is an additive
+  // superset of admin (was previously falling through to 'view' — a bug).
+  if (role === 'admin' || role === 'super_admin' || role === 'master_account') return 'full';
   if (role === 'sales_director') return 'add-only';
-  return 'view'; // sales / sales_executive / outlet_manager / anything else
+  return 'view'; // sales / sales_executive / outlet_manager / coordinator / finance / anything else
 }
 
 function useProductsMode(): ProductsMode {
@@ -213,7 +216,7 @@ const resolveModelPhotoUrl = (raw: string | null | undefined): string | null => 
   return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
 };
 
-type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos';
+type TopTab = 'sku' | 'modular' | 'maintenance' | 'combos' | 'delivery';
 
 
 export const Products = () => {
@@ -311,6 +314,17 @@ export const Products = () => {
             >
               Combo Pricing
             </button>
+            {/* Cost/sell split Phase 2 — delivery fee moved here from the
+                Backend Settings → Delivery tab (Master Account owns it). */}
+            <button
+              type="button"
+              role="tab"
+              data-active={topTab === 'delivery'}
+              className={styles.tabSwitchBtn}
+              onClick={() => setTopTab('delivery')}
+            >
+              Delivery fee
+            </button>
           </div>
         </div>
       </header>
@@ -319,6 +333,133 @@ export const Products = () => {
       {topTab === 'modular' && <ProductModelsReadonlyList mode={mode} />}
       {topTab === 'maintenance' && <MaintenanceTab mode={mode} />}
       {topTab === 'combos' && <SofaComboTab mode={mode} />}
+      {topTab === 'delivery' && <DeliveryFeeTab mode={mode} />}
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Delivery fee tab — Master Account (cost/sell split Phase 2). The whole
+   delivery-fee block (base fee + cross-category surcharge + the two lead-day
+   fields) moved here from the Backend Settings → Delivery tab. Editing is gated
+   on mode === 'full' (admin / super_admin / master_account). Fees are whole RM.
+   NOTE (Phase 4): the fee is not yet re-derived server-side on the live mfg-SO
+   path, and the Handover consumer reads categories from the empty retail
+   catalog — so changing this number does not yet change what live orders are
+   charged. That charging fix is tracked separately.
+   ════════════════════════════════════════════════════════════════════════ */
+const DeliveryFeeTab = ({ mode }: { mode: ProductsMode }) => {
+  const canEdit = mode === 'full';
+  const cfg = useDeliveryFeeConfig();
+  const update = useUpdateDeliveryFeeConfig();
+
+  const [baseFee, setBaseFee] = useState<number | ''>('');
+  const [crossCategoryFee, setCrossCategoryFee] = useState<number | ''>('');
+  const [mattressDays, setMattressDays] = useState<number | ''>('');
+  const [sofaDays, setSofaDays] = useState<number | ''>('');
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  // Hydrate inputs once the GET resolves.
+  useEffect(() => {
+    if (cfg.data) {
+      setBaseFee(cfg.data.baseFee);
+      setCrossCategoryFee(cfg.data.crossCategoryFee);
+      setMattressDays(cfg.data.mattressBedframeLeadDays);
+      setSofaDays(cfg.data.sofaLeadDays);
+    }
+  }, [cfg.data]);
+
+  const onSave = async () => {
+    setError(null);
+    setSuccess(false);
+    if (
+      typeof baseFee !== 'number' || typeof crossCategoryFee !== 'number' ||
+      typeof mattressDays !== 'number' || typeof sofaDays !== 'number'
+    ) {
+      setError('All four fields must be whole-number integers.');
+      return;
+    }
+    if (baseFee < 0 || crossCategoryFee < 0 || mattressDays < 0 || sofaDays < 0) {
+      setError('Values cannot be negative.');
+      return;
+    }
+    try {
+      await update.mutateAsync({
+        baseFee,
+        crossCategoryFee,
+        mattressBedframeLeadDays: mattressDays,
+        sofaLeadDays: sofaDays,
+      });
+      setSuccess(true);
+    } catch (err) {
+      setError(String((err as Error).message ?? err));
+    }
+  };
+
+  if (cfg.isLoading) {
+    return <div style={{ padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>Loading delivery fees…</div>;
+  }
+  if (cfg.error) {
+    return <div style={{ padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>Failed to load: {String(cfg.error)}</div>;
+  }
+
+  const numberField = (
+    id: string,
+    label: string,
+    hint: string,
+    value: number | '',
+    setValue: (v: number | '') => void,
+  ) => (
+    <div style={{ marginBottom: 'var(--space-4)', maxWidth: 440 }}>
+      <label htmlFor={id} style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
+        {label}
+      </label>
+      <input
+        id={id}
+        type="number"
+        min={0}
+        step={1}
+        value={value}
+        disabled={!canEdit}
+        onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+        style={{
+          width: '100%',
+          padding: '8px 10px',
+          fontSize: 'var(--fs-14)',
+          border: '1px solid var(--line-strong)',
+          borderRadius: 'var(--radius-md)',
+          background: canEdit ? 'var(--c-cream)' : 'rgba(34, 31, 32, 0.04)',
+        }}
+      />
+      <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>
+        {hint}
+      </span>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: 'var(--space-5)', maxWidth: 560 }}>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+        Every order is charged the base fee. Orders mixing ≥2 product categories
+        (e.g. sofa + mattress) also pay the cross-category surcharge — flat, once.
+        Lead times set the minimum days before a delivery date can be picked.
+        Changes apply to NEW orders only.
+      </p>
+
+      {numberField('df-base', 'Base fee (RM)', 'Charged on every order. Whole RM (no sen).', baseFee, setBaseFee)}
+      {numberField('df-cross', 'Cross-category surcharge (RM)', 'Added once, flat, when an order has ≥2 distinct product categories.', crossCategoryFee, setCrossCategoryFee)}
+      {numberField('df-mattress', 'Mattress + bed frame lead time (days)', 'Minimum days before a delivery date when the cart has a mattress or bed frame.', mattressDays, setMattressDays)}
+      {numberField('df-sofa', 'Sofa lead time (days)', 'Minimum days when the cart has a sofa. Mixed carts use the larger lead time.', sofaDays, setSofaDays)}
+
+      {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }} role="alert">{error}</div>}
+      {success && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>Saved.</div>}
+
+      {canEdit && (
+        <Button variant="primary" onClick={() => void onSave()} disabled={update.isPending}>
+          {update.isPending ? 'Saving…' : 'Save'}
+        </Button>
+      )}
     </div>
   );
 };
@@ -1366,26 +1507,27 @@ const ProductRow = ({
       see the toggle in its current state but the input is disabled. */
   canToggleVisible?: boolean;
 }) => {
-  /* PR — Commander 2026-05-28: visibility toggle wiring. Flips the
-     mfg_products.status field. Catalog query reads status === 'ACTIVE',
-     so toggle-off pulls the SKU from the customer-facing catalogue while
-     keeping all history/stock intact. Confirm with a native confirm
-     before flipping OFF since visibility lapses have customer impact. */
-  const statusMut = useUpdateMfgProductStatus();
-  const isVisible = row.status === 'ACTIVE';
+  /* PR — Commander 2026-05-28; rewired in cost/sell split Phase 2 (D5): the
+     visibility toggle now flips the selling-only mfg_products.pos_active flag
+     (NOT cost-side status). The customer catalog read filters on pos_active,
+     so toggle-off pulls the SKU from the showroom while leaving status (cost /
+     PO surfacing) intact. Confirm with a native confirm before flipping OFF
+     since visibility lapses have customer impact. */
+  const posActiveMut = useUpdateMfgProductPosActive();
+  const isVisible = row.pos_active;
   const onFlipVisible = () => {
     if (!canToggleVisible) return;
-    const next: 'ACTIVE' | 'INACTIVE' = isVisible ? 'INACTIVE' : 'ACTIVE';
-    if (next === 'INACTIVE') {
+    const next = !isVisible;
+    if (!next) {
       // eslint-disable-next-line no-alert
       if (!confirm(`Hide ${row.code} from the POS catalog? Customers will no longer see this SKU.`)) return;
     }
-    statusMut.mutate({ id: row.id, status: next });
+    posActiveMut.mutate({ id: row.id, posActive: next });
   };
   // Local draft of the seat_height_prices array — buffers user edits before
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
-  const [draftBase, setDraftBase] = useState<number | null>(null);
+  const [draftSell, setDraftSell] = useState<number | null>(null);
   const [draftP1, setDraftP1] = useState<number | null>(null);
   const [draftBranding, setDraftBranding] = useState<string | null>(null);
   const update = useUpdateMfgProductPrices();
@@ -1401,6 +1543,12 @@ const ProductRow = ({
 
   const flushBedframePrice = (field: 'basePriceSen' | 'price1Sen', val: number | null) => {
     update.mutate({ id: row.id, [field]: val });
+  };
+
+  // SELLING price (sell_price_sen). The mattress + "Price 2" cells write this;
+  // base_price_sen / price1_sen are COST and not editable from the POS side.
+  const flushSellPrice = (val: number | null) => {
+    update.mutate({ id: row.id, sellPriceSen: val });
   };
 
   return (
@@ -1530,18 +1678,21 @@ const ProductRow = ({
             )}
           </td>
           <td>{row.size_label ?? '—'}</td>
-          {/* Single Price column for mattress — uses base_price_sen. */}
-          <td className={(draftBase ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
+          {/* Single Price column for mattress — SELLING (sell_price_sen).
+              0109 split: base_price_sen is COST; this editor writes the
+              customer-facing selling price. Display falls back to base_price_sen
+              only until the first sell edit (matches the POS catalog read). */}
+          <td className={(draftSell ?? row.sell_price_sen ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
             {editMode ? (
               <PriceInput
-                valueSen={draftBase ?? row.base_price_sen}
+                valueSen={draftSell ?? row.sell_price_sen ?? row.base_price_sen}
                 onCommit={(v) => {
-                  setDraftBase(v);
-                  flushBedframePrice('basePriceSen', v);
+                  setDraftSell(v);
+                  flushSellPrice(v);
                 }}
               />
             ) : (
-              fmtRm(row.base_price_sen)
+              fmtRm(row.sell_price_sen ?? row.base_price_sen)
             )}
           </td>
         </>
@@ -1549,17 +1700,20 @@ const ProductRow = ({
         <>
           <td><span className={styles.catPill}>{row.category}</span></td>
           <td>{row.size_label ?? '—'}</td>
-          <td className={(draftBase ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
+          {/* "Price 2" column for bedframe/accessory/service — SELLING
+              (sell_price_sen). base_price_sen is COST (0109 split); display
+              falls back to it until the first sell edit. */}
+          <td className={(draftSell ?? row.sell_price_sen ?? row.base_price_sen) ? styles.price : styles.priceEmpty}>
             {editMode ? (
               <PriceInput
-                valueSen={draftBase ?? row.base_price_sen}
+                valueSen={draftSell ?? row.sell_price_sen ?? row.base_price_sen}
                 onCommit={(v) => {
-                  setDraftBase(v);
-                  flushBedframePrice('basePriceSen', v);
+                  setDraftSell(v);
+                  flushSellPrice(v);
                 }}
               />
             ) : (
-              fmtRm(row.base_price_sen)
+              fmtRm(row.sell_price_sen ?? row.base_price_sen)
             )}
           </td>
           <td className={(draftP1 ?? row.price1_sen) ? styles.price : styles.priceEmpty}>
@@ -1579,11 +1733,11 @@ const ProductRow = ({
       )}
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
       {/* PR — Commander 2026-05-28: VISIBLE toggle. Per-SKU control over
-          whether this row surfaces on the POS Catalog. Toggle wired to
-          mfg_products.status (ACTIVE / INACTIVE). The pencil icon lands
-          alongside per commander's screenshot — currently inert (Phase 2
-          would open a drawer for per-channel visibility); the toggle by
-          itself handles the catalog-level on/off commander asked for. */}
+          whether this row surfaces on the POS Catalog. Cost/sell split Phase 2
+          (D5): wired to the selling-only mfg_products.pos_active flag (NOT
+          cost-side status). The pencil icon lands alongside per commander's
+          screenshot — currently inert (per-channel visibility is a later
+          phase); the toggle itself handles the catalog-level on/off. */}
       <td
         style={{ textAlign: 'center', whiteSpace: 'nowrap' }}
         onClick={(e) => e.stopPropagation()}
@@ -1602,7 +1756,7 @@ const ProductRow = ({
               type="checkbox"
               aria-label={`Toggle ${row.code} visibility`}
               checked={isVisible}
-              disabled={!canToggleVisible || statusMut.isPending}
+              disabled={!canToggleVisible || posActiveMut.isPending}
               onChange={onFlipVisible}
             />
             <span aria-hidden="true" />
@@ -4436,11 +4590,13 @@ const MaintenanceHistoryDialog = ({
 // dropping them from the CSV export so commander's spreadsheet stays focused.
 // Schema columns + API field writers also stripped (apps/api/src/routes/
 // mfg-products.ts) so future imports don't resurrect the data.
-/* POS port: cost_price_sen dropped from the CSV columns so sales-side
-   exports never carry purchase cost into a spreadsheet. */
+/* POS port: cost columns are kept OUT of the CSV. cost_price_sen was always
+   dropped; post-0109 base_price_sen / price1_sen now mean COST too, so they
+   are dropped as well — sales-side exports carry only the customer-facing
+   SELLING price (sell_price_sen), never purchase cost. */
 const CSV_COLUMNS = [
   'code', 'name', 'category', 'description', 'base_model', 'size_label',
-  'base_price_sen', 'price1_sen',
+  'sell_price_sen',
   'unit_m3_milli',
   'status', 'branding',
 ] as const;

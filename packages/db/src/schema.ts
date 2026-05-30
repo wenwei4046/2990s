@@ -35,6 +35,10 @@ export const staffRole = pgEnum('staff_role', [
   /* Migration 0092 (2026-05-28) — super_admin: owner role with FULL access
      to BOTH portals (POS + Backend). Additive superset of `admin`. */
   'super_admin',
+  /* Migration 0110 (2026-05-30) — master_account: POS-ONLY selling-side role
+     (cost/sell split Phase 2). Edits sell_price_sen + pos_active; sees no cost.
+     NOT admin-level; no Backend access. */
+  'master_account',
 ]);
 
 export const compGroup = pgEnum('comp_group', [
@@ -1796,6 +1800,7 @@ export const mfgProducts = pgTable('mfg_products', {
   basePriceSen:           integer('base_price_sen'),              // PRICE 2 (default) — COST (computeMfgLineCost)
   price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier) — COST
   sellPriceSen:           integer('sell_price_sen'),              // SELLING price (POS customer-facing). 0109; backfilled = base_price_sen. Master Account edits this (Phase 2).
+  posActive:              boolean('pos_active').notNull().default(true), // 0111 (D5): selling-only POS catalog visibility. Master Account writes; POS catalog read filters. SEPARATE from `status` (cost/PO).
   productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
   subAssemblies:          jsonb('sub_assemblies'),                // string[] e.g. ['Divan','Headboard']
   skuCode:                text('sku_code'),

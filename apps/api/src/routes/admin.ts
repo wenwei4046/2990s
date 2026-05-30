@@ -32,6 +32,8 @@ const STAFF_ROLES = [
   'sales_executive', 'outlet_manager', 'sales_director',
   // Migration 0092 — owner role, full access to both portals.
   'super_admin',
+  // Migration 0110 — POS-only selling-price editor (cost/sell split Phase 2).
+  'master_account',
 ] as const;
 
 /* Roles that still hold a `pin_hash` column for the PATCH /pin endpoint
@@ -115,7 +117,7 @@ admin.post('/staff', async (c) => {
   // Backend roles (admin / sales_director / coordinator / finance /
   // showroom_lead) land on the Backend portal. Both URLs must be on the
   // Supabase Auth → URL Configuration → Redirect URLs allow-list.
-  const POS_ONLY_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager']);
+  const POS_ONLY_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager', 'master_account']);
   const email = input.email;
   const portal = POS_ONLY_ROLES.has(input.role)
     ? c.env.POS_PORTAL_URL

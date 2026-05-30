@@ -75,10 +75,12 @@ export type MfgProductRow = {
       service rows; helper falls back to parsing `code` after the first '-'. */
   size_code: string | null;
   size_label: string | null;
-  base_price_sen: number | null;
-  price1_sen: number | null;
+  base_price_sen: number | null;   // COST (Price 2) — 0109 cost/sell split
+  price1_sen: number | null;       // COST (Price 1, cheaper tier)
+  sell_price_sen: number | null;   // SELLING (POS customer-facing). Master Account edits this.
   unit_m3_milli: number;
-  status: 'ACTIVE' | 'INACTIVE';
+  status: 'ACTIVE' | 'INACTIVE';   // COST/PO side — NOT showroom visibility (use pos_active)
+  pos_active: boolean;             // D5 — selling-only POS catalog visibility (Master Account writes)
   sku_code: string | null;
   /** PR — supplier-mapping-by-model: optional FK to product_models.id so the
       supplier mapping picker can group SKUs by Model client-side. NULL for
@@ -260,6 +262,7 @@ export function useUpdateMfgProductPrices() {
       basePriceSen?: number | null;
       price1Sen?: number | null;
       costPriceSen?: number | null;
+      sellPriceSen?: number | null;
       seatHeightPrices?: SeatHeightPrice[];
       branding?: string | null;
       subAssemblies?: string[];
@@ -283,24 +286,23 @@ export function useUpdateMfgProductPrices() {
   });
 }
 
-/** PR #87 — Per-SKU active toggle, used from the Model detail page's
- *  "SKU variants" table. Commander hits this when a specific SKU stops
- *  selling (e.g. a size variant gets discontinued) — the row stays with its
- *  history, stock, and pricing intact, but the SO/PO line picker stops
- *  surfacing it. Re-activating is a single click back. */
-export function useUpdateMfgProductStatus() {
+/** D5 (cost/sell split Phase 2) — Master Account per-SKU POS catalog on/off.
+ *  Writes the selling-only `pos_active` column (NOT cost-side `status`). The
+ *  POS Products "Visible" toggle hits this; the customer catalog read filters
+ *  on pos_active. Cost/PO discontinuation still lives on `status`, managed from
+ *  the Backend Model-detail SKU-variants table (its own hook). */
+export function useUpdateMfgProductPosActive() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (args: { id: string; status: 'ACTIVE' | 'INACTIVE' }) => {
-      const { id, status } = args;
+    mutationFn: async (args: { id: string; posActive: boolean }) => {
+      const { id, posActive } = args;
       return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ posActive }),
       });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-products'] });
-      qc.invalidateQueries({ queryKey: ['product-models'] });
     },
   });
 }

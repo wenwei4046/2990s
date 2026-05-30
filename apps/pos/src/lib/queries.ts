@@ -723,7 +723,10 @@ export const useMfgCatalog = () =>
           'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, model_id, ' +
           'product_models:model_id ( id, name, photo_url, active )',
         )
-        .eq('status', 'ACTIVE')
+        // D5 (cost/sell split Phase 2): customer catalog visibility = the
+        // selling-only pos_active flag, NOT cost-side status. The Master
+        // Account "Visible" toggle writes pos_active; status stays for cost/PO.
+        .eq('pos_active', true)
         .order('code', { ascending: true });
       if (error) throw error;
 
@@ -1131,6 +1134,38 @@ export const useDeliveryFeeConfig = () =>
     },
     staleTime: 60_000,
   });
+
+/** Master Account (cost/sell split Phase 2) — writes the delivery-fee config
+ *  (base fee + cross-category surcharge + lead-days). The whole block moved to
+ *  the POS Master Account surface; the Backend editor was retired. Gated by the
+ *  delivery_fee_config UPDATE RLS policy + the API WRITE_ROLES (admin /
+ *  coordinator / master_account). */
+export const useUpdateDeliveryFeeConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: {
+      baseFee?:                  number;
+      crossCategoryFee?:         number;
+      mattressBedframeLeadDays?: number;
+      sofaLeadDays?:             number;
+    }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /delivery-fees failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['delivery-fee-config'] }); },
+  });
+};
 
 /* ─── Sales staff (LockScreen pre-session list) ───────────────────────
  *

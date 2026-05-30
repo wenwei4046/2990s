@@ -50,6 +50,7 @@ const ROLE_LABEL: Record<StaffRole, string> = {
   outlet_manager:  'Outlet manager',
   sales_director:  'Sales director',
   super_admin:     'Super admin',
+  master_account:  'Master account',
 };
 
 /* Role options shown in the invite dropdown. We drop showroom_lead from
@@ -58,7 +59,7 @@ const ROLE_LABEL: Record<StaffRole, string> = {
 const INVITE_ROLES: StaffRole[] = [
   'sales_executive', 'outlet_manager', 'sales_director',
   'coordinator', 'finance', 'admin', 'super_admin',
-  'sales',
+  'sales', 'master_account',
 ];
 
 const formatLastSignIn = (iso: string | null): string => {
