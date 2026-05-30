@@ -1,46 +1,45 @@
-// Delivery Returns list — DataGrid clone of the Delivery Orders list
-// (MfgDeliveryOrdersList.tsx), which is itself an SO-clone. Same chrome:
-// 4 KPI tiles, draggable filter bar (search · brand · venue · date range),
-// status chips, ~visible/hidden column set, right-click context menu,
-// click-to-expand line drill-down, and double-click-to-open. Wired to the DR
-// list hook + the rebuilt DR API.
+// Delivery Orders list — DataGrid clone of the Sales Orders list
+// (MfgSalesOrdersList.tsx). Same chrome: 4 KPI tiles, draggable filter bar
+// (search · brand · venue · date range), status chips, ~visible/hidden column
+// set, right-click context menu, click-to-expand line drill-down, and
+// double-click-to-open. Wired to the DO list hook + the rebuilt DO API.
 //
-// A Delivery Return = goods coming BACK from the customer → processing one
-// INCREASES stock (handled server-side on create). Returns can ONLY come from
-// a Delivery Order, so the toolbar carries a "Convert From DO" picker entry.
-//
-// UNIQUE localStorage keys ('pr-g.dr-list.layout.v1' /
-// 'pr-g.dr-list.filter-order.v1') — never reuse the DO/SO keys.
+// UNIQUE localStorage keys ('pr-g.do-list.layout.v1' /
+// 'pr-g.do-list.filter-order.v1') — never reuse the SO keys.
 
 import { useMemo, useState } from 'react';
 import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Filter, Search, ArrowDownToLine } from 'lucide-react';
+import { Plus, X, Filter, Search, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
-  useDeliveryReturns, useUpdateDeliveryReturnStatus, useDeliveryReturnDetail,
+  useMfgDeliveryOrders, useUpdateMfgDeliveryOrderStatus, useMfgDeliveryOrderDetail,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
+import { supabase } from '../lib/supabase';
 import { BrandingPill, badgeFor } from '../lib/category-badges';
 import styles from './MfgSalesOrdersList.module.css';
 import soDetailStyles from './SalesOrderDetail.module.css';
 
-/* ── Row shape (DR header) ─────────────────────────────────────────────── */
-type DrRow = {
+/* ── Row shape (DO header) ─────────────────────────────────────────────── */
+type DoRow = {
   id: string;
-  return_number: string;
-  do_doc_no: string | null;
-  delivery_order_id: string | null;
-  return_date: string;
+  do_number: string;
+  so_doc_no: string | null;
+  do_date: string;
+  expected_delivery_at: string | null;
+  customer_delivery_date: string | null;
   debtor_code: string | null;
   debtor_name: string;
   salesperson_id: string | null;
   sales_location: string | null;
   ref: string | null;
   customer_so_no: string | null;
+  po_doc_no: string | null;
   branding: string | null;
   venue: string | null;
   phone: string | null;
@@ -53,7 +52,8 @@ type DrRow = {
   customer_country: string | null;
   city: string | null;
   postcode: string | null;
-  reason: string | null;
+  driver_name: string | null;
+  vehicle: string | null;
   local_total_centi: number;
   mattress_sofa_centi?: number;
   bedframe_centi?: number;
@@ -69,6 +69,10 @@ type DrRow = {
   currency: string;
   note: string | null;
   line_count?: number;
+  /* Tier 2 downstream-lock — list endpoint stamps this flag when the DO has
+     ANY non-cancelled DR / SI. Hides Edit + Cancel from the context menu;
+     convert-to-DR / convert-to-SI stay (partial flow allowed). */
+  has_children?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -83,32 +87,31 @@ const compactDate = (iso: string | null | undefined): string => {
   return `${d} ${mo} ${y}`;
 };
 
-/* DR status flow: RECEIVED (= goods back, stock added) → INSPECTED → REFUNDED
-   / CREDIT_NOTED, plus REJECTED / CANCELLED. Pill styling reuses the SO detail
-   status classes where the stages line up; the rest fall back to a neutral
-   pill. */
+/* DO status flow: LOADED→DISPATCHED→IN_TRANSIT→SIGNED→DELIVERED→INVOICED,
+   plus CANCELLED. Pill styling reuses the SO detail status classes where the
+   stages line up; the rest fall back to a neutral pill. */
 const STATUS_CLASS: Record<string, string> = {
-  PENDING:      soDetailStyles.statusConfirmed ?? '',
-  RECEIVED:     soDetailStyles.statusReady ?? '',
-  INSPECTED:    soDetailStyles.statusInProd ?? '',
-  REFUNDED:     soDetailStyles.statusDelivered ?? '',
-  CREDIT_NOTED: soDetailStyles.statusInvoiced ?? '',
-  REJECTED:     soDetailStyles.statusCancelled ?? '',
-  CANCELLED:    soDetailStyles.statusCancelled ?? '',
+  LOADED:      soDetailStyles.statusConfirmed ?? '',
+  DISPATCHED:  soDetailStyles.statusShipped ?? '',
+  IN_TRANSIT:  soDetailStyles.statusInProd ?? '',
+  SIGNED:      soDetailStyles.statusReady ?? '',
+  DELIVERED:   soDetailStyles.statusDelivered ?? '',
+  INVOICED:    soDetailStyles.statusInvoiced ?? '',
+  CANCELLED:   soDetailStyles.statusCancelled ?? '',
 };
 const STATUS_LABEL: Record<string, string> = {
-  PENDING:      'Pending',
-  RECEIVED:     'Received',
-  INSPECTED:    'Inspected',
-  REFUNDED:     'Refunded',
-  CREDIT_NOTED: 'Credit Noted',
-  REJECTED:     'Rejected',
-  CANCELLED:    'Cancelled',
+  LOADED:     'Loaded',
+  DISPATCHED: 'Shipped',
+  IN_TRANSIT: 'In Transit',
+  SIGNED:     'Signed',
+  DELIVERED:  'Delivered',
+  INVOICED:   'Invoiced',
+  CANCELLED:  'Cancelled',
 };
-/* A return is RECEIVED on creation (stock added then), so the everyday chips
-   are Received / Refunded / Cancelled. The rest of the enum still renders in
-   the Status column when present. */
-const STATUS_CHIPS = ['all', 'RECEIVED', 'REFUNDED', 'CANCELLED'] as const;
+/* Commander 2026-05-29 — a DO ships on creation (status DISPATCHED = "Shipped"),
+   so the intermediate Loaded / In Transit / Signed / Delivered stages were
+   dropped from the filter chips. Only the states that actually occur remain. */
+const STATUS_CHIPS = ['all', 'DISPATCHED', 'INVOICED', 'CANCELLED'] as const;
 
 const StatusPill = ({ status }: { status: string }) => (
   <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[status] ?? ''}`}>
@@ -116,19 +119,18 @@ const StatusPill = ({ status }: { status: string }) => (
   </span>
 );
 
-/* Branding follows the DR's header — mirrors the DO list rule. */
-const deriveBranding = (r: DrRow): string => r.branding ?? '';
+/* Branding follows the DO's first line item — mirrors the SO list rule. */
+const deriveBranding = (r: DoRow): string => r.branding ?? '';
 
-/* ── Drilldown — per-line breakdown for one DR, mirrors ExpandedDoLines ─── */
-type DrItem = {
+/* ── Drilldown — per-line breakdown for one DO, mirrors ExpandedSoLines ─── */
+type DoItem = {
   id: string;
   item_code: string | null;
   item_group: string | null;
   description: string | null;
   variants: Record<string, unknown> | null;
   uom: string | null;
-  qty_returned: number | null;
-  condition: string | null;
+  qty: number | null;
   unit_price_centi: number | null;
   unit_cost_centi: number | null;
   line_cost_centi: number | null;
@@ -159,8 +161,8 @@ const CategoryPill = ({ group }: { group: string | null | undefined }) => {
   );
 };
 
-const ExpandedDrLines = ({ id }: { id: string }) => {
-  const q = useDeliveryReturnDetail(id);
+const ExpandedDoLines = ({ id }: { id: string }) => {
+  const q = useMfgDeliveryOrderDetail(id);
   if (q.isLoading) {
     return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading lines…</div>;
   }
@@ -171,7 +173,7 @@ const ExpandedDrLines = ({ id }: { id: string }) => {
       </div>
     );
   }
-  const items = (q.data?.items ?? []) as DrItem[];
+  const items = (q.data?.items ?? []) as DoItem[];
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No line items.</div>;
   }
@@ -199,8 +201,8 @@ const ExpandedDrLines = ({ id }: { id: string }) => {
               <th style={{ ...TH_BASE, width: 90 }}>Group</th>
               <th style={{ ...TH_BASE, width: 130 }}>Item Code</th>
               <th style={{ ...TH_BASE, width: 260, minWidth: 200, maxWidth: 340 }}>Description</th>
-              <th style={{ ...TH_BASE, width: 80 }}>Condition</th>
-              <th style={{ ...TH_RIGHT, width: 60 }}>Qty</th>
+              <th style={{ ...TH_BASE, width: 60 }}>UOM</th>
+              <th style={{ ...TH_RIGHT, width: 50 }}>Qty</th>
               <th style={{ ...TH_RIGHT, width: 90 }}>Unit Price</th>
               <th style={{ ...TH_RIGHT, width: 90 }}>Total</th>
               <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
@@ -213,7 +215,7 @@ const ExpandedDrLines = ({ id }: { id: string }) => {
               const lineTotal = Number(it.line_total_centi ?? 0);
               const lineCost = it.line_cost_centi != null
                 ? Number(it.line_cost_centi)
-                : Number(it.qty_returned ?? 0) * Number(it.unit_cost_centi ?? 0);
+                : Number(it.qty ?? 0) * Number(it.unit_cost_centi ?? 0);
               const lineMargin = it.line_margin_centi != null ? Number(it.line_margin_centi) : lineTotal - lineCost;
               const lineMarginColor = lineMargin > 0 ? 'var(--c-secondary-a, #2F5D4F)'
                 : lineMargin < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
@@ -236,8 +238,8 @@ const ExpandedDrLines = ({ id }: { id: string }) => {
                       return summary ? <div>{summary}</div> : '—';
                     })()}
                   </td>
-                  <td style={TD_BASE}>{it.condition || '—'}</td>
-                  <td style={TD_RIGHT}>{it.qty_returned ?? 0}</td>
+                  <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
+                  <td style={TD_RIGHT}>{it.qty ?? 0}</td>
                   <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
                   <td style={{ ...TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtRm(lineTotal)}</td>
                   <td style={TD_RIGHT}>{fmtRm(Number(it.unit_cost_centi ?? 0))}</td>
@@ -262,7 +264,7 @@ const ExpandedDrLines = ({ id }: { id: string }) => {
   );
 };
 
-/* ── Filter chrome (matches DO list) ───────────────────────────────────── */
+/* ── Filter chrome (matches SO list) ───────────────────────────────────── */
 const HOUZS_CARET = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none'><path d='M1 1l4 4 4-4' stroke='%23878D8D' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")`;
 const HOUZS_SELECT: CSSProperties = {
   height: 32, padding: '0 28px 0 10px',
@@ -279,7 +281,7 @@ const HOUZS_INPUT_DATE: CSSProperties = {
 
 type FilterId = 'search' | 'brand' | 'venue' | 'dateRange';
 const DEFAULT_FILTER_ORDER: FilterId[] = ['search', 'brand', 'venue', 'dateRange'];
-const FILTER_ORDER_KEY = 'pr-g.dr-list.filter-order.v1';
+const FILTER_ORDER_KEY = 'pr-g.do-list.filter-order.v1';
 
 const readFilterOrder = (): FilterId[] => {
   if (typeof window === 'undefined') return DEFAULT_FILTER_ORDER;
@@ -299,13 +301,13 @@ const DraggableFilter = ({
 }: { id: FilterId; order: FilterId[]; setOrder: (next: FilterId[]) => void; children: ReactNode }) => {
   const [over, setOver] = useState(false);
   const onDragStart = (e: DragEvent<HTMLDivElement>) => {
-    e.dataTransfer.setData('text/x-dr-filter', id);
+    e.dataTransfer.setData('text/x-do-filter', id);
     e.dataTransfer.effectAllowed = 'move';
   };
   const onDragOver = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setOver(true); };
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault(); setOver(false);
-    const src = e.dataTransfer.getData('text/x-dr-filter') as FilterId;
+    const src = e.dataTransfer.getData('text/x-do-filter') as FilterId;
     if (!src || src === id) return;
     const next = order.filter((f) => f !== src);
     const idx = next.indexOf(id);
@@ -325,15 +327,15 @@ const DraggableFilter = ({
   );
 };
 
-const STORAGE_KEY = 'pr-g.dr-list.layout.v1';
+const STORAGE_KEY = 'pr-g.do-list.layout.v1';
 
-export const DeliveryReturnsList = () => {
+export const MfgDeliveryOrdersList = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const statusChip = searchParams.get('status') ?? 'all';
 
-  const { data, isLoading, error } = useDeliveryReturns(undefined);
-  const allRows = useMemo<DrRow[]>(() => (data?.deliveryReturns ?? []) as DrRow[], [data]);
+  const { data, isLoading, error } = useMfgDeliveryOrders(undefined);
+  const allRows = useMemo<DoRow[]>(() => (data?.deliveryOrders ?? []) as DoRow[], [data]);
 
   const [search, setSearch] = useState('');
   const [brand, setBrand] = useState('');
@@ -364,18 +366,18 @@ export const DeliveryReturnsList = () => {
     return { brands: [...brands].sort(), venues: [...venues].sort() };
   }, [allRows]);
 
-  const rows = useMemo<DrRow[]>(() => {
+  const rows = useMemo<DoRow[]>(() => {
     const q = search.trim().toLowerCase();
     return allRows.filter((r) => {
       if (statusChip !== 'all' && r.status !== statusChip) return false;
       if (brand && deriveBranding(r) !== brand) return false;
       if (venue && r.venue !== venue) return false;
-      if (dateFrom && (r.return_date ?? '') < dateFrom) return false;
-      if (dateTo && (r.return_date ?? '') > dateTo) return false;
+      if (dateFrom && (r.do_date ?? '') < dateFrom) return false;
+      if (dateTo && (r.do_date ?? '') > dateTo) return false;
       if (q) {
         const blob = [
-          r.return_number, r.do_doc_no, r.debtor_name, r.debtor_code, r.venue,
-          deriveBranding(r), r.customer_so_no, r.ref, r.phone, r.reason,
+          r.do_number, r.so_doc_no, r.debtor_name, r.debtor_code, r.venue,
+          deriveBranding(r), r.customer_so_no, r.ref, r.po_doc_no, r.phone, r.driver_name,
         ].filter(Boolean).join(' ').toLowerCase();
         if (!blob.includes(q)) return false;
       }
@@ -390,7 +392,7 @@ export const DeliveryReturnsList = () => {
       cost += r.total_cost_centi ?? 0;
       margin += r.total_margin_centi ?? 0;
     }
-    return { totalReturns: rows.length, revenue, cost, margin };
+    return { totalOrders: rows.length, revenue, cost, margin };
   }, [rows]);
 
   const resetFilters = () => {
@@ -405,15 +407,28 @@ export const DeliveryReturnsList = () => {
   }, [staffQ.data]);
   const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
-  const updateStatus = useUpdateDeliveryReturnStatus();
+  const updateStatus = useUpdateMfgDeliveryOrderStatus();
 
-  const onNew = () => navigate('/delivery-returns/new');
-  const onConvertFromDo = () => navigate('/delivery-returns/from-do');
-  const openDetail = (row: DrRow, edit = false) =>
-    navigate(`/delivery-returns/${row.id}${edit ? '?edit=1' : ''}`);
+  const onNew = () => navigate('/mfg-delivery-orders/new');
+  const openDetail = (row: DoRow, edit = false) =>
+    navigate(`/mfg-delivery-orders/${row.id}${edit ? '?edit=1' : ''}`);
 
-  const doCancel = (row: DrRow) => {
-    if (!window.confirm(`Cancel return ${row.return_number}? This sets status = CANCELLED.`)) return;
+  const renderPdf = (row: DoRow) => {
+    void (async () => {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token ?? '';
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/delivery-orders-mfg/${row.id}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) { alert(`Failed to load DO ${row.do_number}`); return; }
+      const json = (await res.json()) as { deliveryOrder: unknown; items: unknown[] };
+      const { generateDeliveryOrderPdf } = await import('../lib/delivery-order-pdf');
+      await generateDeliveryOrderPdf(json.deliveryOrder as never, json.items as never);
+    })().catch((e) => alert(`PDF failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
+
+  const doCancel = (row: DoRow) => {
+    if (!window.confirm(`Cancel DO ${row.do_number}? This sets status = CANCELLED.`)) return;
     updateStatus.mutate({ id: row.id, status: 'CANCELLED' },
       { onError: (e) => alert(`Failed: ${e instanceof Error ? e.message : String(e)}`) });
   };
@@ -435,21 +450,21 @@ export const DeliveryReturnsList = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div>
-          <h1 className={styles.title}>Delivery Returns</h1>
+          <h1 className={styles.title}>Delivery Orders</h1>
           <p className={styles.subtitle}>
-            Customer returning previously-delivered goods · stock goes back IN
+            AutoCount-style ledger view
             {' · '}{isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} total`}
             {' · drag :: to reorder columns'}
           </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
-          <Button variant="ghost" size="sm" onClick={onConvertFromDo}>
-            <ArrowDownToLine size={14} strokeWidth={1.75} />
-            <span>Convert From DO</span>
+          <Button variant="ghost" size="sm" onClick={() => navigate('/mfg-delivery-orders/from-so')}>
+            <ArrowRightLeft size={14} strokeWidth={1.75} />
+            <span>Convert From Sales Order</span>
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
-            <span>New Delivery Return</span>
+            <span>New Delivery Order</span>
           </Button>
         </div>
       </div>
@@ -462,13 +477,13 @@ export const DeliveryReturnsList = () => {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-2)' }}>
-        {kpiTile('Total Returns', kpis.totalReturns.toLocaleString('en-MY'))}
-        {kpiTile('Returned Value (RM)', fmtRm(kpis.revenue))}
+        {kpiTile('Total DOs', kpis.totalOrders.toLocaleString('en-MY'))}
+        {kpiTile('Revenue (RM)', fmtRm(kpis.revenue))}
         {kpiTile('Cost (RM)', fmtRm(kpis.cost))}
         {kpiTile('Margin (RM)', fmtRm(kpis.margin), kpis.margin > 0 ? 'good' : kpis.margin < 0 ? 'bad' : undefined)}
       </div>
 
-      {/* Status chips. */}
+      {/* Status chips (kept available per spec). */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {STATUS_CHIPS.map((s) => (
           <button key={s} type="button" onClick={() => setStatusChip(s)}
@@ -484,7 +499,7 @@ export const DeliveryReturnsList = () => {
         ))}
       </div>
 
-      {/* Draggable filter row (matches DO list). */}
+      {/* Draggable filter row (matches SO list). */}
       <div style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)',
         padding: 'var(--space-2) var(--space-3)', background: 'var(--c-paper)', border: '1px solid var(--line)', borderRadius: 'var(--radius-md)',
@@ -499,7 +514,7 @@ export const DeliveryReturnsList = () => {
                     <Search size={14} strokeWidth={1.75}
                       style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--fg-muted)', pointerEvents: 'none' }} />
                     <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Return No, DO, debtor, reason…"
+                      placeholder="DO No, SO, debtor, driver…"
                       style={{ ...HOUZS_INPUT_DATE, paddingLeft: 30, paddingRight: 12, width: 240, cursor: 'text' }} />
                   </div>
                 </DraggableFilter>
@@ -547,37 +562,60 @@ export const DeliveryReturnsList = () => {
         </span>
       </div>
 
-      <DataGrid<DrRow>
+      <DataGrid<DoRow>
         rows={rows}
         columns={COLUMNS}
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.id}
-        searchPlaceholder="Search returns…"
+        searchPlaceholder="Search DOs…"
         groupBanner={false}
         onRowDoubleClick={(r) => openDetail(r)}
-        rowStyle={(r) => ['CANCELLED', 'REJECTED'].includes(r.status) ? { opacity: 0.55, filter: 'grayscale(0.6)' } : undefined}
+        rowStyle={(r) => r.status === 'CANCELLED' ? { opacity: 0.55, filter: 'grayscale(0.6)' } : undefined}
         isLoading={isLoading}
-        emptyMessage='No delivery returns yet — click "Convert From DO" to start.'
+        emptyMessage='No delivery orders yet — click "+ New Delivery Order" to start.'
         expandable={{
-          renderExpansion: (row) => <ExpandedDrLines id={row.id} />,
+          renderExpansion: (row) => <ExpandedDoLines id={row.id} />,
           rowExpansionKey: (row) => row.id,
         }}
         contextMenu={(row) => {
+          /* Tier 2 downstream-lock — once any non-cancelled DR / SI references
+             this DO, hide Edit + Cancel. Convert-to-SI / Convert-to-DR STAY
+             visible (partial flow allowed — multiple DRs / SIs may be issued). */
           const status = row.status;
-          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
-            { label: 'Edit', onClick: () => openDetail(row, true) },
-            { label: 'View', onClick: () => openDetail(row) },
-            { divider: true as const },
-          ];
-          if (!['CANCELLED', 'REFUNDED', 'CREDIT_NOTED'].includes(status)) {
-            items.push({ label: 'Cancel Return', danger: true, onClick: () => doCancel(row) });
+          const hasChildren = Boolean(row.has_children);
+          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [];
+          if (!hasChildren) {
+            items.push({ label: 'Edit', onClick: () => openDetail(row, true) });
+          }
+          items.push({ label: 'View',    onClick: () => openDetail(row) });
+          items.push({ label: 'Preview', onClick: () => renderPdf(row) });
+          items.push({ label: 'Print',   onClick: () => renderPdf(row) });
+          items.push({ divider: true as const });
+          /* Commander 2026-05-29 — a DO ships on creation, so the downstream
+             converts are available for any non-cancelled DO (no waiting for a
+             DELIVERED stage that no longer exists). "Convert to Sales Invoice"
+             is wired when the Sales Invoice module lands; "Convert to Delivery
+             Return" prefills a new return from this DO. */
+          if (!['CANCELLED'].includes(status)) {
+            items.push({
+              label: 'Convert to Sales Invoice',
+              onClick: () => navigate(`/sales-invoices/new?fromDo=${row.id}`),
+            });
+            items.push({
+              label: 'Convert to Delivery Return',
+              onClick: () => navigate(`/delivery-returns/new?fromDo=${row.id}`),
+            });
+          }
+          items.push({ divider: true as const });
+          if (!['CANCELLED', 'INVOICED'].includes(status) && !hasChildren) {
+            items.push({ label: 'Cancel DO', danger: true, onClick: () => doCancel(row) });
           }
           if (status === 'CANCELLED') {
             items.push({
-              label: 'Reopen Return',
+              label: 'Reopen DO',
               onClick: () => {
-                if (!window.confirm(`Reopen ${row.return_number} back to RECEIVED?`)) return;
-                updateStatus.mutate({ id: row.id, status: 'RECEIVED' });
+                if (!window.confirm(`Reopen ${row.do_number} back to LOADED?`)) return;
+                updateStatus.mutate({ id: row.id, status: 'LOADED' });
               },
             });
           }
@@ -588,28 +626,32 @@ export const DeliveryReturnsList = () => {
   );
 };
 
-/* ── Columns — mirrors the DO list set, adapted to DR fields. ───────────── */
-const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] => [
+/* ── Columns — mirrors the SO list set, adapted to DO fields. ───────────── */
+const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] => [
   {
-    key: 'return_number', label: 'Return No.', width: 150, sortable: true,
+    key: 'do_number', label: 'DO No.', width: 150, sortable: true,
     accessor: (r) => (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.return_number}</span>
-        {r.status && !['RECEIVED'].includes(r.status) && <StatusPill status={r.status} />}
+        <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
+        {/* Commander 2026-05-29 — every DO is SHIPPED on creation, so the inline
+            "Shipped" pill was just noise next to every row. Only flag the
+            exceptions (Invoiced / Cancelled) inline; the full state still lives
+            in the dedicated Status column. */}
+        {r.status && !['LOADED', 'DISPATCHED'].includes(r.status) && <StatusPill status={r.status} />}
       </span>
     ),
-    searchValue: (r) => `${r.return_number} ${r.status ?? ''}`,
+    searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
   },
   {
-    key: 'do_doc_no', label: 'DO Ref', width: 130, sortable: true,
-    accessor: (r) => r.do_doc_no ?? '—',
-    searchValue: (r) => r.do_doc_no ?? '',
+    key: 'so_doc_no', label: 'SO Ref', width: 130, sortable: true,
+    accessor: (r) => r.so_doc_no ?? '—',
+    searchValue: (r) => r.so_doc_no ?? '',
   },
   {
-    key: 'return_date', label: 'Date', width: 110, sortable: true,
-    accessor: (r) => compactDate(r.return_date),
-    searchValue: (r) => `${r.return_date ?? ''} ${compactDate(r.return_date)}`,
-    sortFn: (a, b) => (a.return_date ?? '').localeCompare(b.return_date ?? ''),
+    key: 'do_date', label: 'Date', width: 110, sortable: true,
+    accessor: (r) => compactDate(r.do_date),
+    searchValue: (r) => `${r.do_date ?? ''} ${compactDate(r.do_date)}`,
+    sortFn: (a, b) => (a.do_date ?? '').localeCompare(b.do_date ?? ''),
   },
   {
     key: 'debtor_name', label: 'Debtor Name', width: 220, sortable: true, groupable: true,
@@ -629,15 +671,17 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     groupValue: (r) => r.sales_location ?? '(none)',
   },
   {
-    key: 'reason', label: 'Reason', width: 160, sortable: true,
-    accessor: (r) => r.reason ?? '—',
-    searchValue: (r) => r.reason ?? '',
+    key: 'expected_delivery_at', label: 'Expected', width: 110, sortable: true,
+    accessor: (r) => compactDate(r.expected_delivery_at),
+    searchValue: (r) => r.expected_delivery_at ?? '',
+    sortFn: (a, b) => (a.expected_delivery_at ?? '').localeCompare(b.expected_delivery_at ?? ''),
   },
   {
     key: 'customer_so_no', label: 'Reference', width: 130, sortable: true,
-    accessor: (r) => r.customer_so_no ?? r.ref ?? '—',
-    searchValue: (r) => `${r.customer_so_no ?? ''} ${r.ref ?? ''}`,
-    sortFn: (a, b) => (a.customer_so_no ?? a.ref ?? '').localeCompare(b.customer_so_no ?? b.ref ?? ''),
+    accessor: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref ?? '—',
+    searchValue: (r) => `${r.customer_so_no ?? ''} ${r.po_doc_no ?? ''} ${r.ref ?? ''}`,
+    sortFn: (a, b) =>
+      (a.customer_so_no ?? a.po_doc_no ?? a.ref ?? '').localeCompare(b.customer_so_no ?? b.po_doc_no ?? b.ref ?? ''),
   },
   {
     key: 'branding', label: 'Branding', width: 130, sortable: true, groupable: true,
@@ -656,7 +700,13 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     groupValue: (r) => r.venue ?? '(none)',
   },
   {
-    key: 'local_total_centi', label: 'Returned Value', width: 130, sortable: true, align: 'right',
+    key: 'driver_name', label: 'Driver', width: 130, sortable: true, groupable: true,
+    accessor: (r) => r.driver_name ?? '—',
+    searchValue: (r) => r.driver_name ?? '',
+    groupValue: (r) => r.driver_name ?? '(none)',
+  },
+  {
+    key: 'local_total_centi', label: 'Local Total', width: 120, sortable: true, align: 'right',
     accessor: (r) => (
       <span style={{ fontWeight: 700, color: 'var(--c-ink)', fontVariantNumeric: 'tabular-nums' }}>{fmtRm(r.local_total_centi)}</span>
     ),
@@ -752,9 +802,31 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     searchValue: (r) => r.postcode ?? '',
   },
   {
+    key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true, defaultHidden: true,
+    accessor: (r) => r.customer_delivery_date ?? '',
+    searchValue: (r) => r.customer_delivery_date ?? '',
+  },
+  {
+    key: 'vehicle', label: 'Vehicle', width: 120, sortable: true, defaultHidden: true,
+    accessor: (r) => r.vehicle ?? '',
+    searchValue: (r) => r.vehicle ?? '',
+  },
+  {
     key: 'note', label: 'Note', width: 200, sortable: true, defaultHidden: true,
     accessor: (r) => r.note ?? '',
     searchValue: (r) => r.note ?? '',
+  },
+  {
+    key: 'mattress_sofa_cost_centi', label: 'Mattress/Sofa Cost', width: 140, sortable: true, align: 'right', defaultHidden: true,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.mattress_sofa_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.mattress_sofa_cost_centi ?? 0),
+    sortFn: (a, b) => (a.mattress_sofa_cost_centi ?? 0) - (b.mattress_sofa_cost_centi ?? 0),
+  },
+  {
+    key: 'bedframe_cost_centi', label: 'Bedframe Cost', width: 130, sortable: true, align: 'right', defaultHidden: true,
+    accessor: (r) => <span className={styles.money}>{fmtRm(r.bedframe_cost_centi ?? 0)}</span>,
+    searchValue: (r) => fmtRm(r.bedframe_cost_centi ?? 0),
+    sortFn: (a, b) => (a.bedframe_cost_centi ?? 0) - (b.bedframe_cost_centi ?? 0),
   },
   {
     key: 'total_cost_centi', label: 'Cost Total', width: 120, sortable: true, align: 'right', defaultHidden: true,
