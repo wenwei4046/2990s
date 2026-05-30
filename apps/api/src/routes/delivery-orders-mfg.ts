@@ -19,6 +19,7 @@ import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
@@ -597,6 +598,21 @@ deliveryOrdersMfg.post('/', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* Edge #1+#2 — soft stock check, gated by confirmShortStock. */
+  if (items.length > 0 && !body.confirmShortStock) {
+    const targetWh = (body.warehouseId as string | undefined) ?? (await defaultWarehouseId(sb));
+    if (targetWh) {
+      const stockLines = items.map((it) => ({
+        itemCode: String(it.itemCode ?? ''),
+        productName: (it.description as string | null) ?? null,
+        variantKey: computeVariantKey((it.itemGroup as string | null) ?? null, (it.variants as VariantAttrs | null) ?? null),
+        qty: Number(it.qty ?? 0),
+      }));
+      const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+      if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+    }
+  }
+
   /* Commander 2026-05-30 — the old whole-SO "already_converted" binary lock is
      GONE. Delivery is now line-level + quantity-based (see
      soDeliverableRemaining): an SO line can be split across several DOs until
@@ -724,7 +740,7 @@ function buildItemRow(deliveryOrderId: string, it: Record<string, unknown>) {
      4. recomputeTotals + deductInventoryForDo (both idempotent). */
 deliveryOrdersMfg.post('/from-sos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { picks?: Array<{ soItemId?: string; qty?: number }> };
+  let body: { picks?: Array<{ soItemId?: string; qty?: number }>; confirmShortStock?: boolean; warehouseId?: string };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
   // Collapse duplicate soItemIds (sum their qty) so a line can't appear twice.
@@ -800,6 +816,23 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     .map((id) => remainingMap.get(id)!)
     .sort((a, b) => a.docNo.localeCompare(b.docNo) || a.soItemId.localeCompare(b.soItemId));
   const firstSoDocNo = sortedPicks[0]!.docNo;
+
+  // Edge #1+#2 — soft stock check at the target warehouse, gated by
+  // confirmShortStock. Returns 409 short_stock with cross-warehouse alternatives
+  // so the picker can offer "ship anyway / switch warehouse / reduce qty".
+  if (!body.confirmShortStock) {
+    const targetWh = body.warehouseId ?? (await defaultWarehouseId(sb));
+    if (targetWh) {
+      const stockLines = sortedPicks.map((line) => ({
+        itemCode: line.itemCode,
+        productName: line.description,
+        variantKey: computeVariantKey(line.itemGroup ?? null, (line.variants as VariantAttrs | null) ?? null),
+        qty: pickQtyById.get(line.soItemId) ?? 0,
+      }));
+      const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+      if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+    }
+  }
 
   // Pull the FIRST SO's header for the DO header snapshot (address / salesperson
   // / branding / venue / contact). Lines carry their own debtor snapshot.
@@ -972,8 +1005,26 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
   const childLock = await doHasDownstream(sb, id);
   if (childLock) return c.json(childLock, 409);
 
-  const { data: header } = await sb.from('delivery_orders').select('id').eq('id', id).maybeSingle();
+  const { data: header } = await sb.from('delivery_orders').select('id, status, warehouse_id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
+
+  /* Edge #1+#2 — if the DO is already shipped, an added line ships immediately
+     via resync; check stock first, gated by confirmShortStock. Skipped on a
+     not-yet-shipped DO (no OUT yet — first-ship deduction handles it). */
+  const h = header as { id: string; status: string | null; warehouse_id: string | null };
+  if (SHIPPED_STATES.includes((h.status ?? '').toUpperCase()) && !(it as { confirmShortStock?: boolean }).confirmShortStock) {
+    const targetWh = h.warehouse_id ?? (await defaultWarehouseId(sb));
+    if (targetWh) {
+      const stockLines = [{
+        itemCode: String(it.itemCode ?? ''),
+        productName: (it.description as string | null) ?? null,
+        variantKey: computeVariantKey((it.itemGroup as string | null) ?? null, (it.variants as VariantAttrs | null) ?? null),
+        qty: Number(it.qty ?? 0),
+      }];
+      const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+      if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+    }
+  }
 
   const row = buildItemRow(id, it);
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
@@ -1007,6 +1058,31 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const qty = it.qty !== undefined ? Number(it.qty) : Number(prev.qty);
+
+  /* Edge #1+#2 — when qty is being INCREASED on a shipped DO, the delta
+     needs more stock OUT. Check that delta against the warehouse, gated by
+     confirmShortStock. Decreases and non-qty edits skip the check. */
+  if (it.qty !== undefined && qty > Number(prev.qty) && !(it as { confirmShortStock?: boolean }).confirmShortStock) {
+    const { data: doHeader } = await sb.from('delivery_orders').select('status, warehouse_id').eq('id', id).maybeSingle();
+    const dh = (doHeader ?? { status: null, warehouse_id: null }) as { status: string | null; warehouse_id: string | null };
+    if (SHIPPED_STATES.includes((dh.status ?? '').toUpperCase())) {
+      const targetWh = dh.warehouse_id ?? (await defaultWarehouseId(sb));
+      if (targetWh) {
+        const delta = qty - Number(prev.qty);
+        const effGroup = (it.itemGroup ?? prev.item_group) as string | null;
+        const effVariants = (it.variants ?? prev.variants) as VariantAttrs | null;
+        const effCode = (it.itemCode as string | undefined) ?? (prev.item_code as string);
+        const stockLines = [{
+          itemCode: effCode,
+          productName: (prev.description as string | null) ?? null,
+          variantKey: computeVariantKey(effGroup, effVariants),
+          qty: delta,
+        }];
+        const shortages = await checkStockAvailability(sb, targetWh, stockLines);
+        if (shortages.length > 0) return c.json(shortStockResponse(shortages), 409);
+      }
+    }
+  }
 
   // TASK #24 — guard against orphaning downstream papers. If the operator is
   // shrinking qty below what's already been invoiced + returned, those Invoice /

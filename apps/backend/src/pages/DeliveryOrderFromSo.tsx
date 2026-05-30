@@ -254,23 +254,51 @@ export const DeliveryOrderFromSo = () => {
     },
   ], [picks, lockedCustomer]);
 
-  const onConvert = () => {
+  const onConvert = (confirmShortStock = false) => {
     if (pickedCount === 0) {
       setDialog({ title: 'Nothing picked', body: 'Tick at least one Sales Order line to deliver first.' });
       return;
     }
     const picksPayload = picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty }));
     convert.mutate(
-      { picks: picksPayload },
+      { picks: picksPayload, ...(confirmShortStock ? { confirmShortStock: true } : {}) },
       {
         onSuccess: (res) => {
           // Land on the new DO in Edit mode so the picked lines are right there.
           navigate(`/mfg-delivery-orders/${res.id}?edit=1`);
         },
-        onError: (e) => setDialog({
-          title: 'Convert failed',
-          body: e instanceof Error ? e.message : String(e),
-        }),
+        onError: (e) => {
+          /* Edge #1+#2 — server returned 409 short_stock. Parse the shortage
+             detail out of the error message, ask the operator to confirm,
+             and on confirm re-submit with confirmShortStock: true. */
+          const raw = e instanceof Error ? e.message : String(e);
+          const shortMatch = raw.includes('"short_stock"');
+          if (shortMatch && !confirmShortStock) {
+            try {
+              const jsonStart = raw.indexOf('{');
+              const payload = JSON.parse(raw.slice(jsonStart)) as {
+                shortages?: Array<{
+                  itemCode: string; warehouseName: string | null;
+                  needed: number; available: number; short: number;
+                  alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
+                }>;
+              };
+              const lines = (payload.shortages ?? []).map((s) => {
+                const alts = (s.alternatives ?? []).slice(0, 3)
+                  .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
+                  .join(', ');
+                const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
+                return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
+              }).join('\n\n');
+              const proceed = window.confirm(
+                `Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`,
+              );
+              if (proceed) onConvert(true);
+              return;
+            } catch { /* fall through to generic dialog */ }
+          }
+          setDialog({ title: 'Convert failed', body: raw });
+        },
       },
     );
   };
@@ -301,7 +329,7 @@ export const DeliveryOrderFromSo = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={onConvert}
+            onClick={() => onConvert()}
             disabled={pickedCount === 0 || convert.isPending}
             title="Combine the picked Sales Order lines into one Delivery Order"
           >

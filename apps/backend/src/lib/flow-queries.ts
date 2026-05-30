@@ -382,10 +382,15 @@ export const useDeliverableSoLines = () => useQuery({
 export const useConvertSoLinesToDo = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ picks }: { picks: Array<{ soItemId: string; qty: number }> }) =>
+    mutationFn: (vars: {
+      picks: Array<{ soItemId: string; qty: number }>;
+      /* Edge #1+#2 — re-submit with confirmShortStock: true to ship anyway
+         after the operator confirmed the stock-shortage dialog. */
+      confirmShortStock?: boolean;
+    }) =>
       authedFetch<{ id: string; doNumber: string }>(
         `/delivery-orders-mfg/from-sos`,
-        { method: 'POST', body: JSON.stringify({ picks }) },
+        { method: 'POST', body: JSON.stringify(vars) },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
