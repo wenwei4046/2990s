@@ -34,6 +34,8 @@ import {
   useDeliveryOrderPayments,
   useAddDeliveryOrderPayment,
   useDeleteDeliveryOrderPayment,
+  useDeliverableSoLinesForDoc,
+  type DeliverableSoLine,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import {
@@ -183,6 +185,13 @@ export const DeliveryOrderDetail = () => {
   const header = (detail.data?.deliveryOrder as DoHeader | undefined) ?? null;
   const items = (detail.data?.items as DoItem[] | undefined) ?? [];
 
+  /* SO-linked DOs: the only way to add a line is to pick one of the parent SO's
+     still-undelivered lines (qty capped to remaining), so Add Line stays in
+     lock-step with the convert picker. Ad-hoc DOs (no parent SO) keep the free
+     blank-line add. */
+  const soDocNo = header?.so_doc_no ?? null;
+  const deliverableQ = useDeliverableSoLinesForDoc(soDocNo);
+
   // ── Payments (DRAFT-mode PaymentsTable + manual persistence) ──────────
   const paymentsQ = useDeliveryOrderPayments(id ?? null);
   const addPayment = useAddDeliveryOrderPayment();
@@ -191,8 +200,13 @@ export const DeliveryOrderDetail = () => {
 
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
   const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
+  /* When the add line was picked from the parent SO, remember its SO line id +
+     remaining cap so the create links so_item_id and never over-delivers. */
+  const [addSoItemId, setAddSoItemId] = useState<string | null>(null);
+  const [addMaxQty, setAddMaxQty] = useState<number>(0);
 
   const [isEditing, setIsEditing] = useState(searchParams.get('edit') === '1');
+  const [justCreated, setJustCreated] = useState(searchParams.get('created') === '1');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const customerCardRef = useRef<CustomerCardHandle | null>(null);
@@ -293,8 +307,25 @@ export const DeliveryOrderDetail = () => {
     return map;
   }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
 
-  const startAddLine = () => setAddingDraft({ ...emptySoLine() });
-  const cancelAddLine = useCallback(() => setAddingDraft(null), []);
+  const startAddLine = () => { setAddSoItemId(null); setAddMaxQty(0); setAddingDraft({ ...emptySoLine() }); };
+  /* Seed the add-line draft from a chosen SO remaining line (SO-linked DOs). */
+  const addFromSoLine = (line: DeliverableSoLine) => {
+    setAddSoItemId(line.soItemId);
+    setAddMaxQty(line.remaining);
+    setAddingDraft({
+      itemCode: line.itemCode,
+      itemGroup: line.itemGroup ?? 'others',
+      description: line.description ?? '',
+      uom: line.uom ?? 'UNIT',
+      qty: line.remaining,
+      unitPriceCenti: line.unitPriceCenti,
+      discountCenti: line.discountCenti,
+      unitCostCenti: line.unitCostCenti,
+      variants: (line.variants as Record<string, unknown>) ?? {},
+      remark: '',
+    });
+  };
+  const cancelAddLine = useCallback(() => { setAddingDraft(null); setAddSoItemId(null); setAddMaxQty(0); }, []);
   const patchAddingDraft = useCallback(
     (patch: Partial<SoLineDraft>) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev),
     [],
@@ -311,8 +342,12 @@ export const DeliveryOrderDetail = () => {
   const commitAddLine = (d: SoLineDraft) =>
     addItem.mutateAsync({
       id: header!.id,
+      // Link to the SO line + clamp to remaining when this add came from the SO
+      // picker; the backend enforces the same cap as a final guard.
+      soItemId: addSoItemId ?? undefined,
       itemCode: d.itemCode, itemGroup: d.itemGroup, description: d.description,
-      uom: d.uom, qty: d.qty, unitPriceCenti: d.unitPriceCenti, discountCenti: d.discountCenti,
+      uom: d.uom, qty: addSoItemId ? Math.min(d.qty, addMaxQty) : d.qty,
+      unitPriceCenti: d.unitPriceCenti, discountCenti: d.discountCenti,
       unitCostCenti: d.unitCostCenti, variants: d.variants, notes: d.remark,
     });
 
@@ -492,6 +527,14 @@ export const DeliveryOrderDetail = () => {
         </div>
       </div>
 
+      {justCreated && !isCancelled && (
+        <div className={styles.bannerOk}>
+          <strong>Delivery order {header.do_number} created.</strong>
+          <span>Stock has already been deducted. Nothing more to save — close this page or click Edit if you need to adjust delivery details.</span>
+          <button type="button" className={styles.bannerDismiss} onClick={() => setJustCreated(false)}>Dismiss</button>
+        </div>
+      )}
+
       {saveError && (
         <div className={styles.bannerWarn}>
           <strong>Save failed.</strong>
@@ -518,10 +561,37 @@ export const DeliveryOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          {isEditing && !addingDraft && (
-            <Button variant="primary" size="sm" onClick={startAddLine} disabled={isLocked}>
-              <Plus {...ICON} /><span>Add Line Item</span>
-            </Button>
+          {isEditing && !addingDraft && !isLocked && (
+            soDocNo ? (() => {
+              if (deliverableQ.isLoading) {
+                return <span className={styles.fieldLabel}>Loading Sales Order lines…</span>;
+              }
+              const remainingLines = (deliverableQ.data ?? []).filter((l) => l.remaining > 0);
+              if (remainingLines.length === 0) {
+                return <span className={styles.fieldLabel}>All Sales Order lines fully delivered — nothing left to add.</span>;
+              }
+              return (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const line = remainingLines.find((l) => l.soItemId === e.target.value);
+                    if (line) addFromSoLine(line);
+                  }}
+                  style={{ padding: '6px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--c-border, #d8d2c8)', fontSize: 'var(--fs-13)', background: 'var(--c-surface, #fff)' }}
+                >
+                  <option value="" disabled>+ Add from Sales Order…</option>
+                  {remainingLines.map((l) => (
+                    <option key={l.soItemId} value={l.soItemId}>
+                      {l.itemCode}{l.description ? ` — ${l.description}` : ''} (remaining {l.remaining})
+                    </option>
+                  ))}
+                </select>
+              );
+            })() : (
+              <Button variant="primary" size="sm" onClick={startAddLine} disabled={isLocked}>
+                <Plus {...ICON} /><span>Add Line Item</span>
+              </Button>
+            )
           )}
         </header>
 
