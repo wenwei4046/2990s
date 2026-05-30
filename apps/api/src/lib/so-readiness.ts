@@ -8,13 +8,17 @@
 //   - PATCH /:docNo/items/:itemId/stock-status (manual READY toggle)
 //   - GET /mfg-sales-orders (list aggregate — emits stock_remark per row)
 //
-// Remark output (mirrors operator's existing ERP "Remark 2" column):
-//   ""               — empty SO or non-shipping status
-//   "READY"          — every line (main + ACC) READY
-//   "READY (PARTIAL)" — every MAIN line READY, some ACC line PENDING
-//   "BEDFRAME"       — at least one BEDFRAME line PENDING
-//   "MATTRESS/ACC"   — MATTRESS line(s) PENDING + accessory pending too
-//   …joined-by-slash list of missing categories when main is not yet ready.
+// Remark output — shows WHAT IS READY (the operator's existing "Remark 2"
+// convention; the warehouse staff scan this column to know what they can
+// pull NOW without asking the salesperson):
+//   ""               — nothing ready / no items
+//   "READY"          — every line (MAIN + ACC) is READY
+//   "READY (PARTIAL)" — every MAIN line READY, some ACC line still PENDING
+//                       (still ship-able — accessories don't block delivery)
+//   "BEDFRAME"       — every BEDFRAME line READY, MAIN of other cats still
+//                       pending (i.e. "bedframe ready, waiting on rest")
+//   "MATTRESS/ACC"   — mattress READY + accessories READY, sofa/bedframe still
+//                       pending → "/"-joined list of categories that ARE ready
 // ----------------------------------------------------------------------------
 
 export const MAIN_CATEGORIES = new Set(['SOFA', 'BEDFRAME', 'MATTRESS']);
@@ -59,6 +63,10 @@ export type ReadinessSummary = {
 export function summariseReadiness(lines: ReadinessLine[]): ReadinessSummary {
   const live = lines.filter((l) => !l.cancelled);
   let mainCount = 0, mainReady = 0, accCount = 0, accReady = 0;
+  /* Per-MAIN-category totals so the "what's ready" string can list cats that
+     are fully READY (e.g. "BEDFRAME" when every bedframe line is READY but
+     sofa/mattress lines on the same SO are still PENDING). */
+  const mainByCat = new Map<string, { total: number; ready: number }>();
   const pendingMainCats = new Set<string>();
   let anyAccPending = false;
 
@@ -68,8 +76,11 @@ export function summariseReadiness(lines: ReadinessLine[]): ReadinessSummary {
     const isReady = l.stock_status === 'READY';
     if (isMain) {
       mainCount += 1;
-      if (isReady) mainReady += 1;
+      const cell = mainByCat.get(cat) ?? { total: 0, ready: 0 };
+      cell.total += 1;
+      if (isReady) { mainReady += 1; cell.ready += 1; }
       else pendingMainCats.add(cat);
+      mainByCat.set(cat, cell);
     } else {
       accCount += 1;
       if (isReady) accReady += 1;
@@ -80,24 +91,31 @@ export function summariseReadiness(lines: ReadinessLine[]): ReadinessSummary {
   const isMainReady  = mainCount > 0 ? mainReady === mainCount : true;  // no-main SO = main-ready by convention
   const isFullyReady = (mainCount + accCount) > 0 && mainReady === mainCount && accReady === accCount;
 
-  // Build the remark label.
+  /* Stock remark — shows WHAT IS READY (so warehouse staff know what they
+     can pull NOW without asking the salesperson). */
   let stockRemark = '';
   if (mainCount + accCount === 0) {
     stockRemark = '';
   } else if (isFullyReady) {
     stockRemark = 'READY';
   } else if (isMainReady) {
+    /* All MAIN done, only ACC still outstanding — operator can still ship. */
     stockRemark = 'READY (PARTIAL)';
   } else {
-    // Some MAIN still pending — list which categories. Append "ACC" too when
-    // any accessory line is pending (matches the operator's "MATTRESS/ACC"
-    // convention from the existing ERP).
-    const parts = [...pendingMainCats].sort();
-    if (anyAccPending) parts.push('ACC');
-    stockRemark = parts.join('/');
+    /* Mix of ready / not-ready. List the cats that ARE fully ready — that's
+       what tells warehouse what to pull. ACC bucket counts as "ready" only
+       when every accessory line is READY. */
+    const readyCats: string[] = [];
+    for (const cat of ['BEDFRAME', 'SOFA', 'MATTRESS']) {
+      const cell = mainByCat.get(cat);
+      if (cell && cell.total > 0 && cell.ready === cell.total) readyCats.push(cat);
+    }
+    if (accCount > 0 && accReady === accCount) readyCats.push('ACC');
+    stockRemark = readyCats.join('/');  // "" when nothing yet ready
   }
 
-  // pendingCategories — collapse ACC entries into one.
+  /* pendingCategories stays = what's NOT ready (handy for internal callers
+     even though the UI now shows the ready list). */
   const pc = [...pendingMainCats].sort();
   if (anyAccPending) pc.push('ACC');
 
