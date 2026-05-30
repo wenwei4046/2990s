@@ -654,63 +654,7 @@ export const SalesOrderDetailListing = () => {
   /* ── PDF preview (retained from the AutoCount layout) ──────────────── */
   const [findNonce, setFindNonce] = useState(0);
 
-  const generatePreviewPdf = async (data: SoDetailListingRow[]) => {
-    try {
-      const { jsPDF } = await import('jspdf');
-      const autoTable = (await import('jspdf-autotable')).default;
-      const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'landscape' });
-      const margin = 10;
-      let y = margin;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
-      doc.text("Sales Order Details", margin, y);
-      y += 5;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.text(
-        `Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${data.length} rows`,
-        margin, y,
-      );
-      y += 4;
-      // A4 landscape — surface the 10 most important columns.
-      const previewKeys = [
-        'doc_no', 'so_date', 'debtor_name', 'agent', 'item_code',
-        'description', 'qty', 'unit_price', 'total', 'line_margin',
-      ];
-      const previewCols = previewKeys
-        .map((k) => COLUMNS.find((c) => c.key === k))
-        .filter((c): c is DataGridColumn<SoDetailListingRow> => Boolean(c));
-      autoTable(doc, {
-        startY: y + 2,
-        head: [previewCols.map((c) => c.label)],
-        body: data.map((r) =>
-          previewCols.map((c) => {
-            if (c.searchValue) return c.searchValue(r);
-            const v = c.accessor(r);
-            return typeof v === 'string' || typeof v === 'number' ? String(v) : '';
-          })
-        ),
-        theme: 'striped',
-        styles: { fontSize: 7, cellPadding: 1.5 },
-        headStyles: { fillColor: [34, 31, 32], textColor: 250, fontStyle: 'bold' },
-        margin: { left: margin, right: margin },
-      });
-      doc.save(`sales-order-details-${new Date().toISOString().slice(0, 10)}.pdf`);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('PDF preview failed', e);
-      alert(`PDF preview failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-
-  const runPreview = () => { void generatePreviewPdf(filteredRows); };
-  const runPrint   = () => window.print();
-
-  /* Reset filters back to defaults. Houzs's "Reset Data" affordance. */
-  const resetFilters = () => {
-    setSearch(''); setBrand(''); setGroup(''); setAgent(''); setVenue(''); setPayment('');
-    setDateFrom(yearAgo); setDateTo(today);
-  };
+  const runPrint = () => window.print();
 
   /* Match the headline format Houzs uses on the title bar — drives the
        "N items · drag to reorder columns" subtitle below. */
@@ -750,14 +694,6 @@ export const SalesOrderDetailListing = () => {
           </div>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
-          <Button variant="ghost" size="sm" onClick={resetFilters}>
-            <X {...SM_ICON} />
-            <span>Reset Data</span>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={runPreview}>
-            <Eye {...SM_ICON} />
-            <span>Preview</span>
-          </Button>
           <Button variant="ghost" size="sm" onClick={runPrint}>
             <Printer {...SM_ICON} />
             <span>Print</span>

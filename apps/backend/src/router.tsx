@@ -40,7 +40,6 @@ function lazyRetry<T extends ComponentType<any>>(factory: () => Promise<{ defaul
 // .then(m => ({ default: m.X })) adapter to satisfy React.lazy's "default
 // export" contract.
 
-const SkuMaster = lazyRetry(() => import('./pages/SkuMaster').then(m => ({ default: m.SkuMaster })));
 const AuditLog = lazyRetry(() => import('./pages/AuditLog').then(m => ({ default: m.AuditLog })));
 const Addons = lazyRetry(() => import('./pages/Addons').then(m => ({ default: m.Addons })));
 const Settings = lazyRetry(() => import('./pages/Settings').then(m => ({ default: m.Settings })));
@@ -72,7 +71,6 @@ const DeliveryOrderFromSo = lazyRetry(() => import('./pages/DeliveryOrderFromSo'
 const SalesInvoicesList = lazyRetry(() => import('./pages/SalesInvoicesList').then(m => ({ default: m.SalesInvoicesList })));
 const SalesInvoiceNew = lazyRetry(() => import('./pages/SalesInvoiceNew').then(m => ({ default: m.SalesInvoiceNew })));
 const SalesInvoiceFromDo = lazyRetry(() => import('./pages/SalesInvoiceFromDo').then(m => ({ default: m.SalesInvoiceFromDo })));
-const ConsignmentPage = lazyRetry(() => import('./pages/FlowPages').then(m => ({ default: m.ConsignmentPage })));
 const DeliveryReturnsList = lazyRetry(() => import('./pages/DeliveryReturnsList').then(m => ({ default: m.DeliveryReturnsList })));
 const DeliveryReturnDetail = lazyRetry(() => import('./pages/DeliveryReturnDetail').then(m => ({ default: m.DeliveryReturnDetail })));
 const DeliveryReturnNew = lazyRetry(() => import('./pages/DeliveryReturnNew').then(m => ({ default: m.DeliveryReturnNew })));
@@ -120,11 +118,9 @@ const Placeholder = lazyRetry(() => import('./pages/Placeholder').then(m => ({ d
 const SalesOrderDetailListing = lazyRetry(() => import('./pages/SalesOrderDetailListing').then(m => ({ default: m.SalesOrderDetailListing })));
 const DeliveryOrderDetailListing = lazyRetry(() => import('./pages/DeliveryOrderDetailListing').then(m => ({ default: m.DeliveryOrderDetailListing })));
 const SalesInvoiceDetailListing = lazyRetry(() => import('./pages/SalesInvoiceDetailListing').then(m => ({ default: m.SalesInvoiceDetailListing })));
-const ConsignmentDetailListing = lazyRetry(() => import('./pages/ConsignmentDetailListing').then(m => ({ default: m.ConsignmentDetailListing })));
 const DeliveryReturnDetailListing = lazyRetry(() => import('./pages/DeliveryReturnDetailListing').then(m => ({ default: m.DeliveryReturnDetailListing })));
 const DeliveryOrderDetail = lazyRetry(() => import('./pages/DeliveryOrderDetail').then(m => ({ default: m.DeliveryOrderDetail })));
 const SalesInvoiceDetail = lazyRetry(() => import('./pages/SalesInvoiceDetail').then(m => ({ default: m.SalesInvoiceDetail })));
-const ConsignmentDetail = lazyRetry(() => import('./pages/DocDetailPages').then(m => ({ default: m.ConsignmentDetail })));
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -137,7 +133,6 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <Dashboard /> },
-      { path: 'sku-master', element: <SkuMaster /> },
       { path: 'products', element: <Products /> },
       { path: 'product-models', element: <ProductModels /> },
       { path: 'product-models/:id', element: <ProductModelDetail /> },
@@ -195,8 +190,6 @@ export const router = createBrowserRouter([
       { path: 'sales-invoices/new', element: <SalesInvoiceNew /> },
       { path: 'sales-invoices/from-do', element: <SalesInvoiceFromDo /> },
       { path: 'sales-invoices/:id', element: <SalesInvoiceDetail /> },
-      { path: 'consignment', element: <ConsignmentPage /> },
-      { path: 'consignment/:id', element: <ConsignmentDetail /> },
       { path: 'delivery-returns', element: <DeliveryReturnsList /> },
       // /new + /from-do must come BEFORE :id so they aren't caught as a DR id.
       { path: 'delivery-returns/new', element: <DeliveryReturnNew /> },
@@ -210,11 +203,10 @@ export const router = createBrowserRouter([
       { path: 'outstanding', element: <Outstanding /> },
       { path: 'reports/sales-order-listing', element: <Placeholder title="Sales Order Listing" phase="a follow-up PR" hint="One row per SO header. Use Sales Order Detail Listing for line-item view." /> },
       { path: 'reports/sales-order-detail-listing', element: <SalesOrderDetailListing /> },
-      /* Task #120 — L2 Detail Listing routes for the 4 other SO-family modules.
+      /* Task #120 — L2 Detail Listing routes for the other SO-family modules.
          Reached from the L1 toolbar's "Listing" picker; no sidebar entry. */
       { path: 'reports/delivery-order-detail-listing', element: <DeliveryOrderDetailListing /> },
       { path: 'reports/sales-invoice-detail-listing', element: <SalesInvoiceDetailListing /> },
-      { path: 'reports/consignment-detail-listing', element: <ConsignmentDetailListing /> },
       { path: 'reports/delivery-return-detail-listing', element: <DeliveryReturnDetailListing /> },
       { path: 'audit-log', element: <AuditLog /> },
       { path: 'addons', element: <Addons /> },

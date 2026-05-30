@@ -73,7 +73,11 @@ const ICON = { size: 16, strokeWidth: 1.75 } as const;
 export type MaintenanceMode = 'view' | 'add-only' | 'full';
 
 function maintenanceMode(role: string | undefined): MaintenanceMode {
-  if (role === 'admin') return 'full';
+  // super_admin is an additive superset of admin (was falling through to
+  // 'view' — the same bug fixed in the Products page productsMode). NOTE:
+  // master_account is a SELLING-side role; SO Maintenance is logistics
+  // (localities / warehouse), so master_account stays view-only here.
+  if (role === 'admin' || role === 'super_admin') return 'full';
   if (role === 'sales_director') return 'add-only';
   // Commander 2026-05-28 tightening: outlet_manager moved from add-only → view.
   // sales_executive / sales / outlet_manager / anything else all view-only.

@@ -152,7 +152,15 @@ async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber:
       source_doc_no: returnNumber,
       performed_by: userId,
     }));
-  if (movements.length > 0) await writeMovements(sb, movements);
+  if (movements.length > 0) {
+    await writeMovements(sb, movements);
+    /* PR post = stock OUT to supplier → other READY SOs that needed it may
+       regress. Re-walk SO allocation. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pr-post failed:', e); }
+  }
 }
 
 purchaseReturns.post('/', async (c) => {
@@ -497,7 +505,14 @@ purchaseReturns.patch('/:id/cancel', async (c) => {
           performed_by: user.id,
           notes: 'Purchase return cancelled — reversing return',
         }));
-      if (movements.length > 0) await writeMovements(sb, movements);
+      if (movements.length > 0) {
+        await writeMovements(sb, movements);
+        /* PR cancel reversed stock IN → may unlock PENDING SOs. Re-walk. */
+        try {
+          const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+          await recomputeSoStockAllocation(sb);
+        } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-pr-cancel failed:', e); }
+      }
     }
   } catch { /* best-effort: never un-cancel on a movement failure */ }
 

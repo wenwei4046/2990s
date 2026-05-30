@@ -24,7 +24,7 @@ export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
 mfgProducts.use('*', supabaseAuth);
 
 // Allowed values for the `field` column on master_price_history.
-const PRICE_FIELDS = new Set(['base_price_sen', 'price1_sen', 'cost_price_sen']);
+const PRICE_FIELDS = new Set(['base_price_sen', 'price1_sen', 'cost_price_sen', 'sell_price_sen']);
 
 // ── GET / ──────────────────────────────────────────────────────────────
 mfgProducts.get('/', async (c) => {
@@ -39,8 +39,8 @@ mfgProducts.get('/', async (c) => {
   let q = supabase
     .from('mfg_products')
     .select(
-      'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, ' +
-        'unit_m3_milli, status, sku_code, model_id, ' +
+      'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, sell_price_sen, ' +
+        'unit_m3_milli, status, pos_active, sku_code, model_id, ' +
         'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
         // Commander 2026-05-29 — surface the Model's allowed_options so the SO
         // line editor can hide variant choices the SKU doesn't allow (instead
@@ -270,6 +270,7 @@ mfgProducts.patch('/:id', async (c) => {
     basePriceSen?: number | null;
     price1Sen?: number | null;
     costPriceSen?: number | null;
+    sellPriceSen?: number | null;
     notes?: string;
     defaultVariants?: unknown;
     subAssemblies?: unknown;
@@ -280,6 +281,10 @@ mfgProducts.patch('/:id', async (c) => {
         detail "SKU variants" table to mark individual SKUs as no longer sold
         without having to delete the row (preserves stock + history). */
     status?: 'ACTIVE' | 'INACTIVE';
+    /** D5 (cost/sell split Phase 2) — selling-only POS catalog visibility.
+        Master Account (POS) writes this; SEPARATE from `status` (cost/PO).
+        The Backend cost editor never sends it. */
+    posActive?: boolean;
     /* PR #89 (Commander 2026-05-26) — inline edit of SKU code + name from
        SKU Master. Unique-constraint on code → 23505 surfaces as 409. */
     code?: string;
@@ -296,7 +301,7 @@ mfgProducts.patch('/:id', async (c) => {
 
   const { data: current, error: loadErr } = await supabase
     .from('mfg_products')
-    .select('code, base_price_sen, price1_sen, cost_price_sen, default_variants, seat_height_prices')
+    .select('code, base_price_sen, price1_sen, cost_price_sen, sell_price_sen, default_variants, seat_height_prices')
     .eq('id', id)
     .maybeSingle();
   if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
@@ -312,6 +317,10 @@ mfgProducts.patch('/:id', async (c) => {
   if (body.price1Sen !== undefined && body.price1Sen !== current.price1_sen) {
     updates.price1_sen = body.price1Sen;
     priceChanges.push({ field: 'price1_sen', oldValueSen: current.price1_sen, newValueSen: body.price1Sen });
+  }
+  if (body.sellPriceSen !== undefined && body.sellPriceSen !== current.sell_price_sen) {
+    updates.sell_price_sen = body.sellPriceSen;
+    priceChanges.push({ field: 'sell_price_sen', oldValueSen: current.sell_price_sen, newValueSen: body.sellPriceSen });
   }
   if (body.costPriceSen !== undefined && body.costPriceSen !== current.cost_price_sen) {
     updates.cost_price_sen = body.costPriceSen;
@@ -334,6 +343,10 @@ mfgProducts.patch('/:id', async (c) => {
   // the rest of the schema (matches mfg_products.status default in inserts).
   if (body.status === 'ACTIVE' || body.status === 'INACTIVE') {
     updates.status = body.status;
+  }
+  // D5 — selling-only POS catalog visibility. Independent of status (cost/PO).
+  if (typeof body.posActive === 'boolean') {
+    updates.pos_active = body.posActive;
   }
   /* PR #89 — code + name inline edit from SKU Master. code is unique;
      duplicate triggers 23505 below. Both trimmed; empty rejected to keep

@@ -138,7 +138,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-2);
-  max-height: 280px;
+  max-height: 460px;
   overflow-y: auto;
   z-index: 30;
   list-style: none;

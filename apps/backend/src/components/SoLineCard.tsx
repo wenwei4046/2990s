@@ -149,6 +149,13 @@ const SoLineCardInner = ({
   const [picked, setPicked]         = useState<MfgProductRow | null>(null);
   const [showPicker, setShowPicker]   = useState(false);
   const [specialsOpen, setSpecialsOpen] = useState(false);
+  /* Commander 2026-05-30 — Unit Price is a free-typed field. Keep the raw
+     typed text in local state so multi-digit entry (e.g. 1000) and
+     clear-then-retype work without the value being reformatted to "x.00" on
+     every keystroke (which jumps the cursor and blocks typing). Synced back
+     from the canonical centi only when it changes from outside, e.g. a
+     product pick resets it to 0. */
+  const [priceText, setPriceText] = useState((draft.unitPriceCenti / 100).toFixed(2));
   /* Task #102 — Same gate the debtor autocomplete got in PR #99. Without
      this the product picker fired one /mfg-products?search=… request per
      keystroke even when the picker wasn't open (every render of an
@@ -194,6 +201,14 @@ const SoLineCardInner = ({
 
   // Sync picker search box to the description after picking.
   useEffect(() => { setSearch(draft.description ?? ''); }, [draft.description]);
+
+  // Reflect external Unit Price changes (e.g. product pick → 0) into the
+  // local text box, but leave the operator's in-progress typing untouched.
+  useEffect(() => {
+    const parsed = Math.round(Number(priceText) * 100) || 0;
+    if (parsed !== draft.unitPriceCenti) setPriceText((draft.unitPriceCenti / 100).toFixed(2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.unitPriceCenti]);
 
   const pickProduct = (p: MfgProductRow) => {
     setPicked(p);
@@ -395,7 +410,7 @@ const SoLineCardInner = ({
                   onMouseDown={() => { pickProduct(p); setShowPicker(false); }}
                 >
                   <div className={styles.suggestItemMeta}>
-                    {p.name} · {fmtRm(p.base_price_sen ?? 0)}
+                    {p.name}
                   </div>
                 </li>
               ))}
@@ -447,12 +462,15 @@ const SoLineCardInner = ({
           type="number"
           step="0.01"
           className={styles.numericInput}
-          value={(draft.unitPriceCenti / 100).toFixed(2)}
+          value={priceText}
           disabled={!isEditing}
           onChange={(e) => {
             // Commander 2026-05-29 — selling unit price is operator-authored.
-            onChange({ unitPriceCenti: Math.round(Number(e.target.value) * 100) || 0 });
+            const t = e.target.value;
+            setPriceText(t);
+            onChange({ unitPriceCenti: Math.round(Number(t) * 100) || 0 });
           }}
+          onBlur={() => setPriceText((draft.unitPriceCenti / 100).toFixed(2))}
         />
 
         {/* 6. Delivery Date (2990 addition between Unit Price and Amount) */}

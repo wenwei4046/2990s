@@ -17,7 +17,7 @@ import { X, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useCreateGrn, useCreatePurchaseInvoice, useCreateMfgSalesOrder,
-  useCreateSalesInvoice, useCreateConsignment,
+  useCreateSalesInvoice,
 } from '../lib/flow-queries';
 import {
   useSuppliers, usePurchaseOrders, usePurchaseOrderDetail,
@@ -526,73 +526,6 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
         <p style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-18)', color: 'var(--c-burnt)', fontWeight: 800 }}>
           Subtotal: {fmtMoney(subtotal)}
         </p>
-      </div>
-
-      <Field label="Notes" value={form.notes} onChange={(v) => upd('notes', v)} multiline />
-    </DrawerShell>
-  );
-};
-
-/* ══════════════════════════════════════════════════════════════════════
-   6. Consignment
-   ══════════════════════════════════════════════════════════════════════ */
-
-export const CreateConsignmentDrawer = ({ onClose }: { onClose: () => void }) => {
-  const [form, setForm] = useState({
-    debtorCode: '', debtorName: '', branchLocation: '',
-    placedAt: new Date().toISOString().slice(0, 10),
-    notes: '',
-  });
-  const [items, setItems] = useState<Array<{ itemCode: string; description: string; qtyPlaced: number; unitPriceCenti: number }>>([
-    { itemCode: '', description: '', qtyPlaced: 1, unitPriceCenti: 0 },
-  ]);
-  const create = useCreateConsignment();
-
-  const upd = (k: keyof typeof form, v: string) => setForm({ ...form, [k]: v });
-  const updI = (i: number, k: string, v: unknown) =>
-    setItems(items.map((it, j) => (j === i ? { ...it, [k]: v } : it)));
-  const addLine = () => setItems([...items, { itemCode: '', description: '', qtyPlaced: 1, unitPriceCenti: 0 }]);
-  const remLine = (i: number) => setItems(items.filter((_, j) => j !== i));
-
-  const submit = () => {
-    if (!form.debtorName.trim()) return alert('Debtor name required.');
-    const valid = items.filter((it) => it.itemCode && it.qtyPlaced > 0);
-    if (!valid.length) return alert('Add at least one item.');
-    create.mutate({ ...form, items: valid }, {
-      onSuccess: (res: any) => { alert(`Consignment: ${res.consignmentNumber}`); onClose(); },
-    });
-  };
-
-  return (
-    <DrawerShell
-      title="New Consignment"
-      onClose={onClose}
-      onSubmit={submit}
-      submitLabel="Create"
-      submitting={create.isPending}
-      canSubmit={Boolean(form.debtorName.trim())}
-    >
-      <div className={sup.formGrid}>
-        <Field label="Debtor Code" value={form.debtorCode} onChange={(v) => upd('debtorCode', v)} />
-        <Field label="Debtor Name" value={form.debtorName} onChange={(v) => upd('debtorName', v)} required />
-        <Field label="Branch Location" value={form.branchLocation} onChange={(v) => upd('branchLocation', v)} gridFull />
-        <Field label="Placed At" type="date" value={form.placedAt} onChange={(v) => upd('placedAt', v)} />
-      </div>
-
-      <div className={sup.section}>
-        <p className={sup.fieldLabel}>Items placed at branch</p>
-        {items.map((it, i) => (
-          <div key={i} className={sup.bindingRow}>
-            <span className={sup.bindingIcon}>·</span>
-            <input className={sup.fieldInput} placeholder="Item code" value={it.itemCode} onChange={(e) => updI(i, 'itemCode', e.target.value)} />
-            <input className={sup.fieldInput} placeholder="Description" value={it.description} onChange={(e) => updI(i, 'description', e.target.value)} />
-            <input type="number" min={1} className={sup.fieldInput} style={{ width: 80, textAlign: 'right' }} value={it.qtyPlaced} onChange={(e) => updI(i, 'qtyPlaced', Number(e.target.value) || 1)} />
-            <MoneyInput bare valueSen={it.unitPriceCenti} onCommit={(sen) => updI(i, 'unitPriceCenti', sen ?? 0)} inputClassName={sup.fieldInput} style={{ width: 100 }} selectOnFocus />
-            <span />
-            <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
-          </div>
-        ))}
-        <button type="button" className={sup.addBindingBtn} onClick={addLine}>+ Add item</button>
       </div>
 
       <Field label="Notes" value={form.notes} onChange={(v) => upd('notes', v)} multiline />

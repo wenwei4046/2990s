@@ -665,7 +665,12 @@ export const SalesOrderDetail = () => {
     );
   }
 
-  const isLocked = lockedStatuses.includes(header.status) && !unlockOverride;
+  /* Tier 2 downstream-lock — once a non-cancelled DO/SI references this SO,
+     the page becomes read-only. unlockOverride NOT honoured for this case —
+     the child must be cancelled/deleted to edit. Convert-to-DO stays available
+     (partial delivery) via the list's right-click. */
+  const hasChildren = Boolean((header as { has_children?: boolean }).has_children);
+  const isLocked = (lockedStatuses.includes(header.status) && !unlockOverride) || hasChildren;
 
   // Cancel SO flow (Commander 2026-05-29) — a cancelled SO stops proceeding
   // (no PO / DO / production; the whole page greys out) and can be reopened
@@ -685,7 +690,6 @@ export const SalesOrderDetail = () => {
     if (!window.confirm(`Reopen ${header.doc_no} back to CONFIRMED so it can proceed again?`)) return;
     updateStatus.mutate({ docNo: header.doc_no, status: 'CONFIRMED' });
   };
-
   const handlePrint = () => {
     /* Followup #81 — Wait for the payments query before generating; legacy
        header columns (paid_centi, payment_method, …) are deprecated. If
@@ -727,6 +731,16 @@ export const SalesOrderDetail = () => {
               SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
               {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
+              {(() => {
+                const credit = Number((header as { customer_credit_centi?: number }).customer_credit_centi ?? 0);
+                if (credit <= 0) return null;
+                return (
+                  <span style={{ color: 'var(--c-burnt)', fontWeight: 600 }}>
+                    {' · Customer credit balance: '}
+                    RM {(credit / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                );
+              })()}
             </p>
           </div>
         </div>

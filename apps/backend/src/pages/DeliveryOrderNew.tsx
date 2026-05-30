@@ -307,7 +307,14 @@ export const DeliveryOrderNew = () => {
           }
           navigate(`/mfg-delivery-orders/${res.id}`);
         },
-        onError: (err) => window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`),
+        onError: (err) => {
+          const raw = err instanceof Error ? err.message : String(err);
+          /* Operator declined the "Ship anyway?" short-stock prompt (the hook
+             re-throws the original 409) — they chose not to ship, so swallow
+             the raw payload instead of dumping it. */
+          if (raw.includes('"short_stock"')) return;
+          window.alert(`Save failed: ${raw}`);
+        },
       },
     );
   };

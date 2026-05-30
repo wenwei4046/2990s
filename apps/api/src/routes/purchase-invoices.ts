@@ -43,20 +43,46 @@ async function recomputePiTotals(sb: any, piId: string) {
   }).eq('id', piId);
 }
 
-/* ── GRN→PI consumption helpers (migration 0106, unified model) ─────────────
-   Track grn_items.invoiced_qty as PI lines are drawn from / adjusted against /
-   released back to a GRN line. base = qty_accepted; remaining = accepted -
-   invoiced. */
-async function adjustGrnInvoicedQty(sb: any, grnItemId: string, delta: number) {
-  if (!grnItemId || delta === 0) return;
-  const { data: row } = await sb.from('grn_items')
-    .select('qty_accepted, invoiced_qty').eq('id', grnItemId).maybeSingle();
-  if (!row) return;
-  const accepted = (row as { qty_accepted: number }).qty_accepted ?? 0;
-  const cur = (row as { invoiced_qty: number }).invoiced_qty ?? 0;
-  // Clamp into [0, qty_accepted] — never over-invoice, never go negative.
-  const next = Math.min(accepted, Math.max(0, cur + delta));
-  await sb.from('grn_items').update({ invoiced_qty: next }).eq('id', grnItemId);
+/* ── Self-heal GRN invoiced counter (live-count model, mirrors recomputeSoPicked
+   / recomputePoReceived) ────────────────────────────────────────────────────
+   For each given grn_item, RECOUNT invoiced_qty from scratch as the sum of qty
+   across ALL live (non-cancelled) PI lines that point at it. This replaces the
+   old delta-based +/- arithmetic so create / edit / delete / cancel all
+   converge to the truth and the GRN line auto-releases for re-invoicing the
+   moment its PI lines go away. Clamped to [0, qty_accepted]. Best-effort. */
+async function recomputeGrnInvoiced(sb: any, grnItemIds: Array<string | null | undefined>) {
+  const ids = [...new Set(grnItemIds.filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return;
+
+  // 1. Sum qty from live (non-cancelled) PI lines per GRN item.
+  const { data: plines } = await sb.from('purchase_invoice_items')
+    .select('grn_item_id, qty, purchase_invoice_id')
+    .in('grn_item_id', ids);
+  const rows = (plines ?? []) as Array<{ grn_item_id: string; qty: number; purchase_invoice_id: string }>;
+  const piIds = [...new Set(rows.map((r) => r.purchase_invoice_id).filter(Boolean))];
+  const cancelled = new Set<string>();
+  if (piIds.length > 0) {
+    const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
+    for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
+      if (p.status === 'CANCELLED') cancelled.add(p.id);
+    }
+  }
+  const invByGrnItem = new Map<string, number>(ids.map((id) => [id, 0]));
+  for (const r of rows) {
+    if (cancelled.has(r.purchase_invoice_id)) continue;
+    invByGrnItem.set(r.grn_item_id, (invByGrnItem.get(r.grn_item_id) ?? 0) + Number(r.qty ?? 0));
+  }
+
+  // 2. Clamp into [0, qty_accepted] per line, then write.
+  const { data: giRows } = await sb.from('grn_items')
+    .select('id, qty_accepted').in('id', ids);
+  const acceptedById = new Map<string, number>(
+    ((giRows ?? []) as Array<{ id: string; qty_accepted: number }>).map((g) => [g.id, g.qty_accepted ?? 0]),
+  );
+  await Promise.all([...invByGrnItem.entries()].map(([giId, inv]) => {
+    const capped = Math.min(acceptedById.get(giId) ?? inv, Math.max(0, inv));
+    return sb.from('grn_items').update({ invoiced_qty: capped }).eq('id', giId);
+  }));
 }
 
 /* PI edit-lock guard: a PI with ANY payment recorded (paid_centi > 0) or that's
@@ -326,13 +352,11 @@ purchaseInvoices.patch('/:id/cancel', async (c) => {
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
 
-  // Release the GRN-line consumption: decrement invoiced_qty for every
-  // GRN-linked line (best-effort, mirrors the GRN cancel reversal pattern).
+  // Release the GRN-line consumption: recount invoiced_qty from live PI lines —
+  // this cancelled PI's lines now drop out, auto-releasing the GRN line.
   const { data: lines } = await sb.from('purchase_invoice_items')
-    .select('qty, grn_item_id').eq('purchase_invoice_id', id);
-  for (const l of (lines ?? []) as Array<{ qty: number; grn_item_id: string | null }>) {
-    if (l.grn_item_id) await adjustGrnInvoicedQty(sb, l.grn_item_id, -(l.qty ?? 0));
-  }
+    .select('grn_item_id').eq('purchase_invoice_id', id);
+  await recomputeGrnInvoiced(sb, (lines ?? []).map((l: { grn_item_id: string | null }) => l.grn_item_id));
   return c.json({ purchaseInvoice: data });
 });
 
@@ -486,10 +510,8 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
       await sb.from('purchase_invoices').delete().eq('id', h.id);
       continue;
     }
-    // Consume the GRN lines: increment invoiced_qty by the picked qty (0106).
-    for (const { row, qty } of bucket.lines) {
-      await adjustGrnInvoicedQty(sb, row.id, qty);
-    }
+    // Consume the GRN lines: recount invoiced_qty from live PI lines.
+    await recomputeGrnInvoiced(sb, bucket.lines.map(({ row }) => row.id));
     created.push({
       id: h.id, invoiceNumber: h.invoice_number,
       supplierId: bucket.supplierId, grnCount: 1, lineCount: bucket.lines.length,
@@ -590,10 +612,8 @@ purchaseInvoices.post('/from-grn', async (c) => {
   const { error: insErr } = await sb.from('purchase_invoice_items').insert(rows);
   if (insErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: insErr.message }, 500); }
 
-  // Consume each GRN line: increment invoiced_qty by the billed remaining (0106).
-  for (const it of lines) {
-    await adjustGrnInvoicedQty(sb, it.id, it._remaining);
-  }
+  // Consume each GRN line: recount invoiced_qty from live PI lines.
+  await recomputeGrnInvoiced(sb, lines.map((it) => it.id));
 
   // Refresh header subtotal/total from the inserted lines (parity with GRN/PR).
   await recomputePiTotals(sb, h.id);
@@ -690,8 +710,8 @@ purchaseInvoices.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('purchase_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   // Consume the GRN line if this PI line is GRN-linked (manual lines consume
-  // nothing). Increment invoiced_qty by the new line's qty.
-  if (grnItemId) await adjustGrnInvoicedQty(sb, grnItemId, qty);
+  // nothing). Recount invoiced_qty from live PI lines.
+  if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
   await recomputePiTotals(sb, piId);
   return c.json({ item: data }, 201);
 });
@@ -762,9 +782,9 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
 
   const { error } = await sb.from('purchase_invoice_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
-  // Apply the consumption delta to the source GRN line (helper clamps to
+  // Recount the source GRN line's invoiced_qty from live PI lines (clamps to
   // [0, qty_accepted]).
-  if (grnItemId && delta !== 0) await adjustGrnInvoicedQty(sb, grnItemId, delta);
+  if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
   await recomputePiTotals(sb, piId);
   return c.json({ ok: true });
 });
@@ -784,8 +804,8 @@ purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   if (line) {
     const l = line as { qty: number; grn_item_id: string | null };
-    // Release: decrement invoiced_qty by the deleted line's qty (helper clamps ≥0).
-    if (l.grn_item_id) await adjustGrnInvoicedQty(sb, l.grn_item_id, -(l.qty ?? 0));
+    // Release: recount invoiced_qty from live PI lines — the deleted line drops out.
+    if (l.grn_item_id) await recomputeGrnInvoiced(sb, [l.grn_item_id]);
   }
   await recomputePiTotals(sb, piId);
   return c.body(null, 204);

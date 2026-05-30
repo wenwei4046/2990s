@@ -136,7 +136,12 @@ export const PurchaseOrderDetail = () => {
 
   // PR-DRAFT-removal — POs are always SUBMITTED on create (no DRAFT). Header
   // edits stay open while the PO can still be received (SUBMITTED / PARTIALLY_RECEIVED).
-  const isLocked = po ? !(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') : true;
+  // Tier 2 downstream-lock — also lock once a non-cancelled GRN exists; the GRN
+  // must be cancelled / deleted before editing again. Partial receiving (more
+  // GRNs) is still allowed via the list's Convert-to-GRN action.
+  const hasChildren = Boolean(po?.has_children);
+  const isLocked = po ? (!(po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') || hasChildren) : true;
+  const lockedDueToChildren = po ? ((po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') && hasChildren) : false;
 
   /* If a PO locks while we're in Edit mode (e.g. it's Received / Cancelled
      after a status change), drop back to View and discard the draft so the
@@ -373,6 +378,16 @@ export const PurchaseOrderDetail = () => {
           )}
         </div>
       </div>
+
+      {/* Tier 2 downstream-lock — once any GRN is created from this PO the page
+          becomes read-only + un-cancellable. Partial receiving (more GRNs) is
+          still allowed via the list's Convert-to-GRN. */}
+      {lockedDueToChildren && (
+        <div className={styles.bannerWarn} style={{ marginBottom: 'var(--space-3)' }}>
+          <strong>Locked — has a Goods Receipt.</strong>{' '}
+          Cancel or delete the downstream GRN to edit this PO again.
+        </div>
+      )}
 
       {/* ── Supplier / dates / currency / notes ─────────────────── */}
       {/* In View the card renders read-only text; in Edit it shows inputs bound

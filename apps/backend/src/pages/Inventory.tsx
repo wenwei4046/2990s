@@ -6,11 +6,11 @@
 //                      Double-click row → per-warehouse breakdown drawer
 //                      (Location | Qty | Unit Cost), like AutoCount's
 //                      "Up To Date Cost" panel.
-//   2. Movements    — append-only ledger (every GRN/DO/Consignment/PR post)
+//   2. Movements    — append-only ledger (every GRN/DO/PR post)
 //   3. COGS (FIFO)  — FIFO consumption stream
 //   4. Warehouses   — CRUD for stock locations (merged from old /warehouses page)
 //
-// IN  events: GRN posted, Consignment RETURN note posted
+// IN  events: GRN posted
 // OUT events: DO dispatched, Purchase Return posted
 // COGS auto-posted via DB trigger trg_inventory_movement_fifo (migration 0053).
 // ----------------------------------------------------------------------------
@@ -33,15 +33,33 @@ import {
   useCreateWarehouse,
   useUpdateWarehouse,
   type CogsEntry,
+  type InventoryMovement,
   type InventoryProductTotal,
   type Warehouse,
 } from '../lib/inventory-queries';
+
+/** Best-effort route for a movement's source doc. Mirrors StockCard's
+ *  docHrefFor so every IN/OUT/ADJUSTMENT row on the Movements ledger can be
+ *  clicked through to the document that drove it. ADJUSTMENT has no per-doc
+ *  detail page — link to the list. */
+const docHrefFor = (m: InventoryMovement): string | null => {
+  switch (m.source_doc_type) {
+    case 'GRN':              return m.source_doc_id ? `/grns/${m.source_doc_id}` : null;
+    case 'DO':               return m.source_doc_id ? `/mfg-delivery-orders/${m.source_doc_id}` : null;
+    case 'DR':               return m.source_doc_id ? `/delivery-returns/${m.source_doc_id}` : null;
+    case 'PURCHASE_RETURN':  return m.source_doc_id ? `/purchase-returns/${m.source_doc_id}` : null;
+    case 'STOCK_TRANSFER':   return m.source_doc_id ? `/inventory/transfers/${m.source_doc_id}` : null;
+    case 'STOCK_TAKE':       return m.source_doc_id ? `/inventory/stock-takes/${m.source_doc_id}` : null;
+    case 'ADJUSTMENT':       return '/inventory/adjustments';
+    default:                 return null;
+  }
+};
 import styles from './Inventory.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const ICON_MD = { size: 16, strokeWidth: 1.75 } as const;
 
-type Tab = 'balances' | 'movements' | 'cogs' | 'warehouses';
+type Tab = 'balances' | 'warehouses';
 type Category = 'all' | 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
 
 const CATEGORIES: { value: Category; label: string }[] = [
@@ -83,18 +101,12 @@ export const Inventory = () => {
         <div>
           <h1 className={styles.title}>Inventory</h1>
           <p className={styles.subtitle}>
-            Stock + FIFO COGS across {warehouses.data?.length ?? 0} warehouses · IN = GRN / Consignment-return · OUT = DO / Purchase-return
+            Stock + FIFO COGS across {warehouses.data?.length ?? 0} warehouses · double-click any SKU to drill in
           </p>
         </div>
         <div className={styles.tabRow}>
           <button type="button" className={styles.tab} data-active={tab === 'balances'} onClick={() => setTab('balances')}>
             Balances
-          </button>
-          <button type="button" className={styles.tab} data-active={tab === 'movements'} onClick={() => setTab('movements')}>
-            Movements
-          </button>
-          <button type="button" className={styles.tab} data-active={tab === 'cogs'} onClick={() => setTab('cogs')}>
-            COGS (FIFO)
           </button>
           <button type="button" className={styles.tab} data-active={tab === 'warehouses'} onClick={() => setTab('warehouses')}>
             Warehouses
@@ -111,33 +123,6 @@ export const Inventory = () => {
               {cat.label}
             </button>
           ))}
-        </div>
-      )}
-
-      {/* Filter row — only for Movements + COGS (Balances uses category chips above) */}
-      {(tab === 'movements' || tab === 'cogs') && (
-        <div className={styles.filterRow}>
-          <div className={styles.warehouseChips}>
-            <button type="button" className={styles.chip} data-active={warehouseId === null} onClick={() => setWarehouseId(null)}>
-              All warehouses
-            </button>
-            {warehouses.data?.map((w) => (
-              <button key={w.id} type="button" className={styles.chip}
-                data-active={warehouseId === w.id} onClick={() => setWarehouseId(w.id)}>
-                {w.code} · {w.name}
-              </button>
-            ))}
-          </div>
-          <div className={styles.searchBox}>
-            <Search {...ICON} className={styles.searchIcon} />
-            <input
-              type="search"
-              className={styles.searchInput}
-              placeholder="Search code / description…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
         </div>
       )}
 
@@ -158,12 +143,6 @@ export const Inventory = () => {
           <BalancesTab category={category} search={search}
             onDrilldown={(code, name) => setBreakdownFor({ code, name })} />
         </>
-      )}
-      {tab === 'movements' && (
-        <MovementsTab warehouseId={warehouseId} search={search} warehouses={warehouses.data ?? []} />
-      )}
-      {tab === 'cogs' && (
-        <CogsTab warehouseId={warehouseId} search={search} />
       )}
       {tab === 'warehouses' && (
         <WarehousesTab />
@@ -407,6 +386,37 @@ const ProductBreakdownDrawer = ({
 }: { code: string; name: string; onClose: () => void }) => {
   const breakdown = useInventoryProductBreakdown(code);
   const lots = useInventoryLots(code);
+  const movements = useInventoryMovements({ productCode: code });
+  const cogs = useCogsEntries({ productCode: code });
+  const warehouses = useWarehouses();
+
+  /* Movements + COGS sections are collapsed by default (Commander 2026-05-30).
+     Operator opens what they want to see — keeps the drawer scannable. */
+  const [movementsOpen, setMovementsOpen] = useState(false);
+  const [cogsOpen, setCogsOpen] = useState(false);
+
+  /* Warehouse name lookup (UUID → code) so the Movements table can show
+     "SLGR" instead of "41d544bc". */
+  const whById = useMemo(
+    () => new Map((warehouses.data ?? []).map((w) => [w.id, w])),
+    [warehouses.data],
+  );
+
+  /* Running-balance computation for Movements (same pattern as Stock Card):
+     API returns DESC, reverse to ASC, accumulate signed qty, then render DESC.
+     OUT subtracts, IN/ADJUSTMENT/TRANSFER add as-is (ADJUSTMENT carries a
+     signed qty per inventory_movements convention). */
+  const movementsWithBalance = useMemo(() => {
+    const desc = movements.data ?? [];
+    const asc = [...desc].reverse();
+    let running = 0;
+    const out: Array<typeof desc[number] & { runningBalance: number }> = [];
+    for (const m of asc) {
+      running += m.movement_type === 'OUT' ? -m.qty : m.qty;
+      out.push({ ...m, runningBalance: running });
+    }
+    return out.reverse();
+  }, [movements.data]);
 
   const balances = (breakdown.data?.balances ?? []).filter((b) => b.product_code === code);
   const totalQty = balances.reduce((s, b) => s + (b.qty ?? 0), 0);
@@ -527,6 +537,117 @@ const ProductBreakdownDrawer = ({
             </tbody>
           </table>
         </div>
+
+        {/* Movements ledger — collapsed by default. Header is a button. */}
+        <button type="button"
+          onClick={() => setMovementsOpen((v) => !v)}
+          style={{
+            marginTop: 'var(--space-4)', cursor: 'pointer', background: 'transparent',
+            border: 'none', padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}>
+          <span className={styles.eyebrow} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {movementsOpen ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
+            Movements ({(movements.data ?? []).length}) — every stock change for this SKU
+          </span>
+        </button>
+        {movementsOpen && (
+          <div className={styles.tableCard}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Type</th>
+                  <th>Warehouse</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th>
+                  <th style={{ textAlign: 'right' }}>Running</th>
+                  <th>Source Doc</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {movements.isLoading && <tr><td colSpan={7} className={styles.emptyRow}>Loading…</td></tr>}
+                {!movements.isLoading && movementsWithBalance.length === 0 && (
+                  <tr><td colSpan={7} className={styles.emptyRow}>No movements yet for this SKU.</td></tr>
+                )}
+                {movementsWithBalance.map((m) => {
+                  const href = docHrefFor(m);
+                  const qtySign = m.movement_type === 'IN' ? '+' : m.movement_type === 'OUT' ? '−' : (m.qty > 0 ? '+' : m.qty < 0 ? '−' : '');
+                  const qtyClass = m.qty > 0 ? styles.numCellPos : m.qty < 0 ? styles.numCellNeg : styles.numCellZero;
+                  const wh = m.warehouse_id ? whById.get(m.warehouse_id) : null;
+                  return (
+                    <tr key={m.id}>
+                      <td className={styles.numCellZero}>{fmtDateTime(m.created_at)}</td>
+                      <td>
+                        <span className={`${styles.movementPill} ${
+                          m.movement_type === 'IN' ? styles.movementIn
+                          : m.movement_type === 'OUT' ? styles.movementOut
+                          : styles.movementAdj}`}>{m.movement_type}</span>
+                      </td>
+                      <td>{wh ? wh.code : (m.warehouse_id ? '—' : '—')}</td>
+                      <td className={`${styles.numCell} ${qtyClass}`}>{qtySign}{Math.abs(m.qty).toLocaleString('en-MY')}</td>
+                      <td className={`${styles.numCell}`} style={{ fontWeight: 700 }}>
+                        {m.runningBalance.toLocaleString('en-MY')}
+                      </td>
+                      <td>
+                        {m.source_doc_no ? (
+                          href
+                            ? <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
+                            : <span className={styles.docLink}>{m.source_doc_no}</span>
+                        ) : <span className={styles.numCellZero}>—</span>}
+                      </td>
+                      <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* COGS — collapsed by default. */}
+        <button type="button"
+          onClick={() => setCogsOpen((v) => !v)}
+          style={{
+            marginTop: 'var(--space-4)', cursor: 'pointer', background: 'transparent',
+            border: 'none', padding: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}>
+          <span className={styles.eyebrow} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {cogsOpen ? <ChevronDown size={12} strokeWidth={1.75} /> : <ChevronRight size={12} strokeWidth={1.75} />}
+            COGS ({(cogs.data ?? []).length}) — FIFO consumptions for this SKU
+          </span>
+        </button>
+        {cogsOpen && (
+          <div className={styles.tableCard}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Consumed at</th>
+                  <th>Source Doc</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th>
+                  <th style={{ textAlign: 'right' }}>Unit Cost</th>
+                  <th style={{ textAlign: 'right' }}>Total Cost</th>
+                  <th>From Lot</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cogs.isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
+                {!cogs.isLoading && (cogs.data ?? []).length === 0 && (
+                  <tr><td colSpan={6} className={styles.emptyRow}>No COGS entries yet for this SKU.</td></tr>
+                )}
+                {(cogs.data ?? []).map((c) => (
+                  <tr key={c.id}>
+                    <td className={styles.numCellZero}>{fmtDateTime(c.consumed_at)}</td>
+                    <td><span className={styles.docLink}>{c.source_doc_no ?? '—'}</span></td>
+                    <td className={`${styles.numCell} ${styles.numCellNeg}`}>−{c.qty_consumed.toLocaleString('en-MY')}</td>
+                    <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(c.unit_cost_sen)}</td>
+                    <td className={styles.numCell} style={{ fontWeight: 700 }}>{fmtRm(c.total_cost_sen)}</td>
+                    <td className={styles.numCellZero}>{c.lot_source_doc_no ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -555,8 +676,10 @@ const MovementsTab = ({
     { value: null,                label: 'All' },
     { value: 'GRN',               label: 'GRN (IN)' },
     { value: 'DO',                label: 'DO (OUT)' },
-    { value: 'CONSIGNMENT_NOTE',  label: 'Consignment' },
+    { value: 'DR',                label: 'DR (IN)' },
     { value: 'PURCHASE_RETURN',   label: 'PR (OUT)' },
+    { value: 'STOCK_TRANSFER',    label: 'Transfer' },
+    { value: 'STOCK_TAKE',        label: 'Stock Take' },
     { value: 'ADJUSTMENT',        label: 'Adjustment' },
   ];
 
@@ -636,9 +759,12 @@ const MovementsTab = ({
                     {m.total_cost_sen && m.total_cost_sen > 0 ? fmtRm(m.total_cost_sen) : '—'}
                   </td>
                   <td>
-                    {m.source_doc_no
-                      ? <span className={styles.docLink}>{m.source_doc_no}</span>
-                      : <span className={styles.numCellZero}>—</span>}
+                    {m.source_doc_no ? (() => {
+                      const href = docHrefFor(m);
+                      return href
+                        ? <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
+                        : <span className={styles.docLink}>{m.source_doc_no}</span>;
+                    })() : <span className={styles.numCellZero}>—</span>}
                   </td>
                   <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
                 </tr>

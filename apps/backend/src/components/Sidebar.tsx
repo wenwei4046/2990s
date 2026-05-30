@@ -3,7 +3,6 @@ import { NavLink } from 'react-router';
 import {
   LayoutDashboard,
   FileSpreadsheet,
-  Package,
   Package2,
   UsersRound,
   Truck,
@@ -105,9 +104,9 @@ export const Sidebar = () => {
       : []),
   ];
 
-  /* ── Supply Chain Management — 5 collapsible modules, ordered by the
+  /* ── Supply Chain Management — collapsible modules, ordered by the
         commander's importance ranking (SO → Procurement → Transport →
-        Warehouse → Consignment). 2026-05-28. ──
+        Warehouse). 2026-05-28. ──
 
      NOTE (Phase 1b, 2026-05-28): "SO Maintenance" now lives as a button on
      the Sales Orders page (next to "New Sales Order"), and "Fabric Converter"
@@ -131,7 +130,6 @@ export const Sidebar = () => {
       id: 'procurement',
       label: 'Procurement',
       items: [
-        { to: '/sku-master', icon: <Package {...ICON_PROPS} />, label: 'SKU master' },
         { to: '/products', icon: <Package2 {...ICON_PROPS} />, label: 'Products & Maintenance' },
         { to: '/suppliers', icon: <Truck {...ICON_PROPS} />, label: 'Suppliers' },
         { to: '/mrp', icon: <ListTree {...ICON_PROPS} />, label: 'MRP · Stock Status' },
@@ -159,13 +157,6 @@ export const Sidebar = () => {
         // Rack/bin Warehouse view (Rack Layout · Stock In-Out · Movement
         // History) ported from Hookka ERP (Phase 3, 2026-05-28).
         { to: '/warehouse', icon: <Warehouse {...ICON_PROPS} />, label: 'Warehouse' },
-      ],
-    },
-    {
-      id: 'consignment',
-      label: 'Consignment',
-      items: [
-        { to: '/consignment', icon: <Boxes {...ICON_PROPS} />, label: 'Consignment' },
       ],
     },
   ];

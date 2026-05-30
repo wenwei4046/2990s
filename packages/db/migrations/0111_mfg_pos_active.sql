@@ -1,0 +1,15 @@
+-- 0111_mfg_pos_active.sql
+-- Phase 2 · Cost/Sell split (COST-SELL-SPLIT-PLAN.md, decision D5).
+--
+-- Adds a SELLING-only per-SKU "show on the POS catalog" flag. The POS Products
+-- "Visible" toggle (Master Account) writes pos_active; the POS customer catalog
+-- read (useMfgCatalog) filters on it. This is kept SEPARATE from
+-- mfg_products.status (ACTIVE / INACTIVE), which stays a cost/purchasing/PO
+-- concern (whether the SKU surfaces in SO/PO line pickers). Splitting the two
+-- means hiding a SKU from the showroom no longer also pulls it from purchasing.
+--
+-- DEFAULT true → every existing SKU stays visible on apply, so the catalog is
+-- unchanged. Verified 2026-05-30: all 174 mfg_products rows are status='ACTIVE'
+-- (0 INACTIVE), so no carry-forward of the old status-based hide state is
+-- needed. Additive + non-destructive; IF NOT EXISTS guards re-runs.
+ALTER TABLE mfg_products ADD COLUMN IF NOT EXISTS pos_active boolean NOT NULL DEFAULT true;

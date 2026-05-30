@@ -132,7 +132,7 @@ export const useProduct = (productId: string | undefined) =>
       const { data: mfgData, error: mfgErr } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, base_model',
+          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, base_model',
         )
         .eq('id', productId)
         .maybeSingle();
@@ -148,6 +148,7 @@ export const useProduct = (productId: string | undefined) =>
         branding: string | null;
         size_label: string | null;
         base_price_sen: number | null;
+        sell_price_sen: number | null;
         base_model: string | null;
       };
 
@@ -170,7 +171,7 @@ export const useProduct = (productId: string | undefined) =>
         img_key: null,
         thumb_key: null,
         pricing_kind: pricingKind,
-        flat_price: mfg.base_price_sen != null ? Math.round(mfg.base_price_sen / 100) : null,
+        flat_price: (mfg.sell_price_sen ?? mfg.base_price_sen) != null ? Math.round((mfg.sell_price_sen ?? mfg.base_price_sen)! / 100) : null,
         recliner_upgrade_price: 0,
         seat_upgrade_label: null,
         seat_upgrade_footrest: true,
@@ -484,7 +485,7 @@ export const useProductSizes = (productId: string | undefined) =>
       if (productId.startsWith('mfg-')) {
         const { data: mfgRow, error: mfgErr } = await supabase
           .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen, base_model, category')
+          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, base_model, category')
           .eq('id', productId)
           .maybeSingle();
         if (mfgErr) throw mfgErr;
@@ -506,7 +507,7 @@ export const useProductSizes = (productId: string | undefined) =>
         // Helper: map sibling rows → ProductSizeRow[]. Handles INACTIVE siblings
         // (shown greyed on the size grid) and case-insensitive size_code lookup
         // (guards against lowercase size_codes stored by older import paths).
-        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; status: string }>) =>
+        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; status: string }>) =>
           sibs
             .filter((s) => {
               const sc = (s.size_code ?? '').toUpperCase();
@@ -518,7 +519,8 @@ export const useProductSizes = (productId: string | undefined) =>
               // variants show as greyed tiles ("Not on this Model") while ACTIVE
               // ones remain selectable.
               active: (s.status as string) === 'ACTIVE',
-              price: s.base_price_sen != null ? Math.round(s.base_price_sen / 100) : 0,
+              // SELLING price (0109 cost/sell split): sell_price_sen ?? base_price_sen.
+              price: (s.sell_price_sen ?? s.base_price_sen) != null ? Math.round((s.sell_price_sen ?? s.base_price_sen)! / 100) : 0,
             }));
 
         // 2b — derive sizes from mfg_products siblings (same model_id — set by
@@ -528,7 +530,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.model_id) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, status')
+            .select('size_code, base_price_sen, sell_price_sen, status')
             .eq('model_id', mfgRow.model_id);
           if (sibErr) throw sibErr;
           const rows = sibsToRows(siblings ?? []);
@@ -541,7 +543,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.base_model && mfgRow.category) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, status')
+            .select('size_code, base_price_sen, sell_price_sen, status')
             .eq('base_model', mfgRow.base_model)
             .eq('category', mfgRow.category);
           if (sibErr) throw sibErr;
@@ -556,7 +558,7 @@ export const useProductSizes = (productId: string | undefined) =>
           return [{
             sizeId: MFG_SIZE_CODE_TO_LIB[ownCode] as string,
             active: true,
-            price: mfgRow.base_price_sen != null ? Math.round(mfgRow.base_price_sen / 100) : 0,
+            price: (mfgRow.sell_price_sen ?? mfgRow.base_price_sen) != null ? Math.round((mfgRow.sell_price_sen ?? mfgRow.base_price_sen)! / 100) : 0,
           }];
         }
 
@@ -718,10 +720,13 @@ export const useMfgCatalog = () =>
       const { data, error } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, model_id, ' +
+          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, model_id, ' +
           'product_models:model_id ( id, name, photo_url, active )',
         )
-        .eq('status', 'ACTIVE')
+        // D5 (cost/sell split Phase 2): customer catalog visibility = the
+        // selling-only pos_active flag, NOT cost-side status. The Master
+        // Account "Visible" toggle writes pos_active; status stays for cost/PO.
+        .eq('pos_active', true)
         .order('code', { ascending: true });
       if (error) throw error;
 
@@ -738,6 +743,7 @@ export const useMfgCatalog = () =>
         branding:        string | null;
         size_label:      string | null;
         base_price_sen:  number | null;
+        sell_price_sen:  number | null;
         model_id:        string | null;
         // Supabase embeds come back as an object OR an array depending on the
         // join cardinality the schema cache infers. mfg_products → product_models
@@ -765,7 +771,7 @@ export const useMfgCatalog = () =>
             description:  r.description,
             branding:     r.branding,
             sizeLabel:    r.size_label,
-            basePriceSen: r.base_price_sen,
+            basePriceSen: r.sell_price_sen ?? r.base_price_sen, // SELLING (0109 cost/sell split)
             modelId:      r.model_id,
             modelName:    m?.name ?? null,
             // photo_url is stored as a relative proxy path from the API
@@ -1128,6 +1134,38 @@ export const useDeliveryFeeConfig = () =>
     },
     staleTime: 60_000,
   });
+
+/** Master Account (cost/sell split Phase 2) — writes the delivery-fee config
+ *  (base fee + cross-category surcharge + lead-days). The whole block moved to
+ *  the POS Master Account surface; the Backend editor was retired. Gated by the
+ *  delivery_fee_config UPDATE RLS policy + the API WRITE_ROLES (admin /
+ *  coordinator / master_account). */
+export const useUpdateDeliveryFeeConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: {
+      baseFee?:                  number;
+      crossCategoryFee?:         number;
+      mattressBedframeLeadDays?: number;
+      sofaLeadDays?:             number;
+    }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/delivery-fees`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /delivery-fees failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['delivery-fee-config'] }); },
+  });
+};
 
 /* ─── Sales staff (LockScreen pre-session list) ───────────────────────
  *

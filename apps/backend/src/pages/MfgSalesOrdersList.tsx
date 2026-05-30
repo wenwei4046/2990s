@@ -168,6 +168,13 @@ type SoRow = {
      is READY (column shows "READY" pill). */
   ready_categories?: string[];
   is_fully_ready?: boolean;
+  /* Commander 2026-05-30 — B2C "Remark 2" semantics from the operator's
+     existing ERP. "READY" / "READY (PARTIAL)" / "BEDFRAME" / "MATTRESS/ACC" …
+     stock_remark is the rendered label; is_main_ready is true once every MAIN
+     (sofa/bedframe/mattress) line is in stock — accessories pending don't
+     block ship. Derived in the SO list GET via summariseReadiness. */
+  stock_remark?: string;
+  is_main_ready?: boolean;
   /* Branding auto-derive (Commander 2026-05-28): distinct normalized product
      categories present on the SO's non-cancelled lines — one of
      'SOFA' | 'MATTRESS' | 'BEDFRAME' | 'ACCESSORY' | 'OTHERS'. Computed
@@ -184,6 +191,10 @@ type SoRow = {
                                 to mfg_products.branding when the line is blank. */
   first_item_category?: string;
   first_item_branding?: string | null;
+  /* Tier 2 downstream-lock — list endpoint stamps this flag when the SO has
+     ANY non-cancelled DO / SI. Hides Edit + Cancel from the context menu;
+     Convert-to-DO stays available (partial delivery). */
+  has_children?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -319,6 +330,7 @@ type SoItem = {
   line_cost_centi: number | null;
   line_margin_centi: number | null;
   total_centi: number | null;
+  stock_status: string | null;
   cancelled: boolean | null;
 };
 
@@ -564,7 +576,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
              Description 240→1098px) and spread the cells far apart ("间距隔那么
              远"). A fixed 1180px keeps the columns compact and readable; the
              wrapper's overflow-x handles narrow viewports. */
-          width: 1180, minWidth: 1180, borderCollapse: 'collapse',
+          width: 1270, minWidth: 1270, borderCollapse: 'collapse',
           fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
           color: 'var(--c-ink)',
           tableLayout: 'fixed',
@@ -586,6 +598,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Line Cost</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Margin</th>
+            <th style={{ ...TH_BASE, width: 90 }}>Stock</th>
             <th style={{ ...TH_BASE, width: 160 }}>Payment</th>
           </tr>
         </thead>
@@ -645,6 +658,22 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 <td style={{ ...TD_RIGHT, color: lineMarginColor, fontWeight: 600 }}>
                   {fmtRm(lineMargin)}
                 </td>
+                <td style={TD_BASE}>
+                  {(() => {
+                    const ready = it.stock_status === 'READY';
+                    return (
+                      <span style={{
+                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+                        fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
+                        borderRadius: 999,
+                        color: ready ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                        background: ready ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                      }}>
+                        {ready ? 'READY' : 'PENDING'}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td style={{ ...TD_BASE, color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>
                   {paymentRefs || '—'}
                 </td>
@@ -663,6 +692,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: marginColor }}>
               {fmtRm(marginCenti)}
             </td>
+            <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
             <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
           </tr>
         </tfoot>
@@ -1092,16 +1122,21 @@ export const MfgSalesOrdersList = () => {
           /* HOUZS status-flow actions — Issue DO appears when the SO is
              confirmed/ready (commander's 开单 button), Issue SI appears
              post-delivery. Delete is only allowed once the SO is
-             CANCELLED (matches the PO Cancel/Delete pattern from PR #169). */
+             CANCELLED (matches the PO Cancel/Delete pattern from PR #169).
+             Tier 2 downstream-lock — hide Edit + Cancel once any non-cancelled
+             DO / SI references this SO; Issue DO (partial delivery) stays. */
           const status = row.status;
-          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
-            { label: 'Edit',    onClick: () => openDetail(row, true) },
-            { label: 'View',    onClick: () => openDetail(row) },
-            { label: 'Preview', onClick: () => void renderPdf(row, 'preview') },
-            { label: 'Print',   onClick: () => void renderPdf(row, 'print') },
-            { divider: true as const },
-          ];
-          // Issue DO (开单) — available before goods ship.
+          const hasChildren = Boolean(row.has_children);
+          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [];
+          if (!hasChildren) {
+            items.push({ label: 'Edit', onClick: () => openDetail(row, true) });
+          }
+          items.push({ label: 'View',    onClick: () => openDetail(row) });
+          items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
+          items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
+          items.push({ divider: true as const });
+          // Issue DO (开单) — available before goods ship. Stays visible even
+          // with downstream children (partial delivery allowed).
           if (['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'].includes(status)) {
             items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
           }
@@ -1109,14 +1144,18 @@ export const MfgSalesOrdersList = () => {
           if (['DELIVERED', 'SHIPPED'].includes(status)) {
             items.push({
               label: 'Issue Sales Invoice',
-              onClick: () => navigate(`/mfg-sales-invoices/new?soDocNo=${row.doc_no}`),
+              // Fixed dead link (#378): the SI module was rebuilt as a DO clone
+              // and lives at /sales-invoices/* in the router; /mfg-sales-invoices/*
+              // never existed → was a 404.
+              onClick: () => navigate(`/sales-invoices/new?soDocNo=${row.doc_no}`),
             });
           }
           items.push({ label: 'Copy to new Sales Order', onClick: () => copyToNewSo(row) });
           items.push({ divider: true as const });
           // Cancel — soft-delete (status → CANCELLED). Hidden once already
-          // cancelled / closed so the menu doesn't offer a no-op.
-          if (!['CANCELLED', 'CLOSED'].includes(status)) {
+          // cancelled / closed / downstream-locked so the menu doesn't offer
+          // a no-op.
+          if (!['CANCELLED', 'CLOSED'].includes(status) && !hasChildren) {
             items.push({ label: 'Cancel SO', danger: true, onClick: () => doDelete(row) });
           }
           // Reopen — bring a cancelled SO back to CONFIRMED so it proceeds
@@ -1179,14 +1218,13 @@ const buildColumns = (
     key: 'doc_no', label: 'Doc. No.', width: 160, sortable: true, groupable: false,
     /* HOUZS-style — burnt-bold doc number followed by a status pill so the
        user sees state without scrolling 20 columns right. */
+    /* Status is shown in the dedicated Status column further right — don't
+       duplicate it next to the doc number (Wei Siang 2026-05-30). */
     accessor: (r) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <span style={{
-          fontWeight: 700, color: 'var(--c-burnt)',
-          fontVariantNumeric: 'tabular-nums',
-        }}>{r.doc_no}</span>
-        {r.status && r.status !== 'CONFIRMED' && <StatusPill status={r.status} />}
-      </span>
+      <span style={{
+        fontWeight: 700, color: 'var(--c-burnt)',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{r.doc_no}</span>
     ),
     searchValue: (r) => `${r.doc_no} ${r.status ?? ''}`,
   },
@@ -1267,61 +1305,53 @@ const buildColumns = (
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
   },
   {
-    /* PR — Commander 2026-05-28: Stock Status chip column.
-       · empty            — no category fully ready
-       · ["MATTRESS"]…    — chip per fully-ready category
-       · isFullyReady     — green "READY" pill (status itself advances) */
-    key: 'stock_status', label: 'Stock Status', width: 200, sortable: true, groupable: false,
+    /* Commander 2026-05-30 — Stock Status column rebuilt around the operator's
+       "Remark 2" semantics: MAIN-ready ships, accessories don't gate.
+         · "READY"            — green pill, every line in stock
+         · "READY (PARTIAL)"  — amber pill, MAIN done + ACC outstanding
+         · "BEDFRAME" / "MATTRESS/ACC" / … — neutral chip, what's still missing
+         · ""                 — no items / empty */
+    key: 'stock_status', label: 'Stock Status', width: 220, sortable: true, groupable: false,
     accessor: (r) => {
-      if (r.is_fully_ready) {
-        return (
-          <span style={{
-            fontFamily: 'var(--font-sans)',
-            fontSize: 'var(--fs-11)',
-            fontWeight: 700,
-            background: 'var(--c-mint, #d4edda)',
-            color: 'var(--c-green, #1a7a3a)',
-            padding: '2px 10px',
-            borderRadius: 'var(--radius-pill, 999px)',
-            letterSpacing: 0.5,
-          }}>
-            READY
-          </span>
-        );
-      }
-      const cats = r.ready_categories ?? [];
-      if (cats.length === 0) {
-        return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-      }
+      const remark = (r.stock_remark ?? '').trim();
+      if (!remark) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const isFull    = remark === 'READY';
+      const isPartial = remark === 'READY (PARTIAL)';
+      const bg = isFull    ? 'var(--c-mint, #d4edda)'
+              : isPartial ? 'rgba(232, 107, 58, 0.15)'
+              : 'var(--c-cream)';
+      const fg = isFull    ? 'var(--c-green, #1a7a3a)'
+              : isPartial ? 'var(--c-burnt)'
+              : 'var(--c-ink)';
+      const weight = (isFull || isPartial) ? 700 : 600;
       return (
-        <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-          {cats.map((c) => (
-            <span key={c} style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 'var(--fs-11)',
-              fontWeight: 600,
-              background: 'var(--c-cream)',
-              color: 'var(--c-ink)',
-              padding: '2px 6px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--line)',
-              letterSpacing: 0.3,
-            }}>
-              {c}
-            </span>
-          ))}
+        <span style={{
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--fs-11)',
+          fontWeight: weight,
+          background: bg,
+          color: fg,
+          padding: '2px 10px',
+          borderRadius: 'var(--radius-pill, 999px)',
+          letterSpacing: 0.5,
+          border: (isFull || isPartial) ? 'none' : '1px solid var(--line)',
+        }}>
+          {remark}
         </span>
       );
     },
-    searchValue: (r) => {
-      if (r.is_fully_ready) return 'ready';
-      return (r.ready_categories ?? []).join(' ').toLowerCase();
-    },
+    searchValue: (r) => (r.stock_remark ?? '').toLowerCase(),
     sortFn: (a, b) => {
-      // Sort: fully ready first, then by count of ready categories desc, then empty
-      const aScore = a.is_fully_ready ? 1000 : (a.ready_categories?.length ?? 0);
-      const bScore = b.is_fully_ready ? 1000 : (b.ready_categories?.length ?? 0);
-      return bScore - aScore;
+      /* Sort: full READY first, then READY (PARTIAL), then pending (any
+         categories shown), then blank. Within "pending" group, longer remark
+         (more categories missing) sorts after shorter. */
+      const score = (s: string) => {
+        if (s === 'READY')             return 3000;
+        if (s === 'READY (PARTIAL)')   return 2000;
+        if (!s)                        return 0;
+        return 1000 - s.length;        // shorter remark = closer to ready
+      };
+      return score(b.stock_remark ?? '') - score(a.stock_remark ?? '');
     },
   },
   /* HOUZS category subtotals — Mattress/Sofa burnt, Bedframe green, Acc neutral.

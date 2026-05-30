@@ -26,7 +26,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { VariantDescription } from '../components/VariantDescription';
 import { useDeliverableSoLines, useConvertSoLinesToDo, type DeliverableSoLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -183,21 +183,15 @@ export const DeliveryOrderFromSo = () => {
     },
     {
       key: 'description', label: 'Description', width: 260, sortable: true,
-      accessor: (r) => {
-        const summary = buildVariantSummary(
-          r.itemGroup ?? '',
-          r.variants as Record<string, unknown> | null | undefined,
-        );
-        const main = r.description || summary || '—';
-        return (
-          <div>
-            <div>{main}</div>
-            {r.description && summary && (
-              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-            )}
-          </div>
-        );
-      },
+      accessor: (r) => (
+        <VariantDescription
+          itemCode={r.itemCode}
+          itemGroup={r.itemGroup}
+          variants={r.variants}
+          description={r.description}
+          mutedClassName={styles.muted}
+        />
+      ),
       searchValue: (r) => `${r.description ?? ''} ${r.description2 ?? ''}`.trim(),
     },
     {
@@ -267,10 +261,14 @@ export const DeliveryOrderFromSo = () => {
           // Land on the new DO in Edit mode so the picked lines are right there.
           navigate(`/mfg-delivery-orders/${res.id}?edit=1`);
         },
-        onError: (e) => setDialog({
-          title: 'Convert failed',
-          body: e instanceof Error ? e.message : String(e),
-        }),
+        onError: (e) => {
+          /* Short-stock is handled systemically in authedFetch (it prompts and
+             replays with confirmShortStock). A short_stock error reaching here
+             means the operator declined to ship — swallow it silently. */
+          const raw = e instanceof Error ? e.message : String(e);
+          if (raw.includes('"short_stock"')) return;
+          setDialog({ title: 'Convert failed', body: raw });
+        },
       },
     );
   };
@@ -301,7 +299,7 @@ export const DeliveryOrderFromSo = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={onConvert}
+            onClick={() => onConvert()}
             disabled={pickedCount === 0 || convert.isPending}
             title="Combine the picked Sales Order lines into one Delivery Order"
           >

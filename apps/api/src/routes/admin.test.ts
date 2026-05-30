@@ -144,6 +144,26 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
     expect(opts.redirectTo).toBe('https://pos.test/set-password');
   });
 
+  it('master_account role uses POS_PORTAL_URL in redirectTo (POS-only selling role)', async () => {
+    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-ma' } }, error: null });
+    adminFromMock.mockImplementation(() => ({
+      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-ma' }, error: null }) }) }),
+    }));
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'MA', name: 'Master Account', role: 'master_account',
+        email: 'master@2990s.my', initials: 'MA', color: '#2F5D4F',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(201);
+    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
+    const opts = inviteByEmailMock.mock.calls[0]![1];
+    expect(opts.redirectTo).toBe('https://pos.test/set-password');
+  });
+
   it('admin role uses BACKEND_PORTAL_URL in redirectTo', async () => {
     inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-be' } }, error: null });
     adminFromMock.mockImplementation(() => ({

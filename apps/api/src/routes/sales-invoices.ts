@@ -22,7 +22,10 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { postSiRevenue } from '../lib/post-si-revenue';
+import { postSiRevenue, reverseSiRevenue } from '../lib/post-si-revenue';
+import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
+import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
 
 export const salesInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 salesInvoices.use('*', supabaseAuth);
@@ -141,6 +144,15 @@ function buildItemRow(salesInvoiceId: string, it: Record<string, unknown>) {
   };
 }
 
+/* Commander 2026-05-30 (Phase B) — LINE-LEVEL, QUANTITY-BASED DO → Sales
+   Invoice remaining. Wraps the shared Pending formula (do-line-remaining.ts):
+   remaining_to_invoice = delivered − invoiced − returned. A DO line can be
+   invoiced across SEVERAL invoices until remaining hits 0; cancelling an
+   invoice (or return) releases its qty back to Pending. */
+async function doInvoiceableRemaining(sb: any, doIds: string[]): Promise<Map<string, DoRemainingLine>> {
+  return doLineRemaining(sb, doIds);
+}
+
 // ── List ────────────────────────────────────────────────────────────────
 salesInvoices.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -149,6 +161,23 @@ salesInvoices.get('/', async (c) => {
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ salesInvoices: data ?? [] });
+});
+
+// ── Invoiceable DO lines (line-level partial-invoice picker) ──────────────
+/* Commander 2026-05-30 (Phase B) — feeds the line-level DO→Sales Invoice
+   picker. Returns each DO LINE that can still be invoiced (remaining > 0),
+   where remaining = delivered − invoiced − returned (derived live). With
+   ?doIds= it scopes to those DOs; without it, every non-cancelled DO.
+
+   IMPORTANT (route ordering): this STATIC path MUST be registered BEFORE the
+   `/:id` param route below, or Hono tries to cast it to an id. */
+salesInvoices.get('/invoiceable-do-lines', async (c) => {
+  const sb = c.get('supabase');
+  const doIds = await resolveCandidateDoIds(sb, c.req.query('doIds'));
+  if (doIds.length === 0) return c.json({ lines: [] });
+  const remainingMap = await doInvoiceableRemaining(sb, doIds);
+  const lines = [...remainingMap.values()].filter((l) => l.remaining > 0);
+  return c.json({ lines });
 });
 
 // ── Detail ──────────────────────────────────────────────────────────────
@@ -179,6 +208,13 @@ salesInvoices.post('/', async (c) => {
   const items = (body.items as Array<Record<string, unknown>> | undefined) ?? [];
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Edge #4 — itemCode catalog guard. */
+  if (items.length > 0) {
+    const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   const invoiceNumber = await nextNum(sb);
 
   const phoneRaw = (body.phone as string | undefined) ?? null;
@@ -229,7 +265,7 @@ salesInvoices.post('/', async (c) => {
     created_by: user.id,
   }).select(HEADER).single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
-  const h = header as unknown as { id: string; invoice_number: string };
+  const h = header as unknown as { id: string; invoice_number: string; debtor_code: string | null; debtor_name: string | null; total_centi: number | null; paid_centi: number | null };
 
   if (items.length > 0) {
     const rows = items.map((it) => buildItemRow(h.id, it));
@@ -256,95 +292,142 @@ salesInvoices.post('/', async (c) => {
     }
   }
 
-  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue }, 201);
+  /* Edge #11 — auto-apply existing customer credit balance toward this new SI.
+     Re-fetch total_centi here so we see the value AFTER recomputeTotals ran. */
+  let creditApplied = 0;
+  if (h.debtor_code) {
+    try {
+      const { data: latest } = await sb.from('sales_invoices').select('total_centi, paid_centi').eq('id', h.id).maybeSingle();
+      const total = Number((latest as { total_centi: number } | null)?.total_centi ?? 0);
+      const paid  = Number((latest as { paid_centi: number } | null)?.paid_centi ?? 0);
+      const due   = Math.max(0, total - paid);
+      const res = await applyCustomerCreditToSi(sb, {
+        debtorCode: h.debtor_code,
+        debtorName: h.debtor_name,
+        siId: h.id,
+        siNumber: h.invoice_number,
+        remainingDueCenti: due,
+        createdBy: user.id,
+      });
+      creditApplied = res.applied;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[customer-credit] apply-on-create failed for ${h.invoice_number}:`, e);
+    }
+  }
+
+  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue, creditApplied }, 201);
 });
 
-/* ── Convert several Delivery Orders → ONE merged Sales Invoice ────────────
-   Mirrors the DO's /from-sos multi-select but over DELIVERY ORDERS: pick
-   several whole Delivery Orders of the SAME customer and combine them into ONE
-   Sales Invoice.
+/* ── Convert picked DO LINES (partial qty) → ONE Sales Invoice ─────────────
+   Commander 2026-05-30 (Phase B) — LINE-LEVEL, QUANTITY-BASED convert, mirroring
+   the SO→DO /from-sos picker. Pick individual DO LINES (each with a qty
+   1..remaining_to_invoice) of ONE customer and combine them into ONE Sales
+   Invoice. A DO line can be invoiced across SEVERAL invoices until its
+   remaining (delivered − invoiced − returned, derived live) reaches 0.
 
-   Body: { doIds: string[] }.
+   Body: { picks: [{ doItemId, qty }] }.
 
    Steps:
-     1. Load the picked DO headers. They must ALL share one customer — same
-        debtor_code, or (when debtor_code is null) same debtor_name. A mixed
-        bag returns 400 mixed_customers so the operator can't merge two
-        different customers' deliveries onto one invoice. Any CANCELLED DO
-        blocks the whole merge.
-     2. Load all their line items.
-     3. Create ONE Sales Invoice — header copied from the FIRST DO (debtor /
-        address / salesperson / branding / venue / contact …), status SENT (an
-        invoice is issued on creation). The DO id FK column delivery_order_id
-        holds the FIRST DO only; the full merged set is recorded in `ref`.
-        Every picked DO's lines are merged into the invoice items, carrying
+     1. Resolve every picked DO line's parent DO + live remaining via
+        doInvoiceableRemaining.
+     2. Validate (a) all picks share ONE customer (else 400 mixed_customers),
+        (b) each pick qty is 1..remaining_to_invoice (else 409 over_remaining).
+     3. Create ONE invoice (status SENT) — header copied from the FIRST pick's
+        DO; one invoice line per pick (qty = picked, do_item_id set), carrying
         cost so margins survive.
-     4. recomputeTotals (rolls the per-category + grand total), THEN post
-        revenue once via the shared idempotent poster. Recomputing BEFORE
-        posting guarantees revenue == the invoice total. */
+     4. recomputeTotals (BEFORE posting so revenue == the invoice total), THEN
+        post revenue once via the shared idempotent poster. */
 salesInvoices.post('/from-dos', async (c) => {
   const sb = c.get('supabase'); const user = c.get('user');
-  let body: { doIds?: string[] };
+  let body: { picks?: Array<{ doItemId?: string; qty?: number }> };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
-  const doIds = [...new Set((body.doIds ?? []).filter((d): d is string => !!d))];
-  if (doIds.length === 0) return c.json({ error: 'do_ids_required' }, 400);
 
-  // 1. Load the DO headers. Order by do_number so "the FIRST DO" is deterministic.
+  // Collapse duplicate doItemIds (sum their qty) so a line can't appear twice.
+  const pickQtyById = new Map<string, number>();
+  for (const p of (body.picks ?? [])) {
+    if (!p || !p.doItemId) continue;
+    const q = Number(p.qty ?? 0);
+    if (!(q > 0)) continue;
+    pickQtyById.set(p.doItemId, (pickQtyById.get(p.doItemId) ?? 0) + q);
+  }
+  if (pickQtyById.size === 0) return c.json({ error: 'picks_required' }, 400);
+
+  // 1. Resolve each picked DO line → its parent DO, then derive remaining
+  //    scoped to exactly those DOs.
+  const pickedIds = [...pickQtyById.keys()];
+  const { data: pickedItemRows, error: pErr } = await sb
+    .from('delivery_order_items')
+    .select('id, delivery_order_id')
+    .in('id', pickedIds);
+  if (pErr) return c.json({ error: 'load_failed', reason: pErr.message }, 500);
+  const idToDo = new Map<string, string>();
+  for (const r of (pickedItemRows ?? []) as Array<{ id: string; delivery_order_id: string }>) idToDo.set(r.id, r.delivery_order_id);
+  const missing = pickedIds.filter((id) => !idToDo.has(id));
+  if (missing.length > 0) return c.json({ error: 'do_item_not_found', missing }, 404);
+
+  const doIds = [...new Set([...idToDo.values()])];
+  const remainingMap = await doInvoiceableRemaining(sb, doIds);
+
+  // 2a. Same-customer guard — every picked line must share ONE customer.
+  const customers = new Set<string>();
+  const customerNames = new Set<string>();
+  for (const id of pickedIds) {
+    const line = remainingMap.get(id);
+    if (!line) return c.json({ error: 'do_item_not_found', missing: [id] }, 404);
+    customers.add(custKeyOf(line));
+    customerNames.add(line.debtorName ?? line.debtorCode ?? '(none)');
+  }
+  if (customers.size > 1) {
+    return c.json({
+      error: 'mixed_customers',
+      message: 'All picked Delivery Order lines must belong to the same customer to combine into one Sales Invoice.',
+      customers: [...customerNames],
+    }, 400);
+  }
+
+  // 2b. Per-line qty guard — 1..remaining_to_invoice. The picker shows remaining
+  //     so this only trips on a stale view / race.
+  for (const id of pickedIds) {
+    const line = remainingMap.get(id)!;
+    const qty = pickQtyById.get(id)!;
+    if (qty < 1 || qty > line.remaining) {
+      return c.json({
+        error: 'over_remaining',
+        message: `${line.itemCode} on ${line.doNumber}: pick qty ${qty} exceeds remaining ${line.remaining}.`,
+        doItemId: id,
+        doNumber: line.doNumber,
+        itemCode: line.itemCode,
+        remaining: line.remaining,
+        requested: qty,
+      }, 409);
+    }
+  }
+
+  // 3. Create ONE invoice header from the FIRST pick's DO. "First" = the DO of
+  //    the earliest-sorted picked line so the result is deterministic.
+  const sortedPicks = pickedIds
+    .map((id) => remainingMap.get(id)!)
+    .sort((a, b) => a.doNumber.localeCompare(b.doNumber) || a.doItemId.localeCompare(b.doItemId));
+  const firstDoId = sortedPicks[0]!.deliveryOrderId;
+  const distinctDoNumbers = [...new Set(sortedPicks.map((l) => l.doNumber))].sort();
+
+  // Pull the FIRST DO's header for the invoice header snapshot.
   const DO_HEADER =
-    'id, do_number, so_doc_no, status, debtor_code, debtor_name, do_date, customer_delivery_date, ' +
+    'id, do_number, so_doc_no, debtor_code, debtor_name, customer_delivery_date, ' +
     'salesperson_id, agent, email, customer_type, building_type, branding, venue, venue_id, ref, ' +
     'customer_so_no, po_doc_no, sales_location, customer_state, customer_country, note, ' +
     'address1, address2, city, state, postcode, phone, currency, ' +
     'emergency_contact_name, emergency_contact_phone, emergency_contact_relationship';
-  const { data: doHeaders, error: hLoadErr } = await sb
+  const { data: doHeaderRow, error: hLoadErr } = await sb
     .from('delivery_orders')
     .select(DO_HEADER)
-    .in('id', doIds)
-    .order('do_number', { ascending: true });
+    .eq('id', firstDoId)
+    .maybeSingle();
   if (hLoadErr) return c.json({ error: 'load_failed', reason: hLoadErr.message }, 500);
-  const dos = (doHeaders ?? []) as unknown as Array<Record<string, unknown> & {
-    id: string; do_number: string; status: string | null;
-    debtor_code: string | null; debtor_name: string | null;
-  }>;
-  if (dos.length === 0) return c.json({ error: 'delivery_order_not_found' }, 404);
+  if (!doHeaderRow) return c.json({ error: 'delivery_order_not_found' }, 404);
+  const head = doHeaderRow as unknown as Record<string, unknown>;
 
-  // A cancelled DO can't be invoiced — block the whole merge if any is cancelled.
-  const cancelled = dos.filter((d) => (d.status ?? '').toUpperCase() === 'CANCELLED').map((d) => d.do_number);
-  if (cancelled.length > 0) {
-    return c.json({ error: 'do_cancelled', message: `Cancelled DO(s) cannot be invoiced: ${cancelled.join(', ')}.`, cancelled }, 409);
-  }
-
-  // 1b. Same-customer guard — every DO must be the SAME customer. Match on
-  //     debtor_code; when a DO has no code, fall back to debtor_name.
-  const custKey = (d: { debtor_code: string | null; debtor_name: string | null }): string =>
-    (d.debtor_code && d.debtor_code.trim())
-      ? `code:${d.debtor_code.trim().toUpperCase()}`
-      : `name:${(d.debtor_name ?? '').trim().toUpperCase()}`;
-  const customers = new Set(dos.map(custKey));
-  if (customers.size > 1) {
-    return c.json({
-      error: 'mixed_customers',
-      message: 'All selected Delivery Orders must belong to the same customer to merge into one Sales Invoice.',
-      customers: [...new Set(dos.map((d) => d.debtor_name ?? d.debtor_code ?? '(none)'))],
-    }, 400);
-  }
-
-  // 2. Load every line of the picked DOs.
-  const { data: itemRows, error: iLoadErr } = await sb
-    .from('delivery_order_items')
-    .select(
-      'id, delivery_order_id, item_code, item_group, description, description2, uom, qty, ' +
-      'unit_price_centi, discount_centi, unit_cost_centi, variants, notes',
-    )
-    .in('delivery_order_id', doIds)
-    .order('delivery_order_id', { ascending: true })
-    .order('created_at', { ascending: true });
-  if (iLoadErr) return c.json({ error: 'load_failed', reason: iLoadErr.message }, 500);
-  const doItems = (itemRows ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
-  if (doItems.length === 0) return c.json({ error: 'no_items_to_convert' }, 400);
-
-  // 3. Create ONE invoice header, copied from the FIRST DO.
-  const head = dos[0]!;
   const invoiceNumber = await nextNum(sb);
   const nowIso = new Date().toISOString();
   const phoneRaw = head.phone as string | null;
@@ -353,10 +436,10 @@ salesInvoices.post('/from-dos', async (c) => {
   const { data: header, error: hErr } = await sb.from('sales_invoices').insert({
     invoice_number: invoiceNumber,
     so_doc_no: (head.so_doc_no as string | null) ?? null,
-    /* delivery_order_id has a FK to delivery_orders(id), so it must be ONE
-       valid id — use the first picked DO. The full merged set is recorded in
-       `ref` below for traceability. */
-    delivery_order_id: head.id,
+    /* delivery_order_id has a FK to delivery_orders(id) → ONE valid id (the
+       first picked DO). The full source set is recorded in `ref`; per-line
+       provenance lives in each item's do_item_id. */
+    delivery_order_id: firstDoId,
     debtor_code: (head.debtor_code as string | null) ?? null,
     debtor_name: (head.debtor_name as string | null) ?? 'Customer',
     invoice_date: new Date().toISOString().slice(0, 10),
@@ -377,9 +460,8 @@ salesInvoices.post('/from-dos', async (c) => {
     branding: (head.branding as string | null) ?? null,
     venue: (head.venue as string | null) ?? null,
     venue_id: (head.venue_id as string | null) ?? null,
-    // Record every merged DO here (delivery_order_id can only hold one FK id).
-    ref: doIds.length > 1
-      ? `Merged from ${dos.map((d) => d.do_number).join(', ')}`
+    ref: distinctDoNumbers.length > 1
+      ? `Merged from ${distinctDoNumbers.join(', ')}`
       : ((head.ref as string | null) ?? null),
     customer_so_no: (head.customer_so_no as string | null) ?? null,
     po_doc_no: (head.po_doc_no as string | null) ?? null,
@@ -399,21 +481,20 @@ salesInvoices.post('/from-dos', async (c) => {
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
   const h = header as unknown as { id: string; invoice_number: string };
 
-  // 3b. Merge every picked DO's lines into the invoice. Carry cost so margins
-  //     survive (buildItemRow recomputes line totals/cost/margin).
-  const rows = doItems.map((it) => buildItemRow(h.id, {
-    doItemId: it.id,
-    itemCode: it.item_code,
-    itemGroup: it.item_group,
-    description: it.description,
-    description2: it.description2,
-    uom: it.uom,
-    qty: it.qty,
-    unitPriceCenti: it.unit_price_centi,
-    discountCenti: it.discount_centi,
-    unitCostCenti: it.unit_cost_centi,
-    variants: it.variants,
-    notes: it.notes,
+  // 3b. One invoice line per pick — qty = the picked qty (NOT the full DO line
+  //     qty), do_item_id set for the remaining-formula link. Carry cost.
+  const rows = sortedPicks.map((line) => buildItemRow(h.id, {
+    doItemId: line.doItemId,
+    itemCode: line.itemCode,
+    itemGroup: line.itemGroup,
+    description: line.description,
+    description2: line.description2,
+    uom: line.uom,
+    qty: pickQtyById.get(line.doItemId)!,
+    unitPriceCenti: line.unitPriceCenti,
+    discountCenti: line.discountCenti,
+    unitCostCenti: line.unitCostCenti,
+    variants: line.variants,
   }));
   const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
   if (iErr) {
@@ -437,7 +518,29 @@ salesInvoices.post('/from-dos', async (c) => {
     }
   }
 
-  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue }, 201);
+  /* Edge #11 — auto-apply customer credit toward this newly-created SI. */
+  let creditApplied = 0;
+  try {
+    const { data: latest } = await sb.from('sales_invoices').select('total_centi, paid_centi, debtor_code, debtor_name').eq('id', h.id).maybeSingle();
+    const l = latest as { total_centi: number | null; paid_centi: number | null; debtor_code: string | null; debtor_name: string | null } | null;
+    if (l?.debtor_code) {
+      const due = Math.max(0, Number(l.total_centi ?? 0) - Number(l.paid_centi ?? 0));
+      const res = await applyCustomerCreditToSi(sb, {
+        debtorCode: l.debtor_code,
+        debtorName: l.debtor_name,
+        siId: h.id,
+        siNumber: h.invoice_number,
+        remainingDueCenti: due,
+        createdBy: user.id,
+      });
+      creditApplied = res.applied;
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[customer-credit] apply-on-from-dos failed for ${h.invoice_number}:`, e);
+  }
+
+  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue, creditApplied }, 201);
 });
 
 /* ── Append a Delivery Order's lines into an EXISTING invoice ──────────────
@@ -534,6 +637,12 @@ salesInvoices.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Edge #4 — itemCode catalog guard. */
+  {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
   const { data: header } = await sb.from('sales_invoices').select('id, invoice_number').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
@@ -552,6 +661,12 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Edge #4 — itemCode catalog guard (only when caller is changing it). */
+  if (it.itemCode !== undefined) {
+    const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
+    if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
 
   const { data: prev } = await sb.from('sales_invoice_items')
     .select('qty, unit_price_centi, discount_centi, tax_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes')
@@ -685,6 +800,11 @@ salesInvoices.post('/:id/payments', async (c) => {
   }).select(PAYMENT_COLS).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputePaid(sb, id);
+  /* Edge #A — if cumulative paid now exceeds the invoice total, the excess
+     becomes a customer credit. Idempotent + handles operator removing a
+     payment later (writes a negative correction). */
+  try { await reconcileSiOverpay(sb, id); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[customer-credit] overpay reconcile failed (post):', e); }
   return c.json({ payment: data }, 201);
 });
 
@@ -696,14 +816,23 @@ salesInvoices.delete('/:id/payments/:paymentId', async (c) => {
   const { error } = await sb.from('sales_invoice_payments').delete().eq('id', paymentId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputePaid(sb, id);
+  /* Edge #A — payment removal may shrink paid_centi back below total →
+     reconcile balances the previously-booked OVERPAY credit. */
+  try { await reconcileSiOverpay(sb, id); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[customer-credit] overpay reconcile failed (delete):', e); }
   return c.json({ ok: true });
 });
 
 // ── Status transition (Cancel / Reopen) ────────────────────────────────────
-// Invoice status flow is kept simple (mirrors how the DO was simplified): an
-// issued invoice is SENT, settles to PARTIALLY_PAID / PAID via the ledger, and
-// can be CANCELLED. We never delete the revenue JE on cancel here (a reversing
-// entry is a separate accounting action) — the guard keeps it idempotent.
+// Invoice status flow is kept simple: an issued invoice is SENT, settles to
+// PARTIALLY_PAID / PAID via the ledger, and can be CANCELLED.
+//
+// Commander 2026-05-30 (Phase B) — CANCEL now REVERSES revenue: reverseSiRevenue
+// writes a contra JE (Dr 4000 / Cr 1100) that nets the original to zero + flags
+// the original `reversed = true`, so revenue no longer counts in the trial
+// balance. Idempotent (the original's reversed flag + a SI_REVERSAL existence
+// check). The cancelled invoice's qty also returns to Pending automatically —
+// the do-line-remaining formula filters non-cancelled invoices.
 salesInvoices.patch('/:id/status', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   let body: { status?: string }; try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -713,8 +842,45 @@ salesInvoices.patch('/:id/status', async (c) => {
   if (body.status === 'SENT' || body.status === 'ISSUED') ts.sent_at = now;
   if (body.status === 'PAID') ts.paid_at = now;
   const status = body.status === 'ISSUED' ? 'SENT' : body.status;
-  const { data, error } = await sb.from('sales_invoices').update({ status, ...ts }).eq('id', id).select('id, status').single();
+
+  // Need the invoice_number + paid_centi + debtor for the revenue reversal +
+  // the Edge #11 cancel-with-payment credit on CANCEL.
+  const { data, error } = await sb.from('sales_invoices')
+    .update({ status, ...ts })
+    .eq('id', id)
+    .select('id, status, invoice_number, paid_centi, debtor_code, debtor_name')
+    .single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  /* Reverse revenue on CANCEL. Best-effort (audit-DLQ pattern) — a reversal
+     failure never un-cancels the invoice; it can be retried (idempotent). */
+  if (status === 'CANCELLED') {
+    const d = data as { invoice_number: string; paid_centi: number | null; debtor_code: string | null; debtor_name: string | null };
+    const rev = await reverseSiRevenue(sb, d.invoice_number);
+    if (!rev.ok) {
+      // eslint-disable-next-line no-console
+      console.error(`[si-revenue] reversal failed for ${d.invoice_number}:`, rev.status, rev.reason);
+    }
+    /* Edge #11 — cancel-with-payment turns paid_centi into a customer credit
+       balance instead of forcing a manual refund flow. Idempotent inside. */
+    if (Number(d.paid_centi ?? 0) > 0) {
+      try {
+        const user = c.get('user');
+        await creditFromCancelledSi(sb, {
+          siId: id,
+          siNumber: d.invoice_number,
+          debtorCode: d.debtor_code,
+          debtorName: d.debtor_name,
+          paidCenti: Number(d.paid_centi),
+          createdBy: user?.id,
+        });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[customer-credit] credit-from-cancel failed for ${d.invoice_number}:`, e);
+      }
+    }
+  }
+
   return c.json({ salesInvoice: data });
 });
 

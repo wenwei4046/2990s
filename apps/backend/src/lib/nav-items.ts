@@ -31,7 +31,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Convert DO to Return', path: '/delivery-returns/from-do', group: 'Sales Order', keywords: 'convert do delivery return goods back' },
 
   // Procurement
-  { label: 'SKU master', path: '/sku-master', group: 'Procurement', keywords: 'catalog pricing' },
   { label: 'Products & Maintenance', path: '/products', group: 'Procurement', keywords: 'modular combo fabric' },
   { label: 'Suppliers', path: '/suppliers', group: 'Procurement', keywords: 'vendor creditor' },
   { label: 'MRP · Stock Status', path: '/mrp', group: 'Procurement', keywords: 'requirements planning shortage order' },
@@ -52,9 +51,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Stock Take', path: '/inventory/stock-takes', group: 'Warehouse' },
   { label: 'Warehouse', path: '/warehouse', group: 'Warehouse', keywords: 'rack bin' },
   { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'locations' },
-
-  // Consignment
-  { label: 'Consignment', path: '/consignment', group: 'Consignment' },
 
   // Finance
   { label: 'Accounting', path: '/accounting', group: 'Finance', keywords: 'gl journal ledger' },

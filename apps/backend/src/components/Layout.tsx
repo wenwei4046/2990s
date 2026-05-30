@@ -22,11 +22,6 @@ interface RouteMeta {
 const ROUTE_META: Record<string, RouteMeta> = {
   '/dashboard': { title: 'Today', sub: 'Coordinator dashboard · Showroom KL' },
   '/audit-log': { title: 'Payment audit log', sub: 'Finance reports' },
-  '/sku-master': {
-    title: 'SKU master',
-    sub: 'Catalog & per-Model pricing',
-    searchPlaceholder: 'SKU, name, category…',
-  },
   '/addons': { title: 'Add-on products', sub: 'Disposal · Lift · Assembly' },
   '/customers': {
     title: 'Customers',

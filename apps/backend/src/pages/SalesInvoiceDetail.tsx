@@ -17,9 +17,9 @@ import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, ChevronDown, Ban, RotateCcw, ArrowRightLeft,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, ChevronDown, Ban, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
@@ -164,7 +164,6 @@ const draftFromItem = (it: SiItem): SoLineDraft => ({
 
 export const SalesInvoiceDetail = () => {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const detail = useSalesInvoiceDetail(id ?? null);
   const updateHeader = useUpdateSalesInvoiceHeader();
@@ -437,13 +436,10 @@ export const SalesInvoiceDetail = () => {
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
           </Button>
-          {/* Convert from DO — gated behind Edit mode (it mutates line items),
-              mirrors the PO detail "Convert from SO". */}
-          {isEditing && !isCancelled && (
-            <Button variant="ghost" size="md" onClick={() => navigate(`/sales-invoices/from-do?siId=${header.id}`)}>
-              <ArrowRightLeft {...ICON} /><span>Convert from DO</span>
-            </Button>
-          )}
+          {/* Commander 2026-05-30 (Phase B) — the in-place "append a DO into this
+              invoice" path was removed when DO→Invoice became line-level + partial.
+              New invoices are created from the line-level picker at
+              /sales-invoices/from-do (one invoice per convert). */}
           {isCancelled ? (
             <Button variant="primary" size="md" onClick={handleReopen} disabled={updateStatus.isPending}>
               <RotateCcw {...ICON} /><span>Reopen Invoice</span>

@@ -7,7 +7,10 @@ export const deliveryFees = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 deliveryFees.use('*', supabaseAuth);
 
-const WRITE_ROLES = new Set(['admin', 'coordinator']);
+// admin + coordinator (legacy) plus master_account — cost/sell split Phase 2
+// moved the delivery fee onto the POS Master Account surface. Kept in lockstep
+// with the delivery_fee_config UPDATE RLS policy (migration 0112).
+const WRITE_ROLES = new Set(['admin', 'coordinator', 'master_account']);
 
 // Same form holds fees + lead days. Each field is independent so the PATCH
 // can partial-update either group without nuking the other.
@@ -37,8 +40,9 @@ deliveryFees.get('/', async (c) => {
   });
 });
 
-// PATCH — admin/coordinator only. Server-side role check + RLS as defence-
-// in-depth (migration 0029 grants UPDATE only to those roles).
+// PATCH — fee editors only (admin / coordinator / master_account). Server-side
+// role check + RLS as defence-in-depth (migrations 0029 + 0112 grant UPDATE to
+// exactly these roles).
 deliveryFees.patch('/', async (c) => {
   const userId   = c.get('user').id;
   const supabase = c.get('supabase');
@@ -51,7 +55,7 @@ deliveryFees.patch('/', async (c) => {
     return c.json({ error: 'forbidden', reason: 'no_active_staff' }, 403);
   }
   if (!WRITE_ROLES.has(staffRes.data.role)) {
-    return c.json({ error: 'forbidden', reason: 'admin_or_coordinator_only' }, 403);
+    return c.json({ error: 'forbidden', reason: 'delivery_fee_editor_only' }, 403);
   }
 
   let body: unknown;
