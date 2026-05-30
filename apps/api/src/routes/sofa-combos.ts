@@ -46,6 +46,7 @@ type Row = {
   customer_id: string | null;
   supplier_id: string | null;
   prices_by_height: Record<string, number | null>;
+  selling_prices_by_height: Record<string, number | null>;
   label: string | null;
   effective_from: string;
   deleted_at: string | null;
@@ -64,6 +65,7 @@ function rowToWire(r: Row) {
     customerId: r.customer_id,
     supplierId: r.supplier_id,
     pricesByHeight: r.prices_by_height ?? {},
+    sellingPricesByHeight: r.selling_prices_by_height ?? {},
     label: r.label,
     effectiveFrom: r.effective_from,
     deletedAt: r.deleted_at,
@@ -138,7 +140,7 @@ sofaCombos.get('/', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .order('base_model', { ascending: true })
@@ -228,7 +230,7 @@ sofaCombos.get('/history', async (c) => {
   let q = supabase
     .from('sofa_combo_pricing')
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .eq('base_model', baseModel)
@@ -280,6 +282,7 @@ sofaCombos.post('/', async (c) => {
     customerId?: string | null;
     supplierId?: string | null;
     pricesByHeight?: unknown;
+    sellingPricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -319,6 +322,14 @@ sofaCombos.post('/', async (c) => {
   const prices = validatePricesByHeight(body.pricesByHeight);
   if (!prices) return c.json({ error: 'prices_by_height_invalid' }, 400);
 
+  // SELLING prices (Master Admin). Default = cost when not supplied, so a
+  // create/edit that only sets the cost keeps selling == cost (no silent
+  // free combo). Validated the same way (per-height centi).
+  const sellingPrices = body.sellingPricesByHeight === undefined
+    ? prices
+    : validatePricesByHeight(body.sellingPricesByHeight);
+  if (!sellingPrices) return c.json({ error: 'selling_prices_by_height_invalid' }, 400);
+
   const effectiveFrom = (body.effectiveFrom ?? '').trim();
   if (!ISO_DATE.test(effectiveFrom)) {
     return c.json({ error: 'effective_from_required', message: 'YYYY-MM-DD' }, 400);
@@ -336,13 +347,14 @@ sofaCombos.post('/', async (c) => {
       customer_id: customerId,
       supplier_id: supplierId,
       prices_by_height: prices,
+      selling_prices_by_height: sellingPrices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
@@ -375,6 +387,7 @@ sofaCombos.put('/:id', async (c) => {
 
   let body: {
     pricesByHeight?: unknown;
+    sellingPricesByHeight?: unknown;
     label?: string | null;
     effectiveFrom?: string;
     notes?: string | null;
@@ -388,6 +401,14 @@ sofaCombos.put('/:id', async (c) => {
 
   const prices = validatePricesByHeight(body.pricesByHeight);
   if (!prices) return c.json({ error: 'prices_by_height_invalid' }, 400);
+
+  // SELLING prices (Master Admin). Default = cost when not supplied, so a
+  // create/edit that only sets the cost keeps selling == cost (no silent
+  // free combo). Validated the same way (per-height centi).
+  const sellingPrices = body.sellingPricesByHeight === undefined
+    ? prices
+    : validatePricesByHeight(body.sellingPricesByHeight);
+  if (!sellingPrices) return c.json({ error: 'selling_prices_by_height_invalid' }, 400);
 
   const effectiveFrom = (body.effectiveFrom ?? '').trim();
   if (!ISO_DATE.test(effectiveFrom)) {
@@ -414,13 +435,14 @@ sofaCombos.put('/:id', async (c) => {
       customer_id: (orig as { customer_id: string | null }).customer_id,
       supplier_id: supplierId,
       prices_by_height: prices,
+      selling_prices_by_height: sellingPrices,
       label: body.label ?? null,
       effective_from: effectiveFrom,
       notes: body.notes ?? null,
       created_by: user.id,
     })
     .select(
-      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, label, ' +
+      'id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, ' +
       'effective_from, deleted_at, notes, created_at, updated_at, created_by',
     )
     .single();
