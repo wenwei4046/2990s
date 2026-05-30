@@ -120,15 +120,18 @@ async function recomputeGrnTotals(sb: any, grnId: string) {
    +/- arithmetic so receive / edit / delete / cancel all converge to the truth
    and the PO line auto-releases the moment its receipts go away. Never
    resurrects a CANCELLED PO. Best-effort. */
-async function recomputePoReceived(sb: any, poItemIds: Array<string | null | undefined>) {
+export async function recomputePoReceived(sb: any, poItemIds: Array<string | null | undefined>) {
   const ids = [...new Set(poItemIds.filter((x): x is string => Boolean(x)))];
   if (ids.length === 0) return;
 
-  // 1. Recount received_qty per PO item from live GRN lines.
+  // 1. Recount received_qty per PO item from live GRN lines. Net out goods
+  //    sent back to the supplier (returned_qty, migration 0106): a returned
+  //    qty no longer counts as received, so the PO line re-opens and a
+  //    replacement shipment can be received against it. Clamped ≥ 0.
   const { data: glines } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, grn_id')
+    .select('purchase_order_item_id, qty_accepted, returned_qty, grn_id')
     .in('purchase_order_item_id', ids);
-  const rows = (glines ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; grn_id: string }>;
+  const rows = (glines ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; returned_qty: number; grn_id: string }>;
   const grnIds = [...new Set(rows.map((r) => r.grn_id).filter(Boolean))];
   const cancelled = new Set<string>();
   if (grnIds.length > 0) {
@@ -140,7 +143,8 @@ async function recomputePoReceived(sb: any, poItemIds: Array<string | null | und
   const recvByPoi = new Map<string, number>(ids.map((id) => [id, 0]));
   for (const r of rows) {
     if (cancelled.has(r.grn_id)) continue;
-    recvByPoi.set(r.purchase_order_item_id, (recvByPoi.get(r.purchase_order_item_id) ?? 0) + Number(r.qty_accepted ?? 0));
+    const net = Number(r.qty_accepted ?? 0) - Number(r.returned_qty ?? 0);
+    recvByPoi.set(r.purchase_order_item_id, (recvByPoi.get(r.purchase_order_item_id) ?? 0) + Math.max(0, net));
   }
   await Promise.all([...recvByPoi.entries()].map(([poiId, recv]) =>
     sb.from('purchase_order_items').update({ received_qty: recv }).eq('id', poiId),

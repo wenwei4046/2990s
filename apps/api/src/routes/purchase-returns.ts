@@ -18,6 +18,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { recomputePoReceived } from './grns';
 
 export const purchaseReturns = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseReturns.use('*', supabaseAuth);
@@ -62,13 +63,17 @@ async function recomputePrTotals(sb: any, prId: string) {
 async function adjustGrnReturnedQty(sb: any, grnItemId: string, delta: number) {
   if (!grnItemId || delta === 0) return;
   const { data: row } = await sb.from('grn_items')
-    .select('qty_accepted, returned_qty').eq('id', grnItemId).maybeSingle();
+    .select('qty_accepted, returned_qty, purchase_order_item_id').eq('id', grnItemId).maybeSingle();
   if (!row) return;
   const accepted = (row as { qty_accepted: number }).qty_accepted ?? 0;
   const cur = (row as { returned_qty: number }).returned_qty ?? 0;
   // Clamp into [0, qty_accepted] — never over-return, never go negative.
   const next = Math.min(accepted, Math.max(0, cur + delta));
   await sb.from('grn_items').update({ returned_qty: next }).eq('id', grnItemId);
+  // Returning goods to the supplier nets down the parent PO line's received_qty
+  // (it re-opens for a replacement shipment). Recount it from live GRN lines.
+  const poItemId = (row as { purchase_order_item_id: string | null }).purchase_order_item_id;
+  if (poItemId) await recomputePoReceived(sb, [poItemId]);
 }
 
 purchaseReturns.get('/', async (c) => {
