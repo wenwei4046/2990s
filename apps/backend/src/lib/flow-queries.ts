@@ -812,6 +812,19 @@ export const useDebtorSearch = (q: string) => useQuery({
 });
 
 /* ── DO (mfg) ─────────────────────────────────────────────────────────── */
+
+/* Any DO write that changes a delivered qty (create / cancel / add-line /
+   qty-change / delete-line) moves the SO line's live remaining-to-deliver. The
+   SO list's "still has undelivered" flag (which shows/hides the Issue-DO menu)
+   and the SO-scoped convert pickers read off that number, so they must refetch
+   too — otherwise a released qty looks stuck and the menu stays hidden until a
+   hard refresh. Mirrors the explicit refetch useConvertSoLinesToDo already does. */
+const releaseSoSideQueries = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+  qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail'] });
+  qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', 'deliverable-so-lines'], refetchType: 'all' });
+};
+
 export const useMfgDeliveryOrders = (status?: string) => baseQuery<{ deliveryOrders: any[] }>(['mfg-delivery-orders', status ?? 'all'], `/delivery-orders-mfg${status ? `?status=${status}` : ''}`);
 export const useMfgDeliveryOrderDetail = (id: string | null) => useQuery({
   queryKey: ['mfg-delivery-order-detail', id],
@@ -826,7 +839,10 @@ export const useCreateMfgDeliveryOrder = () => {
         `/delivery-orders-mfg`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
+    },
   });
 };
 
@@ -843,6 +859,8 @@ export const useUpdateMfgDeliveryOrderStatus = () => {
       /* A status advance into a shipped state deducts inventory — refresh
          the inventory queries so the on-hand drilldown reflects the OUT. */
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* CANCEL releases the delivered qty back to the SO. */
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -876,6 +894,7 @@ export const useAddMfgDeliveryOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -890,6 +909,7 @@ export const useUpdateMfgDeliveryOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -902,6 +922,7 @@ export const useDeleteMfgDeliveryOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
     },
   });
 };
