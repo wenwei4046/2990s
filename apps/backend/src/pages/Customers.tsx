@@ -2,55 +2,78 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ChevronRight, Search, Users } from 'lucide-react';
 import { fmtDate, fmtRM, daysAgo, formatPhone } from '@2990s/shared';
-import { useOrders, type OrderLane, type OrderListRow } from '../lib/queries';
+import { useMfgSalesOrders } from '../lib/flow-queries';
 import styles from './Customers.module.css';
 
 /* ─── Aggregation ────────────────────────────────────────────────────────
- * No dedicated `customers` table is wired yet — orders carry denormalized
- * customer_* columns. So "customers directory" = GROUP BY phone over orders.
+ * Phase C2 — the directory now aggregates Sales Orders (mfg_sales_orders)
+ * instead of the legacy retail `orders` table. No dedicated `customers`
+ * table is wired yet — SOs carry denormalized debtor_name / phone columns,
+ * so "customers directory" = GROUP BY phone over Sales Orders.
  *
- * Key choice: phone if present, else lowercased name. This mirrors how the
- * POS will eventually upsert the customers table once that path lights up.
- * Fine at MVP volume (<100 orders); swap for a Postgres VIEW if it gets hot.
+ * Key choice: phone if present, else lowercased debtor name. Fine at MVP
+ * volume; swap for a Postgres VIEW if it gets hot.
+ *
+ * SO totals are stored in centi — divide by 100 before display / LTV.
+ * CANCELLED and ON_HOLD SOs are excluded from lifetime value + aggregation.
  * ─────────────────────────────────────────────────────────────────────── */
+
+/* Minimal SO list row (full row typed in MfgSalesOrdersList). */
+interface SoRow {
+  doc_no: string;
+  status: string;
+  debtor_name: string | null;
+  phone: string | null;
+  local_total_centi: number;
+  created_at: string | null;
+  so_date: string | null;
+  line_count?: number | null;
+}
 
 interface CustomerEntry {
   key: string;
   name: string;
   phone: string | null;
   orderCount: number;
-  lifetimeValue: number;
-  lastOrderAt: string;       // ISO of most recent order
-  orders: OrderListRow[];    // sorted desc by placedAt
+  lifetimeValue: number;       // MYR (centi already converted)
+  lastOrderAt: string;         // ISO/date of most recent order
+  orders: SoRow[];             // sorted desc by date
 }
 
-const aggregate = (orders: OrderListRow[]): CustomerEntry[] => {
+/* SO date for recency — created_at (timestamp) when present, else so_date. */
+const soDateOf = (o: SoRow): string => o.created_at ?? o.so_date ?? '';
+
+const aggregate = (orders: SoRow[]): CustomerEntry[] => {
   const map = new Map<string, CustomerEntry>();
 
   for (const o of orders) {
-    if (o.lane === 'cancelled') continue; // Cancelled orders don't count toward LTV
-    const key = o.customerPhone?.trim() || `name:${(o.customerName ?? '').toLowerCase().trim()}`;
+    // CANCELLED + ON_HOLD don't count toward LTV / the directory.
+    if (o.status === 'CANCELLED' || o.status === 'ON_HOLD') continue;
+    const key = o.phone?.trim() || `name:${(o.debtor_name ?? '').toLowerCase().trim()}`;
     if (!key || key === 'name:') continue;
+
+    const totalMyr = (o.local_total_centi ?? 0) / 100;
+    const when = soDateOf(o);
 
     const existing = map.get(key);
     if (existing) {
       existing.orderCount += 1;
-      existing.lifetimeValue += o.total;
+      existing.lifetimeValue += totalMyr;
       existing.orders.push(o);
       // Pick most-recent name + phone, since denormalised snapshots can drift
-      if (o.placedAt > existing.lastOrderAt) {
-        existing.lastOrderAt = o.placedAt;
-        existing.name = o.customerName || existing.name;
-        existing.phone = o.customerPhone ?? existing.phone;
+      if (when > existing.lastOrderAt) {
+        existing.lastOrderAt = when;
+        existing.name = o.debtor_name || existing.name;
+        existing.phone = o.phone ?? existing.phone;
       }
     } else {
       map.set(key, {
         key,
-        name: o.customerName || 'Walk-in',
-        phone: o.customerPhone ?? null,
+        name: o.debtor_name || 'Walk-in',
+        phone: o.phone ?? null,
         orderCount: 1,
-        lifetimeValue: o.total,
-        lastOrderAt: o.placedAt,
+        lifetimeValue: totalMyr,
+        lastOrderAt: when,
         orders: [o],
       });
     }
@@ -59,43 +82,37 @@ const aggregate = (orders: OrderListRow[]): CustomerEntry[] => {
   // Sort each customer's order list desc by date, then sort customers by recency
   const list = Array.from(map.values());
   for (const c of list) {
-    c.orders.sort((a, b) => (a.placedAt < b.placedAt ? 1 : -1));
+    c.orders.sort((a, b) => (soDateOf(a) < soDateOf(b) ? 1 : -1));
   }
   list.sort((a, b) => (a.lastOrderAt < b.lastOrderAt ? 1 : -1));
   return list;
 };
 
-const laneLabel = (lane: OrderLane): string => {
-  switch (lane) {
-    case 'received':   return 'Received';
-    case 'proceed':    return 'Proceed';
-    case 'logistics':  return 'Logistics';
-    case 'ready':      return 'Ready';
-    case 'dispatched': return 'Dispatched';
-    case 'delivered':  return 'Delivered';
-    case 'cancelled':  return 'Cancelled';
-  }
+/* SO status → short label. Mirrors the SO module's vocabulary
+   (MfgSalesOrdersList STATUS_LABEL) so the directory reads the same as the
+   Sales Orders ledger. */
+const STATUS_LABEL: Record<string, string> = {
+  CONFIRMED:     'Confirmed',
+  IN_PRODUCTION: 'Proceed',
+  READY_TO_SHIP: 'Stock Ready',
+  SHIPPED:       'Arranged',
+  DELIVERED:     'Delivered',
+  INVOICED:      'Invoiced',
+  CLOSED:        'Closed',
+  ON_HOLD:       'On Hold',
+  CANCELLED:     'Cancelled',
 };
-const laneClass = (lane: OrderLane): string => {
-  switch (lane) {
-    case 'received':   return styles.laneReceived ?? '';
-    case 'proceed':    return styles.laneProceed ?? '';
-    case 'logistics':  return styles.laneLogistics ?? '';
-    case 'ready':      return styles.laneReady ?? '';
-    case 'dispatched': return styles.laneDispatched ?? '';
-    case 'delivered':  return styles.laneDelivered ?? '';
-    case 'cancelled':  return styles.laneCancelled ?? '';
-  }
-};
+const statusLabel = (status: string): string =>
+  STATUS_LABEL[status] ?? status.replace(/_/g, ' ');
 
 export const Customers = () => {
-  const orders = useOrders();
+  const salesOrders = useMfgSalesOrders(undefined);
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const customers = useMemo(
-    () => aggregate(orders.data ?? []),
-    [orders.data],
+    () => aggregate((salesOrders.data?.salesOrders ?? []) as SoRow[]),
+    [salesOrders.data],
   );
 
   const filtered = useMemo(() => {
@@ -119,9 +136,9 @@ export const Customers = () => {
           <div className="t-eyebrow">Directory · grouped by phone</div>
           <h2 className={styles.title}>Customers</h2>
           <p className={`t-body fg-muted ${styles.lede}`}>
-            Read-only directory aggregated from order history. Search by phone or name to look up
+            Read-only directory aggregated from Sales Order history. Search by phone or name to look up
             a customer, then expand to see every order they've placed. New entries appear here
-            automatically when POS confirms an order.
+            automatically when a Sales Order is created.
           </p>
         </div>
       </header>
@@ -146,14 +163,14 @@ export const Customers = () => {
       </div>
 
       <div className={styles.tableCard}>
-        {orders.isLoading ? (
+        {salesOrders.isLoading ? (
           <div className={styles.empty}>Loading customers…</div>
-        ) : orders.error ? (
-          <div className={styles.empty}>Failed to load: {String(orders.error)}</div>
+        ) : salesOrders.error ? (
+          <div className={styles.empty}>Failed to load: {String(salesOrders.error)}</div>
         ) : customers.length === 0 ? (
           <div className={styles.empty}>
             <Users size={28} strokeWidth={1.5} aria-hidden />
-            <p>No customers yet. Each confirmed POS order adds an entry here.</p>
+            <p>No customers yet. Each Sales Order adds an entry here.</p>
           </div>
         ) : filtered.length === 0 ? (
           <div className={styles.empty}>
@@ -260,7 +277,7 @@ const CustomerRow = ({ customer, isOpen, onToggle }: CustomerRowProps) => {
                   <tr>
                     <th>Order</th>
                     <th>Placed</th>
-                    <th>Lane</th>
+                    <th>Status</th>
                     <th>Items</th>
                     <th className={styles.numericCol}>Total</th>
                     <th />
@@ -268,28 +285,25 @@ const CustomerRow = ({ customer, isOpen, onToggle }: CustomerRowProps) => {
                 </thead>
                 <tbody>
                   {customer.orders.map((o) => {
-                    const lineCount = o.cart.reduce(
-                      (sum, item) => sum + (item.qty ?? 0),
-                      0,
-                    );
+                    const lineCount = o.line_count ?? 0;
                     return (
-                      <tr key={o.id}>
+                      <tr key={o.doc_no}>
                         <td>
-                          <span className={styles.orderId}>{o.id}</span>
+                          <span className={styles.orderId}>{o.doc_no}</span>
                         </td>
-                        <td>{fmtDate(o.placedAt)}</td>
+                        <td>{fmtDate(soDateOf(o))}</td>
                         <td>
-                          <span className={`${styles.lanePill} ${laneClass(o.lane)}`}>
-                            {laneLabel(o.lane)}
+                          <span className={styles.lanePill}>
+                            {statusLabel(o.status)}
                           </span>
                         </td>
                         <td>
                           {lineCount} {lineCount === 1 ? 'item' : 'items'}
                         </td>
-                        <td className={styles.numericCol}>{fmtRM(o.total)}</td>
+                        <td className={styles.numericCol}>{fmtRM((o.local_total_centi ?? 0) / 100)}</td>
                         <td className={styles.numericCol}>
                           <Link
-                            to={`/orders?orderId=${o.id}`}
+                            to={`/mfg-sales-orders/${o.doc_no}`}
                             className={styles.openLink}
                             onClick={(e) => e.stopPropagation()}
                           >
