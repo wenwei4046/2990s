@@ -168,6 +168,13 @@ type SoRow = {
      is READY (column shows "READY" pill). */
   ready_categories?: string[];
   is_fully_ready?: boolean;
+  /* Commander 2026-05-30 — B2C "Remark 2" semantics from the operator's
+     existing ERP. "READY" / "READY (PARTIAL)" / "BEDFRAME" / "MATTRESS/ACC" …
+     stock_remark is the rendered label; is_main_ready is true once every MAIN
+     (sofa/bedframe/mattress) line is in stock — accessories pending don't
+     block ship. Derived in the SO list GET via summariseReadiness. */
+  stock_remark?: string;
+  is_main_ready?: boolean;
   /* Branding auto-derive (Commander 2026-05-28): distinct normalized product
      categories present on the SO's non-cancelled lines — one of
      'SOFA' | 'MATTRESS' | 'BEDFRAME' | 'ACCESSORY' | 'OTHERS'. Computed
@@ -1301,61 +1308,53 @@ const buildColumns = (
     sortFn: (a, b) => a.local_total_centi - b.local_total_centi,
   },
   {
-    /* PR — Commander 2026-05-28: Stock Status chip column.
-       · empty            — no category fully ready
-       · ["MATTRESS"]…    — chip per fully-ready category
-       · isFullyReady     — green "READY" pill (status itself advances) */
-    key: 'stock_status', label: 'Stock Status', width: 200, sortable: true, groupable: false,
+    /* Commander 2026-05-30 — Stock Status column rebuilt around the operator's
+       "Remark 2" semantics: MAIN-ready ships, accessories don't gate.
+         · "READY"            — green pill, every line in stock
+         · "READY (PARTIAL)"  — amber pill, MAIN done + ACC outstanding
+         · "BEDFRAME" / "MATTRESS/ACC" / … — neutral chip, what's still missing
+         · ""                 — no items / empty */
+    key: 'stock_status', label: 'Stock Status', width: 220, sortable: true, groupable: false,
     accessor: (r) => {
-      if (r.is_fully_ready) {
-        return (
-          <span style={{
-            fontFamily: 'var(--font-sans)',
-            fontSize: 'var(--fs-11)',
-            fontWeight: 700,
-            background: 'var(--c-mint, #d4edda)',
-            color: 'var(--c-green, #1a7a3a)',
-            padding: '2px 10px',
-            borderRadius: 'var(--radius-pill, 999px)',
-            letterSpacing: 0.5,
-          }}>
-            READY
-          </span>
-        );
-      }
-      const cats = r.ready_categories ?? [];
-      if (cats.length === 0) {
-        return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-      }
+      const remark = (r.stock_remark ?? '').trim();
+      if (!remark) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const isFull    = remark === 'READY';
+      const isPartial = remark === 'READY (PARTIAL)';
+      const bg = isFull    ? 'var(--c-mint, #d4edda)'
+              : isPartial ? 'rgba(232, 107, 58, 0.15)'
+              : 'var(--c-cream)';
+      const fg = isFull    ? 'var(--c-green, #1a7a3a)'
+              : isPartial ? 'var(--c-burnt)'
+              : 'var(--c-ink)';
+      const weight = (isFull || isPartial) ? 700 : 600;
       return (
-        <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
-          {cats.map((c) => (
-            <span key={c} style={{
-              fontFamily: 'var(--font-sans)',
-              fontSize: 'var(--fs-11)',
-              fontWeight: 600,
-              background: 'var(--c-cream)',
-              color: 'var(--c-ink)',
-              padding: '2px 6px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--line)',
-              letterSpacing: 0.3,
-            }}>
-              {c}
-            </span>
-          ))}
+        <span style={{
+          fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--fs-11)',
+          fontWeight: weight,
+          background: bg,
+          color: fg,
+          padding: '2px 10px',
+          borderRadius: 'var(--radius-pill, 999px)',
+          letterSpacing: 0.5,
+          border: (isFull || isPartial) ? 'none' : '1px solid var(--line)',
+        }}>
+          {remark}
         </span>
       );
     },
-    searchValue: (r) => {
-      if (r.is_fully_ready) return 'ready';
-      return (r.ready_categories ?? []).join(' ').toLowerCase();
-    },
+    searchValue: (r) => (r.stock_remark ?? '').toLowerCase(),
     sortFn: (a, b) => {
-      // Sort: fully ready first, then by count of ready categories desc, then empty
-      const aScore = a.is_fully_ready ? 1000 : (a.ready_categories?.length ?? 0);
-      const bScore = b.is_fully_ready ? 1000 : (b.ready_categories?.length ?? 0);
-      return bScore - aScore;
+      /* Sort: full READY first, then READY (PARTIAL), then pending (any
+         categories shown), then blank. Within "pending" group, longer remark
+         (more categories missing) sorts after shorter. */
+      const score = (s: string) => {
+        if (s === 'READY')             return 3000;
+        if (s === 'READY (PARTIAL)')   return 2000;
+        if (!s)                        return 0;
+        return 1000 - s.length;        // shorter remark = closer to ready
+      };
+      return score(b.stock_remark ?? '') - score(a.stock_remark ?? '');
     },
   },
   /* HOUZS category subtotals — Mattress/Sofa burnt, Bedframe green, Acc neutral.

@@ -31,6 +31,7 @@ import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
+import { summariseReadiness } from '../lib/so-readiness';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -390,11 +391,31 @@ mfgSalesOrders.get('/', async (c) => {
       if (s.so_doc_no) downstreamDocNos.add(s.so_doc_no);
     }
 
+    /* B2C readiness summary per SO (Commander 2026-05-30) — derive the
+       "Stock Remark" the operator's existing ERP shows: READY when everything
+       in, READY (PARTIAL) when MAIN done + ACC outstanding, else list the
+       categories still pending. */
+    const readinessByDoc = new Map<string, ReturnType<typeof summariseReadiness>>();
+    {
+      const linesByDoc = new Map<string, Array<{ item_group: string | null; stock_status: string; cancelled: boolean }>>();
+      for (const it of (itemRows ?? []) as Array<{ doc_no: string; item_group: string; stock_status: string; cancelled: boolean }>) {
+        const arr = linesByDoc.get(it.doc_no) ?? [];
+        arr.push({ item_group: it.item_group, stock_status: it.stock_status, cancelled: it.cancelled });
+        linesByDoc.set(it.doc_no, arr);
+      }
+      for (const [docNo, ls] of linesByDoc) {
+        readinessByDoc.set(docNo, summariseReadiness(ls));
+      }
+    }
+
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
       const perGroup = agg.get(docNo);
       (r as Record<string, unknown>).item_categories = [...(cats.get(docNo) ?? [])].sort();
       (r as Record<string, unknown>).has_children = downstreamDocNos.has(docNo);
+      const readiness = readinessByDoc.get(docNo);
+      (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
+      (r as Record<string, unknown>).is_main_ready = readiness?.isMainReady ?? false;
       /* First-item branding source (PR #266). */
       const fCat = firstCat.get(docNo);
       (r as Record<string, unknown>).first_item_category = fCat ?? null;
@@ -2327,15 +2348,17 @@ mfgSalesOrders.patch('/:docNo/items/:itemId/stock-status', async (c) => {
     note: nextStatus === 'READY' ? 'Stock marked ready' : 'Stock marked pending',
   });
 
-  // Re-aggregate at the SO level. If every non-cancelled line is now READY
-  // AND the order is currently CONFIRMED or IN_PRODUCTION, auto-advance
-  // status to READY_TO_SHIP.
+  // Re-aggregate at the SO level. B2C semantic: an SO is ship-able once every
+  // MAIN product line (sofa/bedframe/mattress) is READY — accessories pending
+  // are OK ("READY (PARTIAL)"). So auto-advance fires on main-ready, not
+  // all-ready.
   const { data: allLines } = await sb
     .from('mfg_sales_order_items')
-    .select('stock_status, cancelled')
+    .select('item_group, stock_status, cancelled')
     .eq('doc_no', docNo);
-  const live = ((allLines ?? []) as Array<{ stock_status: string; cancelled: boolean }>).filter((l) => !l.cancelled);
-  const allReady = live.length > 0 && live.every((l) => l.stock_status === 'READY');
+  const liveRows = ((allLines ?? []) as Array<{ item_group: string; stock_status: string; cancelled: boolean }>).filter((l) => !l.cancelled);
+  const readiness = summariseReadiness(liveRows);
+  const allReady = readiness.isMainReady;
 
   let advancedTo: string | null = null;
   if (allReady) {

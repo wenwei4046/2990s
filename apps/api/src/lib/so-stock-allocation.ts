@@ -31,6 +31,7 @@
 // ----------------------------------------------------------------------------
 
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { summariseReadiness } from './so-readiness';
 
 export type AllocationResult = {
   ok: boolean;
@@ -274,17 +275,21 @@ export async function recomputeSoStockAllocation(
       const order = orderByDoc.get(docNo);
       if (!order) continue;
       const docLines = lines.filter((l) => l.doc_no === docNo);
-      // Re-evaluate from the target map; lines that weren't in needs (already
-      // shipped → deliverable 0) are treated as effectively READY (no stock
-      // need remaining).
-      const live = docLines.map((l) => targetStatusById.get(l.id) ?? l.stock_status);
-      const allReady = live.length > 0 && live.every((s) => s === 'READY');
-      const anyPending = live.some((s) => s === 'PENDING');
+      /* Re-evaluate readiness using the live target status (lines that weren't
+         in needs are already shipped → treat as READY). B2C semantics: an SO
+         is ship-able when every MAIN product line (sofa/bedframe/mattress) is
+         READY — accessories pending don't block ship ("READY (PARTIAL)").
+         Auto-regress only when a MAIN line goes back to PENDING. */
+      const readinessLines = docLines.map((l) => ({
+        item_group: l.item_group,
+        stock_status: targetStatusById.get(l.id) ?? l.stock_status,
+      }));
+      const r = summariseReadiness(readinessLines);
       const cur = order.status;
-      if (allReady && (cur === 'CONFIRMED' || cur === 'IN_PRODUCTION')) {
+      if (r.isMainReady && (cur === 'CONFIRMED' || cur === 'IN_PRODUCTION')) {
         const { error } = await sb.from('mfg_sales_orders').update({ status: 'READY_TO_SHIP' }).eq('doc_no', docNo);
         if (!error) ordersAdvanced += 1;
-      } else if (anyPending && cur === 'READY_TO_SHIP') {
+      } else if (!r.isMainReady && cur === 'READY_TO_SHIP') {
         const { error } = await sb.from('mfg_sales_orders').update({ status: 'CONFIRMED' }).eq('doc_no', docNo);
         if (!error) ordersRegressed += 1;
       }
