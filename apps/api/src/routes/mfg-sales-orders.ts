@@ -93,7 +93,7 @@ const HEADER =
      can show category-level margins without per-item rollups. */
   'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, ' +
   'total_cost_centi, total_revenue_centi, total_margin_centi, margin_pct_basis, line_count, ' +
-  'currency, status, remark2, remark3, remark4, note, processing_date, sales_exemption_expiry, ' +
+  'currency, status, remark2, remark3, remark4, note, processing_date, proceeded_at, sales_exemption_expiry, ' +
   /* PR #35 + #46 — extended PO + POS handover fields */
   'customer_id, customer_po, customer_po_id, customer_po_date, customer_po_image_b64, customer_so_no, hub_id, hub_name, ' +
   /* Task #121 — customer_country snapshot auto-derived from customer_state
@@ -376,6 +376,27 @@ mfgSalesOrders.get('/', async (c) => {
   }
 
   return c.json({ salesOrders: rows });
+});
+
+/* POS "My orders" board — the salesperson's OWN Sales Orders, lightweight
+   columns for the 3-status board (Order Placed / Proceed / Delivered).
+   Filtered by salesperson_id = caller (staff.id === auth.users.id, schema.ts
+   line 162; the POS handover writes the placing salesperson's id into
+   salesperson_id) so a POS tablet sees only its own orders WITHOUT relying on
+   an RLS SELECT policy. Excludes CANCELLED / ON_HOLD (mirrors the legacy
+   board's cancelled exclusion). Registered BEFORE '/:docNo' so 'mine' is never
+   captured as a doc-no param. */
+mfgSalesOrders.get('/mine', async (c) => {
+  const sb = c.get('supabase'); const user = c.get('user');
+  const { data, error } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no, debtor_name, phone, status, so_date, proceeded_at, customer_delivery_date, total_revenue_centi, paid_centi, deposit_centi, line_count, created_at')
+    .eq('salesperson_id', user.id)
+    .not('status', 'in', '("CANCELLED","ON_HOLD")')
+    .order('created_at', { ascending: false })
+    .limit(80);
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({ salesOrders: data ?? [] });
 });
 
 mfgSalesOrders.get('/:docNo', async (c) => {
@@ -1028,9 +1049,19 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   const { data: prev } = await sb.from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
   const fromStatus = (prev as { status: string } | null)?.status ?? null;
 
-  const { data, error } = await sb.from('mfg_sales_orders').update({
-    status: body.status, updated_at: new Date().toISOString(),
-  }).eq('doc_no', docNo).select('doc_no, status').single();
+  /* POS "Proceed" → stamp proceeded_at ONCE, on the first move into
+     IN_PRODUCTION. Read the existing value first so re-entering IN_PRODUCTION
+     (or toggling status back and forth) never overwrites the original Proceed
+     date the coordinator sees on the SO detail page. */
+  const patch: Record<string, unknown> = { status: body.status, updated_at: new Date().toISOString() };
+  if (body.status === 'IN_PRODUCTION') {
+    const { data: cur } = await sb.from('mfg_sales_orders').select('proceeded_at').eq('doc_no', docNo).maybeSingle();
+    if (!(cur as { proceeded_at?: string } | null)?.proceeded_at) {
+      patch.proceeded_at = new Date().toISOString();
+    }
+  }
+  const { data, error } = await sb.from('mfg_sales_orders').update(patch)
+    .eq('doc_no', docNo).select('doc_no, status, proceeded_at').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
   // Audit row — best-effort. We keep writing the legacy mfg_so_status_changes

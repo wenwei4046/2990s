@@ -18,6 +18,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
@@ -441,6 +442,11 @@ deliveryOrdersMfg.post('/', async (c) => {
      status is later advanced). */
   await deductInventoryForDo(sb, h.id, user.id);
 
+  /* Requirement #3 (Loo 2026-05-30) — if this DO now fully covers its SO,
+     auto-advance the SO to DELIVERED (best-effort, never blocks the DO). The
+     POS "My orders" board reflects the flip via Supabase realtime. */
+  await syncSoDeliveredFromDo(sb, [(body.soDocNo as string) ?? null], user.id);
+
   return c.json({ id: h.id, doNumber: h.do_number }, 201);
 });
 
@@ -683,6 +689,10 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   // 4. Roll up the header totals + deduct stock (both idempotent).
   await recomputeTotals(sb, dh.id);
   await deductInventoryForDo(sb, dh.id, user.id);
+
+  /* Requirement #3 — a multi-SO DO may complete several SOs at once; check each
+     source SO for full coverage and auto-advance to DELIVERED (best-effort). */
+  await syncSoDeliveredFromDo(sb, [...docNos], user.id);
 
   return c.json({ id: dh.id, doNumber: dh.do_number }, 201);
 });
@@ -935,6 +945,13 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
      re-advancing through later shipped states never double-deducts. */
   if (SHIPPED_STATES.includes(body.status)) {
     await deductInventoryForDo(sb, id, user.id);
+  }
+
+  /* Requirement #3 — if a DO is explicitly marked DELIVERED, re-check its SO
+     for full coverage and auto-advance the SO to DELIVERED (best-effort). */
+  if (body.status === 'DELIVERED') {
+    const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+    await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user.id);
   }
 
   /* Commander 2026-05-30 — cancelling a DO AUTO-REVERSES the stock OUT: the
