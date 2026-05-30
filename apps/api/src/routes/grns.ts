@@ -1073,6 +1073,11 @@ grns.delete('/:id/items/:itemId', async (c) => {
             performed_by: user.id,
             notes: 'GRN line deleted — reversing receipt',
           }]);
+          /* GRN line delete pulled stock back out → re-walk SO allocation. */
+          try {
+            const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+            await recomputeSoStockAllocation(sb);
+          } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn-line-delete failed:', e); }
         }
       } catch { /* best-effort */ }
     }
