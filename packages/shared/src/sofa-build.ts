@@ -696,10 +696,11 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   // Combo override — Commander 2026-05-28, HOOKKA `comboMatches` 1:1. When a
   // SUBSET of the group's cells covers a Sofa Combo Pricing row's slots (with
   // a price at the current height), the combo price replaces that SUBSET's
-  // à-la-carte total — but ONLY when the combo is strictly cheaper than the
-  // subset's à-la-carte sum (HOOKKA's `subsetSum − comboTotal > 0`). The EXTRA
-  // cells outside the matched subset keep their full master price. Recliner
-  // extras still add on top.
+  // à-la-carte total. Q2 (Chairman 2026-05-30): the combo applies whenever it
+  // matches and is priced (> 0) — the cheaper-only guard was removed, so a
+  // matched combo is the canonical price even if dearer than à-la-carte. The
+  // EXTRA cells outside the matched subset keep their full master price.
+  // Recliner extras still add on top.
   let comboPrice: number | null = null;
   let comboSubsetALaCarte: number | null = null;
   let comboExtrasALaCarte: number | null = null;
@@ -737,11 +738,13 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
         const cell = group[i]!;
         subsetSum += compRow(pricing, cell.moduleId)?.price ?? 0;
       }
-      // HOOKKA cheaper-only guard: apply the combo only when it actually saves
-      // money against the matched subset's own à-la-carte sum. Equal / dearer
-      // combos are ignored so a "combo" never inflates the line. Both operands
-      // are now whole-MYR.
-      if (subsetSum - comboPriceMyr > 0) {
+      // Q2 (Chairman 2026-05-30): the Master Account combo price is the
+      // canonical price for a matched set — apply it whenever it matches and is
+      // priced (> 0), even if the matched subset's à-la-carte sum is lower. The
+      // former cheaper-only guard ("ignore equal / dearer combos") was removed
+      // per the always-use-combo ruling. `comboSubsetALaCarte` is still recorded
+      // for display, but no longer gates whether the combo applies.
+      if (comboPriceMyr > 0) {
         basis = 'combo';
         comboPrice = comboPriceMyr;
         comboSubsetALaCarte = subsetSum;

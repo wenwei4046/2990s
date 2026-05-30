@@ -94,6 +94,10 @@ export type ProductRowLite = {
   price1_sen:         number | null;
   cost_price_sen:     number | null;
   seat_height_prices: MfgSeatHeightPrice[] | null;
+  /** SELLING price — the Master Account store (Phase-1 migration 0109,
+   *  backfilled = base_price_sen). The authoritative customer-facing price the
+   *  D4 drift gate validates a client submission against (non-sofa lines). */
+  sell_price_sen:     number | null;
 };
 
 const toMfgCategory = (group: string, productCategory: string): MfgPricingProduct['category'] => {
@@ -214,23 +218,39 @@ export function recomputeFromSnapshot(
       })
     : null;
 
-  /* Commander 2026-05-29 — selling is operator-authored, so accept it as-is.
-     No drift check: the legacy guard compared the client price against the
-     computed selling total, which is now 0; keeping it would reject every
-     non-zero manual price. `driftThresholdExceeded` stays exported/imported
-     for the legacy POS pricing.ts path; it is intentionally not applied here. */
-  void driftThresholdExceeded;
-  const drift = false;
+  /* D4 (Chairman 2026-05-30, Q1) — AUTHORITATIVE selling recompute + drift
+     reject. The Master Account store (mfg_products.sell_price_sen, Phase-1
+     migration 0109) is the customer-facing selling base; add any director-set
+     selling surcharges (breakdown.unitPriceSen — 0 today). On a catalog line we
+     charge that authoritative price and flag drift > 0.5% so the route returns
+     HTTP 400 (CLAUDE.md non-negotiable).
+
+       • SOFA is EXCLUDED — its selling lives in sofaCompartmentMeta + a combo
+         spread across module lines, recomputed on a separate Phase-4b path.
+         Until then sofa keeps the operator's manual price (no regression).
+       • A line with no sell_price_sen (custom / special order) has no
+         authoritative figure → trust the operator.
+       • A client price of 0 means "not provided" (e.g. the backend SO editor
+         couldn't resolve it client-side) → fill the authoritative price, no
+         drift (driftThresholdExceeded returns false for client 0 vs server>0). */
+  const sellBaseSen = Math.max(0, Math.round(Number(product?.sell_price_sen ?? 0)));
+  const authoritativeSellingSen = sellBaseSen + breakdown.unitPriceSen;
+  const hasAuthoritativeSelling = category !== 'SOFA' && sellBaseSen > 0;
+  const drift = hasAuthoritativeSelling
+    ? driftThresholdExceeded(manualUnitSelling, authoritativeSellingSen)
+    : false;
+  const unitToPersistSen = hasAuthoritativeSelling ? authoritativeSellingSen : manualUnitSelling;
 
   return {
     itemCode:          item.itemCode,
-    // Persist the operator's manual SELLING unit price unchanged.
-    unit_price_sen:    manualUnitSelling,
+    // Persist the AUTHORITATIVE selling price on a catalog line (D4); the
+    // operator's manual price on a sofa / custom / not-found line.
+    unit_price_sen:    unitToPersistSen,
     divan_price_sen:   breakdown.divanSurchargeSen,
     leg_price_sen:     breakdown.legSurchargeSen,
     special_order_sen: breakdown.specialsSurchargeSen,
     custom_specials:   customSpecials,
-    total_centi:       manualUnitSelling * safeQty,
+    total_centi:       unitToPersistSen * safeQty,
     breakdown,
     unit_cost_sen:     costBreakdown.unitPriceSen,
     line_cost_sen:     costBreakdown.lineTotalSen,
@@ -244,7 +264,7 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   if (!code) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices')
+    .select('code, category, base_price_sen, price1_sen, cost_price_sen, seat_height_prices, sell_price_sen')
     .eq('code', code)
     .maybeSingle();
   if (!data) return null;

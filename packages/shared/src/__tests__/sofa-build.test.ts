@@ -448,11 +448,12 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
     expect(g.finalPrice).toBe(3800 + 1200);
   });
 
-  it('cheaper-only guard: combo NOT applied when it is dearer than the subset', () => {
-    // Combo RM 9999 (999900 centi) > subset à-la-carte 4300 MYR → guard
-    // refuses; the shape falls back to its bundle / à-la-carte basis (here the
-    // 2+L bundle 4000). This is the case the unit bug used to BREAK: comparing
-    // 4300 MYR against a raw centi combo made the guard misfire ~100×.
+  it('always-combo: combo applied even when dearer than the subset (Chairman 2026-05-30, Q2)', () => {
+    // Q2 ruling — the Master Account combo price is the canonical price for a
+    // matched set: apply it whenever it matches (price > 0), even if the matched
+    // subset's à-la-carte sum is lower. The former "cheaper-only" guard was
+    // removed. Here combo RM 9999 (999900 centi) is dearer than the 4300 MYR
+    // subset, yet it still applies.
     const g = computeSofaPrice(
       [
         { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
@@ -469,8 +470,9 @@ describe('computeSofaPrice combo override (HOOKKA subset 1:1)', () => {
         ],
       }),
     ).groups[0]!;
-    expect(g.basis).not.toBe('combo');
-    expect(g.comboPrice).toBeNull();
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(9999);          // RM 9999, whole-MYR — applied despite being dearer
+    expect(g.comboSubsetALaCarte).toBe(4300); // the cheaper à-la-carte sum is recorded but not preferred
   });
 
   it('OR-alternative within a slot — RHF variant covers the slot too', () => {
