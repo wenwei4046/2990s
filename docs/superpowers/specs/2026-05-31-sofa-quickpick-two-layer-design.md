@@ -35,11 +35,10 @@
 - **New personal store** `apps/pos/src/state/quickpicks.ts` — Zustand + `localStorage` (mirrors `state/quotes.ts`). Entry: `{ id, staffId, baseModel, label, modules: string[], depth, savedAt }`. Ops: `add`, `remove`, `listForStaff(staffId, baseModel)`. Key `pos-quickpicks-v1`.
 - **Configurator Quick Pick UI** renders both layers: the global base (existing `useSofaCombos`) plus a separate **"Yours"** group for this staff's personal entries (filtered by `staffId` + current Model's `base_model`). A personal pick builds its cells and prices through `computeSofaPrice` (combo-aware) — identical to a global pick. Personal entries are deletable.
 
-### Part 3 — Per-kit default size
-- DB: add nullable `default_height` (text, e.g. `'24'`) to `sofa_combo_pricing` (same migration as Part 1's column).
-- API: `GET`/`POST`/`PATCH /sofa-combos` carry `default_height`.
-- Backend `SofaComboTab.tsx`: field to set it per row.
-- POS: picking a Quick Pick kit pre-selects `activeDepth` from its `default_height` (fallback to the Model's first depth). Salesperson can still change it.
+### Part 3 — Default seat depth = smallest (no setting)
+- **No per-kit default-size setting** (Chairman 2026-05-31: avoid an extra advanced setting — too much to manage for no real gain).
+- Instead, **default the seat depth to the smallest available option** for the Model; the salesperson picks any other depth themselves.
+- Code: in the Configurator, default `activeDepth` to the numerically smallest of `depthOptions` (today it's the first in the list). Tiny tweak — no DB / API / Backend change.
 
 ## Out of scope / prerequisites (NOT code this phase)
 - **Modularizing the 10 fixed Models** (create their module SKUs + `allowed_options`, like Booqit) — a **catalog/data task** by Master Admin in the Backend. Parallel; the code does not depend on it.
@@ -49,15 +48,15 @@
 ## Components & changes (delta)
 | File | Change |
 |---|---|
-| `packages/db/migrations/01XX_sofa_combo_selling_and_default.sql` | **NEW** — add `selling_prices_by_height` (backfill = `prices_by_height`) + `default_height` to `sofa_combo_pricing`. |
-| `apps/api/src/routes/sofa-combos.ts` | Carry `selling_prices_by_height` + `default_height` in GET/POST/PATCH; selling write reachable by `master_account`. |
+| `packages/db/migrations/01XX_sofa_combo_selling.sql` | **NEW** — add `selling_prices_by_height` (backfill = `prices_by_height`) to `sofa_combo_pricing`. |
+| `apps/api/src/routes/sofa-combos.ts` | Carry `selling_prices_by_height` in GET/POST/PATCH; selling write reachable by `master_account`. |
 | `apps/pos/src/lib/queries.ts` (`useSofaCombos`, combo edit) | Read `selling_prices_by_height` into `SofaComboRow.pricesByHeight`; add a Master-Admin combo selling-price edit mutation. |
 | `apps/api/src/routes/mfg-sales-orders.ts` (`loadActiveSofaCombos`) | Read `selling_prices_by_height` into `pricesByHeight` (server gate uses SELLING). |
 | POS Master-Admin combo selling editor | **NEW** POS surface for `master_account` to set combo selling prices. |
-| `apps/backend/src/components/SofaComboTab.tsx` | Relabel price as COST; add `default_height` field. |
+| `apps/backend/src/components/SofaComboTab.tsx` | Relabel price as COST. |
 | `apps/pos/src/state/quickpicks.ts` | **NEW** personal Quick Pick store (Zustand + localStorage). |
 | `apps/pos/src/pages/CustomBuilder.tsx` (`SaveComboModal` + Save button) | Role-branch: `master_account` → global; else → personal store. |
-| `apps/pos/src/pages/Configurator.tsx` (Quick Pick render) | Merge global + personal "Yours"; pick/delete personal; pre-select depth from `default_height`. |
+| `apps/pos/src/pages/Configurator.tsx` (Quick Pick render) | Merge global + personal "Yours"; pick/delete personal; default depth = smallest offered option. |
 | POS `useStaff()` | Read role string to branch the save. |
 
 ## Data flow
@@ -70,17 +69,17 @@
 - Personal store is per-device; clearing storage loses personal picks (acceptable at pilot). No server dependency → works offline.
 - A personal pick whose Model is deactivated / modules unpriced prices à-la-carte or 0 — same inert behavior, never a false charge.
 - `staffId` from `useStaff()`; absent → tagged `null`, still works locally.
-- `default_height` null → fallback to the Model's first offered depth.
+- Seat depth defaults to the smallest offered option; the salesperson changes it as needed.
 
 ## Testing
 - **Combo selling:** the engine override and the server drift gate price against the combo **SELLING** value (not cost). Update the existing combo tests (`sofa-build.test.ts`, `mfg-pricing-recompute.test.ts`) to source selling; add a drift case proving cost ≠ charged once selling diverges from cost.
 - **`quickpicks.ts`** unit tests (add / remove / `listForStaff` / persistence) — mirror `quotes.test.ts`.
 - **Role-branch save:** `master_account` save calls the global mutation; salesperson save adds to the store and does **not** call the global mutation.
-- **`default_height`:** API round-trip + POS pre-select.
+- **Default depth:** opening a Model / picking a kit starts at the smallest offered depth.
 
 ## Order of work
 1. **Combo cost/sell split** (migration + backfill + API + engine/gate data-source repoint + Master-Admin POS editor + Backend relabel). Foundational — it makes the combo price truly a selling price.
 2. **Two-layer Quick Pick** (personal store + role-branch save + Configurator "Yours").
-3. **Per-kit default size.**
+3. **Default seat depth = smallest** (tiny Configurator tweak).
 
 *(Modularizing the 10 fixed Models is a parallel catalog task, not part of this code plan.)*
