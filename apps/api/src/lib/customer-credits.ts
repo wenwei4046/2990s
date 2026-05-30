@@ -16,6 +16,7 @@
 
 export type CreditSourceType =
   | 'SI_CANCEL_REFUND'   // SI was cancelled with paid_centi > 0 → credit equal to paid_centi
+  | 'SO_CANCEL_REFUND'   // SO was cancelled with paid deposit > 0 → credit equal to paid deposit
   | 'OVERPAY'            // payment recorded > remaining due → excess turned into credit
   | 'APPLIED_TO_SI'      // negative entry — credit applied to a new invoice
   | 'MANUAL_ADJUST';     // operator-entered adjustment
@@ -136,6 +137,65 @@ export async function applyCustomerCreditToSi(
 }
 
 /**
+ * Reconcile the OVERPAY ledger entry for one Sales Invoice. After any change
+ * to paid_centi (payment add / delete), the customer's credit balance must
+ * match (paid_centi − total_centi) clamped at zero. Edge #A.
+ *
+ *   target_overpay = max(0, paid − total)
+ *   existing_overpay = Σ OVERPAY entries for this SI
+ *   delta = target − existing
+ *
+ * If delta > 0: write a positive OVERPAY entry for the new excess.
+ * If delta < 0: write a negative entry (correction — operator removed a
+ *               payment, the overpay is partially or fully reversed).
+ * Skips when delta is 0 (no change). Skips CANCELLED invoices — cancel-credit
+ * is handled by creditFromCancelledSi instead.
+ */
+export async function reconcileSiOverpay(
+  sb: any,
+  siId: string,
+): Promise<{ delta: number; reason?: string }> {
+  const { data: si } = await sb
+    .from('sales_invoices')
+    .select('invoice_number, total_centi, paid_centi, debtor_code, debtor_name, status')
+    .eq('id', siId)
+    .maybeSingle();
+  if (!si) return { delta: 0, reason: 'not_found' };
+  const s = si as { invoice_number: string; total_centi: number | null; paid_centi: number | null; debtor_code: string | null; debtor_name: string | null; status: string | null };
+  if (!s.debtor_code) return { delta: 0, reason: 'no_debtor' };
+  if ((s.status ?? '').toUpperCase() === 'CANCELLED') return { delta: 0, reason: 'cancelled' };
+
+  const paid  = Number(s.paid_centi ?? 0);
+  const total = Number(s.total_centi ?? 0);
+  const target = Math.max(0, paid - total);
+
+  // Σ existing OVERPAY entries already booked for this SI (signed).
+  const { data: existing } = await sb
+    .from('customer_credits')
+    .select('amount_centi')
+    .eq('source_type', 'OVERPAY')
+    .eq('source_doc_no', s.invoice_number);
+  const existingTotal = ((existing ?? []) as Array<{ amount_centi: number }>)
+    .reduce((acc, r) => acc + Number(r.amount_centi ?? 0), 0);
+
+  const delta = target - existingTotal;
+  if (delta === 0) return { delta: 0 };
+
+  const r = await addCustomerCredit(sb, {
+    debtorCode: s.debtor_code,
+    debtorName: s.debtor_name,
+    amountCenti: delta,
+    sourceType: 'OVERPAY',
+    sourceDocNo: s.invoice_number,
+    sourceDocId: siId,
+    notes: delta > 0
+      ? `Overpayment recorded on ${s.invoice_number} (received ${paid / 100}, due ${total / 100}).`
+      : `Overpayment corrected on ${s.invoice_number} after payment removal.`,
+  });
+  return r.ok ? { delta } : { delta: 0, reason: r.reason };
+}
+
+/**
  * Record a refund-as-credit when a paid Sales Invoice is cancelled. Looks at
  * paid_centi > 0 → writes a positive credit row for the customer (idempotent
  * on source_doc_no, so a second cancel-PATCH no-ops).
@@ -169,4 +229,49 @@ export async function creditFromCancelledSi(
     createdBy: args.createdBy ?? null,
   });
   return r.ok ? { credited: args.paidCenti } : { credited: 0, reason: r.reason };
+}
+
+/**
+ * Record a refund-as-credit when a Sales Order with deposit payments is
+ * cancelled. Reads mfg_sales_order_payments to sum what was paid, then writes
+ * one positive credit entry (SO_CANCEL_REFUND). Idempotent on
+ * (source_type, source_doc_no=docNo) so re-cancel no-ops. Edge #B.
+ */
+export async function creditFromCancelledSo(
+  sb: any,
+  args: { docNo: string; debtorCode: string | null; debtorName: string | null; createdBy?: string | null },
+): Promise<{ credited: number; reason?: string }> {
+  if (!args.debtorCode || !args.debtorCode.trim()) return { credited: 0, reason: 'no_debtor' };
+
+  // Idempotency — already credited?
+  const { data: existing } = await sb
+    .from('customer_credits')
+    .select('id')
+    .eq('source_type', 'SO_CANCEL_REFUND')
+    .eq('source_doc_no', args.docNo)
+    .limit(1);
+  if (existing && existing.length > 0) {
+    return { credited: 0, reason: 'already_credited' };
+  }
+
+  // Sum deposits on the SO. The payments table keys on so_doc_no
+  // (mfg_sales_order_payments — migration 0073).
+  const { data: pays } = await sb
+    .from('mfg_sales_order_payments')
+    .select('amount_centi')
+    .eq('so_doc_no', args.docNo);
+  const total = ((pays ?? []) as Array<{ amount_centi: number }>)
+    .reduce((s, p) => s + Number(p.amount_centi ?? 0), 0);
+  if (total <= 0) return { credited: 0, reason: 'no_paid' };
+
+  const r = await addCustomerCredit(sb, {
+    debtorCode: args.debtorCode,
+    debtorName: args.debtorName ?? null,
+    amountCenti: total,
+    sourceType: 'SO_CANCEL_REFUND',
+    sourceDocNo: args.docNo,
+    notes: `Cancelled Sales Order ${args.docNo} carried deposit ${total / 100} as customer credit.`,
+    createdBy: args.createdBy ?? null,
+  });
+  return r.ok ? { credited: total } : { credited: 0, reason: r.reason };
 }

@@ -30,6 +30,7 @@ import {
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
+import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -447,11 +448,27 @@ mfgSalesOrders.get('/:docNo', async (c) => {
       .eq('so_doc_no', docNo)
       .neq('status', 'CANCELLED'),
   ]);
+  /* Edge #D — surface the customer's current credit balance on the SO Detail
+     response so the page can show "Customer has RM X available" without a
+     second round-trip. 0 when no debtor / no credit history. */
+  const debtorCode = (h.data as { debtor_code?: string | null }).debtor_code ?? null;
+  const customerCreditCenti = debtorCode ? await getCustomerCreditBalance(sb, debtorCode) : 0;
   const salesOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
+    customer_credit_centi: customerCreditCenti,
   };
   return c.json({ salesOrder, items: i.data ?? [] });
+});
+
+/* Customer credit balance lookup — used by the New Sales Order form to flash
+   "Customer has RM X credit available" once the operator picks the customer.
+   Returns 0 (not 404) when there's no history yet. */
+mfgSalesOrders.get('/customer-credit/:debtorCode', async (c) => {
+  const sb = c.get('supabase');
+  const debtorCode = c.req.param('debtorCode');
+  const balance = await getCustomerCreditBalance(sb, debtorCode);
+  return c.json({ debtorCode, balanceCenti: balance });
 });
 
 mfgSalesOrders.post('/', async (c) => {
@@ -991,6 +1008,23 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     statusSnapshot: body.status,
     note: body.notes ?? undefined,
   });
+
+  /* Edge #B — SO cancel with deposit paid turns the deposit into a customer
+     credit. Idempotent on (source_type, source_doc_no). Best-effort. */
+  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
+    try {
+      const { data: so } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name').eq('doc_no', docNo).maybeSingle();
+      const s = so as { debtor_code: string | null; debtor_name: string | null } | null;
+      if (s?.debtor_code) {
+        await creditFromCancelledSo(sb, {
+          docNo,
+          debtorCode: s.debtor_code,
+          debtorName: s.debtor_name,
+          createdBy: user.id,
+        });
+      }
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[customer-credit] so-cancel credit failed:', e); }
+  }
 
   return c.json({ salesOrder: data });
 });

@@ -727,6 +727,16 @@ export const SalesOrderDetail = () => {
               SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
               {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
+              {(() => {
+                const credit = Number((header as { customer_credit_centi?: number }).customer_credit_centi ?? 0);
+                if (credit <= 0) return null;
+                return (
+                  <span style={{ color: 'var(--c-burnt)', fontWeight: 600 }}>
+                    {' · Customer credit balance: '}
+                    RM {(credit / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                );
+              })()}
             </p>
           </div>
         </div>

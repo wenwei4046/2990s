@@ -25,7 +25,7 @@ import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue } from '../lib/post-si-revenue';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
-import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance } from '../lib/customer-credits';
+import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
 
 export const salesInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 salesInvoices.use('*', supabaseAuth);
@@ -800,6 +800,11 @@ salesInvoices.post('/:id/payments', async (c) => {
   }).select(PAYMENT_COLS).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputePaid(sb, id);
+  /* Edge #A — if cumulative paid now exceeds the invoice total, the excess
+     becomes a customer credit. Idempotent + handles operator removing a
+     payment later (writes a negative correction). */
+  try { await reconcileSiOverpay(sb, id); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[customer-credit] overpay reconcile failed (post):', e); }
   return c.json({ payment: data }, 201);
 });
 
@@ -811,6 +816,10 @@ salesInvoices.delete('/:id/payments/:paymentId', async (c) => {
   const { error } = await sb.from('sales_invoice_payments').delete().eq('id', paymentId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputePaid(sb, id);
+  /* Edge #A — payment removal may shrink paid_centi back below total →
+     reconcile balances the previously-booked OVERPAY credit. */
+  try { await reconcileSiOverpay(sb, id); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[customer-credit] overpay reconcile failed (delete):', e); }
   return c.json({ ok: true });
 });
 
