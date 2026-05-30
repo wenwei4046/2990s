@@ -23,7 +23,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
+import { VariantDescription } from '../components/VariantDescription';
 import {
   useOutstandingSoItems,
   useCreatePosFromSoItems,
@@ -301,24 +301,15 @@ export const PurchaseOrderFromSo = () => {
     },
     {
       key: 'description', label: 'Description', width: 240, sortable: true,
-      accessor: (r) => {
-        const summary = buildVariantSummary(
-          r.itemGroup,
-          r.variants as Record<string, unknown> | null | undefined,
-        );
-        /* Commander 2026-05-29 — "这里为什么有 —": don't show a lone "—" when the
-           SO line has no description. Use the variant summary as the main line
-           instead; only stack both when a real description exists. */
-        const main = r.description || summary || '—';
-        return (
-          <div>
-            <div>{main}</div>
-            {r.description && summary && (
-              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-            )}
-          </div>
-        );
-      },
+      accessor: (r) => (
+        <VariantDescription
+          itemCode={r.itemCode}
+          itemGroup={r.itemGroup}
+          variants={r.variants}
+          description={r.description}
+          mutedClassName={styles.muted}
+        />
+      ),
       searchValue: (r) => r.description ?? '',
     },
     {

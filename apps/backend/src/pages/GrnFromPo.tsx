@@ -21,7 +21,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { VariantDescription } from '../components/VariantDescription';
 import {
   useOutstandingPoItems,
   type OutstandingPoItem,
@@ -242,33 +242,16 @@ export const GrnFromPo = () => {
       searchValue: (r) => r.itemCode ?? '',
     },
     {
-      /* Render is deterministic across rows so the column reads cleanly:
-         - Variant summary (computed LIVE from r.variants) is the single
-           source of truth for the detail line. Stored description is unused
-           when it's just the item_code repeat OR a stray variant string
-           (some legacy PO lines stored variants in description). */
       key: 'description', label: 'Description', width: 240, sortable: true,
-      accessor: (r) => {
-        const summary = buildVariantSummary(
-          r.itemGroup,
-          r.variants as Record<string, unknown> | null | undefined,
-        );
-        const desc = (r.description ?? '').trim();
-        /* Only show the stored description when it actually adds info:
-             - non-empty
-             - not equal to the item code (the Item Code column already has it)
-             - doesn't look like a variant string (no slash) — avoids the
-               legacy "BF-01 / DIVAN ..." rows from showing twice. */
-        const showDesc = desc && desc !== r.itemCode && !desc.includes(' / ');
-        return (
-          <div>
-            {showDesc && <div>{desc}</div>}
-            <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>
-              {summary || 'Standard'}
-            </div>
-          </div>
-        );
-      },
+      accessor: (r) => (
+        <VariantDescription
+          itemCode={r.itemCode}
+          itemGroup={r.itemGroup}
+          variants={r.variants}
+          description={r.description}
+          mutedClassName={styles.muted}
+        />
+      ),
       searchValue: (r) => r.description ?? '',
     },
     {

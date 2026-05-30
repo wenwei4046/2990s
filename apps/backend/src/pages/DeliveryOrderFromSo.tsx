@@ -26,7 +26,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { VariantDescription } from '../components/VariantDescription';
 import { useDeliverableSoLines, useConvertSoLinesToDo, type DeliverableSoLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
@@ -183,21 +183,15 @@ export const DeliveryOrderFromSo = () => {
     },
     {
       key: 'description', label: 'Description', width: 260, sortable: true,
-      accessor: (r) => {
-        const summary = buildVariantSummary(
-          r.itemGroup ?? '',
-          r.variants as Record<string, unknown> | null | undefined,
-        );
-        const main = r.description || summary || '—';
-        return (
-          <div>
-            <div>{main}</div>
-            {r.description && summary && (
-              <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div>
-            )}
-          </div>
-        );
-      },
+      accessor: (r) => (
+        <VariantDescription
+          itemCode={r.itemCode}
+          itemGroup={r.itemGroup}
+          variants={r.variants}
+          description={r.description}
+          mutedClassName={styles.muted}
+        />
+      ),
       searchValue: (r) => `${r.description ?? ''} ${r.description2 ?? ''}`.trim(),
     },
     {
