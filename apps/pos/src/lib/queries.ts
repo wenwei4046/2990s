@@ -132,7 +132,7 @@ export const useProduct = (productId: string | undefined) =>
       const { data: mfgData, error: mfgErr } = await supabase
         .from('mfg_products')
         .select(
-          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, base_model',
+          'id, code, name, category, description, branding, size_label, base_price_sen, sell_price_sen, included_addons, base_model',
         )
         .eq('id', productId)
         .maybeSingle();
@@ -149,6 +149,7 @@ export const useProduct = (productId: string | undefined) =>
         size_label: string | null;
         base_price_sen: number | null;
         sell_price_sen: number | null;
+        included_addons: { addonId: string; qty: number }[] | null;
         base_model: string | null;
       };
 
@@ -189,7 +190,7 @@ export const useProduct = (productId: string | undefined) =>
            useSofaCombos() and filter Quick Pick combos to this Model. */
         base_model: mfg.base_model,
         series_id: null,
-        included_addons: [] as { addonId: string; qty: number }[],
+        included_addons: mfg.included_addons ?? [],
         updated_at: new Date().toISOString(),
       };
     },

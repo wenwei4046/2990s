@@ -118,7 +118,8 @@ Every step staging-verified with a full before/after price diff before touching 
 - **🔴 RED-LINE GATE**: add Supabase **RLS policy** for `master_account` → **STOP, get Chairman's explicit yes** before applying.
 - **Verify**: 3-role screenshot proof — master_account (POS only, all SKUs, edits selling, toggles on/off, no cost text); sales (read-only); admin/super_admin (cost side unaffected).
 
-### Phase 3 · Declare cost + delete `/sku-master` + photo/gift relocation
+### Phase 3 · Declare cost + delete `/sku-master` + photo/gift relocation — 🟡 PARTIAL
+> `/sku-master` page deletion ✅ (Phase 0). **D7 gifts ✅ DONE (2026-05-30, committed-not-deployed):** `mfg_products.included_addons jsonb` (migration `0113`, applied to live DB), API GET/PATCH, POS read wired into the existing Configurator render, + a Master Account 🎁 gift drawer (pick add-on + qty). Display-only (no inventory/cost). Live-verified: set "memory-foam-pillow × 2" on a mattress → Configurator renders "PILLOWS · INCLUDED FREE — 2 complimentary". **Still pending:** photo consolidation to R2 + the cost-column documentation.
 - **Goal**: with POS no longer reading cost columns (Phase 1 done), make Backend Product Maintenance cost-only; remove the orphan page.
 - **Scope**: confirm/doc `mfg_products` price = cost; delete `/sku-master` page+route+sidebar+orphan consumers (`SkuDrawer`, `useProducts`, etc.) after D8 verification; consolidate photo upload into Product Maintenance (resolve the Model-photo Supabase-Storage vs R2 split — pick R2 per CLAUDE.md); move `included_addons` editor to selling side.
 - **Verify**: typecheck/build pass, no orphan imports; cost edits work; **POS prices unaffected** (regression price-diff); single photo upload entry + single storage backend.

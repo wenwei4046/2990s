@@ -81,6 +81,7 @@ export type MfgProductRow = {
   unit_m3_milli: number;
   status: 'ACTIVE' | 'INACTIVE';   // COST/PO side — NOT showroom visibility (use pos_active)
   pos_active: boolean;             // D5 — selling-only POS catalog visibility (Master Account writes)
+  included_addons: { addonId: string; qty: number }[]; // D7 — permanent free gifts (display-only)
   sku_code: string | null;
   /** PR — supplier-mapping-by-model: optional FK to product_models.id so the
       supplier mapping picker can group SKUs by Model client-side. NULL for
@@ -299,6 +300,25 @@ export function useUpdateMfgProductPosActive() {
       return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
         method: 'PATCH',
         body: JSON.stringify({ posActive }),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-products'] });
+    },
+  });
+}
+
+/** D7 (Phase 3) — Master Account per-SKU permanent free gifts. Writes the
+ *  selling-only `included_addons` ({addonId, qty}[]). The POS Configurator
+ *  renders "× N INCLUDED". DISPLAY-ONLY — no inventory/cost deduction. */
+export function useUpdateMfgProductGifts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { id: string; includedAddons: { addonId: string; qty: number }[] }) => {
+      const { id, includedAddons } = args;
+      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ includedAddons }),
       });
     },
     onSuccess: () => {

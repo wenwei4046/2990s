@@ -40,7 +40,7 @@ mfgProducts.get('/', async (c) => {
     .from('mfg_products')
     .select(
       'id, code, name, category, description, base_model, size_code, size_label, base_price_sen, price1_sen, sell_price_sen, ' +
-        'unit_m3_milli, status, pos_active, sku_code, model_id, ' +
+        'unit_m3_milli, status, pos_active, included_addons, sku_code, model_id, ' +
         'branding, sub_assemblies, pieces, seat_height_prices, default_variants, updated_at, ' +
         // Commander 2026-05-29 — surface the Model's allowed_options so the SO
         // line editor can hide variant choices the SKU doesn't allow (instead
@@ -285,6 +285,9 @@ mfgProducts.patch('/:id', async (c) => {
         Master Account (POS) writes this; SEPARATE from `status` (cost/PO).
         The Backend cost editor never sends it. */
     posActive?: boolean;
+    /** D7 (Phase 3) — permanent free gifts ({addonId, qty}[]). Master Account
+        sets; Configurator renders "× N INCLUDED". Display-only, no inventory. */
+    includedAddons?: Array<{ addonId: string; qty: number }>;
     /* PR #89 (Commander 2026-05-26) — inline edit of SKU code + name from
        SKU Master. Unique-constraint on code → 23505 surfaces as 409. */
     code?: string;
@@ -347,6 +350,10 @@ mfgProducts.patch('/:id', async (c) => {
   // D5 — selling-only POS catalog visibility. Independent of status (cost/PO).
   if (typeof body.posActive === 'boolean') {
     updates.pos_active = body.posActive;
+  }
+  // D7 — permanent free gifts (display-only). Master Account sets the array.
+  if (Array.isArray(body.includedAddons)) {
+    updates.included_addons = body.includedAddons;
   }
   /* PR #89 — code + name inline edit from SKU Master. code is unique;
      duplicate triggers 23505 below. Both trimmed; empty rejected to keep

@@ -1710,6 +1710,7 @@ export const mfgProducts = pgTable('mfg_products', {
   price1Sen:              integer('price1_sen'),                  // PRICE 1 (cheaper tier) — COST
   sellPriceSen:           integer('sell_price_sen'),              // SELLING price (POS customer-facing). 0109; backfilled = base_price_sen. Master Account edits this (Phase 2).
   posActive:              boolean('pos_active').notNull().default(true), // 0111 (D5): selling-only POS catalog visibility. Master Account writes; POS catalog read filters. SEPARATE from `status` (cost/PO).
+  includedAddons:         jsonb('included_addons').notNull().default([]), // 0113 (D7): permanent free gifts ({addonId, qty}[]). Master Account sets; Configurator renders "× N INCLUDED". DISPLAY-ONLY — no inventory/cost deduction.
   productionTimeMinutes:  integer('production_time_minutes').notNull().default(0),
   subAssemblies:          jsonb('sub_assemblies'),                // string[] e.g. ['Divan','Headboard']
   skuCode:                text('sku_code'),
