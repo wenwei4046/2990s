@@ -345,7 +345,23 @@ export const Configurator = () => {
   // bundle / à la carte. baseModel left empty for now — pickComboPrice
   // treats empty as wildcard until POS product ↔ mfg base_model bridges.
   const sofaPricing = useMemo<SofaProductPricing>(() => ({
-    compartments: compartments.data ?? [],
+    /* mfg products have no product_compartments rows (UUID FK), so the legacy
+       hook returns []. Without this fallback computeSofaPrice would price every
+       module at 0 → a custom (non-combo) build totals RM 0. Derive the
+       per-compartment SELLING price from the Model's per-module SKU prices
+       (SOFA-SELLING-PLAN, Chairman 2026-05-31: each module = its own mfg SKU
+       sell_price_sen; a custom build SUMS them, a matched Combo overrides) —
+       useSofaCustomizerData.compartments[].priceSen carries that. compartmentId
+       = normalizedCode so it matches a laid-out cell.moduleId. The server
+       selling recompute builds the SAME map from the same SKUs, so its
+       drift-reject can't diverge. */
+    compartments: (compartments.data && compartments.data.length > 0)
+      ? compartments.data
+      : (sofaCustomizer.data?.compartments ?? []).map((cc) => ({
+          compartmentId: cc.normalizedCode,
+          active: true,
+          price: Math.round(cc.priceSen / 100),
+        })),
     bundles: bundles.data ?? [],
     reclinerUpgradePrice: product.data?.recliner_upgrade_price ?? 0,
     seatUpgradeLabel: product.data?.seat_upgrade_label ?? null,
@@ -359,7 +375,7 @@ export const Configurator = () => {
     comboHeight: activeDepth,
     baseModel: '',
   }), [
-    compartments.data, bundles.data,
+    compartments.data, bundles.data, sofaCustomizer.data?.compartments,
     product.data?.recliner_upgrade_price,
     product.data?.seat_upgrade_label,
     product.data?.seat_upgrade_footrest,

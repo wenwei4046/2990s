@@ -16,6 +16,7 @@ import {
   recomputeFromSnapshot,
   loadProductByCode,
   loadFabricByCode,
+  loadModelSofaModulePrices,
   type MfgItemForRecompute,
   type RecomputedLine,
 } from '../lib/mfg-pricing-recompute';
@@ -781,6 +782,7 @@ mfgSalesOrders.post('/', async (c) => {
       return c.json({ ...err, lineIdx: i, itemCode: code }, 400);
     }
   }
+  const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
@@ -788,6 +790,12 @@ mfgSalesOrders.post('/', async (c) => {
       loadProductByCode(sb, itemCode),
       loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
     ]);
+    // SOFA-SELLING-PLAN — a sofa's per-module SELLING prices are its Model's
+    // module-SKU sell_price_sen; load them so the drift gate reprices the build
+    // from the same source the POS used. Non-sofa lines skip it.
+    const sofaModulePrices = product?.category === 'SOFA'
+      ? await loadModelSofaModulePrices(sb, product.base_model)
+      : null;
     const draft: MfgItemForRecompute = {
       itemCode,
       itemGroup:      String(it.itemGroup ?? 'others'),
@@ -795,7 +803,7 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -1611,11 +1619,16 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
+    loadActiveSofaCombos(sb),
   ]);
+  // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
+  const sofaModulePricesLite = productLite?.category === 'SOFA'
+    ? await loadModelSofaModulePrices(sb, productLite.base_model)
+    : null;
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -1627,6 +1640,8 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     productLite,
     fabricLite,
     cachedConfig,
+    sofaCombosLite,
+    sofaModulePricesLite,
   );
   if (recomputed.drift) {
     return c.json({
@@ -1772,11 +1787,16 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
+      loadActiveSofaCombos(sb),
     ]);
+    // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
+    const sofaModulePricesPatch = prodLite?.category === 'SOFA'
+      ? await loadModelSofaModulePrices(sb, prodLite.base_model)
+      : null;
     recomputedPatch = recomputeFromSnapshot(
       {
         itemCode:       itemCodeAfter,
@@ -1788,6 +1808,8 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       prodLite,
       fabLite,
       cfg,
+      sofaCombosPatch,
+      sofaModulePricesPatch,
     );
     if (recomputedPatch.drift) {
       return c.json({

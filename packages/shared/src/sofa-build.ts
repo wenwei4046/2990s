@@ -6,7 +6,8 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
-import { pickComboMatch } from './sofa-combo-pricing';
+import { pickComboMatch, type SofaComboRow } from './sofa-combo-pricing';
+export type { SofaComboRow } from './sofa-combo-pricing';
 
 /* ─── Public types ─────────────────────────────────────────────────── */
 
@@ -223,6 +224,91 @@ export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup =
   if (/^2/.test(norm)) return '2-seater';
   if (/^1/.test(norm)) return '1-seater';
   return 'Other';
+};
+
+/* ─── SELLING helpers (per-Model module-SKU prices — SOFA-SELLING-PLAN.md,
+ * Chairman 2026-05-31) ───────────────────────────────────────────────────
+ * A configured mfg sofa is priced from the Model's per-module SELLING prices.
+ * Each module of each Model is its own mfg SKU (e.g. Booqit's 2A(LHF) → SKU
+ * `BOOQIT-2A(LHF)`), and that SKU's `sell_price_sen` IS the per-Model module
+ * price (Master Admin sets it). Custom builds sum each module's price; a
+ * matched Combo overrides (always — Q2). The POS (so a custom build is no
+ * longer RM0) and the server selling recompute (so its drift-reject matches
+ * the POS by construction) both build the SAME per-Model module→price map
+ * through these pure helpers — same source, same math, zero divergence. */
+
+/** Per-Model module SELLING price map: normalized module code (dash form,
+ *  matches a laid-out `cell.moduleId`) → price in sen. Built from the Model's
+ *  sofa module-SKU `sell_price_sen`. */
+export type SofaModulePriceSen = Record<string, number>;
+
+/** Strip the `<BASE_MODEL>-` prefix off a sofa SKU code → the raw module code
+ *  (parens form, e.g. `BOOQIT-2A(LHF)` → `2A(LHF)`). The SKU prefix is UPPER
+ *  while `base_model` is Title-case, so the match is case-insensitive. Falls
+ *  back to the substring after the first `-` when base_model is absent /
+ *  mismatched (base models are single tokens with no internal dash). */
+export const moduleCodeFromSku = (skuCode: string, baseModel: string | null | undefined): string => {
+  const code = (skuCode ?? '').trim();
+  const prefix = (baseModel ?? '').trim();
+  if (prefix && code.toUpperCase().startsWith(`${prefix.toUpperCase()}-`)) {
+    return code.slice(prefix.length + 1);
+  }
+  const dash = code.indexOf('-');
+  return dash >= 0 ? code.slice(dash + 1) : code;
+};
+
+/** Build the per-Model module→price map (sen) from the Model's sofa SKU rows.
+ *  Keyed by normalized module code. SKUs with a null `sell_price` are skipped
+ *  (unpriced → no entry → priced 0 at lookup, never a phantom price). Whole-
+ *  unit preset SKUs (1S / 2S) normalize to codes no laid-out cell carries, so
+ *  they're harmless if present (their Quick-Pick pricing is a separate phase). */
+export const sofaModulePricesFromSkus = (
+  rows: Array<{ code: string; sellPriceSen: number | null }>,
+  baseModel: string | null | undefined,
+): SofaModulePriceSen => {
+  const map: SofaModulePriceSen = {};
+  for (const r of rows) {
+    if (r.sellPriceSen == null) continue;
+    map[normalizeCompartmentCode(moduleCodeFromSku(r.code, baseModel))] = r.sellPriceSen;
+  }
+  return map;
+};
+
+/** Build `SofaProductPricing.compartments` from a per-Model module→price map.
+ *  `compartmentId` is normalised (matches a laid-out `cell.moduleId`); price is
+ *  whole-MYR (sen ÷ 100). */
+export const sofaCompartmentsFromModulePrices = (
+  prices: SofaModulePriceSen | null | undefined,
+): SofaProductPricingRow[] => {
+  if (!prices) return [];
+  return Object.entries(prices).map(([code, sen]) => ({
+    compartmentId: normalizeCompartmentCode(code),
+    active: true,
+    price: Math.round(sen / 100),
+  }));
+};
+
+/** Authoritative SELLING total (in sen) for a configured sofa. Reuses the same
+ *  `computeSofaPrice` the POS uses, fed compartments from the Model's module→
+ *  price map + combos (sofa_combo_pricing). mfg sofas carry no bundles and
+ *  `reclinerUpgradePrice` 0 at pilot, so those are fixed here. Returns whole-
+ *  build sen (×100) for the server drift gate. */
+export const computeSofaSellingSen = (
+  cells: Cell[],
+  depth: Depth,
+  modulePrices: SofaModulePriceSen | null | undefined,
+  combos: SofaComboRow[],
+): number => {
+  const pricing: SofaProductPricing = {
+    compartments: sofaCompartmentsFromModulePrices(modulePrices),
+    bundles: [],
+    reclinerUpgradePrice: 0,
+    combos,
+    fabricTier: 'PRICE_2',
+    comboHeight: String(depth),
+    baseModel: '',
+  };
+  return Math.round(computeSofaPrice(cells, depth, pricing).total * 100);
 };
 
 /* ─── Recliner eligibility ─────────────────────────────────────────── */
@@ -696,10 +782,11 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   // Combo override — Commander 2026-05-28, HOOKKA `comboMatches` 1:1. When a
   // SUBSET of the group's cells covers a Sofa Combo Pricing row's slots (with
   // a price at the current height), the combo price replaces that SUBSET's
-  // à-la-carte total — but ONLY when the combo is strictly cheaper than the
-  // subset's à-la-carte sum (HOOKKA's `subsetSum − comboTotal > 0`). The EXTRA
-  // cells outside the matched subset keep their full master price. Recliner
-  // extras still add on top.
+  // à-la-carte total. Q2 (Chairman 2026-05-30): the combo applies whenever it
+  // matches and is priced (> 0) — the cheaper-only guard was removed, so a
+  // matched combo is the canonical price even if dearer than à-la-carte. The
+  // EXTRA cells outside the matched subset keep their full master price.
+  // Recliner extras still add on top.
   let comboPrice: number | null = null;
   let comboSubsetALaCarte: number | null = null;
   let comboExtrasALaCarte: number | null = null;
@@ -737,11 +824,13 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
         const cell = group[i]!;
         subsetSum += compRow(pricing, cell.moduleId)?.price ?? 0;
       }
-      // HOOKKA cheaper-only guard: apply the combo only when it actually saves
-      // money against the matched subset's own à-la-carte sum. Equal / dearer
-      // combos are ignored so a "combo" never inflates the line. Both operands
-      // are now whole-MYR.
-      if (subsetSum - comboPriceMyr > 0) {
+      // Q2 (Chairman 2026-05-30): the Master Account combo price is the
+      // canonical price for a matched set — apply it whenever it matches and is
+      // priced (> 0), even if the matched subset's à-la-carte sum is lower. The
+      // former cheaper-only guard ("ignore equal / dearer combos") was removed
+      // per the always-use-combo ruling. `comboSubsetALaCarte` is still recorded
+      // for display, but no longer gates whether the combo applies.
+      if (comboPriceMyr > 0) {
         basis = 'combo';
         comboPrice = comboPriceMyr;
         comboSubsetALaCarte = subsetSum;

@@ -60,6 +60,7 @@ import {
   ChevronDown,
   Layers,
   ImageOff,
+  Gift,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -71,6 +72,7 @@ import {
   useMfgProducts,
   useUpdateMfgProductPrices,
   useUpdateMfgProductPosActive,
+  useUpdateMfgProductGifts,
   useCreateMfgProduct,
   useDeleteMfgProduct,
   useMaintenanceConfig,
@@ -88,7 +90,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useAddons, type AddonRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -1117,6 +1119,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   // Drawer + modal state
   const [newSkuOpen, setNewSkuOpen] = useState(false);
   const [suppliersRow, setSuppliersRow] = useState<MfgProductRow | null>(null);
+  const [giftsRow, setGiftsRow] = useState<MfgProductRow | null>(null);
   const [importing, setImporting] = useState(false);
   // PR #73 — "+ New SKU" now opens the Model creation dialog (with the
   // active category filter pre-filled). The legacy single-SKU drawer
@@ -1423,6 +1426,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                    admin-only (canEdit). sales_director / view roles see
                    selling prices but never the supplier purchase-cost data. */
                 onOpenSuppliers={canEdit ? setSuppliersRow : undefined}
+                onOpenGifts={canEdit ? setGiftsRow : undefined}
                 showSelectCol={canEdit}
                 selected={selectedIds.has(row.id)}
                 onToggleSelected={() => toggleRow(row.id)}
@@ -1472,6 +1476,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
         />
       )}
       {suppliersRow && <ProductSuppliersDrawer row={suppliersRow} onClose={() => setSuppliersRow(null)} />}
+      {giftsRow && <ProductGiftsDrawer row={giftsRow} onClose={() => setGiftsRow(null)} />}
       {importing && (
         <ScopeDeferredNotice
           title="Import SKUs from POS — open Backend"
@@ -1483,7 +1488,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
 };
 
 const ProductRow = ({
-  row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers,
+  row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers, onOpenGifts,
   showSelectCol = true, selected, onToggleSelected,
   canToggleVisible = false,
 }: {
@@ -1494,6 +1499,8 @@ const ProductRow = ({
   sofaSizes: string[];
   tier: Tier;
   onOpenSuppliers?: (row: MfgProductRow) => void;
+  /** D7 (Phase 3) — open the free-gifts editor for this SKU (full mode only). */
+  onOpenGifts?: (row: MfgProductRow) => void;
   /** Render the leading select checkbox column (admin/full mode only).
       add-only + view tiers don't have a bulk-delete affordance so the
       column is suppressed entirely. */
@@ -1607,6 +1614,26 @@ const ProductRow = ({
             }}
           >
             <Truck size={13} strokeWidth={1.75} />
+          </button>
+          )}
+          {onOpenGifts && (
+          <button
+            type="button"
+            aria-label={`Edit free gifts for ${row.code}`}
+            title="Free gifts included with this SKU"
+            onClick={() => onOpenGifts?.(row)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              cursor: 'pointer',
+              color: (row.included_addons?.length ?? 0) > 0 ? 'var(--c-orange)' : 'var(--fg-muted)',
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            <Gift size={13} strokeWidth={1.75} />
           </button>
           )}
           <EditableTextCell
@@ -4382,6 +4409,129 @@ const fmtDateTime = (iso: string): string => {
 
 const fmtRmCenti = (centi: number): string =>
   `RM ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/* ────────────────────────────────────────────────────────────────────────
+   D7 (Phase 3) — Free-gifts editor. Master Account sets the permanent free
+   add-ons included with a SKU (e.g. a mattress ships with 2 pillows). Writes
+   mfg_products.included_addons ({addonId, qty}[]); the POS Configurator renders
+   "× N INCLUDED". DISPLAY-ONLY — no inventory or cost deduction (D7).
+   ──────────────────────────────────────────────────────────────────────── */
+const ProductGiftsDrawer = ({
+  row, onClose,
+}: { row: MfgProductRow; onClose: () => void }) => {
+  const addons = useAddons();
+  const update = useUpdateMfgProductGifts();
+  const [gifts, setGifts] = useState<{ addonId: string; qty: number }[]>(row.included_addons ?? []);
+  const [pickAddon, setPickAddon] = useState('');
+  const [pickQty, setPickQty] = useState(1);
+
+  const addonsById = useMemo(() => {
+    const m = new Map<string, AddonRow>();
+    for (const a of addons.data ?? []) m.set(a.id, a);
+    return m;
+  }, [addons.data]);
+
+  const persist = (next: { addonId: string; qty: number }[]) => {
+    setGifts(next);
+    update.mutate({ id: row.id, includedAddons: next });
+  };
+  const addGift = () => {
+    if (!pickAddon) return;
+    const existing = gifts.find((g) => g.addonId === pickAddon);
+    const next = existing
+      ? gifts.map((g) => (g.addonId === pickAddon ? { ...g, qty: g.qty + pickQty } : g))
+      : [...gifts, { addonId: pickAddon, qty: pickQty }];
+    persist(next);
+    setPickAddon('');
+    setPickQty(1);
+  };
+  const removeGift = (addonId: string) => persist(gifts.filter((g) => g.addonId !== addonId));
+
+  const inputStyle = {
+    padding: '8px 10px',
+    fontSize: 'var(--fs-14)',
+    border: '1px solid var(--line-strong)',
+    borderRadius: 'var(--radius-md)',
+    background: 'var(--c-cream)',
+  } as const;
+
+  return (
+    <div className={styles.drawerBackdrop} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: 'var(--c-cream)',
+          border: '1px solid var(--line-strong)',
+          borderRadius: 'var(--radius-xl)',
+          boxShadow: 'var(--shadow-3)',
+          width: 'min(520px, 95vw)',
+          maxHeight: '85vh',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <header className={styles.drawerHeader}>
+          <div>
+            <h2 className={styles.drawerTitle}>
+              <Gift {...ICON_PROPS} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+              Free gifts · <span className={styles.codeChip}>{row.code}</span>
+            </h2>
+            <p style={{ marginTop: 4, fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+              Included free with this SKU — shown as “× N INCLUDED” in the configurator.
+              Display-only; no stock is deducted.
+            </p>
+          </div>
+          <button type="button" className={styles.iconBtn} onClick={onClose}>
+            <X {...ICON_PROPS} />
+          </button>
+        </header>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-4)' }}>
+          {gifts.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 'var(--space-5)', color: 'var(--fg-muted)' }}>
+              <Gift size={32} strokeWidth={1.5} />
+              <div style={{ marginTop: 8 }}>No free gifts on this SKU yet.</div>
+            </div>
+          )}
+          {gifts.map((g) => {
+            const a = addonsById.get(g.addonId);
+            return (
+              <div
+                key={g.addonId}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: '1px solid var(--line-strong)' }}
+              >
+                <span style={{ flex: 1, fontWeight: 600 }}>{a?.label ?? g.addonId}</span>
+                <span style={{ fontSize: 'var(--fs-12)', fontWeight: 700, color: 'var(--c-orange)', whiteSpace: 'nowrap' }}>× {g.qty} FREE</span>
+                <button type="button" className={styles.iconBtn} onClick={() => removeGift(g.addonId)} aria-label={`Remove ${a?.label ?? 'gift'}`}>
+                  <X size={14} strokeWidth={1.75} />
+                </button>
+              </div>
+            );
+          })}
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 'var(--space-4)', alignItems: 'center' }}>
+            <select value={pickAddon} onChange={(e) => setPickAddon(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+              <option value="">Pick an add-on…</option>
+              {(addons.data ?? []).filter((a) => a.enabled).map((a) => (
+                <option key={a.id} value={a.id}>{a.label}</option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={pickQty}
+              onChange={(e) => setPickQty(Math.min(20, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+              style={{ ...inputStyle, width: 64 }}
+              aria-label="Quantity"
+            />
+            <Button variant="primary" onClick={addGift} disabled={!pickAddon || update.isPending}>Add</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const ProductSuppliersDrawer = ({
   row, onClose,
