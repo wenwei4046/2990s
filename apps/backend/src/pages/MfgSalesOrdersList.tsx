@@ -330,6 +330,7 @@ type SoItem = {
   line_cost_centi: number | null;
   line_margin_centi: number | null;
   total_centi: number | null;
+  stock_status: string | null;
   cancelled: boolean | null;
 };
 
@@ -575,7 +576,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
              Description 240→1098px) and spread the cells far apart ("间距隔那么
              远"). A fixed 1180px keeps the columns compact and readable; the
              wrapper's overflow-x handles narrow viewports. */
-          width: 1180, minWidth: 1180, borderCollapse: 'collapse',
+          width: 1270, minWidth: 1270, borderCollapse: 'collapse',
           fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
           color: 'var(--c-ink)',
           tableLayout: 'fixed',
@@ -597,6 +598,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Line Cost</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Margin</th>
+            <th style={{ ...TH_BASE, width: 90 }}>Stock</th>
             <th style={{ ...TH_BASE, width: 160 }}>Payment</th>
           </tr>
         </thead>
@@ -656,6 +658,22 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 <td style={{ ...TD_RIGHT, color: lineMarginColor, fontWeight: 600 }}>
                   {fmtRm(lineMargin)}
                 </td>
+                <td style={TD_BASE}>
+                  {(() => {
+                    const ready = it.stock_status === 'READY';
+                    return (
+                      <span style={{
+                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+                        fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
+                        borderRadius: 999,
+                        color: ready ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                        background: ready ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                      }}>
+                        {ready ? 'READY' : 'PENDING'}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td style={{ ...TD_BASE, color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>
                   {paymentRefs || '—'}
                 </td>
@@ -674,6 +692,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: marginColor }}>
               {fmtRm(marginCenti)}
             </td>
+            <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
             <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
           </tr>
         </tfoot>
