@@ -321,6 +321,40 @@ export const useCreateMfgSalesOrder = () => {
   });
 };
 
+/* Edge #J — catches the 409 short_stock thrown by authedFetch when a DO ship
+   path detects insufficient stock at the target warehouse. Pops the same
+   "stock not enough — continue?" prompt the from-sos picker uses, and on
+   confirm retries the call with confirmShortStock: true so the server lets
+   the OUT go through. Operator who hits Cancel sees the original error. */
+async function withShortStockRetry<T>(call: (extra: { confirmShortStock?: boolean }) => Promise<T>): Promise<T> {
+  try { return await call({}); }
+  catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    if (!raw.includes('"short_stock"')) throw e;
+    try {
+      const jsonStart = raw.indexOf('{');
+      const body = JSON.parse(raw.slice(jsonStart)) as {
+        shortages?: Array<{
+          itemCode: string; warehouseName: string | null;
+          needed: number; available: number; short: number;
+          alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
+        }>;
+      };
+      const lines = (body.shortages ?? []).map((s) => {
+        const alts = (s.alternatives ?? []).slice(0, 3)
+          .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
+          .join(', ');
+        const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
+        return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
+      }).join('\n\n');
+      if (window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`)) {
+        return await call({ confirmShortStock: true });
+      }
+    } catch { /* fall through */ }
+    throw e;
+  }
+}
+
 /* Manual "Re-allocate stock to SOs now" — walks every active SO line and
    flips PENDING/READY against live inventory. Auto-advances SO header
    CONFIRMED↔READY_TO_SHIP. Server-side helper at POST /recompute-allocation. */
@@ -802,9 +836,11 @@ export const useAddMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
-      authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
-        method: 'POST', body: JSON.stringify(item),
-      }),
+      withShortStockRetry((extra) =>
+        authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
+          method: 'POST', body: JSON.stringify({ ...item, ...extra }),
+        }),
+      ),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
@@ -816,9 +852,11 @@ export const useUpdateMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
-      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
-        method: 'PATCH', body: JSON.stringify(item),
-      }),
+      withShortStockRetry((extra) =>
+        authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
+          method: 'PATCH', body: JSON.stringify({ ...item, ...extra }),
+        }),
+      ),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });

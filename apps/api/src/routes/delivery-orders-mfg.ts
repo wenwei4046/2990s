@@ -937,6 +937,29 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
     return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
   }
 
+  /* Edge #E — race-condition guard. The Phase B over_remaining check above is
+     read-before-write, so two parallel converts on the same SO line could both
+     pass and over-allocate. After inserting, re-derive remaining for the picked
+     SO lines and ROLLBACK (delete the just-created DO) when any line has gone
+     negative. Cheap belt-and-suspenders on top of the front-end's optimism. */
+  {
+    const recheck = await soDeliverableRemaining(sb, docNos);
+    const overcommitted = pickedIds
+      .map((sid) => recheck.get(sid))
+      .filter((l): l is DeliverableLine => l !== undefined && l.remaining < 0);
+    if (overcommitted.length > 0) {
+      // Undo: delete the DO + its lines. Inventory wasn't deducted yet — we
+      // haven't called deductInventoryForDo at this point in the flow.
+      await sb.from('delivery_order_items').delete().eq('delivery_order_id', dh.id);
+      await sb.from('delivery_orders').delete().eq('id', dh.id);
+      return c.json({
+        error: 'race_conflict',
+        message: 'Another operator just converted overlapping qty from this Sales Order. Refresh the picker and try again.',
+        conflicts: overcommitted.map((l) => ({ docNo: l.docNo, itemCode: l.itemCode, remaining: l.remaining })),
+      }, 409);
+    }
+  }
+
   // 4. Roll up the header totals + deduct stock (both idempotent).
   await recomputeTotals(sb, dh.id);
   await deductInventoryForDo(sb, dh.id, user.id);
@@ -1306,6 +1329,12 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
      deviation note. */
   if (body.status === 'CANCELLED') {
     try { await reverseMovements(sb, 'DO', id, user.id); } catch { /* best-effort */ }
+    /* DO cancel reversed stock — re-walk SO lines so previously-PENDING orders
+       can flip back to READY now that stock is available again. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-do-cancel failed:', e); }
   }
 
   return c.json({ deliveryOrder: data });

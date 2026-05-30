@@ -49,10 +49,30 @@ export type AllocationResult = {
  * full sweep when creating a single order — but still respects older orders'
  * claims because we deduct ALL outstanding qty from the bucket first).
  */
+// Postgres advisory-lock key for the global recompute mutex. Arbitrary stable
+// int — exclusive across all connections at the DB level. Edge #F.
+const ALLOCATION_LOCK_KEY = 42_990_001;
+
 export async function recomputeSoStockAllocation(
   sb: any,
   scopeToDocNo?: string,
 ): Promise<AllocationResult> {
+  /* Edge #F — single-flight guard. pg_try_advisory_lock returns true if we
+     grabbed it, false if another connection already holds it. When false we
+     no-op (the other recompute will produce the same result against the same
+     inventory snapshot). Best-effort: if the RPC isn't wired we proceed
+     anyway — the algorithm is deterministic + idempotent so interleaving is
+     mostly benign. */
+  let lockHeld = false;
+  try {
+    const { data: gotLock } = await sb.rpc('pg_try_advisory_lock', { key: ALLOCATION_LOCK_KEY });
+    if (gotLock === false) {
+      return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0, reason: 'another_recompute_in_progress' };
+    }
+    if (gotLock === true) lockHeld = true;
+  } catch {
+    /* RPC not configured — proceed without the lock. */
+  }
   try {
     // 1. All non-cancelled, non-completed SOs. Sort by SO created_at ASC
     //    so older SOs allocate stock first (FIFO).
@@ -196,6 +216,48 @@ export async function recomputeSoStockAllocation(
       linesFlipped += toPending.length;
     }
 
+    // ── Audit trail: one entry per affected SO summarising the auto-flip
+    //    (Edge #H polish). Operator can later see "why did this line change?"
+    //    Best-effort — never blocks the allocation result.
+    if (toReady.length > 0 || toPending.length > 0) {
+      const lineToDoc = new Map(lines.map((l) => [l.id, l.doc_no]));
+      const byDoc = new Map<string, { ready: string[]; pending: string[] }>();
+      for (const id of toReady) {
+        const doc = lineToDoc.get(id);
+        if (!doc) continue;
+        const cur = byDoc.get(doc) ?? { ready: [], pending: [] };
+        cur.ready.push(id);
+        byDoc.set(doc, cur);
+      }
+      for (const id of toPending) {
+        const doc = lineToDoc.get(id);
+        if (!doc) continue;
+        const cur = byDoc.get(doc) ?? { ready: [], pending: [] };
+        cur.pending.push(id);
+        byDoc.set(doc, cur);
+      }
+      const auditRows: Array<Record<string, unknown>> = [];
+      for (const [docNo, flips] of byDoc) {
+        const parts: string[] = [];
+        if (flips.ready.length)   parts.push(`${flips.ready.length} line(s) → READY`);
+        if (flips.pending.length) parts.push(`${flips.pending.length} line(s) → PENDING`);
+        auditRows.push({
+          so_doc_no:           docNo,
+          action:              'UPDATE_LINE',
+          actor_id:            null,
+          actor_name_snapshot: 'system (auto-allocate)',
+          field_changes:       [{ field: 'stockStatus', from: 'auto', to: parts.join(', ') }],
+          status_snapshot:     null,
+          source:              'auto-allocation',
+          note:                'Stock allocation recomputed against live inventory',
+        });
+      }
+      if (auditRows.length > 0) {
+        try { await sb.from('mfg_so_audit_log').insert(auditRows); }
+        catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] audit insert failed:', e); }
+      }
+    }
+
     // 9. Per-SO header re-aggregation (only for SOs that had a line flip,
     //    or the scoped SO if any). all-READY → READY_TO_SHIP (when previously
     //    CONFIRMED / IN_PRODUCTION). any-PENDING → CONFIRMED (when previously
@@ -233,5 +295,10 @@ export async function recomputeSoStockAllocation(
     // eslint-disable-next-line no-console
     console.error('[so-allocation] recompute failed:', e);
     return { ok: false, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0, reason: e instanceof Error ? e.message : String(e) };
+  } finally {
+    if (lockHeld) {
+      try { await sb.rpc('pg_advisory_unlock', { key: ALLOCATION_LOCK_KEY }); }
+      catch { /* best-effort */ }
+    }
   }
 }
