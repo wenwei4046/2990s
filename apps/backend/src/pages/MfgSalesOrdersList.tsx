@@ -30,7 +30,7 @@ import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router';
 import {
-  Plus, X, Filter, Search, Wrench, RefreshCw,
+  Plus, X, Filter, Search, Wrench,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -39,7 +39,7 @@ import { formatPhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import {
   useMfgSalesOrders, useUpdateMfgSalesOrderStatus,
-  useMfgSalesOrderDetail, useRecomputeSoAllocation,
+  useMfgSalesOrderDetail,
 } from '../lib/flow-queries';
 import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
@@ -810,18 +810,6 @@ export const MfgSalesOrdersList = () => {
   const COLUMNS = useMemo(() => buildColumns(staffById), [staffById]);
 
   const updateStatus = useUpdateMfgSalesOrderStatus();
-  const recomputeAllocation = useRecomputeSoAllocation();
-  const onRecomputeAllocation = () => {
-    recomputeAllocation.mutate(undefined, {
-      onSuccess: (res) => window.alert(
-        `Stock allocation refreshed.\n` +
-        `Lines flipped: ${res.linesFlipped}\n` +
-        `Orders advanced to READY_TO_SHIP: ${res.ordersAdvanced}\n` +
-        `Orders returned to CONFIRMED: ${res.ordersRegressed}`,
-      ),
-      onError: (e) => window.alert(`Allocation failed: ${e instanceof Error ? e.message : String(e)}`),
-    });
-  };
 
   // ── Row handlers (no toolbar — every action lives on the row's
   //    right-click context menu, gated by status). ───────────────────
@@ -949,15 +937,6 @@ export const MfgSalesOrdersList = () => {
           <Button variant="secondary" size="sm" onClick={() => navigate('/mfg-sales-orders/maintenance')}>
             <Wrench size={14} strokeWidth={1.75} />
             <span>SO Maintenance</span>
-          </Button>
-          <Button
-            variant="ghost" size="sm"
-            onClick={onRecomputeAllocation}
-            disabled={recomputeAllocation.isPending}
-            title="Re-walk every SO line against live inventory — flips READY/PENDING + advances or returns header status"
-          >
-            <RefreshCw size={14} strokeWidth={1.75} />
-            <span>{recomputeAllocation.isPending ? 'Allocating…' : 'Re-allocate Stock'}</span>
           </Button>
         </div>
       </div>
