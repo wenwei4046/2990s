@@ -29,6 +29,7 @@ import {
 } from '../lib/allowed-options-check';
 import { findIncompleteVariantLines } from '../lib/so-variant-check';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -925,7 +926,23 @@ mfgSalesOrders.post('/', async (c) => {
     statusSnapshot: 'CONFIRMED',
   });
 
+  /* B2C auto-allocation — if stock is already on hand, the new SO's lines flip
+     to READY immediately and the header advances to READY_TO_SHIP. Best-effort:
+     a failure never sinks the SO create (status stays CONFIRMED). */
+  try { await recomputeSoStockAllocation(sb, docNo); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-create failed:', e); }
+
   return c.json({ docNo }, 201);
+});
+
+/* ── POST /recompute-allocation — re-walk every active SO line, flip
+       PENDING/READY against live inventory, advance / regress SO header
+       status. Manual trigger from the SO list "Re-allocate stock" button or
+       admin debug. Best-effort. */
+mfgSalesOrders.post('/recompute-allocation', async (c) => {
+  const sb = c.get('supabase');
+  const res = await recomputeSoStockAllocation(sb);
+  return c.json(res);
 });
 
 

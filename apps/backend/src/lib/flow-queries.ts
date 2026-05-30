@@ -321,6 +321,21 @@ export const useCreateMfgSalesOrder = () => {
   });
 };
 
+/* Manual "Re-allocate stock to SOs now" — walks every active SO line and
+   flips PENDING/READY against live inventory. Auto-advances SO header
+   CONFIRMED↔READY_TO_SHIP. Server-side helper at POST /recompute-allocation. */
+export const useRecomputeSoAllocation = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      authedFetch<{ ok: boolean; linesFlipped: number; ordersAdvanced: number; ordersRegressed: number }>(
+        `/mfg-sales-orders/recompute-allocation`,
+        { method: 'POST', body: JSON.stringify({}) },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] }),
+  });
+};
+
 export const useUpdateMfgSalesOrderHeader = () => {
   const qc = useQueryClient();
   return useMutation({

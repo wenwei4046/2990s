@@ -91,6 +91,12 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
       }));
     if (movements.length > 0) await writeMovements(sb, movements);
   }
+  /* B2C SO auto-allocation — stock just came in, re-walk every PENDING SO line
+     and flip to READY where the new inventory covers it. Best-effort. */
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn failed:', e); }
   return { ok: true };
 }
 

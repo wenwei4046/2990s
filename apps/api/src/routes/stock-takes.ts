@@ -371,6 +371,12 @@ stockTakes.patch('/:id/post', async (c) => {
     if (mErr) movementErrors.push(mErr.message);
   }
 
+  /* B2C SO auto-allocation — variance changed stock, re-walk SO lines. */
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-stock-take failed:', e); }
+
   return c.json({
     take: posted,
     movementsWritten: movementErrors.length ? 0 : adjustmentRows.length,

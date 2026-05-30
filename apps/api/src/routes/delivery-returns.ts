@@ -406,6 +406,13 @@ deliveryReturns.post('/', async (c) => {
      if the create is retried). */
   await increaseInventoryForReturn(sb, h.id, user.id);
 
+  /* B2C SO auto-allocation — returned goods re-enter stock; another customer's
+     pending SO might now be fulfillable. Best-effort. */
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-dr failed:', e); }
+
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
