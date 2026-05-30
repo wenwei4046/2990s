@@ -461,6 +461,10 @@ export const useConvertSoLinesToDo = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* Force the picker queries to refetch immediately so already-converted
+         lines disappear from the list on next view (Wei Siang 2026-05-30). */
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', 'deliverable-so-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
     },
   });
 };
@@ -1064,6 +1068,12 @@ export const useConvertDosToSi = () => {
       qc.invalidateQueries({ queryKey: ['journal-entries'] });
       qc.invalidateQueries({ queryKey: ['account-balances'] });
       qc.invalidateQueries({ queryKey: ['ar-aging'] });
+      /* Picker must refetch so already-invoiced DO lines drop off the list
+         (Wei Siang 2026-05-30). Both pickers compete for the same DO Pending
+         pool, so refresh BOTH. */
+      qc.invalidateQueries({ queryKey: ['sales-invoices', 'invoiceable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['delivery-returns', 'returnable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
     },
   });
 };
@@ -1544,6 +1554,12 @@ export const useConvertDoToDeliveryReturn = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['delivery-returns'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* Picker must refetch so returned DO lines drop off the list. Both
+         pickers (return + invoice) compete for the same DO Pending pool so
+         refresh both (Wei Siang 2026-05-30). */
+      qc.invalidateQueries({ queryKey: ['delivery-returns', 'returnable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['sales-invoices', 'invoiceable-do-lines'], refetchType: 'all' });
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
     },
   });
 };

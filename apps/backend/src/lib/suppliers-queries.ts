@@ -551,6 +551,9 @@ export function useCreateGrnsFromPoItems() {
       qc.invalidateQueries({ queryKey: ['mfg-purchase-orders'] });
       qc.invalidateQueries({ queryKey: ['grns'] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* Picker must refetch so already-received PO lines drop off the list
+         (Wei Siang 2026-05-30). */
+      qc.invalidateQueries({ queryKey: ['grns', 'outstanding-po-items'], refetchType: 'all' });
     },
   });
 }
