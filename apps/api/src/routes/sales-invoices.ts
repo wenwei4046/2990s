@@ -25,6 +25,7 @@ import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue } from '../lib/post-si-revenue';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
+import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance } from '../lib/customer-credits';
 
 export const salesInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 salesInvoices.use('*', supabaseAuth);
@@ -264,7 +265,7 @@ salesInvoices.post('/', async (c) => {
     created_by: user.id,
   }).select(HEADER).single();
   if (hErr) return c.json({ error: 'insert_failed', reason: hErr.message }, 500);
-  const h = header as unknown as { id: string; invoice_number: string };
+  const h = header as unknown as { id: string; invoice_number: string; debtor_code: string | null; debtor_name: string | null; total_centi: number | null; paid_centi: number | null };
 
   if (items.length > 0) {
     const rows = items.map((it) => buildItemRow(h.id, it));
@@ -291,7 +292,31 @@ salesInvoices.post('/', async (c) => {
     }
   }
 
-  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue }, 201);
+  /* Edge #11 — auto-apply existing customer credit balance toward this new SI.
+     Re-fetch total_centi here so we see the value AFTER recomputeTotals ran. */
+  let creditApplied = 0;
+  if (h.debtor_code) {
+    try {
+      const { data: latest } = await sb.from('sales_invoices').select('total_centi, paid_centi').eq('id', h.id).maybeSingle();
+      const total = Number((latest as { total_centi: number } | null)?.total_centi ?? 0);
+      const paid  = Number((latest as { paid_centi: number } | null)?.paid_centi ?? 0);
+      const due   = Math.max(0, total - paid);
+      const res = await applyCustomerCreditToSi(sb, {
+        debtorCode: h.debtor_code,
+        debtorName: h.debtor_name,
+        siId: h.id,
+        siNumber: h.invoice_number,
+        remainingDueCenti: due,
+        createdBy: user.id,
+      });
+      creditApplied = res.applied;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[customer-credit] apply-on-create failed for ${h.invoice_number}:`, e);
+    }
+  }
+
+  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue, creditApplied }, 201);
 });
 
 /* ── Convert picked DO LINES (partial qty) → ONE Sales Invoice ─────────────
@@ -493,7 +518,29 @@ salesInvoices.post('/from-dos', async (c) => {
     }
   }
 
-  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue }, 201);
+  /* Edge #11 — auto-apply customer credit toward this newly-created SI. */
+  let creditApplied = 0;
+  try {
+    const { data: latest } = await sb.from('sales_invoices').select('total_centi, paid_centi, debtor_code, debtor_name').eq('id', h.id).maybeSingle();
+    const l = latest as { total_centi: number | null; paid_centi: number | null; debtor_code: string | null; debtor_name: string | null } | null;
+    if (l?.debtor_code) {
+      const due = Math.max(0, Number(l.total_centi ?? 0) - Number(l.paid_centi ?? 0));
+      const res = await applyCustomerCreditToSi(sb, {
+        debtorCode: l.debtor_code,
+        debtorName: l.debtor_name,
+        siId: h.id,
+        siNumber: h.invoice_number,
+        remainingDueCenti: due,
+        createdBy: user.id,
+      });
+      creditApplied = res.applied;
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[customer-credit] apply-on-from-dos failed for ${h.invoice_number}:`, e);
+  }
+
+  return c.json({ id: h.id, invoiceNumber: h.invoice_number, revenue, creditApplied }, 201);
 });
 
 /* ── Append a Delivery Order's lines into an EXISTING invoice ──────────────
@@ -787,18 +834,41 @@ salesInvoices.patch('/:id/status', async (c) => {
   if (body.status === 'PAID') ts.paid_at = now;
   const status = body.status === 'ISSUED' ? 'SENT' : body.status;
 
-  // Need the invoice_number for the revenue reversal when cancelling.
-  const { data, error } = await sb.from('sales_invoices').update({ status, ...ts }).eq('id', id).select('id, status, invoice_number').single();
+  // Need the invoice_number + paid_centi + debtor for the revenue reversal +
+  // the Edge #11 cancel-with-payment credit on CANCEL.
+  const { data, error } = await sb.from('sales_invoices')
+    .update({ status, ...ts })
+    .eq('id', id)
+    .select('id, status, invoice_number, paid_centi, debtor_code, debtor_name')
+    .single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
   /* Reverse revenue on CANCEL. Best-effort (audit-DLQ pattern) — a reversal
      failure never un-cancels the invoice; it can be retried (idempotent). */
   if (status === 'CANCELLED') {
-    const invoiceNumber = (data as { invoice_number: string }).invoice_number;
-    const rev = await reverseSiRevenue(sb, invoiceNumber);
+    const d = data as { invoice_number: string; paid_centi: number | null; debtor_code: string | null; debtor_name: string | null };
+    const rev = await reverseSiRevenue(sb, d.invoice_number);
     if (!rev.ok) {
       // eslint-disable-next-line no-console
-      console.error(`[si-revenue] reversal failed for ${invoiceNumber}:`, rev.status, rev.reason);
+      console.error(`[si-revenue] reversal failed for ${d.invoice_number}:`, rev.status, rev.reason);
+    }
+    /* Edge #11 — cancel-with-payment turns paid_centi into a customer credit
+       balance instead of forcing a manual refund flow. Idempotent inside. */
+    if (Number(d.paid_centi ?? 0) > 0) {
+      try {
+        const user = c.get('user');
+        await creditFromCancelledSi(sb, {
+          siId: id,
+          siNumber: d.invoice_number,
+          debtorCode: d.debtor_code,
+          debtorName: d.debtor_name,
+          paidCenti: Number(d.paid_centi),
+          createdBy: user?.id,
+        });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(`[customer-credit] credit-from-cancel failed for ${d.invoice_number}:`, e);
+      }
     }
   }
 
