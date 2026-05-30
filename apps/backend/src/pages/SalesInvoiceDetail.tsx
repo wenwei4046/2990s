@@ -35,6 +35,7 @@ import {
   useDeleteSalesInvoicePayment,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
 } from '../components/PaymentsTable';
@@ -433,6 +434,7 @@ export const SalesInvoiceDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {STATUS_LABEL[header.status] ?? header.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="si" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
           </Button>

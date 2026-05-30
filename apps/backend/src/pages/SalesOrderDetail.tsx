@@ -47,6 +47,7 @@ import {
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   useLocalities,
   distinctStates,
@@ -767,6 +768,7 @@ export const SalesOrderDetail = () => {
             <History {...ICON} />
             <span>History</span>
           </Button>
+          <RelationshipMapButton type="so" id={docNo} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
             <span>Print PDF</span>

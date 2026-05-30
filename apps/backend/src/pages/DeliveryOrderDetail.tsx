@@ -38,6 +38,7 @@ import {
   type DeliverableSoLine,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   PaymentsTable, labelToApi, parseInstallmentMonths,
   newPaymentDraft, type PaymentDraft,
@@ -496,6 +497,7 @@ export const DeliveryOrderDetail = () => {
               <ArrowRightLeft {...ICON} /><span>Convert from SO</span>
             </Button>
           )}
+          <RelationshipMapButton type="do" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
           </Button>

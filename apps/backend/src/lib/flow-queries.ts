@@ -1914,3 +1914,27 @@ export const useOutstandingSummary = (opts?: { from?: string; to?: string }) => 
     `/outstanding/summary${qs ? `?${qs}` : ''}`,
   );
 };
+
+/* ── Document relationship map (SAP-style flow diagram) ─────────────────── */
+export type FlowNodeType = 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi';
+export type FlowEdgeKind = 'full' | 'partial' | 'value' | 'payment';
+export type FlowNode = {
+  key: string;
+  type: FlowNodeType;
+  id: string;
+  label: string;
+  status: string | null;
+  isAnchor: boolean;
+};
+export type FlowEdge = { from: string; to: string; kind: FlowEdgeKind };
+
+export const useDocumentFlow = (type: FlowNodeType | null, id: string | null) =>
+  useQuery({
+    queryKey: ['document-flow', type, id],
+    queryFn: () => authedFetch<{ nodes: FlowNode[]; edges: FlowEdge[]; rootSos: string[] }>(
+      `/document-flow/${type}/${encodeURIComponent(id!)}`,
+    ),
+    enabled: Boolean(type && id),
+    staleTime: 30_000,
+    retry: 1,
+  });
