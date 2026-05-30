@@ -17,11 +17,11 @@ import {
 
 type Props = { type: FlowNodeType; id: string; open: boolean; onClose: () => void };
 
-const NODE_W = 172;
-const NODE_H = 70;
-const COL_GAP = 78;
-const ROW_GAP = 18;
-const BAND_GAP = 72;
+const NODE_W = 196;
+const NODE_H = 86;
+const COL_GAP = 84;
+const ROW_GAP = 20;
+const BAND_GAP = 80;
 const PAD = 28;
 
 const TYPE_META: Record<
@@ -83,13 +83,17 @@ export function DocumentFlowModal({ type, id, open, onClose }: Props) {
   const topBandH = topMax > 0 ? topMax * (NODE_H + ROW_GAP) - ROW_GAP : 0;
   const bottomTop = PAD + topBandH + (topMax > 0 && bottomMax > 0 ? BAND_GAP : 0);
   const bottomBandH = bottomMax > 0 ? bottomMax * (NODE_H + ROW_GAP) - ROW_GAP : 0;
-  const contentBottom = bottomMax > 0 ? bottomTop + bottomBandH : PAD + topBandH;
+  const bandsBottom = bottomMax > 0 ? bottomTop + bottomBandH : PAD + topBandH;
+
+  // The SO column is vertically centred across both bands. The canvas must fit
+  // whichever is taller — the bands OR the SO block — otherwise a document with
+  // no downstream rows (a lone SO node) gets clipped at the bottom.
+  const soNodes = nodes.filter((n) => n.type === 'so').sort((a, b) => a.label.localeCompare(b.label));
+  const soBlockH = soNodes.length > 0 ? soNodes.length * (NODE_H + ROW_GAP) - ROW_GAP : 0;
+  const contentBottom = Math.max(bandsBottom, PAD + soBlockH);
 
   for (const [col, list] of topCols) list.forEach((n, i) => pos.set(n.key, { x: colX(col), y: PAD + i * (NODE_H + ROW_GAP) }));
   for (const [col, list] of bottomCols) list.forEach((n, i) => pos.set(n.key, { x: colX(col), y: bottomTop + i * (NODE_H + ROW_GAP) }));
-  // SO column — vertically centred across both bands.
-  const soNodes = nodes.filter((n) => n.type === 'so').sort((a, b) => a.label.localeCompare(b.label));
-  const soBlockH = soNodes.length > 0 ? soNodes.length * (NODE_H + ROW_GAP) - ROW_GAP : 0;
   const soStart = PAD + Math.max(0, (contentBottom - PAD - soBlockH) / 2);
   soNodes.forEach((n, i) => pos.set(n.key, { x: colX(0), y: soStart + i * (NODE_H + ROW_GAP) }));
 
@@ -115,7 +119,7 @@ export function DocumentFlowModal({ type, id, open, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: 'white', borderRadius: 10, boxShadow: '0 24px 64px rgba(0,0,0,0.3)',
-          width: '100%', maxWidth: 1080, maxHeight: 'calc(100vh - 96px)', display: 'flex', flexDirection: 'column',
+          width: '100%', maxWidth: 1160, maxHeight: 'calc(100vh - 96px)', display: 'flex', flexDirection: 'column',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 22px', borderBottom: '1px solid var(--c-line)' }}>
@@ -130,11 +134,11 @@ export function DocumentFlowModal({ type, id, open, onClose }: Props) {
           <button onClick={onClose} style={{ background: 'transparent', border: 0, cursor: 'pointer', fontSize: 22, color: 'var(--fg-muted)', lineHeight: 1 }} aria-label="Close">×</button>
         </div>
 
-        <div style={{ flex: 1, overflow: 'auto', padding: 22, background: 'var(--c-cream)' }}>
+        <div style={{ flex: 1, overflow: 'auto', padding: 22, background: 'var(--c-cream)', display: 'flex', minHeight: 460 }}>
           {isLoading && <div style={{ color: 'var(--fg-muted)', padding: 40, textAlign: 'center' }}>Loading map…</div>}
           {isError && <div style={{ color: '#9f1239', padding: 40, textAlign: 'center' }}>Could not load the relationship map.</div>}
           {!isLoading && !isError && (
-            <div style={{ position: 'relative', width, height, margin: '0 auto' }}>
+            <div style={{ position: 'relative', width, height, margin: 'auto' }}>
               <svg width={width} height={height} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
                 <defs>
                   {Object.entries(EDGE_COLOR).map(([k, color]) => (
@@ -171,7 +175,7 @@ export function DocumentFlowModal({ type, id, open, onClose }: Props) {
                     title={clickable ? 'Open document' : undefined}
                     style={{
                       position: 'absolute', left: p.x, top: p.y, width: NODE_W, height: NODE_H,
-                      boxSizing: 'border-box', borderRadius: 8, padding: '8px 10px',
+                      boxSizing: 'border-box', borderRadius: 8, padding: '10px 12px',
                       background: n.isAnchor ? '#fff7d6' : m.bg,
                       border: n.isAnchor ? '2px solid #d4a017' : '1px solid var(--c-line)',
                       cursor: clickable ? 'pointer' : 'default',
@@ -180,9 +184,9 @@ export function DocumentFlowModal({ type, id, open, onClose }: Props) {
                       boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
                     }}
                   >
-                    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: m.accent }}>{m.title}</div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--c-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: cancelled ? 'line-through' : 'none' }}>{n.label}</div>
-                    {n.status && <div style={{ fontSize: 10, color: 'var(--fg-muted)' }}>{n.status}</div>}
+                    <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: m.accent }}>{m.title}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--c-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: cancelled ? 'line-through' : 'none' }}>{n.label}</div>
+                    {n.status && <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{n.status}</div>}
                   </div>
                 );
               })}
