@@ -33,6 +33,30 @@ import type { Env, Variables } from '../env';
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
 mfgSalesOrders.use('*', supabaseAuth);
 
+/* ── SO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
+   An SO locks (read-only — no line edit / no CANCELLED transition) once it has
+   ANY non-cancelled Delivery Order OR Sales Invoice referencing it. Convert-to-
+   DO (partial delivery) is NOT gated by this: the SO can keep emitting DOs;
+   only line MUTATIONS + the CANCELLED status transition are blocked. Mirrors
+   grnHasDownstream in apps/api/src/routes/grns.ts. Returns the blocking JSON,
+   or null if the SO is free to edit. */
+async function soHasDownstream(sb: any, soDocNo: string): Promise<{ error: string; message: string } | null> {
+  const [{ count: doCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_orders')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', soDocNo)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', soDocNo)
+      .neq('status', 'CANCELLED'),
+  ]);
+  if ((doCount ?? 0) > 0 || (siCount ?? 0) > 0) {
+    return { error: 'so_has_downstream', message: 'SO has a Delivery Order / Sales Invoice — delete or cancel it first to edit' };
+  }
+  return null;
+}
+
 /* PR — Commander 2026-05-28 — Server-side combo recompute.
    Fetches all active sofa_combo_pricing rows once (small table; ~64 rows
    in steady state) and returns them as SofaComboRow[] for the pure
@@ -341,10 +365,33 @@ mfgSalesOrders.get('/', async (c) => {
       }
     }
 
+    /* Tier 2 downstream-lock — one extra batched read per doc set: pull every
+       non-cancelled DO/SI that points back to a listed SO and mark has_children
+       on the row. The list grid uses this to hide Edit / Cancel from SOs that
+       are downstream-locked (mirrors computeGrnFlags in routes/grns.ts). */
+    const downstreamDocNos = new Set<string>();
+    const [doRowsRes, siRowsRes] = await Promise.all([
+      sb.from('delivery_orders')
+        .select('so_doc_no')
+        .in('so_doc_no', docNos)
+        .neq('status', 'CANCELLED'),
+      sb.from('sales_invoices')
+        .select('so_doc_no')
+        .in('so_doc_no', docNos)
+        .neq('status', 'CANCELLED'),
+    ]);
+    for (const d of ((doRowsRes.data ?? []) as Array<{ so_doc_no: string | null }>)) {
+      if (d.so_doc_no) downstreamDocNos.add(d.so_doc_no);
+    }
+    for (const s of ((siRowsRes.data ?? []) as Array<{ so_doc_no: string | null }>)) {
+      if (s.so_doc_no) downstreamDocNos.add(s.so_doc_no);
+    }
+
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
       const perGroup = agg.get(docNo);
       (r as Record<string, unknown>).item_categories = [...(cats.get(docNo) ?? [])].sort();
+      (r as Record<string, unknown>).has_children = downstreamDocNos.has(docNo);
       /* First-item branding source (PR #266). */
       const fCat = firstCat.get(docNo);
       (r as Record<string, unknown>).first_item_category = fCat ?? null;
@@ -386,7 +433,23 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ salesOrder: h.data, items: i.data ?? [] });
+  /* Tier 2 downstream-lock — stamp has_children so the SO Detail page can lock
+     once any non-cancelled DO / SI references it. */
+  const [{ count: doCount }, { count: siCount }] = await Promise.all([
+    sb.from('delivery_orders')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', docNo)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('id', { head: true, count: 'exact' })
+      .eq('so_doc_no', docNo)
+      .neq('status', 'CANCELLED'),
+  ]);
+  const salesOrder = {
+    ...(h.data as unknown as Record<string, unknown>),
+    has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
+  };
+  return c.json({ salesOrder, items: i.data ?? [] });
 });
 
 mfgSalesOrders.post('/', async (c) => {
@@ -1028,6 +1091,15 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
   const { data: prev } = await sb.from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
   const fromStatus = (prev as { status: string } | null)?.status ?? null;
 
+  /* Tier 2 downstream-lock — only the CANCELLED transition is gated (mirrors
+     the GRN cancel guard). Other status transitions (CONFIRMED ↔ READY_TO_SHIP
+     ↔ SHIPPED ↔ DELIVERED…) ride through untouched so the existing state
+     machine + auto-advance (e.g. all-lines-READY → READY_TO_SHIP) keep working. */
+  if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
+    const childLock = await soHasDownstream(sb, docNo);
+    if (childLock) return c.json(childLock, 409);
+  }
+
   const { data, error } = await sb.from('mfg_sales_orders').update({
     status: body.status, updated_at: new Date().toISOString(),
   }).eq('doc_no', docNo).select('doc_no, status').single();
@@ -1460,6 +1532,10 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Tier 2 downstream-lock — line-add is blocked once a DO / SI exists. */
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
+
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
@@ -1589,6 +1665,10 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  /* Tier 2 downstream-lock — line-edit is blocked once a DO / SI exists. */
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
 
   // Re-derive totals if qty/price/discount changed. PR-D — also pull the
   // human-facing columns (item_code, description, uom) for the audit diff.
@@ -1766,6 +1846,10 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
 
 mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const itemId = c.req.param('itemId'); const user = c.get('user');
+
+  /* Tier 2 downstream-lock — line-delete is blocked once a DO / SI exists. */
+  const childLock = await soHasDownstream(sb, docNo);
+  if (childLock) return c.json(childLock, 409);
 
   // PR-D — capture the line snapshot before delete so the timeline can
   // show what was removed (item code + qty + unit price).

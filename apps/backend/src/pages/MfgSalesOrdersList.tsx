@@ -184,6 +184,10 @@ type SoRow = {
                                 to mfg_products.branding when the line is blank. */
   first_item_category?: string;
   first_item_branding?: string | null;
+  /* Tier 2 downstream-lock — list endpoint stamps this flag when the SO has
+     ANY non-cancelled DO / SI. Hides Edit + Cancel from the context menu;
+     Convert-to-DO stays available (partial delivery). */
+  has_children?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -1092,16 +1096,21 @@ export const MfgSalesOrdersList = () => {
           /* HOUZS status-flow actions — Issue DO appears when the SO is
              confirmed/ready (commander's 开单 button), Issue SI appears
              post-delivery. Delete is only allowed once the SO is
-             CANCELLED (matches the PO Cancel/Delete pattern from PR #169). */
+             CANCELLED (matches the PO Cancel/Delete pattern from PR #169).
+             Tier 2 downstream-lock — hide Edit + Cancel once any non-cancelled
+             DO / SI references this SO; Issue DO (partial delivery) stays. */
           const status = row.status;
-          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [
-            { label: 'Edit',    onClick: () => openDetail(row, true) },
-            { label: 'View',    onClick: () => openDetail(row) },
-            { label: 'Preview', onClick: () => void renderPdf(row, 'preview') },
-            { label: 'Print',   onClick: () => void renderPdf(row, 'print') },
-            { divider: true as const },
-          ];
-          // Issue DO (开单) — available before goods ship.
+          const hasChildren = Boolean(row.has_children);
+          const items: Array<{ label?: string; onClick?: () => void; danger?: boolean; divider?: true }> = [];
+          if (!hasChildren) {
+            items.push({ label: 'Edit', onClick: () => openDetail(row, true) });
+          }
+          items.push({ label: 'View',    onClick: () => openDetail(row) });
+          items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
+          items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
+          items.push({ divider: true as const });
+          // Issue DO (开单) — available before goods ship. Stays visible even
+          // with downstream children (partial delivery allowed).
           if (['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'].includes(status)) {
             items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
           }
@@ -1115,8 +1124,9 @@ export const MfgSalesOrdersList = () => {
           items.push({ label: 'Copy to new Sales Order', onClick: () => copyToNewSo(row) });
           items.push({ divider: true as const });
           // Cancel — soft-delete (status → CANCELLED). Hidden once already
-          // cancelled / closed so the menu doesn't offer a no-op.
-          if (!['CANCELLED', 'CLOSED'].includes(status)) {
+          // cancelled / closed / downstream-locked so the menu doesn't offer
+          // a no-op.
+          if (!['CANCELLED', 'CLOSED'].includes(status) && !hasChildren) {
             items.push({ label: 'Cancel SO', danger: true, onClick: () => doDelete(row) });
           }
           // Reopen — bring a cancelled SO back to CONFIRMED so it proceeds

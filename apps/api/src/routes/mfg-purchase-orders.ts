@@ -76,6 +76,24 @@ export const mfgPurchaseOrders = new Hono<{ Bindings: Env; Variables: Variables 
 
 mfgPurchaseOrders.use('*', supabaseAuth);
 
+/* ── PO child-lock guard (Tier 2 — downstream lock) ─────────────────────────
+   A PO locks (read-only — no header edit / no line edit / no cancel) once it
+   has ANY non-cancelled GRN. The convert-to-GRN path is NOT gated by this:
+   partial receiving is still allowed (i.e. the PO can keep emitting GRNs);
+   only header/line MUTATIONS + CANCEL are blocked, mirroring grnHasDownstream
+   in apps/api/src/routes/grns.ts. Returns the blocking JSON, or null if the
+   PO is free to edit. */
+async function poHasDownstream(sb: any, poId: string): Promise<{ error: string; message: string } | null> {
+  const { count } = await sb.from('grns')
+    .select('id', { head: true, count: 'exact' })
+    .eq('purchase_order_id', poId)
+    .neq('status', 'CANCELLED');
+  if ((count ?? 0) > 0) {
+    return { error: 'po_has_downstream', message: 'PO has a Goods Receipt — delete or cancel it first to edit' };
+  }
+  return null;
+}
+
 const VALID_STATUSES = new Set(['SUBMITTED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CANCELLED']);
 const VALID_CURRENCIES = new Set(['MYR', 'RMB', 'USD', 'SGD']);
 const VALID_KINDS = new Set(['mfg_product', 'fabric', 'raw']);
@@ -121,7 +139,26 @@ mfgPurchaseOrders.get('/', async (c) => {
 
   const { data, error } = await q;
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-  return c.json({ purchaseOrders: data ?? [] });
+
+  /* Tier 2 downstream-lock (mirror computeGrnFlags in routes/grns.ts) — one
+     extra query: pull the distinct purchase_order_ids that have any non-
+     cancelled GRN, then stamp has_children on every PO row. The list grid uses
+     this to hide Edit / Cancel from POs that are downstream-locked. */
+  const rows = (data ?? []) as Array<{ id: string } & Record<string, unknown>>;
+  const childIds = new Set<string>();
+  if (rows.length > 0) {
+    const ids = rows.map((r) => r.id);
+    const { data: grnRows } = await supabase
+      .from('grns')
+      .select('purchase_order_id')
+      .in('purchase_order_id', ids)
+      .neq('status', 'CANCELLED');
+    for (const g of (grnRows ?? []) as Array<{ purchase_order_id: string | null }>) {
+      if (g.purchase_order_id) childIds.add(g.purchase_order_id);
+    }
+  }
+  const purchaseOrders = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
+  return c.json({ purchaseOrders });
 });
 
 /* ── PR — Outstanding SO items (qty > po_qty_picked) for the
@@ -240,7 +277,17 @@ mfgPurchaseOrders.get('/:id', async (c) => {
   if (headerRes.error) return c.json({ error: 'load_failed', reason: headerRes.error.message }, 500);
   if (!headerRes.data) return c.json({ error: 'not_found' }, 404);
 
-  return c.json({ purchaseOrder: headerRes.data, items: itemsRes.data ?? [] });
+  /* Tier 2 downstream-lock — stamp has_children on the detail header so the
+     PO Detail page can lock once any non-cancelled GRN exists. */
+  const { count: childCount } = await supabase.from('grns')
+    .select('id', { head: true, count: 'exact' })
+    .eq('purchase_order_id', id)
+    .neq('status', 'CANCELLED');
+  const purchaseOrder = {
+    ...(headerRes.data as Record<string, unknown>),
+    has_children: (childCount ?? 0) > 0,
+  };
+  return c.json({ purchaseOrder, items: itemsRes.data ?? [] });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
@@ -1080,6 +1127,11 @@ mfgPurchaseOrders.patch('/:id', async (c) => {
   const id = c.req.param('id');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+  /* Tier 2 downstream-lock — PO header is read-only once a non-cancelled GRN
+     exists. Convert-to-GRN (partial receiving) is NOT routed here. */
+  const childLock = await poHasDownstream(sb, id);
+  if (childLock) return c.json(childLock, 409);
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const [from, to] of [
     ['poDate', 'po_date'], ['expectedAt', 'expected_at'], ['currency', 'currency'],
@@ -1089,7 +1141,6 @@ mfgPurchaseOrders.patch('/:id', async (c) => {
   ] as const) {
     if (body[from] !== undefined) updates[to] = body[from];
   }
-  const sb = c.get('supabase');
   const { data, error } = await sb.from('purchase_orders').update(updates).eq('id', id).select('*').single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   return c.json({ purchaseOrder: data });
@@ -1114,6 +1165,11 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.materialCode) return c.json({ error: 'material_code_required' }, 400);
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
+
+  const sb = c.get('supabase');
+  /* Tier 2 downstream-lock — line-add is blocked once a GRN exists. */
+  const childLock = await poHasDownstream(sb, poId);
+  if (childLock) return c.json(childLock, 409);
 
   const qty = Number(it.qty ?? 1);
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
@@ -1152,7 +1208,6 @@ mfgPurchaseOrders.post('/:id/items', async (c) => {
     delivery_date: (it.deliveryDate as string) ?? null,
     warehouse_id: (it.warehouseId as string) ?? null,
   };
-  const sb = c.get('supabase');
   const { data, error } = await sb.from('purchase_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputePoTotals(sb, poId);
@@ -1164,6 +1219,10 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const sb = c.get('supabase');
+
+  /* Tier 2 downstream-lock — line-edit is blocked once a GRN exists. */
+  const childLock = await poHasDownstream(sb, poId);
+  if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('purchase_order_items')
     .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_group, variants')
@@ -1210,6 +1269,10 @@ mfgPurchaseOrders.patch('/:id/items/:itemId', async (c) => {
 mfgPurchaseOrders.delete('/:id/items/:itemId', async (c) => {
   const poId = c.req.param('id'); const itemId = c.req.param('itemId');
   const sb = c.get('supabase');
+
+  /* Tier 2 downstream-lock — line-delete is blocked once a GRN exists. */
+  const childLock = await poHasDownstream(sb, poId);
+  if (childLock) return c.json(childLock, 409);
 
   /* Commander 2026-05-29 (BUG 1) — before deleting, read the source SO line
      (migration 0098) + this line's qty so we can hand the quota back. */
@@ -1402,6 +1465,11 @@ mfgPurchaseOrders.patch('/:id/cancel', async (c) => {
   if (curStatus === 'CANCELLED') {
     return c.json({ purchaseOrder: { id, status: 'CANCELLED' } });
   }
+
+  /* Tier 2 downstream-lock — can't cancel a PO that has a downstream GRN; the
+     GRN must be cancelled/deleted first (mirrors grnHasDownstream cancel guard). */
+  const childLock = await poHasDownstream(supabase, id);
+  if (childLock) return c.json(childLock, 409);
 
   const { error: updErr } = await supabase
     .from('purchase_orders')
