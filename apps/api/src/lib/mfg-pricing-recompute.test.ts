@@ -8,16 +8,15 @@
 //   • mattress / bedframe / accessory / service — drift-checked against
 //     sell_price_sen. In production each size is its own mfg_products row, so
 //     loadProductByCode resolves the per-size selling price.
-//   • SOFA — EXCLUDED. Its selling lives in sofaCompartmentMeta + a combo spread
-//     across module lines, recomputed on a separate Phase-4b path. Until then
-//     sofa trusts the operator price (no regression).
+//   • SOFA — EXCLUDED from the sell_price_sen catalog path. Its selling is
+//     recomputed from per-Model module-SKU prices on the separate path below
+//     (SOFA-SELLING-PLAN.md). A sofa we can't price → trust the operator.
 //   • Custom lines with no sell_price_sen — trust the operator (no authoritative
 //     figure to reject against).
 //   • Client price 0 = "not provided" (backend SO editor) → server fills the
 //     authoritative price, no drift.
 
 import { describe, it, expect } from 'vitest';
-import type { MaintenanceConfig } from '@2990s/shared/mfg-pricing';
 import { recomputeFromSnapshot, type ProductRowLite } from './mfg-pricing-recompute';
 
 const mattress = (sell: number | null): ProductRowLite => ({
@@ -114,37 +113,34 @@ describe('recomputeFromSnapshot — authoritative selling drift (D4)', () => {
   });
 });
 
-/* ── Phase 4b — configured sofa selling drift (Chairman 2026-05-30) ──────────
+/* ── SOFA-SELLING-PLAN (per-Model module-SKU prices, Chairman 2026-05-31) ────
    A configurator sofa arrives as one line carrying variants.cells + depth. The
-   server recomputes its authoritative SELLING total from the SAME
-   sofaCompartmentMeta + combos the POS used (computeSofaSellingSen), and rejects
-   client drift. Two 1A modules @ RM1500 each, laid out apart (no combo match) →
-   RM3000 = 300000 sen. */
+   server recomputes its authoritative SELLING total from the SAME per-Model
+   module→price map the POS used (each module = that Model's SKU sell_price_sen,
+   via computeSofaSellingSen), and rejects client drift. The module map is the
+   6th arg (loaded by base_model in the route); config no longer carries sofa
+   selling prices. Two 1A modules @ RM1500 each, laid out apart (no combo match)
+   → RM3000 = 300000 sen. */
 
 const sofaProduct: ProductRowLite = {
-  code: 'NOOR', category: 'SOFA',
+  code: 'BOOQIT-2S', category: 'SOFA',
   base_price_sen: 0, price1_sen: null, cost_price_sen: 0,
-  seat_height_prices: null, base_model: 'NOOR', sell_price_sen: null,
+  seat_height_prices: null, base_model: 'Booqit', sell_price_sen: null,
 };
 
-const sofaConfig = (meta: Record<string, { defaultPriceCenti?: number }>): MaintenanceConfig =>
-  ({
-    divanHeights: [], legHeights: [], totalHeights: [], gaps: [], specials: [],
-    sofaLegHeights: [], sofaSpecials: [], sofaSizes: [], sofaCompartmentMeta: meta,
-  } as unknown as MaintenanceConfig);
-
-const SOFA_META = { '1A-LHF': { defaultPriceCenti: 150000 }, '1A-RHF': { defaultPriceCenti: 150000 } };
+// Per-Model module SELLING prices in sen (what loadModelSofaModulePrices builds).
+const SOFA_MODULE_PRICES = { '1A-LHF': 150000, '1A-RHF': 150000 };
 const sofaCells = [
   { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
   { id: 'b', moduleId: '1A-RHF', x: 400, y: 0, rot: 0 },
 ];
 const sofaVariants = { cells: sofaCells, depth: '24' } as unknown as null;
 
-describe('recomputeFromSnapshot — configured sofa selling drift (Phase 4b)', () => {
-  it('client total == authoritative compartment sum → no drift, persists authoritative', () => {
+describe('recomputeFromSnapshot — configured sofa selling drift (per-Model module SKUs)', () => {
+  it('client total == authoritative module sum → no drift, persists authoritative', () => {
     const r = recomputeFromSnapshot(
-      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants: sofaVariants },
-      sofaProduct, null, sofaConfig(SOFA_META), [],
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(300000);
@@ -152,48 +148,62 @@ describe('recomputeFromSnapshot — configured sofa selling drift (Phase 4b)', (
 
   it('tampered low total (RM1 vs RM3000) → drift true (route returns 400)', () => {
     const r = recomputeFromSnapshot(
-      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100, variants: sofaVariants },
-      sofaProduct, null, sofaConfig(SOFA_META), [],
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 100, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
     );
     expect(r.drift).toBe(true);
   });
 
   it('client 0 (not provided) → no drift, server fills the authoritative sofa total', () => {
     const r = recomputeFromSnapshot(
-      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 0, variants: sofaVariants },
-      sofaProduct, null, sofaConfig(SOFA_META), [],
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 0, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(300000);
   });
 
+  it('is per-Model: the SAME build prices from the passed Model map (Annsa ≠ Booqit)', () => {
+    const oneNa = { cells: [{ id: 'a', moduleId: '1NA', x: 0, y: 0, rot: 0 }], depth: '24' } as unknown as null;
+    const booqit = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-1NA', itemGroup: 'sofa', qty: 1, unitPriceCenti: 99000, variants: oneNa },
+      sofaProduct, null, null, [], { '1NA': 99000 },
+    );
+    const annsa = recomputeFromSnapshot(
+      { itemCode: 'ANNSA-1NA', itemGroup: 'sofa', qty: 1, unitPriceCenti: 88000, variants: oneNa },
+      { ...sofaProduct, base_model: 'Annsa' }, null, null, [], { '1NA': 88000 },
+    );
+    expect(booqit.drift).toBe(false);
+    expect(booqit.unit_price_sen).toBe(99000);
+    expect(annsa.drift).toBe(false);
+    expect(annsa.unit_price_sen).toBe(88000);
+  });
+
   it('sofa WITHOUT cells (backend manual module line) → trust operator, no drift', () => {
     const r = recomputeFromSnapshot(
-      { itemCode: 'NOOR-2A', itemGroup: 'sofa', qty: 1, unitPriceCenti: 50000, variants: null },
-      sofaProduct, null, sofaConfig(SOFA_META), [],
+      { itemCode: 'BOOQIT-2A(LHF)', itemGroup: 'sofa', qty: 1, unitPriceCenti: 50000, variants: null },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(50000);
   });
 
-  it('configured sofa but config/meta missing → trust operator (no false reject)', () => {
+  it('configured sofa but no module prices loaded (null) → trust operator (no false reject)', () => {
     const r = recomputeFromSnapshot(
-      { itemCode: 'NOOR', itemGroup: 'sofa', qty: 1, unitPriceCenti: 50000, variants: sofaVariants },
-      sofaProduct, null, null, [],
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 50000, variants: sofaVariants },
+      sofaProduct, null, null, [], null,
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(50000);
   });
 
-  it('sofa priced in the OTHER (retail) system → server computes 0 → trust operator, NO false reject', () => {
-    // Prod reality (verified 2026-05-30): sofa SELLING prices live in retail
-    // product_compartments, not the mfg sofaCompartmentMeta (empty for sofas).
-    // The meta here lacks the build's compartments → computeSofaSellingSen = 0.
-    // The gate must NOT reject the operator's real RM2480 price.
-    const metaWithoutBuild: Record<string, { defaultPriceCenti?: number }> = { '3S': {} };
+  it('module map lacks the build modules → server computes 0 → trust operator, NO false reject', () => {
+    // The Model's priced modules don't include the build's 1A pieces (e.g. only
+    // 2NA priced so far) → computeSofaSellingSen = 0. The gate must NOT reject
+    // the operator's real RM2480 price.
     const r = recomputeFromSnapshot(
-      { itemCode: 'ANNSA', itemGroup: 'sofa', qty: 1, unitPriceCenti: 248000, variants: sofaVariants },
-      sofaProduct, null, sofaConfig(metaWithoutBuild), [],
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 248000, variants: sofaVariants },
+      sofaProduct, null, null, [], { '2NA': 149000 },
     );
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(248000);

@@ -31,8 +31,10 @@ import {
 } from '@2990s/shared/mfg-pricing';
 import {
   computeSofaSellingSen,
+  sofaModulePricesFromSkus,
   type Cell,
   type SofaComboRow,
+  type SofaModulePriceSen,
 } from '@2990s/shared/sofa-build';
 
 export type MfgItemVariants = {
@@ -147,6 +149,7 @@ export function recomputeFromSnapshot(
   fabric:  FabricRowLite | null,
   config:  MaintenanceConfig | null,
   sofaCombos: SofaComboRow[] | null = null,
+  sofaModulePrices: SofaModulePriceSen | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -234,9 +237,9 @@ export function recomputeFromSnapshot(
      charge that authoritative price and flag drift > 0.5% so the route returns
      HTTP 400 (CLAUDE.md non-negotiable).
 
-       • SOFA is EXCLUDED — its selling lives in sofaCompartmentMeta + a combo
-         spread across module lines, recomputed on a separate Phase-4b path.
-         Until then sofa keeps the operator's manual price (no regression).
+       • SOFA is EXCLUDED from this sell_price_sen catalog path — its selling is
+         recomputed from per-Model module-SKU prices just below (SOFA-SELLING-
+         PLAN). A sofa we can't price there keeps the operator's manual price.
        • A line with no sell_price_sen (custom / special order) has no
          authoritative figure → trust the operator.
        • A client price of 0 means "not provided" (e.g. the backend SO editor
@@ -246,19 +249,19 @@ export function recomputeFromSnapshot(
   const authoritativeSellingSen = sellBaseSen + breakdown.unitPriceSen;
   const hasAuthoritativeSelling = category !== 'SOFA' && sellBaseSen > 0;
 
-  /* Phase 4b (Chairman 2026-05-30) — a configurator sofa arrives as ONE line
-     carrying variants.cells + variants.depth. Recompute its authoritative
-     SELLING total from the SAME sofaCompartmentMeta + combos the POS used
-     (the shared computeSofaSellingSen → computeSofaPrice), so the drift gate
-     can't diverge from the POS submission. Sofa lines WITHOUT cells (a backend
-     manual module row) or with no loaded master config keep the operator's
-     price — no false reject. */
+  /* SOFA-SELLING-PLAN (Chairman 2026-05-31) — a configurator sofa arrives as
+     ONE line carrying variants.cells + variants.depth. Recompute its
+     authoritative SELLING total from the SAME per-Model module→price map the
+     POS used (each module = that Model's SKU `sell_price_sen`, passed in as
+     `sofaModulePrices` and loaded by base_model in the route) + combos, via the
+     shared computeSofaSellingSen → computeSofaPrice, so the drift gate can't
+     diverge from the POS submission. Sofa lines WITHOUT cells (a backend manual
+     module row) or with no loaded module prices keep the operator's price — no
+     false reject. */
   const sofaCells = category === 'SOFA'
     ? (item.variants as { cells?: unknown } | null | undefined)?.cells
     : null;
-  const sofaMeta = (config as { sofaCompartmentMeta?: Record<string, { defaultPriceCenti?: number }> } | null)
-    ?.sofaCompartmentMeta ?? null;
-  const canPriceSofa = Array.isArray(sofaCells) && sofaCells.length > 0 && sofaMeta != null;
+  const canPriceSofa = Array.isArray(sofaCells) && sofaCells.length > 0 && sofaModulePrices != null;
 
   let drift: boolean;
   let unitToPersistSen: number;
@@ -271,19 +274,16 @@ export function recomputeFromSnapshot(
     const lineCombos = (sofaCombos ?? []).filter(
       (c) => !product?.base_model || c.baseModel === product.base_model,
     );
-    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaMeta, lineCombos);
+    const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, lineCombos);
     if (sofaSellingSen > 0) {
-      // Server has authoritative per-compartment SELLING prices for this build.
+      // Server has authoritative per-Model module SELLING prices for this build.
       drift = driftThresholdExceeded(manualUnitSelling, sofaSellingSen);
       unitToPersistSen = sofaSellingSen;
     } else {
-      // Server could NOT price this sofa from the master maintenance config.
-      // In prod (verified 2026-05-30) sofa SELLING prices live in the retail
-      // `product_compartments` table, NOT the mfg `sofaCompartmentMeta` (empty
-      // for sofas: 72 SKUs, 0 priced). NEVER reject a sofa we can't
-      // independently price — trust the operator/client price. This keeps the
-      // gate inert until/unless sofa selling prices are populated in the mfg
-      // config; the legacy /orders path already protects retail-priced sofas.
+      // The Model's priced modules don't cover this build (e.g. not yet priced
+      // in Master Admin) → computeSofaSellingSen = 0. NEVER reject a sofa we
+      // can't independently price — trust the operator/client price. The gate
+      // stays inert per-Model until that Model's module SKUs get sell prices.
       drift = false;
       unitToPersistSen = manualUnitSelling;
     }
@@ -325,6 +325,32 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
   return data as ProductRowLite;
 }
 
+/** Load a Model's sofa module SELLING prices (per-Model module→sen map) from
+ *  mfg_products. Each module of a Model is its own SKU (e.g. `BOOQIT-2A(LHF)`);
+ *  its `sell_price_sen` is the per-Model module price. Returns null when
+ *  base_model is absent so the caller treats the sofa as "can't price → trust
+ *  operator" (never a false reject). Built via the shared `sofaModulePricesFromSkus`
+ *  so the server's map is byte-for-byte what the POS builds. */
+export async function loadModelSofaModulePrices(
+  sb: any,
+  baseModel: string | null | undefined,
+): Promise<SofaModulePriceSen | null> {
+  if (!baseModel) return null;
+  const { data } = await sb
+    .from('mfg_products')
+    .select('code, sell_price_sen')
+    .eq('base_model', baseModel)
+    .eq('category', 'SOFA');
+  if (!data) return null;
+  return sofaModulePricesFromSkus(
+    (data as Array<{ code: string; sell_price_sen: number | null }>).map((r) => ({
+      code: r.code,
+      sellPriceSen: r.sell_price_sen,
+    })),
+    baseModel,
+  );
+}
+
 /** Load a single fabric tracking row by code (tier-resolution data only). */
 export async function loadFabricByCode(sb: any, code: string | null | undefined): Promise<FabricRowLite | null> {
   if (!code) return null;
@@ -364,5 +390,8 @@ export async function recomputeOneLine(
     loadProductByCode(sb, item.itemCode),
     loadFabricByCode(sb, item.variants?.fabricCode ?? null),
   ]);
-  return recomputeFromSnapshot(item, product, fabric, config);
+  const sofaModulePrices = product?.category === 'SOFA'
+    ? await loadModelSofaModulePrices(sb, product.base_model)
+    : null;
+  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices);
 }

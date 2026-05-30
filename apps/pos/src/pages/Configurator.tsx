@@ -348,12 +348,13 @@ export const Configurator = () => {
     /* mfg products have no product_compartments rows (UUID FK), so the legacy
        hook returns []. Without this fallback computeSofaPrice would price every
        module at 0 → a custom (non-combo) build totals RM 0. Derive the
-       per-compartment SELLING price from the Model's resolved sofaCompartmentMeta
-       (Chairman 2026-05-30: each module has its own price; a custom build SUMS
-       them, a matched Combo overrides). compartmentId = normalizedCode so it
-       matches a laid-out cell.moduleId. Mirrors @2990s/shared
-       sofaCompartmentsFromMeta — the server selling recompute (Phase 4b) builds
-       the SAME rows from the same meta, so its drift-reject can't diverge. */
+       per-compartment SELLING price from the Model's per-module SKU prices
+       (SOFA-SELLING-PLAN, Chairman 2026-05-31: each module = its own mfg SKU
+       sell_price_sen; a custom build SUMS them, a matched Combo overrides) —
+       useSofaCustomizerData.compartments[].priceSen carries that. compartmentId
+       = normalizedCode so it matches a laid-out cell.moduleId. The server
+       selling recompute builds the SAME map from the same SKUs, so its
+       drift-reject can't diverge. */
     compartments: (compartments.data && compartments.data.length > 0)
       ? compartments.data
       : (sofaCustomizer.data?.compartments ?? []).map((cc) => ({

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { sofaModulePricesFromSkus } from '@2990s/shared/sofa-build';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -812,7 +813,8 @@ export interface ResolvedSofaCompartment {
   normalizedCode: string;
   /** Free-text label for the palette card. */
   label:       string;
-  /** Default price in cents (1 RM = 100). 0 = no default. */
+  /** Per-Model module SELLING price in sen (1 RM = 100), from this Model's
+   *  module SKU `sell_price_sen`. 0 = unpriced (no SKU price set yet). */
   priceSen:    number;
   /** Fully-resolved image URL — Worker proxy when uploaded, /sofa-modules/<id>.png
    *  fallback otherwise. null = no image. */
@@ -902,6 +904,30 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
         : sku.product_models;
       if (!model || sku.category !== 'SOFA') return null;
 
+      // Per-Model module SELLING prices (SOFA-SELLING-PLAN, Chairman
+      // 2026-05-31). Each module of this Model is its own mfg SKU (e.g.
+      // BOOQIT-2A(LHF)); its `sell_price_sen` IS the per-Model module price the
+      // Master Admin sets. Build the SAME normalized module→sen map the server
+      // drift gate uses (shared `sofaModulePricesFromSkus`) so the live total
+      // and the server price from one source. Replaces the old global
+      // sofaCompartmentMeta.defaultPriceCenti read.
+      //
+      // Scope by base_model (= model_code) — the SAME key the server uses
+      // (loadModelSofaModulePrices) and the same key combo scoping uses, so the
+      // POS and server SKU sets are identical by construction (not just for
+      // today's data). model_code === base_model on every sofa SKU.
+      const { data: skuPriceRows, error: skuPriceErr } = await supabase
+        .from('mfg_products')
+        .select('code, sell_price_sen')
+        .eq('base_model', model.model_code)
+        .eq('category', 'SOFA');
+      if (skuPriceErr) throw skuPriceErr;
+      const modulePrices = sofaModulePricesFromSkus(
+        ((skuPriceRows ?? []) as Array<{ code: string; sell_price_sen: number | null }>)
+          .map((r) => ({ code: r.code, sellPriceSen: r.sell_price_sen })),
+        model.model_code,
+      );
+
       const allowed = (model.allowed_options ?? {}) as {
         compartments?: string[];
         sizes?:        string[];
@@ -941,7 +967,9 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
           code:           rawCode,
           normalizedCode: norm,
           label:          meta.description ?? rawCode,
-          priceSen:       meta.defaultPriceCenti ?? 0,
+          // Per-Model module SELLING price from this Model's module SKU
+          // (SOFA-SELLING-PLAN). meta is still the source for image + label.
+          priceSen:       modulePrices[norm] ?? 0,
           imageUrl:       resolveCompartmentPhoto(rawCode, imageKey),
           group:          classifyCompartmentCode(rawCode),
         };
@@ -1046,6 +1074,14 @@ export const useSofaCustomizerRealtime = (leadSkuId: string | undefined) => {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'maintenance_config_history' },
+        () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
+      )
+      // SOFA-SELLING-PLAN — the customizer now reads per-Model module SKU
+      // sell_price_sen, so a Master-Admin price edit (mfg_products) must
+      // re-fetch the configurator's module prices within ~300ms.
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mfg_products' },
         () => { void qc.invalidateQueries({ queryKey: ['sofa-customizer-data', leadSkuId] }); },
       )
       .subscribe();

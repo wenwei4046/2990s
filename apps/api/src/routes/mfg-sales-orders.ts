@@ -16,6 +16,7 @@ import {
   recomputeFromSnapshot,
   loadProductByCode,
   loadFabricByCode,
+  loadModelSofaModulePrices,
   type MfgItemForRecompute,
   type RecomputedLine,
 } from '../lib/mfg-pricing-recompute';
@@ -687,6 +688,12 @@ mfgSalesOrders.post('/', async (c) => {
       loadProductByCode(sb, itemCode),
       loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
     ]);
+    // SOFA-SELLING-PLAN — a sofa's per-module SELLING prices are its Model's
+    // module-SKU sell_price_sen; load them so the drift gate reprices the build
+    // from the same source the POS used. Non-sofa lines skip it.
+    const sofaModulePrices = product?.category === 'SOFA'
+      ? await loadModelSofaModulePrices(sb, product.base_model)
+      : null;
     const draft: MfgItemForRecompute = {
       itemCode,
       itemGroup:      String(it.itemGroup ?? 'others'),
@@ -694,7 +701,7 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -1543,6 +1550,10 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
     loadActiveSofaCombos(sb),
   ]);
+  // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
+  const sofaModulePricesLite = productLite?.category === 'SOFA'
+    ? await loadModelSofaModulePrices(sb, productLite.base_model)
+    : null;
   const recomputed = recomputeFromSnapshot(
     {
       itemCode:       itemCodeStr,
@@ -1555,6 +1566,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     fabricLite,
     cachedConfig,
     sofaCombosLite,
+    sofaModulePricesLite,
   );
   if (recomputed.drift) {
     return c.json({
@@ -1706,6 +1718,10 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
       loadActiveSofaCombos(sb),
     ]);
+    // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
+    const sofaModulePricesPatch = prodLite?.category === 'SOFA'
+      ? await loadModelSofaModulePrices(sb, prodLite.base_model)
+      : null;
     recomputedPatch = recomputeFromSnapshot(
       {
         itemCode:       itemCodeAfter,
@@ -1718,6 +1734,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       fabLite,
       cfg,
       sofaCombosPatch,
+      sofaModulePricesPatch,
     );
     if (recomputedPatch.drift) {
       return c.json({

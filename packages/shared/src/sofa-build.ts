@@ -226,41 +226,81 @@ export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup =
   return 'Other';
 };
 
-/* ─── SELLING helpers (Phase 4b, Chairman 2026-05-30) ─────────────────────
- * A configured mfg sofa is priced from the master maintenance config's
- * per-compartment SELLING prices (`sofaCompartmentMeta.defaultPriceCenti`):
- * custom builds sum each module's price; a matched Combo overrides (always —
- * Q2). The POS (so a custom build is no longer RM0) and the server selling
- * recompute (so its drift-reject matches the POS by construction) both go
+/* ─── SELLING helpers (per-Model module-SKU prices — SOFA-SELLING-PLAN.md,
+ * Chairman 2026-05-31) ───────────────────────────────────────────────────
+ * A configured mfg sofa is priced from the Model's per-module SELLING prices.
+ * Each module of each Model is its own mfg SKU (e.g. Booqit's 2A(LHF) → SKU
+ * `BOOQIT-2A(LHF)`), and that SKU's `sell_price_sen` IS the per-Model module
+ * price (Master Admin sets it). Custom builds sum each module's price; a
+ * matched Combo overrides (always — Q2). The POS (so a custom build is no
+ * longer RM0) and the server selling recompute (so its drift-reject matches
+ * the POS by construction) both build the SAME per-Model module→price map
  * through these pure helpers — same source, same math, zero divergence. */
 
-/** Build `SofaProductPricing.compartments` from the master config's
- *  `sofaCompartmentMeta`. `compartmentId` is normalised (matches a laid-out
- *  cell.moduleId); price is whole-MYR (`defaultPriceCenti` ÷ 100). */
-export const sofaCompartmentsFromMeta = (
-  meta: Record<string, { defaultPriceCenti?: number }> | null | undefined,
+/** Per-Model module SELLING price map: normalized module code (dash form,
+ *  matches a laid-out `cell.moduleId`) → price in sen. Built from the Model's
+ *  sofa module-SKU `sell_price_sen`. */
+export type SofaModulePriceSen = Record<string, number>;
+
+/** Strip the `<BASE_MODEL>-` prefix off a sofa SKU code → the raw module code
+ *  (parens form, e.g. `BOOQIT-2A(LHF)` → `2A(LHF)`). The SKU prefix is UPPER
+ *  while `base_model` is Title-case, so the match is case-insensitive. Falls
+ *  back to the substring after the first `-` when base_model is absent /
+ *  mismatched (base models are single tokens with no internal dash). */
+export const moduleCodeFromSku = (skuCode: string, baseModel: string | null | undefined): string => {
+  const code = (skuCode ?? '').trim();
+  const prefix = (baseModel ?? '').trim();
+  if (prefix && code.toUpperCase().startsWith(`${prefix.toUpperCase()}-`)) {
+    return code.slice(prefix.length + 1);
+  }
+  const dash = code.indexOf('-');
+  return dash >= 0 ? code.slice(dash + 1) : code;
+};
+
+/** Build the per-Model module→price map (sen) from the Model's sofa SKU rows.
+ *  Keyed by normalized module code. SKUs with a null `sell_price` are skipped
+ *  (unpriced → no entry → priced 0 at lookup, never a phantom price). Whole-
+ *  unit preset SKUs (1S / 2S) normalize to codes no laid-out cell carries, so
+ *  they're harmless if present (their Quick-Pick pricing is a separate phase). */
+export const sofaModulePricesFromSkus = (
+  rows: Array<{ code: string; sellPriceSen: number | null }>,
+  baseModel: string | null | undefined,
+): SofaModulePriceSen => {
+  const map: SofaModulePriceSen = {};
+  for (const r of rows) {
+    if (r.sellPriceSen == null) continue;
+    map[normalizeCompartmentCode(moduleCodeFromSku(r.code, baseModel))] = r.sellPriceSen;
+  }
+  return map;
+};
+
+/** Build `SofaProductPricing.compartments` from a per-Model module→price map.
+ *  `compartmentId` is normalised (matches a laid-out `cell.moduleId`); price is
+ *  whole-MYR (sen ÷ 100). */
+export const sofaCompartmentsFromModulePrices = (
+  prices: SofaModulePriceSen | null | undefined,
 ): SofaProductPricingRow[] => {
-  if (!meta) return [];
-  return Object.entries(meta).map(([rawCode, m]) => ({
-    compartmentId: normalizeCompartmentCode(rawCode),
+  if (!prices) return [];
+  return Object.entries(prices).map(([code, sen]) => ({
+    compartmentId: normalizeCompartmentCode(code),
     active: true,
-    price: m?.defaultPriceCenti != null ? Math.round(m.defaultPriceCenti / 100) : 0,
+    price: Math.round(sen / 100),
   }));
 };
 
-/** Authoritative SELLING total (in sen) for a configured sofa. Reuses the
- *  same `computeSofaPrice` the POS uses, fed compartments from
- *  `sofaCompartmentMeta` + combos (sofa_combo_pricing). mfg sofas carry no
- *  bundles and `reclinerUpgradePrice` 0 at pilot, so those are fixed here.
- *  Returns whole-build sen (×100) for the server drift gate. */
+/** Authoritative SELLING total (in sen) for a configured sofa. Reuses the same
+ *  `computeSofaPrice` the POS uses, fed compartments from the Model's module→
+ *  price map + combos (sofa_combo_pricing). mfg sofas carry no bundles and
+ *  `reclinerUpgradePrice` 0 at pilot, so those are fixed here. Returns whole-
+ *  build sen (×100) for the server drift gate. */
 export const computeSofaSellingSen = (
   cells: Cell[],
   depth: Depth,
-  meta: Record<string, { defaultPriceCenti?: number }> | null | undefined,
+  modulePrices: SofaModulePriceSen | null | undefined,
   combos: SofaComboRow[],
 ): number => {
   const pricing: SofaProductPricing = {
-    compartments: sofaCompartmentsFromMeta(meta),
+    compartments: sofaCompartmentsFromModulePrices(modulePrices),
     bundles: [],
     reclinerUpgradePrice: 0,
     combos,
