@@ -23,13 +23,13 @@
 // ----------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useCreateMfgSalesOrder, useDebtorSearch, useAddSalesOrderPayment,
-  useUploadSoItemPhoto,
+  useUploadSoItemPhoto, useMfgSalesOrderDetail,
   type DebtorSuggestion,
 } from '../lib/flow-queries';
 import { supabase } from '../lib/supabase';
@@ -75,6 +75,12 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 
 export const SalesOrderNew = () => {
   const navigate = useNavigate();
+  /* Copy-to-new-SO: ?copyFrom=<docNo> seeds this form from an existing SO
+     (customer + line items only — dates, payments, customer SO ref, doc no
+     and status are intentionally left blank so the operator starts fresh). */
+  const [searchParams] = useSearchParams();
+  const copyFromDocNo = searchParams.get('copyFrom');
+  const copySource = useMfgSalesOrderDetail(copyFromDocNo);
   const create   = useCreateMfgSalesOrder();
   const addPayment = useAddSalesOrderPayment();
   const uploadPhoto = useUploadSoItemPhoto();
@@ -165,6 +171,52 @@ export const SalesOrderNew = () => {
      seeded on mount so commander immediately sees the variant editor
      instead of needing to click "+ Add line item" first. */
   const [lines, setLines] = useState<DraftLine[]>(() => [newLine()]);
+
+  /* Copy-to-new-SO seed — runs once when the source SO finishes loading.
+     Fills customer + address + emergency + line items. Deliberately omits
+     processing/delivery dates, payments, customer SO ref, doc no and status
+     so the new order is a clean draft. Guarded so it can't re-seed and stomp
+     edits the operator has already made. */
+  const [copySeeded, setCopySeeded] = useState(false);
+  useEffect(() => {
+    if (!copyFromDocNo || copySeeded) return;
+    const h = copySource.data?.salesOrder;
+    const srcItems = copySource.data?.items;
+    if (!h) return;
+    setDebtorCode(h.debtor_code ?? '');
+    setDebtorName(h.debtor_name ?? '');
+    setPhone(h.phone ?? '');
+    setEmail(h.email ?? '');
+    setSalespersonId(h.salesperson_id ?? '');
+    setCustomerType(h.customer_type ?? '');
+    setBuildingType(h.building_type ?? '');
+    setNote(h.note ?? '');
+    setAddress1(h.address1 ?? '');
+    setAddress2(h.address2 ?? '');
+    setState(h.customer_state ?? '');
+    setCity(h.city ?? h.address3 ?? '');
+    setPostcode(h.postcode ?? h.address4 ?? '');
+    setEmergencyName(h.emergency_contact_name ?? '');
+    setEmergencyRel(h.emergency_contact_relationship ?? '');
+    setEmergencyPhone(h.emergency_contact_phone ?? '');
+    if (Array.isArray(srcItems) && srcItems.length > 0) {
+      setLines(srcItems.map((it: any) => ({
+        ...newLine(),
+        itemCode:       it.item_code ?? '',
+        itemGroup:      it.item_group ?? 'others',
+        description:    it.description ?? '',
+        uom:            it.uom ?? 'UNIT',
+        qty:            it.qty ?? 1,
+        unitPriceCenti: it.unit_price_centi ?? 0,
+        discountCenti:  it.discount_centi ?? 0,
+        unitCostCenti:  it.unit_cost_centi ?? 0,
+        variants:       (it.variants as Record<string, unknown>) ?? {},
+        remark:         it.remark ?? '',
+      })));
+    }
+    setCopySeeded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [copyFromDocNo, copySeeded, copySource.data]);
 
   // ── Payments draft state ───────────────────────────────────────────
   /* Task #105 — Same Houzs PaymentsTable used on Detail, but in DRAFT mode
@@ -494,18 +546,20 @@ export const SalesOrderNew = () => {
       window.alert('Add at least one item via "+ Add line item".');
       return;
     }
-    // Commander 2026-05-28: variants are mandatory — block proceeding when a
-    // sofa/bedframe line still has any unselected required variant, so
-    // purchasing never gets a half-specced order to chase.
-    const variantGaps = validLines
-      .map((l) => ({ code: l.itemCode, miss: missingRequiredVariants(l.itemGroup, l.variants) }))
-      .filter((x) => x.miss.length > 0);
-    if (variantGaps.length > 0) {
-      window.alert(
-        'Complete all variant selections before saving:\n\n'
-        + variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
-      );
-      return;
+    // Variants are only mandatory once a processing date is set: with a date,
+    // the order is committed to production and purchasing needs a full spec.
+    // No processing date = still a draft, so allow saving with gaps.
+    if (processingDate) {
+      const variantGaps = validLines
+        .map((l) => ({ code: l.itemCode, miss: missingRequiredVariants(l.itemGroup, l.variants) }))
+        .filter((x) => x.miss.length > 0);
+      if (variantGaps.length > 0) {
+        window.alert(
+          'Complete all variant selections before saving:\n\n'
+          + variantGaps.map((x) => `• ${x.code}: ${x.miss.join(', ')}`).join('\n'),
+        );
+        return;
+      }
     }
 
     create.mutate(

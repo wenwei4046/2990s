@@ -887,11 +887,10 @@ export const MfgSalesOrdersList = () => {
     navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(row.doc_no)}`);
   };
 
-  /* TODO(copy-to-new-so): out of scope for this PR. Will need a
-     sessionStorage handoff carrying the SO header + line items so the
-     New SO page can pre-fill. Wire up in a follow-up worktree. */
+  /* Copy to new SO: hand the source doc number to the New SO page, which
+     fetches it and pre-fills customer + line items (dates/payments excluded). */
   const copyToNewSo = (row: SoRow) => {
-    alert(`Copy to new SO is not implemented yet (would clone SO ${row.doc_no}).`);
+    navigate(`/mfg-sales-orders/new?copyFrom=${encodeURIComponent(row.doc_no)}`);
   };
 
   // ── Columns (23 reference + 1 status pill) ──────────────────────
