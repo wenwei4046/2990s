@@ -32,7 +32,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Convert DO to Return', path: '/delivery-returns/from-do', group: 'Sales Order', keywords: 'convert do delivery return goods back' },
 
   // Procurement
-  { label: 'SKU master', path: '/sku-master', group: 'Procurement', keywords: 'catalog pricing' },
   { label: 'Products & Maintenance', path: '/products', group: 'Procurement', keywords: 'modular combo fabric' },
   { label: 'Suppliers', path: '/suppliers', group: 'Procurement', keywords: 'vendor creditor' },
   { label: 'MRP · Stock Status', path: '/mrp', group: 'Procurement', keywords: 'requirements planning shortage order' },
