@@ -1067,6 +1067,12 @@ mfgSalesOrders.patch('/:docNo/status', async (c) => {
     note: body.notes ?? undefined,
   });
 
+  /* SO status changed → recompute allocation. CANCELLED removes the SO from
+     the queue (its claim releases); terminal statuses (SHIPPED/DELIVERED/…)
+     also drop it out. Other PENDING SOs may move into READY. Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-status failed:', e); }
+
   /* Edge #B — SO cancel with deposit paid turns the deposit into a customer
      credit. Idempotent on (source_type, source_doc_no). Best-effort. */
   if (body.status === 'CANCELLED' && fromStatus !== 'CANCELLED') {
@@ -1362,6 +1368,12 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
     }
   }
 
+  /* SO header edit may have changed customer_delivery_date or
+     allocation_warehouse_id — both reshuffle the allocation queue. Recompute.
+     Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-header-patch failed:', e); }
+
   return c.json({ ok: true, docNo });
 });
 
@@ -1623,6 +1635,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     ],
   });
 
+  /* New line = new demand → recompute may flip this SO into READY (or
+     bump another SO out). Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-add failed:', e); }
+
   return c.json({ item: data }, 201);
 });
 
@@ -1812,6 +1829,10 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     });
   }
 
+  /* Line qty / variants / category may have changed → recompute. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-patch failed:', e); }
+
   return c.json({ ok: true });
 });
 
@@ -1876,6 +1897,11 @@ mfgSalesOrders.delete('/:docNo/items/:itemId', async (c) => {
       ],
     });
   }
+
+  /* Line delete = demand drops → other queued SOs may move into READY. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-line-delete failed:', e); }
+
   return c.body(null, 204);
 });
 
