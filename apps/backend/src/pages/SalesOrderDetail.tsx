@@ -23,7 +23,7 @@ import {
 import { Link, useParams } from 'react-router';
 import {
   ArrowLeft, FileText, Pencil, Plus, X, Printer, Save,
-  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw, Flame,
+  DollarSign, Lock, History, ChevronDown, ChevronRight, Ban, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
@@ -32,7 +32,7 @@ import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
   useUpdateMfgSalesOrderHeader,
-  useUpdateMfgSalesOrderStatus, useSetSoPriority,
+  useUpdateMfgSalesOrderStatus,
   useAddMfgSalesOrderItem,
   useUpdateMfgSalesOrderItem,
   useDeleteMfgSalesOrderItem,
@@ -47,6 +47,7 @@ import {
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, missingRequiredVariants, type SoLineDraft } from '../components/SoLineCard';
 import { PaymentsTable } from '../components/PaymentsTable';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   useLocalities,
   distinctStates,
@@ -212,6 +213,11 @@ type SoHeader = {
   hub_name: string | null;
   customer_delivery_date: string | null;
   internal_expected_dd: string | null;
+  /* POS "Proceed" timestamp (migration 0110). Auto-stamped server-side when the
+     SO first enters IN_PRODUCTION (the POS "Proceed" action). Read-only here —
+     surfaced as "Proceed Date" in the Order Info card so the coordinator can
+     see WHEN the salesperson proceeded the order. */
+  proceeded_at: string | null;
   linked_do_doc_no: string | null;
   ship_to_address: string | null;
   bill_to_address: string | null;
@@ -292,7 +298,6 @@ export const SalesOrderDetail = () => {
   const detail = useMfgSalesOrderDetail(docNo ?? null);
   const updateHeader = useUpdateMfgSalesOrderHeader();
   const updateStatus = useUpdateMfgSalesOrderStatus();
-  const setPriority = useSetSoPriority();
   const addItem = useAddMfgSalesOrderItem();
   const updateItem = useUpdateMfgSalesOrderItem();
   const deleteItem = useDeleteMfgSalesOrderItem();
@@ -391,22 +396,24 @@ export const SalesOrderDetail = () => {
       setSaveError('Every line must have a product selected before saving.');
       return;
     }
-    // Guard (Commander 2026-05-28): every required variant on a sofa/bedframe
-    // line must be chosen — no proceeding with blanks (purchasing needs the
-    // full spec). Blocks Save listing each line + its missing fields.
-    const variantGaps = [
-      ...Object.values(editingDrafts),
-      ...(addingDraft ? [addingDraft] : []),
-    ]
-      .filter((d) => d.itemCode.trim())
-      .map((d) => ({ code: d.itemCode, miss: missingRequiredVariants(d.itemGroup, d.variants) }))
-      .filter((x) => x.miss.length > 0);
-    if (variantGaps.length > 0) {
-      setSaveError(
-        'Complete all variant selections before saving — '
-        + variantGaps.map((x) => `${x.code}: ${x.miss.join(', ')}`).join('; ') + '.',
-      );
-      return;
+    // Variants are only mandatory once a processing date is set: with a date
+    // the order is committed to production and purchasing needs the full spec.
+    // No processing date = still a draft, so allow saving with gaps.
+    if (header?.internal_expected_dd) {
+      const variantGaps = [
+        ...Object.values(editingDrafts),
+        ...(addingDraft ? [addingDraft] : []),
+      ]
+        .filter((d) => d.itemCode.trim())
+        .map((d) => ({ code: d.itemCode, miss: missingRequiredVariants(d.itemGroup, d.variants) }))
+        .filter((x) => x.miss.length > 0);
+      if (variantGaps.length > 0) {
+        setSaveError(
+          'Complete all variant selections before saving — '
+          + variantGaps.map((x) => `${x.code}: ${x.miss.join(', ')}`).join('; ') + '.',
+        );
+        return;
+      }
     }
 
     setSavingOrder(true);
@@ -686,21 +693,6 @@ export const SalesOrderDetail = () => {
     if (!window.confirm(`Reopen ${header.doc_no} back to CONFIRMED so it can proceed again?`)) return;
     updateStatus.mutate({ docNo: header.doc_no, status: 'CONFIRMED' });
   };
-  /* #38 — Mark / clear Urgent allocation priority. Lives down here next to
-     Cancel/Reopen so the `header` non-null guard above (Loading… return)
-     already applies — TypeScript narrowing keeps it happy. */
-  const onMarkUrgent = () => {
-    const reason = window.prompt(
-      'Mark this SO as urgent? Stock will be reserved for this order before older queued SOs.\n\nOptional reason (e.g. walk-in customer, VIP):',
-    );
-    if (reason === null) return; // operator hit Cancel
-    setPriority.mutate({ docNo: header.doc_no, rank: 1, reason: reason.trim() || null });
-  };
-  const onClearPriority = () => {
-    if (!window.confirm('Remove the urgent flag? This SO will fall back into delivery-date order.')) return;
-    setPriority.mutate({ docNo: header.doc_no, rank: null });
-  };
-
   const handlePrint = () => {
     /* Followup #81 — Wait for the payments query before generating; legacy
        header columns (paid_centi, payment_method, …) are deprecated. If
@@ -776,24 +768,11 @@ export const SalesOrderDetail = () => {
             <History {...ICON} />
             <span>History</span>
           </Button>
+          <RelationshipMapButton type="so" id={docNo} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
             <span>Print PDF</span>
           </Button>
-          {/* Mark Urgent / Clear Urgent (#38) — manual allocation override
-              that bumps the SO to the head of the stock-allocation queue
-              regardless of delivery date. Hidden on cancelled / completed. */}
-          {!isCancelled && !isEditing && (
-            (header as { priority_rank?: number | null }).priority_rank
-              ? <Button variant="ghost" size="md" onClick={onClearPriority} disabled={setPriority.isPending} title="Remove urgent flag — fall back to delivery-date FIFO">
-                  <Flame {...ICON} style={{ color: 'var(--c-burnt)' }} />
-                  <span>Urgent · clear</span>
-                </Button>
-              : <Button variant="ghost" size="md" onClick={onMarkUrgent} disabled={setPriority.isPending} title="Mark urgent — reserve stock before older queued SOs">
-                  <Flame {...ICON} />
-                  <span>Mark Urgent</span>
-                </Button>
-          )}
           {/* Cancel SO / Reopen SO (Commander 2026-05-29). A cancelled SO
               stops proceeding (greys out, no MRP/PO/DO). Reopen restores it. */}
           {isCancelled ? (
@@ -1663,6 +1642,29 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                 disabled={inputsDisabled}
                 onChange={(e) => set('customerDeliveryDate', e.target.value)}
                 style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Proceed Date</span>
+              {/* Read-only — auto-stamped server-side (proceeded_at, migration
+                  0110) the first time the POS marks this order Proceed. */}
+              <input
+                className={styles.fieldInput}
+                value={header?.proceeded_at
+                  ? new Date(header.proceeded_at).toLocaleString('en-MY', {
+                      day: 'numeric', month: 'short', year: 'numeric',
+                      hour: '2-digit', minute: '2-digit',
+                    })
+                  : '—'}
+                disabled
+                readOnly
+                aria-label="Proceed Date (auto-stamped when the POS marks the order Proceed)" />
+              <span style={{
+                fontSize: 'var(--fs-11)',
+                color: 'var(--fg-muted)',
+                marginTop: 2,
+              }}>
+                Auto-stamped when the POS marks this order Proceed.
+              </span>
             </label>
             <label className={`${styles.field}`} style={{ gridColumn: 'span 4' }}>
               <span className={styles.fieldLabel}>Note</span>

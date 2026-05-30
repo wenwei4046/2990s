@@ -177,6 +177,27 @@ export async function doLineRemaining(
 }
 
 /**
+ * Live remaining-to-invoice qty per DO line id (delivered − invoiced −
+ * returned), resolved straight from the DO item ids. Used by the SI write-path
+ * guards so every sales_invoice_items create / add / qty-increase respects the
+ * SAME cap the convert-from-DO picker enforces — no back door. DO lines that no
+ * longer exist map to 0.
+ */
+export async function doRemainingByItemId(
+  sb: any,
+  doItemIds: Array<string | null | undefined>,
+): Promise<Map<string, number>> {
+  const ids = [...new Set(doItemIds.filter((x): x is string => !!x))];
+  const out = new Map<string, number>();
+  if (ids.length === 0) return out;
+  const { data } = await sb.from('delivery_order_items').select('delivery_order_id').in('id', ids);
+  const doIds = [...new Set(((data ?? []) as Array<{ delivery_order_id: string | null }>).map((r) => r.delivery_order_id).filter((d): d is string => !!d))];
+  const remainingMap = await doLineRemaining(sb, doIds);
+  for (const id of ids) out.set(id, remainingMap.get(id)?.remaining ?? 0);
+  return out;
+}
+
+/**
  * Resolve the set of candidate DO ids the picker should consider.
  * Explicit ?doIds=A,B wins; otherwise every NON-cancelled DO (capped) so the
  * picker can show all of them. Returns [] when there are none.

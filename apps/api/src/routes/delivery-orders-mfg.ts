@@ -18,6 +18,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
 
@@ -401,7 +402,7 @@ type DeliverableLine = {
   remaining: number;
 };
 
-async function soDeliverableRemaining(
+export async function soDeliverableRemaining(
   sb: any,
   soDocNos: string[],
 ): Promise<Map<string, DeliverableLine>> {
@@ -497,6 +498,25 @@ async function soDeliverableRemaining(
       remaining: qty - delivered + returned,
     });
   }
+  return out;
+}
+
+/* Live remaining-deliverable qty per SO line id (qty − delivered + returned),
+   resolved straight from the SO item ids. Used by the write-path guards below
+   so every DO-line create / add / qty-increase respects the SAME cap the
+   line-level picker enforces — no back door. SO lines that no longer exist map
+   to 0 (treat as nothing left to deliver). */
+async function soRemainingByItemId(
+  sb: any,
+  soItemIds: Array<string | null | undefined>,
+): Promise<Map<string, number>> {
+  const ids = [...new Set(soItemIds.filter((x): x is string => !!x))];
+  const out = new Map<string, number>();
+  if (ids.length === 0) return out;
+  const { data } = await sb.from('mfg_sales_order_items').select('doc_no').in('id', ids);
+  const docNos = [...new Set(((data ?? []) as Array<{ doc_no: string | null }>).map((r) => r.doc_no).filter((d): d is string => !!d))];
+  const remainingMap = await soDeliverableRemaining(sb, docNos);
+  for (const id of ids) out.set(id, remainingMap.get(id)?.remaining ?? 0);
   return out;
 }
 
@@ -633,6 +653,33 @@ deliveryOrdersMfg.post('/', async (c) => {
      soDeliverableRemaining): an SO line can be split across several DOs until
      its remaining hits 0. This single-SO prefill path creates a full-qty DO
      as before; the partial/multi path lives in POST /from-sos. */
+
+  /* Remaining-qty guard (Wei Siang 2026-05-30) — any line that traces back to
+     an SO line (soItemId set) may not push that SO line past its ordered qty.
+     Mirrors the /from-sos picker's over_remaining gate so this create path
+     can't become a back door. Ad-hoc lines (no soItemId) are uncapped. */
+  {
+    const additions = new Map<string, number>();
+    for (const it of items) {
+      const sid = it.soItemId as string | undefined;
+      if (!sid) continue;
+      additions.set(sid, (additions.get(sid) ?? 0) + Number(it.qty ?? 0));
+    }
+    if (additions.size > 0) {
+      const remaining = await soRemainingByItemId(sb, [...additions.keys()]);
+      for (const [sid, addQty] of additions) {
+        const rem = remaining.get(sid) ?? 0;
+        if (addQty > rem) {
+          return c.json({
+            error: 'over_remaining',
+            message: `Pick qty ${addQty} exceeds remaining ${rem} on the linked Sales Order line.`,
+            soItemId: sid, remaining: rem, requested: addQty,
+          }, 409);
+        }
+      }
+    }
+  }
+
   const doNumber = await nextNum(sb);
 
   const phoneRaw = (body.phone as string | undefined) ?? null;
@@ -695,6 +742,11 @@ deliveryOrdersMfg.post('/', async (c) => {
      existence check + UNIQUE index mean this never double-deducts even if the
      status is later advanced). */
   await deductInventoryForDo(sb, h.id, user.id);
+
+  /* Requirement #3 (Loo 2026-05-30) — if this DO now fully covers its SO,
+     auto-advance the SO to DELIVERED (best-effort, never blocks the DO). The
+     POS "My orders" board reflects the flip via Supabase realtime. */
+  await syncSoDeliveredFromDo(sb, [(body.soDocNo as string) ?? null], user.id);
 
   return c.json({ id: h.id, doNumber: h.do_number }, 201);
 });
@@ -979,6 +1031,10 @@ deliveryOrdersMfg.post('/from-sos', async (c) => {
   await recomputeTotals(sb, dh.id);
   await deductInventoryForDo(sb, dh.id, user.id);
 
+  /* Requirement #3 — a multi-SO DO may complete several SOs at once; check each
+     source SO for full coverage and auto-advance to DELIVERED (best-effort). */
+  await syncSoDeliveredFromDo(sb, [...docNos], user.id);
+
   return c.json({ id: dh.id, doNumber: dh.do_number }, 201);
 });
 
@@ -1064,6 +1120,25 @@ deliveryOrdersMfg.post('/:id/items', async (c) => {
     }
   }
 
+  /* Remaining-qty guard (Wei Siang 2026-05-30) — if the added line traces back
+     to an SO line, it may not push that SO line past its ordered qty. Same cap
+     as the /from-sos picker; ad-hoc lines (no soItemId) stay uncapped. */
+  {
+    const sid = it.soItemId as string | undefined;
+    if (sid) {
+      const remaining = await soRemainingByItemId(sb, [sid]);
+      const rem = remaining.get(sid) ?? 0;
+      const addQty = Number(it.qty ?? 0);
+      if (addQty > rem) {
+        return c.json({
+          error: 'over_remaining',
+          message: `Add qty ${addQty} exceeds remaining ${rem} on the linked Sales Order line.`,
+          soItemId: sid, remaining: rem, requested: addQty,
+        }, 409);
+      }
+    }
+  }
+
   const row = buildItemRow(id, it);
   const { data, error } = await sb.from('delivery_order_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
@@ -1091,11 +1166,27 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('delivery_order_items')
-    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes')
+    .select('qty, unit_price_centi, discount_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, so_item_id')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const qty = it.qty !== undefined ? Number(it.qty) : Number(prev.qty);
+
+  /* Remaining-qty guard (Wei Siang 2026-05-30) — raising the qty of an
+     SO-linked line may not push the SO line past its ordered qty. remaining is
+     derived live and already counts THIS line's current qty, so the cap is
+     remaining + prevQty. Decreases / ad-hoc lines (no so_item_id) skip. */
+  if (it.qty !== undefined && qty > Number(prev.qty) && prev.so_item_id) {
+    const remaining = await soRemainingByItemId(sb, [prev.so_item_id as string]);
+    const cap = (remaining.get(prev.so_item_id as string) ?? 0) + Number(prev.qty);
+    if (qty > cap) {
+      return c.json({
+        error: 'over_remaining',
+        message: `New qty ${qty} exceeds the most this line can deliver (${cap}) for the linked Sales Order line.`,
+        soItemId: prev.so_item_id, remaining: cap, requested: qty,
+      }, 409);
+    }
+  }
 
   /* Edge #1+#2 — when qty is being INCREASED on a shipped DO, the delta
      needs more stock OUT. Check that delta against the warehouse, gated by
@@ -1329,6 +1420,13 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
      re-advancing through later shipped states never double-deducts. */
   if (SHIPPED_STATES.includes(body.status)) {
     await deductInventoryForDo(sb, id, user.id);
+  }
+
+  /* Requirement #3 — if a DO is explicitly marked DELIVERED, re-check its SO
+     for full coverage and auto-advance the SO to DELIVERED (best-effort). */
+  if (body.status === 'DELIVERED') {
+    const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+    await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user.id);
   }
 
   /* Commander 2026-05-30 — cancelling a DO AUTO-REVERSES the stock OUT: the

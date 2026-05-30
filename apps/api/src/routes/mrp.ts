@@ -67,6 +67,7 @@ type PoLineRow = {
   received_qty: number | null;
   delivery_date: string | null;
   warehouse_id: string | null;
+  so_item_id: string | null; // SO line this PO line was raised from (release-on-delete + MRP coverage)
   po: { po_number: string; status: string; expected_at: string | null } | null;
 };
 
@@ -137,6 +138,7 @@ type SofaSet = {
   orderByDate: string | null; // delivery date − category lead days
   itemCode: string;
   description: string | null;
+  variantLabel: string | null; // spec line e.g. "BF-15 / SEAT 24 / LEG 6\""
   modules: string[];   // e.g. ['2A','LL','2A'] from variants.cells
   colour: string | null; // fabricCode + colorCode
   qty: number;
@@ -233,20 +235,32 @@ mrp.get('/', async (c) => {
   const { data: poRaw } = await sb
     .from('purchase_order_items')
     .select(`
-      material_code, item_group, variants, qty, received_qty, delivery_date, warehouse_id,
+      material_code, item_group, variants, qty, received_qty, delivery_date, warehouse_id, so_item_id,
       po:purchase_orders!inner ( po_number, status, expected_at )
     `)
     .limit(5000);
   type PoSupply = { poNumber: string; eta: string | null; qtyLeft: number };
   const poByKey = new Map<string, PoSupply[]>();
   const poOutstandingByKey = new Map<string, number>();
+  /* Commander 2026-05-30 — map each SO line to the PO(s) its units were raised
+     into (via so_item_id), with the earliest PO-line delivery date (the date we
+     set for the supplier). Lets a line covered by its OWN pick show the PO
+     number + supplier delivery date instead of a bare "ordered". Includes
+     fully-received PO lines, since po_qty_picked counts them as ordered. */
+  const pickedPoByLineId = new Map<string, { poNumbers: string[]; eta: string | null }>();
   for (const r of (poRaw ?? []) as unknown as PoLineRow[]) {
     if (!r.po || PO_DEAD.has(r.po.status)) continue;
+    const eta = r.delivery_date ?? r.po.expected_at ?? null;
+    if (r.so_item_id) {
+      const entry = pickedPoByLineId.get(r.so_item_id) ?? { poNumbers: [], eta: null };
+      if (!entry.poNumbers.includes(r.po.po_number)) entry.poNumbers.push(r.po.po_number);
+      if (eta && (!entry.eta || eta < entry.eta)) entry.eta = eta;
+      pickedPoByLineId.set(r.so_item_id, entry);
+    }
     const left = (r.qty ?? 0) - (r.received_qty ?? 0);
     if (left <= 0) continue;
     if (whFilter && r.warehouse_id && r.warehouse_id !== whFilter) continue;
     const k = composite(r.material_code, variantKeyOf(r.item_group, r.variants));
-    const eta = r.delivery_date ?? r.po.expected_at ?? null;
     const arr = poByKey.get(k) ?? [];
     arr.push({ poNumber: r.po.po_number, eta, qtyLeft: left });
     poByKey.set(k, arr);
@@ -364,6 +378,14 @@ mrp.get('/', async (c) => {
         if (front.qtyLeft <= 0) poQueue.shift();
       }
 
+      // Commander 2026-05-30 — line covered by its OWN pick (po_qty_picked) but
+      // no pooled PO matched: surface the PO it was raised into + the supplier
+      // delivery date so the UI shows "PO-xxxx · ETA …" instead of bare "ordered".
+      if (poNumber == null && picked > 0) {
+        const own = pickedPoByLineId.get(r.id);
+        if (own && own.poNumbers.length > 0) { poNumber = own.poNumbers.join(', '); poEta = own.eta; }
+      }
+
       // need>0 → still uncovered (SHORT; orderable up to qty-picked). need==0 →
       // covered by the pooled PO (poNumber set), by this line's OWN pick
       // (picked>0 → 'po', the UI shows "ordered"), or by stock.
@@ -455,6 +477,7 @@ mrp.get('/', async (c) => {
         orderByDate: orderByOf(setDelivery, prod?.category ?? null),
         itemCode: d.item_code,
         description: prod?.name ?? d.description ?? null,
+        variantLabel: buildVariantSummary(d.item_group, v) || null,
         modules,
         colour: colour || null,
         qty: d.qty,

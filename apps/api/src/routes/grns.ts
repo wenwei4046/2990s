@@ -120,52 +120,63 @@ async function recomputeGrnTotals(sb: any, grnId: string) {
    +/- arithmetic so receive / edit / delete / cancel all converge to the truth
    and the PO line auto-releases the moment its receipts go away. Never
    resurrects a CANCELLED PO. Best-effort. */
-async function recomputePoReceived(sb: any, poItemIds: Array<string | null | undefined>) {
+export async function recomputePoReceived(sb: any, poItemIds: Array<string | null | undefined>) {
   const ids = [...new Set(poItemIds.filter((x): x is string => Boolean(x)))];
   if (ids.length === 0) return;
 
-  // 1. Recount received_qty per PO item from live GRN lines.
-  const { data: glines } = await sb.from('grn_items')
-    .select('purchase_order_item_id, qty_accepted, grn_id')
-    .in('purchase_order_item_id', ids);
-  const rows = (glines ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; grn_id: string }>;
-  const grnIds = [...new Set(rows.map((r) => r.grn_id).filter(Boolean))];
-  const cancelled = new Set<string>();
-  if (grnIds.length > 0) {
-    const { data: gs } = await sb.from('grns').select('id, status').in('id', grnIds);
-    for (const g of (gs ?? []) as Array<{ id: string; status: string }>) {
-      if (g.status === 'CANCELLED') cancelled.add(g.id);
+  // Best-effort, never throws (Commander 2026-05-30): the primary write already
+  // committed. If this secondary recount hiccups we log + skip — the live-count
+  // model self-heals on the next operation that touches these PO lines.
+  try {
+    // 1. Recount received_qty per PO item from live GRN lines. Net out goods
+    //    sent back to the supplier (returned_qty, migration 0106): a returned
+    //    qty no longer counts as received, so the PO line re-opens and a
+    //    replacement shipment can be received against it. Clamped ≥ 0.
+    const { data: glines } = await sb.from('grn_items')
+      .select('purchase_order_item_id, qty_accepted, returned_qty, grn_id')
+      .in('purchase_order_item_id', ids);
+    const rows = (glines ?? []) as Array<{ purchase_order_item_id: string; qty_accepted: number; returned_qty: number; grn_id: string }>;
+    const grnIds = [...new Set(rows.map((r) => r.grn_id).filter(Boolean))];
+    const cancelled = new Set<string>();
+    if (grnIds.length > 0) {
+      const { data: gs } = await sb.from('grns').select('id, status').in('id', grnIds);
+      for (const g of (gs ?? []) as Array<{ id: string; status: string }>) {
+        if (g.status === 'CANCELLED') cancelled.add(g.id);
+      }
     }
-  }
-  const recvByPoi = new Map<string, number>(ids.map((id) => [id, 0]));
-  for (const r of rows) {
-    if (cancelled.has(r.grn_id)) continue;
-    recvByPoi.set(r.purchase_order_item_id, (recvByPoi.get(r.purchase_order_item_id) ?? 0) + Number(r.qty_accepted ?? 0));
-  }
-  await Promise.all([...recvByPoi.entries()].map(([poiId, recv]) =>
-    sb.from('purchase_order_items').update({ received_qty: recv }).eq('id', poiId),
-  ));
+    const recvByPoi = new Map<string, number>(ids.map((id) => [id, 0]));
+    for (const r of rows) {
+      if (cancelled.has(r.grn_id)) continue;
+      const net = Number(r.qty_accepted ?? 0) - Number(r.returned_qty ?? 0);
+      recvByPoi.set(r.purchase_order_item_id, (recvByPoi.get(r.purchase_order_item_id) ?? 0) + Math.max(0, net));
+    }
+    await Promise.all([...recvByPoi.entries()].map(([poiId, recv]) =>
+      sb.from('purchase_order_items').update({ received_qty: recv }).eq('id', poiId),
+    ));
 
-  // 2. Re-evaluate each touched PO's status from its (now-recounted) lines.
-  const { data: poiRows } = await sb.from('purchase_order_items')
-    .select('purchase_order_id').in('id', ids);
-  const poIds = [...new Set(((poiRows ?? []) as Array<{ purchase_order_id: string }>)
-    .map((r) => r.purchase_order_id).filter(Boolean))];
-  for (const poId of poIds) {
-    const { data: lines } = await sb.from('purchase_order_items')
-      .select('qty, received_qty').eq('purchase_order_id', poId);
-    const ll = (lines ?? []) as Array<{ qty: number; received_qty: number }>;
-    if (ll.length === 0) continue;
-    const anyReceived = ll.some((l) => (l.received_qty ?? 0) > 0);
-    const fully = ll.every((l) => (l.received_qty ?? 0) >= l.qty);
-    const newStatus = fully ? 'RECEIVED' : anyReceived ? 'PARTIALLY_RECEIVED' : 'SUBMITTED';
-    const { data: head } = await sb.from('purchase_orders')
-      .select('received_at').eq('id', poId).maybeSingle();
-    const prevReceivedAt = (head as { received_at: string | null } | null)?.received_at ?? null;
-    const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
-    // Stamp received_at on first full receipt, preserve it if already set, clear on regression.
-    patch.received_at = fully ? (prevReceivedAt ?? new Date().toISOString()) : null;
-    await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+    // 2. Re-evaluate each touched PO's status from its (now-recounted) lines.
+    const { data: poiRows } = await sb.from('purchase_order_items')
+      .select('purchase_order_id').in('id', ids);
+    const poIds = [...new Set(((poiRows ?? []) as Array<{ purchase_order_id: string }>)
+      .map((r) => r.purchase_order_id).filter(Boolean))];
+    for (const poId of poIds) {
+      const { data: lines } = await sb.from('purchase_order_items')
+        .select('qty, received_qty').eq('purchase_order_id', poId);
+      const ll = (lines ?? []) as Array<{ qty: number; received_qty: number }>;
+      if (ll.length === 0) continue;
+      const anyReceived = ll.some((l) => (l.received_qty ?? 0) > 0);
+      const fully = ll.every((l) => (l.received_qty ?? 0) >= l.qty);
+      const newStatus = fully ? 'RECEIVED' : anyReceived ? 'PARTIALLY_RECEIVED' : 'SUBMITTED';
+      const { data: head } = await sb.from('purchase_orders')
+        .select('received_at').eq('id', poId).maybeSingle();
+      const prevReceivedAt = (head as { received_at: string | null } | null)?.received_at ?? null;
+      const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
+      // Stamp received_at on first full receipt, preserve it if already set, clear on regression.
+      patch.received_at = fully ? (prevReceivedAt ?? new Date().toISOString()) : null;
+      await sb.from('purchase_orders').update(patch).eq('id', poId).neq('status', 'CANCELLED');
+    }
+  } catch (e) {
+    console.error('[recomputePoReceived] best-effort recount failed', { poItemIds: ids, error: e });
   }
 }
 
@@ -400,6 +411,36 @@ grns.post('/', async (c) => {
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Over-receipt guard — PO-linked lines can't accept more than the PO line's
+     remaining (qty - received_qty). Mirrors the same 409 the From-PO flows
+     enforce, so the manual New-GRN form can't sneak past the gate. Lines with
+     no purchase_order_item_id (free / manual receipts) are uncapped. Picks that
+     target the SAME PO line within one GRN are summed. */
+  {
+    const acceptedByPoItem = new Map<string, number>();
+    for (const it of items) {
+      const poItemId = (it.purchaseOrderItemId as string | undefined) ?? null;
+      if (!poItemId) continue;
+      const accepted = Number(it.qtyAccepted ?? it.qtyReceived ?? 0);
+      acceptedByPoItem.set(poItemId, (acceptedByPoItem.get(poItemId) ?? 0) + accepted);
+    }
+    if (acceptedByPoItem.size > 0) {
+      const { data: poItems } = await sb.from('purchase_order_items')
+        .select('id, qty, received_qty').in('id', [...acceptedByPoItem.keys()]);
+      const remByPoItem = new Map<string, number>(
+        ((poItems ?? []) as Array<{ id: string; qty: number; received_qty: number }>)
+          .map((r) => [r.id, (r.qty ?? 0) - (r.received_qty ?? 0)]),
+      );
+      for (const [poItemId, accepted] of acceptedByPoItem) {
+        const remaining = remByPoItem.get(poItemId) ?? 0;
+        if (accepted > remaining) {
+          return c.json({ error: 'qty_exceeds_remaining', poItemId, requested: accepted, remaining }, 409);
+        }
+      }
+    }
+  }
+
   const grnNumber = await nextNumber(sb, 'GRN', 'grns', 'grn_number');
 
   /* PR-DRAFT-removal — Commander 2026-05-27: GRN is created as POSTED
@@ -894,6 +935,7 @@ grns.post('/:id/items', async (c) => {
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
 
   const sb = c.get('supabase');
+  const user = c.get('user');
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
@@ -902,6 +944,23 @@ grns.post('/:id/items', async (c) => {
   const unitPriceCenti = Number(it.unitPriceCenti ?? 0);
   const discountCenti = Number(it.discountCenti ?? 0);
   const lineTotal = (qtyReceived * unitPriceCenti) - discountCenti;
+
+  /* Over-receipt guard — a PO-linked added line can't accept more than the PO
+     line's remaining (qty - received_qty). received_qty already counts every
+     other live GRN line for this PO item, so remaining is the true headroom.
+     Manual (no PO link) lines are uncapped. Same 409 the From-PO flows use. */
+  const addLinePoItemId = (it.purchaseOrderItemId as string) ?? null;
+  if (addLinePoItemId) {
+    const { data: poItem } = await sb.from('purchase_order_items')
+      .select('qty, received_qty').eq('id', addLinePoItemId).maybeSingle();
+    if (poItem) {
+      const p = poItem as { qty: number; received_qty: number };
+      const remaining = (p.qty ?? 0) - (p.received_qty ?? 0);
+      if (qtyReceived > remaining) {
+        return c.json({ error: 'qty_exceeds_remaining', poItemId: addLinePoItemId, requested: qtyReceived, remaining }, 409);
+      }
+    }
+  }
 
   const row: Record<string, unknown> = {
     grn_id: grnId,
@@ -938,6 +997,43 @@ grns.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('grn_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeGrnTotals(sb, grnId);
+
+  // A line added to a POSTED GRN must roll up exactly like one created at post
+  // time, otherwise its PO line stays "outstanding" (re-appears in the convert
+  // picker) and its stock never enters inventory — yet DELETE still writes an
+  // OUT to reverse it, driving inventory negative. Mirror postGrnAndRollup for
+  // this one line so add/edit/delete all converge. Best-effort throughout.
+  const addedPoiId = (it.purchaseOrderItemId as string) ?? null;
+  try { await recomputePoReceived(sb, [addedPoiId]); } catch { /* best-effort */ }
+  if (qtyReceived > 0) {
+    try {
+      const { data: grnHeader } = await sb.from('grns')
+        .select('grn_number, warehouse_id').eq('id', grnId).maybeSingle();
+      const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
+        ?? (await defaultWarehouseId(sb));
+      if (warehouseId) {
+        await writeMovements(sb, [{
+          movement_type: 'IN' as const,
+          warehouse_id: warehouseId,
+          product_code: String(it.materialCode),
+          variant_key: computeVariantKey((it.itemGroup as string) ?? null, (it.variants as VariantAttrs | null) ?? null),
+          product_name: String(it.materialName),
+          qty: qtyReceived,
+          unit_cost_sen: unitPriceCenti,
+          source_doc_type: 'GRN' as const,
+          source_doc_id: grnId,
+          source_doc_no: (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId,
+          performed_by: user.id,
+          notes: 'GRN line added — receipt',
+        }]);
+        /* New stock landed → re-walk SO allocation. */
+        try {
+          const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+          await recomputeSoStockAllocation(sb);
+        } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn-line-add failed:', e); }
+      }
+    } catch { /* best-effort */ }
+  }
   return c.json({ item: data }, 201);
 });
 
@@ -959,6 +1055,27 @@ grns.patch('/:id/items/:itemId', async (c) => {
 
   // The editable quantity is qty_received (also keep qty_accepted in lockstep).
   const qtyReceived = it.qty !== undefined ? Number(it.qty) : (prev as { qty_received: number }).qty_received;
+
+  /* Over-receipt guard on edit — a PO-linked line can't be raised past the PO
+     line's headroom = qty - (received_qty - this line's current receipt). The
+     stored received_qty already includes this line, so we add its old qty back
+     before comparing. Manual (no PO link) lines are uncapped. */
+  {
+    const poItemId = (prev as { purchase_order_item_id: string | null }).purchase_order_item_id;
+    const prevQty = (prev as { qty_received: number }).qty_received ?? 0;
+    if (poItemId && qtyReceived > prevQty) {
+      const { data: poItem } = await sb.from('purchase_order_items')
+        .select('qty, received_qty').eq('id', poItemId).maybeSingle();
+      if (poItem) {
+        const p = poItem as { qty: number; received_qty: number };
+        const headroom = (p.qty ?? 0) - ((p.received_qty ?? 0) - prevQty);
+        if (qtyReceived > headroom) {
+          return c.json({ error: 'qty_exceeds_remaining', poItemId, requested: qtyReceived, remaining: headroom }, 409);
+        }
+      }
+    }
+  }
+
   const unit = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : (prev as { unit_price_centi: number }).unit_price_centi;
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : ((prev as { discount_centi: number }).discount_centi ?? 0);
   const lineTotal = (qtyReceived * unit) - discount;

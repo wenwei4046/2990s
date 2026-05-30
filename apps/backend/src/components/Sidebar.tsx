@@ -2,7 +2,6 @@ import { useState, type ReactNode } from 'react';
 import { NavLink } from 'react-router';
 import {
   LayoutDashboard,
-  Inbox,
   FileSpreadsheet,
   Package2,
   UsersRound,
@@ -100,7 +99,6 @@ export const Sidebar = () => {
   /* ── Top-level workspace links (outside Supply Chain Management) ── */
   const workspace: NavLinkRow[] = [
     { to: '/dashboard', icon: <LayoutDashboard {...ICON_PROPS} />, label: 'Dashboard' },
-    { to: '/orders', icon: <Inbox {...ICON_PROPS} />, label: 'Orders' },
     ...(canSeeAuditLog
       ? [{ to: '/audit-log', icon: <FileSpreadsheet {...ICON_PROPS} />, label: 'Payment audit log' }]
       : []),

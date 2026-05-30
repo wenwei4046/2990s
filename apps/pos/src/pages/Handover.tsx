@@ -94,13 +94,14 @@ export const Handover = () => {
   const [serverError, setServerError] = useState<string | null>(null);
 
   const createOrder = useCreateOrder();
-  /* Task #70 — Manufacturing SO handoff. Behind the VITE_HANDOVER_MODE flag
-     so we can ship the wiring without disturbing the retail flow until the
-     coordinator portal is ready. Values:
-       'mfg-so' → POST /mfg-sales-orders (the new B2B/handover flow)
-       anything else (incl. unset) → legacy POST /orders (retail receipt). */
+  /* Task #70 — Manufacturing SO handoff. The Sales Order is now the single
+     order system of record (Commander 2026-05-30: unify POS orders onto
+     mfg_sales_orders + retire the legacy 6-lane board). So the SO handoff is
+     now the DEFAULT:
+       unset / anything → POST /mfg-sales-orders (the SO handoff)
+       'retail'         → legacy POST /orders (kept only as an escape hatch). */
   const handoverMode = import.meta.env.VITE_HANDOVER_MODE as string | undefined;
-  const useMfgSoFlow = handoverMode === 'mfg-so';
+  const useMfgSoFlow = handoverMode !== 'retail';
   const handoffToSo = usePosHandoffToSo();
   const deleteQuote = useDeleteQuote();
   const addons = useAddons();

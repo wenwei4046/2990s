@@ -14,14 +14,27 @@ async function authedFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) throw new Error('not_authenticated');
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-      authorization: `Bearer ${token}`,
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-    },
-  });
+  const headers = {
+    ...(init?.headers ?? {}),
+    authorization: `Bearer ${token}`,
+    ...(init?.body ? { 'content-type': 'application/json' } : {}),
+  };
+  let res = await fetch(`${API_URL}${path}`, { ...init, headers });
+
+  /* Edge #J (systemic) — every ship path's server route returns HTTP 409
+     short_stock unless the JSON body carries confirmShortStock:true. Catch it
+     once here: prompt the operator "ship anyway?" and on confirm replay the
+     same request with confirmShortStock:true merged in. Doing it at the single
+     request chokepoint means no individual mutation hook has to opt in, so a
+     new ship endpoint can never regress to dumping the raw 409 at the user. */
+  if (res.status === 409 && typeof init?.body === 'string') {
+    const text = await res.clone().text();
+    if (text.includes('"short_stock"') && confirmShortStock(text)) {
+      const retryBody = JSON.stringify({ ...JSON.parse(init.body), confirmShortStock: true });
+      res = await fetch(`${API_URL}${path}`, { ...init, headers, body: retryBody });
+    }
+  }
+
   if (!res.ok) {
     let detail = '';
     try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text(); }
@@ -332,60 +345,36 @@ export const useCreateMfgSalesOrder = () => {
   });
 };
 
-/* Edge #J — catches the 409 short_stock thrown by authedFetch when a DO ship
-   path detects insufficient stock at the target warehouse. Pops the same
-   "stock not enough — continue?" prompt the from-sos picker uses, and on
-   confirm retries the call with confirmShortStock: true so the server lets
-   the OUT go through. Operator who hits Cancel sees the original error. */
-async function withShortStockRetry<T>(call: (extra: { confirmShortStock?: boolean }) => Promise<T>): Promise<T> {
-  try { return await call({}); }
-  catch (e) {
-    const raw = e instanceof Error ? e.message : String(e);
-    if (!raw.includes('"short_stock"')) throw e;
-    try {
-      const jsonStart = raw.indexOf('{');
-      const body = JSON.parse(raw.slice(jsonStart)) as {
-        shortages?: Array<{
-          itemCode: string; warehouseName: string | null;
-          needed: number; available: number; short: number;
-          alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
-        }>;
-      };
-      const lines = (body.shortages ?? []).map((s) => {
-        const alts = (s.alternatives ?? []).slice(0, 3)
-          .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
-          .join(', ');
-        const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
-        return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
-      }).join('\n\n');
-      if (window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`)) {
-        return await call({ confirmShortStock: true });
-      }
-    } catch { /* fall through */ }
-    throw e;
+/* Edge #J — render the shortage detail out of a 409 short_stock body and ask
+   the operator whether to ship anyway (stock goes negative). Returns true on
+   confirm. Called by authedFetch, which then replays the request with
+   confirmShortStock:true. Returns false (no ship) if the body can't be parsed. */
+function confirmShortStock(raw: string): boolean {
+  try {
+    const jsonStart = raw.indexOf('{');
+    const body = JSON.parse(raw.slice(jsonStart)) as {
+      shortages?: Array<{
+        itemCode: string; warehouseName: string | null;
+        needed: number; available: number; short: number;
+        alternatives?: Array<{ warehouseCode: string | null; warehouseName: string | null; available: number }>;
+      }>;
+    };
+    const lines = (body.shortages ?? []).map((s) => {
+      const alts = (s.alternatives ?? []).slice(0, 3)
+        .map((a) => `${a.warehouseCode ?? a.warehouseName ?? '?'} (${a.available})`)
+        .join(', ');
+      const altHint = alts ? `\n   Other warehouses: ${alts}` : '';
+      return `• ${s.itemCode}\n   At ${s.warehouseName ?? 'this warehouse'}: need ${s.needed}, available ${s.available} (short ${s.short})${altHint}`;
+    }).join('\n\n');
+    return window.confirm(`Stock not enough at the selected warehouse:\n\n${lines}\n\nShip anyway? (Stock will go negative.)`);
+  } catch {
+    return false;
   }
 }
 
 /* Manual "Re-allocate stock to SOs now" — walks every active SO line and
    flips PENDING/READY against live inventory. Auto-advances SO header
    CONFIRMED↔READY_TO_SHIP. Server-side helper at POST /recompute-allocation. */
-/* Manual SO priority override (#38). Bumps an SO to the head of the
-   allocation queue regardless of delivery date. Pass rank=null to clear. */
-export const useSetSoPriority = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ docNo, rank, reason }: { docNo: string; rank: number | null; reason?: string | null }) =>
-      authedFetch<{ salesOrder: { doc_no: string; priority_rank: number | null; priority_reason: string | null } }>(
-        `/mfg-sales-orders/${docNo}/priority`,
-        { method: 'PATCH', body: JSON.stringify({ rank, reason: reason ?? null }) },
-      ),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
-      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
-    },
-  });
-};
-
 export const useRecomputeSoAllocation = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -451,6 +440,20 @@ export const useDeliverableSoLines = () => useQuery({
   retry: 1,
 });
 
+/* Remaining deliverable lines scoped to ONE Sales Order — feeds the SO-linked
+   DO Detail "Add Line" picker so it can only add the SO's still-undelivered
+   lines (qty capped to remaining), matching the line-level convert picker.
+   Disabled when the DO has no parent SO (ad-hoc DO keeps the free add). */
+export const useDeliverableSoLinesForDoc = (docNo: string | null) => useQuery({
+  queryKey: ['mfg-delivery-orders', 'deliverable-so-lines', docNo],
+  enabled: !!docNo,
+  queryFn: () => authedFetch<{ lines: DeliverableSoLine[] }>(
+    `/delivery-orders-mfg/deliverable-so-lines?docNos=${encodeURIComponent(docNo!)}`,
+  ).then((r) => r.lines),
+  staleTime: 30_000,
+  retry: 1,
+});
+
 /* Convert picked SO LINES (each with a partial qty) → ONE DO. Server validates
    the picks share one customer + each qty is 1..remaining, then creates one DO
    line per pick (status DISPATCHED) and deducts stock. Returns the new DO's
@@ -459,12 +462,7 @@ export const useDeliverableSoLines = () => useQuery({
 export const useConvertSoLinesToDo = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (vars: {
-      picks: Array<{ soItemId: string; qty: number }>;
-      /* Edge #1+#2 — re-submit with confirmShortStock: true to ship anyway
-         after the operator confirmed the stock-shortage dialog. */
-      confirmShortStock?: boolean;
-    }) =>
+    mutationFn: (vars: { picks: Array<{ soItemId: string; qty: number }> }) =>
       authedFetch<{ id: string; doNumber: string }>(
         `/delivery-orders-mfg/from-sos`,
         { method: 'POST', body: JSON.stringify(vars) },
@@ -814,6 +812,19 @@ export const useDebtorSearch = (q: string) => useQuery({
 });
 
 /* ── DO (mfg) ─────────────────────────────────────────────────────────── */
+
+/* Any DO write that changes a delivered qty (create / cancel / add-line /
+   qty-change / delete-line) moves the SO line's live remaining-to-deliver. The
+   SO list's "still has undelivered" flag (which shows/hides the Issue-DO menu)
+   and the SO-scoped convert pickers read off that number, so they must refetch
+   too — otherwise a released qty looks stuck and the menu stays hidden until a
+   hard refresh. Mirrors the explicit refetch useConvertSoLinesToDo already does. */
+const releaseSoSideQueries = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+  qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail'] });
+  qc.invalidateQueries({ queryKey: ['mfg-delivery-orders', 'deliverable-so-lines'], refetchType: 'all' });
+};
+
 export const useMfgDeliveryOrders = (status?: string) => baseQuery<{ deliveryOrders: any[] }>(['mfg-delivery-orders', status ?? 'all'], `/delivery-orders-mfg${status ? `?status=${status}` : ''}`);
 export const useMfgDeliveryOrderDetail = (id: string | null) => useQuery({
   queryKey: ['mfg-delivery-order-detail', id],
@@ -823,8 +834,15 @@ export const useMfgDeliveryOrderDetail = (id: string | null) => useQuery({
 export const useCreateMfgDeliveryOrder = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: unknown) => authedFetch<{ id: string; doNumber: string }>(`/delivery-orders-mfg`, { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] }),
+    mutationFn: (body: Record<string, unknown>) =>
+      authedFetch<{ id: string; doNumber: string }>(
+        `/delivery-orders-mfg`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
+    },
   });
 };
 
@@ -841,6 +859,8 @@ export const useUpdateMfgDeliveryOrderStatus = () => {
       /* A status advance into a shipped state deducts inventory — refresh
          the inventory queries so the on-hand drilldown reflects the OUT. */
       qc.invalidateQueries({ queryKey: ['inventory'] });
+      /* CANCEL releases the delivered qty back to the SO. */
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -868,14 +888,13 @@ export const useAddMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...item }: { id: string } & Record<string, unknown>) =>
-      withShortStockRetry((extra) =>
-        authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
-          method: 'POST', body: JSON.stringify({ ...item, ...extra }),
-        }),
-      ),
+      authedFetch<{ item: unknown }>(`/delivery-orders-mfg/${id}/items`, {
+        method: 'POST', body: JSON.stringify(item),
+      }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -884,14 +903,13 @@ export const useUpdateMfgDeliveryOrderItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId, ...item }: { id: string; itemId: string } & Record<string, unknown>) =>
-      withShortStockRetry((extra) =>
-        authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
-          method: 'PATCH', body: JSON.stringify({ ...item, ...extra }),
-        }),
-      ),
+      authedFetch<{ ok: boolean }>(`/delivery-orders-mfg/${id}/items/${itemId}`, {
+        method: 'PATCH', body: JSON.stringify(item),
+      }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -904,6 +922,7 @@ export const useDeleteMfgDeliveryOrderItem = () => {
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['mfg-delivery-order-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['mfg-delivery-orders'] });
+      releaseSoSideQueries(qc);
     },
   });
 };
@@ -1895,3 +1914,27 @@ export const useOutstandingSummary = (opts?: { from?: string; to?: string }) => 
     `/outstanding/summary${qs ? `?${qs}` : ''}`,
   );
 };
+
+/* ── Document relationship map (SAP-style flow diagram) ─────────────────── */
+export type FlowNodeType = 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi';
+export type FlowEdgeKind = 'full' | 'partial' | 'value' | 'payment';
+export type FlowNode = {
+  key: string;
+  type: FlowNodeType;
+  id: string;
+  label: string;
+  status: string | null;
+  isAnchor: boolean;
+};
+export type FlowEdge = { from: string; to: string; kind: FlowEdgeKind };
+
+export const useDocumentFlow = (type: FlowNodeType | null, id: string | null) =>
+  useQuery({
+    queryKey: ['document-flow', type, id],
+    queryFn: () => authedFetch<{ nodes: FlowNode[]; edges: FlowEdge[]; rootSos: string[] }>(
+      `/document-flow/${type}/${encodeURIComponent(id!)}`,
+    ),
+    enabled: Boolean(type && id),
+    staleTime: 30_000,
+    retry: 1,
+  });

@@ -97,9 +97,35 @@ export const GrnFromPo = () => {
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
+  /* The New GRN form stashes its current draft (grnNewDraft) before sending us
+     here. Build a per-poItemId drafted-qty map so the same PO line can't be
+     picked twice across the unsaved draft + these new picks:
+       · lines FULLY consumed by the draft are filtered out,
+       · lines PARTIALLY consumed still show with a "in draft X" tag, and the
+         Pick Qty is capped at (remaining − draft). Mirrors PurchaseOrderFromSo. */
+  const draftQtyById = useMemo(() => {
+    try {
+      const raw = sessionStorage.getItem('grnNewDraft');
+      if (!raw) return new Map<string, number>();
+      const d = JSON.parse(raw) as { lines?: Array<{ purchaseOrderItemId?: string | null; qtyReceived?: number }> };
+      const m = new Map<string, number>();
+      for (const l of (d.lines ?? [])) {
+        if (!l.purchaseOrderItemId) continue;
+        m.set(l.purchaseOrderItemId, (m.get(l.purchaseOrderItemId) ?? 0) + (l.qtyReceived ?? 0));
+      }
+      return m;
+    } catch { return new Map<string, number>(); }
+  }, []);
+
+  /* Effective remaining for a row, after subtracting what the unsaved draft
+     already holds for this same PO line. <=0 → filtered out. */
+  const effRemaining = (r: OutstandingPoItem): number =>
+    r.remainingQty - (draftQtyById.get(r.poItemId) ?? 0);
+
   // ── Filtered rows fed to the grid ────────────────────────────────────
   const rows = useMemo(() => {
     return items.filter((r) => {
+      if (effRemaining(r) <= 0) return false;
       if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
       if (dateFrom || dateTo) {
         const d = rowDateFor(r, dateField);
@@ -109,7 +135,8 @@ export const GrnFromPo = () => {
       }
       return true;
     });
-  }, [items, category, dateField, dateFrom, dateTo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, draftQtyById, category, dateField, dateFrom, dateTo]);
 
   // One WAREHOUSE per GRN (Commander 2026-05-30) — once a line is ticked, the
   // selection locks to that PO line's warehouse (purchase_location). Lines from a
@@ -163,7 +190,7 @@ export const GrnFromPo = () => {
       const lockTo = lockedWarehouse ?? rows[0]?.warehouseLocationId ?? null;
       for (const l of rows) {
         if (lockTo && l.warehouseLocationId !== lockTo) continue;
-        next[l.poItemId] = { picked: true, qty: l.remainingQty };
+        next[l.poItemId] = { picked: true, qty: effRemaining(l) };
       }
       return next;
     });
@@ -188,7 +215,7 @@ export const GrnFromPo = () => {
             type="checkbox"
             checked={on}
             disabled={locked}
-            onChange={() => togglePick(r.poItemId, r.remainingQty)}
+            onChange={() => togglePick(r.poItemId, effRemaining(r))}
             onClick={(e) => e.stopPropagation()}
             aria-label={`Pick ${r.itemCode}`}
             style={locked ? { cursor: 'not-allowed' } : undefined}
@@ -261,7 +288,19 @@ export const GrnFromPo = () => {
     },
     {
       key: 'receivedQty', label: 'Received', width: 80, align: 'right', sortable: true,
-      accessor: (r) => <span className={styles.muted}>{r.receivedQty}</span>,
+      accessor: (r) => {
+        const inDraft = draftQtyById.get(r.poItemId) ?? 0;
+        return (
+          <span className={styles.muted}>
+            {r.receivedQty}
+            {inDraft > 0 && (
+              <span style={{ display: 'block', fontSize: 'var(--fs-11)', color: 'var(--c-burnt)' }}>
+                in draft {inDraft}
+              </span>
+            )}
+          </span>
+        );
+      },
       sortFn: (a, b) => a.receivedQty - b.receivedQty,
     },
     {
@@ -270,18 +309,19 @@ export const GrnFromPo = () => {
         const p = picks[r.poItemId];
         const on = Boolean(p?.picked);
         const locked = isRowLocked(r);
+        const eff = effRemaining(r);
         return (
           <input
             type="number"
             min={0}
-            max={r.remainingQty}
+            max={eff}
             value={on ? p!.qty : ''}
-            placeholder={String(r.remainingQty)}
+            placeholder={String(eff)}
             disabled={locked}
             /* Typing a qty auto-selects the row (no need to tick first). */
             onClick={(e) => e.stopPropagation()}
             onChange={(e) =>
-              setQty(r.poItemId, Math.min(r.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
+              setQty(r.poItemId, Math.min(eff, Math.max(0, Number(e.target.value) || 0)))}
             style={{ ...FILTER_INPUT, width: 64, textAlign: 'right', ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
           />
         );
@@ -297,7 +337,7 @@ export const GrnFromPo = () => {
       key: 'lineValue', label: 'Line Value', width: 120, align: 'right', sortable: true,
       accessor: (r) => {
         const p = picks[r.poItemId];
-        const pickQty = p?.picked ? p.qty : r.remainingQty;
+        const pickQty = p?.picked ? p.qty : effRemaining(r);
         return (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
             {fmtRm(pickQty * r.unitPriceCenti)}
@@ -427,7 +467,7 @@ export const GrnFromPo = () => {
         storageKey={STORAGE_KEY}
         rowKey={(r) => r.poItemId}
         searchPlaceholder="Search PO, supplier, item…"
-        onRowClick={(r) => togglePick(r.poItemId, r.remainingQty)}
+        onRowClick={(r) => togglePick(r.poItemId, effRemaining(r))}
         /* Grey out rows whose supplier conflicts with the locked one. */
         rowStyle={(r) => isRowLocked(r)
           ? { opacity: 0.45, background: 'var(--c-cream)', cursor: 'not-allowed' }

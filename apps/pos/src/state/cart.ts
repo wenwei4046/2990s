@@ -110,6 +110,38 @@ interface CartState {
   restore: (lines: CartLine[], sourceQuoteId?: string | null) => void;
 }
 
+/* ── Sofa-exclusivity rule (Commander 2026-05-30) ──────────────────────────
+   A sofa is its own ticket: a cart holds EITHER sofas OR non-sofa products,
+   never a mix. Multiple sofas together are fine. Mirrors the Sales Order
+   backend guard (POST /mfg-sales-orders rejects a sofa mixed with a bedframe /
+   mattress) — we enforce it here at add-time so the salesperson is stopped in
+   the catalog, not at checkout. In 2990's catalog every sofa is modular
+   (sofa_build → a sofa-configurator line, config.kind === 'sofa'), so kind is
+   the reliable sofa signal. */
+const isSofaConfig = (c: CartConfig): boolean => c.kind === 'sofa';
+
+export const cartHasSofa = (lines: CartLine[]): boolean => lines.some((l) => isSofaConfig(l.config));
+export const cartHasNonSofa = (lines: CartLine[]): boolean => lines.some((l) => !isSofaConfig(l.config));
+
+/** Reason string if adding `config` would mix a sofa with non-sofa products
+ *  (either direction), else null. Editing a line in place (editingKey) never
+ *  conflicts — the line's category doesn't change. */
+export const cartCategoryConflict = (
+  lines: CartLine[],
+  config: CartConfig,
+  editingKey?: string,
+): string | null => {
+  if (editingKey) return null;
+  if (isSofaConfig(config)) {
+    return cartHasNonSofa(lines)
+      ? 'Sofas are placed on their own order. Finish or clear the current items before adding a sofa.'
+      : null;
+  }
+  return cartHasSofa(lines)
+    ? 'Your cart has a sofa. Sofas are placed on their own order — finish or clear it before adding other products.'
+    : null;
+};
+
 export const useCart = create<CartState>()(
   persist(
     (set, get) => ({
@@ -121,6 +153,13 @@ export const useCart = create<CartState>()(
         if (editingKey && get().lines.some((l) => l.key === editingKey)) {
           set({ lines: get().lines.map((l) => (l.key === editingKey ? { ...l, config } : l)) });
           return editingKey;
+        }
+        // Sofa-exclusivity defense — the catalog disables conflicting cards so
+        // this is rarely reached (only via a deep link to a configurator). It
+        // is the single source of truth that guarantees the cart never holds a
+        // sofa mixed with non-sofa products. No-op (don't add) on conflict.
+        if (cartCategoryConflict(get().lines, config)) {
+          return '';
         }
         const key = `cfg-${Math.random().toString(36).slice(2, 9)}`;
         set({ lines: [...get().lines, { key, qty: 1, config }] });

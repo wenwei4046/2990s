@@ -257,6 +257,13 @@ export const PurchaseOrders = () => {
   /* Commander 2026-05-29 — right-click context menu actions (mirrors the SO
      list). Single-PO convert reuses the batch GRN endpoint. */
   const convertOneToGrn = (po: PoHeaderRow) => {
+    // Commander 2026-05-30 — "Convert to GRN" is ALWAYS shown in the menu; when
+    // the PO has no goods left inbound (already fully received / cancelled),
+    // tell the operator plainly instead of silently doing nothing.
+    if (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED') {
+      window.alert('Nothing to be converted — this Purchase Order has no goods left to receive (already fully received or cancelled).');
+      return;
+    }
     grnFromPos.mutate(
       { purchaseOrderIds: [po.id] },
       {
@@ -381,11 +388,11 @@ export const PurchaseOrders = () => {
             menu.push({ label: 'Edit', onClick: () => navigate(`/purchase-orders/${po.id}?edit=1`) });
           }
           menu.push({ divider: true as const });
-          // Convert to GRN — only while the PO still has goods inbound. Stays
-          // visible even with downstream children (partial receiving allowed).
-          if (po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED') {
-            menu.push({ label: 'Convert to GRN', onClick: () => convertOneToGrn(po) });
-          }
+          // Convert to GRN — ALWAYS shown (Commander 2026-05-30) so the operator
+          // never thinks the action disappeared. convertOneToGrn decides at click
+          // time whether the PO still has goods inbound and otherwise shows a
+          // plain "Nothing to be converted" message.
+          menu.push({ label: 'Convert to GRN', onClick: () => convertOneToGrn(po) });
           // Cancel — soft-stop. Hidden once already cancelled / received / locked.
           if (po.status !== 'CANCELLED' && po.status !== 'RECEIVED' && !hasChildren) {
             menu.push({ divider: true as const });

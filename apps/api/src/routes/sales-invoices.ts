@@ -23,7 +23,7 @@ import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { postSiRevenue, reverseSiRevenue } from '../lib/post-si-revenue';
-import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
+import { doLineRemaining, doRemainingByItemId, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
 
@@ -153,6 +153,33 @@ async function doInvoiceableRemaining(sb: any, doIds: string[]): Promise<Map<str
   return doLineRemaining(sb, doIds);
 }
 
+/* Remaining-to-invoice write guard. Sums the qty each incoming line wants to
+   bill per do_item_id and rejects if the total exceeds that DO line's live
+   Pending pool. `excludeByDoItem` lets an EDIT path add back the qty the line
+   being edited already contributes (so a no-op or decrease never trips). Lines
+   with no doItemId are ad-hoc and skipped. Returns an error body to 409 with,
+   or null when every line fits. */
+async function checkSiOverRemaining(
+  sb: any,
+  lines: Array<Record<string, unknown>>,
+  excludeByDoItem?: Map<string, number>,
+): Promise<{ error: string; lines: Array<{ doItemId: string; requested: number; remaining: number }> } | null> {
+  const wanted = new Map<string, number>();
+  for (const it of lines) {
+    const doItemId = (it.doItemId as string | undefined) ?? null;
+    if (!doItemId) continue;
+    wanted.set(doItemId, (wanted.get(doItemId) ?? 0) + Number(it.qty ?? 0));
+  }
+  if (wanted.size === 0) return null;
+  const remainingMap = await doRemainingByItemId(sb, [...wanted.keys()]);
+  const offenders: Array<{ doItemId: string; requested: number; remaining: number }> = [];
+  for (const [doItemId, requested] of wanted) {
+    const cap = (remainingMap.get(doItemId) ?? 0) + (excludeByDoItem?.get(doItemId) ?? 0);
+    if (requested > cap) offenders.push({ doItemId, requested, remaining: cap });
+  }
+  return offenders.length > 0 ? { error: 'over_remaining', lines: offenders } : null;
+}
+
 // ── List ────────────────────────────────────────────────────────────────
 salesInvoices.get('/', async (c) => {
   const sb = c.get('supabase');
@@ -213,6 +240,15 @@ salesInvoices.post('/', async (c) => {
   if (items.length > 0) {
     const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Remaining-to-invoice guard — every DO-linked line must respect the live
+     Pending pool (delivered − invoiced − returned). Lines with no doItemId are
+     ad-hoc and stay uncapped. Mirrors the convert-from-DO picker so there's no
+     back door that over-invoices a delivered line. */
+  {
+    const over = await checkSiOverRemaining(sb, items);
+    if (over) return c.json(over, 409);
   }
 
   const invoiceNumber = await nextNum(sb);
@@ -565,21 +601,29 @@ salesInvoices.post('/:id/items/from-do/:doId', async (c) => {
     'unit_price_centi, discount_centi, unit_cost_centi, variants, notes',
   ).eq('delivery_order_id', doId).order('created_at');
 
-  const rows = ((doItems as Array<Record<string, unknown>> | null) ?? []).map((it) => buildItemRow(id, {
-    doItemId: it.id,
-    itemCode: it.item_code,
-    itemGroup: it.item_group,
-    description: it.description,
-    description2: it.description2,
-    uom: it.uom,
-    qty: it.qty,
-    unitPriceCenti: it.unit_price_centi,
-    discountCenti: it.discount_centi,
-    unitCostCenti: it.unit_cost_centi,
-    variants: it.variants,
-    notes: it.notes,
-  }));
-  if (rows.length === 0) return c.json({ error: 'do_has_no_lines' }, 400);
+  /* "Convert from DO" pulls the BALANCE, not the gross qty: cap each line to its
+     live remaining-to-invoice and drop lines that are already fully invoiced /
+     returned, so re-converting a partially-invoiced DO never double-bills. */
+  const doLines = (doItems as Array<Record<string, unknown>> | null) ?? [];
+  const remainingMap = await doRemainingByItemId(sb, doLines.map((it) => it.id as string));
+  const rows = doLines
+    .map((it) => ({ it, remaining: remainingMap.get(it.id as string) ?? 0 }))
+    .filter(({ remaining }) => remaining > 0)
+    .map(({ it, remaining }) => buildItemRow(id, {
+      doItemId: it.id,
+      itemCode: it.item_code,
+      itemGroup: it.item_group,
+      description: it.description,
+      description2: it.description2,
+      uom: it.uom,
+      qty: Math.min(Number(it.qty ?? 0), remaining),
+      unitPriceCenti: it.unit_price_centi,
+      discountCenti: it.discount_centi,
+      unitCostCenti: it.unit_cost_centi,
+      variants: it.variants,
+      notes: it.notes,
+    }));
+  if (rows.length === 0) return c.json({ error: 'do_fully_invoiced' }, 409);
 
   const { error: iErr } = await sb.from('sales_invoice_items').insert(rows);
   if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
@@ -646,6 +690,12 @@ salesInvoices.post('/:id/items', async (c) => {
   const { data: header } = await sb.from('sales_invoices').select('id, invoice_number').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
 
+  /* Remaining-to-invoice guard for a DO-linked line. */
+  {
+    const over = await checkSiOverRemaining(sb, [it]);
+    if (over) return c.json(over, 409);
+  }
+
   const row = buildItemRow(id, it);
   const { data, error } = await sb.from('sales_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
@@ -669,11 +719,20 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
   }
 
   const { data: prev } = await sb.from('sales_invoice_items')
-    .select('qty, unit_price_centi, discount_centi, tax_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes')
+    .select('qty, unit_price_centi, discount_centi, tax_centi, unit_cost_centi, item_code, item_group, description, uom, variants, notes, do_item_id')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   const qty = it.qty !== undefined ? Number(it.qty) : Number(prev.qty);
+
+  /* Remaining-to-invoice guard on a qty increase. The line being edited already
+     counts toward its own DO line's invoiced total, so add its current qty back
+     to the cap (remaining + prevQty) — a no-op or decrease never trips. */
+  if (it.qty !== undefined && prev.do_item_id && qty > Number(prev.qty)) {
+    const exclude = new Map<string, number>([[prev.do_item_id as string, Number(prev.qty)]]);
+    const over = await checkSiOverRemaining(sb, [{ doItemId: prev.do_item_id, qty }], exclude);
+    if (over) return c.json(over, 409);
+  }
   const unitPrice = it.unitPriceCenti !== undefined ? Number(it.unitPriceCenti) : Number(prev.unit_price_centi);
   const discount = it.discountCenti !== undefined ? Number(it.discountCenti) : Number(prev.discount_centi);
   const tax = it.taxCenti !== undefined ? Number(it.taxCenti) : Number(prev.tax_centi ?? 0);

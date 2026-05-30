@@ -54,35 +54,42 @@ async function recomputeGrnInvoiced(sb: any, grnItemIds: Array<string | null | u
   const ids = [...new Set(grnItemIds.filter((x): x is string => Boolean(x)))];
   if (ids.length === 0) return;
 
-  // 1. Sum qty from live (non-cancelled) PI lines per GRN item.
-  const { data: plines } = await sb.from('purchase_invoice_items')
-    .select('grn_item_id, qty, purchase_invoice_id')
-    .in('grn_item_id', ids);
-  const rows = (plines ?? []) as Array<{ grn_item_id: string; qty: number; purchase_invoice_id: string }>;
-  const piIds = [...new Set(rows.map((r) => r.purchase_invoice_id).filter(Boolean))];
-  const cancelled = new Set<string>();
-  if (piIds.length > 0) {
-    const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
-    for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
-      if (p.status === 'CANCELLED') cancelled.add(p.id);
+  // Best-effort, never throws (Commander 2026-05-30): the primary write already
+  // committed. If this secondary recount hiccups we log + skip — the live-count
+  // model self-heals on the next operation that touches these GRN lines.
+  try {
+    // 1. Sum qty from live (non-cancelled) PI lines per GRN item.
+    const { data: plines } = await sb.from('purchase_invoice_items')
+      .select('grn_item_id, qty, purchase_invoice_id')
+      .in('grn_item_id', ids);
+    const rows = (plines ?? []) as Array<{ grn_item_id: string; qty: number; purchase_invoice_id: string }>;
+    const piIds = [...new Set(rows.map((r) => r.purchase_invoice_id).filter(Boolean))];
+    const cancelled = new Set<string>();
+    if (piIds.length > 0) {
+      const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
+      for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
+        if (p.status === 'CANCELLED') cancelled.add(p.id);
+      }
     }
-  }
-  const invByGrnItem = new Map<string, number>(ids.map((id) => [id, 0]));
-  for (const r of rows) {
-    if (cancelled.has(r.purchase_invoice_id)) continue;
-    invByGrnItem.set(r.grn_item_id, (invByGrnItem.get(r.grn_item_id) ?? 0) + Number(r.qty ?? 0));
-  }
+    const invByGrnItem = new Map<string, number>(ids.map((id) => [id, 0]));
+    for (const r of rows) {
+      if (cancelled.has(r.purchase_invoice_id)) continue;
+      invByGrnItem.set(r.grn_item_id, (invByGrnItem.get(r.grn_item_id) ?? 0) + Number(r.qty ?? 0));
+    }
 
-  // 2. Clamp into [0, qty_accepted] per line, then write.
-  const { data: giRows } = await sb.from('grn_items')
-    .select('id, qty_accepted').in('id', ids);
-  const acceptedById = new Map<string, number>(
-    ((giRows ?? []) as Array<{ id: string; qty_accepted: number }>).map((g) => [g.id, g.qty_accepted ?? 0]),
-  );
-  await Promise.all([...invByGrnItem.entries()].map(([giId, inv]) => {
-    const capped = Math.min(acceptedById.get(giId) ?? inv, Math.max(0, inv));
-    return sb.from('grn_items').update({ invoiced_qty: capped }).eq('id', giId);
-  }));
+    // 2. Clamp into [0, qty_accepted] per line, then write.
+    const { data: giRows } = await sb.from('grn_items')
+      .select('id, qty_accepted').in('id', ids);
+    const acceptedById = new Map<string, number>(
+      ((giRows ?? []) as Array<{ id: string; qty_accepted: number }>).map((g) => [g.id, g.qty_accepted ?? 0]),
+    );
+    await Promise.all([...invByGrnItem.entries()].map(([giId, inv]) => {
+      const capped = Math.min(acceptedById.get(giId) ?? inv, Math.max(0, inv));
+      return sb.from('grn_items').update({ invoiced_qty: capped }).eq('id', giId);
+    }));
+  } catch (e) {
+    console.error('[recomputeGrnInvoiced] best-effort recount failed', { grnItemIds: ids, error: e });
+  }
 }
 
 /* PI edit-lock guard: a PI with ANY payment recorded (paid_centi > 0) or that's
@@ -152,7 +159,7 @@ purchaseInvoices.get('/outstanding-grn-items', async (c) => {
     .from('grn_items')
     .select(`
       id, grn_id, material_kind, material_code, material_name, item_group,
-      description, qty_accepted, qty_rejected, invoiced_qty, unit_price_centi, variants
+      description, qty_accepted, qty_rejected, invoiced_qty, returned_qty, unit_price_centi, variants
     `)
     .in('grn_id', grnIds);
   if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
@@ -161,12 +168,13 @@ purchaseInvoices.get('/outstanding-grn-items', async (c) => {
   const out = ((items ?? []) as Array<{
     id: string; grn_id: string; material_kind: string; material_code: string;
     material_name: string; item_group: string | null; description: string | null;
-    qty_accepted: number; qty_rejected: number; invoiced_qty: number;
+    qty_accepted: number; qty_rejected: number; invoiced_qty: number; returned_qty: number;
     unit_price_centi: number; variants: unknown;
   }>)
     .map((r) => {
       const invoiced = r.invoiced_qty ?? 0;
-      const remaining = (r.qty_accepted ?? 0) - invoiced;
+      const returned = r.returned_qty ?? 0;
+      const remaining = (r.qty_accepted ?? 0) - invoiced - returned;
       return { ...r, _remaining: remaining };
     })
     .filter((r) => r._remaining > 0)
@@ -389,7 +397,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     .from('grn_items')
     .select(`
       id, grn_id, material_kind, material_code, material_name, item_group,
-      description, description2, uom, qty_accepted, invoiced_qty, unit_price_centi,
+      description, description2, uom, qty_accepted, invoiced_qty, returned_qty, unit_price_centi,
       variants, gap_inches, divan_height_inches, divan_price_sen,
       leg_height_inches, leg_price_sen, custom_specials, line_suffix,
       special_order_price_sen, discount_centi,
@@ -402,7 +410,7 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     id: string; grn_id: string; material_kind: string; material_code: string;
     material_name: string; item_group: string | null; description: string | null;
     description2: string | null; uom: string | null;
-    qty_accepted: number; invoiced_qty: number; unit_price_centi: number;
+    qty_accepted: number; invoiced_qty: number; returned_qty: number; unit_price_centi: number;
     variants: unknown; gap_inches: number | null; divan_height_inches: number | null;
     divan_price_sen: number; leg_height_inches: number | null; leg_price_sen: number;
     custom_specials: unknown; line_suffix: string | null; special_order_price_sen: number;
@@ -418,9 +426,10 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     const row = byId.get(p.grnItemId);
     if (!row) return c.json({ error: 'item_not_found', grnItemId: p.grnItemId }, 400);
     if (p.qty <= 0) return c.json({ error: 'qty_must_be_positive', grnItemId: p.grnItemId }, 400);
-    // Cap each pick at the GRN line's REMAINING (qty_accepted - invoiced_qty),
-    // not raw qty_accepted — a line can be invoiced across multiple PIs.
-    const remaining = (row.qty_accepted ?? 0) - (row.invoiced_qty ?? 0);
+    // Cap each pick at the GRN line's REMAINING (qty_accepted - invoiced_qty -
+    // returned_qty), not raw qty_accepted — a line can be invoiced across
+    // multiple PIs, and returned-to-supplier qty is no longer invoiceable.
+    const remaining = (row.qty_accepted ?? 0) - (row.invoiced_qty ?? 0) - (row.returned_qty ?? 0);
     if (p.qty > remaining) {
       return c.json({ error: 'qty_exceeds_remaining', grnItemId: p.grnItemId, requested: p.qty, remaining }, 409);
     }
@@ -544,23 +553,24 @@ purchaseInvoices.post('/from-grn', async (c) => {
   if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
 
   const { data: items, error: iErr } = await sb.from('grn_items')
-    .select('id, material_kind, material_code, material_name, item_group, description, description2, uom, qty_accepted, invoiced_qty, unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi')
+    .select('id, material_kind, material_code, material_name, item_group, description, description2, uom, qty_accepted, invoiced_qty, returned_qty, unit_price_centi, variants, gap_inches, divan_height_inches, divan_price_sen, leg_height_inches, leg_price_sen, custom_specials, line_suffix, special_order_price_sen, discount_centi')
     .eq('grn_id', grnId)
     .gt('qty_accepted', 0);
   if (iErr) return c.json({ error: 'load_failed', reason: iErr.message }, 500);
   type GrnLine = {
     id: string; material_kind: string; material_code: string; material_name: string;
     item_group: string | null; description: string | null; description2: string | null;
-    uom: string | null; qty_accepted: number; invoiced_qty: number; unit_price_centi: number; variants: unknown;
+    uom: string | null; qty_accepted: number; invoiced_qty: number; returned_qty: number; unit_price_centi: number; variants: unknown;
     gap_inches: number | null; divan_height_inches: number | null; divan_price_sen: number;
     leg_height_inches: number | null; leg_price_sen: number; custom_specials: unknown;
     line_suffix: string | null; special_order_price_sen: number; discount_centi: number;
   };
-  // Only copy lines that still have remaining = qty_accepted - invoiced_qty > 0,
-  // and bill the REMAINING qty (a GRN can be invoiced across multiple PIs, 0106).
+  // Only copy lines that still have remaining = qty_accepted - invoiced_qty -
+  // returned_qty > 0, and bill the REMAINING qty (a GRN can be invoiced across
+  // multiple PIs, 0106; returned-to-supplier qty is no longer invoiceable).
   const allLines = (items ?? []) as unknown as GrnLine[];
   const lines = allLines
-    .map((it) => ({ ...it, _remaining: (it.qty_accepted ?? 0) - (it.invoiced_qty ?? 0) }))
+    .map((it) => ({ ...it, _remaining: (it.qty_accepted ?? 0) - (it.invoiced_qty ?? 0) - (it.returned_qty ?? 0) }))
     .filter((it) => it._remaining > 0);
   if (lines.length === 0) return c.json({ error: 'nothing_to_invoice', message: 'GRN is fully invoiced' }, 400);
 
@@ -669,13 +679,15 @@ purchaseInvoices.post('/:id/items', async (c) => {
   const discountCenti = Number(it.discountCenti ?? 0);
   const lineTotal = (qty * unitPriceCenti) - discountCenti;
 
-  // GRN-linked line: cap qty at that GRN line's remaining (accepted - invoiced).
+  // GRN-linked line: cap qty at that GRN line's remaining
+  // (accepted - invoiced - returned).
   const grnItemId = (it.grnItemId as string) ?? null;
   if (grnItemId) {
     const { data: gi } = await sb.from('grn_items')
-      .select('qty_accepted, invoiced_qty').eq('id', grnItemId).maybeSingle();
+      .select('qty_accepted, invoiced_qty, returned_qty').eq('id', grnItemId).maybeSingle();
     if (gi) {
-      const remaining = ((gi as { qty_accepted: number }).qty_accepted ?? 0) - ((gi as { invoiced_qty: number }).invoiced_qty ?? 0);
+      const g = gi as { qty_accepted: number; invoiced_qty: number; returned_qty: number };
+      const remaining = (g.qty_accepted ?? 0) - (g.invoiced_qty ?? 0) - (g.returned_qty ?? 0);
       if (qty > remaining) return c.json({ error: 'qty_exceeds_remaining', requested: qty, remaining }, 409);
     }
   }
@@ -770,12 +782,13 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   const delta = qty - prevQty;
   if (grnItemId && delta !== 0) {
     const { data: gi } = await sb.from('grn_items')
-      .select('qty_accepted, invoiced_qty').eq('id', grnItemId).maybeSingle();
+      .select('qty_accepted, invoiced_qty, returned_qty').eq('id', grnItemId).maybeSingle();
     if (gi) {
       const accepted = (gi as { qty_accepted: number }).qty_accepted ?? 0;
       const invoiced = (gi as { invoiced_qty: number }).invoiced_qty ?? 0;
-      // remaining headroom for THIS line = accepted - (invoiced - prevQty).
-      const headroom = accepted - (invoiced - prevQty);
+      const returned = (gi as { returned_qty: number }).returned_qty ?? 0;
+      // remaining headroom for THIS line = accepted - returned - (invoiced - prevQty).
+      const headroom = accepted - returned - (invoiced - prevQty);
       if (qty > headroom) return c.json({ error: 'qty_exceeds_remaining', requested: qty, remaining: headroom }, 409);
     }
   }

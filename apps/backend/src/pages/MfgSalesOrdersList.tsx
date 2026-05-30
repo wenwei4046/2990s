@@ -195,6 +195,11 @@ type SoRow = {
      ANY non-cancelled DO / SI. Hides Edit + Cancel from the context menu;
      Convert-to-DO stays available (partial delivery). */
   has_children?: boolean;
+  /* List endpoint stamps this when the SO still has at least one line that can
+     be delivered (remaining = qty − delivered + returned > 0), recomputed live
+     so it re-opens after a DO is cancelled / a DO line is deleted. Drives the
+     "Issue Delivery Order" menu entry instead of a status-only gate. */
+  has_undelivered?: boolean;
 };
 
 const fmtRm = (centi: number): string =>
@@ -330,6 +335,7 @@ type SoItem = {
   line_cost_centi: number | null;
   line_margin_centi: number | null;
   total_centi: number | null;
+  stock_status: string | null;
   cancelled: boolean | null;
 };
 
@@ -575,7 +581,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
              Description 240→1098px) and spread the cells far apart ("间距隔那么
              远"). A fixed 1180px keeps the columns compact and readable; the
              wrapper's overflow-x handles narrow viewports. */
-          width: 1180, minWidth: 1180, borderCollapse: 'collapse',
+          width: 1270, minWidth: 1270, borderCollapse: 'collapse',
           fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
           color: 'var(--c-ink)',
           tableLayout: 'fixed',
@@ -597,6 +603,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Line Cost</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Margin</th>
+            <th style={{ ...TH_BASE, width: 90 }}>Stock</th>
             <th style={{ ...TH_BASE, width: 160 }}>Payment</th>
           </tr>
         </thead>
@@ -656,6 +663,22 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 <td style={{ ...TD_RIGHT, color: lineMarginColor, fontWeight: 600 }}>
                   {fmtRm(lineMargin)}
                 </td>
+                <td style={TD_BASE}>
+                  {(() => {
+                    const ready = it.stock_status === 'READY';
+                    return (
+                      <span style={{
+                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+                        fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
+                        borderRadius: 999,
+                        color: ready ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                        background: ready ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                      }}>
+                        {ready ? 'READY' : 'PENDING'}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td style={{ ...TD_BASE, color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>
                   {paymentRefs || '—'}
                 </td>
@@ -674,6 +697,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: marginColor }}>
               {fmtRm(marginCenti)}
             </td>
+            <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
             <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
           </tr>
         </tfoot>
@@ -865,14 +889,20 @@ export const MfgSalesOrdersList = () => {
      Saves to create the DO. Replaces the old window.confirm() + convert
      endpoint, which silently dropped the sales agent + payments. */
   const convertToDo = (row: SoRow) => {
+    // Commander 2026-05-30 — "Issue Delivery Order" is ALWAYS shown in the menu
+    // (so the operator never thinks the feature vanished). When there's nothing
+    // left to deliver, tell them plainly instead of silently doing nothing.
+    if (!Boolean(row.has_undelivered) || ['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(row.status)) {
+      window.alert('Nothing to be converted — every line on this Sales Order is already delivered (or the order is closed / cancelled / on hold).');
+      return;
+    }
     navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(row.doc_no)}`);
   };
 
-  /* TODO(copy-to-new-so): out of scope for this PR. Will need a
-     sessionStorage handoff carrying the SO header + line items so the
-     New SO page can pre-fill. Wire up in a follow-up worktree. */
+  /* Copy to new SO: hand the source doc number to the New SO page, which
+     fetches it and pre-fills customer + line items (dates/payments excluded). */
   const copyToNewSo = (row: SoRow) => {
-    alert(`Copy to new SO is not implemented yet (would clone SO ${row.doc_no}).`);
+    navigate(`/mfg-sales-orders/new?copyFrom=${encodeURIComponent(row.doc_no)}`);
   };
 
   // ── Columns (23 reference + 1 status pill) ──────────────────────
@@ -1116,11 +1146,12 @@ export const MfgSalesOrdersList = () => {
           items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
           items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
           items.push({ divider: true as const });
-          // Issue DO (开单) — available before goods ship. Stays visible even
-          // with downstream children (partial delivery allowed).
-          if (['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP'].includes(status)) {
-            items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
-          }
+          // Issue DO — ALWAYS shown (Commander 2026-05-30) so the operator never
+          // thinks the action disappeared. convertToDo decides at click time
+          // whether there's anything to deliver (has_undelivered is recomputed
+          // live: qty − delivered + returned > 0) and otherwise shows a plain
+          // "Nothing to be converted" message.
+          items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
           // Issue SI — available once the customer has accepted delivery.
           if (['DELIVERED', 'SHIPPED'].includes(status)) {
             items.push({

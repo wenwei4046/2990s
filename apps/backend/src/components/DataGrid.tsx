@@ -219,6 +219,11 @@ function DataGridInner<T>({
      discoverable toolbar button + popover with a per-column checkbox + Reset
      link, matching houzs-erp/src/pages/SalesOrderPage.tsx lines 576-624. */
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+  /* The Columns popover is fixed-positioned (not absolute) so it escapes the
+     grid card's `overflow: hidden`, which otherwise clips the dropdown when the
+     card is short (few rows). Anchor it to the toolbar button's live rect. */
+  const columnsBtnRef = useRef<HTMLButtonElement>(null);
+  const [columnsMenuPos, setColumnsMenuPos] = useState<{ top: number; right: number } | null>(null);
   /* Per-column value filter (Commander 2026-05-29 — "没有 drop-down 菜单让我
      去做选择"). filters[colKey] = the set of allowed values; absent / empty =
      no filter on that column. filterMenu anchors the open dropdown. */
@@ -268,9 +273,11 @@ function DataGridInner<T>({
     const close = () => setColumnsMenuOpen(false);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('click', close);
+      window.removeEventListener('scroll', close, true);
       window.removeEventListener('keydown', onKey);
     };
   }, [columnsMenuOpen]);
@@ -632,9 +639,20 @@ function DataGridInner<T>({
         </div>
         <div className={styles.columnsAnchor}>
           <button
+            ref={columnsBtnRef}
             type="button"
             className={`${styles.toolbarPill} ${columnsMenuOpen ? styles.toolbarPillOn : ''}`}
-            onClick={(e) => { e.stopPropagation(); setColumnsMenuOpen((v) => !v); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setColumnsMenuOpen((v) => {
+                const next = !v;
+                if (next && columnsBtnRef.current) {
+                  const r = columnsBtnRef.current.getBoundingClientRect();
+                  setColumnsMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+                }
+                return next;
+              });
+            }}
           >
             <Columns3 size={14} strokeWidth={1.75} aria-hidden />
             <span>Columns</span>
@@ -648,7 +666,11 @@ function DataGridInner<T>({
                 className={styles.columnsMenuBackdrop}
                 onClick={() => setColumnsMenuOpen(false)}
               />
-              <div className={styles.columnsMenu} onClick={(e) => e.stopPropagation()}>
+              <div
+                className={styles.columnsMenu}
+                style={columnsMenuPos ? { position: 'fixed', top: columnsMenuPos.top, right: columnsMenuPos.right } : undefined}
+                onClick={(e) => e.stopPropagation()}
+              >
                 <header className={styles.columnsMenuHeader}>
                   <span>Columns ({visibleColumns.length - (expandable ? 1 : 0)})</span>
                   <button

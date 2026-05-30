@@ -41,6 +41,7 @@ import {
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -282,6 +283,7 @@ export const GoodsReceivedDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[grn.status as string] ?? ''}`}>
             {STATUS_LABEL[grn.status as string] ?? String(grn.status)}
           </span>
+          <RelationshipMapButton type="grn" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
             <span>Print PDF</span>

@@ -596,16 +596,23 @@ export const MfgDeliveryOrdersList = () => {
              DELIVERED stage that no longer exists). "Convert to Sales Invoice"
              is wired when the Sales Invoice module lands; "Convert to Delivery
              Return" prefills a new return from this DO. */
-          if (!['CANCELLED'].includes(status)) {
-            items.push({
-              label: 'Convert to Sales Invoice',
-              onClick: () => navigate(`/sales-invoices/new?fromDo=${row.id}`),
-            });
-            items.push({
-              label: 'Convert to Delivery Return',
-              onClick: () => navigate(`/delivery-returns/new?fromDo=${row.id}`),
-            });
-          }
+          // Commander 2026-05-30 — both converts are ALWAYS shown so the operator
+          // never thinks they vanished. A CANCELLED DO has nothing to convert, so
+          // clicking then tells them plainly instead of opening an empty form.
+          items.push({
+            label: 'Convert to Sales Invoice',
+            onClick: () => {
+              if (status === 'CANCELLED') { window.alert('Nothing to be converted — this Delivery Order is cancelled.'); return; }
+              navigate(`/sales-invoices/new?fromDo=${row.id}`);
+            },
+          });
+          items.push({
+            label: 'Convert to Delivery Return',
+            onClick: () => {
+              if (status === 'CANCELLED') { window.alert('Nothing to be converted — this Delivery Order is cancelled.'); return; }
+              navigate(`/delivery-returns/new?fromDo=${row.id}`);
+            },
+          });
           items.push({ divider: true as const });
           if (!['CANCELLED', 'INVOICED'].includes(status) && !hasChildren) {
             items.push({ label: 'Cancel DO', danger: true, onClick: () => doCancel(row) });
