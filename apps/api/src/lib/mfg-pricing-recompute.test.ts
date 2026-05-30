@@ -209,3 +209,45 @@ describe('recomputeFromSnapshot — configured sofa selling drift (per-Model mod
     expect(r.unit_price_sen).toBe(248000);
   });
 });
+
+/* Combo cost/sell split (Phase 5, Part 1). The combos the gate receives carry
+   the SELLING price in pricesByHeight (loadActiveSofaCombos merges
+   selling_prices_by_height over cost via comboChargedPrices). This pins the
+   contract: the gate charges SELLING, and the OLD cost figure now drifts. */
+describe('recomputeFromSnapshot — combo charges SELLING, not cost', () => {
+  // 2A-LHF + L-RHF adjacent → one group matching the combo at height 24.
+  const cells = [
+    { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+    { id: 'b', moduleId: 'L-RHF',  x: 158, y: 0, rot: 0 },
+  ];
+  const variants = { cells, depth: '24' } as unknown as null;
+  const product: ProductRowLite = {
+    code: 'BOOQIT-2S', category: 'SOFA', base_price_sen: 0, price1_sen: null,
+    cost_price_sen: 0, seat_height_prices: null, base_model: 'Booqit', sell_price_sen: null,
+  };
+  // What loadActiveSofaCombos supplies = SELLING merged over cost: RM 3800.
+  const combo = {
+    id: 'cmb', baseModel: 'Booqit', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
+    tier: 'PRICE_2' as const, customerId: null,
+    pricesByHeight: { '24': 380000 }, // SELLING
+    label: null, effectiveFrom: '2026-01-01', deletedAt: null,
+  };
+  const modulePrices = { '2A-LHF': 240000, 'L-RHF': 190000 }; // à-la-carte RM 4300
+
+  it('client pays the SELLING combo price → no drift', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 380000, variants },
+      product, null, null, [combo], modulePrices,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(380000);
+  });
+
+  it('client pays the old COST combo price (RM3000) → drift true', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants },
+      product, null, null, [combo], modulePrices,
+    );
+    expect(r.drift).toBe(true);
+  });
+});
