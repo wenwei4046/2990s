@@ -395,23 +395,24 @@ export const PurchaseOrderNew = () => {
     if (appliedFromSoRef.current || suppliers.isLoading) return;
     let rawPicks: string | null = null;
     try { rawPicks = sessionStorage.getItem('poFromSoPicks'); } catch { /* ignore */ }
-    // Read (and always clear) any stashed draft. Only honour it when picks
-    // came back too — otherwise it's a stale draft from a cancelled picker.
+    /* Commander 2026-05-30 — restore the stashed draft REGARDLESS of whether
+       picks came back. If the operator hit Cancel on the picker, picks are
+       absent but they STILL want their in-progress lines/header back — losing
+       the draft on Cancel was the original complaint. The draft is cleared
+       once it's been read so a fresh /new visit (no draft) starts blank. */
     let draft: {
       supplierId?: string; poDate?: string; expectedAt?: string;
       purchaseLocationId?: string; notes?: string; lines?: DraftLine[];
     } | null = null;
     try {
       const rawDraft = sessionStorage.getItem('poNewDraft');
-      if (rawPicks && rawDraft) draft = JSON.parse(rawDraft);
+      if (rawDraft) draft = JSON.parse(rawDraft);
     } catch { /* ignore */ }
     try { sessionStorage.removeItem('poNewDraft'); } catch { /* ignore */ }
 
-    if (!rawPicks) return;
     appliedFromSoRef.current = true;
     try {
-      sessionStorage.removeItem('poFromSoPicks');
-      // Restore the prior draft (header + lines) FIRST so applyFromSo appends.
+      // Restore the prior draft (header + lines) FIRST so any picks append.
       if (draft) {
         if (draft.supplierId)         setSupplierId(draft.supplierId);
         if (draft.poDate)             setPoDate(draft.poDate);
@@ -420,8 +421,11 @@ export const PurchaseOrderNew = () => {
         if (draft.notes)              setNotes(draft.notes);
         if (Array.isArray(draft.lines) && draft.lines.length) setLines(draft.lines);
       }
-      const rows = JSON.parse(rawPicks) as Array<OutstandingSoItem & { _pickQty?: number }>;
-      if (Array.isArray(rows) && rows.length) applyFromSo(rows);
+      if (rawPicks) {
+        sessionStorage.removeItem('poFromSoPicks');
+        const rows = JSON.parse(rawPicks) as Array<OutstandingSoItem & { _pickQty?: number }>;
+        if (Array.isArray(rows) && rows.length) applyFromSo(rows);
+      }
     } catch { /* malformed — ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suppliers.isLoading]);

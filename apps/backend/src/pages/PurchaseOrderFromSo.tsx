@@ -115,23 +115,37 @@ export const PurchaseOrderFromSo = () => {
 
   const items = useMemo(() => itemsQ.data ?? [], [itemsQ.data]);
 
-  /* Commander 2026-05-29 — the New PO form stashes its current draft
-     (poNewDraft) before sending us here. Exclude SO lines ALREADY on that draft
-     so the same line can't be picked/ordered twice into one PO — even before
-     Create PO (the server-side po_qty_picked only bumps on Create). */
-  const alreadyPicked = useMemo(() => {
+  /* Commander 2026-05-30 — the New PO form stashes its current draft
+     (poNewDraft) before sending us here. Build a per-soItemId draft qty map so:
+       · lines FULLY consumed by the draft are filtered out (clean),
+       · lines PARTIALLY consumed still show with a "draft already X" tag, and
+         the Pick Qty input is capped at (remaining − draft) so the same SO
+         qty can't be over-picked across draft + new picks. */
+  const draftQtyById = useMemo(() => {
     try {
       const raw = sessionStorage.getItem('poNewDraft');
-      if (!raw) return new Set<string>();
-      const d = JSON.parse(raw) as { lines?: Array<{ soItemId?: string | null }> };
-      return new Set((d.lines ?? []).map((l) => l.soItemId).filter(Boolean) as string[]);
-    } catch { return new Set<string>(); }
+      if (!raw) return new Map<string, number>();
+      const d = JSON.parse(raw) as { lines?: Array<{ soItemId?: string | null; qty?: number }> };
+      const m = new Map<string, number>();
+      for (const l of (d.lines ?? [])) {
+        if (!l.soItemId) continue;
+        m.set(l.soItemId, (m.get(l.soItemId) ?? 0) + (l.qty ?? 0));
+      }
+      return m;
+    } catch { return new Map<string, number>(); }
   }, []);
+  const cameFromNewPage = draftQtyById.size > 0;
+
+  /* Effective remaining for a row, after subtracting what the draft already
+     holds for this same SO line. <=0 → filter out. >0 with draftQty>0 →
+     partially consumed, show with the "draft already X" tag. */
+  const effectiveRemaining = (r: OutstandingSoItem): number =>
+    r.remainingQty - (draftQtyById.get(r.soItemId) ?? 0);
 
   // ── Filtered rows fed to the grid ────────────────────────────────────
   const rows = useMemo(() => {
     return items.filter((r) => {
-      if (alreadyPicked.has(r.soItemId)) return false;
+      if (effectiveRemaining(r) <= 0) return false;
       if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
       if (dateFrom || dateTo) {
         const d = rowDateFor(r, dateField);
@@ -141,7 +155,7 @@ export const PurchaseOrderFromSo = () => {
       }
       return true;
     });
-  }, [items, alreadyPicked, category, dateField, dateFrom, dateTo]);
+  }, [items, draftQtyById, category, dateField, dateFrom, dateTo]);
 
   // One supplier per PO (Commander 2026-05-29) — once a bound line is ticked,
   // lines from other suppliers lock. Unbound ("— none —") lines don't lock.
@@ -205,8 +219,13 @@ export const PurchaseOrderFromSo = () => {
       setPicks((s) => {
         const next = { ...s };
         for (const m of rideOn) {
+          /* Commander 2026-05-30 — when a draft already holds some of this SO
+             line's qty, the bulk-set tick defaults to the EFFECTIVE remaining
+             (remaining − draft) so it can't over-pick across draft + new. */
+          const cap = effectiveRemaining(m);
+          if (cap <= 0) continue;
           next[m.soItemId] = turningOn
-            ? { picked: true, qty: m.remainingQty }
+            ? { picked: true, qty: cap }
             : { picked: false, qty: 0 };
         }
         return next;
@@ -231,10 +250,16 @@ export const PurchaseOrderFromSo = () => {
     setPicks((s) => ({ ...s, [id]: { picked: true, qty } }));
 
   // Select / clear all currently-VISIBLE rows (respects the active filters).
+  // Commander 2026-05-30 — default each row's qty to its EFFECTIVE remaining
+  // (remaining − draftQty) so bulk-select honours the draft too.
   const selectAll = () =>
     setPicks((s) => {
       const next = { ...s };
-      for (const l of rows) next[l.soItemId] = { picked: true, qty: l.remainingQty };
+      for (const l of rows) {
+        const cap = effectiveRemaining(l);
+        if (cap <= 0) continue;
+        next[l.soItemId] = { picked: true, qty: cap };
+      }
       return next;
     });
 
@@ -256,7 +281,7 @@ export const PurchaseOrderFromSo = () => {
             type="checkbox"
             checked={on}
             disabled={locked}
-            onChange={() => togglePick(r.soItemId, r.remainingQty)}
+            onChange={() => togglePick(r.soItemId, effectiveRemaining(r))}
             // Stop the row-select click from also firing.
             onClick={(e) => e.stopPropagation()}
             aria-label={`Pick ${r.itemCode}`}
@@ -301,15 +326,28 @@ export const PurchaseOrderFromSo = () => {
     },
     {
       key: 'description', label: 'Description', width: 240, sortable: true,
-      accessor: (r) => (
-        <VariantDescription
-          itemCode={r.itemCode}
-          itemGroup={r.itemGroup}
-          variants={r.variants}
-          description={r.description}
-          mutedClassName={styles.muted}
-        />
-      ),
+      accessor: (r) => {
+        const draftQty = draftQtyById.get(r.soItemId) ?? 0;
+        return (
+          <div>
+            <VariantDescription
+              itemCode={r.itemCode}
+              itemGroup={r.itemGroup}
+              variants={r.variants}
+              description={r.description}
+              mutedClassName={styles.muted}
+            />
+            {draftQty > 0 && (
+              <div style={{
+                marginTop: 2, fontSize: 'var(--fs-11)', fontWeight: 600,
+                color: 'var(--c-burnt)',
+              }}>
+                In draft: {draftQty} · remaining {effectiveRemaining(r)}
+              </div>
+            )}
+          </div>
+        );
+      },
       searchValue: (r) => r.description ?? '',
     },
     {
@@ -328,19 +366,23 @@ export const PurchaseOrderFromSo = () => {
         const p = picks[r.soItemId];
         const on = Boolean(p?.picked);
         const locked = isRowLocked(r);
+        /* Commander 2026-05-30 — cap the input at the EFFECTIVE remaining
+           (remaining − draft) so a partially-consumed SO line can't over-pick
+           across the draft + new picks. */
+        const cap = effectiveRemaining(r);
         return (
           <input
             type="number"
             min={0}
-            max={r.remainingQty}
+            max={cap}
             value={on ? p!.qty : ''}
-            placeholder={String(r.remainingQty)}
+            placeholder={String(cap)}
             disabled={locked}
             /* Commander 2026-05-28 — always editable: typing a qty auto-selects
                the row (no need to tick the checkbox first). */
             onClick={(e) => e.stopPropagation()}
             onChange={(e) =>
-              setQty(r.soItemId, Math.min(r.remainingQty, Math.max(0, Number(e.target.value) || 0)))}
+              setQty(r.soItemId, Math.min(cap, Math.max(0, Number(e.target.value) || 0)))}
             style={{ ...FILTER_INPUT, width: 64, textAlign: 'right', ...(locked ? { cursor: 'not-allowed', background: 'var(--c-cream)' } : null) }}
           />
         );
@@ -365,7 +407,9 @@ export const PurchaseOrderFromSo = () => {
       key: 'lineValue', label: 'Line Value', width: 120, align: 'right', sortable: true,
       accessor: (r) => {
         const p = picks[r.soItemId];
-        const pickQty = p?.picked ? p.qty : r.remainingQty;
+        /* Commander 2026-05-30 — preview value defaults to the EFFECTIVE
+           remaining (after draft) so the muted value matches the cap. */
+        const pickQty = p?.picked ? p.qty : effectiveRemaining(r);
         return (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
             {fmtRm(pickQty * r.unitPriceCenti)}
@@ -374,7 +418,7 @@ export const PurchaseOrderFromSo = () => {
       },
       sortFn: (a, b) => a.remainingQty * a.unitPriceCenti - b.remainingQty * b.unitPriceCenti,
     },
-  ], [picks]);
+  ], [picks, draftQtyById]);
 
   // ── Add to PO ────────────────────────────────────────────────────────
   // Commander 2026-05-29 — two modes:
@@ -480,8 +524,15 @@ export const PurchaseOrderFromSo = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to={targetPoId ? `/purchase-orders/${targetPoId}?edit=1` : '/purchase-orders'} className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>{targetPoId ? 'Back to PO' : 'Purchase Orders'}</span>
+          <Link
+            to={targetPoId ? `/purchase-orders/${targetPoId}?edit=1`
+              : cameFromNewPage ? '/purchase-orders/new'
+              : '/purchase-orders'}
+            className={styles.backBtn}
+          >
+            <ArrowLeft {...ICON} />
+            {' '}
+            <span>{targetPoId ? 'Back to PO' : cameFromNewPage ? 'Back to New PO' : 'Purchase Orders'}</span>
           </Link>
           <h1 className={styles.title}>
             Pick Sales Orders for this PO
@@ -495,7 +546,11 @@ export const PurchaseOrderFromSo = () => {
         <div className={styles.actions}>
           <Button
             variant="ghost" size="md"
-            onClick={() => navigate(targetPoId ? `/purchase-orders/${targetPoId}?edit=1` : '/purchase-orders')}
+            onClick={() => navigate(
+              targetPoId ? `/purchase-orders/${targetPoId}?edit=1`
+              : cameFromNewPage ? '/purchase-orders/new'
+              : '/purchase-orders'
+            )}
           >
             <X {...ICON} /> Cancel
           </Button>
