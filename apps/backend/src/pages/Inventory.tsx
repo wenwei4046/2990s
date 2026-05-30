@@ -33,9 +33,28 @@ import {
   useCreateWarehouse,
   useUpdateWarehouse,
   type CogsEntry,
+  type InventoryMovement,
   type InventoryProductTotal,
   type Warehouse,
 } from '../lib/inventory-queries';
+
+/** Best-effort route for a movement's source doc. Mirrors StockCard's
+ *  docHrefFor so every IN/OUT/ADJUSTMENT row on the Movements ledger can be
+ *  clicked through to the document that drove it. ADJUSTMENT has no per-doc
+ *  detail page — link to the list. */
+const docHrefFor = (m: InventoryMovement): string | null => {
+  switch (m.source_doc_type) {
+    case 'GRN':              return m.source_doc_id ? `/grns/${m.source_doc_id}` : null;
+    case 'DO':               return m.source_doc_id ? `/mfg-delivery-orders/${m.source_doc_id}` : null;
+    case 'DR':               return m.source_doc_id ? `/delivery-returns/${m.source_doc_id}` : null;
+    case 'PURCHASE_RETURN':  return m.source_doc_id ? `/purchase-returns/${m.source_doc_id}` : null;
+    case 'CONSIGNMENT_NOTE': return m.source_doc_id ? `/consignment/${m.source_doc_id}` : null;
+    case 'STOCK_TRANSFER':   return m.source_doc_id ? `/inventory/transfers/${m.source_doc_id}` : null;
+    case 'STOCK_TAKE':       return m.source_doc_id ? `/inventory/stock-takes/${m.source_doc_id}` : null;
+    case 'ADJUSTMENT':       return '/inventory/adjustments';
+    default:                 return null;
+  }
+};
 import styles from './Inventory.module.css';
 
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
@@ -555,8 +574,11 @@ const MovementsTab = ({
     { value: null,                label: 'All' },
     { value: 'GRN',               label: 'GRN (IN)' },
     { value: 'DO',                label: 'DO (OUT)' },
+    { value: 'DR',                label: 'DR (IN)' },
     { value: 'CONSIGNMENT_NOTE',  label: 'Consignment' },
     { value: 'PURCHASE_RETURN',   label: 'PR (OUT)' },
+    { value: 'STOCK_TRANSFER',    label: 'Transfer' },
+    { value: 'STOCK_TAKE',        label: 'Stock Take' },
     { value: 'ADJUSTMENT',        label: 'Adjustment' },
   ];
 
@@ -636,9 +658,12 @@ const MovementsTab = ({
                     {m.total_cost_sen && m.total_cost_sen > 0 ? fmtRm(m.total_cost_sen) : '—'}
                   </td>
                   <td>
-                    {m.source_doc_no
-                      ? <span className={styles.docLink}>{m.source_doc_no}</span>
-                      : <span className={styles.numCellZero}>—</span>}
+                    {m.source_doc_no ? (() => {
+                      const href = docHrefFor(m);
+                      return href
+                        ? <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
+                        : <span className={styles.docLink}>{m.source_doc_no}</span>;
+                    })() : <span className={styles.numCellZero}>—</span>}
                   </td>
                   <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
                 </tr>
