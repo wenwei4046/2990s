@@ -1769,7 +1769,8 @@ export const sofaComboPricing = pgTable('sofa_combo_pricing', {
   // default, read + written by the Products page). Non-NULL = combo scoped to
   // that supplier's purchasing side (Supplier detail Combo Pricing tab).
   supplierId:      uuid('supplier_id').references(() => suppliers.id, { onDelete: 'cascade' }),
-  pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null }
+  pricesByHeight:  jsonb('prices_by_height').notNull().default({}),       // { "<inch>": centi|null } — COST benchmark (Backend / PO side)
+  sellingPricesByHeight: jsonb('selling_prices_by_height').notNull().default({}),  // SELLING (Master Admin, POS) — what the app charges
   label:           text('label'),                                         // null = auto-build from modules
   effectiveFrom:   date('effective_from').notNull(),
   deletedAt:       timestamp('deleted_at', { withTimezone: true }),
