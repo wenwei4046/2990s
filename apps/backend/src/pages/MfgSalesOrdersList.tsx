@@ -1118,7 +1118,10 @@ export const MfgSalesOrdersList = () => {
           if (['DELIVERED', 'SHIPPED'].includes(status)) {
             items.push({
               label: 'Issue Sales Invoice',
-              onClick: () => navigate(`/mfg-sales-invoices/new?soDocNo=${row.doc_no}`),
+              // Fixed dead link (#378): the SI module was rebuilt as a DO clone
+              // and lives at /sales-invoices/* in the router; /mfg-sales-invoices/*
+              // never existed → was a 404.
+              onClick: () => navigate(`/sales-invoices/new?soDocNo=${row.doc_no}`),
             });
           }
           items.push({ label: 'Copy to new Sales Order', onClick: () => copyToNewSo(row) });
