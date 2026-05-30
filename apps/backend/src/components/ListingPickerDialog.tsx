@@ -1,8 +1,8 @@
 // ----------------------------------------------------------------------------
 // ListingPickerDialog — Task #120, AutoCount-style "Listing" picker.
 //
-// Replaces / augments the single "Print Listing" button on the 5 Sales Order
-// family L1 pages (Sales Orders, Delivery Orders, Sales Invoices, Consignment,
+// Replaces / augments the single "Print Listing" button on the Sales Order
+// family L1 pages (Sales Orders, Delivery Orders, Sales Invoices,
 // Delivery Returns). Opens a small modal with four radio-button choices:
 //
 //   1. Listing                     — stay on the current L1 page (refresh)

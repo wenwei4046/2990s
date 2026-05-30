@@ -240,8 +240,8 @@ reports.get('/sales-order-detail-listing', async (c) => {
 });
 
 // ----------------------------------------------------------------------------
-// Task #120 — L2 line-level Detail Listings for the other 4 Sales Order family
-// modules: Delivery Order / Sales Invoice / Consignment / Delivery Return.
+// Task #120 — L2 line-level Detail Listings for the other Sales Order family
+// modules: Delivery Order / Sales Invoice / Delivery Return.
 //
 // Same shape as /sales-order-detail-listing: flatten the header onto every
 // line, apply filter params, return { rows: [...] }. The client decides what
@@ -251,12 +251,9 @@ reports.get('/sales-order-detail-listing', async (c) => {
 // Schema mapping per module — see packages/db/src/schema.ts:
 //   DO  : delivery_order_items     joined with delivery_orders
 //   SI  : sales_invoice_items      joined with sales_invoices
-//   CONS: consignment_order_items  joined with consignment_orders
 //   DR  : delivery_return_items    joined with delivery_returns
 //
-// Consignment differs from the others: there's no per-line `total_centi`
-// column; we compute `total_centi = qty_placed * unit_price_centi` on the
-// fly. Delivery Return has a `refund_centi` instead of revenue — surfaced
+// Delivery Return has a `refund_centi` instead of revenue — surfaced
 // as `total_centi` so the column reuse is straightforward.
 // ----------------------------------------------------------------------------
 
@@ -389,64 +386,6 @@ reports.get('/sales-invoice-detail-listing', async (c) => {
     })
     .filter((r) => {
       const d = (r.invoice_date ?? r.line_date) as string | null;
-      if (dateFrom && (!d || d < dateFrom)) return false;
-      if (dateTo   && (!d || d > dateTo))   return false;
-      return true;
-    });
-
-  return c.json({ rows });
-});
-
-/* ── Consignment Detail Listing ─────────────────────────────────────── */
-reports.get('/consignment-detail-listing', async (c) => {
-  const sb = c.get('supabase');
-  const dateFrom    = c.req.query('dateFrom');
-  const dateTo      = c.req.query('dateTo');
-  const docNo       = c.req.query('docNo');
-  const debtorCode  = c.req.query('debtorCode');
-  const itemCode    = c.req.query('itemCode');
-
-  let q = sb
-    .from('consignment_order_items')
-    .select(`
-      id, consignment_order_id, item_code, description,
-      qty_placed, qty_sold, qty_returned, qty_damaged,
-      unit_price_centi, uom, item_group, variants, line_suffix, created_at,
-      consignment_orders!inner (
-        id, consignment_number, debtor_code, debtor_name, branch_location,
-        placed_at, status, notes
-      )
-    `)
-    .limit(2000);
-
-  if (docNo)      q = q.ilike('consignment_orders.consignment_number', `%${docNo}%`);
-  if (itemCode)   q = q.ilike('item_code', `%${itemCode}%`);
-  if (debtorCode) q = q.eq('consignment_orders.debtor_code', debtorCode);
-
-  const { data, error } = await q;
-  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
-
-  const rows = ((data ?? []) as unknown as AnyRow[])
-    .map((r) => {
-      const flat = flattenJoin(r, 'consignment_orders');
-      flat.doc_no = flat.consignment_number;
-      flat.line_date = flat.placed_at;
-      // Consignment has no per-line total — derive value placed.
-      const qty = Number(flat.qty_placed ?? 0);
-      const upc = Number(flat.unit_price_centi ?? 0);
-      flat.total_centi = qty * upc;
-      // "Outstanding" interpretation for consignment = qty still at branch
-      // (placed − sold − returned − damaged). Value = outstanding qty × unit price.
-      const outstandingQty = Math.max(
-        qty - Number(flat.qty_sold ?? 0) - Number(flat.qty_returned ?? 0) - Number(flat.qty_damaged ?? 0),
-        0,
-      );
-      flat.outstanding_qty = outstandingQty;
-      flat.balance_centi = outstandingQty * upc;
-      return flat;
-    })
-    .filter((r) => {
-      const d = (r.placed_at ?? r.line_date) as string | null;
       if (dateFrom && (!d || d < dateFrom)) return false;
       if (dateTo   && (!d || d > dateTo))   return false;
       return true;

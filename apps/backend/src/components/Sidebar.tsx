@@ -107,9 +107,9 @@ export const Sidebar = () => {
       : []),
   ];
 
-  /* ── Supply Chain Management — 5 collapsible modules, ordered by the
+  /* ── Supply Chain Management — collapsible modules, ordered by the
         commander's importance ranking (SO → Procurement → Transport →
-        Warehouse → Consignment). 2026-05-28. ──
+        Warehouse). 2026-05-28. ──
 
      NOTE (Phase 1b, 2026-05-28): "SO Maintenance" now lives as a button on
      the Sales Orders page (next to "New Sales Order"), and "Fabric Converter"
@@ -127,13 +127,6 @@ export const Sidebar = () => {
         // outbound side), not Transportation. Drivers stays under Transportation.
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
-        // Commander 2026-05-30 — Consignment (outbound — you place goods on
-        // consignment at a debtor) belongs with Sales Order. CO + COR mirror
-        // the DO + DR split. COR list now lives at /consignment-returns —
-        // flat view of RETURN consignment_notes; rows deep-link to the parent
-        // CO detail page.
-        { to: '/consignment', icon: <PackagePlus {...ICON_PROPS} />, label: 'Consignment (CO)' },
-        { to: '/consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Returns (COR)' },
       ],
     },
     {
@@ -148,13 +141,6 @@ export const Sidebar = () => {
         { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
         { to: '/purchase-invoices', icon: <Receipt {...ICON_PROPS} />, label: 'Purchase Invoices' },
         { to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
-        // Commander 2026-05-30 — Purchase Consignment (inbound — supplier
-        // places goods on consignment with you) belongs with Procurement. PC
-        // + PCR mirror the GRN + PR split. PC live as of migration 0111;
-        // PCR list now lives at /purchase-consignment-returns — flat view of
-        // RETURN PC notes; rows deep-link to the parent PC detail page.
-        { to: '/purchase-consignment', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment (PC)' },
-        { to: '/purchase-consignment-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns (PCR)' },
       ],
     },
     {
@@ -177,9 +163,6 @@ export const Sidebar = () => {
         { to: '/warehouse', icon: <Warehouse {...ICON_PROPS} />, label: 'Warehouse' },
       ],
     },
-    // Commander 2026-05-30 — standalone Consignment group removed; CO + COR
-    // moved into the Sales Order group above (mirror DO + DR's home there);
-    // PC + PCR placed in Procurement above (mirror GRN + PR's home there).
   ];
 
   /* ── Plain groups kept outside Supply Chain Management ── */

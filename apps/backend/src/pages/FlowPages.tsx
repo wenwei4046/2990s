@@ -1,6 +1,6 @@
 // 7 list-view pages for the procurement/sales flow modules:
 //   GRN / Purchase Invoice / Sales Order (mfg) / Delivery Order (mfg) /
-//   Sales Invoice / Consignment / Delivery Return
+//   Sales Invoice / Delivery Return
 //
 // First-cut: list + status filter + "New" primary button (stub alert; full
 // create drawers come in follow-up). 2990s tokens, no Tailwind.
@@ -11,12 +11,12 @@ import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrns, usePurchaseInvoices,
-  useSalesInvoices, useConsignments, useConsignmentDetail,
+  useSalesInvoices,
   usePurchaseReturns, usePurchaseReturnFromGrns,
 } from '../lib/flow-queries';
 import {
   CreateGrnDrawer, CreatePurchaseInvoiceDrawer,
-  CreateSalesInvoiceDrawer, CreateConsignmentDrawer,
+  CreateSalesInvoiceDrawer,
 } from './FlowDrawers';
 import {
   ListingPickerDialog, ListingPickerTrigger, type ListingChoice,
@@ -540,212 +540,6 @@ export const SalesInvoicesPage = () => {
         </table>
       {open && <CreateSalesInvoiceDrawer onClose={() => setOpen(false)} />}
       </div>
-    </div>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   Consignment
-   ════════════════════════════════════════════════════════════════════════ */
-const CO_CHIPS: Chip[] = [
-  { value: 'all', label: 'All' }, { value: 'AT_BRANCH', label: 'At Branch' },
-  { value: 'SOLD', label: 'Sold' }, { value: 'RETURNED', label: 'Returned' }, { value: 'DAMAGED', label: 'Damaged' },
-];
-
-/* ── L2 expansion for the CO parent list — items + notes summary ──────────
-   Fetches the consignment's detail (items + notes) when the row expands
-   (TanStack Query gates on `enabled: !!id`). Mirrors the ExpandedDoLines
-   pattern in MfgDeliveryOrdersList — a small inline table the user can
-   glance at without leaving the list. */
-const ExpandedConsignmentLines = ({ id }: { id: string }) => {
-  const q = useConsignmentDetail(id);
-  if (q.isLoading) {
-    return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading consignment…</div>;
-  }
-  if (q.error) {
-    return (
-      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)' }}>
-        Failed to load: {q.error instanceof Error ? q.error.message : String(q.error)}
-      </div>
-    );
-  }
-  const items: any[] = q.data?.items ?? [];
-  const notes: any[] = q.data?.notes ?? [];
-  const TH: any = { padding: '2px 8px', textAlign: 'left', color: 'var(--fg-muted)', fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase' };
-  const THR: any = { ...TH, textAlign: 'right' };
-  const TD: any = { padding: '3px 8px', verticalAlign: 'top' };
-  const TDR: any = { ...TD, textAlign: 'right' };
-  // Aggregate per-note totals for the summary panel.
-  const noteSummaries = notes.map((n: any) => {
-    const status = n.cancelled_at ? 'Cancelled' : (n.signed_at ? 'Posted' : 'Draft');
-    return { id: n.id, no: n.note_number, type: n.note_type, date: n.note_date, status };
-  });
-  return (
-    <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-2) 40px', background: 'var(--c-cream)', display: 'grid', gap: 'var(--space-3)' }}>
-      <div>
-        <div style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4 }}>Items placed</div>
-        {items.length === 0 ? (
-          <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No items.</div>
-        ) : (
-          <table style={{ width: 760, borderCollapse: 'collapse', fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)' }}>
-            <thead><tr style={{ borderBottom: '1px solid rgba(34,31,32,0.10)' }}>
-              <th style={{ ...TH, width: 160 }}>Item Code</th>
-              <th style={{ ...TH, width: 320 }}>Description</th>
-              <th style={{ ...THR, width: 70 }}>Placed</th>
-              <th style={{ ...THR, width: 70 }}>Sold</th>
-              <th style={{ ...THR, width: 80 }}>Returned</th>
-              <th style={{ ...THR, width: 80 }}>Damaged</th>
-            </tr></thead>
-            <tbody>
-              {items.map((it: any) => (
-                <tr key={it.id} style={{ borderTop: '1px solid rgba(34,31,32,0.05)' }}>
-                  <td style={{ ...TD, fontWeight: 700, color: 'var(--c-burnt)' }}>{it.item_code ?? '—'}</td>
-                  <td style={TD}>{it.description ?? '—'}</td>
-                  <td style={TDR}>{it.qty_placed ?? 0}</td>
-                  <td style={TDR}>{it.qty_sold ?? 0}</td>
-                  <td style={TDR}>{it.qty_returned ?? 0}</td>
-                  <td style={TDR}>{it.qty_damaged ?? 0}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      <div>
-        <div style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: 4 }}>Notes ({noteSummaries.length})</div>
-        {noteSummaries.length === 0 ? (
-          <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No notes posted yet.</div>
-        ) : (
-          <table style={{ width: 520, borderCollapse: 'collapse', fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)' }}>
-            <thead><tr style={{ borderBottom: '1px solid rgba(34,31,32,0.10)' }}>
-              <th style={{ ...TH, width: 150 }}>Note No.</th>
-              <th style={{ ...TH, width: 80 }}>Type</th>
-              <th style={{ ...TH, width: 120 }}>Date</th>
-              <th style={{ ...TH, width: 100 }}>Status</th>
-            </tr></thead>
-            <tbody>
-              {noteSummaries.map((n) => (
-                <tr key={n.id} style={{ borderTop: '1px solid rgba(34,31,32,0.05)' }}>
-                  <td style={{ ...TD, fontWeight: 700, color: 'var(--c-burnt)' }}>{n.no}</td>
-                  <td style={TD}>{n.type}</td>
-                  <td style={TD}>{(n.date ?? '').slice(0, 10) || '—'}</td>
-                  <td style={TD}>{n.status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-};
-
-/* CO list — DataGrid with L2 expandable drilldown (items + notes summary).
-   storageKey 'co-list.layout.v1' is unique and never reused. */
-const CO_LIST_STORAGE_KEY = 'co-list.layout.v1';
-
-type CoRow = Record<string, unknown> & {
-  id: string;
-  consignment_number: string;
-  debtor_code: string | null;
-  debtor_name: string;
-  branch_location: string | null;
-  placed_at: string | null;
-  status: string;
-};
-
-const buildCoColumns = (): DataGridColumn<CoRow>[] => [
-  {
-    key: 'consignment_number', label: 'Consign #', width: 150, sortable: true,
-    accessor: (g) => <span className={styles.codeChip}>{g.consignment_number}</span>,
-    searchValue: (g) => g.consignment_number,
-    sortFn: (a, b) => a.consignment_number.localeCompare(b.consignment_number),
-  },
-  {
-    key: 'debtor_name', label: 'Debtor', width: 260, sortable: true, groupable: true,
-    accessor: (g) => g.debtor_name,
-    searchValue: (g) => `${g.debtor_code ?? ''} ${g.debtor_name}`.trim(),
-    groupValue: (g) => g.debtor_name ?? '(none)',
-  },
-  {
-    key: 'branch_location', label: 'Branch', width: 200, sortable: true, groupable: true,
-    accessor: (g) => g.branch_location ?? '—',
-    searchValue: (g) => g.branch_location ?? '',
-    groupValue: (g) => g.branch_location ?? '(none)',
-  },
-  {
-    key: 'placed_at', label: 'Placed', width: 120, sortable: true,
-    accessor: (g) => (g.placed_at ?? '').slice(0, 10) || '—',
-    searchValue: (g) => g.placed_at ?? '',
-    sortFn: (a, b) => (a.placed_at ?? '').localeCompare(b.placed_at ?? ''),
-  },
-  {
-    key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
-    accessor: (g) => <span className={styles.statusPill}>{g.status.replace('_', ' ')}</span>,
-    searchValue: (g) => g.status ?? '',
-    groupValue: (g) => g.status ?? '(none)',
-    sortFn: (a, b) => a.status.localeCompare(b.status),
-  },
-];
-
-export const ConsignmentPage = () => {
-  const navigate = useNavigate();
-  const [status, setStatus] = useState('all');
-  const [open, setOpen] = useState(false);
-  const { data, isLoading, error } = useConsignments(status === 'all' ? undefined : status);
-  const allRows = useMemo<CoRow[]>(() => (data?.consignments ?? []) as CoRow[], [data]);
-  const picker = useListingPicker('/reports/consignment-detail-listing');
-  /* Task #120 — Consignment outstanding = still at branch (status === 'AT_BRANCH'). */
-  const rows = useMemo<CoRow[]>(() => {
-    if (!picker.outstandingOnly) return allRows;
-    return allRows.filter((r) => String(r.status ?? '') === 'AT_BRANCH');
-  }, [allRows, picker.outstandingOnly]);
-  const columns = useMemo(() => buildCoColumns(), []);
-
-  return (
-    <div className={styles.page}>
-      <Header
-        title={`Consignment${picker.outstandingOnly ? ' · At-branch only' : ''}`}
-        subtitle="Stock placed at customer branches — sells through / returns / damaged"
-        newLabel="New Consignment"
-        onNew={() => setOpen(true)}
-      />
-      <ListingPickerDialog
-        open={picker.open}
-        onClose={() => picker.setOpen(false)}
-        onChoose={picker.onPick}
-        detailListingAvailable={true}
-        initial={picker.initial}
-      />
-      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
-        <ListingPickerTrigger onClick={() => picker.setOpen(true)} />
-        <StatusChips chips={CO_CHIPS} active={status} onPick={setStatus} />
-      </div>
-      {picker.outstandingOnly && (
-        <OutstandingChip label={`At-branch only · ${rows.length} of ${allRows.length}`} onClear={picker.clearOutstanding} />
-      )}
-      <p className={styles.eyebrow}>{isLoading ? 'Loading…' : `${rows.length} consignments`}</p>
-      {error && !isLoading && <ErrorBanner error={error} hint="Apply migration 0042." />}
-
-      <DataGrid<CoRow>
-        rows={rows}
-        columns={columns}
-        storageKey={CO_LIST_STORAGE_KEY}
-        rowKey={(g) => g.id}
-        searchPlaceholder="Search consignments…"
-        onRowDoubleClick={(g) => navigate(`/consignment/${g.id}`)}
-        expandable={{
-          renderExpansion: (row) => <ExpandedConsignmentLines id={row.id} />,
-          rowExpansionKey: (row) => row.id,
-        }}
-        contextMenu={(g) => [
-          { label: 'View', onClick: () => navigate(`/consignment/${g.id}`) },
-        ]}
-        isLoading={isLoading}
-        emptyMessage="No consignments yet."
-      />
-
-      {open && <CreateConsignmentDrawer onClose={() => setOpen(false)} />}
     </div>
   );
 };

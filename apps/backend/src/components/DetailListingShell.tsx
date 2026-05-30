@@ -1,7 +1,7 @@
 // ----------------------------------------------------------------------------
 // DetailListingShell — Task #120 shared L2 (Detail Listing) layout.
 //
-// Used by the 4 module-specific L2 pages (DO / SI / Consignment / DR).
+// Used by the module-specific L2 pages (DO / SI / DR).
 // Mirrors the SalesOrderDetailListing structure but extracted as a reusable
 // shell so each module-specific page is mostly column definitions + a hook
 // call, not a 500-line copy-paste.
@@ -58,7 +58,7 @@ export interface DetailListingShellProps<R extends DetailListingRow> {
     margin: string;
     outstanding: string;
   }>;
-  /** Hide tiles that don't apply (e.g. consignment has no margin). */
+  /** Hide tiles that don't apply (e.g. a return has no margin). */
   hideKpis?: Partial<{
     cost: boolean;
     margin: boolean;
