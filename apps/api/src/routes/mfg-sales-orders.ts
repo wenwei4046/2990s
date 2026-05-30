@@ -983,6 +983,43 @@ mfgSalesOrders.post('/recompute-allocation', async (c) => {
   return c.json(res);
 });
 
+/* ── PATCH /:docNo/priority — manual urgent override (Commander #38).
+       Body: { rank: 1 | 2 | 3 … | null, reason?: string }
+       Lower rank = higher priority. NULL clears the override → SO falls back
+       into the default delivery_date FIFO. Triggers an allocation recompute
+       so the SO list refreshes immediately. */
+mfgSalesOrders.patch('/:docNo/priority', async (c) => {
+  const sb = c.get('supabase'); const docNo = c.req.param('docNo'); const user = c.get('user');
+  let body: { rank?: number | null; reason?: string | null };
+  try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const rank = body.rank == null ? null : Math.max(1, Math.min(999, Math.round(Number(body.rank))));
+  const patch: Record<string, unknown> = {
+    priority_rank:   rank,
+    priority_set_at: rank == null ? null : new Date().toISOString(),
+    priority_set_by: rank == null ? null : user.id,
+    priority_reason: rank == null ? null : (body.reason ?? null),
+    updated_at:      new Date().toISOString(),
+  };
+  const { data, error } = await sb.from('mfg_sales_orders')
+    .update(patch).eq('doc_no', docNo)
+    .select('doc_no, priority_rank, priority_reason').single();
+  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  await recordSoAudit(sb, {
+    docNo, action: 'UPDATE_HEADER', actorId: user.id,
+    actorName: (user.user_metadata as { name?: string } | undefined)?.name ?? null,
+    fieldChanges: [{ field: 'priorityRank', from: 'previous', to: String(rank ?? '(cleared)') }],
+    note: rank == null ? 'Priority override cleared' : `Marked urgent (rank ${rank}${body.reason ? ` — ${body.reason}` : ''})`,
+  });
+
+  /* Priority changed — re-walk allocation so older non-urgent SOs lose their
+     claim if this one now sorts to the head. Best-effort. */
+  try { await recomputeSoStockAllocation(sb); }
+  catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-priority failed:', e); }
+
+  return c.json({ salesOrder: data });
+});
+
 
 // Status transition with audit row. Reads the prior status, updates, then
 // inserts to mfg_so_status_changes — best-effort (audit failure does NOT

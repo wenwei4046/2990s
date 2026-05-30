@@ -358,6 +358,23 @@ async function withShortStockRetry<T>(call: (extra: { confirmShortStock?: boolea
 /* Manual "Re-allocate stock to SOs now" — walks every active SO line and
    flips PENDING/READY against live inventory. Auto-advances SO header
    CONFIRMED↔READY_TO_SHIP. Server-side helper at POST /recompute-allocation. */
+/* Manual SO priority override (#38). Bumps an SO to the head of the
+   allocation queue regardless of delivery date. Pass rank=null to clear. */
+export const useSetSoPriority = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ docNo, rank, reason }: { docNo: string; rank: number | null; reason?: string | null }) =>
+      authedFetch<{ salesOrder: { doc_no: string; priority_rank: number | null; priority_reason: string | null } }>(
+        `/mfg-sales-orders/${docNo}/priority`,
+        { method: 'PATCH', body: JSON.stringify({ rank, reason: reason ?? null }) },
+      ),
+    onSuccess: (_, vars) => {
+      qc.invalidateQueries({ queryKey: ['mfg-sales-orders'] });
+      qc.invalidateQueries({ queryKey: ['mfg-sales-order-detail', vars.docNo] });
+    },
+  });
+};
+
 export const useRecomputeSoAllocation = () => {
   const qc = useQueryClient();
   return useMutation({

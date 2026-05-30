@@ -75,14 +75,22 @@ export async function recomputeSoStockAllocation(
     /* RPC not configured — proceed without the lock. */
   }
   try {
-    // 1. All non-cancelled, non-completed SOs. Sort by SO created_at ASC
-    //    so older SOs allocate stock first (FIFO).
+    /* 1. All non-cancelled, non-completed SOs. Allocation priority (B2C
+          Commander 2026-05-30, migration 0111):
+            a) priority_rank ASC NULLS LAST  — manual urgent override wins
+            b) customer_delivery_date ASC NULLS LAST  — earlier delivery wins
+            c) created_at ASC  — tiebreaker so order is deterministic */
     const { data: orderRows } = await sb
       .from('mfg_sales_orders')
-      .select('doc_no, status, created_at')
+      .select('doc_no, status, created_at, customer_delivery_date, priority_rank')
       .not('status', 'in', '(CANCELLED,CLOSED,SHIPPED,DELIVERED,INVOICED)')
-      .order('created_at', { ascending: true });
-    const orders = (orderRows ?? []) as Array<{ doc_no: string; status: string; created_at: string }>;
+      .order('priority_rank',           { ascending: true, nullsFirst: false })
+      .order('customer_delivery_date',  { ascending: true, nullsFirst: false })
+      .order('created_at',              { ascending: true });
+    const orders = (orderRows ?? []) as Array<{
+      doc_no: string; status: string; created_at: string;
+      customer_delivery_date: string | null; priority_rank: number | null;
+    }>;
     if (orders.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
     const orderByDoc = new Map(orders.map((o) => [o.doc_no, o]));
 
@@ -163,11 +171,21 @@ export async function recomputeSoStockAllocation(
     }
     if (needs.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
 
-    // 5. Sort needs by SO created_at ASC (FIFO), then by line id for determinism.
+    /* 5. Sort needs by allocation priority (priority_rank, then delivery
+          date, then created_at — same ordering as the SQL query above so
+          allocation order is deterministic). Line id breaks final ties. */
+    const FAR_FUTURE = '9999-12-31';
     needs.sort((a, b) => {
-      const aDate = orderByDoc.get(a.doc_no)?.created_at ?? '';
-      const bDate = orderByDoc.get(b.doc_no)?.created_at ?? '';
-      return aDate.localeCompare(bDate) || a.id.localeCompare(b.id);
+      const A = orderByDoc.get(a.doc_no); const B = orderByDoc.get(b.doc_no);
+      const ap = A?.priority_rank ?? Number.MAX_SAFE_INTEGER;
+      const bp = B?.priority_rank ?? Number.MAX_SAFE_INTEGER;
+      if (ap !== bp) return ap - bp;                                      // a) priority
+      const ad = A?.customer_delivery_date ?? FAR_FUTURE;
+      const bd = B?.customer_delivery_date ?? FAR_FUTURE;
+      if (ad !== bd) return ad.localeCompare(bd);                         // b) delivery date
+      const ac = A?.created_at ?? '';
+      const bc = B?.created_at ?? '';
+      return ac.localeCompare(bc) || a.id.localeCompare(b.id);            // c) created_at + line id
     });
 
     // 6. Pull live on-hand per bucket — sum across ALL warehouses since B2C
