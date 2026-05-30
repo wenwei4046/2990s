@@ -1635,6 +1635,105 @@ export const consignmentNoteItems = pgTable('consignment_note_items', {
   idxCn: index('idx_cn_items_cn').on(t.consignmentNoteId),
 }));
 
+/* ════════════════════════════════════════════════════════════════════════
+   Purchase Consignment (PC) — supplier places goods on consignment with you
+   Migration 0111. Buyer-side mirror of Consignment:
+     • IN note     → supplier delivers to your warehouse (inventory IN)
+     • RETURN note → you ship back to supplier            (inventory OUT)
+   ════════════════════════════════════════════════════════════════════════ */
+
+export const purchaseConsignmentStatus = pgEnum('purchase_consignment_status', [
+  'AT_WAREHOUSE', 'SOLD', 'RETURNED', 'DAMAGED',
+]);
+
+export const purchaseConsignmentNoteType = pgEnum('purchase_consignment_note_type', [
+  'IN', 'RETURN',
+]);
+
+export const purchaseConsignmentOrders = pgTable('purchase_consignment_orders', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  pcNumber:        text('pc_number').notNull().unique(),                          // 'PC-2605-001'
+  supplierId:      uuid('supplier_id').notNull().references(() => suppliers.id, { onDelete: 'restrict' }),
+  status:          purchaseConsignmentStatus('status').notNull().default('AT_WAREHOUSE'),
+  warehouseId:     uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  agreementDate:   date('agreement_date').notNull().defaultNow(),
+  notes:           text('notes'),
+  createdAt:       timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:       uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+  updatedAt:       timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxSupplier: index('idx_pc_supplier').on(t.supplierId),
+  idxStatus:   index('idx_pc_status').on(t.status),
+}));
+
+export const purchaseConsignmentOrderItems = pgTable('purchase_consignment_order_items', {
+  id:                     uuid('id').primaryKey().defaultRandom(),
+  pcId:                   uuid('pc_id').notNull().references(() => purchaseConsignmentOrders.id, { onDelete: 'cascade' }),
+  materialKind:           materialKind('material_kind').notNull().default('mfg_product'),
+  materialCode:           text('material_code').notNull(),
+  materialName:           text('material_name').notNull(),
+  itemGroup:              text('item_group'),
+  description:            text('description'),
+  description2:           text('description2'),
+  uom:                    text('uom').notNull().default('UNIT'),
+  qtyPlaced:              integer('qty_placed').notNull(),
+  qtySold:                integer('qty_sold').notNull().default(0),
+  qtyReturned:            integer('qty_returned').notNull().default(0),
+  qtyDamaged:             integer('qty_damaged').notNull().default(0),
+  unitPriceCenti:         integer('unit_price_centi').notNull().default(0),
+  variants:               jsonb('variants'),
+  /* Variant fields mirrored from consignment_order_items (post-0058) */
+  gapInches:              integer('gap_inches'),
+  divanHeightInches:      integer('divan_height_inches'),
+  divanPriceSen:          integer('divan_price_sen').notNull().default(0),
+  legHeightInches:        integer('leg_height_inches'),
+  legPriceSen:            integer('leg_price_sen').notNull().default(0),
+  customSpecials:         jsonb('custom_specials'),
+  lineSuffix:             text('line_suffix'),
+  specialOrderPriceSen:   integer('special_order_price_sen').notNull().default(0),
+  createdAt:              timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPc: index('idx_pc_items_pc').on(t.pcId),
+}));
+
+export const purchaseConsignmentNotes = pgTable('purchase_consignment_notes', {
+  id:            uuid('id').primaryKey().defaultRandom(),
+  noteNumber:    text('note_number').notNull().unique(),                         // 'PCN-2605-001'
+  pcId:          uuid('pc_id').notNull().references(() => purchaseConsignmentOrders.id, { onDelete: 'restrict' }),
+  noteType:      purchaseConsignmentNoteType('note_type').notNull(),
+  noteDate:      date('note_date').notNull().defaultNow(),
+  warehouseId:   uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
+  driverId:      uuid('driver_id').references(() => drivers.id, { onDelete: 'set null' }),
+  driverName:    text('driver_name'),
+  vehicle:       text('vehicle'),
+  postedAt:      timestamp('posted_at', { withTimezone: true }),
+  signedAt:      timestamp('signed_at', { withTimezone: true }),
+  /* Cancel sentinel — mirrors consignment_notes.cancelled_at (migration 0110).
+     NULL = active / posted; not NULL = unposted (inventory reversed, qty_returned
+     rolled back for RETURN notes). The cancel/has_children/lock probes all
+     filter on cancelled_at IS NULL. */
+  cancelledAt:   timestamp('cancelled_at', { withTimezone: true }),
+  notes:         text('notes'),
+  createdAt:     timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy:     uuid('created_by').notNull().references(() => staff.id, { onDelete: 'restrict' }),
+}, (t) => ({
+  idxPc:   index('idx_pcn_pc').on(t.pcId),
+  idxType: index('idx_pcn_type').on(t.noteType),
+}));
+
+export const purchaseConsignmentNoteItems = pgTable('purchase_consignment_note_items', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  pcNoteId:     uuid('pc_note_id').notNull().references(() => purchaseConsignmentNotes.id, { onDelete: 'cascade' }),
+  pcItemId:     uuid('pc_item_id').references(() => purchaseConsignmentOrderItems.id, { onDelete: 'set null' }),
+  itemCode:     text('item_code').notNull(),
+  description:  text('description'),
+  qty:          integer('qty').notNull(),
+  notes:        text('notes'),
+  createdAt:    timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxPcn: index('idx_pcn_items_pcn').on(t.pcNoteId),
+}));
+
 /* Delivery Return — customer returning previously-delivered goods */
 export const deliveryReturns = pgTable('delivery_returns', {
   id:                uuid('id').primaryKey().defaultRandom(),

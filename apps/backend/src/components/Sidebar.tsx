@@ -150,9 +150,9 @@ export const Sidebar = () => {
         { to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
         // Commander 2026-05-30 — Purchase Consignment (inbound — supplier
         // places goods on consignment with you) belongs with Procurement. PC
-        // + PCR mirror the GRN + PR split. Placeholders until #206/#207 land
-        // (route stub goes to /consignment so nothing 404s in the meantime).
-        { to: '/consignment', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment (PC)' },
+        // + PCR mirror the GRN + PR split. PC live as of migration 0111
+        // (#206); PCR stays a /consignment placeholder until #207 lands.
+        { to: '/purchase-consignment', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment (PC)' },
         { to: '/consignment', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns (PCR)' },
       ],
     },
