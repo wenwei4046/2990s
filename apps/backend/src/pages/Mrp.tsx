@@ -656,21 +656,23 @@ export const Mrp = () => {
                 <th>SO No</th>
                 <th>Customer</th>
                 <th>Set (modules · colour)</th>
-                <th>Delivery Date</th>
-                <th className={styles.num}>Qty</th>
-                <th className={styles.num}>To Order</th>
-                <th>Supplier</th>
+                <th className={styles.num}>Qty Needed</th>
+                <th className={styles.num}>Stock</th>
+                <th className={styles.num}>PO Outstanding</th>
+                <th className={styles.num}>Shortage</th>
+                <th>Delivery</th>
+                <th>Main Supplier</th>
               </tr>
             </thead>
             <tbody>
               {q.isLoading && (
-                <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
+                <tr><td colSpan={11} className={styles.stateCell}>Loading MRP…</td></tr>
               )}
               {q.isError && (
-                <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+                <tr><td colSpan={11} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
               {data && displaySets.length === 0 && (
-                <tr><td colSpan={9} className={styles.stateCell}>
+                <tr><td colSpan={11} className={styles.stateCell}>
                   {onlyShort ? 'No sofa sets need ordering — everything in view is covered.'
                     : hasWindow ? 'No sofa sets delivering in this window.'
                     : 'No open sofa Sales-Order demand for this filter.'}
@@ -946,11 +948,11 @@ const SofaSetRow = ({ set, selected, onSelect, chosenSupplierId, onSupplierChang
         </div>
         {set.variantLabel && <span className={styles.setSpec}>{set.variantLabel}</span>}
       </td>
-      <td>{fmtDate(set.deliveryDate)}</td>
       <td className={styles.num}>{set.qty}</td>
-      <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>
-        {short ? set.shortageQty : <span className={`${styles.tag} ${styles.tagPo}`}>ordered</span>}
-      </td>
+      <td className={styles.num}>—</td>
+      <td className={styles.num}>{set.orderedQty || '—'}</td>
+      <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? set.shortageQty : '—'}</td>
+      <td>{fmtDate(set.deliveryDate)}</td>
       <td className={styles.supplierCell}>
         <SupplierCell suppliers={set.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
       </td>
