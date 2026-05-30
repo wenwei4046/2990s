@@ -652,6 +652,7 @@ export const Mrp = () => {
                     onChange={toggleSelectAll}
                   />
                 </th>
+                <th>Item Code</th>
                 <th>SO No</th>
                 <th>Customer</th>
                 <th>Set (modules · colour)</th>
@@ -663,13 +664,13 @@ export const Mrp = () => {
             </thead>
             <tbody>
               {q.isLoading && (
-                <tr><td colSpan={8} className={styles.stateCell}>Loading MRP…</td></tr>
+                <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
               )}
               {q.isError && (
-                <tr><td colSpan={8} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+                <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
               )}
               {data && displaySets.length === 0 && (
-                <tr><td colSpan={8} className={styles.stateCell}>
+                <tr><td colSpan={9} className={styles.stateCell}>
                   {onlyShort ? 'No sofa sets need ordering — everything in view is covered.'
                     : hasWindow ? 'No sofa sets delivering in this window.'
                     : 'No open sofa Sales-Order demand for this filter.'}
@@ -923,6 +924,7 @@ const SofaSetRow = ({ set, selected, onSelect, chosenSupplierId, onSupplierChang
             aria-label={`Select ${set.soDocNo} sofa set to order`} />
         )}
       </td>
+      <td className={styles.codeCell}>{set.itemCode}</td>
       <td className={styles.codeCell}>{set.soDocNo}</td>
       <td>{set.debtorName ?? '—'}</td>
       <td className={styles.setCell}>
