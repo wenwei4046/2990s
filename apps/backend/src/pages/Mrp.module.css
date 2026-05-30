@@ -310,6 +310,14 @@
 }
 .variantBranch { color: var(--fg-muted); font-weight: 700; }
 
+/* Single-variant model — spec label shown above the SO orders (2-level). */
+.singleSpec {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+
 /* "N variants" count pill on a Model row. */
 .countTag {
   display: inline-block;
@@ -335,46 +343,6 @@
   white-space: nowrap;
 }
 .shortNum { color: var(--c-orange); font-weight: 800; }
-
-/* Sofa set cell — module chips (2A + LL + 2A) + colour. */
-.setCell { vertical-align: middle; }
-.setMain { display: flex; align-items: center; }
-.setSpec {
-  display: block;
-  margin-top: 2px;
-  color: var(--fg-muted);
-  font-size: var(--fs-11);
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-.moduleChips {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-}
-.moduleChip {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: var(--radius-sm, 4px);
-  background: var(--c-ink);
-  color: var(--c-cream);
-  font-family: var(--font-system);
-  font-size: var(--fs-11);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-.colourTag {
-  display: inline-block;
-  margin-left: var(--space-2);
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  background: rgba(60, 110, 200, 0.10);
-  color: #2f5fb3;
-  font-size: var(--fs-11);
-  font-weight: 700;
-  white-space: nowrap;
-}
 
 .supplierCell span {
   display: inline-flex;
