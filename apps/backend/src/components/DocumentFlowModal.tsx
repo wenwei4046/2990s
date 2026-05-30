@@ -18,7 +18,7 @@ import {
 type Props = { type: FlowNodeType; id: string; open: boolean; onClose: () => void };
 
 const NODE_W = 172;
-const NODE_H = 60;
+const NODE_H = 70;
 const COL_GAP = 78;
 const ROW_GAP = 18;
 const BAND_GAP = 72;
