@@ -60,7 +60,7 @@ import styles from './Inventory.module.css';
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const ICON_MD = { size: 16, strokeWidth: 1.75 } as const;
 
-type Tab = 'balances' | 'movements' | 'cogs' | 'warehouses';
+type Tab = 'balances' | 'warehouses';
 type Category = 'all' | 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
 
 const CATEGORIES: { value: Category; label: string }[] = [
@@ -102,18 +102,12 @@ export const Inventory = () => {
         <div>
           <h1 className={styles.title}>Inventory</h1>
           <p className={styles.subtitle}>
-            Stock + FIFO COGS across {warehouses.data?.length ?? 0} warehouses · IN = GRN / Consignment-return · OUT = DO / Purchase-return
+            Stock + FIFO COGS across {warehouses.data?.length ?? 0} warehouses · double-click any SKU to drill in
           </p>
         </div>
         <div className={styles.tabRow}>
           <button type="button" className={styles.tab} data-active={tab === 'balances'} onClick={() => setTab('balances')}>
             Balances
-          </button>
-          <button type="button" className={styles.tab} data-active={tab === 'movements'} onClick={() => setTab('movements')}>
-            Movements
-          </button>
-          <button type="button" className={styles.tab} data-active={tab === 'cogs'} onClick={() => setTab('cogs')}>
-            COGS (FIFO)
           </button>
           <button type="button" className={styles.tab} data-active={tab === 'warehouses'} onClick={() => setTab('warehouses')}>
             Warehouses
@@ -130,33 +124,6 @@ export const Inventory = () => {
               {cat.label}
             </button>
           ))}
-        </div>
-      )}
-
-      {/* Filter row — only for Movements + COGS (Balances uses category chips above) */}
-      {(tab === 'movements' || tab === 'cogs') && (
-        <div className={styles.filterRow}>
-          <div className={styles.warehouseChips}>
-            <button type="button" className={styles.chip} data-active={warehouseId === null} onClick={() => setWarehouseId(null)}>
-              All warehouses
-            </button>
-            {warehouses.data?.map((w) => (
-              <button key={w.id} type="button" className={styles.chip}
-                data-active={warehouseId === w.id} onClick={() => setWarehouseId(w.id)}>
-                {w.code} · {w.name}
-              </button>
-            ))}
-          </div>
-          <div className={styles.searchBox}>
-            <Search {...ICON} className={styles.searchIcon} />
-            <input
-              type="search"
-              className={styles.searchInput}
-              placeholder="Search code / description…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
         </div>
       )}
 
@@ -177,12 +144,6 @@ export const Inventory = () => {
           <BalancesTab category={category} search={search}
             onDrilldown={(code, name) => setBreakdownFor({ code, name })} />
         </>
-      )}
-      {tab === 'movements' && (
-        <MovementsTab warehouseId={warehouseId} search={search} warehouses={warehouses.data ?? []} />
-      )}
-      {tab === 'cogs' && (
-        <CogsTab warehouseId={warehouseId} search={search} />
       )}
       {tab === 'warehouses' && (
         <WarehousesTab />
@@ -426,6 +387,8 @@ const ProductBreakdownDrawer = ({
 }: { code: string; name: string; onClose: () => void }) => {
   const breakdown = useInventoryProductBreakdown(code);
   const lots = useInventoryLots(code);
+  const movements = useInventoryMovements({ productCode: code });
+  const cogs = useCogsEntries({ productCode: code });
 
   const balances = (breakdown.data?.balances ?? []).filter((b) => b.product_code === code);
   const totalQty = balances.reduce((s, b) => s + (b.qty ?? 0), 0);
@@ -541,6 +504,96 @@ const ProductBreakdownDrawer = ({
                   <td className={`${styles.numCell} ${styles.numCellPos}`}>{l.qty_remaining.toLocaleString('en-MY')}</td>
                   <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(l.unit_cost_sen)}</td>
                   <td className={styles.numCellZero}>{l.source_doc_no ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Movements ledger — every IN / OUT / ADJUSTMENT / TRANSFER for
+            this SKU. Source doc shown so the warehouse staff can trace
+            "why did stock change here". */}
+        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-4)' }}>
+          Movements (newest first — every stock change for this SKU)
+        </p>
+        <div className={styles.tableCard}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Type</th>
+                <th>Warehouse</th>
+                <th style={{ textAlign: 'right' }}>Qty</th>
+                <th>Source Doc</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {movements.isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
+              {!movements.isLoading && (movements.data ?? []).length === 0 && (
+                <tr><td colSpan={6} className={styles.emptyRow}>No movements yet for this SKU.</td></tr>
+              )}
+              {(movements.data ?? []).map((m) => {
+                const href = docHrefFor(m);
+                const qtySign = m.movement_type === 'IN' ? '+' : m.movement_type === 'OUT' ? '−' : (m.qty > 0 ? '+' : m.qty < 0 ? '−' : '');
+                const qtyClass = m.qty > 0 ? styles.numCellPos : m.qty < 0 ? styles.numCellNeg : styles.numCellZero;
+                return (
+                  <tr key={m.id}>
+                    <td className={styles.numCellZero}>{fmtDateTime(m.created_at)}</td>
+                    <td>
+                      <span className={`${styles.movementPill} ${
+                        m.movement_type === 'IN' ? styles.movementIn
+                        : m.movement_type === 'OUT' ? styles.movementOut
+                        : styles.movementAdj}`}>{m.movement_type}</span>
+                    </td>
+                    <td>{m.warehouse_id ? <code style={{ fontSize: 'var(--fs-11)' }}>{m.warehouse_id.slice(0, 8)}</code> : '—'}</td>
+                    <td className={`${styles.numCell} ${qtyClass}`}>{qtySign}{Math.abs(m.qty).toLocaleString('en-MY')}</td>
+                    <td>
+                      {m.source_doc_no ? (
+                        href
+                          ? <Link to={href} className={styles.docLink}>{m.source_doc_no}</Link>
+                          : <span className={styles.docLink}>{m.source_doc_no}</span>
+                      ) : <span className={styles.numCellZero}>—</span>}
+                    </td>
+                    <td className={styles.numCellZero}>{m.notes ?? '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* COGS — FIFO consumption stream. Every OUT movement triggers
+            consumption of the oldest open lot(s); these rows are the
+            cost-of-goods-sold ledger for this SKU. */}
+        <p className={styles.eyebrow} style={{ marginTop: 'var(--space-4)' }}>
+          COGS (FIFO consumptions for this SKU)
+        </p>
+        <div className={styles.tableCard}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Consumed at</th>
+                <th>Source Doc</th>
+                <th style={{ textAlign: 'right' }}>Qty</th>
+                <th style={{ textAlign: 'right' }}>Unit Cost</th>
+                <th style={{ textAlign: 'right' }}>Total Cost</th>
+                <th>From Lot</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cogs.isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
+              {!cogs.isLoading && (cogs.data ?? []).length === 0 && (
+                <tr><td colSpan={6} className={styles.emptyRow}>No COGS entries yet for this SKU.</td></tr>
+              )}
+              {(cogs.data ?? []).map((c) => (
+                <tr key={c.id}>
+                  <td className={styles.numCellZero}>{fmtDateTime(c.consumed_at)}</td>
+                  <td><span className={styles.docLink}>{c.source_doc_no ?? '—'}</span></td>
+                  <td className={`${styles.numCell} ${styles.numCellNeg}`}>−{c.qty_consumed.toLocaleString('en-MY')}</td>
+                  <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(c.unit_cost_sen)}</td>
+                  <td className={styles.numCell} style={{ fontWeight: 700 }}>{fmtRm(c.total_cost_sen)}</td>
+                  <td className={styles.numCellZero}>{c.lot_source_doc_no ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
