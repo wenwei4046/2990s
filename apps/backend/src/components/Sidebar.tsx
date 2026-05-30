@@ -127,6 +127,13 @@ export const Sidebar = () => {
         // outbound side), not Transportation. Drivers stays under Transportation.
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
+        // Commander 2026-05-30 — Consignment (outbound — you place goods on
+        // consignment at a debtor) belongs with Sales Order. CO + COR mirror
+        // the DO + DR split. COR will route to its own list once #208 lands;
+        // for now both items deep-link into the existing /consignment page so
+        // the menu structure is in place + nothing 404s.
+        { to: '/consignment', icon: <PackagePlus {...ICON_PROPS} />, label: 'Consignment (CO)' },
+        { to: '/consignment', icon: <Undo2 {...ICON_PROPS} />, label: 'Consignment Returns (COR)' },
       ],
     },
     {
@@ -141,6 +148,12 @@ export const Sidebar = () => {
         { to: '/grns', icon: <PackageCheck {...ICON_PROPS} />, label: 'Goods Receipt' },
         { to: '/purchase-invoices', icon: <Receipt {...ICON_PROPS} />, label: 'Purchase Invoices' },
         { to: '/purchase-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Returns' },
+        // Commander 2026-05-30 — Purchase Consignment (inbound — supplier
+        // places goods on consignment with you) belongs with Procurement. PC
+        // + PCR mirror the GRN + PR split. Placeholders until #206/#207 land
+        // (route stub goes to /consignment so nothing 404s in the meantime).
+        { to: '/consignment', icon: <PackageCheck {...ICON_PROPS} />, label: 'Purchase Consignment (PC)' },
+        { to: '/consignment', icon: <Undo2 {...ICON_PROPS} />, label: 'Purchase Consignment Returns (PCR)' },
       ],
     },
     {
@@ -163,13 +176,9 @@ export const Sidebar = () => {
         { to: '/warehouse', icon: <Warehouse {...ICON_PROPS} />, label: 'Warehouse' },
       ],
     },
-    {
-      id: 'consignment',
-      label: 'Consignment',
-      items: [
-        { to: '/consignment', icon: <Boxes {...ICON_PROPS} />, label: 'Consignment' },
-      ],
-    },
+    // Commander 2026-05-30 — standalone Consignment group removed; CO + COR
+    // moved into the Sales Order group above (mirror DO + DR's home there);
+    // PC + PCR placed in Procurement above (mirror GRN + PR's home there).
   ];
 
   /* ── Plain groups kept outside Supply Chain Management ── */
