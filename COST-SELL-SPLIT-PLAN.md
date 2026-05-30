@@ -1,8 +1,31 @@
 # Cost / Sell Split + Master Account + QuickPick rework — Locked Plan
 
-> Created 2026-05-30. Owner: Loo (Chairman). Status: **planning complete, awaiting go-ahead to start Phase 1.**
+> Created 2026-05-30. Owner: Loo (Chairman). Status: **Phase 1 DONE (code + migration applied). Resume at Phase 2 — see RESUME HERE below.**
 > Companion research: workflow `cost-sell-split-analysis` (run wf_e6a65512-521).
 > This plan reorganises pricing so **Backend = cost** and a new **POS "Master Account" role = selling**.
+
+---
+
+## ▶ RESUME HERE (updated 2026-05-30 — written before a session clear)
+
+**Branch:** `feat/cost-sell-split` (pushed to origin; NOT merged to main, NOT deployed). Continue on this branch.
+
+**Done (commits on the branch):**
+- `ee898b5` — Phase 0 docs (this plan + UI_REFERENCE §5 approved deviation).
+- `4145f75` + `7951a76` — **deleted the standalone `/sku-master` page** (legacy retail-`products` editor — orphan) + its exclusive consumers (SkuDrawer, CategoryHeroSection, useProducts/useProductPricing/useUpdateProduct/useBulkSetProductVisibility) + the command-palette entry. The `Products & Maintenance` (mfg) page is untouched. Verified: typecheck 6/6, backend build clean.
+- `c0d5f72` — **Phase 1 selling-store split.** Added `mfg_products.sell_price_sen` (`packages/db/migrations/0109_mfg_sell_price.sql`, backfilled = base_price_sen). Repointed the 3 POS customer-facing selling reads in `apps/pos/src/lib/queries.ts` — `useProduct` flat_price, `useProductSizes` (bedframe/mattress), `useMfgCatalog` (catalog "from RM X") — to `sell_price_sen ?? base_price_sen`. `base_price_sen`/`price1_sen`/`seat_height_prices` now mean COST only. Sofa selling already lived on `sofaCompartmentMeta.defaultPriceCenti` — untouched. Verified: typecheck 6/6, POS build clean.
+
+**⚠️ Migration 0109 is ALREADY APPLIED to the live Supabase** (project `dolvxrchzbnqvahocwsu`) via the Supabase MCP `apply_migration`, and verified: 174 mfg_products rows, **0 mismatches** (sell_price_sen = base_price_sen everywhere) → displayed prices unchanged. **Do NOT re-apply 0109** (bare `ADD COLUMN` — a re-run fails). Applied via MCP, NOT the `db-migrate.yml` workflow (the `DATABASE_URL` repo secret is still unset — only matters for FUTURE workflow-applied migrations).
+
+**▶ NEXT: Phase 2 — Master Account role + selling editor + `pos_active` + delivery fee.** Concretely:
+1. Add `master_account` to the `staff_role` pgEnum (new migration) + the `StaffRole` unions in `apps/backend/src/lib/auth.tsx` & `apps/pos/src/lib/auth.tsx` + `STAFF_ROLES`/`POS_ONLY_ROLES` in `apps/api/src/routes/admin.ts` (POS-only; invite redirect → POS).
+2. Map `master_account` → `'full'` in `productsMode()` (`apps/pos/src/pages/Products.tsx:~121`); also fix `super_admin` currently falling to `'view'` there.
+3. Switch the POS selling editor to write `sell_price_sen` (today it edits `base_price_sen` = cost). Thread a `sellPriceSen` field through `apps/api/src/routes/mfg-products.ts` PATCH + `apps/pos/src/lib/products/mfg-products-queries.ts`.
+4. Add `mfg_products.pos_active` boolean (new migration) — Master Account writes it; POS selling reads filter on it (keep cost-side `status` for purchasing/PO).
+5. **Chairman's explicit ask:** move the cross-category **delivery-fee** setting into Master Account (today in Backend Settings → Delivery; `DeliveryFeeConfigRow` at `apps/backend/src/lib/queries.ts:382`). Also fixes the latent Handover delivery-fee gap (see risks).
+6. 🔴 **RED-LINE GATE:** Phase 2 needs a Supabase **RLS policy** for `master_account`. STOP and get the Chairman's explicit "yes" before applying any RLS change.
+
+**Then:** Phase 4 (server-side selling recompute per D4 — recompute from Master Account store, log mismatch, never reject) and Phase 5 (per-salesperson QuickPick per D6). Sequence flexible; Phase 2 is next.
 
 ---
 
@@ -79,7 +102,7 @@ Every step staging-verified with a full before/after price diff before touching 
   | `included_addons` (free gifts) | **Master Account** selling side (D7) |
   | category hero image (`CategoryHeroSection`) | decide at Phase 3 (minor — keep or drop) |
 
-### Phase 1 · Selling store + POS repoint — **HIGHEST RISK**
+### Phase 1 · Selling store + POS repoint — ✅ DONE (code committed `c0d5f72`; migration 0109 applied to Supabase + verified 0/174 price mismatches, 2026-05-30)
 - **Goal**: independent selling store live, POS reads it, **zero change to any displayed price**.
 - **Scope**: sofa selling keeps `sofaCompartmentMeta.defaultPriceCenti`; add `sell_price_sen` (+ backfill = current price) to bedframe/mattress/addons; repoint POS reads off cost columns; extend Realtime to the selling store.
 - **Verify**: staging — every sofa/bedframe/mattress/addon displayed price **identical** before vs after (screenshot diff); Backend price edit → ~300ms to all tablets.
