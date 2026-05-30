@@ -258,8 +258,12 @@ export const DeliveryOrderFromSo = () => {
       { picks: picksPayload },
       {
         onSuccess: (res) => {
-          // Land on the new DO in Edit mode so the picked lines are right there.
-          navigate(`/mfg-delivery-orders/${res.id}?edit=1`);
+          /* Land on the new DO in READ-ONLY view (not edit mode) so it's obvious
+             the order is already created + stock already deducted. Edit mode looked
+             like an unsaved draft and confused the operator into thinking the
+             Convert hadn't committed (Wei Siang 2026-05-30). ?created=1 shows the
+             "DO created" confirmation banner on the detail page. */
+          navigate(`/mfg-delivery-orders/${res.id}?created=1`);
         },
         onError: (e) => {
           /* Short-stock is handled systemically in authedFetch (it prompts and

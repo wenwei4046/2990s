@@ -193,6 +193,7 @@ export const DeliveryOrderDetail = () => {
   const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
 
   const [isEditing, setIsEditing] = useState(searchParams.get('edit') === '1');
+  const [justCreated, setJustCreated] = useState(searchParams.get('created') === '1');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const customerCardRef = useRef<CustomerCardHandle | null>(null);
@@ -491,6 +492,14 @@ export const DeliveryOrderDetail = () => {
           )}
         </div>
       </div>
+
+      {justCreated && !isCancelled && (
+        <div className={styles.bannerOk}>
+          <strong>Delivery order {header.do_number} created.</strong>
+          <span>Stock has already been deducted. Nothing more to save — close this page or click Edit if you need to adjust delivery details.</span>
+          <button type="button" className={styles.bannerDismiss} onClick={() => setJustCreated(false)}>Dismiss</button>
+        </div>
+      )}
 
       {saveError && (
         <div className={styles.bannerWarn}>
