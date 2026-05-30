@@ -1123,16 +1123,16 @@ export const useDeleteSalesInvoicePayment = () => {
 };
 
 /* ── Consignment ─────────────────────────────────────────────────────── */
-export const useConsignments = (status?: string) => baseQuery<{ consignments: any[] }>(['consignments', status ?? 'all'], `/consignment${status ? `?status=${status}` : ''}`);
+export const useConsignments = (status?: string) => baseQuery<{ consignments: any[] }>(['consignments', status ?? 'all'], `/consignments${status ? `?status=${status}` : ''}`);
 export const useConsignmentDetail = (id: string | null) => useQuery({
   queryKey: ['consignment-detail', id],
-  queryFn: () => authedFetch<{ consignment: any; items: any[]; notes: any[] }>(`/consignment/${id}`),
+  queryFn: () => authedFetch<{ consignment: any; items: any[]; notes: any[] }>(`/consignments/${id}`),
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
 export const useCreateConsignment = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: unknown) => authedFetch<{ id: string; consignmentNumber: string }>(`/consignment`, { method: 'POST', body: JSON.stringify(body) }),
+    mutationFn: (body: unknown) => authedFetch<{ id: string; consignmentNumber: string }>(`/consignments`, { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['consignments'] }),
   });
 };
@@ -1140,7 +1140,7 @@ export const useUpdateConsignmentStatus = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) =>
-      authedFetch(`/consignment/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+      authedFetch(`/consignments/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['consignments'] });
       qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
@@ -1151,7 +1151,7 @@ export const useAddConsignmentNote = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
-      authedFetch<{ id: string; noteNumber: string }>(`/consignment/${id}/notes`, {
+      authedFetch<{ id: string; noteNumber: string }>(`/consignments/${id}/notes`, {
         method: 'POST', body: JSON.stringify(body),
       }),
     onSuccess: (_, vars) => {
@@ -1163,7 +1163,7 @@ export const usePostConsignmentNote = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
-      authedFetch(`/consignment/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
+      authedFetch(`/consignments/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['inventory'] });
@@ -1179,7 +1179,7 @@ export const useCancelConsignmentNote = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
-      authedFetch(`/consignment/${id}/notes/${noteId}/cancel`, { method: 'PATCH' }),
+      authedFetch(`/consignments/${id}/notes/${noteId}/cancel`, { method: 'PATCH' }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['consignment-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['consignments'] });
@@ -1195,18 +1195,18 @@ export const useCancelConsignmentNote = () => {
    + ['inventory'] on note mutations. */
 export const usePurchaseConsignments = (status?: string) => baseQuery<{ purchaseConsignments: any[] }>(
   ['purchase-consignment', status ?? 'all'],
-  `/purchase-consignment${status ? `?status=${status}` : ''}`,
+  `/purchase-consignments${status ? `?status=${status}` : ''}`,
 );
 export const usePurchaseConsignmentDetail = (id: string | null) => useQuery({
   queryKey: ['purchase-consignment-detail', id],
-  queryFn: () => authedFetch<{ purchaseConsignment: any; items: any[]; notes: any[] }>(`/purchase-consignment/${id}`),
+  queryFn: () => authedFetch<{ purchaseConsignment: any; items: any[]; notes: any[] }>(`/purchase-consignments/${id}`),
   enabled: Boolean(id), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
 export const useCreatePurchaseConsignment = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: unknown) => authedFetch<{ id: string; pcNumber: string }>(
-      `/purchase-consignment`, { method: 'POST', body: JSON.stringify(body) },
+      `/purchase-consignments`, { method: 'POST', body: JSON.stringify(body) },
     ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['purchase-consignment'] }),
   });
@@ -1215,7 +1215,7 @@ export const useUpdatePurchaseConsignmentHeader = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
-      authedFetch(`/purchase-consignment/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      authedFetch(`/purchase-consignments/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['purchase-consignment'] });
       qc.invalidateQueries({ queryKey: ['purchase-consignment-detail', vars.id] });
@@ -1226,7 +1226,7 @@ export const useAddPurchaseConsignmentItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
-      authedFetch<{ item: any }>(`/purchase-consignment/${id}/items`, { method: 'POST', body: JSON.stringify(body) }),
+      authedFetch<{ item: any }>(`/purchase-consignments/${id}/items`, { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: (_, vars) => qc.invalidateQueries({ queryKey: ['purchase-consignment-detail', vars.id] }),
   });
 };
@@ -1234,7 +1234,7 @@ export const useUpdatePurchaseConsignmentItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId, ...body }: { id: string; itemId: string } & Record<string, unknown>) =>
-      authedFetch(`/purchase-consignment/${id}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      authedFetch(`/purchase-consignments/${id}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: (_, vars) => qc.invalidateQueries({ queryKey: ['purchase-consignment-detail', vars.id] }),
   });
 };
@@ -1242,7 +1242,7 @@ export const useDeletePurchaseConsignmentItem = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, itemId }: { id: string; itemId: string }) =>
-      authedFetch(`/purchase-consignment/${id}/items/${itemId}`, { method: 'DELETE' }),
+      authedFetch(`/purchase-consignments/${id}/items/${itemId}`, { method: 'DELETE' }),
     onSuccess: (_, vars) => qc.invalidateQueries({ queryKey: ['purchase-consignment-detail', vars.id] }),
   });
 };
@@ -1250,7 +1250,7 @@ export const useAddPurchaseConsignmentNote = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...body }: { id: string } & Record<string, unknown>) =>
-      authedFetch<{ id: string; noteNumber: string }>(`/purchase-consignment/${id}/notes`, {
+      authedFetch<{ id: string; noteNumber: string }>(`/purchase-consignments/${id}/notes`, {
         method: 'POST', body: JSON.stringify(body),
       }),
     onSuccess: (_, vars) => {
@@ -1264,7 +1264,7 @@ export const usePostPurchaseConsignmentNote = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
-      authedFetch(`/purchase-consignment/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
+      authedFetch(`/purchase-consignments/${id}/notes/${noteId}/post`, { method: 'PATCH' }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['purchase-consignment-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['purchase-consignment'] });
@@ -1276,7 +1276,7 @@ export const useCancelPurchaseConsignmentNote = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, noteId }: { id: string; noteId: string }) =>
-      authedFetch(`/purchase-consignment/${id}/notes/${noteId}/cancel`, { method: 'PATCH' }),
+      authedFetch(`/purchase-consignments/${id}/notes/${noteId}/cancel`, { method: 'PATCH' }),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['purchase-consignment-detail', vars.id] });
       qc.invalidateQueries({ queryKey: ['purchase-consignment'] });
@@ -1292,7 +1292,7 @@ export const useCancelPurchaseConsignmentNote = () => {
    on the response for the L2 row-expansion. */
 export const useConsignmentReturns = () => baseQuery<{ notes: any[] }>(
   ['consignment-returns'],
-  `/consignment/notes/returns`,
+  `/consignments/notes/returns`,
 );
 /* Per-note line items hook — used by the L2 expansion in the COR list and
    the CO parent list (when a CO row is expanded we re-fetch the parent
@@ -1303,7 +1303,7 @@ export const useConsignmentReturns = () => baseQuery<{ notes: any[] }>(
    round trip — implementation reads from cache when present. */
 export const useConsignmentNoteLines = (noteId: string | null) => useQuery({
   queryKey: ['consignment-note-lines', noteId],
-  queryFn: () => authedFetch<{ notes: Array<{ id: string; items: any[] }> }>(`/consignment/notes/returns`)
+  queryFn: () => authedFetch<{ notes: Array<{ id: string; items: any[] }> }>(`/consignments/notes/returns`)
     .then((r) => ({ items: r.notes.find((n) => n.id === noteId)?.items ?? [] })),
   enabled: Boolean(noteId), staleTime: 30_000, retry: 1, retryDelay: 800,
 });
@@ -1311,11 +1311,11 @@ export const useConsignmentNoteLines = (noteId: string | null) => useQuery({
 /* ── Purchase Consignment Returns (PCR) — list of RETURN PC notes ─────── */
 export const usePurchaseConsignmentReturns = () => baseQuery<{ notes: any[] }>(
   ['purchase-consignment-returns'],
-  `/purchase-consignment/notes/returns`,
+  `/purchase-consignments/notes/returns`,
 );
 export const usePurchaseConsignmentNoteLines = (noteId: string | null) => useQuery({
   queryKey: ['purchase-consignment-note-lines', noteId],
-  queryFn: () => authedFetch<{ notes: Array<{ id: string; items: any[] }> }>(`/purchase-consignment/notes/returns`)
+  queryFn: () => authedFetch<{ notes: Array<{ id: string; items: any[] }> }>(`/purchase-consignments/notes/returns`)
     .then((r) => ({ items: r.notes.find((n) => n.id === noteId)?.items ?? [] })),
   enabled: Boolean(noteId), staleTime: 30_000, retry: 1, retryDelay: 800,
 });

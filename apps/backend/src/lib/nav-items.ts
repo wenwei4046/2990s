@@ -55,7 +55,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Warehouses', path: '/warehouses', group: 'Warehouse', keywords: 'locations' },
 
   // Consignment
-  { label: 'Consignment', path: '/consignment', group: 'Consignment' },
+  { label: 'Consignment', path: '/consignments', group: 'Consignment' },
 
   // Finance
   { label: 'Accounting', path: '/accounting', group: 'Finance', keywords: 'gl journal ledger' },
