@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
+import { useCart, cartHasSofa, cartHasNonSofa } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
 import styles from './Catalog.module.css';
@@ -142,6 +143,14 @@ export const Catalog = () => {
 
   const rows = catalog.data ?? [];
   const cards = useMemo(() => buildCards(rows), [rows]);
+
+  /* Sofa-exclusivity (Commander 2026-05-30): a sofa is sold on its own ticket.
+     When the cart holds a sofa, non-sofa cards are disabled (and vice versa);
+     multiple sofas together are fine. Mirrors the cart store guard
+     (cartCategoryConflict) + the Sales Order backend rule. */
+  const cartLines = useCart((s) => s.lines);
+  const hasSofa = cartHasSofa(cartLines);
+  const hasNonSofa = cartHasNonSofa(cartLines);
 
   // Categories come from the categories table directly (not derived from
   // products) so TBC ones still render even with zero products. Brandings
@@ -341,6 +350,24 @@ export const Catalog = () => {
               </span>
             </div>
 
+            {(hasSofa || hasNonSofa) && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 14px', marginBottom: 12,
+                background: 'var(--c-paper)',
+                border: '1px solid var(--line-strong)',
+                borderRadius: 'var(--radius-md, 10px)',
+                fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-12)', color: 'var(--c-ink)',
+              }}>
+                <Sofa size={16} strokeWidth={1.75} />
+                <span>
+                  {hasSofa
+                    ? 'Sofa order — sofas are sold on their own ticket. Add more sofas, or check out / clear the cart to switch categories.'
+                    : 'This order has other products. Sofas are placed separately — check out or clear the cart to start a sofa order.'}
+                </span>
+              </div>
+            )}
+
             {filtered.length === 0 ? (
               <div className={styles.gridEmpty}>
                 <h4>No pieces match.</h4>
@@ -382,7 +409,13 @@ export const Catalog = () => {
                     </span>
                   </header>
                   <div className={styles.grid}>
-                    {items.map((p) => <ProductCard key={p.modelKey} p={p} />)}
+                    {items.map((p) => (
+                      <ProductCard
+                        key={p.modelKey}
+                        p={p}
+                        blocked={(hasSofa && p.categoryId !== 'sofa') || (hasNonSofa && p.categoryId === 'sofa')}
+                      />
+                    ))}
                   </div>
                 </section>
               ))
@@ -404,16 +437,18 @@ export const Catalog = () => {
   );
 };
 
-const ProductCard = ({ p }: { p: CatalogCard }) => {
+const ProductCard = ({ p, blocked = false }: { p: CatalogCard; blocked?: boolean }) => {
   // PR — Commander wanted a "Configure" affordance even when SKUs are not
   // wired into the production configurator yet. For now the card links to
   // the Configurator route using the lead SKU's id; the Configurator will
   // fall back to placeholder for unknown ids.
-  return (
-    <Link
-      to={`/configure/${p.leadSkuId}`}
-      className={styles.card}
-    >
+  //
+  // Sofa-exclusivity (Commander 2026-05-30): when `blocked`, the card is greyed
+  // + not clickable — a sofa can't share a cart with other categories (and vice
+  // versa). The cart store (cartCategoryConflict) enforces the same rule as a
+  // backstop in case this card is reached by deep link.
+  const inner = (
+    <>
       <div
         className={styles.photo}
         style={p.photoUrl ? { backgroundImage: `url(${p.photoUrl})` } : undefined}
@@ -442,6 +477,25 @@ const ProductCard = ({ p }: { p: CatalogCard }) => {
           </span>
         </div>
       </div>
+    </>
+  );
+
+  if (blocked) {
+    return (
+      <div
+        className={styles.card}
+        aria-disabled="true"
+        title="Sofas are placed on their own order — they can't share a cart with other products."
+        style={{ opacity: 0.4, cursor: 'not-allowed' }}
+      >
+        {inner}
+      </div>
+    );
+  }
+
+  return (
+    <Link to={`/configure/${p.leadSkuId}`} className={styles.card}>
+      {inner}
     </Link>
   );
 };
