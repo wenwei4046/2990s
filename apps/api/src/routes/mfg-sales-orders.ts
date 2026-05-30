@@ -93,7 +93,7 @@ const HEADER =
      can show category-level margins without per-item rollups. */
   'mattress_sofa_cost_centi, bedframe_cost_centi, accessories_cost_centi, others_cost_centi, ' +
   'total_cost_centi, total_revenue_centi, total_margin_centi, margin_pct_basis, line_count, ' +
-  'currency, status, remark2, remark3, remark4, note, processing_date, proceeded_at, sales_exemption_expiry, ' +
+  'currency, status, remark2, remark3, remark4, note, processing_date, sales_exemption_expiry, ' +
   /* PR #35 + #46 — extended PO + POS handover fields */
   'customer_id, customer_po, customer_po_id, customer_po_date, customer_po_image_b64, customer_so_no, hub_id, hub_name, ' +
   /* Task #121 — customer_country snapshot auto-derived from customer_state
@@ -462,7 +462,12 @@ mfgSalesOrders.get('/mine', async (c) => {
 mfgSalesOrders.get('/:docNo', async (c) => {
   const sb = c.get('supabase'); const docNo = c.req.param('docNo');
   const [h, i] = await Promise.all([
-    sb.from('mfg_sales_orders').select(HEADER).eq('doc_no', docNo).maybeSingle(),
+    /* `${HEADER}, proceeded_at` — proceeded_at lives ONLY on the base table,
+       NOT the mfg_sales_orders_with_payment_totals view that the LIST route
+       (LIST_COLS = HEADER + …) reads. Keeping it out of the shared HEADER and
+       appending it only here means the detail page still gets the Proceed Date
+       while the list view query stays valid. */
+    sb.from('mfg_sales_orders').select(`${HEADER}, proceeded_at`).eq('doc_no', docNo).maybeSingle(),
     sb.from('mfg_sales_order_items').select(ITEM).eq('doc_no', docNo).order('created_at'),
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
