@@ -6,11 +6,11 @@
 //                      Double-click row → per-warehouse breakdown drawer
 //                      (Location | Qty | Unit Cost), like AutoCount's
 //                      "Up To Date Cost" panel.
-//   2. Movements    — append-only ledger (every GRN/DO/Consignment/PR post)
+//   2. Movements    — append-only ledger (every GRN/DO/PR post)
 //   3. COGS (FIFO)  — FIFO consumption stream
 //   4. Warehouses   — CRUD for stock locations (merged from old /warehouses page)
 //
-// IN  events: GRN posted, Consignment RETURN note posted
+// IN  events: GRN posted
 // OUT events: DO dispatched, Purchase Return posted
 // COGS auto-posted via DB trigger trg_inventory_movement_fifo (migration 0053).
 // ----------------------------------------------------------------------------
@@ -48,7 +48,6 @@ const docHrefFor = (m: InventoryMovement): string | null => {
     case 'DO':               return m.source_doc_id ? `/mfg-delivery-orders/${m.source_doc_id}` : null;
     case 'DR':               return m.source_doc_id ? `/delivery-returns/${m.source_doc_id}` : null;
     case 'PURCHASE_RETURN':  return m.source_doc_id ? `/purchase-returns/${m.source_doc_id}` : null;
-    case 'CONSIGNMENT_NOTE': return m.source_doc_id ? `/consignment/${m.source_doc_id}` : null;
     case 'STOCK_TRANSFER':   return m.source_doc_id ? `/inventory/transfers/${m.source_doc_id}` : null;
     case 'STOCK_TAKE':       return m.source_doc_id ? `/inventory/stock-takes/${m.source_doc_id}` : null;
     case 'ADJUSTMENT':       return '/inventory/adjustments';
@@ -678,7 +677,6 @@ const MovementsTab = ({
     { value: 'GRN',               label: 'GRN (IN)' },
     { value: 'DO',                label: 'DO (OUT)' },
     { value: 'DR',                label: 'DR (IN)' },
-    { value: 'CONSIGNMENT_NOTE',  label: 'Consignment' },
     { value: 'PURCHASE_RETURN',   label: 'PR (OUT)' },
     { value: 'STOCK_TRANSFER',    label: 'Transfer' },
     { value: 'STOCK_TAKE',        label: 'Stock Take' },

@@ -71,7 +71,6 @@ const docHrefFor = (m: InventoryMovement): string | null => {
     case 'DO':               return m.source_doc_id ? `/mfg-delivery-orders/${m.source_doc_id}` : null;
     case 'DR':               return m.source_doc_id ? `/delivery-returns/${m.source_doc_id}` : null;
     case 'PURCHASE_RETURN':  return m.source_doc_id ? `/purchase-returns/${m.source_doc_id}` : null;
-    case 'CONSIGNMENT_NOTE': return m.source_doc_id ? `/consignment/${m.source_doc_id}` : null;
     case 'STOCK_TRANSFER':   return m.source_doc_id ? `/inventory/transfers/${m.source_doc_id}` : null;
     case 'STOCK_TAKE':       return m.source_doc_id ? `/inventory/stock-takes/${m.source_doc_id}` : null;
     case 'ADJUSTMENT':       return '/inventory/adjustments';
