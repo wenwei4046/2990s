@@ -73,6 +73,9 @@ export function summariseReadiness(lines: ReadinessLine[]): ReadinessSummary {
   for (const l of live) {
     const cat = normCategory(l.item_group);
     const isMain = MAIN_CATEGORIES.has(cat);
+    /* stock_status 'READY' = fully allocated. 'PARTIAL' (Commander 2026-05-30
+       #4) = some but not all of the line's qty allocated → counts as NOT
+       ready for the category-level "all ready" gate. 'PENDING' = nothing. */
     const isReady = l.stock_status === 'READY';
     if (isMain) {
       mainCount += 1;

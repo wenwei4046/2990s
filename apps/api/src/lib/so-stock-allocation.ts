@@ -82,7 +82,7 @@ export async function recomputeSoStockAllocation(
             c) created_at ASC  — tiebreaker so order is deterministic */
     const { data: orderRows } = await sb
       .from('mfg_sales_orders')
-      .select('doc_no, status, created_at, customer_delivery_date, priority_rank')
+      .select('doc_no, status, created_at, customer_delivery_date, priority_rank, allocation_warehouse_id')
       .not('status', 'in', '(CANCELLED,CLOSED,SHIPPED,DELIVERED,INVOICED)')
       .order('priority_rank',           { ascending: true, nullsFirst: false })
       .order('customer_delivery_date',  { ascending: true, nullsFirst: false })
@@ -90,6 +90,7 @@ export async function recomputeSoStockAllocation(
     const orders = (orderRows ?? []) as Array<{
       doc_no: string; status: string; created_at: string;
       customer_delivery_date: string | null; priority_rank: number | null;
+      allocation_warehouse_id: string | null;
     }>;
     if (orders.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
     const orderByDoc = new Map(orders.map((o) => [o.doc_no, o]));
@@ -99,12 +100,12 @@ export async function recomputeSoStockAllocation(
     const docNos = orders.map((o) => o.doc_no);
     const { data: lineRows } = await sb
       .from('mfg_sales_order_items')
-      .select('id, doc_no, item_code, item_group, variants, qty, stock_status, cancelled')
+      .select('id, doc_no, item_code, item_group, variants, qty, stock_status, stock_qty_ready, cancelled')
       .in('doc_no', docNos)
       .eq('cancelled', false);
     const lines = (lineRows ?? []) as Array<{
       id: string; doc_no: string; item_code: string; item_group: string | null;
-      variants: VariantAttrs | null; qty: number; stock_status: string;
+      variants: VariantAttrs | null; qty: number; stock_status: string; stock_qty_ready: number | null;
     }>;
     if (lines.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
 
@@ -156,9 +157,12 @@ export async function recomputeSoStockAllocation(
       }
     }
 
-    // 4. Build per-line allocation request: { id, doc_no, bucket_key, need }.
-    //    Drop lines with deliverable_remaining ≤ 0 — already shipped.
-    type LineNeed = { id: string; doc_no: string; bucket: string; need: number; current: string };
+    /* 4. Build per-line allocation request. Per-SO allocation_warehouse_id
+          (#3) scopes the bucket key, so two SOs on different warehouses sharing
+          the same SKU stay isolated. Drop lines with deliverable_remaining ≤ 0
+          (already shipped). curReady is the line's existing stock_qty_ready —
+          used to compute "did the value change". */
+    type LineNeed = { id: string; doc_no: string; bucket: string; whId: string | null; need: number; current: string; curReady: number };
     const needs: LineNeed[] = [];
     for (const l of lines) {
       const delivered = deliveredBySoItem.get(l.id) ?? 0;
@@ -166,8 +170,18 @@ export async function recomputeSoStockAllocation(
       const remaining = Number(l.qty ?? 0) - delivered + returned;
       if (remaining <= 0) continue;
       const variant_key = computeVariantKey(l.item_group ?? null, l.variants ?? null);
-      const bucket = `${l.item_code}::${variant_key}`;
-      needs.push({ id: l.id, doc_no: l.doc_no, bucket, need: remaining, current: l.stock_status });
+      const order = orderByDoc.get(l.doc_no);
+      const whId = order?.allocation_warehouse_id ?? null;
+      /* When the SO carries an allocation_warehouse_id the bucket key includes
+         it, so per-warehouse SOs draw from a distinct bucket-key namespace and
+         can't accidentally share stock with cross-warehouse SOs of the same
+         SKU. NULL whId → cross-warehouse bucket as before. */
+      const bucket = `${whId ?? '*'}::${l.item_code}::${variant_key}`;
+      needs.push({
+        id: l.id, doc_no: l.doc_no, bucket, whId,
+        need: remaining, current: l.stock_status,
+        curReady: Number(l.stock_qty_ready ?? 0),
+      });
     }
     if (needs.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
 
@@ -188,77 +202,98 @@ export async function recomputeSoStockAllocation(
       return ac.localeCompare(bc) || a.id.localeCompare(b.id);            // c) created_at + line id
     });
 
-    // 6. Pull live on-hand per bucket — sum across ALL warehouses since B2C
-    //    operator picks the warehouse at DO time. inventory_balances is a
-    //    view; sum qty per (product_code, variant_key).
-    const productCodes = [...new Set(needs.map((n) => n.bucket.split('::')[0]!))];
+    /* 6. Pull live on-hand. Two parallel maps:
+            · onHandWhAll        — Σ qty across ALL warehouses (for cross-WH SOs)
+            · onHandByWh[whId]   — per-warehouse qty (for #3 scoped SOs)
+          Each need's bucket key encodes whether it's whId-scoped or '*'-wide. */
+    const productCodes = [...new Set(needs.map((n) => {
+      const parts = n.bucket.split('::');
+      return parts[1] ?? '';
+    }).filter(Boolean))];
     const { data: balRows } = await sb
       .from('inventory_balances')
-      .select('product_code, variant_key, qty')
+      .select('warehouse_id, product_code, variant_key, qty')
       .in('product_code', productCodes);
     const onHandByBucket = new Map<string, number>();
-    for (const r of (balRows ?? []) as Array<{ product_code: string; variant_key: string | null; qty: number }>) {
-      const k = `${r.product_code}::${r.variant_key ?? ''}`;
-      onHandByBucket.set(k, (onHandByBucket.get(k) ?? 0) + Number(r.qty ?? 0));
+    for (const r of (balRows ?? []) as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; qty: number }>) {
+      const v = r.variant_key ?? '';
+      const qty = Number(r.qty ?? 0);
+      const allKey = `*::${r.product_code}::${v}`;
+      onHandByBucket.set(allKey, (onHandByBucket.get(allKey) ?? 0) + qty);
+      const whKey = `${r.warehouse_id}::${r.product_code}::${v}`;
+      onHandByBucket.set(whKey, (onHandByBucket.get(whKey) ?? 0) + qty);
     }
 
-    // 7. Walk needs in FIFO order, deduct from bucket. Decide READY/PENDING.
-    const targetStatusById = new Map<string, 'READY' | 'PENDING'>();
+    /* 7. Walk needs in priority order. Partial fill (#4) — when bucket has
+          some but not enough, allocate what's available and mark the line
+          PARTIAL (stock_qty_ready = whatever fit). Full fill → READY. Zero
+          allocation → PENDING (stock_qty_ready = 0). */
+    type TargetState = { status: 'READY' | 'PENDING' | 'PARTIAL'; qtyReady: number };
+    const targetById = new Map<string, TargetState>();
     const remaining = new Map(onHandByBucket);
     for (const n of needs) {
       const avail = remaining.get(n.bucket) ?? 0;
       if (avail >= n.need) {
-        targetStatusById.set(n.id, 'READY');
+        targetById.set(n.id, { status: 'READY', qtyReady: n.need });
         remaining.set(n.bucket, avail - n.need);
+      } else if (avail > 0) {
+        targetById.set(n.id, { status: 'PARTIAL', qtyReady: avail });
+        remaining.set(n.bucket, 0);
       } else {
-        targetStatusById.set(n.id, 'PENDING');
+        targetById.set(n.id, { status: 'PENDING', qtyReady: 0 });
       }
     }
 
-    // 8. Flip lines that changed. Group by target status to issue one UPDATE
-    //    per bucket of changes. Optionally scope updates to scopeToDocNo.
+    /* 8. Flip lines that changed. Group by exact (status, qtyReady) so we can
+          batch the UPDATEs. Optionally scope writes to scopeToDocNo. */
     let linesFlipped = 0;
-    const toReady: string[] = [];
-    const toPending: string[] = [];
+    type FlipBatch = { ids: string[]; status: 'READY' | 'PENDING' | 'PARTIAL'; qtyReady: number };
+    const flipBatches = new Map<string, FlipBatch>(); // key = status|qtyReady
     for (const n of needs) {
       if (scopeToDocNo && n.doc_no !== scopeToDocNo) continue;
-      const target = targetStatusById.get(n.id);
-      if (!target || target === n.current) continue;
-      if (target === 'READY') toReady.push(n.id); else toPending.push(n.id);
+      const t = targetById.get(n.id);
+      if (!t) continue;
+      if (t.status === n.current && t.qtyReady === n.curReady) continue;
+      const key = `${t.status}|${t.qtyReady}`;
+      const batch = flipBatches.get(key) ?? { ids: [], status: t.status, qtyReady: t.qtyReady };
+      batch.ids.push(n.id);
+      flipBatches.set(key, batch);
     }
-    if (toReady.length > 0) {
-      await sb.from('mfg_sales_order_items').update({ stock_status: 'READY' }).in('id', toReady);
-      linesFlipped += toReady.length;
+    for (const batch of flipBatches.values()) {
+      await sb.from('mfg_sales_order_items')
+        .update({ stock_status: batch.status, stock_qty_ready: batch.qtyReady })
+        .in('id', batch.ids);
+      linesFlipped += batch.ids.length;
     }
-    if (toPending.length > 0) {
-      await sb.from('mfg_sales_order_items').update({ stock_status: 'PENDING' }).in('id', toPending);
-      linesFlipped += toPending.length;
-    }
+    /* Flatten the maps so the audit + header re-aggregation steps below see
+       per-line target status directly. */
+    const toReady   = needs.filter((n) => targetById.get(n.id)?.status === 'READY'   && targetById.get(n.id)?.status !== n.current).map((n) => n.id);
+    const toPending = needs.filter((n) => targetById.get(n.id)?.status === 'PENDING' && targetById.get(n.id)?.status !== n.current).map((n) => n.id);
+    const toPartial = needs.filter((n) => targetById.get(n.id)?.status === 'PARTIAL' && targetById.get(n.id)?.status !== n.current).map((n) => n.id);
+    /* Map of id → target status (string) for the readiness summary below.
+       Replaces the old targetStatusById which was 'READY' | 'PENDING' only. */
+    const targetStatusById = new Map<string, string>();
+    for (const [id, t] of targetById) targetStatusById.set(id, t.status);
 
     // ── Audit trail: one entry per affected SO summarising the auto-flip
     //    (Edge #H polish). Operator can later see "why did this line change?"
     //    Best-effort — never blocks the allocation result.
-    if (toReady.length > 0 || toPending.length > 0) {
+    if (toReady.length > 0 || toPending.length > 0 || toPartial.length > 0) {
       const lineToDoc = new Map(lines.map((l) => [l.id, l.doc_no]));
-      const byDoc = new Map<string, { ready: string[]; pending: string[] }>();
-      for (const id of toReady) {
-        const doc = lineToDoc.get(id);
-        if (!doc) continue;
-        const cur = byDoc.get(doc) ?? { ready: [], pending: [] };
-        cur.ready.push(id);
-        byDoc.set(doc, cur);
-      }
-      for (const id of toPending) {
-        const doc = lineToDoc.get(id);
-        if (!doc) continue;
-        const cur = byDoc.get(doc) ?? { ready: [], pending: [] };
-        cur.pending.push(id);
-        byDoc.set(doc, cur);
-      }
+      const byDoc = new Map<string, { ready: string[]; pending: string[]; partial: string[] }>();
+      const bucket = (id: string, key: 'ready' | 'pending' | 'partial') => {
+        const doc = lineToDoc.get(id); if (!doc) return;
+        const cur = byDoc.get(doc) ?? { ready: [], pending: [], partial: [] };
+        cur[key].push(id); byDoc.set(doc, cur);
+      };
+      for (const id of toReady)   bucket(id, 'ready');
+      for (const id of toPending) bucket(id, 'pending');
+      for (const id of toPartial) bucket(id, 'partial');
       const auditRows: Array<Record<string, unknown>> = [];
       for (const [docNo, flips] of byDoc) {
         const parts: string[] = [];
         if (flips.ready.length)   parts.push(`${flips.ready.length} line(s) → READY`);
+        if (flips.partial.length) parts.push(`${flips.partial.length} line(s) → PARTIAL`);
         if (flips.pending.length) parts.push(`${flips.pending.length} line(s) → PENDING`);
         auditRows.push({
           so_doc_no:           docNo,
@@ -282,7 +317,7 @@ export async function recomputeSoStockAllocation(
     //    CONFIRMED / IN_PRODUCTION). any-PENDING → CONFIRMED (when previously
     //    READY_TO_SHIP).
     const touchedDocs = new Set<string>();
-    for (const id of [...toReady, ...toPending]) {
+    for (const id of [...toReady, ...toPending, ...toPartial]) {
       const ln = lines.find((l) => l.id === id);
       if (ln) touchedDocs.add(ln.doc_no);
     }
