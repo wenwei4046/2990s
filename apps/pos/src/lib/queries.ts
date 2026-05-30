@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus } from '@2990s/shared/sofa-build';
+import { comboChargedPrices } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -1279,6 +1280,9 @@ export interface SofaComboRow {
   tier: SofaPriceTier | null;
   customerId: string | null;
   pricesByHeight: Record<string, number | null>;
+  /** SELLING prices per height (Master Admin). The engine charges these merged
+   *  over cost via comboChargedPrices — `pricesByHeight` above is the COST side. */
+  sellingPricesByHeight: Record<string, number | null>;
   label: string | null;
   effectiveFrom: string;
   deletedAt: string | null;
@@ -1316,7 +1320,13 @@ export const useSofaCombos = (baseModel?: string | null) =>
       );
       if (!res.ok) return [];
       const body = (await res.json()) as { rules: SofaComboRow[] };
-      return body.rules ?? [];
+      // The engine's pricesByHeight is the CHARGED (selling) price: selling wins
+      // per height, falling back to cost. Same merge the server gate uses, so
+      // POS live total and server recompute price from one source.
+      return (body.rules ?? []).map((r) => ({
+        ...r,
+        pricesByHeight: comboChargedPrices(r.sellingPricesByHeight, r.pricesByHeight),
+      }));
     },
     staleTime: 30_000,
   });
