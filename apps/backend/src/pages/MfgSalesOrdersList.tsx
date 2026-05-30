@@ -889,6 +889,13 @@ export const MfgSalesOrdersList = () => {
      Saves to create the DO. Replaces the old window.confirm() + convert
      endpoint, which silently dropped the sales agent + payments. */
   const convertToDo = (row: SoRow) => {
+    // Commander 2026-05-30 — "Issue Delivery Order" is ALWAYS shown in the menu
+    // (so the operator never thinks the feature vanished). When there's nothing
+    // left to deliver, tell them plainly instead of silently doing nothing.
+    if (!Boolean(row.has_undelivered) || ['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(row.status)) {
+      window.alert('Nothing to be converted — every line on this Sales Order is already delivered (or the order is closed / cancelled / on hold).');
+      return;
+    }
     navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(row.doc_no)}`);
   };
 
@@ -1139,15 +1146,12 @@ export const MfgSalesOrdersList = () => {
           items.push({ label: 'Preview', onClick: () => void renderPdf(row, 'preview') });
           items.push({ label: 'Print',   onClick: () => void renderPdf(row, 'print') });
           items.push({ divider: true as const });
-          // Issue DO — show whenever the SO still has undelivered qty, NOT by
-          // status. A status-only gate hid this once the SO hit SHIPPED/DELIVERED
-          // even with lines left to deliver, and failed to re-show it after a DO
-          // was cancelled. has_undelivered is recomputed live (qty − delivered +
-          // returned > 0), so it tracks cancel / delete / partial-delivery
-          // correctly. Hidden only on terminal/paused states.
-          if (Boolean(row.has_undelivered) && !['CANCELLED', 'CLOSED', 'ON_HOLD'].includes(status)) {
-            items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
-          }
+          // Issue DO — ALWAYS shown (Commander 2026-05-30) so the operator never
+          // thinks the action disappeared. convertToDo decides at click time
+          // whether there's anything to deliver (has_undelivered is recomputed
+          // live: qty − delivered + returned > 0) and otherwise shows a plain
+          // "Nothing to be converted" message.
+          items.push({ label: 'Issue Delivery Order', onClick: () => convertToDo(row) });
           // Issue SI — available once the customer has accepted delivery.
           if (['DELIVERED', 'SHIPPED'].includes(status)) {
             items.push({
