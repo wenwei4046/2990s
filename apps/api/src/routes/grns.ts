@@ -894,6 +894,7 @@ grns.post('/:id/items', async (c) => {
   if (!it.materialName) return c.json({ error: 'material_name_required' }, 400);
 
   const sb = c.get('supabase');
+  const user = c.get('user');
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
@@ -938,6 +939,43 @@ grns.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('grn_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeGrnTotals(sb, grnId);
+
+  // A line added to a POSTED GRN must roll up exactly like one created at post
+  // time, otherwise its PO line stays "outstanding" (re-appears in the convert
+  // picker) and its stock never enters inventory — yet DELETE still writes an
+  // OUT to reverse it, driving inventory negative. Mirror postGrnAndRollup for
+  // this one line so add/edit/delete all converge. Best-effort throughout.
+  const addedPoiId = (it.purchaseOrderItemId as string) ?? null;
+  try { await recomputePoReceived(sb, [addedPoiId]); } catch { /* best-effort */ }
+  if (qtyReceived > 0) {
+    try {
+      const { data: grnHeader } = await sb.from('grns')
+        .select('grn_number, warehouse_id').eq('id', grnId).maybeSingle();
+      const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
+        ?? (await defaultWarehouseId(sb));
+      if (warehouseId) {
+        await writeMovements(sb, [{
+          movement_type: 'IN' as const,
+          warehouse_id: warehouseId,
+          product_code: String(it.materialCode),
+          variant_key: computeVariantKey((it.itemGroup as string) ?? null, (it.variants as VariantAttrs | null) ?? null),
+          product_name: String(it.materialName),
+          qty: qtyReceived,
+          unit_cost_sen: unitPriceCenti,
+          source_doc_type: 'GRN' as const,
+          source_doc_id: grnId,
+          source_doc_no: (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId,
+          performed_by: user.id,
+          notes: 'GRN line added — receipt',
+        }]);
+        /* New stock landed → re-walk SO allocation. */
+        try {
+          const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+          await recomputeSoStockAllocation(sb);
+        } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn-line-add failed:', e); }
+      }
+    } catch { /* best-effort */ }
+  }
   return c.json({ item: data }, 201);
 });
 
