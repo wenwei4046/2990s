@@ -68,6 +68,7 @@ export type SofaSet = {
   orderByDate: string | null; // delivery − category lead days
   itemCode: string;
   description: string | null;
+  variantLabel: string | null;
   modules: string[];
   colour: string | null;
   qty: number;

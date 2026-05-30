@@ -926,16 +926,23 @@ const SofaSetRow = ({ set, selected, onSelect, chosenSupplierId, onSupplierChang
       <td className={styles.codeCell}>{set.soDocNo}</td>
       <td>{set.debtorName ?? '—'}</td>
       <td className={styles.setCell}>
-        {set.modules.length > 0 ? (
-          <span className={styles.moduleChips}>
-            {set.modules.map((m, i) => (
-              <span key={`${m}-${i}`} className={styles.moduleChip}>{m}</span>
-            ))}
-          </span>
-        ) : (
-          <span className={styles.descCell}>{set.description ?? '—'}</span>
-        )}
-        {set.colour && <span className={styles.colourTag}>{set.colour}</span>}
+        <div className={styles.setMain}>
+          {set.modules.length > 0 ? (
+            <span className={styles.moduleChips}>
+              {set.modules.map((m, i) => (
+                <span key={`${m}-${i}`} className={styles.moduleChip}>{m}</span>
+              ))}
+            </span>
+          ) : (
+            <span className={styles.descCell}>{set.description ?? '—'}</span>
+          )}
+          {/* Spec line carries the fabric code, so only show the standalone
+              colour tag when there is no spec line to fall back on. */}
+          {!set.variantLabel && set.colour && (
+            <span className={styles.colourTag}>{set.colour}</span>
+          )}
+        </div>
+        {set.variantLabel && <span className={styles.setSpec}>{set.variantLabel}</span>}
       </td>
       <td>{fmtDate(set.deliveryDate)}</td>
       <td className={styles.num}>{set.qty}</td>

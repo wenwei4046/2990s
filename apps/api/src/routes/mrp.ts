@@ -138,6 +138,7 @@ type SofaSet = {
   orderByDate: string | null; // delivery date − category lead days
   itemCode: string;
   description: string | null;
+  variantLabel: string | null; // spec line e.g. "BF-15 / SEAT 24 / LEG 6\""
   modules: string[];   // e.g. ['2A','LL','2A'] from variants.cells
   colour: string | null; // fabricCode + colorCode
   qty: number;
@@ -476,6 +477,7 @@ mrp.get('/', async (c) => {
         orderByDate: orderByOf(setDelivery, prod?.category ?? null),
         itemCode: d.item_code,
         description: prod?.name ?? d.description ?? null,
+        variantLabel: buildVariantSummary(d.item_group, v) || null,
         modules,
         colour: colour || null,
         qty: d.qty,

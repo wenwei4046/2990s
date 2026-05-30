@@ -338,6 +338,15 @@
 
 /* Sofa set cell — module chips (2A + LL + 2A) + colour. */
 .setCell { vertical-align: middle; }
+.setMain { display: flex; align-items: center; }
+.setSpec {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
 .moduleChips {
   display: inline-flex;
   flex-wrap: wrap;
