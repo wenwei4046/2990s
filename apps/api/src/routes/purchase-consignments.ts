@@ -3,7 +3,8 @@
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, computeVariantKey } from '@2990s/shared';
+import { writeMovements, reverseMovements, defaultWarehouseId } from '../lib/inventory-movements';
 
 export const purchaseConsignments = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseConsignments.use('*', supabaseAuth);
@@ -261,6 +262,26 @@ purchaseConsignments.post('/', async (c) => {
   const rowsWithId = itemRows.map((r) => ({ ...r, purchase_consignment_id: h.id }));
   const { error: iErr } = await sb.from('purchase_consignment_items').insert(rowsWithId);
   if (iErr) { await sb.from('purchase_consignments').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+
+  /* Hard reset 2026-05-30: PC POST writes inventory IN (supplier delivers stock
+     to our warehouse — the doc IS the receipt). Mirrors GRN POST. */
+  const warehouseId = (body.warehouseId as string | undefined) ?? (await defaultWarehouseId(sb));
+  if (warehouseId) {
+    await writeMovements(sb, itemRows.filter((r) => r.qty > 0).map((r) => ({
+      movement_type: 'IN' as const,
+      warehouse_id: warehouseId,
+      product_code: r.material_code,
+      variant_key: computeVariantKey(r.item_group ?? null, r.variants ?? null),
+      product_name: r.material_name,
+      qty: r.qty,
+      unit_cost_sen: r.unit_price_centi ?? 0,
+      source_doc_type: 'PURCHASE_CONSIGNMENT' as const,
+      source_doc_id: h.id,
+      source_doc_no: h.pc_number,
+      performed_by: user.id,
+    })));
+  }
+
   return c.json({ id: h.id, pcNumber: h.pc_number }, 201);
 });
 
@@ -307,32 +328,26 @@ purchaseConsignments.patch('/:id/payment', async (c) => {
 
 purchaseConsignments.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
+  const user = c.get('user');
 
-  // Read → guard → release → cancel. Keep the existing PAID guard; a PI with
-  // any payment can't be cancelled.
   const { data: cur } = await sb.from('purchase_consignments')
     .select('id, status, paid_centi').eq('id', id).maybeSingle();
   if (!cur) return c.json({ error: 'not_found' }, 404);
   const head = cur as { id: string; status: string; paid_centi: number | null };
-  if (head.status === 'PAID' || (head.paid_centi ?? 0) > 0) {
-    return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
+  if ((head.paid_centi ?? 0) > 0) {
+    return c.json({ error: 'cannot_cancel', message: 'PC already has payments' }, 409);
   }
-  // Idempotent — already cancelled, echo back without re-releasing.
   if (head.status === 'CANCELLED') return c.json({ purchaseConsignment: { id, status: 'CANCELLED' } });
 
   const { data, error } = await sb.from('purchase_consignments').update({
-    status: 'CANCELLED', updated_at: new Date().toISOString(),
-  }).eq('id', id).neq('status', 'PAID').select('id, status').single();
+    status: 'CANCELLED', cancelled_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  }).eq('id', id).select('id, status').single();
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
 
-  // Release the GRN-line consumption: decrement invoiced_qty for every
-  // GRN-linked line (best-effort, mirrors the GRN cancel reversal pattern).
-  const { data: lines } = await sb.from('purchase_consignment_items')
-    .select('qty, grn_item_id').eq('purchase_consignment_id', id);
-  for (const l of (lines ?? []) as Array<{ qty: number; grn_item_id: string | null }>) {
-    if (l.grn_item_id) await adjustGrnInvoicedQty(sb, l.grn_item_id, -(l.qty ?? 0));
-  }
+  /* Hard reset 2026-05-30: reverse the inventory IN written at POST.
+     reverseMovements is signed-net per bucket — idempotent on re-call. */
+  try { await reverseMovements(sb, 'PURCHASE_CONSIGNMENT', id, user.id); } catch { /* best-effort */ }
+
   return c.json({ purchaseConsignment: data });
 });
 
