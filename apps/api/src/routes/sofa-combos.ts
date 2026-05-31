@@ -26,7 +26,7 @@
 import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, type ComboSlots } from '@2990s/shared';
+import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, comboTierPrices, type ComboSlots } from '@2990s/shared';
 import { loadModelSofaModuleCosts } from '../lib/mfg-pricing-recompute';
 
 export const sofaCombos = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -288,6 +288,25 @@ sofaCombos.get('/history', async (c) => {
   return c.json({ rules: matching.map(rowToWire) });
 });
 
+// ── GET /tier-premiums ─────────────────────────────────────────────────
+// The two global flat premiums (sen) added to each combo's Price 1 to derive
+// Price 2 / Price 3. Read-open (the POS Overall-Edit panel pre-fills from it).
+sofaCombos.get('/tier-premiums', async (c) => {
+  const supabase = c.get('supabase');
+  const { data, error } = await supabase
+    .from('sofa_combo_tier_offsets')
+    .select('p2_premium_sen, p3_premium_sen, updated_at, updated_by')
+    .eq('id', 1)
+    .maybeSingle();
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+  return c.json({
+    p2PremiumSen: data?.p2_premium_sen ?? 0,
+    p3PremiumSen: data?.p3_premium_sen ?? 0,
+    updatedAt: data?.updated_at ?? null,
+    updatedBy: data?.updated_by ?? null,
+  });
+});
+
 // ── POST / ─────────────────────────────────────────────────────────────
 // Create a new combo row. body: {
 //   baseModel, modules: string[][], tier?: SofaPriceTier | null,
@@ -420,6 +439,91 @@ sofaCombos.post('/', async (c) => {
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
   }
   return c.json(rowToWire(data as unknown as Row), 201);
+});
+
+// ── POST /tier-premiums/apply ──────────────────────────────────────────
+// Persist the two premiums, then sweep every ACTIVE master Price-1 combo and
+// insert append-only PRICE_2 + PRICE_3 rows = base SELLING + premium per height
+// (cost copied from the base — same modules). Re-running inserts fresher rows,
+// so the latest (today) wins → overwrites manual edits (Chairman point 4). The
+// combo lookup is untouched: generated rows are ordinary tier-tagged rows.
+sofaCombos.post('/tier-premiums/apply', async (c) => {
+  const gate = await requireWriteRole(c);
+  if (!gate.ok) return gate.res;
+
+  let body: { p2PremiumSen?: unknown; p3PremiumSen?: unknown };
+  try { body = (await c.req.json()) as typeof body; }
+  catch { return c.json({ error: 'invalid_json' }, 400); }
+
+  const p2 = Number(body.p2PremiumSen);
+  const p3 = Number(body.p3PremiumSen);
+  if (!Number.isInteger(p2) || p2 < 0 || !Number.isInteger(p3) || p3 < 0) {
+    return c.json({ error: 'premiums_invalid', message: 'p2/p3 premium must be a non-negative integer (sen)' }, 400);
+  }
+
+  const supabase = c.get('supabase');
+  const user = c.get('user');
+  const today = todayIso();
+
+  // 1) Persist premiums (singleton id = 1).
+  const { error: upErr } = await supabase
+    .from('sofa_combo_tier_offsets')
+    .update({ p2_premium_sen: p2, p3_premium_sen: p3, updated_at: new Date().toISOString(), updated_by: user.id })
+    .eq('id', 1);
+  if (upErr) return c.json({ error: 'save_failed', reason: upErr.message }, 500);
+
+  // 2) Load active master PRICE_1 bases (customer + supplier NULL, not deleted).
+  const { data: rows, error: loadErr } = await supabase
+    .from('sofa_combo_pricing')
+    .select('id, base_model, modules, tier, customer_id, supplier_id, prices_by_height, selling_prices_by_height, label, effective_from, deleted_at, created_at')
+    .eq('tier', 'PRICE_1')
+    .is('customer_id', null)
+    .is('supplier_id', null)
+    .is('deleted_at', null)
+    .order('effective_from', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (loadErr) return c.json({ error: 'load_failed', reason: loadErr.message }, 500);
+
+  // Reduce to the active row per (base_model, modules) — newest effective ≤ today.
+  const seen = new Set<string>();
+  const bases: Row[] = [];
+  for (const r of (rows ?? []) as unknown as Row[]) {
+    if (r.effective_from > today) continue;
+    const key = JSON.stringify([r.base_model, comboSlotsKey(r.modules ?? [])]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bases.push(r);
+  }
+
+  // 3) Build PRICE_2 + PRICE_3 inserts (selling = base + premium; cost copied).
+  const inserts: Array<Record<string, unknown>> = [];
+  let skipped = 0;
+  for (const b of bases) {
+    const baseSelling = b.selling_prices_by_height ?? {};
+    if (!Object.values(baseSelling).some((v) => v !== null && v !== undefined)) { skipped++; continue; }
+    for (const [tier, prem] of [['PRICE_2', p2], ['PRICE_3', p3]] as const) {
+      inserts.push({
+        base_model: b.base_model,
+        modules: b.modules,
+        tier,
+        customer_id: null,
+        supplier_id: null,
+        prices_by_height: b.prices_by_height ?? {},
+        selling_prices_by_height: comboTierPrices(baseSelling, prem),
+        label: b.label,
+        effective_from: today,
+        notes: 'auto: Price 1 + tier premium',
+        created_by: user.id,
+      });
+    }
+  }
+
+  if (inserts.length > 0) {
+    const { error: insErr } = await supabase.from('sofa_combo_pricing').insert(inserts);
+    if (insErr) return c.json({ error: 'insert_failed', reason: insErr.message }, 500);
+  }
+
+  return c.json({ generated: inserts.length, p1Count: bases.length, skipped });
 });
 
 // ── PUT /:id ───────────────────────────────────────────────────────────
