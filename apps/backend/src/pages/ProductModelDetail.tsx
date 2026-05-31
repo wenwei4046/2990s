@@ -382,10 +382,6 @@ export const ProductModelDetail = ({
           )}
           <div className={styles.photoSide}>
             <h2 className={styles.photoSideTitle}>Photo</h2>
-            <p className={styles.photoSideHint}>
-              One photo per Model — flows down to every SKU generated from it.
-              JPG / PNG / WebP, max 5 MB. Stored in Supabase Storage.
-            </p>
             <input
               ref={photoInputRef}
               type="file"
@@ -472,9 +468,6 @@ export const ProductModelDetail = ({
           <div className={styles.optGroup}>
             <div className={styles.optHead}>
               <span className="t-eyebrow">Mattress thickness (cm)</span>
-              <span className={styles.optHint}>
-                Drives the {'{width}'}x{'{length}'}x<strong>{'{thickness}'}</strong>CM dimensions in the SKU name
-              </span>
             </div>
             <input
               type="number"

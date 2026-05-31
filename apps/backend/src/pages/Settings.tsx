@@ -260,7 +260,6 @@ const SupplierDrawer = ({
               placeholder="e.g. KFA"
               maxLength={8}
             />
-            <span className={styles.fieldHint}>Short uppercase identifier used on PO numbers.</span>
           </label>
 
           <label className={styles.field}>
@@ -493,7 +492,6 @@ const DriverDrawer = ({
               onChange={(e) => setCode(e.target.value)}
               placeholder="e.g. DRV-04"
             />
-            <span className={styles.fieldHint}>Short identifier shown on dispatch cards.</span>
           </label>
 
           <label className={styles.field}>

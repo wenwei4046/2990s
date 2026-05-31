@@ -210,17 +210,14 @@ const BalancesTab = ({
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Total Qty</span>
           <span className={styles.statValue}>{stats.totalQty.toLocaleString('en-MY')}</span>
-          <span className={styles.statCaption}>Σ across all warehouses</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Distinct SKUs</span>
           <span className={styles.statValue}>{stats.distinctSku}</span>
-          <span className={styles.statCaption}>In selected category</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Inventory Value</span>
           <span className={styles.statValue}>{fmtRm(stats.totalValue)}</span>
-          <span className={styles.statCaption}>FIFO cost basis</span>
         </div>
       </div>
 
@@ -472,17 +469,14 @@ const BatchesTab = ({
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Open Batches</span>
           <span className={styles.statValue}>{stats.batchCount}</span>
-          <span className={styles.statCaption}>1 batch = 1 PO = 1 dye lot</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Modules On Hand</span>
           <span className={styles.statValue}>{stats.totalQty.toLocaleString('en-MY')}</span>
-          <span className={styles.statCaption}>Σ surviving components</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Distinct SKUs</span>
           <span className={styles.statValue}>{stats.skuCount}</span>
-          <span className={styles.statCaption}>Across all open batches</span>
         </div>
       </div>
 
@@ -649,12 +643,10 @@ const ProductBreakdownDrawer = ({
           <div className={styles.statCard}>
             <span className={styles.statLabel}>Total Qty</span>
             <span className={styles.statValue}>{totalQty.toLocaleString('en-MY')}</span>
-            <span className={styles.statCaption}>Across all warehouses</span>
           </div>
           <div className={styles.statCard}>
             <span className={styles.statLabel}>Total Value</span>
             <span className={styles.statValue}>{fmtRm(totalVal)}</span>
-            <span className={styles.statCaption}>FIFO cost basis</span>
           </div>
         </div>
 
@@ -997,7 +989,7 @@ const CogsTab = ({
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Total COGS</span>
           <span className={styles.statValue}>{fmtRm(totalCogs)}</span>
-          <span className={styles.statCaption}>FIFO basis · {cogs.length} consumptions</span>
+          <span className={styles.statCaption}>{cogs.length} consumptions</span>
         </div>
       </div>
 
