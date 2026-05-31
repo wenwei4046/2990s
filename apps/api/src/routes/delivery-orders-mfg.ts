@@ -479,13 +479,15 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
    id skips a re-reversal. Best-effort — a movement failure never un-cancels the
    DO (audit-DLQ pattern). */
 async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performedBy: string) {
-  // Idempotency guard — has this DO already been reversed via ADJUSTMENT?
+  // Idempotency guard — has this DO already been reversed? Reversal rows are
+  // tagged source_doc_type='ADJUSTMENT' + this DO's id. They may be ADJUSTMENT
+  // (non-sofa) OR a batch-restoring IN (sofa, Stage 4), so DON'T filter on
+  // movement_type — either kind means we already reversed.
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
     .eq('source_doc_type', 'ADJUSTMENT')
-    .eq('source_doc_id', deliveryOrderId)
-    .eq('movement_type', 'ADJUSTMENT');
+    .eq('source_doc_id', deliveryOrderId);
   if ((existing ?? 0) > 0) return; // already reversed — no-op
 
   const { data: doHeader } = await sb.from('delivery_orders')
@@ -493,27 +495,36 @@ async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performed
     .eq('id', deliveryOrderId).maybeSingle();
   const doNo = (doHeader as { do_number: string } | null)?.do_number ?? deliveryOrderId;
 
-  // Net OUT per (warehouse, product_code, variant_key) bucket from THIS DO's own
-  // IN/OUT movements. Carry the warehouse + cost basis so the add-back is exact.
-  const { data: movs } = await sb.from('inventory_movements')
-    .select('movement_type, warehouse_id, product_code, variant_key, qty, total_cost_sen, product_name')
-    .eq('source_doc_type', 'DO')
-    .eq('source_doc_id', deliveryOrderId);
+  // Net OUT per (warehouse, product_code, variant_key, batch_no) bucket from THIS
+  // DO's own IN/OUT movements. batch_no is read from the OUT rows themselves (the
+  // ship stamped it), so a sofa reversal restores the EXACT dye-lot batch it drew
+  // from. Forward-compat: pre-0120 the column doesn't exist → retry without it and
+  // every bucket's batch is '' (plain ADJUSTMENT, identical to old behaviour).
+  const sel = 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name';
+  let movsRes = await sb.from('inventory_movements').select(sel)
+    .eq('source_doc_type', 'DO').eq('source_doc_id', deliveryOrderId);
+  if (movsRes.error && (movsRes.error.message ?? '').includes('batch_no')) {
+    movsRes = await sb.from('inventory_movements')
+      .select('movement_type, warehouse_id, product_code, variant_key, qty, total_cost_sen, product_name')
+      .eq('source_doc_type', 'DO').eq('source_doc_id', deliveryOrderId);
+  }
+  const movs = movsRes.data;
   type Agg = {
-    warehouse_id: string; product_code: string; variant_key: string;
+    warehouse_id: string; product_code: string; variant_key: string; batch_no: string | null;
     product_name: string | null; net_out: number; out_total_cost: number; out_qty: number;
   };
   const byBucket = new Map<string, Agg>();
   for (const m of (movs ?? []) as Array<{
-    movement_type: string; warehouse_id: string; product_code: string;
-    variant_key: string | null; qty: number; total_cost_sen: number | null; product_name: string | null;
+    movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null;
+    batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null;
   }>) {
     if (m.movement_type !== 'IN' && m.movement_type !== 'OUT') continue;
     const variant_key = m.variant_key ?? '';
-    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}`;
+    const batch_no = m.batch_no ?? null;
+    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}::${batch_no ?? ''}`;
     let agg = byBucket.get(k);
     if (!agg) {
-      agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, product_name: m.product_name, net_out: 0, out_total_cost: 0, out_qty: 0 };
+      agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, batch_no, product_name: m.product_name, net_out: 0, out_total_cost: 0, out_qty: 0 };
       byBucket.set(k, agg);
     }
     const q = Number(m.qty ?? 0);
@@ -522,23 +533,33 @@ async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performed
     if (!agg.product_name) agg.product_name = m.product_name;
   }
 
+  /* Build the add-back rows. For a BATCHED (sofa) bucket we write a reversing IN
+     (carrying batch_no) so the FIFO trigger re-OPENS a lot tagged with that exact
+     batch — restoring inventory_lots, not just the aggregate balance. For a plain
+     bucket we keep the FIFO-neutral ADJUSTMENT (no lot re-open, no spurious COGS).
+     Both use source_doc_type='ADJUSTMENT' so neither collides with the DO source
+     index (ix_inv_mov_do_source is scoped WHERE source_doc_type='DO'). */
   const movements = [...byBucket.values()]
     .filter((b) => b.net_out > 0)
-    .map((b) => ({
-      movement_type: 'ADJUSTMENT' as const,
-      warehouse_id: b.warehouse_id,
-      product_code: b.product_code,
-      variant_key: b.variant_key,
-      product_name: b.product_name,
-      qty: b.net_out, // signed: positive adds back the stock the DO shipped out
-      // Carry the weighted-avg OUT cost so the re-added stock has a cost basis.
-      unit_cost_sen: b.out_qty > 0 ? Math.round(b.out_total_cost / b.out_qty) : 0,
-      source_doc_type: 'ADJUSTMENT' as const,
-      source_doc_id: deliveryOrderId,
-      source_doc_no: doNo,
-      performed_by: performedBy,
-      notes: `Delivery order ${doNo} cancelled — reversing shipment (stock returned to shelf)`,
-    }));
+    .map((b) => {
+      const unit_cost_sen = b.out_qty > 0 ? Math.round(b.out_total_cost / b.out_qty) : 0;
+      const base = {
+        warehouse_id: b.warehouse_id,
+        product_code: b.product_code,
+        variant_key: b.variant_key,
+        product_name: b.product_name,
+        qty: b.net_out, // positive — adds back the stock the DO shipped out
+        unit_cost_sen,
+        source_doc_type: 'ADJUSTMENT' as const,
+        source_doc_id: deliveryOrderId,
+        source_doc_no: doNo,
+        performed_by: performedBy,
+        notes: `Delivery order ${doNo} cancelled — reversing shipment (stock returned to shelf)`,
+      };
+      return b.batch_no
+        ? { ...base, movement_type: 'IN' as const, batch_no: b.batch_no }
+        : { ...base, movement_type: 'ADJUSTMENT' as const };
+    });
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 

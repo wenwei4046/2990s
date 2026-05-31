@@ -193,6 +193,42 @@ async function warehouseCodeMap(
   return out;
 }
 
+/* resolveDrLineBatches (Stage 4, Commander 2026-06-01) — sofa batch per DR line.
+   Returned sofa modules must re-enter the SAME dye-lot batch they shipped from,
+   so the batch view + batch-scoped consume stay consistent. Trace
+   do_item_id → delivery_order_items.so_item_id → mfg_sales_order_items.
+   allocated_batch_no. Best-effort: absent column (pre-0121) / non-sofa → no
+   entry → plain non-batched IN, identical to the old behaviour. */
+async function resolveDrLineBatches(
+  sb: any,
+  items: Array<{ id: string; do_item_id?: string | null }>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const doItemIds = [...new Set(items.map((it) => it.do_item_id ?? null).filter((x): x is string => !!x))];
+  if (doItemIds.length === 0) return out;
+  const { data: doLines } = await sb.from('delivery_order_items')
+    .select('id, so_item_id').in('id', doItemIds);
+  const doRows = (doLines ?? []) as Array<{ id: string; so_item_id: string | null }>;
+  const soByDoLine = new Map<string, string>();
+  const soItemIds = new Set<string>();
+  for (const r of doRows) { if (r.so_item_id) { soByDoLine.set(r.id, r.so_item_id); soItemIds.add(r.so_item_id); } }
+  if (soItemIds.size === 0) return out;
+  const batchBySo = new Map<string, string>();
+  try {
+    const { data: soRows, error } = await sb.from('mfg_sales_order_items')
+      .select('id, allocated_batch_no').in('id', [...soItemIds]);
+    if (!error) for (const r of (soRows ?? []) as Array<{ id: string; allocated_batch_no: string | null }>) {
+      if (r.allocated_batch_no) batchBySo.set(r.id, r.allocated_batch_no);
+    }
+  } catch { /* column absent pre-0121 — no batches */ }
+  for (const it of items) {
+    const so = it.do_item_id ? soByDoLine.get(it.do_item_id) : undefined;
+    const batch = so ? batchBySo.get(so) : undefined;
+    if (batch) out.set(it.id, batch);
+  }
+  return out;
+}
+
 async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
   // Idempotency guard #1 — has this DR already written IN movements?
   const { count: existing } = await sb
@@ -216,14 +252,18 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
   // Per-line warehouse — each returned line re-enters the warehouse the DO line
   // shipped from (its SO line's warehouse, 0118), not a single DR-header default.
   const lineWh = await resolveDrLineWarehouses(sb, items as Array<{ id: string; do_item_id?: string | null }>, drHeaderWarehouseId);
+  // Sofa batch per DR line — returned modules re-enter the batch they shipped from.
+  const lineBatch = await resolveDrLineBatches(sb, items as Array<{ id: string; do_item_id?: string | null }>);
 
-  /* Collapse identical (warehouse_id, product_code, variant_key) lines into one
-     IN row. A DR can list the same product across two lines AND across two
-     warehouses (multi-DO merge); bucketing by warehouse keeps each warehouse's
-     increase correct + idempotency-safe. Unit cost carried from the first line
-     in the bucket (returned stock re-enters at its original per-unit cost). */
+  /* Collapse identical (warehouse_id, product_code, variant_key, batch_no) lines
+     into one IN row. A DR can list the same product across two lines AND across
+     two warehouses (multi-DO merge); bucketing by warehouse keeps each
+     warehouse's increase correct + idempotency-safe. batch_no joins the key so a
+     returned sofa module re-opens a lot tagged with its own dye-lot batch. Unit
+     cost carried from the first line in the bucket (returned stock re-enters at
+     its original per-unit cost). */
   const byKey = new Map<string, {
-    warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number;
+    warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number; batch_no: string | null;
   }>();
   for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null; unit_cost_centi?: number | null }>)) {
     const qty = Number(it.qty_returned ?? 0);
@@ -231,7 +271,8 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
     const warehouseId = lineWh.get(it.id) ?? null;
     if (!warehouseId) continue; // no resolvable warehouse — skip rather than guess
     const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${warehouseId}::${it.item_code}::${variantKey}`;
+    const batchNo = lineBatch.get(it.id) ?? null;
+    const k = `${warehouseId}::${it.item_code}::${variantKey}::${batchNo ?? ''}`;
     const cur = byKey.get(k);
     if (cur) { cur.qty += qty; }
     else byKey.set(k, {
@@ -241,6 +282,7 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
       product_name: it.description,
       qty,
       unit_cost_sen: Number(it.unit_cost_centi ?? 0),
+      batch_no: batchNo,
     });
   }
   const movements = [...byKey.values()].map((m) => ({
@@ -258,6 +300,7 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
     source_doc_id: deliveryReturnId,
     source_doc_no: drNo,
     performed_by: performedBy,
+    ...(m.batch_no ? { batch_no: m.batch_no } : {}),
   }));
   if (movements.length > 0) await writeMovements(sb, movements);
 }
@@ -280,13 +323,15 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
    DR's id skips a re-reversal. Best-effort — a movement failure never un-cancels
    the DR (audit-DLQ pattern, same as increaseInventoryForReturn). */
 async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
-  // Idempotency guard — has this DR already been reversed?
+  // Idempotency guard — has this DR already been reversed? Reversal rows are
+  // tagged source_doc_type='ADJUSTMENT' + this DR's id, and may be ADJUSTMENT
+  // (non-sofa) OR a batch-removing OUT (sofa, Stage 4), so DON'T filter on
+  // movement_type — either kind means we already reversed.
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
     .eq('source_doc_type', 'ADJUSTMENT')
-    .eq('source_doc_id', deliveryReturnId)
-    .eq('movement_type', 'ADJUSTMENT');
+    .eq('source_doc_id', deliveryReturnId);
   if ((existing ?? 0) > 0) return; // already reversed — no-op
 
   const { data: drHeader } = await sb.from('delivery_returns')
@@ -294,46 +339,62 @@ async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, perf
     .eq('id', deliveryReturnId).maybeSingle();
   const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
 
-  /* Net IN per (warehouse, product, variant) bucket from THIS DR's OWN
+  /* Net IN per (warehouse, product, variant, batch_no) bucket from THIS DR's OWN
      movements. Reversing from the actual rows (not the line list + a single
-     header warehouse) guarantees the negative ADJUSTMENT lands in exactly the
-     warehouse(s) the IN created — critical now that increaseInventoryForReturn
-     books each line into its DO line's SOURCE warehouse (0118), which can differ
-     per line. Mirrors reverseInventoryForDo on the DO side. */
-  const { data: movs } = await sb.from('inventory_movements')
-    .select('movement_type, warehouse_id, product_code, variant_key, qty, product_name')
-    .eq('source_doc_type', 'DR')
-    .eq('source_doc_id', deliveryReturnId);
-  type Agg = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; net_in: number };
+     header warehouse) guarantees the reversal lands in exactly the warehouse(s)
+     the IN created — critical now that increaseInventoryForReturn books each line
+     into its DO line's SOURCE warehouse (0118), which can differ per line.
+     batch_no is read from the IN rows so a sofa reversal removes stock from the
+     EXACT batch it re-entered. Forward-compat: pre-0120 the column doesn't exist
+     → retry without it, every bucket's batch is '' (plain ADJUSTMENT). */
+  const sel = 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, product_name';
+  let movsRes = await sb.from('inventory_movements').select(sel)
+    .eq('source_doc_type', 'DR').eq('source_doc_id', deliveryReturnId);
+  if (movsRes.error && (movsRes.error.message ?? '').includes('batch_no')) {
+    movsRes = await sb.from('inventory_movements')
+      .select('movement_type, warehouse_id, product_code, variant_key, qty, product_name')
+      .eq('source_doc_type', 'DR').eq('source_doc_id', deliveryReturnId);
+  }
+  const movs = movsRes.data;
+  type Agg = { warehouse_id: string; product_code: string; variant_key: string; batch_no: string | null; product_name: string | null; net_in: number };
   const byBucket = new Map<string, Agg>();
   for (const m of (movs ?? []) as Array<{
     movement_type: string; warehouse_id: string; product_code: string;
-    variant_key: string | null; qty: number; product_name: string | null;
+    variant_key: string | null; batch_no?: string | null; qty: number; product_name: string | null;
   }>) {
     if (m.movement_type !== 'IN' && m.movement_type !== 'OUT') continue;
     const variant_key = m.variant_key ?? '';
-    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}`;
+    const batch_no = m.batch_no ?? null;
+    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}::${batch_no ?? ''}`;
     let agg = byBucket.get(k);
-    if (!agg) { agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, product_name: m.product_name, net_in: 0 }; byBucket.set(k, agg); }
+    if (!agg) { agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, batch_no, product_name: m.product_name, net_in: 0 }; byBucket.set(k, agg); }
     const q = Number(m.qty ?? 0);
     if (m.movement_type === 'IN') agg.net_in += q; else agg.net_in -= q;
     if (!agg.product_name) agg.product_name = m.product_name;
   }
+  /* BATCHED (sofa) bucket → write an OUT carrying batch_no so the batch-scoped
+     FIFO consumer removes the stock from that EXACT batch's lot (keeping
+     inventory_lots truthful). Plain bucket → FIFO-neutral negative ADJUSTMENT.
+     Both use source_doc_type='ADJUSTMENT' (ix_inv_mov_dr_source is scoped to
+     source_doc_type='DR', so no collision). */
   const movements = [...byBucket.values()]
     .filter((b) => b.net_in > 0)
-    .map((b) => ({
-      movement_type: 'ADJUSTMENT' as const,
-      warehouse_id: b.warehouse_id,
-      product_code: b.product_code,
-      variant_key: b.variant_key,
-      product_name: b.product_name,
-      qty: -b.net_in, // signed: negative removes the stock the return added
-      source_doc_type: 'ADJUSTMENT' as const,
-      source_doc_id: deliveryReturnId,
-      source_doc_no: drNo,
-      performed_by: performedBy,
-      notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
-    }));
+    .map((b) => {
+      const base = {
+        warehouse_id: b.warehouse_id,
+        product_code: b.product_code,
+        variant_key: b.variant_key,
+        product_name: b.product_name,
+        source_doc_type: 'ADJUSTMENT' as const,
+        source_doc_id: deliveryReturnId,
+        source_doc_no: drNo,
+        performed_by: performedBy,
+        notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
+      };
+      return b.batch_no
+        ? { ...base, movement_type: 'OUT' as const, qty: b.net_in, batch_no: b.batch_no }
+        : { ...base, movement_type: 'ADJUSTMENT' as const, qty: -b.net_in };
+    });
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
