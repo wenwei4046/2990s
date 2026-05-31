@@ -19,7 +19,7 @@ import { useMemo, useState, Fragment } from 'react';
 import { Link } from 'react-router';
 import {
   Boxes, Search, ArrowUpRight, ArrowDownLeft, DollarSign, Star, X, Plus,
-  Warehouse as WarehouseIcon, ChevronRight, ChevronDown,
+  Warehouse as WarehouseIcon, ChevronRight, ChevronDown, Layers,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatVariantKey } from '@2990s/shared';
@@ -29,10 +29,12 @@ import {
   useInventoryProductBreakdown,
   useInventoryMovements,
   useInventoryLots,
+  useInventoryBatches,
   useCogsEntries,
   useCreateWarehouse,
   useUpdateWarehouse,
   type CogsEntry,
+  type InventoryBatch,
   type InventoryMovement,
   type InventoryProductTotal,
   type Warehouse,
@@ -59,7 +61,7 @@ import styles from './Inventory.module.css';
 const ICON = { size: 14, strokeWidth: 1.75 } as const;
 const ICON_MD = { size: 16, strokeWidth: 1.75 } as const;
 
-type Tab = 'balances' | 'warehouses';
+type Tab = 'balances' | 'batches' | 'warehouses';
 type Category = 'all' | 'ACCESSORY' | 'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'SERVICE';
 
 const CATEGORIES: { value: Category; label: string }[] = [
@@ -105,6 +107,9 @@ export const Inventory = () => {
           <button type="button" className={styles.tab} data-active={tab === 'balances'} onClick={() => setTab('balances')}>
             Balances
           </button>
+          <button type="button" className={styles.tab} data-active={tab === 'batches'} onClick={() => setTab('batches')}>
+            Batches
+          </button>
           <button type="button" className={styles.tab} data-active={tab === 'warehouses'} onClick={() => setTab('warehouses')}>
             Warehouses
           </button>
@@ -140,6 +145,15 @@ export const Inventory = () => {
           <BalancesTab category={category} search={search}
             onDrilldown={(code, name) => setBreakdownFor({ code, name })} />
         </>
+      )}
+      {tab === 'batches' && (
+        <BatchesTab
+          warehouseId={warehouseId}
+          setWarehouseId={setWarehouseId}
+          warehouses={warehouses.data ?? []}
+          search={search}
+          setSearch={setSearch}
+        />
       )}
       {tab === 'warehouses' && (
         <WarehousesTab />
@@ -196,17 +210,14 @@ const BalancesTab = ({
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Total Qty</span>
           <span className={styles.statValue}>{stats.totalQty.toLocaleString('en-MY')}</span>
-          <span className={styles.statCaption}>Σ across all warehouses</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Distinct SKUs</span>
           <span className={styles.statValue}>{stats.distinctSku}</span>
-          <span className={styles.statCaption}>In selected category</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Inventory Value</span>
           <span className={styles.statValue}>{fmtRm(stats.totalValue)}</span>
-          <span className={styles.statCaption}>FIFO cost basis</span>
         </div>
       </div>
 
@@ -375,6 +386,190 @@ const SkuVariantRows = ({ code }: { code: string }) => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
+   Batches tab (Stage 4 — Commander 2026-05-31)
+   ───────────────────────────────────────────────────────────────────────
+   Sofa is colour-matched, produced as a SET on ONE PO = ONE dye lot = ONE
+   batch (batch_no = source PO number). To ship a set with no colour diff the
+   whole set must leave from ONE batch. This view shows, per warehouse, every
+   open batch and the surviving component SKUs inside it — the raw material the
+   allocator binds and the DO consumes from. Only produced-to-PO stock carries a
+   batch; free / un-batched GRN stock never appears here (by design).
+   ════════════════════════════════════════════════════════════════════════ */
+const BatchesTab = ({
+  warehouseId, setWarehouseId, warehouses, search, setSearch,
+}: {
+  warehouseId: string | null;
+  setWarehouseId: (id: string | null) => void;
+  warehouses: Warehouse[];
+  search: string;
+  setSearch: (s: string) => void;
+}) => {
+  const { data, isLoading, error } = useInventoryBatches({
+    warehouseId: warehouseId ?? undefined,
+  });
+  const allBatches: InventoryBatch[] = data ?? [];
+
+  /* Client-side search across batch no / supplier / component code+name. */
+  const q = search.trim().toLowerCase();
+  const batches = useMemo(() => {
+    if (!q) return allBatches;
+    return allBatches.filter((b) =>
+      b.batchNo.toLowerCase().includes(q) ||
+      (b.supplierName ?? '').toLowerCase().includes(q) ||
+      b.components.some((c) =>
+        c.productCode.toLowerCase().includes(q) ||
+        (c.productName ?? '').toLowerCase().includes(q)),
+    );
+  }, [allBatches, q]);
+
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpand = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+
+  const stats = useMemo(() => ({
+    batchCount: batches.length,
+    totalQty: batches.reduce((s, b) => s + b.totalRemaining, 0),
+    skuCount: new Set(batches.flatMap((b) => b.components.map((c) => c.productCode))).size,
+  }), [batches]);
+
+  return (
+    <>
+      {/* Warehouse filter chips */}
+      <div className={styles.warehouseChips}>
+        <button type="button" className={styles.chip}
+          data-active={warehouseId === null} onClick={() => setWarehouseId(null)}>
+          All warehouses
+        </button>
+        {warehouses.map((w) => (
+          <button key={w.id} type="button" className={styles.chip}
+            data-active={warehouseId === w.id} onClick={() => setWarehouseId(w.id)}>
+            {w.name}
+          </button>
+        ))}
+      </div>
+
+      <div className={styles.filterRow}>
+        <div className={styles.searchBox} style={{ width: '100%' }}>
+          <Search {...ICON} className={styles.searchIcon} />
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Search batch / PO / supplier / component…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className={styles.statGrid}>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Open Batches</span>
+          <span className={styles.statValue}>{stats.batchCount}</span>
+        </div>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Modules On Hand</span>
+          <span className={styles.statValue}>{stats.totalQty.toLocaleString('en-MY')}</span>
+        </div>
+        <div className={styles.statCard}>
+          <span className={styles.statLabel}>Distinct SKUs</span>
+          <span className={styles.statValue}>{stats.skuCount}</span>
+        </div>
+      </div>
+
+      <p className={styles.eyebrow}>
+        {isLoading ? 'Loading…' : `${batches.length} open batch${batches.length === 1 ? '' : 'es'} · click a row to see component SKUs`}
+      </p>
+
+      {error && !isLoading && (
+        <div className={styles.bannerWarn}>
+          <strong>Failed to load.</strong>{' '}
+          {error instanceof Error ? error.message : String(error)}
+        </div>
+      )}
+
+      <div className={styles.tableCard}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Batch / PO</th>
+              <th>Warehouse</th>
+              <th>Supplier</th>
+              <th style={{ textAlign: 'right' }}>Components</th>
+              <th style={{ textAlign: 'right' }}>Modules</th>
+              <th>Received</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading && <tr><td colSpan={6} className={styles.emptyRow}>Loading…</td></tr>}
+            {!isLoading && batches.length === 0 && (
+              <tr><td colSpan={6} className={styles.emptyRow}>
+                <Layers size={32} strokeWidth={1.5} />
+                <div style={{ marginTop: 8 }}>No open batches{q ? ' match the search' : ''}.</div>
+              </td></tr>
+            )}
+            {!isLoading && batches.map((b) => {
+              const key = `${b.warehouseId}|${b.batchNo}`;
+              const open = expanded.has(key);
+              return (
+                <Fragment key={key}>
+                  <tr onClick={() => toggleExpand(key)} style={{ cursor: 'pointer' }}
+                    title={open ? 'Hide components' : 'Show components'}>
+                    <td>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {open ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
+                        <span className={styles.codeChip}>{b.batchNo}</span>
+                      </span>
+                    </td>
+                    <td>{b.warehouseName ?? '—'}</td>
+                    <td>{b.supplierName ?? <span className={styles.numCellZero}>—</span>}</td>
+                    <td className={`${styles.numCell} ${styles.numCellZero}`}>{b.components.length}</td>
+                    <td className={`${styles.numCell} ${b.totalRemaining > 0 ? styles.numCellPos : styles.numCellZero}`}>
+                      {b.totalRemaining.toLocaleString('en-MY')}
+                    </td>
+                    <td className={styles.numCellZero} title={b.receivedAt ?? undefined}>{fmtAgeDays(b.receivedAt)}</td>
+                  </tr>
+                  {open && b.components.map((c) => (
+                    <tr key={`${key}|${c.productCode}|${c.variantKey ?? ''}`} style={{ background: 'var(--c-cream)' }}>
+                      <td style={{ paddingLeft: 28 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span className={styles.numCellZero}>↳</span>
+                          <Link
+                            to={`/inventory/stock-card/${encodeURIComponent(c.productCode)}`}
+                            className={styles.codeChip}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open Stock Card"
+                            style={{ textDecoration: 'none' }}
+                          >
+                            {c.productCode}
+                          </Link>
+                        </span>
+                      </td>
+                      <td colSpan={2}>
+                        {c.productName ?? '—'}
+                        {c.variantKey && <span className={styles.numCellZero}> · {formatVariantKey(c.variantKey) || 'Standard'}</span>}
+                      </td>
+                      <td className={`${styles.numCell} ${styles.numCellZero}`}>{fmtRm(c.unitCostSen)}</td>
+                      <td className={`${styles.numCell} ${c.qtyRemaining > 0 ? styles.numCellPos : styles.numCellZero}`}>
+                        {c.qtyRemaining.toLocaleString('en-MY')}
+                      </td>
+                      <td className={styles.numCellZero} title={c.receivedAt ?? undefined}>{fmtAgeDays(c.receivedAt)}</td>
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
    Product breakdown drawer — AutoCount-style "Up To Date Cost" panel:
    per-warehouse Location | Qty | Unit Cost  +  FIFO lots underneath
    ════════════════════════════════════════════════════════════════════════ */
@@ -448,12 +643,10 @@ const ProductBreakdownDrawer = ({
           <div className={styles.statCard}>
             <span className={styles.statLabel}>Total Qty</span>
             <span className={styles.statValue}>{totalQty.toLocaleString('en-MY')}</span>
-            <span className={styles.statCaption}>Across all warehouses</span>
           </div>
           <div className={styles.statCard}>
             <span className={styles.statLabel}>Total Value</span>
             <span className={styles.statValue}>{fmtRm(totalVal)}</span>
-            <span className={styles.statCaption}>FIFO cost basis</span>
           </div>
         </div>
 
@@ -796,7 +989,7 @@ const CogsTab = ({
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Total COGS</span>
           <span className={styles.statValue}>{fmtRm(totalCogs)}</span>
-          <span className={styles.statCaption}>FIFO basis · {cogs.length} consumptions</span>
+          <span className={styles.statCaption}>{cogs.length} consumptions</span>
         </div>
       </div>
 

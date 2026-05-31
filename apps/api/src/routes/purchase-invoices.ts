@@ -4,7 +4,8 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary } from '@2990s/shared';
-import { reversePiAccounting } from './accounting';
+import { reversePiAccounting, resyncPiAccounting } from './accounting';
+import { recostForPi, recostFromGrn } from '../lib/recost';
 
 export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseInvoices.use('*', supabaseAuth);
@@ -333,6 +334,10 @@ purchaseInvoices.post('/', async (c) => {
   // Self-heal the GRN invoiced counter so the just-billed lines drop out of the
   // outstanding picker (mirrors /from-grn-items line ~523 + /:id/items).
   await recomputeGrnInvoiced(sb, itemRows.map((r) => r.grn_item_id));
+  // Costing B — a new PI is the authoritative cost: re-cost the GRN's lots →
+  // consumptions → movements → DO → SI so a shipped order's margin reflects the
+  // billed price (or its later correction) in real time.
+  await recostForPi(sb, h.id);
   return c.json({ id: h.id, invoiceNumber: h.invoice_number }, 201);
 });
 
@@ -427,6 +432,9 @@ purchaseInvoices.patch('/:id/cancel', async (c) => {
   const { data: lines } = await sb.from('purchase_invoice_items')
     .select('grn_item_id').eq('purchase_invoice_id', id);
   await recomputeGrnInvoiced(sb, (lines ?? []).map((l: { grn_item_id: string | null }) => l.grn_item_id));
+  // Costing B — a cancelled PI is no longer the authoritative price; re-cost the
+  // GRN so its buckets fall back to the GR price (or Pending), and DOs/SIs follow.
+  await recostForPi(sb, id);
   return c.json({ purchaseInvoice: { id: cancelled.id, status: cancelled.status } });
 });
 
@@ -583,6 +591,8 @@ purchaseInvoices.post('/from-grn-items', async (c) => {
     }
     // Consume the GRN lines: recount invoiced_qty from live PI lines.
     await recomputeGrnInvoiced(sb, bucket.lines.map(({ row }) => row.id));
+    // Costing B — push the billed price down to the GRN's lots / DO / SI.
+    await recostFromGrn(sb, bucket.grnId);
     created.push({
       id: h.id, invoiceNumber: h.invoice_number,
       supplierId: bucket.supplierId, grnCount: 1, lineCount: bucket.lines.length,
@@ -689,6 +699,9 @@ purchaseInvoices.post('/from-grn', async (c) => {
 
   // Refresh header subtotal/total from the inserted lines (parity with GRN/PR).
   await recomputePiTotals(sb, h.id);
+
+  // Costing B — push the billed price down to the GRN's lots / DO / SI.
+  await recostFromGrn(sb, g.id);
 
   return c.json({ id: h.id, invoiceNumber: h.invoice_number }, 201);
 });
@@ -822,6 +835,8 @@ purchaseInvoices.post('/:id/items', async (c) => {
   // nothing). Recount invoiced_qty from live PI lines.
   if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
   await recomputePiTotals(sb, piId);
+  // Costing B — a newly added PI line bills a GRN line: re-cost its lots / DO / SI.
+  await recostForPi(sb, piId);
   return c.json({ item: data }, 201);
 });
 
@@ -896,6 +911,16 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   // [0, qty_accepted]).
   if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
   await recomputePiTotals(sb, piId);
+  // Costing B — a PI price EDIT (incl. human-error correction) re-costs the
+  // GRN's lots and cascades to every shipped DO + Sales Invoice in real time.
+  await recostForPi(sb, piId);
+  /* If this PI was already posted to the accounts, its total just changed — void
+     the stale entry + re-post at the new amount. No-op when never posted (PI
+     posts to the GL only on demand). Best-effort. */
+  try {
+    const { data: h } = await sb.from('purchase_invoices').select('invoice_number').eq('id', piId).maybeSingle();
+    if (h) await resyncPiAccounting(sb, (h as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pi-accounting] post-line-edit resync failed:', e); }
   return c.json({ ok: true });
 });
 
@@ -916,7 +941,21 @@ purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
     const l = line as { qty: number; grn_item_id: string | null };
     // Release: recount invoiced_qty from live PI lines — the deleted line drops out.
     if (l.grn_item_id) await recomputeGrnInvoiced(sb, [l.grn_item_id]);
+    // Costing B — removing a PI line drops its authoritative price; re-cost the
+    // GRN so the bucket falls back to the GR price (or Pending) and DOs/SIs follow.
+    if (l.grn_item_id) {
+      const { data: gi } = await sb.from('grn_items').select('grn_id').eq('id', l.grn_item_id).maybeSingle();
+      const gid = (gi as { grn_id: string | null } | null)?.grn_id ?? null;
+      if (gid) await recostFromGrn(sb, gid);
+    }
   }
   await recomputePiTotals(sb, piId);
+  /* Deleting a line lowers the PI total — if it was posted to the accounts, void
+     the stale entry + re-post (or void to nothing if it was the last line). No-op
+     when never posted. Best-effort. */
+  try {
+    const { data: h } = await sb.from('purchase_invoices').select('invoice_number').eq('id', piId).maybeSingle();
+    if (h) await resyncPiAccounting(sb, (h as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pi-accounting] post-line-delete resync failed:', e); }
   return c.body(null, 204);
 });

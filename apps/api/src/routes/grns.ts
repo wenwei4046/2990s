@@ -6,6 +6,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { recostFromGrn } from '../lib/recost';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
@@ -1457,6 +1458,14 @@ grns.patch('/:id/items/:itemId', async (c) => {
   await recomputeGrnTotals(sb, grnId);
   // Editing qty_accepted changes how much the PO counts as received — recount it.
   try { await recomputePoReceived(sb, [(prev as { purchase_order_item_id: string | null }).purchase_order_item_id]); } catch { /* best-effort */ }
+  // Costing B — when the GR price (or its variant bucket) was corrected and no PI
+  // has superseded it yet, re-cost this GRN's lots → consumptions → movements →
+  // DO → SI so a shipped order's margin reflects the fix in real time.
+  {
+    const prevUnit = (prev as { unit_price_centi: number | null }).unit_price_centi ?? 0;
+    const priceChanged = Number(unit) !== Number(prevUnit);
+    if (priceChanged || bucketChanged) await recostFromGrn(sb, grnId);
+  }
   return c.json({ ok: true });
 });
 

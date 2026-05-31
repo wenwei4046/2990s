@@ -10,6 +10,7 @@ import {
   groupSofas,
   analyzeSofa,
   computeSofaPrice,
+  detectBundle,
   findSnap,
   hasArmConflict,
   reclinerEligible,
@@ -53,7 +54,16 @@ interface ArtBbox { l: number; t: number; r: number; b: number }
 // square-ish, etc.). To make the rendered cell exactly match the module's
 // cm bbox, we measure each silhouette's alpha-channel bbox once and use the
 // fractions to scale + offset the img so the silhouette fills the cellArt.
-const ART_BBOX_FALLBACK: ArtBbox = { l: 0.10, t: 0.20, r: 0.90, b: 0.80 };
+// Default silhouette inset used when a module art's exact alpha-bbox hasn't
+// been measured yet (the measure is async) OR measurement failed. Both the
+// bundled SVGs (a uniform ~20-unit transparent margin inside their viewBox)
+// and the 1024² PNGs draw the silhouette ~18-20% inset, so cropping to this
+// fills the cell footprint on the FIRST paint instead of letterboxing the
+// square-ish art inside a non-square (wide-arm / deep-seat) cell. The async
+// measureArtBbox refines it to the exact bbox a tick later. Tuned to the
+// single-seaters — those are the modules whose footprint is wider than deep,
+// so they were the ones that visibly gapped before this fallback filled.
+const ART_BBOX_FALLBACK: ArtBbox = { l: 0.20, t: 0.18, r: 0.80, b: 0.82 };
 const bboxCache = new Map<string, ArtBbox>();
 const bboxPending = new Map<string, Promise<ArtBbox>>();
 const measureArtBbox = (src: string): Promise<ArtBbox> => {
@@ -570,11 +580,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // flicker between drop and overlay render).
   useEffect(() => {
     priceResult.groups.forEach((g, i) => {
-      if (!g.bundle) return;
       const groupCells = analyses[i]?.group;
       if (!groupCells) return;
+      // Seamless overlay shows for any recognised bundle SHAPE, priced or not
+      // (Chairman 2026-06-01), so resolve the shape from detectBundle when the
+      // group isn't priced as a bundle — same source the render path uses.
+      const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+      if (!bundle) return;
       const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-      const id = g.bundle.id;
+      const id = bundle.id;
       const isLShape = id === '2+L' || id === '3+L';
       const src = `${ASSET_BASE}/${id}${isLShape ? `-${flip}` : ''}.png`;
       if (bboxCache.has(src)) return;
@@ -783,6 +797,53 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     }
     onAdded();
   };
+
+  /* ─── Seamless composite overlays ──────────────────────────────────
+     Computed once here, used by BOTH the cell render (to hide the modules
+     sitting behind an active composite, so they don't ghost out past its
+     edges) and the overlay render below. A group shows the unified Quick-Pick
+     artwork when it forms a recognised closed bundle shape and isn't an
+     accessory / recliner / edit-mode / mid-drag case. Unlike before, a ROTATED
+     group is no longer skipped — the composite is rotated to match (mirroring
+     how each module's cellArt rotates), so rotating a sofa keeps it whole
+     instead of snapping back to separated module silhouettes. */
+  const activeComposites = priceResult.groups.flatMap((g, i) => {
+    const groupCells = analyses[i]?.group;
+    if (!groupCells || groupCells.length === 0) return [];
+    const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+    if (!bundle) return [];
+    if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return [];
+    if (!analyses[i]?.closed) return [];
+    const ids = new Set(groupCells.map((c) => c.id).filter((x): x is string => x != null));
+    if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return [];
+    // During a drag, KEEP the seamless overlay (it tracks the group via
+    // displayCells) when the WHOLE group is being moved — Chairman 2026-06-01:
+    // the sofa should stay fixed/together while you drag it, not flicker back to
+    // separate modules. Only fall back to individual silhouettes for a PARTIAL
+    // drag (pulling one module out of the group), so the user can see the single
+    // piece they're repositioning.
+    if (draftDelta != null) {
+      const someDragging = draftDelta.ids.some((id) => ids.has(id));
+      const allDragging = Array.from(ids).every((id) => draftDelta.ids.includes(id));
+      if (someDragging && !allDragging) return [];
+    }
+    if (groupCells.some((c) => (c.recliners ?? []).length > 0)) return [];
+    // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
+    // sync). Bail to per-module art on the off chance the rots are mixed.
+    const rot = groupCells[0]!.rot;
+    if (groupCells.some((c) => c.rot !== rot)) return [];
+    const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+    const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
+    const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
+    const compBbox = bboxCache.get(src);
+    if (!compBbox) return [];
+    const bb = cellsBbox(displayCells.filter((c) => c.id != null && ids.has(c.id)), depth);
+    if (!bb) return [];
+    return [{ key: i, src, bb, rot, compBbox, ids }];
+  });
+  const compositeCoveredIds = new Set<string>(
+    activeComposites.flatMap((c) => Array.from(c.ids)),
+  );
 
   /* ─── Render ───────────────────────────────────────────────────── */
 
@@ -1115,24 +1176,34 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                   }}
                 >
                   {(() => {
+                    // Hidden behind an active seamless composite — skip the
+                    // module art so it can't peek out past the composite's
+                    // edges as a faint double-image / ghost. The cell div still
+                    // renders (keeps drag + selection working underneath the
+                    // pointer-events:none composite).
+                    if (c.id != null && compositeCoveredIds.has(c.id)) return null;
                     const artSrc = resolveModuleArtSrc(c.moduleId);
-                    const bbox = bboxCache.get(artSrc);
-                    let imgStyle: CSSProperties;
-                    if (bbox) {
-                      const bw = bbox.r - bbox.l;
-                      const bh = bbox.b - bbox.t;
-                      const imgW = nativeW / bw;
-                      const imgH = nativeH / bh;
-                      imgStyle = {
-                        position: 'absolute',
-                        width: imgW,
-                        height: imgH,
-                        left: -bbox.l * imgW,
-                        top: -bbox.t * imgH,
-                      };
-                    } else {
-                      imgStyle = { width: '100%', height: '100%', objectFit: 'contain' };
-                    }
+                    // Crop the art to its silhouette bbox so it fills the cell
+                    // footprint. Until the async measure resolves (or if it
+                    // fails) fall back to ART_BBOX_FALLBACK — a stretch-fill, NOT
+                    // objectFit:contain. contain preserves the art's aspect, so a
+                    // square-ish PNG/SVG sits letterboxed inside a non-square cell
+                    // (wide-arm or deep-seat modules whose footprint is wider than
+                    // deep), leaving a ~5cm margin on each side that reads as a gap
+                    // between adjacent modules on the first paint. Filling removes
+                    // that flash; the measured bbox refines the crop a tick later.
+                    const bbox = bboxCache.get(artSrc) ?? ART_BBOX_FALLBACK;
+                    const bw = bbox.r - bbox.l;
+                    const bh = bbox.b - bbox.t;
+                    const imgW = nativeW / bw;
+                    const imgH = nativeH / bh;
+                    const imgStyle: CSSProperties = {
+                      position: 'absolute',
+                      width: imgW,
+                      height: imgH,
+                      left: -bbox.l * imgW,
+                      top: -bbox.t * imgH,
+                    };
                     return <img src={artSrc} style={imgStyle} alt={m.label} draggable={false} />;
                   })()}
 
@@ -1273,88 +1344,68 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             );
           })}
 
-          {/* Bundle composite overlay — when a group of cells matches a known
-              bundle, drop the QP composite PNG on top so the build reads as
-              ONE continuous sofa (matching Quick Pick's artwork: continuous
-              top frame, internal cushion division lines, no module-to-module
-              double-frame crack). pointer-events:none lets drags fall through
-              to the cells underneath. Hidden during drag (so individual cells
-              show their silhouettes while moving) and during per-module edit
-              mode (where the user explicitly wants to see modules apart). */}
-          {priceResult.groups.map((g, i) => {
-            if (!g.bundle) return null;
-            const groupCells = analyses[i]?.group;
-            if (!groupCells || groupCells.length === 0) return null;
-            // Skip when the group includes an accessory (console / stool). The
-            // bundle composite PNG depicts only the seat shell but is sized to
-            // the WHOLE group bbox — including the accessory's width — so it
-            // paints over and hides the console underneath (it only reappeared
-            // in "Edit modules", which suppresses this overlay). Mirror
-            // describeSofaLine's hasAccessory rule: keep every compartment
-            // visible by drawing the individual module silhouettes instead.
-            if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return null;
-            // Skip when the modular shape isn't actually closed. groupPrice
-            // intentionally treats a lone handed module (1A-RHF, 2B-RHF, …)
-            // as a 1S/2S bundle for PO + pricing (factory ships a complete
-            // sofa for those SKUs), but on-canvas the composite PNG depicts
-            // both arms — overlaying it on a one-armed module makes the
-            // silhouette sprout a second arm the moment the cell deselects.
-            // Multi-module groups already need analyzeSofa.closed for bundle
-            // matching in groupPrice, so this gate is a no-op for them.
-            if (!analyses[i]?.closed) return null;
-            const ids = new Set(
-              groupCells.map((c) => c.id).filter((x): x is string => x != null),
-            );
-            // Skip while this group is being edited per-module — the point
-            // of edit mode is to see and manipulate individual silhouettes.
-            if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return null;
-            // Skip while dragging cells in this group so the user sees the
-            // individual silhouettes following their pointer.
-            const isDraggingThisGroup =
-              draftDelta != null && draftDelta.ids.some((id) => ids.has(id));
-            if (isDraggingThisGroup) return null;
-            // Skip when the group is rotated — the composite PNG is painted
-            // for the horizontal orientation, so stretching it to fit a
-            // rotated bbox produces a wildly skewed image. Per-cell rotated
-            // silhouettes read fine on their own.
-            if (groupCells.some((c) => c.rot !== 0)) return null;
-            // Skip when any cell in the group has a per-seat recliner upgrade.
-            // The composite (zIndex 1) sits ABOVE the cells (zIndex auto = 0),
-            // so the reclineWash/reclineBadge overlays inside cellArt would be
-            // hidden under the bundle mask. Recliner state is the user's
-            // explicit customization — showing the modules with their
-            // upgrade indicators wins over the seamless mask here.
-            if (groupCells.some((c) => (c.recliners ?? []).length > 0)) return null;
-            const dispCells = displayCells.filter((c) => c.id != null && ids.has(c.id));
-            const bb = cellsBbox(dispCells, depth);
-            if (!bb) return null;
-            const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-            const isLShape = g.bundle.id === '2+L' || g.bundle.id === '3+L';
-            const compositeSrc = `${ASSET_BASE}/${g.bundle.id}${isLShape ? `-${flip}` : ''}.png`;
-            const compBbox = bboxCache.get(compositeSrc);
-            if (!compBbox) return null;
+          {/* Bundle composite overlay — a group that forms a recognised closed
+              shape renders as ONE continuous sofa (Quick Pick's artwork:
+              continuous top frame, internal cushion lines, no module-to-module
+              crack). The modules behind it are hidden (see compositeCoveredIds
+              in the cell render) so nothing ghosts past its edges, and the art
+              rotates with the group — see activeComposites above for the gating.
+              pointer-events:none lets drags fall through to the hidden cells. */}
+          {activeComposites.map(({ key, src, bb, rot, compBbox }) => {
             const bw = compBbox.r - compBbox.l;
             const bh = compBbox.b - compBbox.t;
-            const targetW = bb.w * SCALE;
-            const targetH = bb.h * SCALE;
-            const imgW = targetW / bw;
-            const imgH = targetH / bh;
+            const boxW = bb.w * SCALE;
+            const boxH = bb.h * SCALE;
+            // The composite art is drawn for the sofa's natural (un-rotated)
+            // orientation. When the group is rotated 90/270 its bbox axes swap,
+            // so lay the art out at its natural footprint, centre it on the
+            // group box, then CSS-rotate it to fill the rotated footprint —
+            // exactly how each module's cellArt rotates.
+            const sideways = rot === 90 || rot === 270;
+            const natW = sideways ? boxH : boxW;
+            const natH = sideways ? boxW : boxH;
+            const imgW = natW / bw;
+            const imgH = natH / bh;
             return (
-              <img
-                key={`composite-${i}`}
-                src={compositeSrc}
-                alt=""
-                draggable={false}
+              <div
+                key={`composite-${key}`}
+                aria-hidden
                 style={{
                   position: 'absolute',
-                  left: bb.x * SCALE - compBbox.l * imgW,
-                  top: bb.y * SCALE - compBbox.t * imgH,
-                  width: imgW,
-                  height: imgH,
+                  left: bb.x * SCALE,
+                  top: bb.y * SCALE,
+                  width: boxW,
+                  height: boxH,
                   pointerEvents: 'none',
                   zIndex: 1,
+                  overflow: 'hidden',
                 }}
-              />
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    width: natW,
+                    height: natH,
+                    left: (boxW - natW) / 2,
+                    top: (boxH - natH) / 2,
+                    transform: `rotate(${rot}deg)`,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <img
+                    src={src}
+                    alt=""
+                    draggable={false}
+                    style={{
+                      position: 'absolute',
+                      left: -compBbox.l * imgW,
+                      top: -compBbox.t * imgH,
+                      width: imgW,
+                      height: imgH,
+                    }}
+                  />
+                </div>
+              </div>
             );
           })}
 

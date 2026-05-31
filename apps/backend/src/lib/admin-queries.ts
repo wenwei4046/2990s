@@ -242,6 +242,33 @@ export const useResetTestData = () => {
   });
 };
 
+/* ─── Reset test data BUT KEEP Sales Orders (Commander 2026-06-01) ───
+   Wipes everything downstream of the SO (purchasing / GRN / invoices /
+   returns / deliveries / inventory / journals / legacy POS / credits) and
+   resets the kept SOs to a fresh re-testable state, so the team can re-drive
+   the same batch of SOs through the whole flow again. Gated server-side to
+   super_admin. Invalidates everything on success. */
+export const useResetTestDataKeepSo = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/admin/reset-test-data-keep-so`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '<no body>');
+        throw new Error(`resetTestDataKeepSo failed (${res.status}): ${text}`);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
+  });
+};
+
 /* ─── App config ─── */
 
 export interface AppConfigRow {

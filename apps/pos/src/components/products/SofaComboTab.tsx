@@ -18,7 +18,7 @@
 //   header   — "Sofa Combo Pricing" + subtitle + "+ New Combo"
 //   filters  — Base model dropdown + "N rules"
 //   list     — grouped by base model; each combo card has the module
-//              composition + tier + 5 height-tier prices + Effective date
+//              composition + tier + per-seat-height prices + Effective date
 //              + Edit/History/Delete actions.
 // ----------------------------------------------------------------------------
 
@@ -36,7 +36,10 @@ import {
 } from '../../lib/products/sofa-combos-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../../lib/products/mfg-products-queries';
 
-const HEIGHTS = ['24', '28', '30', '32', '35'] as const;
+// Seat-height columns mirror the live Maintenance pool (Products → Maintenance
+// → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
+// config fails to load — same default the rest of the app uses.
+const HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
 const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
 
 const ICON_PROPS = { size: 14, strokeWidth: 1.75 } as const;
@@ -90,6 +93,10 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
     customerId: null,
   });
   const productsQ = useMfgProducts({ category: 'SOFA' });
+  // Seat-height columns = the live Maintenance Sizes pool (single source of
+  // truth), so a size added in Maintenance shows up here automatically.
+  const heightsCfgQ = useMaintenanceConfig('master');
+  const heights = heightsCfgQ.data?.data?.sofaSizes ?? HEIGHTS_FALLBACK;
 
   const baseModels = useMemo(() => {
     const set = new Set<string>();
@@ -205,6 +212,7 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
                 <ComboCard
                   key={r.id}
                   rule={r}
+                  heights={heights}
                   /* canEdit gates Edit + Delete on existing cards. add-only
                      viewers see the card but no per-card edit affordances. */
                   canEdit={canEdit}
@@ -226,12 +234,13 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
         <ComposerModal
           editing={composer.editing}
           baseModels={baseModels}
+          heights={heights}
           onClose={() => setComposer({ open: false })}
         />
       )}
 
       {historyFor && (
-        <HistoryModal rule={historyFor} onClose={() => setHistoryFor(null)} />
+        <HistoryModal rule={historyFor} heights={heights} onClose={() => setHistoryFor(null)} />
       )}
     </div>
   );
@@ -240,9 +249,10 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, onEdit, onHistory, onDelete, canEdit = true,
+  rule, heights, onEdit, onHistory, onDelete, canEdit = true,
 }: {
   rule: SofaComboRule;
+  heights: string[];
   onEdit: () => void;
   onHistory: () => void;
   onDelete: () => void;
@@ -287,8 +297,8 @@ function ComboCard({
       </div>
 
       {/* Height tiers */}
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 4 }}>
-        {HEIGHTS.map((h) => {
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4 }}>
+        {heights.map((h) => {
           const v = rule.pricesByHeight?.[h];
           return (
             <div key={h} style={{
@@ -338,10 +348,11 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, baseModels, onClose,
+  editing, baseModels, heights, onClose,
 }: {
   editing?: SofaComboRule;
   baseModels: string[];
+  heights: string[];
   onClose: () => void;
 }) {
   const create = useCreateSofaCombo();
@@ -367,7 +378,7 @@ function ComposerModal({
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
   const [prices, setPrices] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
-    for (const h of HEIGHTS) {
+    for (const h of heights) {
       const v = editing?.pricesByHeight?.[h];
       seed[h] = v == null ? '' : (v / 100).toFixed(2);
     }
@@ -398,7 +409,7 @@ function ComposerModal({
     if (orderedModules.length === 0) return alert('Add at least one module slot.');
 
     const pricesByHeight: Record<string, number | null> = {};
-    for (const h of HEIGHTS) {
+    for (const h of heights) {
       const raw = (prices[h] ?? '').trim();
       if (!raw) pricesByHeight[h] = null;
       else {
@@ -542,15 +553,15 @@ function ComposerModal({
         </Field>
 
         <Field label="Prices by seat height (RM)">
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 8 }}>
-            {HEIGHTS.map((h) => (
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
               <div key={h}>
-                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}"</div>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}{/^\d/.test(h) ? '"' : ''}</div>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
-                  value={prices[h]}
+                  value={prices[h] ?? ''}
                   onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
                   placeholder="—"
                   style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
@@ -601,7 +612,7 @@ function ComposerModal({
 
 // ─── History modal ────────────────────────────────────────────────────
 
-function HistoryModal({ rule, onClose }: { rule: SofaComboRule; onClose: () => void }) {
+function HistoryModal({ rule, heights, onClose }: { rule: SofaComboRule; heights: string[]; onClose: () => void }) {
   const historyQ = useSofaComboHistory({
     baseModel: rule.baseModel,
     modules: rule.modules,
@@ -625,8 +636,8 @@ function HistoryModal({ rule, onClose }: { rule: SofaComboRule; onClose: () => v
                 <strong>Effective {fmtDate(r.effectiveFrom)}</strong>
                 {r.deletedAt && <span style={statusPillPending}>Deleted</span>}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 4, marginTop: 6 }}>
-                {HEIGHTS.map((h) => (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4, marginTop: 6 }}>
+                {heights.map((h) => (
                   <div key={h} style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{h}</div>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>

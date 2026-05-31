@@ -162,14 +162,10 @@ export const StockCard = () => {
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Current Qty</span>
           <span className={styles.statValue}>{totalQty.toLocaleString('en-MY')}</span>
-          <span className={styles.statCaption}>
-            {warehouseId ? 'In selected warehouse' : 'Σ across all warehouses'}
-          </span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Warehouses</span>
           <span className={styles.statValue}>{warehouseCount}</span>
-          <span className={styles.statCaption}>Holding this SKU</span>
         </div>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>Last Movement</span>
@@ -181,7 +177,6 @@ export const StockCard = () => {
         <div className={styles.statCard}>
           <span className={styles.statLabel}>FIFO Value</span>
           <span className={styles.statValue}>{fmtRm(fifoValue)}</span>
-          <span className={styles.statCaption}>Open lots · qty × cost</span>
         </div>
       </div>
 

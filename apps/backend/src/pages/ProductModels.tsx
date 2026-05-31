@@ -347,7 +347,8 @@ function FilterChip({
 /* ────────────────────────── Model Photo cell ───────────────────────────── */
 /* PR — Commander 2026-05-27: 48×48 thumb on each Product Model row in
    Modular tab. Click the empty slot or filled thumb to pick a new file
-   (jpg/png/webp, ≤2MB enforced server-side). Hover the filled thumb to
+   (jpg/png/webp; big photos are auto-resized client-side to fit the 2 MB
+   cap, so phone photos no longer get rejected). Hover the filled thumb to
    reveal an × button that removes the photo (R2 delete + nulls
    photo_url). Errors surface as a small red caption under the thumb so
    we don't block the table layout. */
@@ -363,6 +364,48 @@ function resolveBackendPhotoUrl(raw: string | null): string | null {
   if (/^https?:\/\//i.test(raw)) return raw;
   if (!API_URL) return raw;
   return raw.startsWith('/') ? `${API_URL}${raw}` : `${API_URL}/${raw}`;
+}
+
+/* Downscale a picked image in the browser before upload so big phone photos
+ * (commonly 3–8 MB) fit under PHOTO_MAX_BYTES_CLIENT instead of being
+ * rejected. Caps the longest edge at SHRINK_MAX_EDGE and re-encodes as JPEG
+ * — product photos don't need transparency, and smaller files keep the POS
+ * catalog fast. A decode/encode failure falls back to the original file via
+ * the caller's try/catch; the byte-cap check still guards the upload. */
+const SHRINK_MAX_EDGE = 1600;
+const SHRINK_JPEG_QUALITY = 0.85;
+
+async function shrinkImageForUpload(file: File): Promise<File> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result as string);
+    fr.onerror = () => reject(fr.error ?? new Error('read_failed'));
+    fr.readAsDataURL(file);
+  });
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error('decode_failed'));
+    im.src = dataUrl;
+  });
+  const longest = Math.max(img.width, img.height);
+  const scale = longest > SHRINK_MAX_EDGE ? SHRINK_MAX_EDGE / longest : 1;
+  // Already small on both axes AND under the byte cap → upload untouched.
+  if (scale === 1 && file.size <= PHOTO_MAX_BYTES_CLIENT) return file;
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return file;
+  ctx.drawImage(img, 0, 0, w, h);
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, 'image/jpeg', SHRINK_JPEG_QUALITY),
+  );
+  if (!blob) return file;
+  const baseName = file.name.replace(/\.[^.]+$/, '') || 'photo';
+  return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' });
 }
 
 function ModelPhotoCell({ model }: { model: ProductModelRow }) {
@@ -381,15 +424,24 @@ function ModelPhotoCell({ model }: { model: ProductModelRow }) {
   };
 
   const onPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const picked = e.target.files?.[0];
     e.target.value = ''; // allow re-picking the same file
-    if (!file) return;
-    if (file.size > PHOTO_MAX_BYTES_CLIENT) {
-      setErr(`Too large (${(file.size / 1024 / 1024).toFixed(1)} MB · max 2 MB)`);
+    if (!picked) return;
+    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(picked.type)) {
+      setErr('Use JPG / PNG / WEBP');
       return;
     }
-    if (!/^image\/(jpeg|jpg|png|webp)$/i.test(file.type)) {
-      setErr('Use JPG / PNG / WEBP');
+    setErr(null);
+    // Shrink big photos to fit the 2 MB cap instead of rejecting them. On any
+    // failure we fall back to the original; the byte-cap check below still guards.
+    let file = picked;
+    try {
+      file = await shrinkImageForUpload(picked);
+    } catch {
+      file = picked;
+    }
+    if (file.size > PHOTO_MAX_BYTES_CLIENT) {
+      setErr(`Still too large after resize (${(file.size / 1024 / 1024).toFixed(1)} MB · max 2 MB)`);
       return;
     }
     try {

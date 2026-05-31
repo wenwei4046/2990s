@@ -550,11 +550,11 @@ export const Mrp = () => {
       <div className={styles.tabBar} role="tablist">
         <button type="button" role="tab" aria-selected={view === 'general'}
           className={styles.tab} data-active={view === 'general'} onClick={() => switchView('general')}>
-          General <span className={styles.tabHint}>· bedframe, mattress, etc.</span>
+          General
         </button>
         <button type="button" role="tab" aria-selected={view === 'sofa'}
           className={styles.tab} data-active={view === 'sofa'} onClick={() => switchView('sofa')}>
-          Sofa <span className={styles.tabHint}>· ordered as a set</span>
+          Sofa
         </button>
       </div>
 

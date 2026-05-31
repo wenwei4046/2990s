@@ -359,6 +359,41 @@ admin.post('/reset-test-data', async (c) => {
   return c.json({ ok: true });
 });
 
+/* POST /admin/reset-test-data-keep-so — TEMPORARY testing helper (Commander
+   2026-06-01). Same wipe as /reset-test-data but KEEPS every Sales Order (the
+   SO header + its lines, payments, audit log, status changes, price
+   overrides). Everything downstream — purchasing, GRN, invoices, returns,
+   deliveries, inventory, journals, legacy POS, refund credits — is cleared,
+   then the kept SOs are reset to a fresh re-testable state (lines → PENDING,
+   non-terminal headers → CONFIRMED). order_seq is NOT reset; po_sequences is.
+   Lets the team re-drive the SAME batch of SOs through the full flow again.
+   Gated to super_admin ONLY. Single in-DB call (reset_test_transactions_keep_so,
+   migration 0122) — the atomic TRUNCATE CASCADE is the only way that stays
+   under Cloudflare's per-invocation subrequest cap. Remove before pilot. */
+admin.post('/reset-test-data-keep-so', async (c) => {
+  const callerRole = await loadStaffRole(c);
+  if (callerRole !== 'super_admin') {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const { error } = await adminClient.rpc('reset_test_transactions_keep_so');
+  if (error) {
+    if (/reset_test_transactions_keep_so|schema cache|does not exist|could not find the function/i.test(error.message)) {
+      return c.json({
+        error: 'setup_required',
+        detail: 'The reset_test_transactions_keep_so() function is not installed yet. '
+          + 'Run migration 0122_reset_test_transactions_keep_so_fn.sql in the Supabase SQL Editor once.',
+      }, 412);
+    }
+    return c.json({ error: 'reset_failed', detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 const PatchPinBodySchema = z.object({
   pin: z.union([z.string().regex(/^\d{6}$/), z.null()]),
 });

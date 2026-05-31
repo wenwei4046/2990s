@@ -492,7 +492,6 @@ const SupplierOverviewPanel = ({
           <p className={`${styles.kpiValue} ${(score?.receivedPOs ?? 0) > 0 ? defectTone : ''}`}>
             {(score?.receivedPOs ?? 0) > 0 ? `${(score?.defectRate ?? 0).toFixed(2)}%` : '—'}
           </p>
-          <p className={styles.kpiCaption}>Rejected qty / total received qty across posted GRNs</p>
         </div>
 
         <div className={styles.kpiCard}>
@@ -503,7 +502,6 @@ const SupplierOverviewPanel = ({
           <p className={styles.kpiValue}>
             {(score?.receivedPOs ?? 0) > 0 ? (score?.averageLeadDays ?? 0).toFixed(1) : '—'}
           </p>
-          <p className={styles.kpiCaption}>Days from order to receipt (received POs only)</p>
         </div>
       </section>
 

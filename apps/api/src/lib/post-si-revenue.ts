@@ -42,15 +42,20 @@ export type PostSiResult =
  * Returns a structured result; never throws on the expected failure paths.
  */
 export async function postSiRevenue(sb: any, invoiceNumber: string): Promise<PostSiResult> {
-  // ── Idempotency guard — has this SI already been posted? ──
-  const { data: existing } = await sb
+  // ── Idempotency guard — does an ACTIVE (non-reversed) SI JE already exist? ──
+  // We deliberately ignore REVERSED JEs: after resyncSiRevenue voids a stale
+  // entry it calls us to post a FRESH one at the new total, so a reversed
+  // original must NOT block the re-post. The trial-balance views already exclude
+  // reversed entries, so only a live one means "already posted".
+  const { data: existingRows } = await sb
     .from('journal_entries')
-    .select('id, je_no')
+    .select('id, je_no, reversed')
     .eq('source_type', 'SI')
-    .eq('source_doc_no', invoiceNumber)
-    .limit(1);
-  if (existing && existing.length > 0) {
-    return { ok: true, status: 'already_posted', jeNo: existing[0].je_no, jeId: existing[0].id };
+    .eq('source_doc_no', invoiceNumber);
+  const activeExisting = ((existingRows ?? []) as Array<{ id: string; je_no: string; reversed: boolean | null }>)
+    .find((r) => !r.reversed);
+  if (activeExisting) {
+    return { ok: true, status: 'already_posted', jeNo: activeExisting.je_no, jeId: activeExisting.id };
   }
 
   const { data: si, error } = await sb
@@ -146,27 +151,28 @@ export type ReverseSiResult =
  * Re-cancelling, retries, or a second status PATCH all no-op.
  */
 export async function reverseSiRevenue(sb: any, invoiceNumber: string): Promise<ReverseSiResult> {
-  // Find the original posted SI revenue JE. Nothing posted → nothing to reverse.
+  // Find the ACTIVE (non-reversed) SI revenue JE — an invoice may carry several
+  // historical SI JEs after edit-driven void+repost cycles (resyncSiRevenue), so
+  // we void the live one, not an arbitrary `.limit(1)` row. Nothing live →
+  // nothing to reverse.
   const { data: origRows } = await sb
     .from('journal_entries')
     .select('id, je_no, entry_date, reversed, total_debit_sen, total_credit_sen, narration')
     .eq('source_type', 'SI')
-    .eq('source_doc_no', invoiceNumber)
-    .limit(1);
-  const orig = origRows?.[0] as
-    | { id: string; je_no: string; entry_date: string; reversed: boolean; total_debit_sen: number; total_credit_sen: number; narration: string | null }
-    | undefined;
+    .eq('source_doc_no', invoiceNumber);
+  const orig = ((origRows ?? []) as Array<{ id: string; je_no: string; entry_date: string; reversed: boolean; total_debit_sen: number; total_credit_sen: number; narration: string | null }>)
+    .find((r) => !r.reversed);
   if (!orig) return { ok: true, status: 'nothing_to_reverse' };
 
-  // Idempotency guard #1 — the original is already flagged reversed.
-  if (orig.reversed) return { ok: true, status: 'already_reversed' };
-
-  // Idempotency guard #2 — a reversing JE already exists for this invoice.
+  // Idempotency guard — a reversing JE already tied to THIS original exists (the
+  // flag never stuck). Keyed on reversed_by_je = orig.id, NOT just "any reversal
+  // for this invoice", so a prior cycle's reversal doesn't block voiding the
+  // current live JE.
   const { data: revExisting } = await sb
     .from('journal_entries')
     .select('id, je_no')
     .eq('source_type', 'SI_REVERSAL')
-    .eq('source_doc_no', invoiceNumber)
+    .eq('reversed_by_je', orig.id)
     .limit(1);
   if (revExisting && revExisting.length > 0) {
     // The reversing JE exists but the flag never got set — make the flag stick.
@@ -240,4 +246,65 @@ export async function reverseSiRevenue(sb: any, invoiceNumber: string): Promise<
   await sb.from('journal_entries').update({ reversed: true, reversed_by_je: revJe.id }).eq('id', orig.id);
 
   return { ok: true, status: 'reversed', jeNo: revJe.je_no, jeId: revJe.id };
+}
+
+export type ResyncSiResult =
+  | { ok: true; status: 'unchanged' | 'not_posted' | 'resynced' | 'reversed_to_zero' | 'posted' }
+  | { ok: false; status: string; reason?: string };
+
+/**
+ * Re-align a Sales Invoice's revenue JE with its CURRENT total after a line was
+ * edited / added / deleted post-issue. Wei Siang 2026-06-01 chose "auto void the
+ * stale entry + re-post at the new amount" (auto credit-note + reissue) so the
+ * GL never drifts from the invoice.
+ *
+ *   • No live JE yet + total > 0  → post a fresh one (covers a blank invoice
+ *     getting its first line, and self-heals a never-posted issued invoice).
+ *   • No live JE + total ≤ 0      → nothing to do.
+ *   • Live JE, total unchanged    → no-op (no needless churn).
+ *   • Live JE, total changed > 0  → void the stale JE, post a fresh one.
+ *   • Live JE, new total ≤ 0      → void only (all lines gone → no revenue left).
+ *
+ * Idempotent: a second call finds the JE already matching → 'unchanged'.
+ * Best-effort caller pattern — never blocks the line edit on a GL hiccup.
+ */
+export async function resyncSiRevenue(sb: any, invoiceNumber: string): Promise<ResyncSiResult> {
+  // Current live SI JE (non-reversed) + its booked total.
+  const { data: jeRows } = await sb
+    .from('journal_entries')
+    .select('id, total_debit_sen, reversed')
+    .eq('source_type', 'SI')
+    .eq('source_doc_no', invoiceNumber);
+  const active = ((jeRows ?? []) as Array<{ id: string; total_debit_sen: number; reversed: boolean | null }>)
+    .find((r) => !r.reversed);
+
+  // Current invoice total.
+  const { data: si } = await sb
+    .from('sales_invoices')
+    .select('total_centi')
+    .eq('invoice_number', invoiceNumber)
+    .maybeSingle();
+  const newTotal = Number((si as { total_centi?: number } | null)?.total_centi ?? 0);
+
+  if (!active) {
+    // Never posted (or fully reversed). Post fresh only when there's value —
+    // SI posts revenue on issue, so a positive total with no live JE should post.
+    if (newTotal > 0) {
+      const post = await postSiRevenue(sb, invoiceNumber);
+      return post.ok ? { ok: true, status: 'posted' } : { ok: false, status: post.status, reason: (post as { reason?: string }).reason };
+    }
+    return { ok: true, status: 'not_posted' };
+  }
+
+  if (Number(active.total_debit_sen) === newTotal) return { ok: true, status: 'unchanged' };
+
+  // Total changed → void the stale JE.
+  const rev = await reverseSiRevenue(sb, invoiceNumber);
+  if (!rev.ok) return { ok: false, status: rev.status, reason: (rev as { reason?: string }).reason };
+
+  // Re-post at the new total. A new total of 0 (all lines removed) means there is
+  // nothing left to record — the void alone leaves the GL flat.
+  if (newTotal <= 0) return { ok: true, status: 'reversed_to_zero' };
+  const post = await postSiRevenue(sb, invoiceNumber);
+  return post.ok ? { ok: true, status: 'resynced' } : { ok: false, status: post.status, reason: (post as { reason?: string }).reason };
 }

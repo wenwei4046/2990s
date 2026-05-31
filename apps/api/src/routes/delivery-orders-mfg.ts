@@ -134,6 +134,109 @@ async function recomputeTotals(sb: any, deliveryOrderId: string) {
   }).eq('id', deliveryOrderId);
 }
 
+/* ── restampDoActualCost (Costing C, Commander 2026-06-01) ────────────────────
+   Replace a shipped DO's line costs — copied from the SO Product-Maintenance
+   BENCHMARK at build time — with the REAL FIFO cost the inventory trigger booked
+   when the goods left. The SO keeps the benchmark (a reference snapshot); the DO
+   — and the Sales Invoice that copies the DO — now carry the ACTUAL cost, so
+   Margin reflects reality and the commander can compare order-time benchmark vs
+   ship-time actual.
+
+   actual unit cost per bucket = net OUT cost ÷ net OUT qty across THIS DO's own
+   movements (ship OUT + any resync delta IN/OUT), matched to each line by
+   (warehouse, product, variant, batch). A bucket with no booked cost yet (GR
+   received with NO price and no Purchase Invoice) reads 0 for now — Stage A will
+   surface that as "Pending"; Stage B re-runs this stamp when a price correction
+   re-costs the lots, so the DO/Invoice cost reflects the fix in real time.
+
+   Only SHIPPED DOs have OUT movements; un-shipped DOs keep the benchmark. A
+   bucket with net_qty ≤ 0 (line fully returned/reversed) is left untouched.
+   Best-effort: never throws into the caller (audit-DLQ pattern).
+
+   EXPORTED (Costing B, 2026-06-01) so the recost engine (apps/api/src/lib/
+   recost.ts) can re-run it after a PI/GR price correction re-costs the lots. */
+export async function restampDoActualCost(sb: any, deliveryOrderId: string) {
+  try {
+    const { data: doHeader } = await sb.from('delivery_orders')
+      .select('status, warehouse_id').eq('id', deliveryOrderId).maybeSingle();
+    if (!doHeader) return;
+    const status = ((doHeader as { status: string | null }).status ?? '').toUpperCase();
+    if (!SHIPPED_STATES.includes(status)) return; // no OUT yet → keep benchmark
+    const headerWarehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id ?? null;
+
+    const { data: items } = await sb.from('delivery_order_items')
+      .select('id, so_item_id, item_code, qty, item_group, variants, line_total_centi')
+      .eq('delivery_order_id', deliveryOrderId);
+    if (!items || items.length === 0) return;
+
+    const lineWh = await resolveDoLineWarehouses(
+      sb, items as Array<{ id: string; so_item_id?: string | null }>, headerWarehouseId);
+
+    // Sofa batch per so_item — same source the ship used (allocated_batch_no).
+    const batchBySoItem = new Map<string, string>();
+    const soItemIds = [...new Set((items as Array<{ so_item_id?: string | null }>)
+      .map((it) => it.so_item_id).filter((x): x is string => !!x))];
+    if (soItemIds.length > 0) {
+      try {
+        const { data: bRows, error } = await sb.from('mfg_sales_order_items')
+          .select('id, allocated_batch_no').in('id', soItemIds);
+        if (!error) for (const r of (bRows ?? []) as Array<{ id: string; allocated_batch_no: string | null }>) {
+          if (r.allocated_batch_no) batchBySoItem.set(r.id, r.allocated_batch_no);
+        }
+      } catch { /* column absent pre-0121 — no batches */ }
+    }
+    const batchAware = batchBySoItem.size > 0;
+
+    // Net actual cost per (warehouse, product, variant, batch) bucket.
+    const movSelect = batchAware
+      ? 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen'
+      : 'movement_type, warehouse_id, product_code, variant_key, qty, total_cost_sen';
+    const { data: movs } = await sb.from('inventory_movements')
+      .select(movSelect)
+      .eq('source_doc_type', 'DO')
+      .eq('source_doc_id', deliveryOrderId);
+    type Agg = { net_qty: number; net_cost: number };
+    const aggByBucket = new Map<string, Agg>();
+    for (const m of (movs ?? []) as Array<{
+      movement_type: string; warehouse_id: string; product_code: string;
+      variant_key: string | null; batch_no?: string | null; qty: number; total_cost_sen: number | null;
+    }>) {
+      const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}::${m.batch_no ?? ''}`;
+      let agg = aggByBucket.get(k);
+      if (!agg) { agg = { net_qty: 0, net_cost: 0 }; aggByBucket.set(k, agg); }
+      const q = Number(m.qty ?? 0);
+      const cost = Number(m.total_cost_sen ?? 0);
+      if (m.movement_type === 'OUT') { agg.net_qty += q; agg.net_cost += cost; }
+      else if (m.movement_type === 'IN') { agg.net_qty -= q; agg.net_cost -= cost; }
+    }
+
+    // Restamp each line to its bucket's actual unit cost.
+    for (const it of items as Array<{
+      id: string; so_item_id?: string | null; item_code: string; qty: number;
+      item_group?: string | null; variants?: VariantAttrs | null; line_total_centi: number | null;
+    }>) {
+      const warehouseId = lineWh.get(it.id) ?? null;
+      if (!warehouseId) continue;
+      const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+      const batchNo = it.so_item_id ? (batchBySoItem.get(it.so_item_id) ?? null) : null;
+      const k = `${warehouseId}::${it.item_code}::${variantKey}::${batchNo ?? ''}`;
+      const agg = aggByBucket.get(k);
+      if (!agg || agg.net_qty <= 0) continue; // no booked outflow — leave as-is
+      const unitCost = Math.round(agg.net_cost / agg.net_qty);
+      const qty = Number(it.qty ?? 0);
+      const lineTotal = Number(it.line_total_centi ?? 0);
+      const lineCost = unitCost * qty;
+      await sb.from('delivery_order_items').update({
+        unit_cost_centi: unitCost,
+        line_cost_centi: lineCost,
+        line_margin_centi: lineTotal - lineCost,
+      }).eq('id', it.id);
+    }
+
+    await recomputeTotals(sb, deliveryOrderId);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[restampDoActualCost] failed:', e); }
+}
+
 /* Deduct inventory for a DO exactly once. ROBUST: fires on the first
    transition into ANY shipped state (not only DISPATCHED). IDEMPOTENT: a
    pre-insert existence check on the DO id skips re-deduction, and the partial
@@ -278,6 +381,10 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
   }));
   if (movements.length > 0) {
     await writeMovements(sb, movements);
+    /* Costing C — the OUT rows now carry their real FIFO cost (trigger filled
+       total_cost_sen). Restamp the DO lines from that actual cost so Margin is
+       real, not the SO benchmark copy. */
+    await restampDoActualCost(sb, deliveryOrderId);
     /* B2C SO auto-allocation — stock just went out; other PENDING/READY SOs
        might lose their claim. Best-effort. */
     try {
@@ -444,6 +551,9 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
   }
   if (writes.length > 0) {
     await writeMovements(sb, writes);
+    /* Costing C — line set changed → re-derive each line's actual FIFO cost
+       from the now-current movements (ship OUT + these resync deltas). */
+    await restampDoActualCost(sb, deliveryOrderId);
     /* Resync changed stock — re-walk SO allocation. Best-effort. */
     try {
       const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
@@ -479,13 +589,15 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
    id skips a re-reversal. Best-effort — a movement failure never un-cancels the
    DO (audit-DLQ pattern). */
 async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performedBy: string) {
-  // Idempotency guard — has this DO already been reversed via ADJUSTMENT?
+  // Idempotency guard — has this DO already been reversed? Reversal rows are
+  // tagged source_doc_type='ADJUSTMENT' + this DO's id. They may be ADJUSTMENT
+  // (non-sofa) OR a batch-restoring IN (sofa, Stage 4), so DON'T filter on
+  // movement_type — either kind means we already reversed.
   const { count: existing } = await sb
     .from('inventory_movements')
     .select('id', { head: true, count: 'exact' })
     .eq('source_doc_type', 'ADJUSTMENT')
-    .eq('source_doc_id', deliveryOrderId)
-    .eq('movement_type', 'ADJUSTMENT');
+    .eq('source_doc_id', deliveryOrderId);
   if ((existing ?? 0) > 0) return; // already reversed — no-op
 
   const { data: doHeader } = await sb.from('delivery_orders')
@@ -493,27 +605,36 @@ async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performed
     .eq('id', deliveryOrderId).maybeSingle();
   const doNo = (doHeader as { do_number: string } | null)?.do_number ?? deliveryOrderId;
 
-  // Net OUT per (warehouse, product_code, variant_key) bucket from THIS DO's own
-  // IN/OUT movements. Carry the warehouse + cost basis so the add-back is exact.
-  const { data: movs } = await sb.from('inventory_movements')
-    .select('movement_type, warehouse_id, product_code, variant_key, qty, total_cost_sen, product_name')
-    .eq('source_doc_type', 'DO')
-    .eq('source_doc_id', deliveryOrderId);
+  // Net OUT per (warehouse, product_code, variant_key, batch_no) bucket from THIS
+  // DO's own IN/OUT movements. batch_no is read from the OUT rows themselves (the
+  // ship stamped it), so a sofa reversal restores the EXACT dye-lot batch it drew
+  // from. Forward-compat: pre-0120 the column doesn't exist → retry without it and
+  // every bucket's batch is '' (plain ADJUSTMENT, identical to old behaviour).
+  const sel = 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, total_cost_sen, product_name';
+  let movsRes = await sb.from('inventory_movements').select(sel)
+    .eq('source_doc_type', 'DO').eq('source_doc_id', deliveryOrderId);
+  if (movsRes.error && (movsRes.error.message ?? '').includes('batch_no')) {
+    movsRes = await sb.from('inventory_movements')
+      .select('movement_type, warehouse_id, product_code, variant_key, qty, total_cost_sen, product_name')
+      .eq('source_doc_type', 'DO').eq('source_doc_id', deliveryOrderId);
+  }
+  const movs = movsRes.data;
   type Agg = {
-    warehouse_id: string; product_code: string; variant_key: string;
+    warehouse_id: string; product_code: string; variant_key: string; batch_no: string | null;
     product_name: string | null; net_out: number; out_total_cost: number; out_qty: number;
   };
   const byBucket = new Map<string, Agg>();
   for (const m of (movs ?? []) as Array<{
-    movement_type: string; warehouse_id: string; product_code: string;
-    variant_key: string | null; qty: number; total_cost_sen: number | null; product_name: string | null;
+    movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null;
+    batch_no?: string | null; qty: number; total_cost_sen: number | null; product_name: string | null;
   }>) {
     if (m.movement_type !== 'IN' && m.movement_type !== 'OUT') continue;
     const variant_key = m.variant_key ?? '';
-    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}`;
+    const batch_no = m.batch_no ?? null;
+    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}::${batch_no ?? ''}`;
     let agg = byBucket.get(k);
     if (!agg) {
-      agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, product_name: m.product_name, net_out: 0, out_total_cost: 0, out_qty: 0 };
+      agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, batch_no, product_name: m.product_name, net_out: 0, out_total_cost: 0, out_qty: 0 };
       byBucket.set(k, agg);
     }
     const q = Number(m.qty ?? 0);
@@ -522,23 +643,33 @@ async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performed
     if (!agg.product_name) agg.product_name = m.product_name;
   }
 
+  /* Build the add-back rows. For a BATCHED (sofa) bucket we write a reversing IN
+     (carrying batch_no) so the FIFO trigger re-OPENS a lot tagged with that exact
+     batch — restoring inventory_lots, not just the aggregate balance. For a plain
+     bucket we keep the FIFO-neutral ADJUSTMENT (no lot re-open, no spurious COGS).
+     Both use source_doc_type='ADJUSTMENT' so neither collides with the DO source
+     index (ix_inv_mov_do_source is scoped WHERE source_doc_type='DO'). */
   const movements = [...byBucket.values()]
     .filter((b) => b.net_out > 0)
-    .map((b) => ({
-      movement_type: 'ADJUSTMENT' as const,
-      warehouse_id: b.warehouse_id,
-      product_code: b.product_code,
-      variant_key: b.variant_key,
-      product_name: b.product_name,
-      qty: b.net_out, // signed: positive adds back the stock the DO shipped out
-      // Carry the weighted-avg OUT cost so the re-added stock has a cost basis.
-      unit_cost_sen: b.out_qty > 0 ? Math.round(b.out_total_cost / b.out_qty) : 0,
-      source_doc_type: 'ADJUSTMENT' as const,
-      source_doc_id: deliveryOrderId,
-      source_doc_no: doNo,
-      performed_by: performedBy,
-      notes: `Delivery order ${doNo} cancelled — reversing shipment (stock returned to shelf)`,
-    }));
+    .map((b) => {
+      const unit_cost_sen = b.out_qty > 0 ? Math.round(b.out_total_cost / b.out_qty) : 0;
+      const base = {
+        warehouse_id: b.warehouse_id,
+        product_code: b.product_code,
+        variant_key: b.variant_key,
+        product_name: b.product_name,
+        qty: b.net_out, // positive — adds back the stock the DO shipped out
+        unit_cost_sen,
+        source_doc_type: 'ADJUSTMENT' as const,
+        source_doc_id: deliveryOrderId,
+        source_doc_no: doNo,
+        performed_by: performedBy,
+        notes: `Delivery order ${doNo} cancelled — reversing shipment (stock returned to shelf)`,
+      };
+      return b.batch_no
+        ? { ...base, movement_type: 'IN' as const, batch_no: b.batch_no }
+        : { ...base, movement_type: 'ADJUSTMENT' as const };
+    });
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
@@ -1822,6 +1953,15 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   // TASK #24 — if the DO has shipped, propagate the qty change to inventory
   // (delta OUT for increase, delta IN for decrease). No-op when not shipped.
   await resyncInventoryForDo(sb, id, user?.id);
+  /* SO #4 — a qty change on a DO line shifts how much of the SO line is
+     delivered. Re-derive the SO's stored delivery status from live qtys so a
+     DECREASE can release the SO from DELIVERED back to a partial/booked status
+     (bidirectional + idempotent). Without this the SO stays latched DELIVERED
+     against a quantity that no longer exists. Best-effort. */
+  try {
+    const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+    await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user?.id);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-sync] post-do-line-edit failed:', e); }
   return c.json({ ok: true });
 });
 
@@ -1865,6 +2005,14 @@ deliveryOrdersMfg.delete('/:id/items/:itemId', async (c) => {
   // TASK #24 — give the deleted qty back to stock (delta IN per bucket). No-op
   // when the DO hasn't shipped yet.
   await resyncInventoryForDo(sb, id, user?.id);
+  /* SO #4 — deleting a DO line drops its delivered qty to zero for that SO
+     line. Re-derive the SO's stored delivery status so it releases from
+     DELIVERED back to a partial/booked status (bidirectional + idempotent).
+     Best-effort. */
+  try {
+    const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+    await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user?.id);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-sync] post-do-line-delete failed:', e); }
   return c.json({ ok: true });
 });
 

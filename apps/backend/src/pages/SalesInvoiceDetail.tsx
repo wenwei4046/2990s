@@ -150,6 +150,15 @@ type SiItem = {
   notes: string | null;
 };
 
+/* Costing A (Commander 2026-06-01) — an SI line copies the DO's actual cost. A
+   live (non-cancelled) line with qty but cost 0 means the goods were received
+   with NO price and no Purchase Invoice yet → cost PENDING, not free. The recost
+   engine fills the real number (and re-stamps this SI) the instant a price lands. */
+const lineCostPending = (
+  it: { qty: number; unit_cost_centi: number },
+  isCancelled: boolean,
+): boolean => !isCancelled && Number(it.qty) > 0 && Number(it.unit_cost_centi ?? 0) === 0;
+
 const draftFromItem = (it: SiItem): SoLineDraft => ({
   itemCode: it.item_code ?? '',
   itemGroup: it.item_group ?? 'others',
@@ -561,13 +570,19 @@ export const SalesInvoiceDetail = () => {
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, header.currency)}</td>
                   <td className={styles.tableRight}>
-                    <span className={styles.muted}>{it.unit_cost_centi > 0 ? fmtRm(it.unit_cost_centi, header.currency) : '—'}</span>
+                    {lineCostPending(it, isCancelled)
+                      ? <span className={styles.pendingPill}>Pending</span>
+                      : <span className={styles.muted}>{it.unit_cost_centi > 0 ? fmtRm(it.unit_cost_centi, header.currency) : '—'}</span>}
                   </td>
                   <td className={styles.tableRight}>
-                    <span className={styles.muted}>{it.line_cost_centi > 0 ? fmtRm(it.line_cost_centi, header.currency) : '—'}</span>
+                    {lineCostPending(it, isCancelled)
+                      ? <span className={styles.pendingPill}>Pending</span>
+                      : <span className={styles.muted}>{it.line_cost_centi > 0 ? fmtRm(it.line_cost_centi, header.currency) : '—'}</span>}
                   </td>
                   <td className={styles.tableRight}>
-                    {it.line_total_centi > 0 ? (
+                    {lineCostPending(it, isCancelled) ? (
+                      <span className={styles.muted}>—</span>
+                    ) : it.line_total_centi > 0 ? (
                       <span className={it.line_margin_centi > 0 ? styles.marginGood : it.line_margin_centi < 0 ? styles.marginBad : styles.muted}
                         style={{ fontWeight: 600 }}>
                         {fmtRm(it.line_margin_centi, header.currency)}
@@ -581,7 +596,7 @@ export const SalesInvoiceDetail = () => {
         )}
       </section>
 
-      <TotalsCard header={header} />
+      <TotalsCard header={header} costPending={items.some((it) => lineCostPending(it, isCancelled))} />
 
       <PaymentsTable
         docNo={null}
@@ -913,7 +928,7 @@ const CustomerCard = memo(CustomerCardInner) as typeof CustomerCardInner;
 /* ════════════════════════════════════════════════════════════════════════
    Totals card (mirror of DeliveryOrderDetail's TotalsCard)
    ════════════════════════════════════════════════════════════════════════ */
-const TotalsCard = ({ header }: { header: SiHeader }) => {
+const TotalsCard = ({ header, costPending = false }: { header: SiHeader; costPending?: boolean }) => {
   const revenue = header.local_total_centi || header.total_centi || 0;
   const marginPct = header.margin_pct_basis / 100;
   const marginCls =
@@ -947,16 +962,21 @@ const TotalsCard = ({ header }: { header: SiHeader }) => {
           </div>
           <div>
             <div className={styles.totalLabel}>Cost</div>
-            <div className={styles.totalValue} style={TOTALS_KPI_VALUE_STYLE}>{fmtRm(header.total_cost_centi, header.currency)}</div>
+            <div className={styles.totalValue} style={TOTALS_KPI_VALUE_STYLE}>
+              {fmtRm(header.total_cost_centi, header.currency)}
+              {costPending && <span className={styles.pendingPill} style={{ marginLeft: 'var(--space-2)' }}>Pending</span>}
+            </div>
           </div>
           <div>
             <div className={styles.totalLabel}>Margin</div>
-            <div className={`${styles.totalValue} ${marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>{fmtRm(header.total_margin_centi, header.currency)}</div>
+            <div className={`${styles.totalValue} ${costPending ? styles.muted : marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
+              {costPending ? <span className={styles.pendingPill}>Pending</span> : fmtRm(header.total_margin_centi, header.currency)}
+            </div>
           </div>
           <div>
             <div className={styles.totalLabel}>Margin %</div>
-            <div className={`${styles.totalValue} ${marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
-              {revenue > 0 ? `${marginPct.toFixed(1)}%` : '—'}
+            <div className={`${styles.totalValue} ${costPending ? styles.muted : marginCls}`} style={TOTALS_KPI_VALUE_STYLE}>
+              {costPending ? '—' : revenue > 0 ? `${marginPct.toFixed(1)}%` : '—'}
             </div>
           </div>
         </div>

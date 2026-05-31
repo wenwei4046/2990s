@@ -220,26 +220,33 @@ accounting.post('/post/si/:invoiceNumber', async (c) => {
   return c.json({ error: r.status, reason: r.reason }, 500);
 });
 
-accounting.post('/post/pi/:invoiceNumber', async (c) => {
-  const invoiceNumber = c.req.param('invoiceNumber');
-  const sb = c.get('supabase');
+/* ── postPiAccounting (extracted 2026-06-01) — idempotent PI → GL post ──────
+   Writes Dr Inventory (1200) / Cr Payables (2000) for the PI total. Shared by
+   the manual POST /post/pi route AND resyncPiAccounting (void+repost on a
+   post-issue line edit). Mirrors postSiRevenue: keyed on an ACTIVE (non-reversed)
+   PI JE, so a reversed original never blocks a fresh re-post. */
+export type PostPiResult =
+  | { ok: true; status: 'posted'; jeNo: string; jeId: string; totalSen: number }
+  | { ok: true; status: 'already_posted'; jeNo: string; jeId: string }
+  | { ok: false; status: 'invoice_not_found' | 'zero_total' | 'je_insert_failed' | 'lines_insert_failed' | 'post_failed'; reason?: string };
 
-  const { data: existing } = await sb
+export async function postPiAccounting(sb: any, invoiceNumber: string): Promise<PostPiResult> {
+  // Idempotency — an ACTIVE (non-reversed) PI JE already exists?
+  const { data: existingRows } = await sb
     .from('journal_entries')
-    .select('id, je_no')
+    .select('id, je_no, reversed')
     .eq('source_type', 'PI')
-    .eq('source_doc_no', invoiceNumber)
-    .limit(1);
-  if (existing && existing.length > 0) {
-    return c.json({ error: 'already_posted', existingJe: existing[0] }, 409);
-  }
+    .eq('source_doc_no', invoiceNumber);
+  const active = ((existingRows ?? []) as Array<{ id: string; je_no: string; reversed: boolean | null }>)
+    .find((r) => !r.reversed);
+  if (active) return { ok: true, status: 'already_posted', jeNo: active.je_no, jeId: active.id };
 
   const { data: piRaw, error } = await sb
     .from('purchase_invoices')
     .select('id, invoice_number, invoice_date, supplier_id, total_centi, suppliers(code, name)')
     .eq('invoice_number', invoiceNumber)
     .single();
-  if (error || !piRaw) return c.json({ error: 'invoice_not_found' }, 404);
+  if (error || !piRaw) return { ok: false, status: 'invoice_not_found' };
   // Cast through `unknown` — Supabase JS without generated types returns
   // `GenericStringError` from `.select(string).single()` even when data is
   // populated. Project-wide pattern; see routes/admin.ts L97.
@@ -253,7 +260,7 @@ accounting.post('/post/pi/:invoiceNumber', async (c) => {
   };
 
   const totalSen = Number(pi.total_centi);
-  if (totalSen <= 0) return c.json({ error: 'zero_total' }, 400);
+  if (totalSen <= 0) return { ok: false, status: 'zero_total' };
 
   const supplier = pi.suppliers ?? { code: null, name: null };
   const lines: JeLineIn[] = [
@@ -286,7 +293,7 @@ accounting.post('/post/pi/:invoiceNumber', async (c) => {
     })
     .select('*')
     .single();
-  if (jeErr) return c.json({ error: 'je_insert_failed', reason: jeErr.message }, 500);
+  if (jeErr) return { ok: false, status: 'je_insert_failed', reason: jeErr.message };
 
   const lineRows = lines.map((l, i) => ({
     journal_entry_id: je.id,
@@ -302,16 +309,29 @@ accounting.post('/post/pi/:invoiceNumber', async (c) => {
   const { error: linesErr } = await sb.from('journal_entry_lines').insert(lineRows);
   if (linesErr) {
     await sb.from('journal_entries').delete().eq('id', je.id);
-    return c.json({ error: 'lines_insert_failed', reason: linesErr.message }, 500);
+    return { ok: false, status: 'lines_insert_failed', reason: linesErr.message };
   }
 
   const { error: postErr } = await sb
     .from('journal_entries')
     .update({ posted: true })
     .eq('id', je.id);
-  if (postErr) return c.json({ error: 'post_failed', reason: postErr.message }, 500);
+  if (postErr) return { ok: false, status: 'post_failed', reason: postErr.message };
 
-  return c.json({ ok: true, jeNo: je.je_no, jeId: je.id, totalSen });
+  return { ok: true, status: 'posted', jeNo: je.je_no, jeId: je.id, totalSen };
+}
+
+accounting.post('/post/pi/:invoiceNumber', async (c) => {
+  const invoiceNumber = c.req.param('invoiceNumber');
+  const sb = c.get('supabase');
+  const r = await postPiAccounting(sb, invoiceNumber);
+  if (r.ok && r.status === 'already_posted') {
+    return c.json({ error: 'already_posted', existingJe: { id: r.jeId, je_no: r.jeNo } }, 409);
+  }
+  if (r.ok) return c.json({ ok: true, jeNo: r.jeNo, jeId: r.jeId, totalSen: r.totalSen });
+  if (r.status === 'invoice_not_found') return c.json({ error: 'invoice_not_found' }, 404);
+  if (r.status === 'zero_total') return c.json({ error: 'zero_total' }, 400);
+  return c.json({ error: r.status, reason: r.reason }, 500);
 });
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -332,27 +352,28 @@ export async function reversePiAccounting(
   sb: any,
   invoiceNumber: string,
 ): Promise<{ ok: boolean; status: string; jeNo?: string; jeId?: string; reason?: string }> {
-  // Find the original posted PI JE. Nothing posted → nothing to reverse.
+  // Find the ACTIVE (non-reversed) PI JE — an invoice may carry several
+  // historical PI JEs after edit-driven void+repost cycles (resyncPiAccounting),
+  // so we void the live one, not an arbitrary `.limit(1)` row. Nothing live →
+  // nothing to reverse.
   const { data: origRows } = await sb
     .from('journal_entries')
     .select('id, je_no, entry_date, reversed, total_debit_sen, total_credit_sen, narration')
     .eq('source_type', 'PI')
-    .eq('source_doc_no', invoiceNumber)
-    .limit(1);
-  const orig = origRows?.[0] as
-    | { id: string; je_no: string; entry_date: string; reversed: boolean; total_debit_sen: number; total_credit_sen: number; narration: string | null }
-    | undefined;
+    .eq('source_doc_no', invoiceNumber);
+  const orig = ((origRows ?? []) as Array<{ id: string; je_no: string; entry_date: string; reversed: boolean; total_debit_sen: number; total_credit_sen: number; narration: string | null }>)
+    .find((r) => !r.reversed);
   if (!orig) return { ok: true, status: 'nothing_to_reverse' };
 
-  // Idempotency guard #1 — the original is already flagged reversed.
-  if (orig.reversed) return { ok: true, status: 'already_reversed' };
-
-  // Idempotency guard #2 — a reversing JE already exists for this invoice.
+  // Idempotency guard — a reversing JE already tied to THIS original exists (the
+  // flag never stuck). Keyed on reversed_by_je = orig.id, NOT just "any reversal
+  // for this invoice", so a prior cycle's reversal doesn't block voiding the
+  // current live JE.
   const { data: revExisting } = await sb
     .from('journal_entries')
     .select('id, je_no')
     .eq('source_type', 'PI_REVERSAL')
-    .eq('source_doc_no', invoiceNumber)
+    .eq('reversed_by_je', orig.id)
     .limit(1);
   if (revExisting && revExisting.length > 0) {
     // The reversing JE exists but the flag never got set — make the flag stick.
@@ -427,6 +448,42 @@ export async function reversePiAccounting(
   await sb.from('journal_entries').update({ reversed: true, reversed_by_je: revJe.id }).eq('id', orig.id);
 
   return { ok: true, status: 'reversed', jeNo: revJe.je_no, jeId: revJe.id };
+}
+
+/* ── resyncPiAccounting (2026-06-01) — re-align a posted PI's GL after a line edit
+   Wei Siang chose "auto void the stale entry + re-post at the new amount". UNLIKE
+   the SI side, a PI does NOT auto-post on create — it only has a JE once someone
+   manually posts it from the accounting page. So this NEVER auto-creates a JE: it
+   only fires when an ACTIVE PI JE already exists and its total no longer matches
+   the invoice. Idempotent + best-effort. */
+export async function resyncPiAccounting(
+  sb: any,
+  invoiceNumber: string,
+): Promise<{ ok: boolean; status: string; reason?: string }> {
+  const { data: jeRows } = await sb
+    .from('journal_entries')
+    .select('id, total_debit_sen, reversed')
+    .eq('source_type', 'PI')
+    .eq('source_doc_no', invoiceNumber);
+  const active = ((jeRows ?? []) as Array<{ id: string; total_debit_sen: number; reversed: boolean | null }>)
+    .find((r) => !r.reversed);
+  // Not posted to the GL yet → nothing to keep in sync (PI posts only on demand).
+  if (!active) return { ok: true, status: 'not_posted' };
+
+  const { data: pi } = await sb
+    .from('purchase_invoices')
+    .select('total_centi')
+    .eq('invoice_number', invoiceNumber)
+    .maybeSingle();
+  const newTotal = Number((pi as { total_centi?: number } | null)?.total_centi ?? 0);
+  if (Number(active.total_debit_sen) === newTotal) return { ok: true, status: 'unchanged' };
+
+  // Total changed → void the stale JE, then re-post at the new amount.
+  const rev = await reversePiAccounting(sb, invoiceNumber);
+  if (!rev.ok) return { ok: false, status: rev.status, reason: rev.reason };
+  if (newTotal <= 0) return { ok: true, status: 'reversed_to_zero' };
+  const post = await postPiAccounting(sb, invoiceNumber);
+  return post.ok ? { ok: true, status: 'resynced' } : { ok: false, status: post.status, reason: (post as { reason?: string }).reason };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
