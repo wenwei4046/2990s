@@ -129,7 +129,11 @@ function validatePricesByHeight(v: unknown): Record<string, number | null> | nul
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const out: Record<string, number | null> = {};
   for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
-    if (!/^\d+$/.test(k)) return null;
+    // Height keys come from the Maintenance Sizes pool: numeric seat heights
+    // ("24", "37") or named ones like "Flat". Accept alphanumeric labels (with
+    // an optional space/dash); reject empty or symbol-only keys. The old
+    // /^\d+$/ rejected the entire payload the moment "Flat" entered the pool.
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(k)) return null;
     if (raw === null || raw === undefined || raw === '') {
       out[k] = null;
       continue;
