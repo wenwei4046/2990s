@@ -295,10 +295,12 @@ export const Mrp = () => {
       return;
     }
     /* Commander 2026-05-31 — supplier now travels PER PICK (the per-line
-       dropdown), so we no longer send supplierByCode/mode from MRP — the
-       backend groups by (warehouse, supplier). fromMrp tags every PO line as
-       reference-only so it never locks the source SO line (infinite-convert). */
-    const body = { picks, fromMrp: true, ...(expectedAt ? { expectedAt } : {}) };
+       dropdown), so we no longer send supplierByCode from MRP. We DO send the
+       Combined/Per-SO `mode` so the toggle works: 'combined' groups by
+       (warehouse, supplier); 'per-so' splits further by source SO doc so each
+       SO gets its own PO. fromMrp tags every PO line as reference-only so it
+       never locks the source SO line (infinite-convert). */
+    const body = { picks, mode: poMode, fromMrp: true, ...(expectedAt ? { expectedAt } : {}) };
     createPos.mutate(body, {
       onSuccess: (res) => {
         if (!res.total) {
@@ -315,7 +317,7 @@ export const Mrp = () => {
         void q.refetch();
         setDialog({
           kind: 'created',
-          title: `Created ${res.total} PO${res.total === 1 ? '' : 's'}`,
+          title: `Successfully created ${res.total} PO${res.total === 1 ? '' : 's'}`,
           body: (res.created ?? []).map((p) => p.poNumber).join(', '),
         });
       },
