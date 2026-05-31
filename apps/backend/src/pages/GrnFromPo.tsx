@@ -26,6 +26,7 @@ import {
   useOutstandingPoItems,
   type OutstandingPoItem,
 } from '../lib/suppliers-queries';
+import { useGrnDetail, useAddGrnItem } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { ItemGroupPill } from '../lib/category-badges';
@@ -95,6 +96,20 @@ export const GrnFromPo = () => {
     [poIdFilter],
   );
 
+  /* Commander 2026-05-31 — APPEND mode. When a POSTED GRN's edit page sends the
+     operator here with ?appendToGrn=<grnId>, this picker no longer feeds the
+     New GRN form; instead it appends the picked PO lines straight into that
+     existing GRN (same multi-pick UI as Create-GR's "From PO (multi)"). Scope:
+     the GRN is supplier- + warehouse-locked, so only that supplier's lines for
+     that warehouse are pickable. */
+  const appendToGrn = searchParams.get('appendToGrn');
+  const grnDetailQ  = useGrnDetail(appendToGrn);
+  const addGrnItem  = useAddGrnItem();
+  const appendGrn   = grnDetailQ.data?.grn as
+    | { id: string; grn_number: string; supplier_id: string | null; warehouse_id: string | null }
+    | undefined;
+  const [appending, setAppending] = useState(false);
+
   // Map<poItemId, { picked, qty }>. qty defaults to remainingQty when ticked.
   const [picks, setPicks] = useState<Record<string, Pick>>({});
 
@@ -138,6 +153,12 @@ export const GrnFromPo = () => {
   const rows = useMemo(() => {
     return items.filter((r) => {
       if (poIdSet.size > 0 && !poIdSet.has(r.poId)) return false;
+      // Append mode — only this GRN's supplier (and warehouse, if the GRN is
+      // warehouse-bound) so the receipt stays one-supplier / one-warehouse.
+      if (appendGrn) {
+        if (appendGrn.supplier_id && r.supplierId !== appendGrn.supplier_id) return false;
+        if (appendGrn.warehouse_id && r.warehouseLocationId !== appendGrn.warehouse_id) return false;
+      }
       if (effRemaining(r) <= 0) return false;
       if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
       if (dateFrom || dateTo) {
@@ -149,7 +170,7 @@ export const GrnFromPo = () => {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, draftQtyById, category, dateField, dateFrom, dateTo, poIdSet]);
+  }, [items, draftQtyById, category, dateField, dateFrom, dateTo, poIdSet, appendGrn]);
 
   /* Commander 2026-05-31 — "Convert to GR 应该进入 Draft 状态，不要直接 Create."
      When the operator converts ONE PO from the list (?poId=<id>), land here with
@@ -394,7 +415,7 @@ export const GrnFromPo = () => {
   // Commander 2026-05-29 — this grid FEEDS the New GRN form (no longer auto-
   // creates GRNs). On confirm, stash the picked PO lines + their chosen qty,
   // then return to /grns/new, which loads them as GRN line items.
-  const onSave = () => {
+  const onSave = async () => {
     if (pickedCount === 0) { setDialog({ title: 'Nothing picked', body: 'Tick at least one PO line first.' }); return; }
     const out: GrnFromPoPick[] = picked
       .map(([poItemId, v]) => {
@@ -402,6 +423,37 @@ export const GrnFromPo = () => {
         return row ? { ...row, _pickQty: v.qty } : null;
       })
       .filter((x): x is GrnFromPoPick => x !== null);
+
+    // APPEND mode — push each pick straight into the existing GRN as a new line
+    // (server rolls received_qty + writes inventory-IN per line), then return to
+    // the GRN's edit page where the new lines now appear.
+    if (appendToGrn) {
+      setAppending(true);
+      try {
+        for (const r of out) {
+          await addGrnItem.mutateAsync({
+            grnId:               appendToGrn,
+            purchaseOrderItemId: r.poItemId,
+            materialCode:        r.itemCode,
+            materialName:        r.description ?? r.itemCode,
+            itemGroup:           r.itemGroup || undefined,
+            variants:            (r.variants as Record<string, unknown> | null) ?? undefined,
+            qty:                 r._pickQty,
+            unitPriceCenti:      r.unitPriceCenti,
+            deliveryDate:        r.deliveryDate ?? undefined,
+          });
+        }
+        navigate(`/grns/${appendToGrn}?edit=1`);
+      } catch (e) {
+        setAppending(false);
+        setDialog({
+          title: 'Add failed',
+          body: e instanceof Error ? e.message : 'Could not append the picked lines to this GRN.',
+        });
+      }
+      return;
+    }
+
     try { sessionStorage.setItem('grnFromPoPicks', JSON.stringify(out)); } catch { /* quota */ }
     navigate('/grns/new');
   };
@@ -475,26 +527,49 @@ export const GrnFromPo = () => {
     <div className={styles.page}>
       <div className={styles.headerRow}>
         <div className={styles.titleBlock}>
-          <Link to="/grns" className={styles.backBtn}>
-            <ArrowLeft {...ICON} /> <span>Goods Receipts</span>
+          <Link to={appendToGrn ? `/grns/${appendToGrn}?edit=1` : '/grns'} className={styles.backBtn}>
+            <ArrowLeft {...ICON} /> <span>{appendToGrn ? (appendGrn?.grn_number ?? 'Goods Receipt') : 'Goods Receipts'}</span>
           </Link>
-          <h1 className={styles.title}>Pick PO lines for this GRN</h1>
+          <h1 className={styles.title}>
+            {appendToGrn
+              ? `Add PO lines to ${appendGrn?.grn_number ?? 'this GRN'}`
+              : 'Pick PO lines for this GRN'}
+          </h1>
         </div>
         <div className={styles.actions}>
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
+          <Button
+            variant="ghost" size="md"
+            onClick={() => navigate(appendToGrn ? `/grns/${appendToGrn}?edit=1` : '/grns')}
+          >
             <X {...ICON} /> Cancel
           </Button>
           <Button
             variant="primary" size="md"
             onClick={onSave}
-            disabled={pickedCount === 0}
-            title="Add the picked PO lines into the New GRN form"
+            disabled={pickedCount === 0 || appending}
+            title={appendToGrn ? 'Append the picked PO lines into this GRN' : 'Add the picked PO lines into the New GRN form'}
           >
             <Save {...ICON} />
-            {pickedCount === 0 ? 'Pick at least 1 line' : `Add ${pickedCount} line${pickedCount === 1 ? '' : 's'} to GRN`}
+            {appending
+              ? 'Adding…'
+              : pickedCount === 0
+                ? 'Pick at least 1 line'
+                : `Add ${pickedCount} line${pickedCount === 1 ? '' : 's'} to GRN`}
           </Button>
         </div>
       </div>
+      {appendToGrn && (
+        <p style={{
+          margin: '0 0 var(--space-2)', padding: 'var(--space-1) var(--space-3)',
+          width: 'fit-content', borderRadius: 'var(--radius-pill)',
+          background: 'rgba(232, 107, 58, 0.10)', border: '1px solid var(--c-burnt)',
+          color: 'var(--c-burnt)', fontSize: 'var(--fs-12)', fontWeight: 600,
+        }}>
+          Appending to <code>{appendGrn?.grn_number ?? 'this GRN'}</code> — only this
+          supplier&apos;s outstanding PO lines for the same warehouse are shown. Tick lines,
+          adjust qty, then Save to add them.
+        </p>
+      )}
       {poIdSet.size > 0 && (
         <p style={{
           margin: '0 0 var(--space-2)', padding: 'var(--space-1) var(--space-3)',

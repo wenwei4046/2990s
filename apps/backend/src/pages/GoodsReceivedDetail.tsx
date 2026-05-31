@@ -24,10 +24,10 @@
 // CLOSED → "Closed" (locked). isLocked = CANCELLED or CLOSED.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, Plus, X,
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, Plus,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
@@ -36,20 +36,19 @@ import {
   useUpdateGrnHeader,
   useUpdateGrnItem,
   useDeleteGrnItem,
-  useAddGrnItem,
   useCancelGrn,
 } from '../lib/flow-queries';
 import {
-  useSuppliers, useSupplierDetail, useOutstandingPoItems,
-  type SupplierRow, type OutstandingPoItem,
+  useSuppliers, useSupplierDetail,
+  type SupplierRow,
 } from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
+import { ItemGroupPill } from '../lib/category-badges';
 import { MoneyInput } from '../components/MoneyInput';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
-const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 
 // grn_status enum — POSTED reads as "Confirmed"; CANCELLED / CLOSED lock the page.
 const STATUS_CLASS: Record<string, string> = {
@@ -126,14 +125,7 @@ export const GoodsReceivedDetail = () => {
   const updateHeader = useUpdateGrnHeader();
   const updateItem = useUpdateGrnItem();
   const deleteItem = useDeleteGrnItem();
-  const addItem = useAddGrnItem();
   const cancel = useCancelGrn();
-
-  /* Commander 2026-05-31 — a GRN aggregates lines from MANY POs, so instead of a
-     free "add line" (the DO pattern, which fits a 1:1 SO) it keeps converting
-     from PO: pick more outstanding PO lines into THIS GRN. Delete / qty-down
-     releases them back (the server recomputes received_qty either way). */
-  const [addFromPoOpen, setAddFromPoOpen] = useState(false);
 
   const grn = detail.data?.grn ?? null;
   const items = (detail.data?.items ?? []) as GrnItemRow[];
@@ -356,141 +348,184 @@ export const GoodsReceivedDetail = () => {
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
           {/* Add from PO — Edit mode only, and never while the GRN is locked
-              (cancelled / closed / has a downstream PI-PR). A GRN aggregates many
-              POs, so this "keeps converting from PO" instead of a free add-line. */}
+              (cancelled / closed / has a downstream PI-PR). Commander 2026-05-31:
+              opens the SAME multi-pick "From PO (multi)" interface as Create GR,
+              scoped to this GRN's supplier + warehouse, appending the picked PO
+              lines straight into THIS GRN. A GRN aggregates many POs, so it keeps
+              converting from PO instead of offering a free add-line. */}
           {isEditing && !isLocked && (
-            <Button variant="ghost" size="sm" onClick={() => setAddFromPoOpen((v) => !v)}>
-              {addFromPoOpen ? <X {...SM_ICON} /> : <Plus {...SM_ICON} />}
-              <span>{addFromPoOpen ? 'Close' : 'Add from PO'}</span>
+            <Button
+              variant="ghost" size="sm"
+              onClick={() => navigate(`/grns/from-po?appendToGrn=${grn.id}`)}
+            >
+              <Plus {...ICON} />
+              <span>Add from PO</span>
             </Button>
           )}
         </header>
 
-        {/* Outstanding-PO picker — same supplier + same receive-into warehouse as
-            this GRN. Tick lines + qty, confirm appends them to THIS GRN. */}
-        {isEditing && !isLocked && addFromPoOpen && (
-          <AddFromPoPanel
-            grn={grn}
-            existingPoItemIds={new Set(items.map((it) => String(it.purchase_order_item_id ?? '')).filter(Boolean))}
-            onAppend={async (picks) => {
-              for (const p of picks) {
-                await addItem.mutateAsync({
-                  grnId: grn.id,
-                  purchaseOrderItemId: p.poItemId,
-                  materialCode: p.itemCode,
-                  materialName: p.description ?? p.itemCode,
-                  itemGroup: p.itemGroup ?? undefined,
-                  variants: p.variants ?? undefined,
-                  qty: p.qty,
-                  unitPriceCenti: p.unitPriceCenti,
-                  deliveryDate: p.deliveryDate ?? undefined,
-                });
-              }
-              setAddFromPoOpen(false);
-            }}
-          />
-        )}
-
         {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>No items on this GRN.</p>
         ) : (
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Item</th>
-                <th>Group</th>
-                <th className={styles.tableRight}>Qty</th>
-                <th className={styles.tableRight}>Unit</th>
-                <th className={styles.tableRight}>Disc</th>
-                <th className={styles.tableRight}>Total</th>
-                <th className={styles.tableRight}>Delivery</th>
-                {/* Actions column only in Edit mode — View is read-only. */}
-                {isEditing && <th className={styles.tableRight}>Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleItems.map((it) => {
-                const d = lineOf(it);
-                return (
-                  <tr key={it.id}>
-                    <td>
-                      <div className={styles.codeCell}>{it.material_code}</div>
-                      {(() => {
-                        const summary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
-                          || it.description
-                          || it.material_name;
-                        return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
-                      })()}
-                    </td>
-                    <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
+          /* Card-per-line layout — Commander 2026-05-31: "全部用卡片带框", GR first
+             to match Create GR. Each line is a bordered card with LINE N + category
+             pill + line value + remove at top, a read-only identity row (code +
+             description), the variant summary, then a fields row. Qty(received) /
+             Unit / Disc / Delivery are inline-editable in Edit; read-only in View. */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            {visibleItems.map((it, idx) => {
+              const d = lineOf(it);
+              const lineValueCenti = lineTotalOf(it);
+              const variantSummary = buildVariantSummary(it.item_group ?? null, it.variants as Record<string, unknown> | null)
+                || it.description
+                || it.material_name;
+              return (
+                <div
+                  key={it.id}
+                  style={{
+                    background: 'var(--c-paper)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: 'var(--space-4)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  {/* Card header — LINE N · category pill · line value · remove */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{
+                        fontFamily: 'var(--font-button)',
+                        fontSize: 'var(--fs-12)',
+                        fontWeight: 700,
+                        letterSpacing: '0.10em',
+                        color: 'var(--fg-muted)',
+                      }}>
+                        LINE {idx + 1}
+                      </span>
+                      {it.item_group && <ItemGroupPill group={it.item_group} />}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                      <span className={styles.previewPrice}>{fmtRm(lineValueCenti, grn.currency)}</span>
+                      {/* Remove — Edit mode only. Deletes immediately (no confirm);
+                          the server releases the PO's received_qty back. */}
+                      {isEditing && (
+                        <button
+                          type="button"
+                          onClick={() => { if (!isLocked) deleteItem.mutate({ grnId: grn.id, itemId: it.id }); }}
+                          title="Remove line"
+                          disabled={isLocked || deleteItem.isPending}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--c-festive-b, #B8331F)',
+                            padding: 4,
+                            display: 'inline-flex',
+                          }}
+                        >
+                          <Trash2 {...ICON} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
-                    {/* Qty(received) / Unit / Disc / Delivery are inline-editable
-                        in Edit mode (no per-line modal). */}
-                    {isEditing ? (
-                      <>
-                        <td className={styles.tableRight}>
-                          <input
-                            type="number"
-                            min={0}
-                            className={styles.fieldInput}
-                            style={{ width: 70, textAlign: 'right' }}
-                            value={d.qty}
-                            disabled={isLocked}
-                            onChange={(e) => setLine(it, { qty: Number(e.target.value) || 0 })}
-                          />
-                        </td>
-                        <td className={styles.tableRight}>
-                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
-                            style={{ width: 110, textAlign: 'right' }}
-                            valueSen={d.unitPriceCenti}
-                            disabled={isLocked}
-                            onCommit={(sen) => setLine(it, { unitPriceCenti: sen ?? 0 })} />
-                        </td>
-                        <td className={styles.tableRight}>
-                          <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
-                            style={{ width: 100, textAlign: 'right' }}
-                            valueSen={d.discountCenti}
-                            disabled={isLocked}
-                            onCommit={(sen) => setLine(it, { discountCenti: sen ?? 0 })} />
-                        </td>
-                        <td className={styles.priceCell}>{fmtRm(d.qty * d.unitPriceCenti - d.discountCenti, grn.currency)}</td>
-                        <td className={styles.tableRight}>
-                          <input
-                            type="date"
-                            className={styles.fieldInput}
-                            style={{ width: 150 }}
-                            value={d.deliveryDate ?? ''}
-                            disabled={isLocked}
-                            onChange={(e) => setLine(it, { deliveryDate: e.target.value || null })}
-                          />
-                        </td>
-                        <td>
-                          <span className={styles.actionsCell}>
-                            <button type="button"
-                              className={`${styles.iconBtn} ${styles.iconBtnDanger}`}
-                              title="Remove line" disabled={isLocked || deleteItem.isPending}
-                              /* Delete immediately (no confirm). GRN lines hold no
-                                 SO quota, so removal is a plain line delete. */
-                              onClick={() => { if (!isLocked) deleteItem.mutate({ grnId: grn.id, itemId: it.id }); }}>
-                              <Trash2 {...SM_ICON} />
-                            </button>
-                          </span>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td className={styles.tableRight}>{it.qty_received}</td>
-                        <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, grn.currency)}</td>
-                        <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, grn.currency) : '—'}</td>
-                        <td className={styles.priceCell}>{fmtRm(lineTotalOf(it), grn.currency)}</td>
-                        <td className={styles.tableRight}>{it.delivery_date ?? '—'}</td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  {/* Identity row — Item Code + Description (read-only; a GRN line's
+                      identity comes from the PO / SKU and isn't edited here). */}
+                  <div className={styles.formGrid2}>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Item Code (Internal)</span>
+                      <input
+                        type="text" readOnly value={it.material_code}
+                        className={styles.fieldInput}
+                        style={{ fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                      />
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Description</span>
+                      <input
+                        type="text" readOnly value={it.description ?? it.material_name}
+                        className={styles.fieldInput}
+                        style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                      />
+                    </label>
+                  </div>
+
+                  {variantSummary && (
+                    <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
+                  )}
+
+                  {/* Fields row — Received · Unit Price · Discount · Delivery Date.
+                      Editable inline in Edit; read-only display in View. */}
+                  <div className={styles.formGrid4}>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Received</span>
+                      {isEditing ? (
+                        <input
+                          type="number" min={0}
+                          className={styles.fieldInput} style={{ textAlign: 'right' }}
+                          value={d.qty} disabled={isLocked}
+                          onChange={(e) => setLine(it, { qty: Number(e.target.value) || 0 })}
+                        />
+                      ) : (
+                        <input
+                          type="text" readOnly value={it.qty_received}
+                          className={styles.fieldInput}
+                          style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                        />
+                      )}
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Unit Price ({grn.currency})</span>
+                      {isEditing ? (
+                        <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                          valueSen={d.unitPriceCenti} disabled={isLocked}
+                          onCommit={(sen) => setLine(it, { unitPriceCenti: sen ?? 0 })} />
+                      ) : (
+                        <input
+                          type="text" readOnly value={fmtRm(it.unit_price_centi, grn.currency)}
+                          className={styles.fieldInput}
+                          style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                        />
+                      )}
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Discount</span>
+                      {isEditing ? (
+                        <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
+                          valueSen={d.discountCenti} disabled={isLocked}
+                          onCommit={(sen) => setLine(it, { discountCenti: sen ?? 0 })} />
+                      ) : (
+                        <input
+                          type="text" readOnly
+                          value={(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, grn.currency) : '—'}
+                          className={styles.fieldInput}
+                          style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                        />
+                      )}
+                    </label>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>Delivery Date</span>
+                      {isEditing ? (
+                        <input
+                          type="date" className={styles.fieldInput}
+                          value={d.deliveryDate ?? ''} disabled={isLocked}
+                          onChange={(e) => setLine(it, { deliveryDate: e.target.value || null })}
+                        />
+                      ) : (
+                        <input
+                          type="text" readOnly value={it.delivery_date ?? '—'}
+                          className={styles.fieldInput}
+                          style={{ background: 'var(--c-cream)', color: 'var(--fg-muted)' }}
+                        />
+                      )}
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
 
@@ -514,147 +549,6 @@ export const GoodsReceivedDetail = () => {
           </div>
         </div>
       </section>
-    </div>
-  );
-};
-
-/* ════════════════════════════════════════════════════════════════════════
-   Add-from-PO picker — a GRN aggregates lines from MANY POs, so rather than a
-   free "add line" (the DO pattern, which fits a 1:1 SO) it keeps converting from
-   PO: lists this supplier's still-outstanding PO lines (limited to the GRN's
-   receive-into warehouse so the one-warehouse-per-GRN rule holds), lets you tick
-   + set qty, and appends them to THIS GRN. The server consumes the PO's
-   received_qty on append (and releases it again on delete / qty-down).
-   ════════════════════════════════════════════════════════════════════════ */
-
-type PoPick = {
-  poItemId: string;
-  itemCode: string;
-  description: string | null;
-  itemGroup: string | null;
-  variants: Record<string, unknown> | null;
-  qty: number;
-  unitPriceCenti: number;
-  deliveryDate: string | null;
-};
-
-const AddFromPoPanel = ({
-  grn, existingPoItemIds, onAppend,
-}: {
-  grn: any;
-  /** PO-item ids already on this GRN — hide them so we don't double-pick. */
-  existingPoItemIds: Set<string>;
-  onAppend: (picks: PoPick[]) => Promise<void>;
-}) => {
-  const outstandingQ = useOutstandingPoItems();
-  const [picks, setPicks] = useState<Record<string, { checked: boolean; qty: number }>>({});
-  const [busy, setBusy] = useState(false);
-
-  // Same supplier + same receive-into warehouse (one-warehouse-per-GRN), minus
-  // lines already on this GRN.
-  const rows = useMemo(() => {
-    const all = (outstandingQ.data ?? []) as OutstandingPoItem[];
-    return all.filter((r) =>
-      r.supplierId === grn.supplier_id &&
-      (!grn.warehouse_id || r.warehouseLocationId === grn.warehouse_id) &&
-      !existingPoItemIds.has(String(r.poItemId)),
-    );
-  }, [outstandingQ.data, grn.supplier_id, grn.warehouse_id, existingPoItemIds]);
-
-  const pickOf = (r: OutstandingPoItem) => picks[r.poItemId] ?? { checked: false, qty: r.remainingQty };
-  const setPick = (id: string, patch: Partial<{ checked: boolean; qty: number }>) =>
-    setPicks((prev) => ({ ...prev, [id]: { ...(prev[id] ?? { checked: false, qty: 0 }), ...patch } }));
-
-  const chosen = rows.filter((r) => pickOf(r).checked && pickOf(r).qty > 0);
-
-  const confirm = async () => {
-    if (busy || chosen.length === 0) return;
-    setBusy(true);
-    try {
-      await onAppend(chosen.map((r) => ({
-        poItemId:       r.poItemId,
-        itemCode:       r.itemCode,
-        description:    r.description ?? null,
-        itemGroup:      r.itemGroup ?? null,
-        variants:       (r.variants as Record<string, unknown> | null) ?? null,
-        qty:            Math.min(pickOf(r).qty, r.remainingQty),
-        unitPriceCenti: r.unitPriceCenti,
-        deliveryDate:   r.deliveryDate ?? null,
-      })));
-      setPicks({});
-    } catch (e) {
-      window.alert(`Add from PO failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{
-      margin: 'var(--space-3) 0',
-      padding: 'var(--space-3) var(--space-4)',
-      background: 'var(--c-cream)',
-      border: '1px solid var(--line)',
-      borderRadius: 'var(--radius-md)',
-    }}>
-      {outstandingQ.isLoading ? (
-        <p className={styles.fieldLabel}>Loading outstanding PO lines…</p>
-      ) : rows.length === 0 ? (
-        <p className={styles.emptyRow} style={{ margin: 0 }}>
-          No outstanding PO lines for this supplier / warehouse.
-        </p>
-      ) : (
-        <>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th style={{ width: 32 }} />
-                <th>PO</th>
-                <th>Item</th>
-                <th className={styles.tableRight}>Remaining</th>
-                <th className={styles.tableRight}>Receive</th>
-                <th className={styles.tableRight}>Unit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const p = pickOf(r);
-                return (
-                  <tr key={r.poItemId}>
-                    <td>
-                      <input type="checkbox" checked={p.checked}
-                        onChange={(e) => setPick(r.poItemId, { checked: e.target.checked })} />
-                    </td>
-                    <td className={styles.muted}>{r.poDocNo}</td>
-                    <td>
-                      <div className={styles.codeCell}>{r.itemCode}</div>
-                      {(() => {
-                        const summary = buildVariantSummary(r.itemGroup ?? null, r.variants as Record<string, unknown> | null)
-                          || r.description;
-                        return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
-                      })()}
-                    </td>
-                    <td className={styles.tableRight}>{r.remainingQty}</td>
-                    <td className={styles.tableRight}>
-                      <input type="number" min={0} max={r.remainingQty}
-                        className={styles.fieldInput} style={{ width: 70, textAlign: 'right' }}
-                        value={p.qty} disabled={!p.checked}
-                        onChange={(e) => setPick(r.poItemId, { qty: Math.min(Number(e.target.value) || 0, r.remainingQty) })} />
-                    </td>
-                    <td className={styles.tableRight}>{fmtRm(r.unitPriceCenti, grn.currency)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' }}>
-            <Button variant="primary" size="sm" onClick={confirm} disabled={busy || chosen.length === 0}>
-              <Plus {...SM_ICON} />
-              <span>{busy ? 'Adding…' : `Add ${chosen.length || ''} to GRN`.trim()}</span>
-            </Button>
-          </div>
-        </>
-      )}
     </div>
   );
 };
