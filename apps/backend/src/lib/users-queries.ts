@@ -1,11 +1,11 @@
 // ----------------------------------------------------------------------------
 // Users page hooks (migration 0085).
 //
-// Backed by /admin/staff in the API Worker. Every role takes the
-// service-role inviteUserByEmail path — the legacy createUser + PIN flow
-// for POS roles was dropped 2026-05-27 (commander: "不需要给 6digit pin
-// 让他们自己 set"). The Worker is the only place the
-// SUPABASE_SERVICE_ROLE_KEY ever lives.
+// Backed by /admin/staff in the API Worker. WS2 (2026-05-31): the Master Admin
+// sets the initial credential at create time — a 6-digit PIN for role==='sales'
+// (they log in by PIN on the POS), or an email + password for every other role
+// (Backend login). The Worker creates the account via service-role createUser;
+// it is the only place the SUPABASE_SERVICE_ROLE_KEY ever lives.
 // ----------------------------------------------------------------------------
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -63,6 +63,10 @@ export type InviteUserBody = {
   showroomId?: string | null;
   venueId?: string | null;
   phone?: string | null;
+  /** WS2: 6-digit PIN — required by the API when role==='sales'. */
+  pin?: string;
+  /** WS2: initial password — required by the API for every non-sales role. */
+  password?: string;
 };
 
 export type UpdateUserBody = {

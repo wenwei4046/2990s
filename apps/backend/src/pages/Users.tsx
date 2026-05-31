@@ -29,6 +29,7 @@ import {
   type UserRow, type InviteUserBody, type UpdateUserBody,
 } from '../lib/users-queries';
 import { useVenues, type VenueRow } from '../lib/venues-queries';
+import { PinDrawer } from '../components/PinDrawer';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -262,27 +263,34 @@ const InviteUserDrawer = ({
   const [form, setForm] = useState<{
     staffCode: string; name: string; email: string;
     role: StaffRole; venueId: string; initials: string;
-    color: string;
+    color: string; pin: string; confirmPin: string; password: string;
   }>({
     staffCode: '', name: '', email: '',
     role: 'sales_executive', venueId: '', initials: '',
-    color: '#2F5D4F',
+    color: '#2F5D4F', pin: '', confirmPin: '', password: '',
   });
   const set = <K extends keyof typeof form>(k: K, v: typeof form[K]) =>
     setForm((s) => ({ ...s, [k]: v }));
 
   const needsVenue = VENUE_SCOPED_ROLES.has(form.role);
+  // WS2: sales log in by PIN (admin sets it); every other role logs in with an
+  // admin-set email + password.
+  const isSales = form.role === 'sales';
 
   const submit = () => {
     if (!form.staffCode.trim()) { toast.error('Staff code required.'); return; }
     if (!form.name.trim())      { toast.error('Name required.'); return; }
     if (!form.initials.trim())  { toast.error('Initials required.'); return; }
-    if (!form.email.trim()) {
-      toast.error('Email required — the user receives a magic-link invite.');
-      return;
-    }
+    if (!form.email.trim())     { toast.error('Email required.'); return; }
     if (needsVenue && !form.venueId) {
       toast.error('Pick a venue for this role.');
+      return;
+    }
+    if (isSales) {
+      if (!/^\d{6}$/.test(form.pin)) { toast.error('Set a 6-digit PIN for this salesperson.'); return; }
+      if (form.pin !== form.confirmPin) { toast.error('PINs do not match.'); return; }
+    } else if (form.password.length < 8) {
+      toast.error('Set a password (at least 8 characters).');
       return;
     }
 
@@ -294,14 +302,17 @@ const InviteUserDrawer = ({
       initials:  form.initials.trim().toUpperCase().slice(0, 4),
       color:     form.color,
       ...(needsVenue ? { venueId: form.venueId } : {}),
+      ...(isSales ? { pin: form.pin } : { password: form.password }),
     };
 
     invite.mutate(body, {
       onSuccess: (r) => {
-        toast.success(`Magic-link invite sent to ${r.staff.email}.`);
+        toast.success(isSales
+          ? `${r.staff.name} created — they log in with their PIN.`
+          : `${r.staff.name} created — they log in with email + password.`);
         onClose();
       },
-      onError: (e) => toast.error(`Invite failed: ${(e as Error).message}`),
+      onError: (e) => toast.error(`Create failed: ${(e as Error).message}`),
     });
   };
 
@@ -352,19 +363,47 @@ const InviteUserDrawer = ({
                 onChange={(e) => set('color', e.target.value)}
                 style={{ height: 38, padding: 2 }} />
             </label>
+            {/* WS2 credential: PIN for sales (POS login), password for everyone else. */}
+            {isSales ? (
+              <>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>PIN * (6 digits)</span>
+                  <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
+                    value={form.pin}
+                    onChange={(e) => set('pin', e.target.value.replace(/\D/g, ''))}
+                    placeholder="6-digit PIN" />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.fieldLabel}>Confirm PIN *</span>
+                  <input className={styles.fieldInput} inputMode="numeric" maxLength={6}
+                    value={form.confirmPin}
+                    onChange={(e) => set('confirmPin', e.target.value.replace(/\D/g, ''))}
+                    placeholder="Re-enter PIN" />
+                </label>
+              </>
+            ) : (
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>Password *</span>
+                <input className={styles.fieldInput} value={form.password}
+                  onChange={(e) => set('password', e.target.value)}
+                  placeholder="At least 8 characters" />
+              </label>
+            )}
           </div>
           <p style={{
             fontSize: 'var(--fs-12)', color: 'var(--fg-muted)',
             background: 'var(--c-paper)', padding: 'var(--space-3)',
             borderRadius: 'var(--radius-md)', border: '1px solid var(--line)',
           }}>
-            User receives a magic-link invite at the email above. They set their own password on first sign-in.
+            {isSales
+              ? 'Sales staff log in with their PIN on the POS. Set their starting PIN above — they can change it themselves later.'
+              : 'This person logs in with their email + the password above on the Backend. They can change it after signing in.'}
           </p>
         </div>
         <footer className={styles.drawerFooter}>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" onClick={submit} disabled={invite.isPending}>
-            {invite.isPending ? 'Sending…' : 'Send invite'}
+            {invite.isPending ? 'Creating…' : 'Create user'}
           </Button>
         </footer>
       </aside>
@@ -377,6 +416,7 @@ const EditUserDrawer = ({
 }: { row: UserRow; venues: VenueRow[]; onClose: () => void }) => {
   const toast = useToast();
   const update = useUpdateUser();
+  const [pinOpen, setPinOpen] = useState(false);
   const [form, setForm] = useState({
     name:     row.name,
     role:     row.role,
@@ -454,6 +494,13 @@ const EditUserDrawer = ({
             <Field label="Phone" value={form.phone}
               onChange={(v) => set('phone', v)} placeholder="+60 12-345-6789" />
           </div>
+          {row.role === 'sales' && (
+            <div style={{ marginTop: 'var(--space-4)' }}>
+              <Button variant="ghost" size="sm" onClick={() => setPinOpen(true)}>
+                <RefreshCw {...ICON} /> Reset PIN
+              </Button>
+            </div>
+          )}
         </div>
         <footer className={styles.drawerFooter}>
           <Button variant="ghost" size="md" onClick={onClose}>Cancel</Button>
@@ -462,6 +509,12 @@ const EditUserDrawer = ({
           </Button>
         </footer>
       </aside>
+      {pinOpen && (
+        <PinDrawer
+          staff={{ id: row.id, name: row.name, staffCode: row.staff_code }}
+          onClose={() => setPinOpen(false)}
+        />
+      )}
     </>
   );
 };

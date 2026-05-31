@@ -6,19 +6,22 @@ import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 import { hashPin } from '../lib/bcrypt';
 
-/* 2026-05-27 — Unified invite flow. ALL roles now go through
-   `inviteUserByEmail` (magic link). The legacy PIN-on-shared-device path
-   for POS roles (sales / sales_executive / outlet_manager) was dropped per
-   commander: "不需要给 6digit pin 让他们自己 set". When the POS app ships
-   (Phase 2) it will use Supabase Auth like the Backend — each staff person
-   logs in with their own email + password.
-
-   The `staff.pin_hash` column is intentionally left in place (migration
-   0086) — no rows will populate it going forward, but dropping the column
-   is deferred to a later cleanup PR. The PATCH /staff/:id/pin endpoint
-   below is therefore unreachable in practice (no one is created as a
-   PIN-only user any more) but kept compiling so existing tests still pass
-   until that cleanup PR lands. */
+/* 2026-05-31 (WS2) — role-based registration. The Master Admin sets the
+   initial credential at create time:
+     • role === 'sales'  → admin sets a 6-digit PIN. The salesperson logs in
+       by PIN on the POS LockScreen (the account still carries an email + a
+       random password they never use; the PIN mints the session via a
+       server-side magic-link token — see /pos/pin-login).
+     • every other role  → admin sets an email + password. They log in with
+       email + password on the Backend.
+   Either way the account is created via `createUser` (email_confirm: true,
+   password_set: true) — NOT an emailed magic-link invite — so there is no
+   /set-password dance. The staff member can change their own PIN / password
+   later (self-service: PATCH /pos/my-pin for sales, supabase updateUser for
+   passwords). This refines the 2026-05-27 "unified magic-link, drop PIN"
+   decision: PIN is back for sales, but the ADMIN sets it (the original
+   objection was making sales set their own). PATCH /staff/:id/pin stays as the
+   admin PIN-reset path. */
 
 export const admin = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -36,20 +39,24 @@ const STAFF_ROLES = [
   'master_account',
 ] as const;
 
-/* Roles that still hold a `pin_hash` column for the PATCH /pin endpoint
-   below — kept only so that endpoint's role guard still has something to
-   compare against. The invite flow itself no longer cares: every role now
-   takes the magic-link path. */
-const POS_PIN_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager']);
+/* Roles that log in by PIN — must stay in lock-step with the PIN consumers
+   (/pos/pin-login, /pos/verify-pin, /pos/sales-staff) and the create branch,
+   all of which are hard-scoped to role==='sales'. Keeping this set wider would
+   let admin PIN-reset write a dead PIN onto a password-only role (the staff
+   member could never actually sign in by it). Spec §0.3: only 'sales' uses PIN. */
+const POS_PIN_ROLES = new Set<string>(['sales']);
 
 /* Roles allowed to invite + update + deactivate other staff. coordinator
    listed in the GET list (see STAFF_LIST_ROLES) but cannot mutate. */
 const STAFF_WRITE_ROLES = new Set<string>(['admin', 'super_admin', 'sales_director']);
 const STAFF_LIST_ROLES  = new Set<string>(['admin', 'super_admin', 'sales_director', 'coordinator']);
 
-/* Email is REQUIRED for every invite — the magic link is the only sign-in
-   path. Venue is required for the POS-side roles only; admin / coordinator
-   / finance / sales_director are cross-venue. */
+/* Email is REQUIRED for every role (the account is keyed by it; for sales the
+   PIN-login mints the session via a magic-link token on this email). Venue is
+   required for the POS-side roles only; admin / coordinator / finance /
+   sales_director are cross-venue. WS2 (2026-05-31): `pin` is required when
+   role === 'sales' (admin sets the initial 6-digit PIN); `password` is required
+   for every other role (admin sets the initial password). */
 const CreateStaffBodySchema = z.object({
   staffCode:  z.string().trim().min(1).max(16),
   name:       z.string().trim().min(1).max(80),
@@ -60,7 +67,11 @@ const CreateStaffBodySchema = z.object({
   showroomId: z.string().uuid().nullable().optional(),
   venueId:    z.string().uuid().nullable().optional(),
   phone:      z.string().trim().min(1).nullable().optional(),
-});
+  pin:        z.string().regex(/^\d{6}$/).optional(),
+  password:   z.string().min(8).max(72).optional(),
+})
+  .refine((d) => d.role !== 'sales' || !!d.pin, { message: 'pin_required_for_sales', path: ['pin'] })
+  .refine((d) => d.role === 'sales' || !!d.password, { message: 'password_required_for_non_sales', path: ['password'] });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadStaffRole(c: any): Promise<string | null> {
@@ -106,38 +117,33 @@ admin.post('/staff', async (c) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Unified invite path — every role, POS or Backend, gets a magic-link
-  // email. The invited user starts with `password_set: false` so the
-  // corresponding portal's AuthGate / Layout auto-redirects them to
-  // /set-password on first sign-in.
-  //
-  // 2026-05-27 (role-based redirect) — `redirectTo` is now per-role:
-  // POS-only roles (sales / sales_executive / outlet_manager) land on the
-  // POS portal so they can take orders immediately after onboarding.
-  // Backend roles (admin / sales_director / coordinator / finance /
-  // showroom_lead) land on the Backend portal. Both URLs must be on the
-  // Supabase Auth → URL Configuration → Redirect URLs allow-list.
-  const POS_ONLY_ROLES = new Set<string>(['sales', 'sales_executive', 'outlet_manager', 'master_account']);
+  // 2026-05-31 (WS2) — admin-set credential, NOT a magic-link invite. Sales log
+  // in by PIN (admin sets it; the account carries a random password they never
+  // use); every other role logs in with the admin-set email + password. The
+  // account is created confirmed with `password_set: true` so the portal never
+  // routes them through /set-password.
+  const isSales = input.role === 'sales';
   const email = input.email;
-  const portal = POS_ONLY_ROLES.has(input.role)
-    ? c.env.POS_PORTAL_URL
-    : c.env.BACKEND_PORTAL_URL;
-  const { data: invited, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
+  const password = isSales ? crypto.randomUUID() : (input.password as string);
+  const { data: created, error: createErr } = await adminClient.auth.admin.createUser({
     email,
-    {
-      data: {
-        staff_code:   input.staffCode,
-        name:         input.name,
-        role:         input.role,
-        password_set: false,
-      },
-      ...(portal ? { redirectTo: `${portal}/set-password` } : {}),
+    password,
+    email_confirm: true,
+    user_metadata: {
+      staff_code:   input.staffCode,
+      name:         input.name,
+      role:         input.role,
+      password_set: true,
     },
-  );
-  if (inviteErr || !invited?.user) {
-    return c.json({ error: 'invite_failed', detail: inviteErr?.message ?? 'no user returned' }, 422);
+  });
+  if (createErr || !created?.user) {
+    return c.json({ error: 'create_failed', detail: createErr?.message ?? 'no user returned' }, 422);
   }
-  const userId = invited.user.id;
+  const userId = created.user.id;
+
+  // Sales log in by PIN — hash the admin-set 6-digit PIN (required-by-refine for
+  // sales). Other roles have no PIN.
+  const pinHash = isSales ? await hashPin(input.pin as string) : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let newStaff: any = null;
@@ -161,10 +167,8 @@ admin.post('/staff', async (c) => {
         initials:     input.initials,
         color:        input.color,
         active:       true,
-        /* pin_hash intentionally NOT set — unified invite flow drops the
-           PIN model entirely (commander 2026-05-27). Column still exists
-           from migration 0086; will be dropped in a follow-up cleanup PR. */
-        pin_hash:     null,
+        /* Sales log in by PIN (admin-set, hashed above); other roles have none. */
+        pin_hash:     pinHash,
       })
       .select('id, staff_code, name, role, showroom_id, venue_id, email, phone, initials, color, active')
       .maybeSingle();

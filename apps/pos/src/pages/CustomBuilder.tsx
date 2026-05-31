@@ -24,7 +24,7 @@ import {
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
-import { useQuickPicks } from '../state/quickpicks';
+import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
 import styles from './CustomBuilder.module.css';
 
@@ -1460,7 +1460,6 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             modules={cells.map((c) => c.moduleId)}
             depth={depth}
             baseModel={baseModel ?? ''}
-            staffId={staff?.id ?? null}
             curator={canCurate}
             onClose={() => setSaveComboOpen(false)}
             onSaved={() => setSaveComboOpen(false)}
@@ -1486,24 +1485,26 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
    2026-05-31: a Quick Pick is a visible saved layout, NOT a Combo, and may be
    unpriced). Role-branch: a curator (Master Admin / backend admin) saves to the
    GLOBAL layer (sofa_quick_picks, every tablet sees it); anyone else saves to
-   their PERSONAL per-device layer (state/quickpicks.ts). The card's price is
+   their PERSONAL layer (DB-backed, RLS-scoped per salesperson so it follows
+   them across devices — lib/personal-quick-picks.ts). The card's price is
    computed by the engine when shown — nothing is priced here. */
 function SaveQuickPickModal({
-  modules, depth, baseModel, staffId, curator, onClose, onSaved,
+  modules, depth, baseModel, curator, onClose, onSaved,
 }: {
   modules: string[];
   depth: string;
   /** mfg_products.base_model — pins the saved pick to this sofa Model. */
   baseModel: string;
-  /** Current salesperson (auth.users.id) — tags personal picks. */
-  staffId: string | null;
   /** true → save to the global layer (Master Admin); false → personal. */
   curator: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const createGlobal = useCreateSofaQuickPick();
-  const addPersonal = useQuickPicks((s) => s.addPick);
+  // Personal picks are DB-backed now (WS1): the server derives the owner from
+  // the JWT and RLS-scopes the row, so the pick follows the salesperson across
+  // devices. No staffId to thread through.
+  const addPersonal = useAddPersonalQuickPick();
   const [label, setLabel] = useState('');
 
   const submit = async () => {
@@ -1518,13 +1519,14 @@ function SaveQuickPickModal({
           label: label.trim() || null,
         });
       } else {
-        // Personal layer — per-device localStorage, this salesperson only.
-        addPersonal({
-          staffId,
+        // Personal layer — DB-backed, RLS-scoped to this salesperson, so it
+        // follows them across devices. Server derives the owner from the JWT
+        // and canonicalises each module code into its own singleton OR-set slot.
+        await addPersonal.mutateAsync({
           baseModel,
-          label: label.trim() || modules.join(' + '),
-          modules,
+          modules: modules.map((m) => [m]),
           depth: String(depth),
+          label: label.trim() || modules.join(' + '),
         });
       }
       onSaved();
@@ -1533,7 +1535,7 @@ function SaveQuickPickModal({
     }
   };
 
-  const pending = createGlobal.isPending;
+  const pending = createGlobal.isPending || addPersonal.isPending;
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',

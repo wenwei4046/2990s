@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@2990s/design-system/tokens.css';
 import './main.css';
 import { AuthProvider } from './lib/auth';
+import { CartSync } from './lib/cart-sync';
 import { router } from './router';
 
 const queryClient = new QueryClient({
@@ -23,6 +24,9 @@ createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
+        {/* DB-backed cart sync (WS1): hydrate on login + write-through on change.
+            Mounted here so it survives navigation (no per-route remount). */}
+        <CartSync />
         <RouterProvider router={router} />
       </AuthProvider>
     </QueryClientProvider>

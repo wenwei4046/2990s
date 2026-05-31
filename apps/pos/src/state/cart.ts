@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 import { summarizeSofaCells, type Cell, type Depth } from '@2990s/shared';
 
 /**
@@ -142,56 +141,52 @@ export const cartCategoryConflict = (
     : null;
 };
 
-export const useCart = create<CartState>()(
-  persist(
-    (set, get) => ({
-      lines: [],
-      sourceQuoteId: null,
+// In-memory store. Persistence moved off localStorage to the DB (pos_carts,
+// WS1 2026-05-31) via useCartSync (lib/cart-sync.ts), so the cart follows the
+// salesperson across devices and never bleeds to the next person on a shared
+// tablet. The store API is unchanged — only the backing store moved.
+export const useCart = create<CartState>()((set, get) => ({
+  lines: [],
+  sourceQuoteId: null,
 
-      addConfigured(config, opts) {
-        const editingKey = opts?.editingKey;
-        if (editingKey && get().lines.some((l) => l.key === editingKey)) {
-          set({ lines: get().lines.map((l) => (l.key === editingKey ? { ...l, config } : l)) });
-          return editingKey;
-        }
-        // Sofa-exclusivity defense — the catalog disables conflicting cards so
-        // this is rarely reached (only via a deep link to a configurator). It
-        // is the single source of truth that guarantees the cart never holds a
-        // sofa mixed with non-sofa products. No-op (don't add) on conflict.
-        if (cartCategoryConflict(get().lines, config)) {
-          return '';
-        }
-        const key = `cfg-${Math.random().toString(36).slice(2, 9)}`;
-        set({ lines: [...get().lines, { key, qty: 1, config }] });
-        return key;
-      },
+  addConfigured(config, opts) {
+    const editingKey = opts?.editingKey;
+    if (editingKey && get().lines.some((l) => l.key === editingKey)) {
+      set({ lines: get().lines.map((l) => (l.key === editingKey ? { ...l, config } : l)) });
+      return editingKey;
+    }
+    // Sofa-exclusivity defense — the catalog disables conflicting cards so
+    // this is rarely reached (only via a deep link to a configurator). It
+    // is the single source of truth that guarantees the cart never holds a
+    // sofa mixed with non-sofa products. No-op (don't add) on conflict.
+    if (cartCategoryConflict(get().lines, config)) {
+      return '';
+    }
+    const key = `cfg-${Math.random().toString(36).slice(2, 9)}`;
+    set({ lines: [...get().lines, { key, qty: 1, config }] });
+    return key;
+  },
 
-      setQty(key, qty) {
-        if (qty < 1) {
-          get().remove(key);
-          return;
-        }
-        set({ lines: get().lines.map((l) => (l.key === key ? { ...l, qty } : l)) });
-      },
+  setQty(key, qty) {
+    if (qty < 1) {
+      get().remove(key);
+      return;
+    }
+    set({ lines: get().lines.map((l) => (l.key === key ? { ...l, qty } : l)) });
+  },
 
-      remove(key) {
-        set({ lines: get().lines.filter((l) => l.key !== key) });
-      },
+  remove(key) {
+    set({ lines: get().lines.filter((l) => l.key !== key) });
+  },
 
-      clear() {
-        set({ lines: [], sourceQuoteId: null });
-      },
+  clear() {
+    set({ lines: [], sourceQuoteId: null });
+  },
 
-      restore(lines, sourceQuoteId = null) {
-        set({ lines: lines.map((l) => ({ ...l })), sourceQuoteId });
-      },
-    }),
-    {
-      name: 'pos-cart-v1',
-      storage: createJSONStorage(() => localStorage),
-    },
-  ),
-);
+  restore(lines, sourceQuoteId = null) {
+    set({ lines: lines.map((l) => ({ ...l })), sourceQuoteId });
+  },
+}));
 
 export const cartSubtotal = (lines: CartLine[]): number =>
   lines.reduce((sum, l) => sum + l.qty * l.config.total, 0);

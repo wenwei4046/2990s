@@ -1828,6 +1828,61 @@ export const sofaQuickPicks = pgTable('sofa_quick_picks', {
     .on(t.baseModel, t.sortOrder).where(sql`${t.deletedAt} IS NULL`),
 }));
 
+/* ───────────────────── sofa_personal_quick_picks ───────────────────────
+   WS1 (Chairman 2026-05-31) — the PERSONAL Quick Pick layer, moved from POS
+   localStorage (apps/pos/src/state/quickpicks.ts) to the DB so a salesperson's
+   saved layouts follow THEM across devices (each logs in with their own account
+   on any tablet). Mirrors sofaQuickPicks but is OWNED per staff: each row is
+   scoped to staff_id and RLS lets a salesperson CRUD ONLY their own rows — no
+   Master-Admin gate. See migration 0117 + the spec
+   docs/superpowers/specs/2026-05-31-staff-bound-data-and-sales-pin.md.
+   ──────────────────────────────────────────────────────────────────────── */
+export const sofaPersonalQuickPicks = pgTable('sofa_personal_quick_picks', {
+  id:          uuid('id').primaryKey().defaultRandom(),
+  staffId:     uuid('staff_id').notNull().references(() => staff.id, { onDelete: 'cascade' }), // = auth.users.id
+  baseModel:   text('base_model').notNull(),
+  label:       text('label'),                                    // null = auto-build from modules
+  modules:     jsonb('modules').$type<string[][]>().notNull().default([]),  // same shape as sofaQuickPicks
+  depth:       text('depth').notNull(),
+  sortOrder:   integer('sort_order').notNull().default(0),
+  deletedAt:   timestamp('deleted_at', { withTimezone: true }),
+  createdAt:   timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:   timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  idxOwnerLookup: index('idx_personal_quick_picks_lookup')
+    .on(t.staffId, t.baseModel, t.sortOrder).where(sql`${t.deletedAt} IS NULL`),
+}));
+
+/* ───────────────────────────── pos_carts ───────────────────────────────
+   WS1 (Chairman 2026-05-31) — the salesperson's in-progress cart, moved from
+   POS localStorage (apps/pos/src/state/cart.ts) to the DB so it (a) follows
+   them across devices and (b) does NOT bleed to the next person on a shared
+   tablet (loaded by the logged-in staff_id, not device storage). One open cart
+   per staff (staff_id PK). RLS scopes each row to its owner. A saved cart
+   already persists as a `quotes` row or an order; this is only the live cart.
+   See migration 0118.
+   ──────────────────────────────────────────────────────────────────────── */
+export const posCarts = pgTable('pos_carts', {
+  staffId:       uuid('staff_id').primaryKey().references(() => staff.id, { onDelete: 'cascade' }), // = auth.users.id
+  lines:         jsonb('lines').notNull().default([]),           // CartLine[] snapshot (same shape as quotes.cart)
+  sourceQuoteId: text('source_quote_id'),                        // set when restored from a quote
+  updatedAt:     timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/* ───────────────────────────── pos_pin_attempts ────────────────────────
+   Durable PIN brute-force lockout (WS2 security hardening, 2026-05-31). The POS
+   PIN-login limiter must be globally consistent across Cloudflare edge isolates,
+   so the counter lives in Postgres (not Worker memory). Written only by the
+   service-role API via the pin_attempt_* SECURITY DEFINER functions (migration
+   0119). RLS enabled with NO policies (deny-all to anon/authenticated — the
+   public anon key ships in the POS bundle; service-role + the SECURITY DEFINER
+   fns bypass RLS). */
+export const posPinAttempts = pgTable('pos_pin_attempts', {
+  staffId:  uuid('staff_id').primaryKey().references(() => staff.id, { onDelete: 'cascade' }),
+  count:    integer('count').notNull().default(0),
+  resetAt:  timestamp('reset_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /* ─────────────────────────── product_models ─────────────────────────────
    PR #49 — Template / second-layer entity that owns the allowed-options
    pool per Model. Each SKU on mfg_products keeps its own row (separate
