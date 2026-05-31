@@ -569,9 +569,18 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
        whose supplier matches the PO's supplier), keeping each line's so_item_id
        so a later delete releases the SO quota. */
     targetPoId?: string;
+    /* Commander 2026-05-31 (MRP rebuild) — when the convert is raised from the
+       MRP page, the resulting PO line is REFERENCE-ONLY: it does NOT lock the
+       source SO line. MRP pools all open PO as supply regardless of SO↔PO
+       linkage, so the same SO line is infinitely convertible from MRP. This
+       flag (a) bypasses the qty_exceeds_remaining cap and (b) tags the PO line
+       from_mrp=true so the po_qty_picked recount excludes it. The ordinary
+       From-SO picker leaves this false → keeps its cap. */
+    fromMrp?: boolean;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
+  const fromMrp = body.fromMrp === true;
   const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
   const targetPoId = body.targetPoId as string | undefined;
 
@@ -650,7 +659,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       if (!row) return c.json({ error: 'item_not_found', soItemId: p.soItemId }, 400);
       const remaining = row.qty - row.po_qty_picked;
       if (p.qty <= 0)         return c.json({ error: 'qty_must_be_positive', soItemId: p.soItemId }, 400);
-      if (p.qty > remaining)  return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
+      // Commander 2026-05-31 — MRP-origin converts skip the remaining cap: the
+      // line is reference-only and infinitely convertible. The ordinary picker
+      // keeps the cap so a normal SO→PO can't over-order.
+      if (!fromMrp && p.qty > remaining)
+        return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
       pickedItems.push({ row, qty: p.qty });
     }
   } else {
@@ -1011,6 +1024,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
       // Release-on-delete link (migration 0098).
       so_item_id: l.soItemId,
+      // Commander 2026-05-31 — MRP-origin lines are reference-only (no SO lock).
+      from_mrp: fromMrp,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
@@ -1103,6 +1118,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       // Release-on-delete link (migration 0098) — every from-SO line carries
       // its source SO line so recomputeSoPicked can release it on delete/cancel.
       so_item_id: l.soItemId,
+      // Commander 2026-05-31 — MRP-origin lines are reference-only (no SO lock).
+      from_mrp: fromMrp,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {
@@ -1181,9 +1198,15 @@ async function recomputeSoPicked(sb: any, soItemIds: Array<string | null | undef
   try {
     const { data: lines } = await sb
       .from('purchase_order_items')
-      .select('so_item_id, qty, purchase_order_id')
+      .select('so_item_id, qty, purchase_order_id, from_mrp')
       .in('so_item_id', ids);
-    const rows = (lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string }>;
+    /* Commander 2026-05-31 — MRP-origin PO lines are reference-only: they do
+       NOT lock the source SO line, so the recount excludes them. Without this,
+       converting a line from MRP would bump po_qty_picked and drop the line
+       from the From-SO picker / cap further converts — exactly what the
+       infinite-convert model must avoid. */
+    const rows = ((lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string; from_mrp: boolean | null }>)
+      .filter((r) => r.from_mrp !== true);
     const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter(Boolean))];
     const cancelled = new Set<string>();
     if (poIds.length > 0) {

@@ -229,6 +229,25 @@ const deriveSalesLocationFromState = async (
   return wh ? (wh.code ?? wh.name ?? null) : null;
 };
 
+/* Commander 2026-05-31 (MRP/Supply-Chain rebuild) — the per-LINE warehouse_id
+   UUID (migration 0118) drives MRP + auto-allocation, which run strictly
+   per-warehouse. It defaults from the SO's customer_state (same mapping the
+   text sales_location uses) and is editable per line. Returns the warehouse
+   UUID for the state, or null when unmapped/no state. */
+const deriveWarehouseIdFromState = async (
+  sb: any,
+  state: string | null | undefined,
+): Promise<string | null> => {
+  if (!state) return null;
+  const key = state === 'Wilayah Persekutuan Kuala Lumpur' ? 'Kuala Lumpur' : state;
+  const { data: m } = await sb
+    .from('state_warehouse_mappings')
+    .select('warehouse_id')
+    .eq('state', key)
+    .maybeSingle();
+  return (m as { warehouse_id?: string } | null)?.warehouse_id ?? null;
+};
+
 const nextDocNo = async (sb: any): Promise<string> => {
   // Format: SO-YYMM-NNN (counts within month) — matches PO/DO/GRN/SI/DR/PI/PRT.
   // Legacy SO-NNNNNN numbers stay as-is; only newly created SOs use this scheme.
@@ -936,6 +955,14 @@ mfgSalesOrders.post('/', async (c) => {
       }
     }
   }
+  /* Commander 2026-05-31 — per-line ship-from warehouse default. MRP +
+     auto-allocation run strictly per-warehouse; each line gets the SO state's
+     warehouse by default, editable per line via it.warehouseId. */
+  const defaultWarehouseId = await deriveWarehouseIdFromState(
+    sb,
+    (body.customerState as string | null | undefined) ?? null,
+  );
+
   /* Task #114 — snapshot unit cost from mfg_products when client didn't.
      Build itemRows sequentially with Promise.all so the cost lookup runs
      in parallel across lines but each row still has its own awaited cost. */
@@ -1016,6 +1043,9 @@ mfgSalesOrders.post('/', async (c) => {
       custom_specials:         recomputed?.custom_specials ?? null,
       line_delivery_date: lineDeliveryDate,
       line_delivery_date_overridden: lineDeliveryDateOverridden,
+      // Commander 2026-05-31 — per-line ship-from warehouse (migration 0118).
+      // Explicit per-line override wins; else the SO state's default.
+      warehouse_id: (it.warehouseId as string | null | undefined) ?? defaultWarehouseId,
     };
   }));
 
@@ -1699,8 +1729,12 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   /* PR-E — pull customer_delivery_date alongside debtor/agent/venue so a
      line added later still inherits the SO header's delivery date by
      default. Client can override by sending lineDeliveryDate explicitly. */
-  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date').eq('doc_no', docNo).maybeSingle();
+  const { data: header } = await sb.from('mfg_sales_orders').select('debtor_code, debtor_name, agent, branding, venue, customer_delivery_date, customer_state').eq('doc_no', docNo).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
+  /* Commander 2026-05-31 — a line added later inherits the SO state's warehouse
+     by default (migration 0118). Explicit it.warehouseId override wins. */
+  const addLineWarehouseId = (it.warehouseId as string | null | undefined)
+    ?? await deriveWarehouseIdFromState(sb, (header.customer_state as string | null) ?? null);
 
   const qty = Number(it.qty ?? 1);
   const discount = Number(it.discountCenti ?? 0);
@@ -1810,6 +1844,7 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     custom_specials:         recomputed.custom_specials ?? null,
     line_delivery_date: lineDeliveryDate,
     line_delivery_date_overridden: lineDeliveryDateOverridden,
+    warehouse_id: addLineWarehouseId,
   };
   const { data, error } = await sb.from('mfg_sales_order_items').insert(row).select('*').single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
@@ -2000,6 +2035,12 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   }
   if (it.lineDeliveryDateOverridden !== undefined) {
     updates['line_delivery_date_overridden'] = Boolean(it.lineDeliveryDateOverridden);
+  }
+  /* Commander 2026-05-31 — per-line ship-from warehouse is editable. Moving a
+     line to another warehouse reshuffles the per-warehouse allocation pool, so
+     recomputeSoStockAllocation below re-derives stock_status. */
+  if (it.warehouseId !== undefined) {
+    updates['warehouse_id'] = it.warehouseId as string | null;
   }
 
   const { error } = await sb.from('mfg_sales_order_items').update(updates).eq('id', itemId);

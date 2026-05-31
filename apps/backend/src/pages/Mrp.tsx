@@ -44,6 +44,12 @@ type View = 'general' | 'sofa';
    Bedframe/sofa: one model, many fabric/colour variants. Mattress/accessory:
    one model, one (empty) variant → renders 2-level. */
 type ModelGroup = {
+  /* Commander 2026-05-31 — a Model is now scoped to ONE warehouse. The same
+     SKU in two warehouses is two groups (per-WH MRP, no cross-WH pooling). */
+  groupKey: string;          // `${warehouseId ?? 'NOWH'}|${itemCode}` — identity
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseName: string | null;
   itemCode: string;
   description: string | null;
   category: string | null;
@@ -55,19 +61,24 @@ type ModelGroup = {
   suppliers: MrpSku['suppliers'];
 };
 
-const rowKey = (s: MrpSku) => `${s.itemCode}${s.variantKey}`;
+const WH_NONE = 'NOWH';
+const skuGroupKey = (s: MrpSku) => `${s.warehouseId ?? WH_NONE}|${s.itemCode}`;
+const rowKey = (s: MrpSku) => `${s.warehouseId ?? WH_NONE}|${s.itemCode}${s.variantKey}`;
 
 function groupByModel(skus: MrpSku[]): ModelGroup[] {
   const map = new Map<string, ModelGroup>();
   for (const s of skus) {
-    let g = map.get(s.itemCode);
+    const gk = skuGroupKey(s);
+    let g = map.get(gk);
     if (!g) {
       g = {
+        groupKey: gk,
+        warehouseId: s.warehouseId, warehouseCode: s.warehouseCode, warehouseName: s.warehouseName,
         itemCode: s.itemCode, description: s.description, category: s.category,
         variants: [], qtyNeeded: 0, stock: 0, poOutstanding: 0, shortage: 0,
         suppliers: s.suppliers,
       };
-      map.set(s.itemCode, g);
+      map.set(gk, g);
     }
     g.variants.push(s);
     g.qtyNeeded += s.qtyNeeded;
@@ -79,11 +90,15 @@ function groupByModel(skus: MrpSku[]): ModelGroup[] {
   for (const g of groups) {
     g.variants.sort((a, b) => (a.variantLabel ?? '') < (b.variantLabel ?? '') ? -1 : 1);
   }
-  // Shortage models float to the top (the orange ones to act on), then by code.
+  // Shortage models float to the top (the orange ones to act on), then by
+  // warehouse, then by code — so each warehouse's rows cluster together.
   groups.sort((a, b) => {
     if ((b.shortage > 0 ? 1 : 0) !== (a.shortage > 0 ? 1 : 0)) {
       return (b.shortage > 0 ? 1 : 0) - (a.shortage > 0 ? 1 : 0);
     }
+    const wa = a.warehouseCode ?? a.warehouseName ?? '';
+    const wb = b.warehouseCode ?? b.warehouseName ?? '';
+    if (wa !== wb) return wa < wb ? -1 : 1;
     return a.itemCode < b.itemCode ? -1 : 1;
   });
   return groups;
@@ -93,17 +108,21 @@ function groupByModel(skus: MrpSku[]): ModelGroup[] {
    MrpSku/MrpLine shape the General tab uses, so the Sofa tab can reuse the
    identical Model → Variant → SO hierarchy (ModelRows). One sofa item_code =
    one Model; its colour/spec configs = variants; each SO line = one order line.
-   Coverage stays precise (orderedQty = po_qty_picked per SO line), so this
-   reuse does NOT regress to variant-key PO matching. */
+   Coverage is the pooled per-(warehouse, code, variant) stock+PO allocation the
+   server already computed (orderedQty), so this reuse does NOT regress to
+   variant-key PO matching. */
 function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
   const map = new Map<string, MrpSku>();
   for (const s of sets) {
     const variantKey = s.variantLabel ?? s.colour ?? '';
-    const key = `${s.itemCode}|${variantKey}`;
+    // Per-warehouse (Commander 2026-05-31): the same sofa config in two
+    // warehouses stays two rows, matching the General tab's per-WH buckets.
+    const key = `${s.warehouseId ?? WH_NONE}|${s.itemCode}|${variantKey}`;
     let sku = map.get(key);
     if (!sku) {
       const main = s.suppliers.find((x) => x.isMain) ?? null;
       sku = {
+        warehouseId: s.warehouseId, warehouseCode: s.warehouseCode, warehouseName: s.warehouseName,
         itemCode: s.itemCode, variantKey, variantLabel: s.variantLabel,
         description: s.description, category: 'SOFA',
         qtyNeeded: 0, stock: 0, poOutstanding: 0, shortage: 0,
@@ -238,7 +257,7 @@ export const Mrp = () => {
     });
 
   const expandAll = () => {
-    setExpandedModels(new Set(models.map((m) => m.itemCode)));
+    setExpandedModels(new Set(models.map((m) => m.groupKey)));
     setExpandedVariants(new Set(viewSkus.map(rowKey)));
   };
   const collapseAll = () => { setExpandedModels(new Set()); setExpandedVariants(new Set()); };
@@ -270,7 +289,10 @@ export const Mrp = () => {
     for (const [code, sup] of Object.entries(supplierOverride)) {
       if (orderedCodes.has(code) && sup) supplierByCode[code] = sup;
     }
-    const body = { picks, mode: poMode, supplierByCode, ...(expectedAt ? { expectedAt } : {}) };
+    /* Commander 2026-05-31 — every convert from the MRP page is reference-only:
+       fromMrp tags the PO line so it never locks the source SO line, and the
+       same SO line stays infinitely convertible from MRP. */
+    const body = { picks, mode: poMode, supplierByCode, fromMrp: true, ...(expectedAt ? { expectedAt } : {}) };
     createPos.mutate(body, {
       onSuccess: (res) => {
         if (!res.total) {
@@ -630,6 +652,9 @@ export const Mrp = () => {
                 />
               </th>
               <th className={styles.colCaret} />
+              {/* Commander 2026-05-31 — per-warehouse MRP: each Model row is
+                  scoped to one warehouse (no cross-WH pooling). */}
+              <th>Warehouse</th>
               <th>Item Code</th>
               <th>Description</th>
               <th className={styles.num}>Qty Needed</th>
@@ -644,13 +669,13 @@ export const Mrp = () => {
           </thead>
           <tbody>
             {q.isLoading && (
-              <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
+              <tr><td colSpan={10} className={styles.stateCell}>Loading MRP…</td></tr>
             )}
             {q.isError && (
-              <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+              <tr><td colSpan={10} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
             )}
             {data && displayModels.length === 0 && (
-              <tr><td colSpan={9} className={styles.stateCell}>
+              <tr><td colSpan={10} className={styles.stateCell}>
                 {onlyShort ? 'Nothing needs ordering — everything in view is covered.'
                   : hasWindow ? 'No demand delivering in this window.'
                   : 'No open Sales-Order demand for this filter.'}
@@ -658,10 +683,10 @@ export const Mrp = () => {
             )}
             {displayModels.map((g) => (
               <ModelRows
-                key={g.itemCode}
+                key={g.groupKey}
                 group={g}
-                modelOpen={expandedModels.has(g.itemCode)}
-                onToggleModel={() => toggleModel(g.itemCode)}
+                modelOpen={expandedModels.has(g.groupKey)}
+                onToggleModel={() => toggleModel(g.groupKey)}
                 expandedVariants={expandedVariants}
                 onToggleVariant={toggleVariant}
                 selected={selected}
@@ -816,6 +841,11 @@ const ModelRows = ({
         <td className={styles.colCaret}>
           {modelOpen ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
         </td>
+        <td className={styles.whCell}>
+          {group.warehouseCode
+            ? <span className={styles.whTag} title={group.warehouseName ?? undefined}>{group.warehouseCode}</span>
+            : <span className={styles.whNone}>—</span>}
+        </td>
         <td className={styles.codeCell}>{group.itemCode}</td>
         <td className={styles.descCell}>
           {group.description ?? '—'}
@@ -837,7 +867,7 @@ const ModelRows = ({
       {modelOpen && single && (
         <tr className={styles.detailRow}>
           <td /><td />
-          <td colSpan={7}>
+          <td colSpan={8}>
             {onlyVariant.variantLabel && (
               <div className={styles.singleSpec}>
                 <span className={styles.variantBranch}>↳</span>
@@ -870,6 +900,7 @@ const ModelRows = ({
               <td className={styles.colCaret}>
                 {vOpen ? <ChevronDown {...ICON} /> : <ChevronRight {...ICON} />}
               </td>
+              <td />{/* warehouse — inherited from parent model row */}
               <td />
               <td className={styles.variantDescCell}>
                 <span className={styles.variantBranch}>↳</span>
@@ -884,7 +915,7 @@ const ModelRows = ({
             {vOpen && (
               <tr className={styles.detailRow}>
                 <td /><td />
-                <td colSpan={7}><OrderLines lines={v.lines} /></td>
+                <td colSpan={8}><OrderLines lines={v.lines} /></td>
               </tr>
             )}
           </FragmentRow>

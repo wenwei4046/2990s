@@ -648,6 +648,10 @@ export function useCreatePosFromSoItems() {
          PO (the "Convert from SO" / "Add Line Item" picker scoped to a PO)
          instead of creating new POs. */
       targetPoId?: string;
+      /* Commander 2026-05-31 — converts raised from the MRP page are
+         reference-only: bypass the qty_exceeds_remaining cap + tag PO lines
+         from_mrp so they don't lock the source SO line (infinite-convert). */
+      fromMrp?: boolean;
     }) =>
       authedFetch<{
         // Create-new-POs shape:
