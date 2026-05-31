@@ -32,7 +32,6 @@ import {
   type MaterialKind,
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
-import { useGrnFromPos } from '../lib/flow-queries';
 import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -205,7 +204,6 @@ export const PurchaseOrders = () => {
   const navigate = useNavigate();
   // Multi-select state — batch-convert N POs into one GRN.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const grnFromPos = useGrnFromPos();
   const cancelPo = useCancelPurchaseOrder();
 
   // Always fetch all rows — filtering Outstanding (SUBMITTED ∪
@@ -242,29 +240,23 @@ export const PurchaseOrders = () => {
     [selectedIds],
   );
 
+  /* Commander 2026-05-31 — "为什么点 Convert to GR 的时候它是直接 Create，而不是进入
+     Draft 状态？" Convert no longer POSTs a posted GRN straight away. It routes to
+     the reviewable From-PO picker (?poId=…) where the PO's lines arrive PRE-TICKED,
+     so the operator reviews a ready draft and only presses Save to create the GRN.
+     Mirrors the DO→SI convert flow. */
   const convertToGrn = () => {
     if (selectedRows.length === 0) return;
     if (selectedSuppliers.size > 1) {
       alert('All selected POs must be from the same supplier. Convert per supplier in separate batches.');
       return;
     }
-    grnFromPos.mutate(
-      { purchaseOrderIds: [...selectedIds] },
-      {
-        onSuccess: (res) => {
-          /* Commander 2026-05-29 — "为什么没有跳进 GR 的界面先": after converting,
-             go STRAIGHT into the new GRN detail page (no blocking alert, no PO
-             drawer). The GRN page shows its own number. */
-          setSelectedIds(new Set());
-          navigate(`/grns/${res.id}`);
-        },
-        onError: (e) => alert(`Convert to GRN failed: ${e instanceof Error ? e.message : String(e)}`),
-      },
-    );
+    setSelectedIds(new Set());
+    navigate(`/grns/from-po?poId=${[...selectedIds].join(',')}`);
   };
 
   /* Commander 2026-05-29 — right-click context menu actions (mirrors the SO
-     list). Single-PO convert reuses the batch GRN endpoint. */
+     list). Single-PO convert routes to the same reviewable picker. */
   const convertOneToGrn = (po: PoHeaderRow) => {
     // Commander 2026-05-30 — "Convert to GRN" is ALWAYS shown in the menu; when
     // the PO has no goods left inbound (already fully received / cancelled),
@@ -273,14 +265,7 @@ export const PurchaseOrders = () => {
       window.alert('Nothing to be converted — this Purchase Order has no goods left to receive (already fully received or cancelled).');
       return;
     }
-    grnFromPos.mutate(
-      { purchaseOrderIds: [po.id] },
-      {
-        // Jump straight into the created GRN (Commander 2026-05-29).
-        onSuccess: (res) => navigate(`/grns/${res.id}`),
-        onError: (e) => alert(`Convert to GRN failed: ${e instanceof Error ? e.message : String(e)}`),
-      },
-    );
+    navigate(`/grns/from-po?poId=${po.id}`);
   };
   const doCancelPo = (po: PoHeaderRow) => {
     if (!window.confirm(`Cancel ${po.po_number}? It will stop proceeding and any converted SO lines are released back.`)) return;
@@ -365,8 +350,8 @@ export const PurchaseOrders = () => {
             <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>Clear</Button>
             <Button variant="primary" size="sm"
               onClick={convertToGrn}
-              disabled={grnFromPos.isPending || selectedSuppliers.size !== 1}>
-              {grnFromPos.isPending ? 'Converting…' : `Convert to GRN (${selectedIds.size})`}
+              disabled={selectedSuppliers.size !== 1}>
+              {`Convert to GRN (${selectedIds.size})`}
             </Button>
           </span>
         </div>

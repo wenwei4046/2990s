@@ -17,7 +17,7 @@
 // Routing: /grns/from-po.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -87,7 +87,13 @@ export const GrnFromPo = () => {
      ?poId=<id>, scoping the picker to ONE PO's outstanding lines so the operator
      isn't hunting through every supplier's PO. No param → the full picker. */
   const [searchParams] = useSearchParams();
+  // ?poId=<id> (single convert) or ?poId=<id>,<id>,… (batch convert from the
+  // toolbar) → scope to those POs. Empty set = the full open picker.
   const poIdFilter = searchParams.get('poId');
+  const poIdSet = useMemo(
+    () => new Set((poIdFilter ?? '').split(',').map((s) => s.trim()).filter(Boolean)),
+    [poIdFilter],
+  );
 
   // Map<poItemId, { picked, qty }>. qty defaults to remainingQty when ticked.
   const [picks, setPicks] = useState<Record<string, Pick>>({});
@@ -131,7 +137,7 @@ export const GrnFromPo = () => {
   // ── Filtered rows fed to the grid ────────────────────────────────────
   const rows = useMemo(() => {
     return items.filter((r) => {
-      if (poIdFilter && r.poId !== poIdFilter) return false;
+      if (poIdSet.size > 0 && !poIdSet.has(r.poId)) return false;
       if (effRemaining(r) <= 0) return false;
       if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
       if (dateFrom || dateTo) {
@@ -143,7 +149,36 @@ export const GrnFromPo = () => {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, draftQtyById, category, dateField, dateFrom, dateTo, poIdFilter]);
+  }, [items, draftQtyById, category, dateField, dateFrom, dateTo, poIdSet]);
+
+  /* Commander 2026-05-31 — "Convert to GR 应该进入 Draft 状态，不要直接 Create."
+     When the operator converts ONE PO from the list (?poId=<id>), land here with
+     that PO's outstanding lines PRE-TICKED at their full remaining qty, so the
+     screen is a ready-to-review draft (mirrors the DO→SI convert). They eyeball
+     it and press Save — nothing is created until then. No poId param (the open
+     "From PO" picker) → start untouched. Runs once after items load. */
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (prefilled.current) return;
+    if (poIdSet.size === 0) return;
+    if (itemsQ.isLoading) return;
+    prefilled.current = true;
+    const mine = items.filter((r) => poIdSet.has(r.poId) && effRemaining(r) > 0);
+    const first = mine[0];
+    if (!first) return;
+    // Honour the one-warehouse-per-GRN lock: tick only lines that share the
+    // first line's warehouse (a same-supplier batch can still span warehouses).
+    const lockTo = first.warehouseLocationId ?? null;
+    setPicks(() => {
+      const next: Record<string, Pick> = {};
+      for (const l of mine) {
+        if (lockTo && l.warehouseLocationId !== lockTo) continue;
+        next[l.poItemId] = { picked: true, qty: effRemaining(l) };
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, itemsQ.isLoading, poIdSet]);
 
   // One WAREHOUSE per GRN (Commander 2026-05-30) — once a line is ticked, the
   // selection locks to that PO line's warehouse (purchase_location). Lines from a
@@ -460,16 +495,20 @@ export const GrnFromPo = () => {
           </Button>
         </div>
       </div>
-      {poIdFilter && (
+      {poIdSet.size > 0 && (
         <p style={{
           margin: '0 0 var(--space-2)', padding: 'var(--space-1) var(--space-3)',
           width: 'fit-content', borderRadius: 'var(--radius-pill)',
           background: 'rgba(232, 107, 58, 0.10)', border: '1px solid var(--c-burnt)',
           color: 'var(--c-burnt)', fontSize: 'var(--fs-12)', fontWeight: 600,
         }}>
-          Partially converting{' '}
-          <code>{items.find((r) => r.poId === poIdFilter)?.poDocNo ?? 'this PO'}</code>
-          {' '}— only its outstanding lines are shown.{' '}
+          Reviewing{' '}
+          <code>
+            {poIdSet.size === 1
+              ? (items.find((r) => poIdSet.has(r.poId))?.poDocNo ?? 'this PO')
+              : `${poIdSet.size} POs`}
+          </code>
+          {' '}— outstanding lines are pre-filled. Adjust qty, then Save to create the GRN.{' '}
           <Link to="/grns/from-po" style={{ color: 'var(--c-burnt)', textDecoration: 'underline' }}>Show all POs</Link>
         </p>
       )}
