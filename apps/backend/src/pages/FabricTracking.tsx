@@ -117,6 +117,7 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
     fabricDescription: '',
     supplierCode: '',
     series: '',
+    colours: '',
     sofaPriceTier: 'PRICE_2' as FabricTier,
     bedframePriceTier: 'PRICE_2' as FabricTier,
   });
@@ -129,6 +130,7 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
       alert('Fabric Code is required.');
       return;
     }
+    const colourList = form.colours.split(',').map((s) => s.trim()).filter(Boolean).map((label) => ({ label }));
     create.mutate({
       fabricCode: form.fabricCode.trim(),
       fabricDescription: form.fabricDescription.trim() || undefined,
@@ -136,8 +138,16 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
       series: form.series.trim() || undefined,
       sofaPriceTier: form.sofaPriceTier,
       bedframePriceTier: form.bedframePriceTier,
+      // Migration 0124/0125 — also create the POS-pickable fabric_library entry + colours.
+      label: form.fabricDescription.trim() || form.fabricCode.trim(),
+      colours: colourList,
     }, {
-      onSuccess: onClose,
+      onSuccess: (res) => {
+        if (res.libraryWarning) {
+          alert(`Fabric saved, but the customer-pickable entry had an issue:\n${res.libraryWarning}`);
+        }
+        onClose();
+      },
       onError: (e) => alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
@@ -190,6 +200,13 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
           <input className={styles.searchInput} style={{ width: '100%' }}
             value={form.supplierCode} placeholder="Optional — supplier's own code"
             onChange={(e) => set('supplierCode', e.target.value)} />
+        </label>
+
+        <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
+          <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 4 }}>Colours (comma-separated — makes the fabric pickable on POS)</div>
+          <input className={styles.searchInput} style={{ width: '100%' }}
+            value={form.colours} placeholder="e.g. Sand, Charcoal, Ivory"
+            onChange={(e) => set('colours', e.target.value)} />
         </label>
 
         {/* Commander 2026-05-27 (Fix 6): only Price 1 and Price 2 are in

@@ -76,7 +76,35 @@ fabricTracking.post('/', async (c) => {
     if (error.code === '42501') return c.json({ error: 'forbidden', reason: error.message }, 403);
     return c.json({ error: 'insert_failed', reason: error.message }, 500);
   }
-  return c.json({ fabric: data }, 201);
+  // Migration 0124/0125 — also create the customer-pickable fabric_library entry
+  // (+ colours) so a Backend-added fabric is immediately pickable + coloured on
+  // POS. The procurement row above is already created; surface any library/colour
+  // failure as a warning so the operator can retry without losing the fabric.
+  const libLabel = String(body.label ?? body.fabricDescription ?? fabricCode).trim();
+  const libId = fabricCode.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || id.toLowerCase();
+  let libraryWarning: string | null = null;
+  const { error: libErr } = await sb.from('fabric_library').upsert({
+    id: libId, label: libLabel, tier: 'standard', default_surcharge: 0,
+    active: true, sort_order: 0, fabric_code: fabricCode,
+  }, { onConflict: 'id' });
+  if (libErr) {
+    libraryWarning = `fabric_library: ${libErr.message}`;
+  } else if (Array.isArray(body.colours)) {
+    const colourRows = (body.colours as Array<Record<string, unknown>>)
+      .map((col, i) => {
+        const label = String(col.label ?? '').trim();
+        if (!label) return null;
+        const colourId = String(col.colourId ?? label).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || `c${i}`;
+        return { fabric_id: libId, colour_id: colourId, label, swatch_hex: (col.swatchHex as string) ?? null, active: true, sort_order: i };
+      })
+      .filter((r): r is NonNullable<typeof r> => r != null);
+    if (colourRows.length > 0) {
+      const { error: colErr } = await sb.from('fabric_colours').upsert(colourRows, { onConflict: 'fabric_id,colour_id' });
+      if (colErr) libraryWarning = `fabric_colours: ${colErr.message}`;
+    }
+  }
+
+  return c.json({ fabric: data, fabricLibraryId: libId, libraryWarning }, 201);
 });
 
 /* Commander 2026-05-26 — Bulk upsert from CSV import. One Postgres upsert
