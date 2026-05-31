@@ -488,11 +488,25 @@ export const useProductSizes = (productId: string | undefined) =>
       if (productId.startsWith('mfg-')) {
         const { data: mfgRow, error: mfgErr } = await supabase
           .from('mfg_products')
-          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, base_model, category')
+          .select('retail_product_id, model_id, size_code, base_price_sen, sell_price_sen, base_model, category, product_models:model_id ( allowed_options )')
           .eq('id', productId)
           .maybeSingle();
         if (mfgErr) throw mfgErr;
         if (!mfgRow) return [];
+
+        // Master-Admin's Modular ON/OFF is the single source of truth: a size is
+        // offered only if it's in the Model's allowed_options.sizes (Chairman
+        // 2026-06-01). Empty/absent sizes = no restriction (show all). Combined
+        // with the per-SKU pos_active "Visible" flag below in sibsToRows so an
+        // OFF size disappears from the picker instead of staying selectable.
+        const modelRel = Array.isArray(mfgRow.product_models)
+          ? mfgRow.product_models[0]
+          : mfgRow.product_models;
+        const allowedSizesArr = ((modelRel as { allowed_options?: { sizes?: string[] } } | null)
+          ?.allowed_options?.sizes) ?? null;
+        const allowedSizes = Array.isArray(allowedSizesArr) && allowedSizesArr.length > 0
+          ? new Set(allowedSizesArr.map((s) => s.toUpperCase()))
+          : null;
 
         // 2a — retail bridge exists: use admin-configured product_size_variants
         if (mfgRow.retail_product_id) {
@@ -507,33 +521,36 @@ export const useProductSizes = (productId: string | undefined) =>
           // Fall through to mfg siblings if the retail link exists but has no variants yet.
         }
 
-        // Helper: map sibling rows → ProductSizeRow[]. Handles INACTIVE siblings
-        // (shown greyed on the size grid) and case-insensitive size_code lookup
-        // (guards against lowercase size_codes stored by older import paths).
-        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; status: string }>) =>
+        // Helper: map sibling rows → ProductSizeRow[]. Drops sizes the Master
+        // Admin turned OFF in Modular — a size is kept only if it's in the
+        // Model's allowed_options.sizes (when restricted) AND its SKU is
+        // pos_active (the "Visible" flag the catalog also honors). A kept size's
+        // `active` still follows `status` so a cost-discontinued one greys out.
+        // Case-insensitive size_code lookup guards older lowercase imports.
+        const sibsToRows = (sibs: Array<{ size_code: string | null; base_price_sen: number | null; sell_price_sen: number | null; status: string; pos_active: boolean | null }>) =>
           sibs
             .filter((s) => {
               const sc = (s.size_code ?? '').toUpperCase();
-              return sc && sc in MFG_SIZE_CODE_TO_LIB;
+              if (!sc || !(sc in MFG_SIZE_CODE_TO_LIB)) return false;
+              if (s.pos_active === false) return false;          // OFF via Visible / catalog flag
+              if (allowedSizes && !allowedSizes.has(sc)) return false; // OFF in Modular allowed_options
+              return true;
             })
             .map((s) => ({
               sizeId: MFG_SIZE_CODE_TO_LIB[(s.size_code!).toUpperCase()] as string,
-              // Use actual status rather than hardcoded true so INACTIVE size
-              // variants show as greyed tiles ("Not on this Model") while ACTIVE
-              // ones remain selectable.
+              // Surviving size: greys out only if cost-discontinued (status).
               active: (s.status as string) === 'ACTIVE',
               // SELLING price (0109 cost/sell split): sell_price_sen ?? base_price_sen.
               price: (s.sell_price_sen ?? s.base_price_sen) != null ? Math.round((s.sell_price_sen ?? s.base_price_sen)! / 100) : 0,
             }));
 
         // 2b — derive sizes from mfg_products siblings (same model_id — set by
-        // generate-skus). No status filter here: include INACTIVE siblings so
-        // discontinued sizes still render as greyed tiles rather than disappearing
-        // from the grid entirely.
+        // generate-skus). sibsToRows drops sizes turned OFF in Modular /
+        // pos_active so they vanish from the picker (Chairman 2026-06-01).
         if (mfgRow.model_id) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, status')
+            .select('size_code, base_price_sen, sell_price_sen, status, pos_active')
             .eq('model_id', mfgRow.model_id);
           if (sibErr) throw sibErr;
           const rows = sibsToRows(siblings ?? []);
@@ -546,7 +563,7 @@ export const useProductSizes = (productId: string | undefined) =>
         if (mfgRow.base_model && mfgRow.category) {
           const { data: siblings, error: sibErr } = await supabase
             .from('mfg_products')
-            .select('size_code, base_price_sen, sell_price_sen, status')
+            .select('size_code, base_price_sen, sell_price_sen, status, pos_active')
             .eq('base_model', mfgRow.base_model)
             .eq('category', mfgRow.category);
           if (sibErr) throw sibErr;
