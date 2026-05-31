@@ -1032,7 +1032,13 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     const lineWarehouseId = it.lineWarehouseId;
     // (warehouse, supplier) → one single-warehouse PO; soDocNo splits further in
     // 'per-so' mode. A null warehouse buckets together under the literal 'null'.
-    const groupKey = poMode === 'per-so'
+    // Commander 2026-05-31 — SOFA is colour-matched and MUST be produced as one
+    // set on ONE PO (split → different dye lots → colour difference). So sofa
+    // lines ALWAYS group per-(warehouse, supplier, SO) regardless of the toggle:
+    // one SO's whole sofa set = exactly one PO, never merged with another SO's
+    // set, never split per component SKU. Non-sofa lines follow the toggle.
+    const isSofaLine = (it.itemGroup?.toUpperCase() ?? '') === 'SOFA';
+    const groupKey = (poMode === 'per-so' || isSofaLine)
       ? `${lineWarehouseId ?? 'null'}::${effectiveSupplierId}::${it.soDocNo}`
       : `${lineWarehouseId ?? 'null'}::${effectiveSupplierId}`;
     const bucket = byGroup.get(groupKey)
