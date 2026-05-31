@@ -20,7 +20,7 @@
 |---|---|---|
 | `packages/shared/src/sofa-combo-pricing.ts` | Modify | add pure `comboTierPrices(baseSelling, premiumSen)` |
 | `packages/shared/src/__tests__/sofa-combo-pricing.test.ts` | Modify | unit tests for `comboTierPrices` |
-| `packages/db/migrations/0123_sofa_combo_tier_offsets.sql` | Create | singleton config table |
+| `packages/db/migrations/0124_sofa_combo_tier_offsets.sql` | Create | singleton config table |
 | `packages/db/src/schema.ts` | Modify | Drizzle def `sofaComboTierOffsets` |
 | `apps/api/src/routes/sofa-combos.ts` | Modify | `GET /tier-premiums` + `POST /tier-premiums/apply` |
 | `apps/pos/src/lib/products/sofa-combos-queries.ts` | Modify | `useSofaComboTierPremiums` + `useApplySofaComboTierPremiums` |
@@ -108,14 +108,14 @@ git commit -m "feat(sofa): comboTierPrices — derive tier selling from P1 base 
 ## Task 2: Config table — migration + Drizzle schema
 
 **Files:**
-- Create: `packages/db/migrations/0123_sofa_combo_tier_offsets.sql`
+- Create: `packages/db/migrations/0124_sofa_combo_tier_offsets.sql`
 - Modify: `packages/db/src/schema.ts`
 
-- [ ] **Step 1: Create the migration** — `packages/db/migrations/0123_sofa_combo_tier_offsets.sql`:
+- [ ] **Step 1: Create the migration** — `packages/db/migrations/0124_sofa_combo_tier_offsets.sql`:
 
 ```sql
 -- ----------------------------------------------------------------------------
--- 0123 — sofa_combo_tier_offsets
+-- 0124 — sofa_combo_tier_offsets
 --
 -- Chairman 2026-06-01: Combo "Overall Edit price tier". A single global row
 -- (id = 1) holding the two flat premiums (sen = RM×100) added to each combo's
@@ -170,8 +170,8 @@ Expected: PASS (no errors). If `@2990s/db` has no `typecheck` script, run `pnpm 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add packages/db/migrations/0123_sofa_combo_tier_offsets.sql packages/db/src/schema.ts
-git commit -m "feat(sofa): sofa_combo_tier_offsets singleton config table (migration 0123)"
+git add packages/db/migrations/0124_sofa_combo_tier_offsets.sql packages/db/src/schema.ts
+git commit -m "feat(sofa): sofa_combo_tier_offsets singleton config table (migration 0124)"
 ```
 
 > **Prod apply is a separate, user-gated deploy step** — see Task 6. Do NOT apply to prod inside this task.
@@ -521,7 +521,7 @@ Expected: PASS (all packages).
 Run: `pnpm test`
 Expected: PASS (includes the new `comboTierPrices` cases; existing combo + pricing tests unchanged).
 
-- [ ] **Step 2: Apply migration `0123` to PROD — REQUIRES explicit Chairman "go"**
+- [ ] **Step 2: Apply migration `0124` to PROD — REQUIRES explicit Chairman "go"**
 
 This is a new additive table (no data risk), but per project practice migrations land on prod **before** deploy and are verified. Apply via the Supabase migration tool, then verify the seeded singleton:
 
