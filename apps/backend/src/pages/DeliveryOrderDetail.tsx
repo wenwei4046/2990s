@@ -70,7 +70,21 @@ const STATUS_CLASS: Record<string, string> = {
   SIGNED:     styles.statusReady ?? '',
   DELIVERED:  styles.statusDelivered ?? '',
   INVOICED:   styles.statusInvoiced ?? '',
+  RETURNED:   styles.statusReturned ?? '',
   CANCELLED:  styles.statusCancelled ?? '',
+};
+
+/* Document-driven status (latest event wins) — Cancelled / Shipped / Invoiced /
+   Delivery Return. Mirrors the DO list. The detail endpoint sends lifecycle_state. */
+type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
+const DO_STATUS_LABEL: Record<string, string> = {
+  DISPATCHED: 'Shipped', INVOICED: 'Invoiced', RETURNED: 'Delivery Return', CANCELLED: 'Cancelled',
+};
+const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
+  if (status === 'CANCELLED') return 'CANCELLED';
+  if (lifecycle === 'returned') return 'RETURNED';
+  if (lifecycle === 'invoiced') return 'INVOICED';
+  return 'DISPATCHED';
 };
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
@@ -485,9 +499,14 @@ export const DeliveryOrderDetail = () => {
             <span className={styles.totalRailLabel}>Total</span>
             <span className={styles.totalRailValue}>{fmtRm(header.local_total_centi, header.currency)}</span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
-            {header.status.replace(/_/g, ' ')}
-          </span>
+          {(() => {
+            const key = doEffectiveKey(header.status, (header as { lifecycle_state?: DoLifecycle }).lifecycle_state);
+            return (
+              <span className={`${styles.statusPill} ${STATUS_CLASS[key] ?? ''}`}>
+                {DO_STATUS_LABEL[key] ?? key.replace(/_/g, ' ')}
+              </span>
+            );
+          })()}
           <RelationshipMapButton type="do" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>

@@ -18,18 +18,21 @@
 // A customer-lock keeps the merge clean: once one line is ticked, lines of a
 // DIFFERENT customer grey out — a return is for ONE customer.
 //
-// On convert the server creates ONE return (status RECEIVED) with one line per
-// pick and INCREASES stock; we land on the new return in Edit mode.
+// Continue stashes the picked lines (carrying each line's doItemId + condition)
+// and opens the normal New Delivery Return form prefilled for review. No stock
+// moves back IN until the operator clicks Create there — that POST increases
+// stock and caps each line at its live remaining-to-return via the same guard
+// the old auto-convert used.
 //
 // Routing: /delivery-returns/from-do.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { VariantDescription } from '../components/VariantDescription';
-import { useReturnableDoLines, useConvertDoToDeliveryReturn, type DoRemainingLine } from '../lib/flow-queries';
+import { useReturnableDoLines, type DoRemainingLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { ItemGroupPill } from '../lib/category-badges';
@@ -69,7 +72,6 @@ type Pick = { picked: boolean; qty: number; condition: string };
 export const DeliveryReturnFromDo = () => {
   const navigate = useNavigate();
   const linesQ = useReturnableDoLines();
-  const convert = useConvertDoToDeliveryReturn();
 
   // Map<doItemId, { picked, qty, condition }>. Defaults: picked = false; when
   // ticked, qty defaults to the line's remaining, condition to NEW.
@@ -255,25 +257,43 @@ export const DeliveryReturnFromDo = () => {
     },
   ], [picks, lockedCustomer]);
 
-  const onConvert = () => {
+  const onContinue = () => {
     if (pickedCount === 0) {
       setDialog({ title: 'Nothing picked', body: 'Tick at least one Delivery Order line to return first.' });
       return;
     }
-    const picksPayload = picked.map(([doItemId, v]) => ({ doItemId, qty: v.qty, condition: v.condition }));
-    convert.mutate(
-      { picks: picksPayload },
-      {
-        onSuccess: (res) => {
-          // Open the new return in Edit mode so the operator can review.
-          navigate(`/delivery-returns/${res.id}?edit=1`);
-        },
-        onError: (e) => setDialog({
-          title: 'Convert failed',
-          body: e instanceof Error ? e.message : String(e),
-        }),
-      },
-    );
+    // Stash the picked lines (qty + condition) and open the normal New Delivery
+    // Return form prefilled for review. No stock moves back IN until the operator
+    // clicks Create on that screen.
+    const stash = picked
+      .map(([doItemId, v]) => {
+        const r = rowById.get(doItemId);
+        if (!r) return null;
+        return {
+          doItemId,
+          deliveryOrderId: r.deliveryOrderId,
+          itemCode: r.itemCode,
+          itemGroup: r.itemGroup,
+          description: r.description,
+          uom: r.uom,
+          qty: v.qty,
+          condition: v.condition,
+          unitPriceCenti: r.unitPriceCenti,
+          discountCenti: r.discountCenti,
+          unitCostCenti: r.unitCostCenti,
+          variants: r.variants,
+        };
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+
+    if (stash.length === 0) {
+      setDialog({ title: 'Nothing picked', body: 'Tick at least one Delivery Order line to return first.' });
+      return;
+    }
+
+    const firstDoId = stash.map((s) => s.deliveryOrderId).sort()[0] ?? '';
+    sessionStorage.setItem('drFromDoPicks', JSON.stringify(stash));
+    navigate(`/delivery-returns/new?fromDo=${encodeURIComponent(firstDoId)}&fromPicks=1`);
   };
 
   const toolbar = (
@@ -302,23 +322,22 @@ export const DeliveryReturnFromDo = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={onConvert}
-            disabled={pickedCount === 0 || convert.isPending}
-            title="Combine the picked Delivery Order lines into one Delivery Return"
+            onClick={onContinue}
+            disabled={pickedCount === 0}
+            title="Open the New Delivery Return form prefilled with the picked Delivery Order lines"
           >
-            <ArrowRightLeft {...ICON} />
-            {convert.isPending
-              ? 'Converting…'
-              : pickedCount === 0
-                ? 'Pick at least 1 line'
-                : `Convert ${pickedCount} line${pickedCount === 1 ? '' : 's'} to Delivery Return`}
+            <ArrowRight {...ICON} />
+            {pickedCount === 0
+              ? 'Pick at least 1 line'
+              : `Continue with ${pickedCount} line${pickedCount === 1 ? '' : 's'}`}
           </Button>
         </div>
       </div>
       <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
         Pick the Delivery Order lines being returned and set the quantity + condition for each. A line can be
         returned in parts across several returns — only the remaining (not-yet-returned, not-yet-invoiced)
-        quantity is shown. Returned stock goes back IN. You can review and edit the new return on the next screen.
+        quantity is shown. Continuing opens the normal New Delivery Return form, prefilled for review — no
+        stock goes back IN until you click Create on that screen.
       </p>
       {lockedCustomerName && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>

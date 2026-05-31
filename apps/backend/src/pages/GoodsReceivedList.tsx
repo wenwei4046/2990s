@@ -15,7 +15,6 @@ import { Plus } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrns,
-  usePurchaseInvoiceFromGrn,
   usePurchaseReturnFromGrn,
   useCancelGrn,
 } from '../lib/flow-queries';
@@ -121,20 +120,17 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
 export const GoodsReceived = () => {
   const navigate = useNavigate();
   const { data, isLoading, error } = useGrns();
-  const piFromGrn = usePurchaseInvoiceFromGrn();
   const prFromGrn = usePurchaseReturnFromGrn();
   const cancelGrn = useCancelGrn();
 
   const rows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
   const columns = useMemo(() => buildGrnColumns(), []);
 
-  // Single-GRN convert (right-click) → create the doc, then jump straight onto
-  // its detail page (the converted doc is already confirmed — no draft step).
+  // Single-GRN convert (right-click) → open the New PI review screen pre-loaded
+  // with this note's remaining lines. Nothing is invoiced until the operator
+  // confirms prices/dates and clicks Create (matches the other modules).
   const convertToPi = (g: GrnRow) => {
-    piFromGrn.mutate(g.id, {
-      onSuccess: (res) => navigate(`/purchase-invoices/${res.id}`),
-      onError: (e) => alert(`Convert to PI failed: ${e instanceof Error ? e.message : String(e)}`),
-    });
+    navigate(`/purchase-invoices/new?grnId=${encodeURIComponent(g.id)}`);
   };
   const convertToPr = (g: GrnRow) => {
     prFromGrn.mutate(g.id, {

@@ -127,6 +127,7 @@
 .statusInvoiced  { background: rgba(34, 31, 32, 0.18);  color: var(--c-ink); }
 .statusClosed    { background: rgba(34, 31, 32, 0.18);  color: var(--c-ink); }
 .statusCancelled { background: rgba(184, 51, 31, 0.10); color: var(--c-festive-b, #B8331F); }
+.statusReturned  { background: rgba(214, 158, 46, 0.18); color: #8a5a00; }
 
 /* ── Cards ──────────────────────────────────────────────────────────── */
 

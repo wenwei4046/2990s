@@ -251,6 +251,40 @@ purchaseInvoices.post('/', async (c) => {
   if (!Array.isArray(items) || !items.length) return c.json({ error: 'items_required' }, 400);
 
   const sb = c.get('supabase'); const user = c.get('user');
+
+  /* Over-invoice guard (mirrors /from-grn-items line ~432 + /:id/items): any
+     line linked to a GRN line is capped at that line's REMAINING
+     (qty_accepted - invoiced_qty - returned_qty). Sum requested qty per GRN
+     line first, since the same GRN line can appear twice in one PI. Without
+     this the ?grnId= draft path could over-bill or double-invoice. */
+  {
+    const wantByGrnItem = new Map<string, number>();
+    for (const it of items) {
+      const gid = (it.grnItemId as string | undefined) ?? null;
+      if (!gid) continue;
+      wantByGrnItem.set(gid, (wantByGrnItem.get(gid) ?? 0) + Number(it.qty ?? 0));
+    }
+    const gids = [...wantByGrnItem.keys()];
+    if (gids.length > 0) {
+      const { data: giRows } = await sb.from('grn_items')
+        .select('id, qty_accepted, invoiced_qty, returned_qty').in('id', gids);
+      const byId = new Map<string, { qty_accepted: number; invoiced_qty: number; returned_qty: number }>(
+        ((giRows ?? []) as Array<{ id: string; qty_accepted: number; invoiced_qty: number; returned_qty: number }>)
+          .map((g) => [g.id, g]),
+      );
+      const over: Array<{ grnItemId: string; requested: number; remaining: number }> = [];
+      for (const [gid, want] of wantByGrnItem.entries()) {
+        const g = byId.get(gid);
+        if (!g) return c.json({ error: 'item_not_found', grnItemId: gid }, 400);
+        const remaining = (g.qty_accepted ?? 0) - (g.invoiced_qty ?? 0) - (g.returned_qty ?? 0);
+        if (want > remaining) over.push({ grnItemId: gid, requested: want, remaining });
+      }
+      if (over.length > 0) {
+        return c.json({ error: 'qty_exceeds_remaining', lines: over }, 409);
+      }
+    }
+  }
+
   const invoiceNumber = await nextNum(sb, 'PI');
   let subtotal = 0;
   const itemRows = items.map((it) => {
@@ -295,6 +329,9 @@ purchaseInvoices.post('/', async (c) => {
   const rowsWithId = itemRows.map((r) => ({ ...r, purchase_invoice_id: h.id }));
   const { error: iErr } = await sb.from('purchase_invoice_items').insert(rowsWithId);
   if (iErr) { await sb.from('purchase_invoices').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
+  // Self-heal the GRN invoiced counter so the just-billed lines drop out of the
+  // outstanding picker (mirrors /from-grn-items line ~523 + /:id/items).
+  await recomputeGrnInvoiced(sb, itemRows.map((r) => r.grn_item_id));
   return c.json({ id: h.id, invoiceNumber: h.invoice_number }, 201);
 });
 

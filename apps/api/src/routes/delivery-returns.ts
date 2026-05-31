@@ -248,6 +248,46 @@ async function doReturnableRemaining(sb: any, doIds: string[]): Promise<Map<stri
   return doLineRemaining(sb, doIds);
 }
 
+/* Over-return guard for the bulk create POST. Every DO-linked line must respect
+   the live Pending pool (delivered − invoiced − returned). Lines with no doItemId
+   are ad-hoc free-entry returns and stay uncapped. Mirrors the convert-from-DO
+   picker's per-line check so the New-Return form is not a back door that returns
+   more than was delivered. Returns a 409 body to reject, or null to allow. */
+async function checkDrOverRemaining(
+  sb: any,
+  items: Array<Record<string, unknown>>,
+): Promise<{ error: string; message: string; lines: Array<{ doItemId: string; requested: number; remaining: number }> } | null> {
+  const wanted = new Map<string, number>();
+  for (const it of items) {
+    const doItemId = (it.doItemId as string | undefined) ?? null;
+    if (!doItemId) continue;
+    const q = Number(it.qtyReturned ?? it.qty ?? 0);
+    wanted.set(doItemId, (wanted.get(doItemId) ?? 0) + q);
+  }
+  if (wanted.size === 0) return null;
+
+  const ids = [...wanted.keys()];
+  const { data: rows, error } = await sb
+    .from('delivery_order_items')
+    .select('id, delivery_order_id')
+    .in('id', ids);
+  if (error) return null; // load failure → don't block; the insert will surface real errors
+  const doIds = [...new Set((rows ?? []).map((r: { delivery_order_id: string }) => r.delivery_order_id))] as string[];
+  const remainingMap = await doReturnableRemaining(sb, doIds);
+
+  const offenders: Array<{ doItemId: string; requested: number; remaining: number }> = [];
+  for (const [doItemId, requested] of wanted) {
+    const remaining = remainingMap.get(doItemId)?.remaining ?? 0;
+    if (requested > remaining) offenders.push({ doItemId, requested, remaining });
+  }
+  if (offenders.length === 0) return null;
+  return {
+    error: 'over_remaining',
+    message: 'One or more lines return more than the remaining (delivered − invoiced − returned) quantity.',
+    lines: offenders,
+  };
+}
+
 /* Build one delivery_return_items insert row from a client line payload.
    Shared by POST / (bulk create), POST /:id/items (single add), and the
    convert-from-DO copy. Computes line_total / line_cost / margin so
@@ -390,6 +430,14 @@ deliveryReturns.post('/', async (c) => {
   {
     const codeCheck = await validateItemCodes(sb, items.map((it) => it.itemCode as string | null | undefined));
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
+  }
+
+  /* Remaining-to-return guard — every DO-linked line must respect the live
+     Pending pool. Mirrors the convert-from-DO picker so the New-Return form
+     can't over-return a delivered line. */
+  {
+    const over = await checkDrOverRemaining(sb, items);
+    if (over) return c.json(over, 409);
   }
 
   const { data: header, error: hErr } = await insertHeader(sb, user.id, body);

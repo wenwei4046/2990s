@@ -38,7 +38,7 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-type DraftLine = SoLineDraft & { rid: string };
+type DraftLine = SoLineDraft & { rid: string; doItemId?: string; condition?: string };
 
 const newLine = (): DraftLine => ({
   ...emptySoLine(),
@@ -52,6 +52,7 @@ export const DeliveryReturnNew = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
+  const fromPicks = searchParams.get('fromPicks') === '1';
 
   const create = useCreateDeliveryReturn();
   const staffQ = useStaff();
@@ -137,7 +138,41 @@ export const DeliveryReturnNew = () => {
     setDoDocNo((dval.do_number as string) ?? '');
     setReason(`Return from DO ${(dval.do_number as string) ?? ''}`);
 
-    if (doItems.length > 0) {
+    // When we arrived from the DO→Return picker (fromPicks) the operator already
+    // chose specific lines, quantities and conditions — build from that stash,
+    // carrying each line's doItemId (the server's remaining-to-return tracking
+    // depends on it) and its condition. Otherwise (plain ?fromDo) seed every DO
+    // line at full quantity, condition NEW.
+    type Stash = {
+      doItemId: string; itemCode: string; itemGroup: string | null;
+      description: string | null; uom: string | null; qty: number; condition: string;
+      unitPriceCenti: number; discountCenti: number; unitCostCenti: number; variants: unknown;
+    };
+    let stash: Stash[] | null = null;
+    if (fromPicks) {
+      try { stash = JSON.parse(sessionStorage.getItem('drFromDoPicks') ?? 'null'); }
+      catch { stash = null; }
+    }
+
+    if (stash && stash.length > 0) {
+      setLines(stash.map((s, i) => ({
+        ...emptySoLine(),
+        rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
+        itemCode: s.itemCode ?? '',
+        itemGroup: (s.itemGroup as string) ?? 'others',
+        description: s.description ?? '',
+        uom: s.uom ?? 'UNIT',
+        qty: Number(s.qty ?? 1),
+        unitPriceCenti: Number(s.unitPriceCenti ?? 0),
+        discountCenti: Number(s.discountCenti ?? 0),
+        unitCostCenti: Number(s.unitCostCenti ?? 0),
+        variants: (s.variants as Record<string, unknown>) ?? {},
+        remark: '',
+        doItemId: s.doItemId,
+        condition: s.condition || 'NEW',
+      })));
+      sessionStorage.removeItem('drFromDoPicks');
+    } else if (doItems.length > 0) {
       setLines(doItems.map((it) => ({
         ...emptySoLine(),
         rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${String(it.id)}`,
@@ -152,11 +187,12 @@ export const DeliveryReturnNew = () => {
         variants: (it.variants as Record<string, unknown>) ?? {},
         remark: '',
         doItemId: (it.id as string) ?? undefined,
-      } as DraftLine & { doItemId?: string })));
+        condition: 'NEW',
+      })));
     }
 
     setPrefilled(true);
-  }, [fromDo, prefilled, doDetail.data]);
+  }, [fromDo, fromPicks, prefilled, doDetail.data]);
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
 
@@ -219,12 +255,12 @@ export const DeliveryReturnNew = () => {
           description: l.description,
           uom: l.uom,
           qtyReturned: l.qty,
-          condition: 'NEW',
+          condition: l.condition || 'NEW',
           unitPriceCenti: l.unitPriceCenti,
           discountCenti: l.discountCenti,
           unitCostCenti: l.unitCostCenti,
           variants: l.variants,
-          doItemId: (l as DraftLine & { doItemId?: string }).doItemId,
+          doItemId: l.doItemId,
         })),
       },
       {

@@ -554,16 +554,29 @@ export async function soLinePoCoverage(
   if (ids.length === 0) return out;
   const { data } = await sb
     .from('purchase_order_items')
-    .select('so_item_id, delivery_date, po:purchase_orders!inner ( po_number, status, expected_at )')
+    .select('so_item_id, delivery_date, qty, received_qty, po:purchase_orders!inner ( po_number, status, expected_at )')
     .in('so_item_id', ids);
   type Row = {
     so_item_id: string | null;
     delivery_date: string | null;
+    qty: number | null;
+    received_qty: number | null;
     po: { po_number: string; status: string; expected_at: string | null } | null;
   };
   const agg = new Map<string, { poNumbers: string[]; eta: string | null }>();
   for (const r of (data ?? []) as unknown as Row[]) {
-    if (!r.so_item_id || !r.po || (r.po.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    if (!r.so_item_id || !r.po) continue;
+    const st = (r.po.status ?? '').toUpperCase();
+    /* Only GENUINELY-INCOMING stock counts as coverage. A CANCELLED or fully
+       RECEIVED PO is not arriving, and a PO line whose received_qty already
+       covers its ordered qty has nothing left to come — its goods are now
+       on-hand (which is what flips the SO line to READY). Showing such a PO as
+       "incoming · ETA" is the stale tag that made a READY line read as if it
+       were still waiting (Wei Siang 2026-05-31). Fix at the source, not the
+       display: a line with no incoming balance simply has no coverage. */
+    if (st === 'CANCELLED' || st === 'RECEIVED') continue;
+    const incoming = Number(r.qty ?? 0) - Number(r.received_qty ?? 0);
+    if (incoming <= 0) continue; // this PO line fully received → nothing in transit
     const eta = r.delivery_date ?? r.po.expected_at ?? null;
     const entry = agg.get(r.so_item_id) ?? { poNumbers: [], eta: null };
     if (!entry.poNumbers.includes(r.po.po_number)) entry.poNumbers.push(r.po.po_number);
@@ -571,6 +584,154 @@ export async function soLinePoCoverage(
     agg.set(r.so_item_id, entry);
   }
   for (const [id, v] of agg) out.set(id, { po: v.poNumbers.sort().join(', '), eta: v.eta });
+  return out;
+}
+
+/* Per-SO lifecycle state by "latest event wins" (Wei Siang 2026-05-31).
+   Walks every NON-cancelled downstream document for each Sales Order — Delivery
+   Orders, Sales Invoices, Delivery Returns — and keeps the one with the most
+   recent business date (do_date / invoice_date / return_date), tie-broken by
+   created_at, then by a corrective-action priority (a return outranks an invoice
+   outranks a delivery for the same instant). The winning document's KIND becomes
+   the Sales Order's status badge:
+     • no events       → 'none'      (badge shows the stored status, e.g. Confirmed)
+     • latest is a DO   → 'delivered' (the view splits Partial / Full by quantity)
+     • latest is a SI   → 'invoiced'
+     • latest is a DR   → 'returned'  (Delivery Return)
+   Because it is purely "latest wins", raising a fresh Delivery Order or Invoice
+   after a return moves the badge straight back to Delivered / Invoiced — no
+   stored status to unwind. Read-only display aid. */
+export type SoLifecycle = 'none' | 'delivered' | 'invoiced' | 'returned';
+export async function computeSoLifecycle(
+  sb: any,
+  docNos: string[],
+): Promise<Map<string, SoLifecycle>> {
+  const out = new Map<string, SoLifecycle>();
+  const ids = [...new Set(docNos.filter(Boolean))];
+  if (ids.length === 0) return out;
+
+  type Ev = { date: string; createdAt: string; kind: SoLifecycle };
+  const events = new Map<string, Ev[]>();
+  const push = (doc: string | null | undefined, ev: Ev) => {
+    if (!doc) return;
+    const arr = events.get(doc) ?? [];
+    arr.push(ev);
+    events.set(doc, arr);
+  };
+
+  const [doRes, siRes] = await Promise.all([
+    sb.from('delivery_orders')
+      .select('id, so_doc_no, do_date, created_at, status')
+      .in('so_doc_no', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('so_doc_no, invoice_date, created_at, status')
+      .in('so_doc_no', ids)
+      .neq('status', 'CANCELLED'),
+  ]);
+
+  // DO id → so_doc_no, so a Delivery Return (which carries delivery_order_id but
+  // no so_doc_no) can be attributed back to its Sales Order.
+  const doToSo = new Map<string, string>();
+  for (const d of (doRes.data ?? []) as Array<{ id: string; so_doc_no: string | null; do_date: string | null; created_at: string | null }>) {
+    if (d.so_doc_no) doToSo.set(d.id, d.so_doc_no);
+    push(d.so_doc_no, { date: d.do_date ?? d.created_at ?? '', createdAt: d.created_at ?? '', kind: 'delivered' });
+  }
+  for (const s of (siRes.data ?? []) as Array<{ so_doc_no: string | null; invoice_date: string | null; created_at: string | null }>) {
+    push(s.so_doc_no, { date: s.invoice_date ?? s.created_at ?? '', createdAt: s.created_at ?? '', kind: 'invoiced' });
+  }
+
+  const doIds = [...doToSo.keys()];
+  if (doIds.length > 0) {
+    const { data: drRows } = await sb.from('delivery_returns')
+      .select('delivery_order_id, return_date, created_at, status')
+      .in('delivery_order_id', doIds)
+      .neq('status', 'CANCELLED');
+    for (const r of (drRows ?? []) as Array<{ delivery_order_id: string | null; return_date: string | null; created_at: string | null }>) {
+      const so = r.delivery_order_id ? doToSo.get(r.delivery_order_id) : undefined;
+      push(so, { date: r.return_date ?? r.created_at ?? '', createdAt: r.created_at ?? '', kind: 'returned' });
+    }
+  }
+
+  const priority: Record<SoLifecycle, number> = { none: 0, delivered: 1, invoiced: 2, returned: 3 };
+  for (const [doc, evs] of events) {
+    let best: Ev | null = null;
+    for (const ev of evs) {
+      if (!best) { best = ev; continue; }
+      const dc = ev.date.localeCompare(best.date);
+      if (dc > 0) { best = ev; continue; }
+      if (dc < 0) continue;
+      const cc = ev.createdAt.localeCompare(best.createdAt);
+      if (cc > 0) { best = ev; continue; }
+      if (cc < 0) continue;
+      if (priority[ev.kind] > priority[best.kind]) best = ev;
+    }
+    out.set(doc, best ? best.kind : 'none');
+  }
+  return out;
+}
+
+/* Per-DO lifecycle state by "latest event wins" (Wei Siang 2026-05-31). A
+   Delivery Order ships on creation, so its baseline badge is 'shipped'. If a
+   NON-cancelled Sales Invoice or Delivery Return points back at the DO, the one
+   with the most recent business date (invoice_date / return_date, tie-broken by
+   created_at, then return-over-invoice for the same instant) takes the badge:
+     • no SI / DR     → 'shipped'
+     • latest is a SI  → 'invoiced'
+     • latest is a DR  → 'returned'   (Delivery Return)
+   Cancelled DOs are handled by the stored status, not here. Read-only. */
+export type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
+export async function computeDoLifecycle(
+  sb: any,
+  doIds: string[],
+): Promise<Map<string, DoLifecycle>> {
+  const out = new Map<string, DoLifecycle>();
+  const ids = [...new Set(doIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+
+  type Ev = { date: string; createdAt: string; kind: DoLifecycle };
+  const events = new Map<string, Ev[]>();
+  const push = (doId: string | null | undefined, ev: Ev) => {
+    if (!doId) return;
+    const arr = events.get(doId) ?? [];
+    arr.push(ev);
+    events.set(doId, arr);
+  };
+
+  const [siRes, drRes] = await Promise.all([
+    sb.from('sales_invoices')
+      .select('delivery_order_id, invoice_date, created_at, status')
+      .in('delivery_order_id', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('delivery_returns')
+      .select('delivery_order_id, return_date, created_at, status')
+      .in('delivery_order_id', ids)
+      .neq('status', 'CANCELLED'),
+  ]);
+  for (const s of (siRes.data ?? []) as Array<{ delivery_order_id: string | null; invoice_date: string | null; created_at: string | null }>) {
+    push(s.delivery_order_id, { date: s.invoice_date ?? s.created_at ?? '', createdAt: s.created_at ?? '', kind: 'invoiced' });
+  }
+  for (const r of (drRes.data ?? []) as Array<{ delivery_order_id: string | null; return_date: string | null; created_at: string | null }>) {
+    push(r.delivery_order_id, { date: r.return_date ?? r.created_at ?? '', createdAt: r.created_at ?? '', kind: 'returned' });
+  }
+
+  const priority: Record<DoLifecycle, number> = { shipped: 0, invoiced: 1, returned: 2 };
+  for (const id of ids) {
+    const evs = events.get(id);
+    if (!evs || evs.length === 0) { out.set(id, 'shipped'); continue; }
+    let best: Ev | null = null;
+    for (const ev of evs) {
+      if (!best) { best = ev; continue; }
+      const dc = ev.date.localeCompare(best.date);
+      if (dc > 0) { best = ev; continue; }
+      if (dc < 0) continue;
+      const cc = ev.createdAt.localeCompare(best.createdAt);
+      if (cc > 0) { best = ev; continue; }
+      if (cc < 0) continue;
+      if (priority[ev.kind] > priority[best.kind]) best = ev;
+    }
+    out.set(id, best ? best.kind : 'shipped');
+  }
   return out;
 }
 
@@ -607,12 +768,15 @@ deliveryOrdersMfg.get('/', async (c) => {
      that are downstream-locked (mirrors computeGrnFlags in routes/grns.ts). */
   const rows = (data ?? []) as unknown as Array<{ id: string } & Record<string, unknown>>;
   const childIds = new Set<string>();
+  let lifecycleByDo = new Map<string, DoLifecycle>();
   if (rows.length > 0) {
     const ids = rows.map((r) => r.id);
-    const [drRes, siRes] = await Promise.all([
+    const [drRes, siRes, lc] = await Promise.all([
       sb.from('delivery_returns').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
       sb.from('sales_invoices').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
+      computeDoLifecycle(sb, ids),
     ]);
+    lifecycleByDo = lc;
     for (const d of ((drRes.data ?? []) as Array<{ delivery_order_id: string | null }>)) {
       if (d.delivery_order_id) childIds.add(d.delivery_order_id);
     }
@@ -620,7 +784,11 @@ deliveryOrdersMfg.get('/', async (c) => {
       if (s.delivery_order_id) childIds.add(s.delivery_order_id);
     }
   }
-  const deliveryOrders = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
+  const deliveryOrders = rows.map((r) => ({
+    ...r,
+    has_children: childIds.has(r.id),
+    lifecycle_state: lifecycleByDo.get(r.id) ?? 'shipped',
+  }));
   return c.json({ deliveryOrders });
 });
 
@@ -680,9 +848,11 @@ deliveryOrdersMfg.get('/:id', async (c) => {
       .eq('delivery_order_id', id)
       .neq('status', 'CANCELLED'),
   ]);
+  const lifecycleByDo = await computeDoLifecycle(sb, [id]);
   const deliveryOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (drCount ?? 0) > 0 || (siCount ?? 0) > 0,
+    lifecycle_state: lifecycleByDo.get(id) ?? 'shipped',
   };
   return c.json({ deliveryOrder, items: i.data ?? [] });
 });

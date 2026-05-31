@@ -1,29 +1,27 @@
 // ----------------------------------------------------------------------------
-// PurchaseInvoiceFromGrn — multi-select GRN LINE → PI picker (PR — task #52,
-// Commander 2026-05-27).
+// PurchaseInvoiceFromGrn — GRN LINE → Purchase Invoice picker.
 //
-// Mirrors GrnFromPo but for GRN→PI: lists every accepted GRN line on
-// POSTED GRNs that have NOT yet been invoiced (header-level dedupe per
-// MVP — see /purchase-invoices/outstanding-grn-items handler for the
-// trade-off note). Server groups picks by grn_id (PI has single grn_id
-// FK) and emits one PI per GRN, auto-posted.
+// A purchase invoice belongs to ONE goods-received note (purchase_invoices has
+// a single grn_id FK), so this picker locks to one note at a time: tick the
+// lines you want to bill from a single note, then Continue to the review
+// screen where you confirm prices/dates and click Create. Nothing is invoiced
+// until that final Create — this page only carries your picks forward.
 //
-// PI does NOT touch inventory (PI is AP-only — inventory landed at GRN
-// time). The trade-off this surfaces: if a GRN is partially invoiced
-// today, the remaining lines won't show until grn_items gets an
-// invoiced_qty column. Track as follow-up if/when needed.
+// Lines from other notes are dimmed while one note is active; clear your picks
+// to switch notes. Each line is capped at its REMAINING quantity (accepted
+// minus already-invoiced minus returned), so a part-billed note still shows
+// only what is left to bill.
 //
-// Routing: /purchase-invoices/from-grn — full-page form so the chrome
-// matches GrnFromPo / PurchaseInvoiceNew.
+// Routing: /purchase-invoices/from-grn — full-page form so the chrome matches
+// GrnFromPo / PurchaseInvoiceNew.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Save, X, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useOutstandingGrnItems,
-  useCreatePisFromGrnItems,
   type OutstandingGrnItem,
 } from '../lib/suppliers-queries';
 import styles from './SalesOrderDetail.module.css';
@@ -38,15 +36,8 @@ const fmtRm = (centi: number, currency = 'MYR'): string =>
 export const PurchaseInvoiceFromGrn = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingGrnItems();
-  const create   = useCreatePisFromGrnItems();
 
   const [picks, setPicks] = useState<Record<string, { picked: boolean; qty: number }>>({});
-
-  // PI Defaults applied to every emitted PI.
-  const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState<string>('');
-  const [invoiceDate, setInvoiceDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
-  const [dueDate, setDueDate] = useState<string>('');
-  const [notes, setNotes] = useState<string>('');
 
   const items = itemsQ.data ?? [];
 
@@ -61,28 +52,33 @@ export const PurchaseInvoiceFromGrn = () => {
     return [...byDoc.entries()].map(([docNo, { meta, lines }]) => ({ docNo, meta, lines }));
   }, [items]);
 
-  const togglePick = (id: string, accepted: number) =>
+  // The note currently being billed = the GRN of the first ticked line. While
+  // it is set, lines from every OTHER note are locked (one PI ↔ one note).
+  const activeGrnId = useMemo(() => {
+    for (const it of items) {
+      const p = picks[it.grnItemId];
+      if (p?.picked && p.qty > 0) return it.grnId;
+    }
+    return null;
+  }, [picks, items]);
+
+  const togglePick = (it: OutstandingGrnItem) => {
+    if (activeGrnId && activeGrnId !== it.grnId) return; // locked to another note
     setPicks((s) => ({
       ...s,
-      [id]: s[id]?.picked
+      [it.grnItemId]: s[it.grnItemId]?.picked
         ? { picked: false, qty: 0 }
-        : { picked: true, qty: s[id]?.qty || accepted },
+        : { picked: true, qty: s[it.grnItemId]?.qty || it.remaining },
     }));
+  };
 
-  const setQty = (id: string, qty: number) =>
-    setPicks((s) => ({ ...s, [id]: { picked: true, qty } }));
+  const setQty = (it: OutstandingGrnItem, qty: number) =>
+    setPicks((s) => ({ ...s, [it.grnItemId]: { picked: true, qty } }));
 
   const toggleAllInGrn = (lines: OutstandingGrnItem[], on: boolean) =>
     setPicks((s) => {
       const next = { ...s };
-      for (const l of lines) next[l.grnItemId] = on ? { picked: true, qty: l.qtyAccepted } : { picked: false, qty: 0 };
-      return next;
-    });
-
-  const selectAll = () =>
-    setPicks(() => {
-      const next: Record<string, { picked: boolean; qty: number }> = {};
-      for (const l of items) next[l.grnItemId] = { picked: true, qty: l.qtyAccepted };
+      for (const l of lines) next[l.grnItemId] = on ? { picked: true, qty: l.remaining } : { picked: false, qty: 0 };
       return next;
     });
 
@@ -91,24 +87,11 @@ export const PurchaseInvoiceFromGrn = () => {
   const picked = Object.entries(picks).filter(([, v]) => v.picked && v.qty > 0);
   const pickedCount = picked.length;
 
-  const onSave = () => {
-    if (pickedCount === 0) { window.alert('Tick at least one GRN line first.'); return; }
-    if (!invoiceDate) { window.alert('Invoice Date is required.'); return; }
-    const body = {
-      picks: picked.map(([grnItemId, v]) => ({ grnItemId, qty: v.qty })),
-      supplierInvoiceNumber: supplierInvoiceNumber || undefined,
-      invoiceDate,
-      dueDate: dueDate || undefined,
-      notes: notes || undefined,
-    };
-    create.mutate(body, {
-      onSuccess: (res) => {
-        const summary = res.created.map((p) => p.invoiceNumber).join(', ');
-        window.alert(`Created ${res.total} PI${res.total === 1 ? '' : 's'}: ${summary}`);
-        navigate('/purchase-invoices');
-      },
-      onError: (err) => window.alert(`Create failed: ${err instanceof Error ? err.message : String(err)}`),
-    });
+  const onContinue = () => {
+    if (pickedCount === 0 || !activeGrnId) { window.alert('Tick at least one line from one note first.'); return; }
+    const stash = picked.map(([grnItemId, v]) => ({ grnItemId, qty: v.qty }));
+    sessionStorage.setItem('piFromGrnPicks', JSON.stringify(stash));
+    navigate(`/purchase-invoices/new?grnId=${encodeURIComponent(activeGrnId)}&fromPicks=1`);
   };
 
   return (
@@ -118,7 +101,7 @@ export const PurchaseInvoiceFromGrn = () => {
           <Link to="/purchase-invoices" className={styles.backBtn}>
             <ArrowLeft {...ICON} /> <span>Purchase Invoices</span>
           </Link>
-          <h1 className={styles.title}>Create Purchase Invoice from GRNs</h1>
+          <h1 className={styles.title}>Bill a Goods-Received Note</h1>
         </div>
         <div className={styles.actions}>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-invoices')}>
@@ -126,82 +109,23 @@ export const PurchaseInvoiceFromGrn = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={onSave}
-            disabled={create.isPending || pickedCount === 0 || !invoiceDate}
+            onClick={onContinue}
+            disabled={pickedCount === 0}
           >
-            <Save {...ICON} />
-            {create.isPending
-              ? 'Creating…'
-              : pickedCount === 0
-                ? 'Pick at least 1 line'
-                : !invoiceDate
-                  ? 'Set invoice date'
-                  : `Create PIs (${pickedCount} line${pickedCount === 1 ? '' : 's'})`}
+            <ArrowRight {...ICON} />
+            {pickedCount === 0
+              ? 'Pick at least 1 line'
+              : `Continue with ${pickedCount} line${pickedCount === 1 ? '' : 's'}`}
           </Button>
         </div>
       </div>
 
       <section className={styles.card}>
         <div className={styles.cardHeader}>
-          <h2 className={styles.cardTitle}>PI Defaults</h2>
-          <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
-            Applied to every PI created from this batch.
-          </span>
-        </div>
-        <div className={styles.cardBody}>
-          <div className={styles.formGrid2}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Supplier Invoice #</span>
-              <input
-                type="text"
-                value={supplierInvoiceNumber}
-                onChange={(e) => setSupplierInvoiceNumber(e.target.value)}
-                placeholder="From the supplier's printed invoice (optional)"
-                className={styles.fieldInput}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Invoice Date *</span>
-              <input
-                type="date"
-                value={invoiceDate}
-                onChange={(e) => setInvoiceDate(e.target.value)}
-                className={styles.fieldInput}
-                required
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Due Date</span>
-              <input
-                type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                className={styles.fieldInput}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Notes</span>
-              <input
-                type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Optional — applies to every PI"
-                className={styles.fieldInput}
-              />
-            </label>
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Outstanding GRN Lines</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <Button variant="ghost" size="sm" onClick={selectAll} disabled={items.length === 0}>
-              <CheckSquare {...ICON} /> Select all (full qty)
-            </Button>
             <Button variant="ghost" size="sm" onClick={clearAll} disabled={Object.keys(picks).length === 0}>
-              <Square {...ICON} /> Clear all
+              <X {...ICON} /> Clear picks
             </Button>
             <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
               {itemsQ.isLoading ? 'Loading…'
@@ -210,13 +134,18 @@ export const PurchaseInvoiceFromGrn = () => {
             </span>
           </div>
         </div>
+        <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', padding: '0 var(--space-4) var(--space-2)' }}>
+          One purchase invoice covers one note. Tick lines from a single note, then Continue to review — nothing is
+          invoiced until you click Create on the next screen.
+        </p>
         <div className={styles.cardBody} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           {grouped.length === 0 && !itemsQ.isLoading && (
             <p style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)' }}>
-              Once a GRN is posted (and not yet invoiced), its accepted lines will show up here.
+              Once a GRN is posted (and not yet fully invoiced), its lines will show up here.
             </p>
           )}
           {grouped.map(({ docNo, meta, lines }) => {
+            const locked   = Boolean(activeGrnId) && activeGrnId !== meta.grnId;
             const allPicked = lines.every((l) => picks[l.grnItemId]?.picked);
             return (
               <div key={docNo} style={{
@@ -224,12 +153,14 @@ export const PurchaseInvoiceFromGrn = () => {
                 borderRadius: 'var(--radius-md)',
                 background: 'var(--c-paper)',
                 padding: 'var(--space-3) var(--space-4)',
+                opacity: locked ? 0.5 : 1,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: locked ? 'not-allowed' : 'pointer' }}>
                     <input
                       type="checkbox"
                       checked={allPicked}
+                      disabled={locked}
                       onChange={() => toggleAllInGrn(lines, !allPicked)}
                     />
                     <strong>{docNo}</strong>
@@ -240,11 +171,16 @@ export const PurchaseInvoiceFromGrn = () => {
                       `Received ${meta.receivedAt}`,
                     ].filter(Boolean).join(' · ')}
                   </span>
+                  {locked && (
+                    <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-soft)', fontStyle: 'italic' }}>
+                      Clear your picks to bill this note instead
+                    </span>
+                  )}
                 </div>
 
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '24px minmax(120px, 1fr) minmax(200px, 2fr) 80px 80px 110px',
+                  gridTemplateColumns: '24px minmax(120px, 1fr) minmax(200px, 2fr) 90px 80px 110px',
                   gap: 'var(--space-2)',
                   alignItems: 'center',
                   fontSize: 'var(--fs-12)',
@@ -258,21 +194,21 @@ export const PurchaseInvoiceFromGrn = () => {
                   <div></div>
                   <div>Item Code</div>
                   <div>Description</div>
-                  <div style={{ textAlign: 'right' }}>Accepted</div>
-                  <div style={{ textAlign: 'right' }}>Pick Qty</div>
+                  <div style={{ textAlign: 'right' }}>Remaining</div>
+                  <div style={{ textAlign: 'right' }}>Bill Qty</div>
                   <div style={{ textAlign: 'right' }}>Line Value</div>
                 </div>
 
                 {lines.map((l) => {
                   const p = picks[l.grnItemId];
                   const on = Boolean(p?.picked);
-                  const pickQty = on ? p!.qty : l.qtyAccepted;
+                  const pickQty = on ? p!.qty : l.remaining;
                   return (
                     <div
                       key={l.grnItemId}
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '24px minmax(120px, 1fr) minmax(200px, 2fr) 80px 80px 110px',
+                        gridTemplateColumns: '24px minmax(120px, 1fr) minmax(200px, 2fr) 90px 80px 110px',
                         gap: 'var(--space-2)',
                         alignItems: 'center',
                         padding: 'var(--space-2) 0',
@@ -283,19 +219,20 @@ export const PurchaseInvoiceFromGrn = () => {
                       <input
                         type="checkbox"
                         checked={on}
-                        onChange={() => togglePick(l.grnItemId, l.qtyAccepted)}
+                        disabled={locked}
+                        onChange={() => togglePick(l)}
                       />
                       <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.itemCode}</span>
                       <span style={{ fontSize: 'var(--fs-13)' }}>{l.description ?? '—'}</span>
-                      <span style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.qtyAccepted}</span>
+                      <span style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-13)' }}>{l.remaining}</span>
                       <input
                         type="number"
                         min={0}
-                        max={l.qtyAccepted}
+                        max={l.remaining}
                         value={on ? pickQty : ''}
-                        placeholder={String(l.qtyAccepted)}
-                        onChange={(e) => setQty(l.grnItemId, Math.min(l.qtyAccepted, Math.max(0, Number(e.target.value) || 0)))}
-                        disabled={!on}
+                        placeholder={String(l.remaining)}
+                        onChange={(e) => setQty(l, Math.min(l.remaining, Math.max(0, Number(e.target.value) || 0)))}
+                        disabled={!on || locked}
                         className={styles.fieldInput}
                         style={{ textAlign: 'right', padding: '4px 6px', fontSize: 'var(--fs-13)' }}
                       />

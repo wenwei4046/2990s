@@ -101,6 +101,9 @@ export const PurchaseInvoiceNew = () => {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const grnId    = params.get('grnId');
+  // fromPicks = arrived from the GRN→PI review picker: build ONLY the ticked
+  // lines (with the ticked qty), not every accepted line on the GRN.
+  const fromPicks = params.get('fromPicks') === '1';
   const grnQ     = useGrnDetail(grnId);
 
   // Manual mode = no ?grnId= in the URL (Commander 2026-05-29 — blank PI).
@@ -134,8 +137,25 @@ export const PurchaseInvoiceNew = () => {
   // ── GRN-sourced lines (only when ?grnId= present). ──────────────────────
   useEffect(() => {
     if (!grnQ.data) return;
+    // In picker mode, only the ticked GRN lines come through — keyed by GRN
+    // line id → ticked qty. Outside picker mode, prefill every accepted line.
+    let pickQtyById: Map<string, number> | null = null;
+    if (fromPicks) {
+      try {
+        const raw = sessionStorage.getItem('piFromGrnPicks');
+        if (raw) {
+          const arr = JSON.parse(raw) as Array<{ grnItemId: string; qty: number }>;
+          pickQtyById = new Map(arr.map((p) => [p.grnItemId, Number(p.qty ?? 0)]));
+        }
+      } catch { pickQtyById = null; }
+      sessionStorage.removeItem('piFromGrnPicks');
+    }
     const next: DraftLine[] = (grnQ.data.items ?? [])
-      .filter((it: any) => (it.qty_accepted ?? 0) > 0)
+      // Remaining-to-bill = accepted − already-invoiced − returned-to-supplier.
+      // Outside picker mode, prefill only lines that still have something left
+      // to bill (so a part-billed note doesn't re-show settled lines).
+      .map((it: any) => ({ ...it, _remaining: (it.qty_accepted ?? 0) - (it.invoiced_qty ?? 0) - (it.returned_qty ?? 0) }))
+      .filter((it: any) => (pickQtyById ? pickQtyById.has(it.id) : it._remaining > 0))
       .map((it: any) => ({
         rid:            `r${it.id}`,
         grnItemId:      it.id,
@@ -146,12 +166,12 @@ export const PurchaseInvoiceNew = () => {
         // PI shows the same variant summary as the GRN it descends from.
         itemGroup:      it.item_group ?? null,
         variants:       (it.variants as Record<string, unknown> | null) ?? null,
-        qty:            it.qty_accepted,
+        qty:            pickQtyById ? (pickQtyById.get(it.id) ?? it._remaining) : it._remaining,
         unitPriceCenti: it.unit_price_centi ?? 0,
         notes:          '',
       }));
     setLines(next);
-  }, [grnQ.data]);
+  }, [grnQ.data, fromPicks]);
 
   // Manual mode — seed ONE blank starter line so a LINE 1 card shows
   // immediately (matches New PO). Only when empty (never clobbers).

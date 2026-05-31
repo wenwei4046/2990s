@@ -59,7 +59,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { useStaff } from '../lib/admin-queries';
-import { soStatusDisplay, type DeliveryState } from '../lib/so-status';
+import { soStatusDisplay, type DeliveryState, type SoLifecycle } from '../lib/so-status';
 import { useAuth } from '../lib/auth';
 import { useVenues } from '../lib/venues-queries';
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
@@ -135,7 +135,7 @@ const STATUS_LIST = [
 ] as const;
 type SoStatus = typeof STATUS_LIST[number];
 
-const STATUS_CLASS: Record<SoStatus, string> = {
+const STATUS_CLASS: Record<string, string> = {
   CONFIRMED:      styles.statusConfirmed ?? '',
   IN_PRODUCTION:  styles.statusInProd ?? '',
   READY_TO_SHIP:  styles.statusReady ?? '',
@@ -144,6 +144,7 @@ const STATUS_CLASS: Record<SoStatus, string> = {
   INVOICED:       styles.statusInvoiced ?? '',
   CLOSED:         styles.statusClosed ?? '',
   CANCELLED:      styles.statusCancelled ?? '',
+  RETURNED:       styles.statusReturned ?? '',
 };
 
 const fmtRm = (centi: number, currency = 'MYR'): string =>
@@ -769,7 +770,11 @@ export const SalesOrderDetail = () => {
             </span>
           </div>
           {(() => {
-            const eff = soStatusDisplay(header.status, (header as { delivery_state?: DeliveryState }).delivery_state);
+            const eff = soStatusDisplay(
+              header.status,
+              (header as { delivery_state?: DeliveryState }).delivery_state,
+              (header as { lifecycle_state?: SoLifecycle }).lifecycle_state,
+            );
             return (
               <span className={`${styles.statusPill} ${STATUS_CLASS[eff.classKey as SoStatus] ?? ''}`}>
                 {eff.label ?? header.status.replace(/_/g, ' ')}

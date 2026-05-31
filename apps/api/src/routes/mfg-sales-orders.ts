@@ -33,7 +33,7 @@ import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
-import { soDeliverableRemaining, soLineDeliveries, soLinePoCoverage } from './delivery-orders-mfg';
+import { soDeliverableRemaining, soLineDeliveries, soLinePoCoverage, computeSoLifecycle } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -434,6 +434,10 @@ mfgSalesOrders.get('/', async (c) => {
       }
     }
 
+    /* Per-SO status badge driver — "latest event wins" across DO / SI / DR
+       (Wei Siang 2026-05-31). 'none' falls back to the stored status. */
+    const lifecycleByDoc = await computeSoLifecycle(sb, docNos);
+
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
       const perGroup = agg.get(docNo);
@@ -443,6 +447,7 @@ mfgSalesOrders.get('/', async (c) => {
       const dRemaining = remainingTotal.get(docNo) ?? 0;
       (r as Record<string, unknown>).delivery_state =
         dDelivered <= 0 ? 'none' : dRemaining > 0 ? 'partial' : 'full';
+      (r as Record<string, unknown>).lifecycle_state = lifecycleByDoc.get(docNo) ?? 'none';
       (r as Record<string, unknown>).has_undelivered = hasUndelivered.has(docNo);
       const readiness = readinessByDoc.get(docNo);
       (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
@@ -627,6 +632,9 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   const totalRemaining = items.reduce((s, it) => s + Number(it.remaining_qty ?? 0), 0);
   (salesOrder as Record<string, unknown>).delivery_state =
     totalDelivered <= 0 ? 'none' : totalRemaining > 0 ? 'partial' : 'full';
+  /* Status badge driver — same "latest event wins" engine as the list. */
+  const lifecycleByDoc = await computeSoLifecycle(sb, [docNo]);
+  (salesOrder as Record<string, unknown>).lifecycle_state = lifecycleByDoc.get(docNo) ?? 'none';
   return c.json({ salesOrder, items });
 });
 

@@ -1,15 +1,23 @@
-// Sales Order status display — overlays live delivery progress on top of the
-// stored status enum. The stored status (CONFIRMED, IN_PRODUCTION, …) does not
-// auto-advance when DOs ship, so an SO that has shipped some lines would still
-// read "Confirmed". This derives a "Partially Delivered" / "Delivered" label
-// from the delivery_state the API computes, but only while the SO is still in a
-// pre-completion status — terminal states (Invoiced / Closed / Cancelled) are
-// left untouched so the operator keeps seeing the business state they care about.
+// Sales Order status display — DOCUMENT-DRIVEN, "latest event wins".
+//
+// The Status pill reflects the most recent live document raised against the
+// Sales Order (its lifecycle_state, computed by the API): Delivered, Invoiced,
+// or Delivery Return. Before any such document exists it falls back to the SO's
+// stored status (Confirmed / Proceed / Stock Ready …) — UNCHANGED, not masked.
+// If that stored status is wrong (e.g. "Stock Ready" while incoming stock has
+// not arrived) the fix belongs in the status-setting / readiness logic, never in
+// a display override here.
+//
+// "Latest event wins" means a Delivery Return shows while it is the newest event,
+// but raising a fresh Delivery Order or Invoice afterwards flips the pill straight
+// back to Delivered / Invoiced (the API recomputes lifecycle_state each load).
+// Terminal operator states (Cancelled / Closed / On Hold) always take precedence.
 
 export type DeliveryState = 'none' | 'partial' | 'full';
+export type SoLifecycle = 'none' | 'delivered' | 'invoiced' | 'returned';
 
-// Statuses whose label may be replaced by the live delivery progress.
-const OVERRIDABLE = new Set(['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED', 'DELIVERED']);
+// Operator-set states that always win over any document overlay.
+const TERMINAL = new Set(['CANCELLED', 'CLOSED', 'ON_HOLD']);
 
 export type SoStatusDisplay = {
   // Label to render. null => caller should fall back to its own STATUS_LABEL map.
@@ -18,10 +26,32 @@ export type SoStatusDisplay = {
   classKey: string;
 };
 
-export function soStatusDisplay(status: string, deliveryState: DeliveryState | undefined): SoStatusDisplay {
-  if (deliveryState && OVERRIDABLE.has(status)) {
-    if (deliveryState === 'partial') return { label: 'Partially Delivered', classKey: 'SHIPPED' };
-    if (deliveryState === 'full') return { label: 'Delivered', classKey: 'DELIVERED' };
+export function soStatusDisplay(
+  status: string,
+  deliveryState: DeliveryState | undefined,
+  lifecycleState?: SoLifecycle,
+): SoStatusDisplay {
+  // Terminal operator states always win.
+  if (TERMINAL.has(status)) return { label: null, classKey: status };
+
+  // Document lifecycle (latest event wins) drives the badge.
+  switch (lifecycleState) {
+    case 'returned':
+      return { label: 'Delivery Return', classKey: 'RETURNED' };
+    case 'invoiced':
+      return { label: 'Invoiced', classKey: 'INVOICED' };
+    case 'delivered':
+      if (deliveryState === 'partial') return { label: 'Partially Delivered', classKey: 'SHIPPED' };
+      return { label: 'Delivered', classKey: 'DELIVERED' };
+    default:
+      break; // 'none' / undefined — no document yet, fall through.
   }
+
+  // No document event. A partial/full delivery without a lifecycle signal still
+  // shows progress (defensive — list + detail both send lifecycle_state).
+  if (deliveryState === 'partial') return { label: 'Partially Delivered', classKey: 'SHIPPED' };
+  if (deliveryState === 'full') return { label: 'Delivered', classKey: 'DELIVERED' };
+
+  // No document yet — show the SO's real stored status as-is.
   return { label: null, classKey: status };
 }

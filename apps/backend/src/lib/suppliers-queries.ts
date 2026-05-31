@@ -581,6 +581,7 @@ export type OutstandingGrnItem = {
   description:     string | null;
   itemGroup:       string;
   qtyAccepted:     number;
+  remaining:       number;
   unitPriceCenti:  number;
   variants:        unknown;
 };

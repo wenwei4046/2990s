@@ -41,7 +41,7 @@ import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-type DraftLine = SoLineDraft & { rid: string };
+type DraftLine = SoLineDraft & { rid: string; doItemId?: string };
 
 const newLine = (): DraftLine => ({
   ...emptySoLine(),
@@ -55,6 +55,7 @@ export const SalesInvoiceNew = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromDo = searchParams.get('fromDo');
+  const fromPicks = searchParams.get('fromPicks') === '1';
 
   const create = useCreateSalesInvoice();
   const addPayment = useAddSalesInvoicePayment();
@@ -141,11 +142,44 @@ export const SalesInvoiceNew = () => {
     setEmergencyRel((doc.emergency_contact_relationship as string) ?? '');
     setEmergencyPhone((doc.emergency_contact_phone as string) ?? '');
 
-    // Line items — carry variants + prices + costs.
-    if (doItems.length > 0) {
+    // Line items. When we arrived from the DO→SI picker (fromPicks) the operator
+    // already chose specific lines + quantities — build from that stash, carrying
+    // each line's doItemId so the invoice stays linked to its DO line (the server's
+    // remaining-to-invoice tracking depends on it). Otherwise (plain ?fromDo) seed
+    // every DO line at its full quantity.
+    type Stash = {
+      doItemId: string; itemCode: string; itemGroup: string | null;
+      description: string | null; uom: string | null; qty: number;
+      unitPriceCenti: number; discountCenti: number; unitCostCenti: number;
+      variants: unknown;
+    };
+    let stash: Stash[] | null = null;
+    if (fromPicks) {
+      try { stash = JSON.parse(sessionStorage.getItem('siFromDoPicks') ?? 'null'); }
+      catch { stash = null; }
+    }
+
+    if (stash && stash.length > 0) {
+      setLines(stash.map((s, i) => ({
+        ...emptySoLine(),
+        rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
+        doItemId: s.doItemId,
+        itemCode: s.itemCode ?? '',
+        itemGroup: (s.itemGroup as string) ?? 'others',
+        description: s.description ?? '',
+        uom: s.uom ?? 'UNIT',
+        qty: Number(s.qty ?? 1),
+        unitPriceCenti: Number(s.unitPriceCenti ?? 0),
+        discountCenti: Number(s.discountCenti ?? 0),
+        unitCostCenti: Number(s.unitCostCenti ?? 0),
+        variants: (s.variants as Record<string, unknown>) ?? {},
+      })));
+      sessionStorage.removeItem('siFromDoPicks');
+    } else if (doItems.length > 0) {
       setLines(doItems.map((it) => ({
         ...emptySoLine(),
         rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${String(it.id)}`,
+        doItemId: (it.id as string) ?? undefined,
         itemCode: (it.item_code as string) ?? '',
         itemGroup: (it.item_group as string) ?? 'others',
         description: (it.description as string) ?? '',
@@ -159,8 +193,10 @@ export const SalesInvoiceNew = () => {
       })));
     }
 
-    // Payment records — map DO payments to PaymentsTable drafts.
-    const pays = doPayments.data ?? [];
+    // Payment records — map DO payments to PaymentsTable drafts. Skip when we
+    // arrived from the line picker: a partial invoice must not re-record the DO's
+    // full deposits. The operator adds any payment for this invoice by hand.
+    const pays = fromPicks ? [] : (doPayments.data ?? []);
     if (pays.length > 0) {
       setPaymentDrafts(pays.map((p) => {
         const methodLabel = p.method === 'cash' ? 'Cash' : p.method === 'transfer' ? 'Online' : 'Merchant';
@@ -181,7 +217,7 @@ export const SalesInvoiceNew = () => {
     }
 
     setPrefilled(true);
-  }, [fromDo, prefilled, doDetail.data, doPayments.data]);
+  }, [fromDo, fromPicks, prefilled, doDetail.data, doPayments.data]);
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
 
@@ -271,6 +307,7 @@ export const SalesInvoiceNew = () => {
         emergencyContactPhone: emergencyPhone || undefined,
         note: note || undefined,
         items: validLines.map((l) => ({
+          doItemId: l.doItemId,
           itemGroup: l.itemGroup,
           itemCode: l.itemCode,
           description: l.description,

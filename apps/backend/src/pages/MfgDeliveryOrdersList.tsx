@@ -73,6 +73,9 @@ type DoRow = {
      ANY non-cancelled DR / SI. Hides Edit + Cancel from the context menu;
      convert-to-DR / convert-to-SI stay (partial flow allowed). */
   has_children?: boolean;
+  /* Document-driven status (latest event wins) — 'invoiced' | 'returned', else
+     'shipped' baseline. Sent by the list endpoint. */
+  lifecycle_state?: 'shipped' | 'invoiced' | 'returned';
 };
 
 const fmtRm = (centi: number): string =>
@@ -97,6 +100,7 @@ const STATUS_CLASS: Record<string, string> = {
   SIGNED:      soDetailStyles.statusReady ?? '',
   DELIVERED:   soDetailStyles.statusDelivered ?? '',
   INVOICED:    soDetailStyles.statusInvoiced ?? '',
+  RETURNED:    soDetailStyles.statusReturned ?? '',
   CANCELLED:   soDetailStyles.statusCancelled ?? '',
 };
 const STATUS_LABEL: Record<string, string> = {
@@ -106,18 +110,30 @@ const STATUS_LABEL: Record<string, string> = {
   SIGNED:     'Signed',
   DELIVERED:  'Delivered',
   INVOICED:   'Invoiced',
+  RETURNED:   'Delivery Return',
   CANCELLED:  'Cancelled',
 };
-/* Commander 2026-05-29 — a DO ships on creation (status DISPATCHED = "Shipped"),
-   so the intermediate Loaded / In Transit / Signed / Delivered stages were
-   dropped from the filter chips. Only the states that actually occur remain. */
-const STATUS_CHIPS = ['all', 'DISPATCHED', 'INVOICED', 'CANCELLED'] as const;
+/* Document-driven status (Wei Siang 2026-05-31) — "latest event wins". A DO
+   ships on creation (Shipped); if a non-cancelled Sales Invoice or Delivery
+   Return points back at it, the most recent one becomes the badge. Cancelled
+   (operator action) always wins. The list endpoint sends lifecycle_state. */
+type DoLifecycle = 'shipped' | 'invoiced' | 'returned';
+const doEffectiveKey = (status: string, lifecycle?: DoLifecycle): string => {
+  if (status === 'CANCELLED') return 'CANCELLED';
+  if (lifecycle === 'returned') return 'RETURNED';
+  if (lifecycle === 'invoiced') return 'INVOICED';
+  return 'DISPATCHED'; // shipped baseline
+};
+const STATUS_CHIPS = ['all', 'DISPATCHED', 'INVOICED', 'RETURNED', 'CANCELLED'] as const;
 
-const StatusPill = ({ status }: { status: string }) => (
-  <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[status] ?? ''}`}>
-    {STATUS_LABEL[status] ?? status.replace(/_/g, ' ')}
-  </span>
-);
+const StatusPill = ({ status, lifecycle }: { status: string; lifecycle?: DoLifecycle }) => {
+  const key = doEffectiveKey(status, lifecycle);
+  return (
+    <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[key] ?? ''}`}>
+      {STATUS_LABEL[key] ?? key.replace(/_/g, ' ')}
+    </span>
+  );
+};
 
 /* Branding follows the DO's first line item — mirrors the SO list rule. */
 const deriveBranding = (r: DoRow): string => r.branding ?? '';
@@ -369,7 +385,7 @@ export const MfgDeliveryOrdersList = () => {
   const rows = useMemo<DoRow[]>(() => {
     const q = search.trim().toLowerCase();
     return allRows.filter((r) => {
-      if (statusChip !== 'all' && r.status !== statusChip) return false;
+      if (statusChip !== 'all' && doEffectiveKey(r.status, r.lifecycle_state) !== statusChip) return false;
       if (brand && deriveBranding(r) !== brand) return false;
       if (venue && r.venue !== venue) return false;
       if (dateFrom && (r.do_date ?? '') < dateFrom) return false;
@@ -755,10 +771,10 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
   },
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
-    accessor: (r) => <StatusPill status={r.status} />,
-    searchValue: (r) => r.status,
-    groupValue: (r) => r.status,
-    sortFn: (a, b) => a.status.localeCompare(b.status),
+    accessor: (r) => <StatusPill status={r.status} lifecycle={r.lifecycle_state} />,
+    searchValue: (r) => STATUS_LABEL[doEffectiveKey(r.status, r.lifecycle_state)] ?? r.status,
+    groupValue: (r) => doEffectiveKey(r.status, r.lifecycle_state),
+    sortFn: (a, b) => doEffectiveKey(a.status, a.lifecycle_state).localeCompare(doEffectiveKey(b.status, b.lifecycle_state)),
   },
   /* ── Default-hidden long-tail ── */
   {

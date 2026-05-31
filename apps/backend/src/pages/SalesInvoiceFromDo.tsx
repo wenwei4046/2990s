@@ -20,19 +20,21 @@
 // A customer-lock keeps the merge clean: once one line is ticked, lines of a
 // DIFFERENT customer grey out — an invoice bills ONE customer.
 //
-// On convert the server creates ONE invoice (status SENT) with one line per pick
-// and records revenue (Dr Accounts Receivable / Cr Sales Revenue) for the total;
-// we land on the new invoice's detail.
+// Continue stashes the picked lines (carrying each line's doItemId) and opens the
+// normal New Sales Invoice form prefilled for review. Nothing is invoiced and no
+// revenue is recorded until the operator clicks Create there — that POST records
+// revenue (Dr Accounts Receivable / Cr Sales Revenue) and caps each line at its
+// live remaining-to-invoice via the same guard the old auto-convert used.
 //
 // Routing: /sales-invoices/from-do.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { VariantDescription } from '../components/VariantDescription';
-import { useInvoiceableDoLines, useConvertDosToSi, type DoRemainingLine } from '../lib/flow-queries';
+import { useInvoiceableDoLines, type DoRemainingLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { ItemGroupPill } from '../lib/category-badges';
@@ -71,7 +73,6 @@ type Pick = { picked: boolean; qty: number };
 export const SalesInvoiceFromDo = () => {
   const navigate = useNavigate();
   const linesQ = useInvoiceableDoLines();
-  const convert = useConvertDosToSi();
 
   // Map<doItemId, { picked, qty }>. Defaults: picked = false; when ticked,
   // qty defaults to the line's remaining.
@@ -251,25 +252,44 @@ export const SalesInvoiceFromDo = () => {
     },
   ], [picks, lockedCustomer]);
 
-  const onConvert = () => {
+  const onContinue = () => {
     if (pickedCount === 0) {
       setDialog({ title: 'Nothing picked', body: 'Tick at least one Delivery Order line to invoice first.' });
       return;
     }
-    const picksPayload = picked.map(([doItemId, v]) => ({ doItemId, qty: v.qty }));
-    convert.mutate(
-      { picks: picksPayload },
-      {
-        onSuccess: (res) => {
-          // Land on the new invoice's detail so the picked lines are right there.
-          navigate(`/sales-invoices/${res.id}`);
-        },
-        onError: (e) => setDialog({
-          title: 'Convert failed',
-          body: e instanceof Error ? e.message : String(e),
-        }),
-      },
-    );
+    // Stash the picked lines and open the normal New Sales Invoice form, prefilled
+    // for review. Nothing is invoiced and no revenue is recorded until the operator
+    // clicks Create on that screen.
+    const stash = picked
+      .map(([doItemId, v]) => {
+        const r = rowById.get(doItemId);
+        if (!r) return null;
+        return {
+          doItemId,
+          deliveryOrderId: r.deliveryOrderId,
+          itemCode: r.itemCode,
+          itemGroup: r.itemGroup,
+          description: r.description,
+          uom: r.uom,
+          qty: v.qty,
+          unitPriceCenti: r.unitPriceCenti,
+          discountCenti: r.discountCenti,
+          unitCostCenti: r.unitCostCenti,
+          variants: r.variants,
+        };
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+
+    if (stash.length === 0) {
+      setDialog({ title: 'Nothing picked', body: 'Tick at least one Delivery Order line to invoice first.' });
+      return;
+    }
+
+    // All picks share one customer (the lock guarantees it); they may span several
+    // DOs. Land on the first DO so its header seeds the form.
+    const firstDoId = stash.map((s) => s.deliveryOrderId).sort()[0] ?? '';
+    sessionStorage.setItem('siFromDoPicks', JSON.stringify(stash));
+    navigate(`/sales-invoices/new?fromDo=${encodeURIComponent(firstDoId)}&fromPicks=1`);
   };
 
   const toolbar = (
@@ -298,24 +318,22 @@ export const SalesInvoiceFromDo = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={onConvert}
-            disabled={pickedCount === 0 || convert.isPending}
-            title="Combine the picked Delivery Order lines into one Sales Invoice"
+            onClick={onContinue}
+            disabled={pickedCount === 0}
+            title="Open the New Sales Invoice form prefilled with the picked Delivery Order lines"
           >
-            <ArrowRightLeft {...ICON} />
-            {convert.isPending
-              ? 'Converting…'
-              : pickedCount === 0
-                ? 'Pick at least 1 line'
-                : `Convert ${pickedCount} line${pickedCount === 1 ? '' : 's'} to Sales Invoice`}
+            <ArrowRight {...ICON} />
+            {pickedCount === 0
+              ? 'Pick at least 1 line'
+              : `Continue with ${pickedCount} line${pickedCount === 1 ? '' : 's'}`}
           </Button>
         </div>
       </div>
       <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
         Pick the Delivery Order lines you want to invoice and set the quantity for each. A line can be
         invoiced in parts across several invoices — only the remaining (not-yet-invoiced, not-yet-returned)
-        quantity is shown. On convert it records revenue (Dr Accounts Receivable / Cr Sales Revenue) for
-        the invoice total — you can review and edit the new invoice on the next screen.
+        quantity is shown. Continuing opens the normal New Sales Invoice form, prefilled for review —
+        nothing is invoiced and no revenue is recorded until you click Create on that screen.
       </p>
       {lockedCustomerName && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>

@@ -45,7 +45,7 @@ import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
 import { BrandingPill, badgeFor } from '../lib/category-badges';
-import { soStatusDisplay, type DeliveryState } from '../lib/so-status';
+import { soStatusDisplay, type DeliveryState, type SoLifecycle } from '../lib/so-status';
 import styles from './MfgSalesOrdersList.module.css';
 import soDetailStyles from './SalesOrderDetail.module.css';
 
@@ -205,6 +205,9 @@ type SoRow = {
      qty has shipped but a balance remains, 'full' once nothing remains. Drives
      the "Partially Delivered" / "Delivered" status badge. */
   delivery_state?: DeliveryState;
+  /* Document-driven status (latest event wins) — 'delivered' | 'invoiced' |
+     'returned', else 'none' before any downstream document exists. */
+  lifecycle_state?: SoLifecycle;
 };
 
 const fmtRm = (centi: number): string =>
@@ -273,6 +276,7 @@ const STATUS_CLASS: Record<string, string> = {
   INVOICED:       soDetailStyles.statusInvoiced ?? '',
   CLOSED:         soDetailStyles.statusClosed ?? '',
   CANCELLED:      soDetailStyles.statusCancelled ?? '',
+  RETURNED:       soDetailStyles.statusReturned ?? '',
 };
 
 /* Commander 2026-05-28: relabel the status enum to the 6-stage flow
@@ -299,8 +303,8 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED:     'Cancelled',
 };
 
-const StatusPill = ({ status, deliveryState }: { status: string; deliveryState?: DeliveryState }) => {
-  const eff = soStatusDisplay(status, deliveryState);
+const StatusPill = ({ status, deliveryState, lifecycleState }: { status: string; deliveryState?: DeliveryState; lifecycleState?: SoLifecycle }) => {
+  const eff = soStatusDisplay(status, deliveryState, lifecycleState);
   return (
     <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[eff.classKey] ?? ''}`}>
       {eff.label ?? STATUS_LABEL[status] ?? status.replace(/_/g, ' ')}
@@ -675,42 +679,30 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 <td style={TD_RIGHT}>{it.qty ?? 0}</td>
                 <td style={TD_BASE}>
                   {(() => {
+                    /* Delivered column = delivery documentation only (which DOs
+                       took how much + the live balance). The incoming-PO / ETA
+                       coverage moved to the Stock column under "Pending" (Wei
+                       Siang 2026-05-31) — it belongs with stock readiness, not
+                       with what has shipped. */
                     const hasDeliveries = it.deliveries && it.deliveries.length > 0;
-                    const notFullyDelivered = (it.remaining_qty ?? 1) > 0;
-                    const coverage = (it.coverage_po && notFullyDelivered)
-                      ? (
-                        <div style={{
-                          display: 'inline-block', marginTop: hasDeliveries ? 3 : 0,
-                          fontSize: 'var(--fs-10)', fontWeight: 600,
-                          padding: '1px 6px', borderRadius: 999,
-                          color: 'var(--c-secondary-a, #2F5D4F)', background: 'rgba(47,93,79,0.12)',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
-                        </div>
-                      )
-                      : null;
-                    if (hasDeliveries) {
-                      return (
-                        <div>
-                          {it.deliveries!.map((d, di) => (
-                            <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
-                              {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
-                            </div>
-                          ))}
-                          {typeof it.remaining_qty === 'number' && (
-                            <div style={{
-                              fontSize: 'var(--fs-10)', marginTop: 1,
-                              color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
-                            }}>
-                              {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
-                            </div>
-                          )}
-                          {coverage}
-                        </div>
-                      );
-                    }
-                    return coverage ?? <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+                    if (!hasDeliveries) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+                    return (
+                      <div>
+                        {it.deliveries!.map((d, di) => (
+                          <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+                            {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
+                          </div>
+                        ))}
+                        {typeof it.remaining_qty === 'number' && (
+                          <div style={{
+                            fontSize: 'var(--fs-10)', marginTop: 1,
+                            color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                          }}>
+                            {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                          </div>
+                        )}
+                      </div>
+                    );
                   })()}
                 </td>
                 <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
@@ -735,16 +727,33 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                     const ready = it.stock_status === 'READY';
                     const label = fullyDelivered ? 'DELIVERED' : ready ? 'READY' : 'PENDING';
                     const green = fullyDelivered || ready;
+                    /* Pending = goods not yet on hand. Show where they're coming
+                       from (the allocated PO + ETA from MRP) right under the
+                       Pending chip (Wei Siang 2026-05-31). Once stock is Ready or
+                       the line is Delivered, the goods are here / gone — no
+                       incoming tag, so the old "Ready but ETA 3 Jun" contradiction
+                       can't happen. */
+                    const showCoverage = label === 'PENDING' && Boolean(it.coverage_po);
                     return (
-                      <span style={{
-                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
-                        fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
-                        borderRadius: 999,
-                        color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
-                        background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
-                      }}>
-                        {label}
-                      </span>
+                      <div>
+                        <span style={{
+                          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+                          fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
+                          borderRadius: 999,
+                          color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                          background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                        }}>
+                          {label}
+                        </span>
+                        {showCoverage && (
+                          <div style={{
+                            marginTop: 3, fontSize: 'var(--fs-10)', fontWeight: 600,
+                            color: 'var(--c-burnt)', whiteSpace: 'nowrap',
+                          }}>
+                            {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
+                          </div>
+                        )}
+                      </div>
                     );
                   })()}
                 </td>
@@ -1695,7 +1704,7 @@ const buildColumns = (
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
     defaultHidden: true,
-    accessor: (r) => <StatusPill status={r.status} deliveryState={r.delivery_state} />,
+    accessor: (r) => <StatusPill status={r.status} deliveryState={r.delivery_state} lifecycleState={r.lifecycle_state} />,
     searchValue: (r) => r.status,
     groupValue: (r) => r.status,
     sortFn: (a, b) => a.status.localeCompare(b.status),
