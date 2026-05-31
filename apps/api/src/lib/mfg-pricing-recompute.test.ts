@@ -210,6 +210,73 @@ describe('recomputeFromSnapshot — configured sofa selling drift (per-Model mod
   });
 });
 
+describe('recomputeFromSnapshot — fabric-tier SELLING add-on (migration 0124)', () => {
+  const ADDON_CFG = { sofaTier2Delta: 150, sofaTier3Delta: 250, bedframeTier2Delta: 200, bedframeTier3Delta: 300 };
+
+  it('sofa PRICE_2 fabric → Δ folded onto the authoritative total (RM150 → 15000 sen)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 315000, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, ADDON_CFG,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(315000); // 300000 modules + 15000 Δ
+  });
+
+  it('Δ is per-item: total_centi = (base + Δ) × qty', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 2, unitPriceCenti: 325000, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_3', bedframeTier: null }, ADDON_CFG,
+    );
+    expect(r.unit_price_sen).toBe(325000);  // 300000 + 25000 (RM250)
+    expect(r.total_centi).toBe(650000);     // × qty 2
+  });
+
+  it('PRICE_1 / no tier → no Δ (default data = no price change)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: null, bedframeTier: null }, ADDON_CFG,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(300000);
+  });
+
+  it('anti-tamper: POS omits the Δ (sends base only) → drift true', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, ADDON_CFG,
+    );
+    expect(r.drift).toBe(true); // server 315000 vs client 300000 → >0.5%
+  });
+
+  it('no config passed → no Δ (back-compat: existing callers unaffected)', () => {
+    const r = recomputeFromSnapshot(
+      { itemCode: 'BOOQIT-2S', itemGroup: 'sofa', qty: 1, unitPriceCenti: 300000, variants: sofaVariants },
+      sofaProduct, null, null, [], SOFA_MODULE_PRICES,
+      { sofaTier: 'PRICE_2', bedframeTier: null }, null,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(300000);
+  });
+
+  it('bedframe PRICE_3 fabric → bedframe Δ folds onto the catalog sell_price_sen', () => {
+    const bedframeProduct: ProductRowLite = {
+      code: 'HILTON-Q', category: 'BEDFRAME', base_price_sen: 0, price1_sen: null,
+      cost_price_sen: 0, seat_height_prices: null, base_model: 'Hilton', sell_price_sen: 200000,
+    };
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 1, unitPriceCenti: 230000, variants: null },
+      bedframeProduct, null, null, [], null,
+      { sofaTier: null, bedframeTier: 'PRICE_3' }, ADDON_CFG,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(230000); // 200000 sell + 30000 (RM300 bedframe P3)
+  });
+});
+
 /* Combo cost/sell split (Phase 5, Part 1). The combos the gate receives carry
    the SELLING price in pricesByHeight (loadActiveSofaCombos merges
    selling_prices_by_height over cost via comboChargedPrices). This pins the

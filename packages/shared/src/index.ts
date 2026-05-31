@@ -9,3 +9,4 @@ export * from './order-rules';
 export * from './variant-key';
 export * from './schemas';
 export * from './variant-summary'; // Commander 2026-05-28
+export * from './fabric-tier-addon';

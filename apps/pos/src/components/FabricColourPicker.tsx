@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { fmtRM } from '@2990s/shared';
+import { fmtRM, fabricTierAddon, type FabricTier, type FabricTierAddonConfig } from '@2990s/shared';
 import { useFabricLibrary, useFabricColours, type ProductFabricRow } from '../lib/queries';
 import styles from './FabricColourPicker.module.css';
 
@@ -10,6 +10,9 @@ export interface FabricSelection {
   colourLabel: string;
   colourHex: string | null;
   surcharge: number;
+  // SELLING tiers (migration 0124) — drive the per-item fabric-tier add-on.
+  sofaTier: string | null;
+  bedframeTier: string | null;
 }
 
 export interface FabricColourPickerProps {
@@ -18,13 +21,17 @@ export interface FabricColourPickerProps {
   fabricId: string | null;
   colourId: string | null;
   onChange: (next: FabricSelection) => void;
+  /** Pricing context for the fabric-tier add-on (migration 0124). */
+  category?: 'SOFA' | 'BEDFRAME';
+  /** The 4 Δ amounts; when present each chip shows its tier add-on. */
+  addonConfig?: FabricTierAddonConfig | null;
 }
 
 // Fabric + Colour selection for a sofa. Fabric chips show a transparent
 // "+RM" surcharge (or "Included"); colour swatches belong to the chosen
 // fabric (spec 2026-05-24, G3). Controlled — the Configurator owns the state
 // so the topbar LIVE TOTAL + Add-to-Cart gate can read it.
-export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange }: FabricColourPickerProps) => {
+export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChange, category = 'SOFA', addonConfig = null }: FabricColourPickerProps) => {
   const lib = useFabricLibrary();
   const colours = useFabricColours();
 
@@ -46,7 +53,11 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
     const f = fabrics.find((x) => x.id === fId);
     const c = (colours.data ?? []).find((x) => x.fabricId === fId && x.colourId === cId);
     if (!f || !c) return;
-    onChange({ fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: c.label, colourHex: c.swatchHex, surcharge: f.surcharge });
+    onChange({
+      fabricId: fId, colourId: cId, fabricLabel: f.label, colourLabel: c.label,
+      colourHex: c.swatchHex, surcharge: f.surcharge,
+      sofaTier: f.sofaTier ?? null, bedframeTier: f.bedframeTier ?? null,
+    });
   };
 
   if (lib.isLoading || colours.isLoading) return <p className={styles.muted}>Loading fabrics…</p>;
@@ -61,6 +72,8 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
         <div className={styles.fabricRow}>
           {fabrics.map((f) => {
             const on = f.id === fabricId;
+            const tierForCtx = (category === 'BEDFRAME' ? f.bedframeTier : f.sofaTier) as FabricTier | null;
+            const tierDelta = addonConfig ? fabricTierAddon(category, tierForCtx, addonConfig) : 0;
             return (
               <button
                 key={f.id}
@@ -76,7 +89,7 @@ export const FabricColourPicker = ({ productFabrics, fabricId, colourId, onChang
                 }}
               >
                 <span className={styles.fabricName}>{f.label}</span>
-                <span className={styles.fabricMeta}>{f.surcharge > 0 ? `+${fmtRM(f.surcharge)}` : 'Included'}</span>
+                <span className={styles.fabricMeta}>{tierDelta > 0 ? `+${fmtRM(tierDelta)}` : 'Included'}</span>
               </button>
             );
           })}

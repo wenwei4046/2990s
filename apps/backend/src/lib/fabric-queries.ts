@@ -177,12 +177,15 @@ export type NewFabric = {
   supplierCode?: string;
   series?: string;
   priceCenti?: number;
+  // Migration 0124/0125 — also create the customer-pickable fabric_library entry.
+  label?: string;
+  colours?: Array<{ colourId?: string; label: string; swatchHex?: string }>;
 };
 export function useCreateFabric() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: NewFabric) =>
-      authedFetch<{ fabric: FabricTrackingRow }>(`/fabric-tracking`, {
+      authedFetch<{ fabric: FabricTrackingRow; fabricLibraryId?: string; libraryWarning?: string | null }>(`/fabric-tracking`, {
         method: 'POST', body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fabric-tracking'] }),

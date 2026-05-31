@@ -81,6 +81,9 @@ const bedframeLineConfigSchema = z.object({
   sizeOther: z.string().max(60).optional(),
   colourId: z.string(),
   colourLabel: z.string().max(60).nullable().optional(),
+  // Fabric (migration 0124) — bedframe picks a fabric, then its colour.
+  fabricId: z.string().optional(),
+  fabricLabel: z.string().max(60).nullable().optional(),
   gapId: z.string().optional(),
   legHeightId: z.string(),
   divanHeightId: z.string().optional(),

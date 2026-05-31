@@ -37,9 +37,17 @@ import {
   type SofaComboRow,
   type SofaModulePriceSen,
 } from '@2990s/shared/sofa-build';
+import {
+  fabricTierAddon,
+  type FabricTier,
+  type FabricTierAddonConfig,
+} from '@2990s/shared/fabric-tier-addon';
 
 export type MfgItemVariants = {
   fabricCode?:    string | null;
+  /** fabric_library id (the customer-pickable fabric). Drives the SELLING
+   *  fabric-tier add-on (migration 0124). Distinct from fabricCode (cost). */
+  fabricId?:      string | null;
   divanHeight?:   string | null;
   legHeight?:     string | null;
   totalHeight?:   string | null;
@@ -151,6 +159,8 @@ export function recomputeFromSnapshot(
   config:  MaintenanceConfig | null,
   sofaCombos: SofaComboRow[] | null = null,
   sofaModulePrices: SofaModulePriceSen | null = null,
+  sellingFabricTiers: { sofaTier: FabricTier | null; bedframeTier: FabricTier | null } | null = null,
+  fabricAddonConfig: FabricTierAddonConfig | null = null,
 ): RecomputedLine {
   const category = toMfgCategory(item.itemGroup, product?.category ?? '');
   const variants = item.variants ?? {};
@@ -264,6 +274,20 @@ export function recomputeFromSnapshot(
     : null;
   const canPriceSofa = Array.isArray(sofaCells) && sofaCells.length > 0 && sofaModulePrices != null;
 
+  // SELLING fabric-tier add-on (migration 0124). Per-item flat Δ (whole MYR →
+  // ×100 centi) from the chosen fabric's per-context selling tier. Folded into
+  // the AUTHORITATIVE sofa price below so the drift gate stays consistent with
+  // the POS (which adds the same Δ via the shared fabricTierAddon). 0 when no
+  // config / tier → default data = no price change. COST path untouched.
+  const sellingTier = category === 'SOFA'
+    ? (sellingFabricTiers?.sofaTier ?? null)
+    : category === 'BEDFRAME'
+      ? (sellingFabricTiers?.bedframeTier ?? null)
+      : null;
+  const fabricAddonCenti = (fabricAddonConfig && (category === 'SOFA' || category === 'BEDFRAME'))
+    ? fabricTierAddon(category, sellingTier, fabricAddonConfig) * 100
+    : 0;
+
   let drift: boolean;
   let unitToPersistSen: number;
   if (canPriceSofa) {
@@ -277,9 +301,12 @@ export function recomputeFromSnapshot(
     );
     const sofaSellingSen = computeSofaSellingSen(sofaCells as Cell[], sofaDepth, sofaModulePrices, lineCombos);
     if (sofaSellingSen > 0) {
-      // Server has authoritative per-Model module SELLING prices for this build.
-      drift = driftThresholdExceeded(manualUnitSelling, sofaSellingSen);
-      unitToPersistSen = sofaSellingSen;
+      // Server has authoritative per-Model module SELLING prices for this build,
+      // + the SELLING fabric-tier Δ (migration 0124); the POS adds the same Δ so
+      // the gate matches. Δ = 0 with default data (no tier / no config set).
+      const authoritativeSofaSen = sofaSellingSen + fabricAddonCenti;
+      drift = driftThresholdExceeded(manualUnitSelling, authoritativeSofaSen);
+      unitToPersistSen = authoritativeSofaSen;
     } else {
       // The Model's priced modules don't cover this build (e.g. not yet priced
       // in Master Admin) → computeSofaSellingSen = 0. NEVER reject a sofa we
@@ -289,8 +316,12 @@ export function recomputeFromSnapshot(
       unitToPersistSen = manualUnitSelling;
     }
   } else if (hasAuthoritativeSelling) {
-    drift = driftThresholdExceeded(manualUnitSelling, authoritativeSellingSen);
-    unitToPersistSen = authoritativeSellingSen;
+    // + SELLING fabric-tier Δ (migration 0124). Non-zero only for BEDFRAME (the
+    // shared fabricTierAddon returns 0 for mattress/accessory/service). POS adds
+    // the same Δ so the gate matches; 0 with default data (no tier / no config).
+    const authoritativeWithFabric = authoritativeSellingSen + fabricAddonCenti;
+    drift = driftThresholdExceeded(manualUnitSelling, authoritativeWithFabric);
+    unitToPersistSen = authoritativeWithFabric;
   } else {
     drift = false;
     unitToPersistSen = manualUnitSelling;
@@ -412,6 +443,42 @@ export async function loadMaintenanceConfig(sb: any): Promise<MaintenanceConfig 
   return (cfg as MaintenanceConfig | null) ?? null;
 }
 
+/** Load the chosen fabric's SELLING tiers from fabric_library (by fabric_library
+ *  id = variants.fabricId). Drives the fabric-tier add-on (migration 0124).
+ *  Distinct from loadFabricByCode (fabric_trackings, COST). */
+export async function loadFabricSellingTiers(
+  sb: any,
+  fabricId: string | null | undefined,
+): Promise<{ sofaTier: FabricTier | null; bedframeTier: FabricTier | null } | null> {
+  if (!fabricId) return null;
+  const { data } = await sb
+    .from('fabric_library')
+    .select('sofa_tier, bedframe_tier')
+    .eq('id', fabricId)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    sofaTier:     ((data as { sofa_tier?: string | null }).sofa_tier ?? null) as FabricTier | null,
+    bedframeTier: ((data as { bedframe_tier?: string | null }).bedframe_tier ?? null) as FabricTier | null,
+  };
+}
+
+/** Load the singleton fabric-tier add-on Δ config (whole MYR). Missing → all 0. */
+export async function loadFabricTierAddonConfig(sb: any): Promise<FabricTierAddonConfig> {
+  const { data } = await sb
+    .from('fabric_tier_addon_config')
+    .select('sofa_tier2_delta, sofa_tier3_delta, bedframe_tier2_delta, bedframe_tier3_delta')
+    .eq('id', 1)
+    .maybeSingle();
+  const d = data as Record<string, number> | null;
+  return {
+    sofaTier2Delta:     d?.sofa_tier2_delta ?? 0,
+    sofaTier3Delta:     d?.sofa_tier3_delta ?? 0,
+    bedframeTier2Delta: d?.bedframe_tier2_delta ?? 0,
+    bedframeTier3Delta: d?.bedframe_tier3_delta ?? 0,
+  };
+}
+
 /** End-to-end: given an item draft, load product + fabric + config and
  *  return the recompute. The caller assembles the DB row from the result.
  *  Returns drift=true when the client's unitPriceCenti differs > 0.5%
@@ -422,9 +489,11 @@ export async function recomputeOneLine(
   cachedConfig?: MaintenanceConfig | null,
 ): Promise<RecomputedLine> {
   const config = cachedConfig ?? await loadMaintenanceConfig(sb);
-  const [product, fabric] = await Promise.all([
+  const [product, fabric, sellingTiers, fabricAddonConfig] = await Promise.all([
     loadProductByCode(sb, item.itemCode),
     loadFabricByCode(sb, item.variants?.fabricCode ?? null),
+    loadFabricSellingTiers(sb, item.variants?.fabricId ?? null),
+    loadFabricTierAddonConfig(sb),
   ]);
   const sofaModulePrices = product?.category === 'SOFA'
     ? await loadModelSofaModulePrices(
@@ -433,5 +502,5 @@ export async function recomputeOneLine(
         String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24'),
       )
     : null;
-  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices);
+  return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices, sellingTiers, fabricAddonConfig);
 }

@@ -166,6 +166,8 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
       sizeId: config.sizeId,
       colourId: config.colourId,
     };
+    if (config.fabricId)              v.fabricId = config.fabricId;
+    if (config.fabricLabel)           v.fabricLabel = config.fabricLabel;
     if (config.sizeOther)             v.sizeOther = config.sizeOther;
     if (config.colourLabel != null)   v.colourLabel = config.colourLabel;
     if (config.colourHex)              v.colourHex = config.colourHex;

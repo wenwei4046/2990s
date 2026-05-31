@@ -27,6 +27,9 @@ export interface SofaConfigSnapshot {
   fabricLabel?: string;
   colourLabel?: string;
   colourHex?: string;
+  /** Per-item fabric-tier SELLING add-on (whole MYR, migration 0124) already
+   *  folded into `total`. Stored so the cart/handover can show it as a sub-line. */
+  fabricTierDelta?: number;
   total: number;
   summary: string;       // e.g. "3+L · Bundle · Velvet/Sand"
 }
@@ -68,6 +71,10 @@ export interface BedframeConfigSnapshot {
   colourId: string;
   colourLabel: string | null;
   colourHex?: string;
+  // Fabric (migration 0124) — bedframe picks a fabric, then its colour (above).
+  fabricId?: string;
+  fabricLabel?: string;
+  fabricTierDelta?: number;
   gapId?: string;
   legHeightId: string;
   divanHeightId?: string;

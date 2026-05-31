@@ -292,6 +292,10 @@ export interface FabricLibraryRow {
   defaultSurcharge: number;
   active: boolean;
   sortOrder: number;
+  // SELLING tiers (migration 0124) — PRICE_1/2/3 per context; drive the
+  // fabric-tier add-on. Distinct from the display `tier` ('standard'/'premium').
+  sofaTier: string | null;
+  bedframeTier: string | null;
 }
 export interface FabricColourRow {
   fabricId: string;
@@ -314,13 +318,14 @@ export const useFabricLibrary = () =>
     queryFn: async (): Promise<FabricLibraryRow[]> => {
       const { data, error } = await supabase
         .from('fabric_library')
-        .select('id, label, tier, default_surcharge, active, sort_order')
+        .select('id, label, tier, default_surcharge, active, sort_order, sofa_tier, bedframe_tier')
         .eq('active', true)
         .order('sort_order');
       if (error) throw error;
       return (data ?? []).map((r) => ({
         id: r.id, label: r.label, tier: r.tier, defaultSurcharge: r.default_surcharge,
         active: r.active, sortOrder: r.sort_order,
+        sofaTier: r.sofa_tier ?? null, bedframeTier: r.bedframe_tier ?? null,
       }));
     },
   });
@@ -1211,6 +1216,38 @@ export const useDeliveryFeeConfig = () =>
     staleTime: 60_000,
   });
 
+/* ─── Fabric-tier add-on config (migration 0124) — the 4 Δ amounts ─── */
+
+export interface FabricTierAddonConfigRow {
+  sofaTier2Delta:     number;
+  sofaTier3Delta:     number;
+  bedframeTier2Delta: number;
+  bedframeTier3Delta: number;
+}
+
+export const useFabricTierAddonConfig = () =>
+  useQuery({
+    queryKey: ['fabric-tier-addon-config'],
+    queryFn: async (): Promise<FabricTierAddonConfigRow> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`GET /fabric-tier-addon failed (${res.status})`);
+      const body = (await res.json()) as FabricTierAddonConfigRow;
+      return {
+        sofaTier2Delta:     body.sofaTier2Delta,
+        sofaTier3Delta:     body.sofaTier3Delta,
+        bedframeTier2Delta: body.bedframeTier2Delta,
+        bedframeTier3Delta: body.bedframeTier3Delta,
+      };
+    },
+    staleTime: 60_000,
+  });
+
 /** Master Account (cost/sell split Phase 2) — writes the delivery-fee config
  *  (base fee + cross-category surcharge + lead-days). The whole block moved to
  *  the POS Master Account surface; the Backend editor was retired. Gated by the
@@ -1240,6 +1277,54 @@ export const useUpdateDeliveryFeeConfig = () => {
       }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['delivery-fee-config'] }); },
+  });
+};
+
+/** Master Admin — writes the 4 fabric-tier Δ amounts (PATCH /fabric-tier-addon).
+ *  Gated by the fabric_tier_addon_config UPDATE RLS + API WRITE_ROLES (0124). */
+export const useUpdateFabricTierAddonConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: Partial<FabricTierAddonConfigRow>) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /fabric-tier-addon failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-tier-addon-config'] }); },
+  });
+};
+
+/** Master Admin — sets a fabric's SELLING tier (PATCH /fabric-library/:id/tier).
+ *  field 'sofaTier' | 'bedframeTier'; tier PRICE_1/2/3 (migration 0124). */
+export const useUpdateFabricLibraryTier = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, field, tier }: { id: string; field: 'sofaTier' | 'bedframeTier'; tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-library/${encodeURIComponent(id)}/tier`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ field, tier }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /fabric-library tier failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-library'] }); },
   });
 };
 

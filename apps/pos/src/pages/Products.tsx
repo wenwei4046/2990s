@@ -89,7 +89,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useAddons, type AddonRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useFabricLibrary, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -1228,12 +1228,12 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   //   the per-SKU "Visible" column was removed from SKU Master.
   //   - Sofa: [select?] + code + desc + model + N sizes + unit
   //   - Mattress: [select?] + code + desc + branding + size + price + unit
-  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit
+  //   - Other: [select?] + code + desc + category + size + base price + unit
   const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
-      : 7);
+      : 6);   // Price 1 / price1_sen column removed — global fabric Δ replaces it (0124)
 
   return (
     <>
@@ -1381,8 +1381,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 <>
                   <th>Category</th>
                   <th>Size</th>
-                  <th style={{ textAlign: 'right' }}>Price 2</th>
-                  <th style={{ textAlign: 'right' }}>Price 1</th>
+                  <th style={{ textAlign: 'right' }}>Base Price</th>
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
@@ -1491,7 +1490,6 @@ const ProductRow = ({
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
   const [draftSell, setDraftSell] = useState<number | null>(null);
-  const [draftP1, setDraftP1] = useState<number | null>(null);
   const [draftBranding, setDraftBranding] = useState<string | null>(null);
   const update = useUpdateMfgProductPrices();
 
@@ -1506,11 +1504,7 @@ const ProductRow = ({
     update.mutate({ id: row.id, seatHeightPrices: next });
   };
 
-  const flushBedframePrice = (field: 'basePriceSen' | 'price1Sen', val: number | null) => {
-    update.mutate({ id: row.id, [field]: val });
-  };
-
-  // SELLING price (sell_price_sen). The mattress + "Price 2" cells write this;
+  // SELLING price (sell_price_sen). The mattress + base-price cells write this;
   // base_price_sen / price1_sen are COST and not editable from the POS side.
   const flushSellPrice = (val: number | null) => {
     update.mutate({ id: row.id, sellPriceSen: val });
@@ -1695,19 +1689,6 @@ const ProductRow = ({
               />
             ) : (
               fmtRm(row.sell_price_sen ?? row.base_price_sen)
-            )}
-          </td>
-          <td className={(draftP1 ?? row.price1_sen) ? styles.price : styles.priceEmpty}>
-            {editMode ? (
-              <PriceInput
-                valueSen={draftP1 ?? row.price1_sen}
-                onCommit={(v) => {
-                  setDraftP1(v);
-                  flushBedframePrice('price1Sen', v);
-                }}
-              />
-            ) : (
-              fmtRm(row.price1_sen)
             )}
           </td>
         </>
@@ -2066,7 +2047,8 @@ type MaintenanceListKey =
   | 'sofaSpecials'
   | 'sofaQuickPresets' // PR (Commander 2026-05-28) — module-composition presets
   | 'mattressSizes'    // PR #50 — Mattress size pool (K/Q/S/SS)
-  | 'fabrics';
+  | 'fabrics'
+  | 'fabricPricing';   // migration 0124 — POS selling fabric-tier add-on editor
 
 // PR #208 — exported so SupplierDetail can pass a `sectionFilter` prop to
 // the reused MaintenanceTab.
@@ -2098,7 +2080,8 @@ const MAINTENANCE_TABS: {
   { key: 'sofaQuickPresets', label: 'Quick Presets', description: 'Module-composition shortcuts (e.g. 1-Seater = 1A-LHF + 1A-RHF). Used by the New Combo dialog and POS Quick Pick.', priced: false, section: 'Sofa' },
 
   // ── Common (cross-category single pool) ─────────────────────────────────
-  { key: 'fabrics', label: 'Fabrics', description: 'Fabric price tier assignment — drives Price 1 / Price 2', priced: false, section: 'Common' },
+  { key: 'fabrics', label: 'Fabrics', description: 'Procurement fabric tiers (cost side, read-only reference).', priced: false, section: 'Common' },
+  { key: 'fabricPricing', label: 'Fabric Pricing', description: 'POS selling fabric-tier add-on — set the +RM for Price 2 / Price 3 (sofa & bedframe) and assign each fabric its tier.', priced: false, section: 'Common' },
 
   // ── Products Maintenance (cross-category, drives Model "+ Add Codes") ──
   // PR #74 (Commander 2026-05-26): bedframeSizes / mattressSizes / sofaCompartments
@@ -3495,6 +3478,10 @@ const MaintenanceList = ({
     return <FabricsMaintenancePanel />;
   }
 
+  if (listKey === 'fabricPricing') {
+    return <FabricPricingPanel />;
+  }
+
   // PR #74 — Code Format tab removed (Commander 2026-05-26: preset only).
   // The CodeFormatPanel component is kept in the file dead-code below in
   // case we ever want to re-expose it; the API's hardcoded templates take
@@ -4117,6 +4104,147 @@ const CodeFormatPanel = ({
       <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
         <strong>Available placeholders:</strong> {f.placeholderHint}
       </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Fabric Pricing (migration 0124) — POS selling fabric-tier add-on.
+   Master Admin sets the 4 tier Δ amounts (sofa P2/P3, bedframe P2/P3) + assigns
+   each fabric's SELLING tier. The Δ is added per item to the order total (like
+   the delivery fee); the cost/procurement side (fabric_trackings) is untouched.
+   ════════════════════════════════════════════════════════════════════════ */
+const FABRIC_TIER_NEXT: Record<string, 'PRICE_1' | 'PRICE_2' | 'PRICE_3'> = {
+  PRICE_1: 'PRICE_2', PRICE_2: 'PRICE_3', PRICE_3: 'PRICE_1',
+};
+const fabricTierShort = (t: string | null | undefined): string =>
+  t ? `Price ${t.replace('PRICE_', '')}` : 'Price 1';
+
+const FabricPricingPanel = () => {
+  const canEdit   = useProductsMode() === 'full';
+  const cfg       = useFabricTierAddonConfig();
+  const updateCfg = useUpdateFabricTierAddonConfig();
+  const fabrics   = useFabricLibrary();
+  const updateTier = useUpdateFabricLibraryTier();
+
+  const [sofa2, setSofa2] = useState<number | ''>('');
+  const [sofa3, setSofa3] = useState<number | ''>('');
+  const [bed2, setBed2]   = useState<number | ''>('');
+  const [bed3, setBed3]   = useState<number | ''>('');
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    if (cfg.data) {
+      setSofa2(cfg.data.sofaTier2Delta);
+      setSofa3(cfg.data.sofaTier3Delta);
+      setBed2(cfg.data.bedframeTier2Delta);
+      setBed3(cfg.data.bedframeTier3Delta);
+    }
+  }, [cfg.data]);
+
+  const onSave = async () => {
+    setError(null); setSuccess(false);
+    if ([sofa2, sofa3, bed2, bed3].some((v) => typeof v !== 'number')) {
+      setError('All four amounts must be whole-number RM.'); return;
+    }
+    try {
+      await updateCfg.mutateAsync({
+        sofaTier2Delta: sofa2 as number, sofaTier3Delta: sofa3 as number,
+        bedframeTier2Delta: bed2 as number, bedframeTier3Delta: bed3 as number,
+      });
+      setSuccess(true);
+    } catch (err) { setError(String((err as Error).message ?? err)); }
+  };
+
+  const cycle = (row: FabricLibraryRow, field: 'sofaTier' | 'bedframeTier') => {
+    if (!canEdit) return;
+    const current = (field === 'sofaTier' ? row.sofaTier : row.bedframeTier) ?? 'PRICE_1';
+    updateTier.mutate({ id: row.id, field, tier: FABRIC_TIER_NEXT[current] ?? 'PRICE_2' });
+  };
+
+  const numField = (
+    id: string, label: string, hint: string, value: number | '', setValue: (v: number | '') => void,
+  ) => (
+    <div style={{ marginBottom: 'var(--space-4)', minWidth: 180, flex: '1 1 180px' }}>
+      <label htmlFor={id} style={{ display: 'block', fontSize: 'var(--fs-13)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>{label}</label>
+      <input
+        id={id} type="number" min={0} step={1} value={value} disabled={!canEdit}
+        onChange={(e) => setValue(e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value))))}
+        style={{ width: '100%', padding: '8px 10px', fontSize: 'var(--fs-14)', border: '1px solid var(--line-strong)', borderRadius: 'var(--radius-md)', background: canEdit ? 'var(--c-cream)' : 'rgba(34, 31, 32, 0.04)' }}
+      />
+      <span style={{ display: 'block', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginTop: 'var(--space-1)' }}>{hint}</span>
+    </div>
+  );
+
+  const tierBtn = (row: FabricLibraryRow, field: 'sofaTier' | 'bedframeTier') => {
+    const t = field === 'sofaTier' ? row.sofaTier : row.bedframeTier;
+    return (
+      <button
+        type="button" disabled={!canEdit} onClick={() => cycle(row, field)}
+        title={canEdit ? 'Click to cycle Price 1 → 2 → 3' : undefined}
+        style={{
+          padding: '4px 10px', fontSize: 'var(--fs-13)', borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--line)', cursor: canEdit ? 'pointer' : 'default',
+          background: (t && t !== 'PRICE_1') ? 'var(--c-cream)' : 'transparent',
+          fontWeight: (t && t !== 'PRICE_1') ? 600 : 400,
+        }}
+      >
+        {fabricTierShort(t)}
+      </button>
+    );
+  };
+
+  return (
+    <div style={{ padding: 'var(--space-5)', maxWidth: 820 }}>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)', marginBottom: 'var(--space-4)' }}>
+        每件 sofa / bedframe 选到高一级的布，整单 on-top 加这里设定的金额（每件各加一次，像 delivery fee）。
+        Price 1 = base（加 0）。改这里只动 POS 卖价，不动成本 / 采购。
+      </p>
+
+      <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
+        {numField('ft-s2', 'Sofa · Price 2 (+RM)', 'Added once when a sofa uses a Price-2 fabric.', sofa2, setSofa2)}
+        {numField('ft-s3', 'Sofa · Price 3 (+RM)', 'Added once when a sofa uses a Price-3 fabric.', sofa3, setSofa3)}
+        {numField('ft-b2', 'Bedframe · Price 2 (+RM)', 'Added once when a bedframe uses a Price-2 fabric.', bed2, setBed2)}
+        {numField('ft-b3', 'Bedframe · Price 3 (+RM)', 'Added once when a bedframe uses a Price-3 fabric.', bed3, setBed3)}
+      </div>
+
+      {error && <div style={{ color: 'var(--c-burnt, #A6471E)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }} role="alert">{error}</div>}
+      {success && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-13)', marginBottom: 'var(--space-3)' }}>Saved.</div>}
+      {canEdit && (
+        <Button variant="primary" onClick={() => void onSave()} disabled={updateCfg.isPending}>
+          {updateCfg.isPending ? 'Saving…' : 'Save amounts'}
+        </Button>
+      )}
+
+      <h3 style={{ fontSize: 'var(--fs-15)', fontWeight: 600, margin: 'var(--space-6) 0 var(--space-1)' }}>Fabric tiers</h3>
+      <p style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 'var(--space-3)' }}>
+        {canEdit ? 'Click a tier to cycle Price 1 → 2 → 3. Sofa and bedframe are independent.' : 'Read-only — only Master Admin can change fabric tiers.'}
+      </p>
+      {fabrics.isLoading ? (
+        <div style={{ color: 'var(--fg-muted)' }}>Loading fabrics…</div>
+      ) : (fabrics.data ?? []).length === 0 ? (
+        <div style={{ color: 'var(--fg-muted)' }}>No fabrics yet — add them in the Backend Fabric Converter.</div>
+      ) : (
+        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 560 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+              <th style={{ padding: '6px 8px' }}>Fabric</th>
+              <th style={{ padding: '6px 8px' }}>Sofa tier</th>
+              <th style={{ padding: '6px 8px' }}>Bedframe tier</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(fabrics.data ?? []).map((row) => (
+              <tr key={row.id} style={{ borderTop: '1px solid var(--line)' }}>
+                <td style={{ padding: '6px 8px', fontSize: 'var(--fs-14)' }}>{row.label}</td>
+                <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'sofaTier')}</td>
+                <td style={{ padding: '6px 8px' }}>{tierBtn(row, 'bedframeTier')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 };

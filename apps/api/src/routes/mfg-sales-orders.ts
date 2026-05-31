@@ -16,6 +16,8 @@ import {
   recomputeFromSnapshot,
   loadProductByCode,
   loadFabricByCode,
+  loadFabricSellingTiers,
+  loadFabricTierAddonConfig,
   loadModelSofaModulePrices,
   type MfgItemForRecompute,
   type RecomputedLine,
@@ -925,12 +927,14 @@ mfgSalesOrders.post('/', async (c) => {
     }
   }
   const cachedCombos = await loadActiveSofaCombos(sb);  // Phase 4b — sofa selling recompute
+  const cachedFabricAddonConfig = await loadFabricTierAddonConfig(sb);  // migration 0124 — fabric-tier Δ
   const recomputes: Array<RecomputedLine | null> = await Promise.all(items.map(async (it) => {
     const itemCode = String(it.itemCode ?? '');
     if (!itemCode) return null;
-    const [product, fabric] = await Promise.all([
+    const [product, fabric, sellingTiers] = await Promise.all([
       loadProductByCode(sb, itemCode),
       loadFabricByCode(sb, (it.variants as { fabricCode?: string } | null)?.fabricCode ?? null),
+      loadFabricSellingTiers(sb, (it.variants as { fabricId?: string } | null)?.fabricId ?? null),
     ]);
     // SOFA-SELLING-PLAN — a sofa's per-module SELLING prices are its Model's
     // module-SKU sell_price_sen; load them so the drift gate reprices the build
@@ -949,7 +953,7 @@ mfgSalesOrders.post('/', async (c) => {
       unitPriceCenti: Number(it.unitPriceCenti ?? 0),
       variants:       (it.variants as MfgItemForRecompute['variants']) ?? null,
     };
-    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices);
+    return recomputeFromSnapshot(draft, product, fabric, cachedConfig, cachedCombos, sofaModulePrices, sellingTiers, cachedFabricAddonConfig);
   }));
   /* Commander 2026-05-29 (system-wide) — the SELLING unit price is now
      operator-authored on every SO line. The product price tables are COST,
@@ -1809,11 +1813,13 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     );
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeStr }, 400);
   }
-  const [cachedConfig, productLite, fabricLite, sofaCombosLite] = await Promise.all([
+  const [cachedConfig, productLite, fabricLite, sofaCombosLite, sellingTiersLite, fabricAddonConfigLite] = await Promise.all([
     loadMaintenanceConfig(sb),
     loadProductByCode(sb, itemCodeStr),
     loadFabricByCode(sb, variantsObj?.fabricCode ?? null),
     loadActiveSofaCombos(sb),
+    loadFabricSellingTiers(sb, (variantsObj as { fabricId?: string } | null)?.fabricId ?? null),
+    loadFabricTierAddonConfig(sb),
   ]);
   // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
   const sofaModulePricesLite = productLite?.category === 'SOFA'
@@ -1836,6 +1842,8 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     cachedConfig,
     sofaCombosLite,
     sofaModulePricesLite,
+    sellingTiersLite,
+    fabricAddonConfigLite,
   );
   /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
      roles are drift-rejected + take the server price; Backend / office authors
@@ -1991,11 +1999,13 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     if (aoErr) return c.json({ ...aoErr, itemCode: itemCodeAfter }, 400);
   }
   if (shouldRecompute && itemCodeAfter) {
-    const [cfg, prodLite, fabLite, sofaCombosPatch] = await Promise.all([
+    const [cfg, prodLite, fabLite, sofaCombosPatch, sellingTiersPatch, fabricAddonConfigPatch] = await Promise.all([
       loadMaintenanceConfig(sb),
       loadProductByCode(sb, itemCodeAfter),
       loadFabricByCode(sb, variantsAfter?.fabricCode ?? null),
       loadActiveSofaCombos(sb),
+      loadFabricSellingTiers(sb, (variantsAfter as { fabricId?: string } | null)?.fabricId ?? null),
+      loadFabricTierAddonConfig(sb),
     ]);
     // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
     const sofaModulePricesPatch = prodLite?.category === 'SOFA'
@@ -2018,6 +2028,8 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       cfg,
       sofaCombosPatch,
       sofaModulePricesPatch,
+      sellingTiersPatch,
+      fabricAddonConfigPatch,
     );
     if (posTablet && recomputedPatch.drift) {
       return c.json({
