@@ -21,12 +21,13 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Sales Orders', path: '/mfg-sales-orders', group: 'Sales Order', keywords: 'so' },
   { label: 'New Sales Order', path: '/mfg-sales-orders/new', group: 'Sales Order', keywords: 'create so add' },
   { label: 'SO Detail View', path: '/reports/sales-order-detail-listing', group: 'Sales Order', keywords: 'listing report' },
+  { label: 'SO Maintenance', path: '/mfg-sales-orders/maintenance', group: 'Sales Order', keywords: 'localities warehouse dropdown' },
+  // Commander 2026-05-29 — Delivery flows grouped with Sales Order (outbound side).
+  // Ordered to follow the real flow: SO → Delivery Order → Invoice → Return.
+  { label: 'Delivery Orders', path: '/mfg-delivery-orders', group: 'Sales Order', keywords: 'do dispatch' },
   { label: 'Sales Invoices', path: '/sales-invoices', group: 'Sales Order', keywords: 'si invoice' },
   { label: 'New Sales Invoice', path: '/sales-invoices/new', group: 'Sales Order', keywords: 'create si invoice add' },
   { label: 'Convert DO to Invoice', path: '/sales-invoices/from-do', group: 'Sales Order', keywords: 'convert delivery order sales invoice bill revenue' },
-  { label: 'SO Maintenance', path: '/mfg-sales-orders/maintenance', group: 'Sales Order', keywords: 'localities warehouse dropdown' },
-  // Commander 2026-05-29 — Delivery flows grouped with Sales Order (outbound side).
-  { label: 'Delivery Orders', path: '/mfg-delivery-orders', group: 'Sales Order', keywords: 'do dispatch' },
   { label: 'Delivery Returns', path: '/delivery-returns', group: 'Sales Order', keywords: 'dr return' },
   { label: 'Convert DO to Return', path: '/delivery-returns/from-do', group: 'Sales Order', keywords: 'convert do delivery return goods back' },
 

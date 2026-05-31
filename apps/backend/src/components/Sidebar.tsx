@@ -119,10 +119,11 @@ export const Sidebar = () => {
       items: [
         { to: '/mfg-sales-orders', icon: <ClipboardList {...ICON_PROPS} />, label: 'Sales Orders' },
         { to: '/reports/sales-order-detail-listing', icon: <FileBarChart {...ICON_PROPS} />, label: 'SO Detail View' },
-        { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
         // Commander 2026-05-29 — Delivery flows belong with Sales Order (the
         // outbound side), not Transportation. Drivers stays under Transportation.
+        // Ordered to follow the real flow: SO → Delivery Order → Invoice → Return.
         { to: '/mfg-delivery-orders', icon: <PackagePlus {...ICON_PROPS} />, label: 'Delivery Orders' },
+        { to: '/sales-invoices', icon: <FileText {...ICON_PROPS} />, label: 'Sales Invoices' },
         { to: '/delivery-returns', icon: <Undo2 {...ICON_PROPS} />, label: 'Delivery Returns' },
       ],
     },
