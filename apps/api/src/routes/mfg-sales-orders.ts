@@ -419,10 +419,18 @@ mfgSalesOrders.get('/', async (c) => {
        deleted and closes once every line is fully delivered. Replaces the old
        status-only gate that hid the action at SHIPPED/DELIVERED. */
     const hasUndelivered = new Set<string>();
+    /* Per-SO delivery progress — drives the "Partially Delivered" / "Delivered"
+       badge (Wei Siang 2026-05-31). Aggregated from the same live engine: a SO
+       is 'partial' once any qty has shipped but some remains, 'full' once
+       nothing remains, 'none' before the first DO. */
+    const deliveredTotal = new Map<string, number>();
+    const remainingTotal = new Map<string, number>();
     {
       const deliverableMap = await soDeliverableRemaining(sb, docNos);
       for (const line of deliverableMap.values()) {
         if (line.remaining > 0) hasUndelivered.add(line.docNo);
+        deliveredTotal.set(line.docNo, (deliveredTotal.get(line.docNo) ?? 0) + line.delivered);
+        remainingTotal.set(line.docNo, (remainingTotal.get(line.docNo) ?? 0) + line.remaining);
       }
     }
 
@@ -431,6 +439,10 @@ mfgSalesOrders.get('/', async (c) => {
       const perGroup = agg.get(docNo);
       (r as Record<string, unknown>).item_categories = [...(cats.get(docNo) ?? [])].sort();
       (r as Record<string, unknown>).has_children = downstreamDocNos.has(docNo);
+      const dDelivered = deliveredTotal.get(docNo) ?? 0;
+      const dRemaining = remainingTotal.get(docNo) ?? 0;
+      (r as Record<string, unknown>).delivery_state =
+        dDelivered <= 0 ? 'none' : dRemaining > 0 ? 'partial' : 'full';
       (r as Record<string, unknown>).has_undelivered = hasUndelivered.has(docNo);
       const readiness = readinessByDoc.get(docNo);
       (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
@@ -604,6 +616,10 @@ mfgSalesOrders.get('/:docNo', async (c) => {
       remaining_qty: rem?.remaining ?? Number(it.qty ?? 0),
     };
   });
+  const totalDelivered = items.reduce((s, it) => s + Number(it.delivered_qty ?? 0), 0);
+  const totalRemaining = items.reduce((s, it) => s + Number(it.remaining_qty ?? 0), 0);
+  (salesOrder as Record<string, unknown>).delivery_state =
+    totalDelivered <= 0 ? 'none' : totalRemaining > 0 ? 'partial' : 'full';
   return c.json({ salesOrder, items });
 });
 

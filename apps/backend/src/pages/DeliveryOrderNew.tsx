@@ -146,10 +146,13 @@ export const DeliveryOrderNew = () => {
     setEmergencyRel((so.emergency_contact_relationship as string) ?? '');
     setEmergencyPhone((so.emergency_contact_phone as string) ?? '');
 
-    // Line items — carry variants + prices + costs.
+    // Line items — carry variants + prices + costs. Only the lines that still
+    // have an undelivered balance are prefilled, and each line is seeded with
+    // its REMAINING qty (not the ordered qty) so converting a partly-delivered
+    // SO shows just what is left to ship. remaining_qty rides on the SO detail.
     if (soItems.length > 0) {
       setLines(soItems
-        .filter((it) => !it.cancelled)
+        .filter((it) => !it.cancelled && Number(it.remaining_qty ?? it.qty ?? 0) > 0)
         .map((it) => ({
           ...emptySoLine(),
           rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${String(it.id)}`,
@@ -157,7 +160,7 @@ export const DeliveryOrderNew = () => {
           itemGroup: (it.item_group as string) ?? 'others',
           description: (it.description as string) ?? '',
           uom: (it.uom as string) ?? 'UNIT',
-          qty: Number(it.qty ?? 1),
+          qty: Number(it.remaining_qty ?? it.qty ?? 1),
           unitPriceCenti: Number(it.unit_price_centi ?? 0),
           discountCenti: Number(it.discount_centi ?? 0),
           unitCostCenti: Number(it.unit_cost_centi ?? 0),

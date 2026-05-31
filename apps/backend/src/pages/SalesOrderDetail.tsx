@@ -59,6 +59,7 @@ import {
   useSoDropdownOptions, optionsOrFallback,
 } from '../lib/so-dropdown-options-queries';
 import { useStaff } from '../lib/admin-queries';
+import { soStatusDisplay, type DeliveryState } from '../lib/so-status';
 import { useAuth } from '../lib/auth';
 import { useVenues } from '../lib/venues-queries';
 import { useStateWarehouseMappings } from '../lib/state-warehouse-queries';
@@ -763,9 +764,14 @@ export const SalesOrderDetail = () => {
               {fmtRm(header.local_total_centi, header.currency)}
             </span>
           </div>
-          <span className={`${styles.statusPill} ${STATUS_CLASS[header.status]}`}>
-            {header.status.replace(/_/g, ' ')}
-          </span>
+          {(() => {
+            const eff = soStatusDisplay(header.status, (header as { delivery_state?: DeliveryState }).delivery_state);
+            return (
+              <span className={`${styles.statusPill} ${STATUS_CLASS[eff.classKey as SoStatus] ?? ''}`}>
+                {eff.label ?? header.status.replace(/_/g, ' ')}
+              </span>
+            );
+          })()}
           {/* PR-D — History drawer toggle. Commander 2026-05-27 wants a
               HOOKKA-style timeline showing who did what, when, and what
               changed. Reads from mfg_so_audit_log via useSalesOrderAuditLog. */}

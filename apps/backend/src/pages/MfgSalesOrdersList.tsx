@@ -45,6 +45,7 @@ import { useStaff } from '../lib/admin-queries';
 import { generateSalesOrderPdf } from '../lib/sales-order-pdf';
 import { supabase } from '../lib/supabase';
 import { BrandingPill, badgeFor } from '../lib/category-badges';
+import { soStatusDisplay, type DeliveryState } from '../lib/so-status';
 import styles from './MfgSalesOrdersList.module.css';
 import soDetailStyles from './SalesOrderDetail.module.css';
 
@@ -200,6 +201,10 @@ type SoRow = {
      so it re-opens after a DO is cancelled / a DO line is deleted. Drives the
      "Issue Delivery Order" menu entry instead of a status-only gate. */
   has_undelivered?: boolean;
+  /* Live delivery progress — 'none' before the first DO, 'partial' once some
+     qty has shipped but a balance remains, 'full' once nothing remains. Drives
+     the "Partially Delivered" / "Delivered" status badge. */
+  delivery_state?: DeliveryState;
 };
 
 const fmtRm = (centi: number): string =>
@@ -294,11 +299,14 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED:     'Cancelled',
 };
 
-const StatusPill = ({ status }: { status: string }) => (
-  <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[status] ?? ''}`}>
-    {STATUS_LABEL[status] ?? status.replace(/_/g, ' ')}
-  </span>
-);
+const StatusPill = ({ status, deliveryState }: { status: string; deliveryState?: DeliveryState }) => {
+  const eff = soStatusDisplay(status, deliveryState);
+  return (
+    <span className={`${soDetailStyles.statusPill} ${STATUS_CLASS[eff.classKey] ?? ''}`}>
+      {eff.label ?? STATUS_LABEL[status] ?? status.replace(/_/g, ' ')}
+    </span>
+  );
+};
 
 /* HOUZS expand-chevron drill-down. Renders the per-line breakdown for a
    single SO inline under its parent row. Lazy-fetches the SO detail (header
@@ -1654,7 +1662,7 @@ const buildColumns = (
   {
     key: 'status', label: 'Status', width: 130, sortable: true, groupable: true,
     defaultHidden: true,
-    accessor: (r) => <StatusPill status={r.status} />,
+    accessor: (r) => <StatusPill status={r.status} deliveryState={r.delivery_state} />,
     searchValue: (r) => r.status,
     groupValue: (r) => r.status,
     sortFn: (a, b) => a.status.localeCompare(b.status),
