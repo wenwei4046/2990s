@@ -35,6 +35,11 @@ type MovementInput = {
     | 'PURCHASE_RETURN' | 'STOCK_TRANSFER' | 'STOCK_TAKE' | 'ADJUSTMENT';
   source_doc_id?: string;
   source_doc_no?: string;
+  /** Migration 0120 — production batch (source PO number). On IN rows the FIFO
+   *  trigger copies this onto the lot it creates, so sofa set components share a
+   *  batch and can be shipped as a whole set from one dye lot. Omit for
+   *  un-batched stock. */
+  batch_no?: string | null;
   performed_by?: string | null;
   notes?: string | null;
 };
@@ -56,6 +61,19 @@ export async function writeMovements(
   try {
     const { error } = await sb.from('inventory_movements').insert(rows);
     if (error) {
+      // Migration 0120 forward-compat: if batch_no isn't in the schema cache yet
+      // (column not created on this DB), strip it and retry so inbound stock
+      // still enters inventory. Once 0120 is applied the first attempt succeeds.
+      const msg = error.message ?? '';
+      const batchMissing = msg.includes('batch_no');
+      if (batchMissing && rows.some((r) => 'batch_no' in r)) {
+        const stripped = rows.map(({ batch_no: _b, ...rest }) => rest);
+        const retry = await sb.from('inventory_movements').insert(stripped);
+        if (!retry.error) return { ok: true };
+        // eslint-disable-next-line no-console
+        console.error('[inventory] movement insert failed (post batch_no strip):', retry.error.message);
+        return { ok: false, reason: retry.error.message };
+      }
       // eslint-disable-next-line no-console
       console.error('[inventory] movement insert failed:', error.message);
       return { ok: false, reason: error.message };

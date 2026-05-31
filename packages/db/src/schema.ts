@@ -2163,6 +2163,10 @@ export const inventoryMovements = pgTable('inventory_movements', {
   sourceDocType:  text('source_doc_type'),  // 'GRN' | 'DO' | 'CONSIGNMENT_NOTE' | 'PURCHASE_RETURN' | 'ADJUSTMENT'
   sourceDocId:    uuid('source_doc_id'),
   sourceDocNo:    text('source_doc_no'),
+  // Migration 0120 — production batch (source PO number). Carried on the IN
+  // movement; the FIFO trigger copies it onto the lot it creates. Sofa sets
+  // ship by batch so the whole set comes from one dye lot. NULL = un-batched.
+  batchNo:        text('batch_no'),
   notes:          text('notes'),
   performedBy:    uuid('performed_by').references(() => staff.id, { onDelete: 'set null' }),
   createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2188,11 +2192,16 @@ export const inventoryLots = pgTable('inventory_lots', {
   sourceDocId:    uuid('source_doc_id'),
   sourceDocNo:    text('source_doc_no'),
   movementId:     uuid('movement_id'),
+  // Migration 0120 — production batch (source PO number), copied from the IN
+  // movement by the FIFO trigger. Sofa set components share a batch_no so the
+  // outbound side can ship a complete set from one dye lot. NULL = un-batched.
+  batchNo:        text('batch_no'),
   notes:          text('notes'),
   createdBy:      uuid('created_by').references(() => staff.id, { onDelete: 'set null' }),
   createdAt:      timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxWhProduct: index('idx_inv_lots_wh_product').on(t.warehouseId, t.productCode, t.receivedAt),
+  idxBatch:     index('idx_inv_lots_batch').on(t.warehouseId, t.batchNo, t.productCode, t.variantKey),
 }));
 
 /* PR — Inv PR4. Migration 0072. Stock transfers move qty between

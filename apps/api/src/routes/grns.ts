@@ -10,6 +10,35 @@ import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
 
+/* ── Migration 0120 — resolve the production batch (source PO number) for each
+   GRN line, keyed by purchase_order_item_id. A GRN can aggregate lines from
+   several POs (the add-PO picker), so we resolve PER LINE, not off the GRN
+   header. Lines with no PO link (free GRN) get no batch. The IN movement carries
+   batch_no → the FIFO trigger stamps it on the lot, so a sofa set's components
+   share a batch and Stage 3 can ship the whole set from one dye lot. */
+async function resolvePoBatchByItem(
+  sb: any,
+  poItemIds: Array<string | null>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(poItemIds.filter((x): x is string => !!x))];
+  if (ids.length === 0) return out;
+  const { data: poi } = await sb.from('purchase_order_items')
+    .select('id, purchase_order_id').in('id', ids);
+  const rows = (poi ?? []) as Array<{ id: string; purchase_order_id: string | null }>;
+  const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter((x): x is string => !!x))];
+  if (poIds.length === 0) return out;
+  const { data: pos } = await sb.from('purchase_orders')
+    .select('id, po_number').in('id', poIds);
+  const poNo = new Map<string, string>();
+  for (const p of (pos ?? []) as Array<{ id: string; po_number: string }>) poNo.set(p.id, p.po_number);
+  for (const r of rows) {
+    const n = r.purchase_order_id ? poNo.get(r.purchase_order_id) : undefined;
+    if (n) out.set(r.id, n);
+  }
+  return out;
+}
+
 /* ── Shared helper: post a GRN, roll up to PO items, write inventory IN ──
    Pulled out of the PATCH /:id/post handler so both single-doc post and
    the multi-PO `/from-po-items` route can reuse the same logic.
@@ -45,7 +74,12 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
   const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
     ?? (await defaultWarehouseId(sb));
   if (warehouseId && items) {
-    const movements = (items as Array<{ qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)
+    // Migration 0120 — stamp each IN with its source PO number as the batch.
+    const batchByItem = await resolvePoBatchByItem(
+      sb,
+      (items as Array<{ purchase_order_item_id: string | null }>).map((it) => it.purchase_order_item_id),
+    );
+    const movements = (items as Array<{ purchase_order_item_id: string | null; qty_accepted: number; material_code: string; material_name: string | null; unit_price_centi: number | null; item_group?: string | null; variants?: VariantAttrs | null }>)
       .filter((it) => it.qty_accepted > 0)
       .map((it) => ({
         movement_type: 'IN' as const,
@@ -59,6 +93,8 @@ async function postGrnAndRollup(sb: any, grnId: string, userId: string): Promise
         source_doc_type: 'GRN' as const,
         source_doc_id: grnId,
         source_doc_no: grnNo,
+        // Production batch = source PO number (migration 0120). NULL for free GRNs.
+        batch_no: it.purchase_order_item_id ? (batchByItem.get(it.purchase_order_item_id) ?? null) : null,
         performed_by: userId,
       }));
     if (movements.length > 0) await writeMovements(sb, movements);
@@ -1161,6 +1197,9 @@ grns.post('/:id/items', async (c) => {
       const warehouseId = (grnHeader as { warehouse_id: string | null } | null)?.warehouse_id
         ?? (await defaultWarehouseId(sb));
       if (warehouseId) {
+        // Migration 0120 — stamp this added line's IN with its source PO batch.
+        const addedPoItemId = (it.purchaseOrderItemId as string) ?? null;
+        const batchByItem = await resolvePoBatchByItem(sb, [addedPoItemId]);
         await writeMovements(sb, [{
           movement_type: 'IN' as const,
           warehouse_id: warehouseId,
@@ -1172,6 +1211,7 @@ grns.post('/:id/items', async (c) => {
           source_doc_type: 'GRN' as const,
           source_doc_id: grnId,
           source_doc_no: (grnHeader as { grn_number: string } | null)?.grn_number ?? grnId,
+          batch_no: addedPoItemId ? (batchByItem.get(addedPoItemId) ?? null) : null,
           performed_by: user.id,
           notes: 'GRN line added — receipt',
         }]);
