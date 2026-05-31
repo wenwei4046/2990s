@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useMfgCatalog, useMfgCatalogRealtime, useCategoriesAll, type MfgCatalogRow } from '../lib/queries';
+import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useCart, cartHasSofa, cartHasNonSofa } from '../state/cart';
 import { Topbar } from '../components/Topbar';
 import { CustomerOrderFab } from '../components/CustomerOrderFab';
@@ -134,6 +135,7 @@ function buildCards(rows: MfgCatalogRow[]): CatalogCard[] {
 
 export const Catalog = () => {
   const catalog = useMfgCatalog();
+  const { data: staff } = useStaff();
   useMfgCatalogRealtime();
   const allCategories = useCategoriesAll();
 
@@ -297,23 +299,33 @@ export const Catalog = () => {
                 They sit under a "Maintain" heading just above the Honest
                 Pricing footer so they're the last thing in the rail —
                 away from the per-session category browsing flow above. */}
-            <div className={styles.sideHeading}>Maintain</div>
-            {/* Commander 2026-05-28 ("就直接添加一个 New Order 的 button…
-                不要跳 Backend, 永远在 POS 系统里"): customer-first SO creation
-                path. Click → POS-native customer form → POSTs empty SO,
-                lands on the existing handover-confirmed thank-you screen. */}
-            <Link to="/new-order" className={styles.sideItem}>
-              <Plus size={16} strokeWidth={1.75} />
-              <span className={styles.sideLabel}>New Order</span>
-            </Link>
-            <Link to="/products" className={styles.sideItem}>
-              <Package size={16} strokeWidth={1.75} />
-              <span className={styles.sideLabel}>Products</span>
-            </Link>
-            <Link to="/sales-order-maintenance" className={styles.sideItem}>
-              <Settings size={16} strokeWidth={1.75} />
-              <span className={styles.sideLabel}>SO Maintenance</span>
-            </Link>
+            {/* MAINTAIN is master-admin tooling (New Order / Products / SO
+                Maintenance). Only admin / super_admin / master_account see it —
+                isGlobalCurator, the same POS curator predicate used for global
+                Quick Picks + Combos. Sales etc. don't see the section, and the
+                three routes are guarded in router.tsx (MaintainGate) so a
+                hand-typed URL can't bypass the hide. */}
+            {isGlobalCurator(staff?.role) && (
+              <>
+                <div className={styles.sideHeading}>Maintain</div>
+                {/* Commander 2026-05-28 ("就直接添加一个 New Order 的 button…
+                    不要跳 Backend, 永远在 POS 系统里"): customer-first SO creation
+                    path. Click → POS-native customer form → POSTs empty SO,
+                    lands on the existing handover-confirmed thank-you screen. */}
+                <Link to="/new-order" className={styles.sideItem}>
+                  <Plus size={16} strokeWidth={1.75} />
+                  <span className={styles.sideLabel}>New Order</span>
+                </Link>
+                <Link to="/products" className={styles.sideItem}>
+                  <Package size={16} strokeWidth={1.75} />
+                  <span className={styles.sideLabel}>Products</span>
+                </Link>
+                <Link to="/sales-order-maintenance" className={styles.sideItem}>
+                  <Settings size={16} strokeWidth={1.75} />
+                  <span className={styles.sideLabel}>SO Maintenance</span>
+                </Link>
+              </>
+            )}
 
             <div className={styles.sideFooter}>
               <div className={styles.sideBrand}>Honest pricing</div>

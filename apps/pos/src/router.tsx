@@ -15,6 +15,7 @@ import { Products } from './pages/Products';
 import { SalesOrderMaintenance } from './pages/SalesOrderMaintenance';
 import { NewOrder } from './pages/NewOrder';
 import { AuthGate } from './components/AuthGate';
+import { MaintainGate } from './components/MaintainGate';
 
 export const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -40,11 +41,11 @@ export const router = createBrowserRouter([
   { path: '/change-pin', element: <AuthGate><ChangePin /></AuthGate> },
   { path: '/print/sales-order/:orderId', element: <AuthGate><SalesOrderPrint /></AuthGate> },
   /* PR — Commander 2026-05-28 ("把 Backend 的 Products 整个模块 port 到 POS").
-     Sales-side roles see this readonly; sales_director / admin can edit.
-     Page-level component reads useStaff() to derive readonly — no route
-     gate needed, every authed POS user lands here and the inner page
-     decides edit vs view. */
-  { path: '/products', element: <AuthGate><Products /></AuthGate> },
+     2026-06-01 — now wrapped in <MaintainGate>: only master-admin roles
+     (admin / super_admin / master_account) may open it; everyone else is
+     bounced to /catalog. The page still derives view/add/full from useStaff()
+     for the admins who get in. */
+  { path: '/products', element: <AuthGate><MaintainGate><Products /></MaintainGate></AuthGate> },
   /* PR — Commander 2026-05-28 ("Sales Order Maintenance 这个 module 也要 port
      到 POS"). Mode-based role gate inside the page:
        - admin                              → full
@@ -52,13 +53,13 @@ export const router = createBrowserRouter([
        - sales_executive / sales / default  → view
      Hits the SAME /venues, /localities, /state-warehouse-mappings,
      /so-dropdown-options API endpoints as Backend — bidirectional sync. */
-  { path: '/sales-order-maintenance', element: <AuthGate><SalesOrderMaintenance /></AuthGate> },
+  { path: '/sales-order-maintenance', element: <AuthGate><MaintainGate><SalesOrderMaintenance /></MaintainGate></AuthGate> },
   /* PR — Commander 2026-05-28 ("就直接添加一个 New Order 的 button, 点了
      之后就可以开了。不要跳 Backend，永远在 POS 系统里"). Topic 4 path 2:
      customer-first SO creation. Captures customer details, POSTs an empty
      SO header to /mfg-sales-orders, lands on the existing POS-native
      /handover-confirmed thank-you screen. */
-  { path: '/new-order', element: <AuthGate><NewOrder /></AuthGate> },
+  { path: '/new-order', element: <AuthGate><MaintainGate><NewOrder /></MaintainGate></AuthGate> },
   { path: '/', element: <Navigate to="/catalog" replace /> },
   { path: '*', element: <Navigate to="/catalog" replace /> },
 ]);
