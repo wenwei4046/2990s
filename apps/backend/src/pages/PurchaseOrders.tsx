@@ -10,13 +10,15 @@
 // 没做(后续):GRN 收货、3-way match、PDF 打印、邮件发送。
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
+import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3, ChevronDown, ChevronRight } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { buildVariantSummary } from '@2990s/shared';
 import {
   usePurchaseOrders,
   usePurchaseOrderDetail,
+  usePurchaseOrderLinked,
   useCreatePurchaseOrder,
   useCancelPurchaseOrder,
   useSuppliers,
@@ -24,6 +26,8 @@ import {
   useSuppliersForMaterial,
   type PoStatus,
   type PoHeaderRow,
+  type PoItemRow,
+  type LinkedGrnSummary,
   type BindingRow,
   type Currency,
   type NewPoItem,
@@ -31,6 +35,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useGrnFromPos } from '../lib/flow-queries';
+import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
 
@@ -273,6 +278,16 @@ export const PurchaseOrders = () => {
       },
     );
   };
+  /* Commander 2026-05-31 — "Partially Convert": jump into the line-level GRN
+     picker SCOPED to this PO (?poId=) so the operator can tick specific lines /
+     part quantities. Full "Convert" stays convertOneToGrn (whole PO in one GRN). */
+  const convertPartial = (po: PoHeaderRow) => {
+    if (po.status !== 'SUBMITTED' && po.status !== 'PARTIALLY_RECEIVED') {
+      window.alert('Nothing to be converted — this Purchase Order has no goods left to receive (already fully received or cancelled).');
+      return;
+    }
+    navigate(`/grns/from-po?poId=${encodeURIComponent(po.id)}`);
+  };
   const doCancelPo = (po: PoHeaderRow) => {
     if (!window.confirm(`Cancel ${po.po_number}? It will stop proceeding and any converted SO lines are released back.`)) return;
     cancelPo.mutate(po.id, {
@@ -372,6 +387,21 @@ export const PurchaseOrders = () => {
         /* Commander 2026-05-29 — open on DOUBLE-click (single-click was too
            trigger-happy: "本来应该要点两次的嘛"). Right-click → context menu. */
         onRowDoubleClick={(po) => navigate(`/purchase-orders/${po.id}`)}
+        /* Commander 2026-05-31 — click a PO row to reveal full line-item detail,
+           Convert / Partially-Convert actions, and which GR(s) it converted to
+           (mirrors the SO list's expand drill-down). */
+        expandable={{
+          renderExpansion: (po) => (
+            <ExpandedPoLines
+              po={po}
+              converting={grnFromPos.isPending}
+              onFullConvert={() => convertOneToGrn(po)}
+              onPartialConvert={() => convertPartial(po)}
+              onOpenGrn={(grnId) => navigate(`/grns/${grnId}`)}
+            />
+          ),
+          rowExpansionKey: (po) => po.id,
+        }}
         /* Cancelled POs grey out so they read as dead (mirrors the SO list). */
         rowStyle={(po) => po.status === 'CANCELLED'
           ? { opacity: 0.55, filter: 'grayscale(0.6)' }
@@ -407,6 +437,216 @@ export const PurchaseOrders = () => {
       {/* PR #97 — Create-PO drawer removed; full-page form at /purchase-orders/new */}
       {drawer.kind === 'detail' && (
         <DetailPoDrawer poId={drawer.poId} onClose={() => setDrawer({ kind: 'closed' })} />
+      )}
+    </div>
+  );
+};
+
+/* ─────────────────── Expanded PO drill-down ────────────────────────────
+   Commander 2026-05-31 — click a PO row → full line-item detail + Convert /
+   Partially-Convert actions + which GR(s) this PO converted to. Mirrors the
+   SO list's ExpandedSoLines. Lazy-fetches detail (items) + linked (GRNs);
+   TanStack caches both so re-expanding the same row is instant. */
+const PO_TD: CSSProperties = { padding: '3px 10px', verticalAlign: 'top', whiteSpace: 'nowrap' };
+const PO_TD_RIGHT: CSSProperties = { ...PO_TD, textAlign: 'right' };
+const PO_TH: CSSProperties = {
+  padding: '2px 10px', textAlign: 'left',
+  fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+  letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)',
+};
+const PO_TH_RIGHT: CSSProperties = { ...PO_TH, textAlign: 'right' };
+
+const ExpandedPoLines = ({
+  po, converting, onFullConvert, onPartialConvert, onOpenGrn,
+}: {
+  po: PoHeaderRow;
+  converting: boolean;
+  onFullConvert: () => void;
+  onPartialConvert: () => void;
+  onOpenGrn: (grnId: string) => void;
+}) => {
+  const detail = usePurchaseOrderDetail(po.id);
+  const linked = usePurchaseOrderLinked(po.id);
+  const [grnsOpen, setGrnsOpen] = useState(true);
+
+  const items = (detail.data?.items ?? []) as PoItemRow[];
+  const grns = (linked.data?.grns ?? []) as LinkedGrnSummary[];
+  const canConvert = po.status === 'SUBMITTED' || po.status === 'PARTIALLY_RECEIVED';
+
+  let subtotal = 0;
+  for (const it of items) subtotal += Number(it.line_total_centi ?? 0);
+
+  return (
+    <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
+      {detail.isLoading && (
+        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: 0 }}>Loading lines for {po.po_number}…</p>
+      )}
+      {detail.error && (
+        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)', margin: 0 }}>
+          Failed to load lines: {detail.error instanceof Error ? detail.error.message : String(detail.error)}
+        </p>
+      )}
+
+      {!detail.isLoading && !detail.error && (
+        <>
+          {/* ── Line-item detail ─────────────────────────────────────── */}
+          <div style={{ width: '100%', overflowX: 'auto' }}>
+            <table style={{
+              width: '100%', minWidth: 900, borderCollapse: 'collapse',
+              fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)',
+            }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(34, 31, 32, 0.10)' }}>
+                  <th style={PO_TH}>Group</th>
+                  <th style={PO_TH}>Item Code</th>
+                  <th style={{ ...PO_TH, whiteSpace: 'normal' }}>Description</th>
+                  <th style={PO_TH}>UOM</th>
+                  <th style={PO_TH_RIGHT}>Ordered</th>
+                  <th style={PO_TH_RIGHT}>Received</th>
+                  <th style={PO_TH_RIGHT}>Remaining</th>
+                  <th style={PO_TH_RIGHT}>Unit Price</th>
+                  <th style={PO_TH_RIGHT}>Line Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length === 0 && (
+                  <tr><td style={{ ...PO_TD, color: 'var(--fg-muted)' }} colSpan={9}>No line items.</td></tr>
+                )}
+                {items.map((it) => {
+                  const remaining = Number(it.qty ?? 0) - Number(it.received_qty ?? 0);
+                  const manual = (it.description ?? '').trim();
+                  const summary = buildVariantSummary(it.item_group ?? null, it.variants ?? null);
+                  return (
+                    <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
+                      <td style={PO_TD}><ItemGroupPill group={it.item_group ?? null} /></td>
+                      <td style={{ ...PO_TD, fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code}</td>
+                      <td style={{ ...PO_TD, whiteSpace: 'normal' }}>
+                        {manual ? (
+                          <>
+                            <div>{manual}</div>
+                            {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>{summary}</div>}
+                          </>
+                        ) : (summary || it.material_name || '—')}
+                      </td>
+                      <td style={PO_TD}>{it.uom || 'UNIT'}</td>
+                      <td style={PO_TD_RIGHT}>{it.qty ?? 0}</td>
+                      <td style={PO_TD_RIGHT}>{it.received_qty ?? 0}</td>
+                      <td style={{ ...PO_TD_RIGHT, color: remaining > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)', fontWeight: 600 }}>
+                        {remaining}
+                      </td>
+                      <td style={PO_TD_RIGHT}>{fmtMoney(Number(it.unit_price_centi ?? 0), po.currency)}</td>
+                      <td style={{ ...PO_TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
+                        {fmtMoney(Number(it.line_total_centi ?? 0), po.currency)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              {items.length > 0 && (
+                <tfoot>
+                  <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
+                    <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)' }} colSpan={8}>
+                      Subtotal
+                    </td>
+                    <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontWeight: 800, color: 'var(--c-burnt)' }}>
+                      {fmtMoney(subtotal, po.currency)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+
+          {/* ── Convert actions + linked GRNs ────────────────────────── */}
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start',
+            gap: 'var(--space-4)', marginTop: 'var(--space-3)',
+          }}>
+            {/* Convert action group */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              <span style={{ fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)' }}>
+                Convert to Goods Received
+              </span>
+              {canConvert ? (
+                <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
+                  <Button variant="primary" size="sm" disabled={converting} onClick={onFullConvert}>
+                    {converting ? 'Converting…' : 'Convert (all lines)'}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={onPartialConvert}>
+                    Partially Convert (pick lines)
+                  </Button>
+                </div>
+              ) : (
+                <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                  {po.status === 'RECEIVED'
+                    ? 'Fully received — nothing left to convert.'
+                    : po.status === 'CANCELLED'
+                      ? 'Cancelled — cannot convert.'
+                      : 'No goods left to convert.'}
+                </span>
+              )}
+            </div>
+
+            {/* Linked GRNs — which GR(s) this PO converted to. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', minWidth: 240 }}>
+              <button
+                type="button"
+                onClick={() => setGrnsOpen((s) => !s)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+                  fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em',
+                  textTransform: 'uppercase', color: 'var(--fg-muted)',
+                }}
+              >
+                {grnsOpen ? <ChevronDown size={12} strokeWidth={2} /> : <ChevronRight size={12} strokeWidth={2} />}
+                <span>Converted to GR ({grns.length})</span>
+              </button>
+              {grnsOpen && (
+                linked.isLoading ? (
+                  <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>Loading…</span>
+                ) : grns.length === 0 ? (
+                  <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>Not yet converted.</span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {grns.map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => onOpenGrn(g.id)}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)',
+                          padding: '4px 8px', background: 'var(--c-paper)', border: '1px solid var(--line)',
+                          borderRadius: 'var(--radius-sm)', cursor: 'pointer', textAlign: 'left',
+                        }}
+                        title={`Open ${g.grn_number}`}
+                      >
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--c-burnt)', fontSize: 'var(--fs-12)' }}>
+                          {g.grn_number}
+                        </span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{
+                            fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', fontWeight: 700,
+                            padding: '1px 8px', borderRadius: 999,
+                            color: g.status === 'CANCELLED' ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                            background: g.status === 'CANCELLED' ? 'rgba(184, 51, 31, 0.10)' : 'rgba(47, 93, 79, 0.12)',
+                          }}>
+                            {g.status}
+                          </span>
+                          {g.received_at && (
+                            <span style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>
+                              {String(g.received_at).slice(0, 10)}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

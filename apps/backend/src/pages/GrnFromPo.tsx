@@ -18,7 +18,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type CSSProperties } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { VariantDescription } from '../components/VariantDescription';
@@ -83,6 +83,12 @@ export const GrnFromPo = () => {
   const navigate = useNavigate();
   const itemsQ   = useOutstandingPoItems();
 
+  /* Commander 2026-05-31 — "Partially Convert" from the PO list lands here with
+     ?poId=<id>, scoping the picker to ONE PO's outstanding lines so the operator
+     isn't hunting through every supplier's PO. No param → the full picker. */
+  const [searchParams] = useSearchParams();
+  const poIdFilter = searchParams.get('poId');
+
   // Map<poItemId, { picked, qty }>. qty defaults to remainingQty when ticked.
   const [picks, setPicks] = useState<Record<string, Pick>>({});
 
@@ -125,6 +131,7 @@ export const GrnFromPo = () => {
   // ── Filtered rows fed to the grid ────────────────────────────────────
   const rows = useMemo(() => {
     return items.filter((r) => {
+      if (poIdFilter && r.poId !== poIdFilter) return false;
       if (effRemaining(r) <= 0) return false;
       if (category !== 'all' && (r.itemGroup ?? '').toLowerCase() !== category) return false;
       if (dateFrom || dateTo) {
@@ -136,7 +143,7 @@ export const GrnFromPo = () => {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, draftQtyById, category, dateField, dateFrom, dateTo]);
+  }, [items, draftQtyById, category, dateField, dateFrom, dateTo, poIdFilter]);
 
   // One WAREHOUSE per GRN (Commander 2026-05-30) — once a line is ticked, the
   // selection locks to that PO line's warehouse (purchase_location). Lines from a
@@ -453,6 +460,19 @@ export const GrnFromPo = () => {
           </Button>
         </div>
       </div>
+      {poIdFilter && (
+        <p style={{
+          margin: '0 0 var(--space-2)', padding: 'var(--space-1) var(--space-3)',
+          width: 'fit-content', borderRadius: 'var(--radius-pill)',
+          background: 'rgba(232, 107, 58, 0.10)', border: '1px solid var(--c-burnt)',
+          color: 'var(--c-burnt)', fontSize: 'var(--fs-12)', fontWeight: 600,
+        }}>
+          Partially converting{' '}
+          <code>{items.find((r) => r.poId === poIdFilter)?.poDocNo ?? 'this PO'}</code>
+          {' '}— only its outstanding lines are shown.{' '}
+          <Link to="/grns/from-po" style={{ color: 'var(--c-burnt)', textDecoration: 'underline' }}>Show all POs</Link>
+        </p>
+      )}
       {lockedWarehouse && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           One warehouse per GRN — locked to{' '}
