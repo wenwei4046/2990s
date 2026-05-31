@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -161,6 +161,16 @@ const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number
 
 const isLShapeBundle = (id: string | null | undefined): boolean =>
   id === '2+L' || id === '3+L';
+
+// Aspect (w/h) of a sofa layout at a given seat size. The composed hero anchors
+// its preview HEIGHT on the layout's aspect at the LARGEST offered seat size, so
+// growing the seat widens the sofa left-right instead of shrinking the whole
+// plan-view (mirrors the single-PNG hero's scaleX widen). undefined when the
+// layout has no measurable footprint.
+const layoutAnchorAspect = (cells: Cell[], depth: Depth): number | undefined => {
+  const bb = cellsBbox(cells, depth);
+  return bb && bb.h > 0 ? bb.w / bb.h : undefined;
+};
 
 /* A salesperson-facing Quick Pick — a saved sofa LAYOUT (Chairman 2026-05-31).
    Unifies the two layers the configurator shows: GLOBAL (sofa_quick_picks,
@@ -1032,6 +1042,7 @@ export const Configurator = () => {
             qpMirror={qpMirror}
             onToggleQpMirror={() => setQpMirror((v) => !v)}
             depth={activeDepth}
+            maxDepth={depthOptions[depthOptions.length - 1] ?? activeDepth}
             globalQuickPicks={globalQPItems}
             personalQuickPicks={personalQPItems}
             pickedQuickPickId={pickedQP?.id ?? null}
@@ -1528,6 +1539,10 @@ interface SofaQuickPickProps {
   qpMirror?: boolean;
   onToggleQpMirror?: () => void;
   depth: Depth;
+  /** Largest seat size offered by this Model (max of depthOptions). The composed
+   *  hero anchors its preview height on the layout's aspect at this size so the
+   *  seat-size toggle widens the sofa instead of shrinking the whole plan-view. */
+  maxDepth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
   /** Global Quick Picks (Master-Admin-curated, shared). */
@@ -1663,7 +1678,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1710,6 +1725,16 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
   const baseW = (pickedRow && QUICK_PRESET_META[pickedRow.bundle.id]?.baseW) ?? dims.w;
   const depthScale = baseW > 0 ? dims.w / baseW : 1;
   const heroCells = pickedRow ? buildPresetCells(pickedRow.bundle.id, depth) : undefined;
+  // Hero only — anchor the composed-preview HEIGHT on the layout's aspect at the
+  // LARGEST seat size so toggling the seat WIDENS the sofa left-right instead of
+  // shrinking the whole plan-view (the single-PNG hero already does this via
+  // scaleX). pickedQPRow → saved-layout hero; heroCells → console/corner preset.
+  const qpAnchorAspect = pickedQPRow
+    ? layoutAnchorAspect(cellsFromComboModules(pickedQPRow.modules, maxDepth), maxDepth)
+    : undefined;
+  const presetAnchorAspect = pickedRow && heroCells
+    ? layoutAnchorAspect(buildPresetCells(pickedRow.bundle.id, maxDepth) ?? [], maxDepth)
+    : undefined;
 
   return (
     <>
@@ -1867,12 +1892,13 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
               <SofaCellsPreview
                 cells={cellsFromComboModules(qpMirror ? mirrorModules(pickedQPRow.modules) : pickedQPRow.modules, depth)}
                 depth={depth}
+                anchorAspect={qpAnchorAspect}
                 showDims
               />
             </div>
           ) : heroCells ? (
             <div className={styles.qpHeroCells}>
-              <SofaCellsPreview cells={heroCells} depth={depth} showDims />
+              <SofaCellsPreview cells={heroCells} depth={depth} anchorAspect={presetAnchorAspect} showDims />
             </div>
           ) : pickedRow ? (
           <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
