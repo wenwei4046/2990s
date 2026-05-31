@@ -207,6 +207,33 @@ productModels.patch('/:id', async (c) => {
     return c.json({ error: 'update_failed', reason: error.message }, 500);
   }
   if (!data) return c.json({ error: 'not_found' }, 404);
+
+  // Chairman 2026-06-01: Modular's allowed_options is the SINGLE source of truth
+  // for ON/OFF — there is no separate per-SKU "Visible" toggle anymore. For
+  // size-keyed categories, mirror allowed_options.sizes onto each SKU's
+  // pos_active (the flag the POS catalog reads) so toggling a size OFF in Modular
+  // also pulls it from the catalog. Idempotent: only flips SKUs whose membership
+  // changed. Sofa is unaffected (its configurator reads allowed_options directly;
+  // its catalog card is model-level via product_models.active).
+  const cat = (data as { category?: string }).category;
+  const aoSizes = (parsed.data.allowedOptions as { sizes?: unknown } | undefined)?.sizes;
+  if ((cat === 'MATTRESS' || cat === 'BEDFRAME') && Array.isArray(aoSizes) && aoSizes.length > 0) {
+    const allowedSet = new Set((aoSizes as unknown[]).map((s) => String(s).toUpperCase()));
+    const { data: skus } = await supabase
+      .from('mfg_products')
+      .select('id, size_code, pos_active')
+      .eq('model_id', id);
+    const toOn:  string[] = [];
+    const toOff: string[] = [];
+    for (const s of (skus ?? []) as Array<{ id: string; size_code: string | null; pos_active: boolean | null }>) {
+      const inAllowed = allowedSet.has((s.size_code ?? '').toUpperCase());
+      if (inAllowed && s.pos_active === false) toOn.push(s.id);
+      else if (!inAllowed && s.pos_active !== false) toOff.push(s.id);
+    }
+    if (toOn.length)  await supabase.from('mfg_products').update({ pos_active: true  }).in('id', toOn);
+    if (toOff.length) await supabase.from('mfg_products').update({ pos_active: false }).in('id', toOff);
+  }
+
   return c.json({ model: data });
 });
 
