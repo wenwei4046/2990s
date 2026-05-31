@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, fabricTierAddon, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -12,6 +12,7 @@ import {
   useProductPricingRealtime,
   useProductFabrics,
   useFabricLibrary,
+  useFabricTierAddonConfig,
   useAddons,
   useBedframeColours,
   useBedframeOptions,
@@ -187,6 +188,7 @@ export const Configurator = () => {
   // products whose fabric list comes from sofaCustomizer.fabricIds rather than
   // the product_fabrics UUID-FK table.
   const fabricLib = useFabricLibrary();
+  const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ amounts
   useProductPricingRealtime(productId);
   /* PR — Commander 2026-05-28: Sofa Customize wires to Model.allowed_options.
    * The query resolves to null for non-sofa SKUs / orphan SKUs (no model_id),
@@ -373,6 +375,7 @@ export const Configurator = () => {
       setActiveDepth(cfg.depth ?? '24');
       if (cfg.fabricId && cfg.colourId) {
         const pf = derivedFabricRows.find((f) => f.fabricId === cfg.fabricId);
+        const libRow = (fabricLib.data ?? []).find((f) => f.id === cfg.fabricId);
         setFabricSel({
           fabricId: cfg.fabricId,
           colourId: cfg.colourId,
@@ -380,6 +383,8 @@ export const Configurator = () => {
           colourLabel: cfg.colourLabel ?? '',
           colourHex: cfg.colourHex ?? null,
           surcharge: pf?.surcharge ?? 0,
+          sofaTier: libRow?.sofaTier ?? null,
+          bedframeTier: libRow?.bedframeTier ?? null,
         });
       }
       if (cfg.cells && cfg.cells.length > 0) {
@@ -692,10 +697,15 @@ export const Configurator = () => {
   // Quick Pick selection price: computed from its layout via the engine.
   const qpPickPrice = pickedQP ? (priceForLayout(pickedQP.modules) ?? 0) : 0;
 
-  // Fabric surcharge folds onto the bundle/Quick-Pick price (spec §3.2).
+  // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
+  // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
+  // adds the SAME Δ via the shared fabricTierAddon, so the figure can't drift.
+  const sofaFabricDelta = fabricSel && addonCfgQ.data
+    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
+    : 0;
   const sofaTotal = pickedQP
-    ? qpPickPrice + (fabricSel?.surcharge ?? 0)
-    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? (fabricSel?.surcharge ?? 0) : 0);
+    ? qpPickPrice + sofaFabricDelta
+    : (pickedSofaRow?.price ?? 0) + (pickedSofaRow ? sofaFabricDelta : 0);
 
   // Sofas require a fabric + colour before Add-to-Cart (G6).
   const canAddSofa =
@@ -724,7 +734,8 @@ export const Configurator = () => {
       fabricLabel: fabricSel.fabricLabel,
       colourLabel: fabricSel.colourLabel,
       colourHex: fabricSel.colourHex ?? undefined,
-      total: pickedSofaRow.price + (fabricSel.surcharge ?? 0),
+      fabricTierDelta: sofaFabricDelta,
+      total: pickedSofaRow.price + sofaFabricDelta,
       summary: lShape
         ? `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${quickFlip}-facing · ${activeDepth}"${fabricSuffix}`
         : `${pickedSofaRow.bundle.id} · ${pickedSofaRow.bundle.label} · ${activeDepth}"${fabricSuffix}`,
@@ -754,7 +765,8 @@ export const Configurator = () => {
       fabricLabel: fabricSel.fabricLabel,
       colourLabel: fabricSel.colourLabel,
       colourHex: fabricSel.colourHex ?? undefined,
-      total: qpPickPrice + (fabricSel.surcharge ?? 0),
+      fabricTierDelta: sofaFabricDelta,
+      total: qpPickPrice + sofaFabricDelta,
       summary: `${label} · ${activeDepth}"${fabricSuffix}`,
     };
     addConfigured(snapshot, isEditing && editKey ? { editingKey: editKey } : undefined);
@@ -1047,6 +1059,8 @@ export const Configurator = () => {
                 fabricId={fabricSel?.fabricId ?? null}
                 colourId={fabricSel?.colourId ?? null}
                 onChange={setFabricSel}
+                category="SOFA"
+                addonConfig={addonCfgQ.data ?? null}
               />
             }
           />

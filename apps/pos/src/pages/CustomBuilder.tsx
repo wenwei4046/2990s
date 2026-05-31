@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useCallback, type CSSProperties, type Dispatch, type PointerEvent, type SetStateAction } from 'react';
 import { Trash2, RotateCw, Eraser, Maximize2, Minimize2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM } from '@2990s/shared';
+import { fmtRM, fabricTierAddon, type FabricTier } from '@2990s/shared';
 import {
   SOFA_MODULES,
   findModule,
@@ -23,7 +23,7 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData } from '../lib/queries';
+import { useProductFabrics, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
@@ -718,6 +718,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // Fabric + colour (spec 2026-05-24) — required before Add-to-Cart, surcharge
   // folds onto each sofa line.
   const productFabrics = useProductFabrics(productId);
+  const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
   /* Commander 2026-05-28 — "Save as Quick Pick" modal. Lets the staff
      persist the current cell composition as a new Sofa Combo Pricing row
@@ -738,7 +739,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       fabricHydratedRef.current = true;
     }
   }, [initialFabric]);
-  const fabricSurcharge = fabricSel?.surcharge ?? 0;
+  // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
+  // fabric's SELLING tier — replaces the old per-fabric surcharge. Server adds
+  // the same Δ per line via the shared fabricTierAddon, so it can't drift.
+  const sofaFabricDelta = fabricSel && addonCfgQ.data
+    ? fabricTierAddon('SOFA', fabricSel.sofaTier as FabricTier | null, addonCfgQ.data)
+    : 0;
   const canAdd = cells.length > 0 && allClosed && fabricSel != null;
 
   // Per-seat upgrade (F3) — this Model offers one named upgrade or none.
@@ -782,14 +788,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         cells: groupCells,
         depth,
         seatUpgradeLabel: pricing.seatUpgradeLabel ?? null,
-        // Fabric + colour applies to each sofa line in the build (server
-        // recompute adds the surcharge per line).
+        // Fabric + colour applies to each sofa line in the build; the tier Δ
+        // (migration 0124) folds onto each line (the server adds the same Δ).
         fabricId: fabricSel?.fabricId,
         colourId: fabricSel?.colourId,
         fabricLabel: fabricSel?.fabricLabel,
         colourLabel: fabricSel?.colourLabel,
         colourHex: fabricSel?.colourHex ?? undefined,
-        total: g.finalPrice + fabricSurcharge,
+        fabricTierDelta: sofaFabricDelta,
+        total: g.finalPrice + sofaFabricDelta,
         summary,
       };
       addConfigured(snapshot, !usedEditKey && editingKey ? { editingKey } : undefined);
@@ -929,6 +936,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           fabricId={fabricSel?.fabricId ?? null}
           colourId={fabricSel?.colourId ?? null}
           onChange={setFabricSel}
+          category="SOFA"
+          addonConfig={addonCfgQ.data ?? null}
         />
       </aside>
 
@@ -1447,7 +1456,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         <footer className={styles.priceBar}>
           <div>
             <span className="t-eyebrow">{allClosed && cells.length > 0 ? 'Total' : 'Provisional'}</span>
-            <PriceTag amount={priceResult.total + fabricSurcharge * priceResult.groups.length} size="lg" />
+            <PriceTag amount={priceResult.total + sofaFabricDelta * priceResult.groups.length} size="lg" />
             {/* Combo cue (HOOKKA parity) — when any group priced via a combo,
                 show the savings the combo gave over the matched subset's own
                 à-la-carte sum. Extra modules outside the combo subset stay at

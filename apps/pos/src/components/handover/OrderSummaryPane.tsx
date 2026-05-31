@@ -76,6 +76,9 @@ const FormPane = ({ lines, form, subtotal, addonTotal, deliveryFee, total }: For
             <div className={styles.itemBody}>
               <div className={styles.itemName}>{l.config.productName}</div>
               <div className={styles.itemDetail}>{cartSummary(l.config)} · qty {l.qty}</div>
+              {'fabricTierDelta' in l.config && (l.config.fabricTierDelta ?? 0) > 0 && (
+                <div className={styles.itemDetail}>Fabric upgrade · +{fmtRM((l.config.fabricTierDelta ?? 0) * l.qty)}</div>
+              )}
             </div>
             <div className={styles.itemPrice}>
               <span className={styles.itemPriceUnit}>RM</span>
