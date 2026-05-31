@@ -43,6 +43,7 @@ import {
 } from '../lib/flow-queries';
 import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
 import { MoneyInput } from '../components/MoneyInput';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import styles from './SalesOrderDetail.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -259,6 +260,7 @@ export const PurchaseReturnDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[pr.status as string] ?? ''}`}>
             {STATUS_LABEL[pr.status as string] ?? String(pr.status)}
           </span>
+          <RelationshipMapButton type="pr" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
             <span>Print PDF</span>

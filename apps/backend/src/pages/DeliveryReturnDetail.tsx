@@ -33,6 +33,7 @@ import {
   useDeleteDeliveryReturnItem,
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
+import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import { buildVariantSummary } from '@2990s/shared';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
@@ -384,6 +385,7 @@ export const DeliveryReturnDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
+          <RelationshipMapButton type="dr" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
           </Button>

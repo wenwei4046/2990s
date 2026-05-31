@@ -35,6 +35,11 @@ const TYPE_META: Record<
   po:      { col: 1, band: 'bottom', title: 'Purchase Order',   route: (id) => `/purchase-orders/${id}`,     bg: '#faf5ff', accent: '#9333ea' },
   grn:     { col: 2, band: 'bottom', title: 'Goods Receive',    route: (id) => `/grns/${id}`,                bg: '#f0f9ff', accent: '#0284c7' },
   pi:      { col: 3, band: 'bottom', title: 'Purchase Invoice', route: (id) => `/purchase-invoices/${id}`,   bg: '#fefce8', accent: '#ca8a04' },
+  // Returns reverse goods. A Delivery Return hangs off its DO (sales/top band),
+  // a Purchase Return off its GRN (purchase/bottom band). Both sit one column
+  // right of their parent and share a warm red accent to read as "sent back".
+  dr:      { col: 2, band: 'top',    title: 'Delivery Return',  route: (id) => `/delivery-returns/${id}`,    bg: '#fef2f2', accent: '#b91c1c' },
+  pr:      { col: 3, band: 'bottom', title: 'Purchase Return',  route: (id) => `/purchase-returns/${id}`,    bg: '#fef2f2', accent: '#b91c1c' },
 };
 
 const EDGE_COLOR: Record<FlowEdgeKind, string> = {

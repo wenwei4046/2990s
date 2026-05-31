@@ -5,7 +5,9 @@
 // both directions:
 //
 //   sales chain:     SO ──▶ DO ──▶ Sales Invoice ──▶ AR Payment
+//                            └──▶ Delivery Return (goods sent back)
 //   purchase chain:  SO ──▶ PO ──▶ GRN ──▶ Purchase Invoice
+//                                   └──▶ Purchase Return (goods sent back)
 //
 // and returns a flat { nodes, edges } graph the frontend lays out in fixed
 // stage-columns. Every edge carries a `kind` so the UI can colour it:
@@ -31,7 +33,7 @@ import type { Env, Variables } from '../env';
 export const documentFlow = new Hono<{ Bindings: Env; Variables: Variables }>();
 documentFlow.use('*', supabaseAuth);
 
-type NodeType = 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi';
+type NodeType = 'so' | 'do' | 'si' | 'payment' | 'po' | 'grn' | 'pi' | 'dr' | 'pr';
 type EdgeKind = 'full' | 'partial' | 'value' | 'payment';
 
 type FlowNode = {
@@ -87,6 +89,17 @@ async function resolveRootSos(sb: any, type: NodeType, id: string): Promise<stri
       const { data } = await sb.from('purchase_invoices').select('grn_id').eq('id', id).maybeSingle();
       return data?.grn_id ? resolveRootSos(sb, 'grn', data.grn_id) : [];
     }
+    case 'dr': {
+      // Delivery Return hangs off its Delivery Order — resolve through the DO.
+      const { data } = await sb.from('delivery_returns').select('delivery_order_id').eq('id', id).maybeSingle();
+      return data?.delivery_order_id ? resolveRootSos(sb, 'do', data.delivery_order_id) : [];
+    }
+    case 'pr': {
+      // Purchase Return hangs off its Goods Receipt (or, failing that, its PO).
+      const { data } = await sb.from('purchase_returns').select('grn_id, purchase_order_id').eq('id', id).maybeSingle();
+      if (data?.grn_id) return resolveRootSos(sb, 'grn', data.grn_id);
+      return data?.purchase_order_id ? resolveRootSos(sb, 'po', data.purchase_order_id) : [];
+    }
     default:
       return [];
   }
@@ -107,7 +120,7 @@ documentFlow.get('/:type/:id', async (c) => {
   const sb = c.get('supabase');
   const type = c.req.param('type') as NodeType;
   const id = c.req.param('id');
-  if (!['so', 'do', 'si', 'payment', 'po', 'grn', 'pi'].includes(type)) {
+  if (!['so', 'do', 'si', 'payment', 'po', 'grn', 'pi', 'dr', 'pr'].includes(type)) {
     return c.json({ error: 'bad_type' }, 400);
   }
 
@@ -247,6 +260,38 @@ documentFlow.get('/:type/:id', async (c) => {
     }
   }
 
+  // ── 8. Delivery Returns (sales chain) ───────────────────────────────────
+  // A Delivery Return reverses goods on a Delivery Order. It hangs off the DO,
+  // mirroring how a GRN hangs off its PO. Coverage compares returned qty to the
+  // DO line qty (a full return greys out blue, a partial one red).
+  if (doIds.length) {
+    const { data: drByHeader } = await sb.from('delivery_returns')
+      .select('id, return_number, status, delivery_order_id').in('delivery_order_id', doIds);
+    const drIds = uniq((drByHeader ?? []).map((d: any) => d.id));
+    const drLineLinks = drIds.length
+      ? (await sb.from('delivery_return_items').select('delivery_return_id, do_item_id, qty_returned').in('delivery_return_id', drIds)).data ?? []
+      : [];
+    const doToDr = new Map<string, { childQty: number; parentItems: Set<string> }>(); // `${doId}|${drId}`
+    for (const l of (drLineLinks as any[])) {
+      const dm = l.do_item_id ? doItemMeta.get(l.do_item_id) : undefined;
+      if (!dm) continue;
+      const k = `${dm.doId}|${l.delivery_return_id}`;
+      const agg = doToDr.get(k) ?? { childQty: 0, parentItems: new Set<string>() };
+      agg.childQty += Number(l.qty_returned ?? 0);
+      agg.parentItems.add(l.do_item_id);
+      doToDr.set(k, agg);
+    }
+    for (const d of (drByHeader ?? []) as any[]) {
+      const k = keyOf('dr', d.id);
+      nodes.set(k, { key: k, type: 'dr', id: d.id, label: d.return_number ?? d.id, status: d.status ?? null, isAnchor: k === anchorKey });
+      if (d.delivery_order_id) {
+        const agg = doToDr.get(`${d.delivery_order_id}|${d.id}`);
+        const parentQty = agg ? [...agg.parentItems].reduce((s, di) => s + (doItemMeta.get(di)?.qty ?? 0), 0) : 0;
+        addEdge(keyOf('do', d.delivery_order_id), k, agg ? cover(agg.childQty, parentQty) : 'full');
+      }
+    }
+  }
+
   // ── 5. POs (purchase chain) ─────────────────────────────────────────────
   const poItemLinks = soItemIds.length
     ? (await sb.from('purchase_order_items').select('id, purchase_order_id, so_item_id, qty').in('so_item_id', soItemIds)).data ?? []
@@ -327,6 +372,38 @@ documentFlow.get('/:type/:id', async (c) => {
       nodes.set(k, { key: k, type: 'pi', id: p.id, label: p.invoice_number ?? p.id, status: p.status ?? null, isAnchor: k === anchorKey });
       if (p.grn_id) {
         const agg = grnToPi.get(`${p.grn_id}|${p.id}`);
+        const parentQty = agg ? [...agg.parentItems].reduce((s, gi) => s + (grnItemMeta.get(gi)?.qty ?? 0), 0) : 0;
+        addEdge(keyOf('grn', p.grn_id), k, agg ? cover(agg.childQty, parentQty) : 'full');
+      }
+    }
+  }
+
+  // ── 9. Purchase Returns (purchase chain) ────────────────────────────────
+  // A Purchase Return reverses goods on a Goods Receipt. It hangs off the GRN,
+  // mirroring how a Delivery Return hangs off its DO. Coverage compares returned
+  // qty to the GRN line qty.
+  if (grnIds.length) {
+    const { data: prByHeader } = await sb.from('purchase_returns')
+      .select('id, return_number, status, grn_id').in('grn_id', grnIds);
+    const prIds = uniq((prByHeader ?? []).map((p: any) => p.id));
+    const prLineLinks = prIds.length
+      ? (await sb.from('purchase_return_items').select('purchase_return_id, grn_item_id, qty_returned').in('purchase_return_id', prIds)).data ?? []
+      : [];
+    const grnToPr = new Map<string, { childQty: number; parentItems: Set<string> }>(); // `${grnId}|${prId}`
+    for (const l of (prLineLinks as any[])) {
+      const gm = l.grn_item_id ? grnItemMeta.get(l.grn_item_id) : undefined;
+      if (!gm) continue;
+      const k = `${gm.grnId}|${l.purchase_return_id}`;
+      const agg = grnToPr.get(k) ?? { childQty: 0, parentItems: new Set<string>() };
+      agg.childQty += Number(l.qty_returned ?? 0);
+      agg.parentItems.add(l.grn_item_id);
+      grnToPr.set(k, agg);
+    }
+    for (const p of (prByHeader ?? []) as any[]) {
+      const k = keyOf('pr', p.id);
+      nodes.set(k, { key: k, type: 'pr', id: p.id, label: p.return_number ?? p.id, status: p.status ?? null, isAnchor: k === anchorKey });
+      if (p.grn_id) {
+        const agg = grnToPr.get(`${p.grn_id}|${p.id}`);
         const parentQty = agg ? [...agg.parentItems].reduce((s, gi) => s + (grnItemMeta.get(gi)?.qty ?? 0), 0) : 0;
         addEdge(keyOf('grn', p.grn_id), k, agg ? cover(agg.childQty, parentQty) : 'full');
       }
