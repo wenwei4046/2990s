@@ -10,6 +10,7 @@ import {
   groupSofas,
   analyzeSofa,
   computeSofaPrice,
+  detectBundle,
   findSnap,
   hasArmConflict,
   reclinerEligible,
@@ -578,11 +579,15 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   // flicker between drop and overlay render).
   useEffect(() => {
     priceResult.groups.forEach((g, i) => {
-      if (!g.bundle) return;
       const groupCells = analyses[i]?.group;
       if (!groupCells) return;
+      // Seamless overlay shows for any recognised bundle SHAPE, priced or not
+      // (Chairman 2026-06-01), so resolve the shape from detectBundle when the
+      // group isn't priced as a bundle — same source the render path uses.
+      const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+      if (!bundle) return;
       const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-      const id = g.bundle.id;
+      const id = bundle.id;
       const isLShape = id === '2+L' || id === '3+L';
       const src = `${ASSET_BASE}/${id}${isLShape ? `-${flip}` : ''}.png`;
       if (bboxCache.has(src)) return;
@@ -1290,9 +1295,18 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
               show their silhouettes while moving) and during per-module edit
               mode (where the user explicitly wants to see modules apart). */}
           {priceResult.groups.map((g, i) => {
-            if (!g.bundle) return null;
             const groupCells = analyses[i]?.group;
             if (!groupCells || groupCells.length === 0) return null;
+            // Seamless whole-sofa overlay: show whenever the laid-out group forms
+            // a recognised bundle SHAPE (2S/3S/2+L/3+L) and is closed — regardless
+            // of whether that bundle is PRICED (Chairman 2026-06-01: the unified
+            // Quick-Pick artwork should also cover Custom builds, so e.g. two 1A
+            // read as one continuous 2-seater rather than two silhouettes with a
+            // seam). Ad-hoc shapes detectBundle can't name have no composite art,
+            // so they keep their per-module silhouettes. Falls back to the priced
+            // g.bundle when present (unchanged for priced bundles).
+            const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+            if (!bundle) return null;
             // Skip when the group includes an accessory (console / stool). The
             // bundle composite PNG depicts only the seat shell but is sized to
             // the WHOLE group bbox — including the accessory's width — so it
@@ -1337,8 +1351,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             const bb = cellsBbox(dispCells, depth);
             if (!bb) return null;
             const flip = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
-            const isLShape = g.bundle.id === '2+L' || g.bundle.id === '3+L';
-            const compositeSrc = `${ASSET_BASE}/${g.bundle.id}${isLShape ? `-${flip}` : ''}.png`;
+            const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
+            const compositeSrc = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
             const compBbox = bboxCache.get(compositeSrc);
             if (!compBbox) return null;
             const bw = compBbox.r - compBbox.l;
