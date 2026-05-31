@@ -341,10 +341,17 @@ export const GrnNew = () => {
      a manual choice. */
   useEffect(() => {
     if (warehouseId) return;
+    // In the from-PO picks flow no single PO is selected (selPoId is unset, so
+    // `po` is undefined). The picked lines all share one warehouse — honour it
+    // first, so the GRN receives into the PO's warehouse instead of silently
+    // defaulting to the first warehouse in the list.
+    const pickLoc = hasPicks
+      ? (picks?.find((p) => p.warehouseLocationId)?.warehouseLocationId ?? null)
+      : null;
     const poLoc = (po as { purchase_location_id?: string | null } | undefined)?.purchase_location_id ?? null;
-    const fallback = poLoc ?? (warehousesQ.data?.[0]?.id ?? '');
+    const fallback = pickLoc ?? poLoc ?? (warehousesQ.data?.[0]?.id ?? '');
     if (fallback) setWarehouseId(fallback);
-  }, [warehouseId, po, warehousesQ.data]);
+  }, [warehouseId, hasPicks, picks, po, warehousesQ.data]);
 
   // ── Manual product search (gated by min query length, mirrors PO form). ──
   // Commander 2026-05-29 — the single top "ADD ITEM" box is gone. Each MANUAL
