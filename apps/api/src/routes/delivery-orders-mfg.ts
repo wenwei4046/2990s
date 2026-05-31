@@ -151,8 +151,11 @@ async function recomputeTotals(sb: any, deliveryOrderId: string) {
 
    Only SHIPPED DOs have OUT movements; un-shipped DOs keep the benchmark. A
    bucket with net_qty ≤ 0 (line fully returned/reversed) is left untouched.
-   Best-effort: never throws into the caller (audit-DLQ pattern). */
-async function restampDoActualCost(sb: any, deliveryOrderId: string) {
+   Best-effort: never throws into the caller (audit-DLQ pattern).
+
+   EXPORTED (Costing B, 2026-06-01) so the recost engine (apps/api/src/lib/
+   recost.ts) can re-run it after a PI/GR price correction re-costs the lots. */
+export async function restampDoActualCost(sb: any, deliveryOrderId: string) {
   try {
     const { data: doHeader } = await sb.from('delivery_orders')
       .select('status, warehouse_id').eq('id', deliveryOrderId).maybeSingle();
