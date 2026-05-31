@@ -1,4 +1,5 @@
--- 0122 — Console merge (Chairman 2026-06-01, spec decision 5).
+-- 0123 — Console merge (Chairman 2026-06-01, spec decision 5).
+-- (Renumbered 0122 -> 0123: a parallel branch claimed 0122_reset_test_transactions.)
 -- Code-side `WC-45` was renamed to `Console` (a single canonical console code);
 -- this migration aligns the DB data. Idempotent + guarded so a re-run is a no-op.
 --
@@ -13,16 +14,20 @@
 --   • The WC-45 -> CNR retail copy (old SOFA-SELLING-PLAN) NEVER ran (all *-CNR
 --     SKUs unpriced), so `Console` is the safe, non-colliding target.
 
--- 1. Legacy per-product compartment rows (update referencing rows BEFORE the
---    library id, in case of a FK). No-op when empty.
+-- 1+2. Move the WC-45 reference compartment to Console. There IS a FK
+--    product_compartments.compartment_id -> compartment_library.id (confirmed
+--    live: 15 child rows, no Console row, PK (product_id, compartment_id)). Do it
+--    INSERT -> repoint-children -> DELETE so the FK is never violated (also correct
+--    with no ON UPDATE CASCADE). Idempotent: INSERT ON CONFLICT DO NOTHING; the
+--    UPDATE/DELETE are no-ops on re-run.
+INSERT INTO compartment_library (id, comp_group, label, width_cm, depth_cm, cushions, default_price, art_filename, is_accessory, sort_order)
+  SELECT 'Console', comp_group, label, width_cm, depth_cm, cushions, default_price, 'Console.png', is_accessory, sort_order
+  FROM compartment_library WHERE id = 'WC-45'
+  ON CONFLICT (id) DO NOTHING;
+
 UPDATE product_compartments SET compartment_id = 'Console' WHERE compartment_id = 'WC-45';
 
--- 2. compartment_library: rename the WC-45 reference row to Console. Guard so it
---    only runs once and never clobbers an existing Console row.
-UPDATE compartment_library
-  SET id = 'Console', art_filename = 'Console.png'
-  WHERE id = 'WC-45'
-    AND NOT EXISTS (SELECT 1 FROM compartment_library c2 WHERE c2.id = 'Console');
+DELETE FROM compartment_library WHERE id = 'WC-45';
 
 -- 3. mfg_products: fold `<MODEL>-CONSOLE/WC` SKUs into their `<MODEL>-CONSOLE`
 --    sibling. Delete the `/WC` variant where the plain sibling already exists…
