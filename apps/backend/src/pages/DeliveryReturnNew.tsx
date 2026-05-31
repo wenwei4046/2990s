@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowDownToLine, ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
+import { ArrowRightLeft, ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
@@ -288,7 +288,7 @@ export const DeliveryReturnNew = () => {
         <div className={styles.actions}>
           {/* Pull lines from a Delivery Order — mirrors New GRN's "From Purchase Order". */}
           <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns/from-do')}>
-            <ArrowDownToLine {...ICON} /> From Delivery Order
+            <ArrowRightLeft {...ICON} /> From Delivery Order
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns')}>
             <X {...ICON} /> Cancel

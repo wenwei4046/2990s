@@ -23,7 +23,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Save, Trash2, X, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, X, ChevronDown, ArrowRightLeft } from 'lucide-react';
 import { ItemGroupPill } from '../lib/category-badges';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
@@ -385,7 +385,7 @@ export const PurchaseInvoiceNew = () => {
           {/* Keep the GRN→Invoice path: jump to the multi-GRN-line picker. */}
           {isManual && (
             <Button variant="ghost" size="md" onClick={() => navigate('/purchase-invoices/from-grn')}>
-              From GRN (multi)
+              <ArrowRightLeft {...ICON} /> From Goods Receipt
             </Button>
           )}
           <Button variant="ghost" size="md" onClick={() => navigate(isManual ? '/purchase-invoices' : (grn ? `/grns/${grn.id}` : '/grns'))}>

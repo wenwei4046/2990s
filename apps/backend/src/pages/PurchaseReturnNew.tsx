@@ -26,7 +26,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Plus, Save, Trash2, X, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import {
@@ -295,6 +295,11 @@ export const PurchaseReturnNew = () => {
           <h1 className={styles.title}>New Purchase Return {sourceTitle}</h1>
         </div>
         <div className={styles.actions}>
+          {/* Pull lines from a Goods Receipt — routes to the GRN list where the
+              user right-clicks "Convert to PR" (no dedicated picker page). */}
+          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
+            <ArrowRightLeft {...ICON} /> From Goods Receipt
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-returns')}>
             <X {...ICON} /> Cancel
           </Button>

@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, ChevronDown, Plus, Save, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
 import {
@@ -350,6 +350,10 @@ export const SalesInvoiceNew = () => {
           </h1>
         </div>
         <div className={styles.actions}>
+          {/* Pull lines from a Delivery Order — mirrors the purchase-side New forms. */}
+          <Button variant="ghost" size="md" onClick={() => navigate('/sales-invoices/from-do')}>
+            <ArrowRightLeft {...ICON} /> From Delivery Order
+          </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/sales-invoices')}>
             <X {...ICON} /> Cancel
           </Button>

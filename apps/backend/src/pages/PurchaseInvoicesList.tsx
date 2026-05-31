@@ -11,7 +11,7 @@
 
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, FileText } from 'lucide-react';
+import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -142,11 +142,11 @@ export const PurchaseInvoices = () => {
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           {/* A Purchase Invoice starts from a Goods Receipt — this routes to the
               GRN list where the user right-clicks "Convert to PI". */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
-            <FileText {...ICON} />
+          <Button variant="ghost" size="sm" onClick={() => navigate('/grns')}>
+            <ArrowRightLeft {...ICON} />
             <span>From Goods Receipt</span>
           </Button>
-          <Button variant="primary" size="md" onClick={() => navigate('/purchase-invoices/new')}>
+          <Button variant="primary" size="sm" onClick={() => navigate('/purchase-invoices/new')}>
             <Plus {...ICON} />
             <span>New Purchase Invoice</span>
           </Button>
@@ -170,6 +170,7 @@ export const PurchaseInvoices = () => {
         storageKey={PI_LIST_STORAGE_KEY}
         rowKey={(r) => r.id}
         searchPlaceholder="Search invoices…"
+        groupBanner={false}
         /* Open on DOUBLE-click; right-click → context menu (mirrors the GRN/PR list). */
         onRowDoubleClick={(r) => navigate(`/purchase-invoices/${r.id}`)}
         /* Cancelled invoices grey out so they read as locked / void. */

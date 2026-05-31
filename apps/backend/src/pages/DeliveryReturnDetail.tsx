@@ -20,7 +20,7 @@ import {
 } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, Pencil, Plus, Save, Undo2, ChevronDown, Ban, RotateCcw, ArrowDownToLine,
+  ArrowLeft, Pencil, Plus, Save, Undo2, ChevronDown, Ban, RotateCcw, ArrowRightLeft, Printer,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
@@ -330,6 +330,32 @@ export const DeliveryReturnDetail = () => {
     if (!window.confirm(`Reopen ${header.return_number} back to RECEIVED?`)) return;
     updateStatus.mutate({ id: header.id, status: 'RECEIVED' });
   };
+  const handlePrint = () => {
+    import('../lib/delivery-return-pdf').then(({ generateDeliveryReturnPdf }) =>
+      generateDeliveryReturnPdf(
+        {
+          return_number: header.return_number,
+          status: header.status,
+          return_date: header.return_date,
+          debtor_code: header.debtor_code,
+          debtor_name: header.debtor_name,
+          reason: header.reason,
+          refund_centi: header.local_total_centi,
+          notes: header.notes,
+          delivery_order_id: header.delivery_order_id,
+          sales_invoice_id: null,
+        },
+        items.map((it) => ({
+          item_code: it.item_code,
+          description: it.description,
+          qty_returned: it.qty_returned,
+          condition: it.condition,
+          unit_price_centi: it.unit_price_centi,
+          refund_centi: it.line_total_centi,
+        })),
+      ),
+    ).catch((e) => alert(`PDF generation failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
 
   return (
     <div className={styles.page} style={isCancelled ? { filter: 'grayscale(0.7)' } : undefined}>
@@ -358,9 +384,12 @@ export const DeliveryReturnDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
+          <Button variant="ghost" size="md" onClick={handlePrint}>
+            <Printer {...ICON} /><span>Print PDF</span>
+          </Button>
           {isEditing && (
             <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns/from-do')}>
-              <ArrowDownToLine {...ICON} /><span>From Delivery Order</span>
+              <ArrowRightLeft {...ICON} /><span>From Delivery Order</span>
             </Button>
           )}
           {isCancelled ? (

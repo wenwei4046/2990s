@@ -11,7 +11,7 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus } from 'lucide-react';
+import { Plus, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useGrns,
@@ -154,11 +154,11 @@ export const GoodsReceived = () => {
           <h1 className={styles.title}>Goods Received</h1>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
-            <Plus {...ICON} />
+          <Button variant="ghost" size="sm" onClick={() => navigate('/grns/from-po')}>
+            <ArrowRightLeft {...ICON} />
             <span>From Purchase Order</span>
           </Button>
-          <Button variant="primary" size="md" onClick={() => navigate('/grns/new')}>
+          <Button variant="primary" size="sm" onClick={() => navigate('/grns/new')}>
             <Plus {...ICON} />
             <span>New Goods Receipt</span>
           </Button>
@@ -182,6 +182,7 @@ export const GoodsReceived = () => {
         storageKey={GRN_LIST_STORAGE_KEY}
         rowKey={(g) => g.id}
         searchPlaceholder="Search GRNs…"
+        groupBanner={false}
         /* Open on DOUBLE-click; right-click → context menu (mirrors the PO list). */
         onRowDoubleClick={(g) => navigate(`/grns/${g.id}`)}
         /* Cancelled / Closed GRNs grey out so they read as dead (mirrors the PO list). */

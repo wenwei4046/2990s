@@ -12,7 +12,7 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
+import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
@@ -293,11 +293,11 @@ export const PurchaseOrders = () => {
           {/* PR — Phase 1: multi-SO → PO picker. Lets commander select
               outstanding SO lines (across customers + suppliers), input
               partial qty per line, and emit one PO per supplier. */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
-            <Plus {...ICON} />
+          <Button variant="ghost" size="sm" onClick={() => navigate('/purchase-orders/from-so')}>
+            <ArrowRightLeft {...ICON} />
             <span>From Sales Order</span>
           </Button>
-          <Button variant="primary" size="md" onClick={() => navigate('/purchase-orders/new')}>
+          <Button variant="primary" size="sm" onClick={() => navigate('/purchase-orders/new')}>
             <Plus {...ICON} />
             <span>New Purchase Order</span>
           </Button>
@@ -368,6 +368,7 @@ export const PurchaseOrders = () => {
         storageKey={PO_LIST_STORAGE_KEY}
         rowKey={(po) => po.id}
         searchPlaceholder="Search POs…"
+        groupBanner={false}
         /* Commander 2026-05-29 — open on DOUBLE-click (single-click was too
            trigger-happy: "本来应该要点两次的嘛"). Right-click → context menu. */
         onRowDoubleClick={(po) => navigate(`/purchase-orders/${po.id}`)}

@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X, Layers, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
@@ -486,7 +486,7 @@ export const GrnNew = () => {
         <div className={styles.actions}>
           {/* Bulk / multi-PO picker that FEEDS this form. */}
           <Button variant="ghost" size="md" onClick={goToFromPo}>
-            <Layers {...ICON} /> From Purchase Order
+            <ArrowRightLeft {...ICON} /> From Purchase Order
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <X {...ICON} /> Cancel

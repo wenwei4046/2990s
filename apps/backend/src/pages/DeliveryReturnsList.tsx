@@ -15,7 +15,7 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties, DragEvent, JSX, ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { Plus, Filter, Search, ArrowDownToLine } from 'lucide-react';
+import { Plus, Filter, Search, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { formatPhone } from '@2990s/shared/phone';
@@ -477,7 +477,7 @@ export const DeliveryReturnsList = () => {
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="sm" onClick={onConvertFromDo}>
-            <ArrowDownToLine size={14} strokeWidth={1.75} />
+            <ArrowRightLeft size={14} strokeWidth={1.75} />
             <span>From Delivery Order</span>
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>

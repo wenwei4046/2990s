@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
   useCreatePurchaseOrder,
@@ -651,7 +651,7 @@ export const PurchaseOrderNew = () => {
           {/* PR — Commander 2026-05-27: parity with PO list — quick swap into
               the SO-driven flow without bouncing back to the list page. */}
           <Button variant="ghost" size="md" onClick={goToFromSo}>
-            <Plus {...ICON} /> From SO
+            <ArrowRightLeft {...ICON} /> From Sales Order
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders')}>
             <X {...ICON} /> Cancel

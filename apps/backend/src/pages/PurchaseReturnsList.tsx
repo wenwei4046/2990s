@@ -11,7 +11,7 @@
 
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, Undo2 } from 'lucide-react';
+import { Plus, Undo2, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseReturns, useCancelPurchaseReturn } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
@@ -128,11 +128,11 @@ export const PurchaseReturns = () => {
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           {/* A Purchase Return starts from a Goods Receipt — this routes to the
               GRN list where the user right-clicks "Convert to PR". */}
-          <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
-            <Undo2 {...ICON} />
+          <Button variant="ghost" size="sm" onClick={() => navigate('/grns')}>
+            <ArrowRightLeft {...ICON} />
             <span>From Goods Receipt</span>
           </Button>
-          <Button variant="primary" size="md" onClick={() => navigate('/purchase-returns/new')}>
+          <Button variant="primary" size="sm" onClick={() => navigate('/purchase-returns/new')}>
             <Plus {...ICON} />
             <span>New Purchase Return</span>
           </Button>
@@ -156,6 +156,7 @@ export const PurchaseReturns = () => {
         storageKey={PR_LIST_STORAGE_KEY}
         rowKey={(r) => r.id}
         searchPlaceholder="Search returns…"
+        groupBanner={false}
         /* Open on DOUBLE-click; right-click → context menu (mirrors the GRN list). */
         onRowDoubleClick={(r) => navigate(`/purchase-returns/${r.id}`)}
         /* Completed / cancelled returns grey out so they read as locked / done. */
