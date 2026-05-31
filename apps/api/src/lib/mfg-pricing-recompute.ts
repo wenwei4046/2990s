@@ -316,8 +316,12 @@ export function recomputeFromSnapshot(
       unitToPersistSen = manualUnitSelling;
     }
   } else if (hasAuthoritativeSelling) {
-    drift = driftThresholdExceeded(manualUnitSelling, authoritativeSellingSen);
-    unitToPersistSen = authoritativeSellingSen;
+    // + SELLING fabric-tier Δ (migration 0124). Non-zero only for BEDFRAME (the
+    // shared fabricTierAddon returns 0 for mattress/accessory/service). POS adds
+    // the same Δ so the gate matches; 0 with default data (no tier / no config).
+    const authoritativeWithFabric = authoritativeSellingSen + fabricAddonCenti;
+    drift = driftThresholdExceeded(manualUnitSelling, authoritativeWithFabric);
+    unitToPersistSen = authoritativeWithFabric;
   } else {
     drift = false;
     unitToPersistSen = manualUnitSelling;

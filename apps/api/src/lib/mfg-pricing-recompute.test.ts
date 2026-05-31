@@ -261,6 +261,20 @@ describe('recomputeFromSnapshot — fabric-tier SELLING add-on (migration 0124)'
     expect(r.drift).toBe(false);
     expect(r.unit_price_sen).toBe(300000);
   });
+
+  it('bedframe PRICE_3 fabric → bedframe Δ folds onto the catalog sell_price_sen', () => {
+    const bedframeProduct: ProductRowLite = {
+      code: 'HILTON-Q', category: 'BEDFRAME', base_price_sen: 0, price1_sen: null,
+      cost_price_sen: 0, seat_height_prices: null, base_model: 'Hilton', sell_price_sen: 200000,
+    };
+    const r = recomputeFromSnapshot(
+      { itemCode: 'HILTON-Q', itemGroup: 'bedframe', qty: 1, unitPriceCenti: 230000, variants: null },
+      bedframeProduct, null, null, [], null,
+      { sofaTier: null, bedframeTier: 'PRICE_3' }, ADDON_CFG,
+    );
+    expect(r.drift).toBe(false);
+    expect(r.unit_price_sen).toBe(230000); // 200000 sell + 30000 (RM300 bedframe P3)
+  });
 });
 
 /* Combo cost/sell split (Phase 5, Part 1). The combos the gate receives carry
