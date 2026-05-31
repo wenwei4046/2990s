@@ -6,8 +6,12 @@
 // pricing flow through arguments. Same code runs on POS, Backend preview,
 // and Cloudflare Workers when /orders does the server-side recompute.
 
-import { pickComboMatch, type SofaComboRow } from './sofa-combo-pricing';
+import { pickComboMatch, type SofaComboRow, type SofaPriceTier } from './sofa-combo-pricing';
 export type { SofaComboRow } from './sofa-combo-pricing';
+// One-way edge: mfg-pricing.ts imports nothing (fully self-contained), so this
+// does NOT create a cycle. resolveSeatHeightSelling powers the SELLING assembly
+// helper below; MfgSeatHeightPrice is the per-(height,tier) entry shape.
+import { resolveSeatHeightSelling, type MfgSeatHeightPrice } from './mfg-pricing';
 
 /* ─── Public types ─────────────────────────────────────────────────── */
 
@@ -286,6 +290,33 @@ export const sofaModulePricesFromSkus = (
   for (const r of rows) {
     if (r.sellPriceSen == null) continue;
     map[normalizeCompartmentCode(moduleCodeFromSku(r.code, baseModel))] = r.sellPriceSen;
+  }
+  return map;
+};
+
+/** Build the per-Model module→SELLING-price map (sen) for the chosen depth+tier.
+ *  For each SKU: prefer the per-(depth,tier) seatHeightPrices[].sellingPriceSen,
+ *  else the flat module sell_price_sen, else drop (0/null → no entry → priced 0
+ *  at lookup). Same normalized-code keying as sofaModulePricesFromSkus so POS and
+ *  the server drift gate produce an identical map by construction — provided both
+ *  call it with the SAME depth+tier (the "POS == server" invariant). Never reads
+ *  `priceSen` (cost), so the buyer price can never leak the cost. */
+export const sofaModuleSellingPricesFromSkus = (
+  rows: Array<{
+    code: string;
+    sellPriceSen: number | null;
+    seatHeightPrices?: MfgSeatHeightPrice[] | null;
+  }>,
+  baseModel: string | null | undefined,
+  depth: string | null | undefined,
+  tier: SofaPriceTier | null | undefined,
+): SofaModulePriceSen => {
+  const map: SofaModulePriceSen = {};
+  for (const r of rows) {
+    const seat = resolveSeatHeightSelling(r.seatHeightPrices, depth, tier ?? 'PRICE_2');
+    const sen = seat?.sellingPriceSen ?? r.sellPriceSen ?? 0;
+    if (sen <= 0) continue;
+    map[normalizeCompartmentCode(moduleCodeFromSku(r.code, baseModel))] = sen;
   }
   return map;
 };

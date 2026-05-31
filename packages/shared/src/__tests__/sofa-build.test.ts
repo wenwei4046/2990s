@@ -19,6 +19,7 @@ import {
   describeSofaLine,
   fabricSurchargeFor,
   fabricColourSuffix,
+  sofaModuleSellingPricesFromSkus,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -926,5 +927,30 @@ describe('whole-unit preset cells — placement, combo match, labelling', () => 
 
   it('describeSofaLine lists a placed 1S cell by its own code, not a bundle name', () => {
     expect(describeSofaLine({ cells: [{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], depth: '24' })).toBe('1S');
+  });
+});
+
+describe('sofaModuleSellingPricesFromSkus (2026-06-01)', () => {
+  it('prefers per-(depth,tier) sellingPriceSen, falls back to flat sell, then drops 0', () => {
+    const rows = [
+      { code: 'OMMBUC-1S', sellPriceSen: 120000, seatHeightPrices: [
+        { height: '24', priceSen: 50000, tier: 'PRICE_1' as const, sellingPriceSen: 99000 },
+      ]},
+      { code: 'OMMBUC-2S', sellPriceSen: 150000, seatHeightPrices: null }, // flat fallback
+      { code: 'OMMBUC-1NA', sellPriceSen: null, seatHeightPrices: null },  // unpriced → dropped
+    ];
+    const map = sofaModuleSellingPricesFromSkus(rows, 'Ommbuc', '24', 'PRICE_1');
+    expect(map['1S']).toBe(99000);   // seat selling wins
+    expect(map['2S']).toBe(150000);  // flat sell fallback
+    expect(map['1NA']).toBeUndefined(); // unpriced → no entry
+  });
+  it('a cost-only seat row (no sellingPriceSen) falls back to flat sell, never leaks priceSen', () => {
+    const rows = [
+      { code: 'OMMBUC-1A-LHF', sellPriceSen: 70000, seatHeightPrices: [
+        { height: '24', priceSen: 50000, tier: 'PRICE_2' as const }, // cost-only
+      ]},
+    ];
+    const map = sofaModuleSellingPricesFromSkus(rows, 'Ommbuc', '24', 'PRICE_2');
+    expect(map['1A-LHF']).toBe(70000); // flat sell, NOT the 50000 cost
   });
 });

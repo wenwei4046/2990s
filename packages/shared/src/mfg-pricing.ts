@@ -66,11 +66,16 @@ export type MaintenanceConfig = {
 export type MfgFabricTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
 
 /** Per-(height, tier) sofa price entry. Legacy rows without `tier` are
- *  treated as PRICE_2 (HOOKKA's historic default). */
+ *  treated as PRICE_2 (HOOKKA's historic default).
+ *  `priceSen` = COST (read by computeMfgLineCost; NEVER the buyer price).
+ *  `sellingPriceSen` = the buyer (SELLING) price the POS Master-Admin grid
+ *  authors (decision 6). Unset on cost-only rows → selling reads fall through
+ *  to the flat module sell_price_sen. */
 export type MfgSeatHeightPrice = {
   height: string;
   priceSen: number;
   tier?: MfgFabricTier;
+  sellingPriceSen?: number;
 };
 
 /** Minimal product shape the compute function needs. Caller projects
@@ -233,6 +238,34 @@ const resolveSeatHeightSen = (
   // Any row for this height.
   const any = rows.find((r) => r.height === size);
   return any ? { priceSen: any.priceSen, matchedTier: normalize(any.tier) } : null;
+};
+
+/** SELLING-side sibling of resolveSeatHeightSen. Reads `.sellingPriceSen` for
+ *  the picked (size, tier) with an exact→PRICE_2-default fallback, SKIPPING any
+ *  row whose `sellingPriceSen` is null/undefined. Returns null (caller falls
+ *  through to the flat module sell_price_sen) when no priced selling row matches
+ *  the picked tier OR the PRICE_2 default.
+ *
+ *  Deliberately NO blind any-tier fallback (unlike the cost resolver): the
+ *  buyer must never be silently charged a DIFFERENT fabric tier's selling price
+ *  (honest-pricing brand promise). A want with no exact and no PRICE_2-default
+ *  selling row resolves to null, not to "whatever tier happens to be priced".
+ *  Never leaks `priceSen`/cost into the buyer price. */
+export const resolveSeatHeightSelling = (
+  rows: MfgSeatHeightPrice[] | null | undefined,
+  size: string | null | undefined,
+  tier: MfgFabricTier | null | undefined,
+): { sellingPriceSen: number; matchedTier: MfgFabricTier } | null => {
+  if (!rows || rows.length === 0 || !size) return null;
+  const wantTier: MfgFabricTier = tier ?? 'PRICE_2';
+  const normalize = (t: MfgFabricTier | undefined): MfgFabricTier => t ?? 'PRICE_2';
+  const priced = (r: MfgSeatHeightPrice): r is MfgSeatHeightPrice & { sellingPriceSen: number } =>
+    r.sellingPriceSen != null;
+  const exact = rows.find((r) => r.height === size && normalize(r.tier) === wantTier && priced(r));
+  if (exact) return { sellingPriceSen: exact.sellingPriceSen!, matchedTier: wantTier };
+  const fallback = rows.find((r) => r.height === size && normalize(r.tier) === 'PRICE_2' && priced(r));
+  if (fallback) return { sellingPriceSen: fallback.sellingPriceSen!, matchedTier: 'PRICE_2' };
+  return null;
 };
 
 /** Compute the unit-price breakdown for one mfg SO line. Pure — no I/O,
