@@ -61,12 +61,12 @@ Each sofa combo is stored as its **Price 1 base**. A new **"Overall Edit price t
 
 ## 6. Design
 
-### 6.1 Storage — `sofa_combo_tier_offsets` (new, migration `0122`)
+### 6.1 Storage — `sofa_combo_tier_offsets` (new, migration `0123`)
 
 Mirror the proven `delivery_fee_config` single-row pattern (one global row, `id = 1`).
 
 ```sql
--- 0122_sofa_combo_tier_offsets.sql
+-- 0123_sofa_combo_tier_offsets.sql
 CREATE TABLE IF NOT EXISTS sofa_combo_tier_offsets (
   id              SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   -- Flat premium (sen = RM×100) added to each combo's Price 1 to derive the tier.
@@ -79,7 +79,7 @@ INSERT INTO sofa_combo_tier_offsets (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 ```
 
 - **No RLS** — consistent with `sofa_combo_pricing` (same domain). App-layer `requireWriteRole` is the gate. (Deliberate: avoids touching RLS policies — a global red line — and matches the combo table's existing posture. Hardening to RLS later is a separate, approval-gated migration.)
-- Migration number `0122`: the repo already tolerates duplicate numbers (two `0118_*` exist); if the other section also ships `0122`, the distinct filename suffix keeps both, resolved trivially at merge.
+- Migration number `0123` — the next free number after main's `0122_reset_test_transactions_keep_so_fn` (which merged while this branch was open). The repo also tolerates duplicate numbers (two `0118_*` exist), so any future collision is resolvable at merge.
 
 ### 6.2 API (`apps/api/src/routes/sofa-combos.ts`)
 
@@ -151,11 +151,11 @@ Evidence to deliver before "done": test output + a POS screenshot of the panel +
 
 ## 9. Rollout
 
-- Migration `0122` applied to **prod first + verified** (read-back the seeded `id=1` row) before deploy, per project practice for pricing tables.
+- Migration `0123` applied to **prod first + verified** (read-back the seeded `id=1` row) before deploy, per project practice for pricing tables.
 - Standalone PR off `main`; merges independently of `feat/sofa-compartments-from-pool`.
 
 ## 10. Risks / coordination
 
 - **Other section overlap:** if Phase B introduces its own global tier-premium store, reconcile at merge (this table is combo-scoped; theirs is module-scoped — they can stay separate or unify later).
 - **Interim POS behavior:** until Phase B wires fabric→tier, POS looks up `PRICE_2`, so after Apply a combo build is charged the PRICE_2 (P1+Δ2) price for every customer. Documented; acceptable per scope decision.
-- **Migration number** collision with the other section's `0122` — mechanical, resolved at merge (repo already has dup numbers).
+- **Migration number:** main shipped `0122_reset_test_transactions_keep_so_fn` while this branch was open; mine was renumbered to `0123` (no collision).

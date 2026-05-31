@@ -1,5 +1,5 @@
 -- ----------------------------------------------------------------------------
--- 0122 — sofa_combo_tier_offsets
+-- 0123 — sofa_combo_tier_offsets
 --
 -- Chairman 2026-06-01: Combo "Overall Edit price tier". A single global row
 -- (id = 1) holding the two flat premiums (sen = RM×100) added to each combo's
