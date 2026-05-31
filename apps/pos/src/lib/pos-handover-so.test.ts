@@ -140,6 +140,15 @@ describe('cartLineToSoItem', () => {
       totalHeightLabel: '12"',
       specialLabels: ['Power outlet'],
     });
+    // The server validates + prices height/gap variants by their human LABEL
+    // (`4"`), not the slug id (`leg-4`). Sending the id 409'd as
+    // variant_not_allowed on Models with a restricted leg/divan/total pool.
+    expect(item.variants).toMatchObject({
+      legHeight: '4"',
+      divanHeight: '8"',
+      totalHeight: '12"',
+      gap: '6"',
+    });
   });
 
   it('maps a size-priced mattress line', () => {
