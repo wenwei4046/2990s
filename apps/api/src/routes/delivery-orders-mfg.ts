@@ -693,6 +693,64 @@ export async function soLineDeliveries(
   return out;
 }
 
+/* Per-DO-line downstream breakdown — for each DO item id, the list of documents
+   it was carried into: Sales Invoices (via sales_invoice_items.do_item_id) and
+   Delivery Returns (via delivery_return_items.do_item_id). Carries the parent
+   doc number + kind (SI / DR) + qty + status. Cancelled SIs / DRs are excluded
+   so the "Transfer To" column never shows a voided document. The DO counterpart
+   of soLineDeliveries — read-only display aid, no writes. */
+export type DoLineDownstream = { docNumber: string; docType: 'SI' | 'DR'; qty: number; status: string };
+export async function doLineDownstream(
+  sb: any,
+  doItemIds: string[],
+): Promise<Map<string, DoLineDownstream[]>> {
+  const out = new Map<string, DoLineDownstream[]>();
+  const ids = [...new Set(doItemIds.filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return out;
+
+  const [siLinesRes, drLinesRes] = await Promise.all([
+    sb.from('sales_invoice_items').select('do_item_id, qty, sales_invoice_id').in('do_item_id', ids),
+    sb.from('delivery_return_items').select('do_item_id, qty, delivery_return_id').in('do_item_id', ids),
+  ]);
+  const siLines = (siLinesRes.data ?? []) as Array<{ do_item_id: string | null; qty: number; sales_invoice_id: string }>;
+  const drLines = (drLinesRes.data ?? []) as Array<{ do_item_id: string | null; qty: number; delivery_return_id: string }>;
+
+  const siIds = [...new Set(siLines.map((r) => r.sales_invoice_id).filter(Boolean))];
+  const drIds = [...new Set(drLines.map((r) => r.delivery_return_id).filter(Boolean))];
+  const [siHeadRes, drHeadRes] = await Promise.all([
+    siIds.length > 0 ? sb.from('sales_invoices').select('id, invoice_number, status').in('id', siIds) : Promise.resolve({ data: [] }),
+    drIds.length > 0 ? sb.from('delivery_returns').select('id, return_number, status').in('id', drIds) : Promise.resolve({ data: [] }),
+  ]);
+  const siMeta = new Map<string, { docNumber: string; status: string }>();
+  for (const s of (siHeadRes.data ?? []) as Array<{ id: string; invoice_number: string | null; status: string | null }>) {
+    if ((s.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    siMeta.set(s.id, { docNumber: s.invoice_number ?? '—', status: (s.status ?? '').toUpperCase() });
+  }
+  const drMeta = new Map<string, { docNumber: string; status: string }>();
+  for (const d of (drHeadRes.data ?? []) as Array<{ id: string; return_number: string | null; status: string | null }>) {
+    if ((d.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    drMeta.set(d.id, { docNumber: d.return_number ?? '—', status: (d.status ?? '').toUpperCase() });
+  }
+
+  const push = (doItemId: string | null, entry: DoLineDownstream) => {
+    if (!doItemId) return;
+    const arr = out.get(doItemId) ?? [];
+    arr.push(entry);
+    out.set(doItemId, arr);
+  };
+  for (const r of siLines) {
+    const meta = siMeta.get(r.sales_invoice_id);
+    if (!meta) continue; // cancelled SI — excluded
+    push(r.do_item_id, { docNumber: meta.docNumber, docType: 'SI', qty: Number(r.qty ?? 0), status: meta.status });
+  }
+  for (const r of drLines) {
+    const meta = drMeta.get(r.delivery_return_id);
+    if (!meta) continue; // cancelled DR — excluded
+    push(r.do_item_id, { docNumber: meta.docNumber, docType: 'DR', qty: Number(r.qty ?? 0), status: meta.status });
+  }
+  return out;
+}
+
 /* Per-SO lifecycle state by "latest event wins" (Wei Siang 2026-05-31).
    Walks every NON-cancelled downstream document for each Sales Order — Delivery
    Orders, Sales Invoices, Delivery Returns — and keeps the one with the most
@@ -981,11 +1039,19 @@ deliveryOrdersMfg.get('/:id', async (c) => {
      warehouse each line moves. Display-only — does not alter stock. */
   const rawItems = (i.data ?? []) as unknown as Array<{ id: string; so_item_id?: string | null } & Record<string, unknown>>;
   const headerWh = (h.data as { warehouse_id?: string | null }).warehouse_id ?? null;
-  const lineWh = await resolveDoLineWarehouses(sb, rawItems, headerWh);
+  const [lineWh, downstreamMap] = await Promise.all([
+    resolveDoLineWarehouses(sb, rawItems, headerWh),
+    doLineDownstream(sb, rawItems.map((it) => it.id)),
+  ]);
   const codeMap = await warehouseCodeMap(sb, [...lineWh.values()]);
   const items = rawItems.map((it) => {
     const wid = lineWh.get(it.id) ?? null;
-    return { ...it, warehouse_id: wid, warehouse_code: wid ? (codeMap.get(wid) ?? null) : null };
+    return {
+      ...it,
+      warehouse_id: wid,
+      warehouse_code: wid ? (codeMap.get(wid) ?? null) : null,
+      downstream: downstreamMap.get(it.id) ?? [],
+    };
   });
   return c.json({ deliveryOrder, items });
 });

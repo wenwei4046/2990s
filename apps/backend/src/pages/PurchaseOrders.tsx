@@ -472,7 +472,7 @@ const buildPoDrilldownColumns = (
        that took qty, then the live balance underneath. Balance derives from
        the shown (non-cancelled) receipts so breakdown + balance reconciles to
        Ordered. */
-    key: 'received', label: 'Received', width: 130,
+    key: 'received', label: 'Transfer To (GRN)', width: 130,
     accessor: (it) => {
       const receipts = it.receipts ?? [];
       if (receipts.length === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;

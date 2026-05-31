@@ -446,7 +446,7 @@ export const PurchaseOrderDetail = () => {
                 <th>Item</th>
                 <th>Group</th>
                 <th className={styles.tableRight}>Qty</th>
-                <th>Received</th>
+                <th>Transfer To (GRN)</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>

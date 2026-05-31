@@ -30,7 +30,7 @@ import {
   ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   useGrnDetail,
   useUpdateGrnHeader,
@@ -104,6 +104,9 @@ type GrnItemRow = Record<string, unknown> & {
      receive date, so each line surfaces "received from which PO" + "receive date". */
   source_po_number?: string | null;
   received_at?: string | null;
+  /* Downstream "Transfer To" breakdown (read-only): the Purchase Invoice(s) and
+     Purchase Return(s) this GRN line was carried into, resolved server-side. */
+  downstream?: { docNumber: string; docType: 'PI' | 'PR'; qty: number; status: string }[];
 };
 
 const headerSnapshot = (g: any): HeaderDraft => ({
@@ -479,8 +482,18 @@ export const GoodsReceivedDetail = () => {
                     <span>
                       Receive date:{' '}
                       <strong style={{ color: 'var(--fg)' }}>
-                        {(it.received_at ?? grn.received_at ?? '').slice(0, 10) || '—'}
+                        {fmtDateOrDash(it.received_at ?? grn.received_at ?? null)}
                       </strong>
+                    </span>
+                    <span>
+                      Transfer To:{' '}
+                      {(it.downstream ?? []).length === 0
+                        ? <strong style={{ color: 'var(--fg)' }}>—</strong>
+                        : (it.downstream ?? []).map((dn, dni) => (
+                            <strong key={dni} style={{ color: 'var(--c-burnt)', marginRight: 8, whiteSpace: 'nowrap' }}>
+                              {dn.docNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{dn.qty}</span>
+                            </strong>
+                          ))}
                     </span>
                   </div>
 
@@ -631,7 +644,7 @@ const SupplierCard = ({
             </div>
             <InfoCell label="Currency" value={grn.currency || null} />
             <div />
-            <InfoCell label="Received Date" value={(grn.received_at ?? '').slice(0, 10) || null} />
+            <InfoCell label="Received Date" value={grn.received_at ? fmtDateOrDash(grn.received_at) : null} />
             <InfoCell label="Delivery Note Ref" value={grn.delivery_note_ref || null} />
             <InfoCell label="Receive Into"
               value={(() => {

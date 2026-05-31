@@ -176,6 +176,9 @@ type DoItem = {
      which warehouse each line deducts from. */
   warehouse_id?: string | null;
   warehouse_code?: string | null;
+  /* Downstream "Transfer To" breakdown (read-only): the Sales Invoice(s) and
+     Delivery Return(s) this DO line was carried into, resolved server-side. */
+  downstream?: { docNumber: string; docType: 'SI' | 'DR'; qty: number; status: string }[];
 };
 
 /* One not-yet-saved add-line. soItemId/maxQty are set when picked from the
@@ -676,6 +679,7 @@ export const DeliveryOrderDetail = () => {
                 <th>Item</th>
                 <th>Warehouse</th>
                 <th className={styles.tableRight}>Qty</th>
+                <th>Transfer To</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
@@ -697,6 +701,15 @@ export const DeliveryOrderDetail = () => {
                   </td>
                   <td><span className={styles.muted}>{it.warehouse_code ?? '—'}</span></td>
                   <td className={styles.tableRight}>{it.qty}</td>
+                  <td>
+                    {(it.downstream ?? []).length === 0
+                      ? <span className={styles.muted}>—</span>
+                      : (it.downstream ?? []).map((d, di) => (
+                          <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+                            {d.docNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{d.qty}</span>
+                          </div>
+                        ))}
+                  </td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
                   <td className={styles.priceCell}>{fmtRm(it.line_total_centi, header.currency)}</td>

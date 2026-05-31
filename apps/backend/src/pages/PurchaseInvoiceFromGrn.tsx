@@ -20,6 +20,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDateOrDash } from '@2990s/shared';
 import {
   useOutstandingGrnItems,
   type OutstandingGrnItem,
@@ -168,7 +169,7 @@ export const PurchaseInvoiceFromGrn = () => {
                   <span style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
                     {[meta.supplierName || meta.supplierCode,
                       meta.poDocNo ? `PO ${meta.poDocNo}` : null,
-                      `Received ${meta.receivedAt}`,
+                      `Received ${fmtDateOrDash(meta.receivedAt)}`,
                     ].filter(Boolean).join(' · ')}
                   </span>
                   {locked && (

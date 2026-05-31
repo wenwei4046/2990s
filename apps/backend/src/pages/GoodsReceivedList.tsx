@@ -132,6 +132,7 @@ type GrnItem = Record<string, unknown> & {
   /* Bug #2 (2026-05-31) — server-resolved per-line source PO + the GRN receive date. */
   source_po_number?: string | null;
   received_at?: string | null;
+  downstream?: { docNumber: string; docType: 'PI' | 'PR'; qty: number; status: string }[];
 };
 
 const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] => [
@@ -158,6 +159,23 @@ const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] =
     accessor: (it) => it.qty_received ?? it.qty ?? 0,
     searchValue: (it) => String(it.qty_received ?? it.qty ?? 0),
     sortFn: (a, b) => Number(a.qty_received ?? a.qty ?? 0) - Number(b.qty_received ?? b.qty ?? 0),
+  },
+  {
+    key: 'transfer_to', label: 'Transfer To', width: 140,
+    accessor: (it) => {
+      const ds = it.downstream ?? [];
+      if (ds.length === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return (
+        <div>
+          {ds.map((d, di) => (
+            <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+              {d.docNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
+            </div>
+          ))}
+        </div>
+      );
+    },
+    searchValue: (it) => (it.downstream ?? []).map((d) => d.docNumber).join(' '),
   },
   {
     key: 'unit_price', label: 'Unit Price', width: 110, align: 'right',

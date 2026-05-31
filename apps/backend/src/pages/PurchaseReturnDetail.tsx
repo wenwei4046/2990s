@@ -33,7 +33,7 @@ import {
   ArrowLeft, Undo2, Pencil, Trash2, Printer, Save, Ban, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   usePurchaseReturnDetail,
   useUpdatePurchaseReturnHeader,
@@ -468,7 +468,7 @@ const SupplierCard = ({
               <InfoCell label="Supplier"
                 value={pr.supplier?.name ?? pr.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
-            <InfoCell label="Return Date" value={(pr.return_date ?? '').slice(0, 10) || null} />
+            <InfoCell label="Return Date" value={pr.return_date ? fmtDateOrDash(pr.return_date) : null} />
             <InfoCell label="Credit Note Ref" value={pr.credit_note_ref || null} />
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Reason" value={pr.reason || null} />

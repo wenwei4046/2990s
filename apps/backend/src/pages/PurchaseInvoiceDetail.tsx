@@ -34,7 +34,7 @@ import {
   ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   usePurchaseInvoiceDetail,
   useUpdatePurchaseInvoiceHeader,
@@ -510,8 +510,8 @@ const SupplierCard = ({
             <InfoCell label="Currency" value={pi.currency || null} />
             <div />
             <InfoCell label="Supplier Invoice Ref" value={pi.supplier_invoice_ref || null} />
-            <InfoCell label="Invoice Date" value={(pi.invoice_date ?? '').slice(0, 10) || null} />
-            <InfoCell label="Due Date" value={(pi.due_date ?? '').slice(0, 10) || null} />
+            <InfoCell label="Invoice Date" value={pi.invoice_date ? fmtDateOrDash(pi.invoice_date) : null} />
+            <InfoCell label="Due Date" value={pi.due_date ? fmtDateOrDash(pi.due_date) : null} />
             <div style={{ gridColumn: 'span 2' }}>
               <InfoCell label="Notes" value={pi.notes || null} />
             </div>

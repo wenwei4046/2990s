@@ -150,6 +150,7 @@ type DoItem = {
   line_cost_centi: number | null;
   line_margin_centi: number | null;
   line_total_centi: number | null;
+  downstream?: { docNumber: string; docType: 'SI' | 'DR'; qty: number; status: string }[];
 };
 
 const CategoryPill = ({ group }: { group: string | null | undefined }) => {
@@ -223,6 +224,23 @@ const buildDoDrilldownColumns = (): DataGridColumn<DoItem>[] => [
     accessor: (it) => it.qty ?? 0,
     searchValue: (it) => String(it.qty ?? 0),
     sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    key: 'transfer_to', label: 'Transfer To', width: 130,
+    accessor: (it) => {
+      const ds = it.downstream ?? [];
+      if (ds.length === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return (
+        <div>
+          {ds.map((d, di) => (
+            <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+              {d.docNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
+            </div>
+          ))}
+        </div>
+      );
+    },
+    searchValue: (it) => (it.downstream ?? []).map((d) => d.docNumber).join(' '),
   },
   {
     key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',

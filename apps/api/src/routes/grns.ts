@@ -450,6 +450,64 @@ grns.get('/outstanding-po-items', async (c) => {
   return c.json({ items: outstanding });
 });
 
+/* Per-GRN-line downstream breakdown — for each GRN item id, the documents it was
+   carried into: Purchase Invoices (via purchase_invoice_items.grn_item_id) and
+   Purchase Returns (via purchase_return_items.grn_item_id). Carries the parent
+   doc number + kind (PI / PR) + qty + status. Cancelled PIs / PRs are excluded so
+   the "Transfer To" column never shows a voided document. The GRN counterpart of
+   poLineReceipts — read-only display aid, no writes. */
+export type GrnLineDownstream = { docNumber: string; docType: 'PI' | 'PR'; qty: number; status: string };
+export async function grnLineDownstream(
+  sb: any,
+  grnItemIds: string[],
+): Promise<Map<string, GrnLineDownstream[]>> {
+  const out = new Map<string, GrnLineDownstream[]>();
+  const ids = [...new Set(grnItemIds.filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return out;
+
+  const [piLinesRes, prLinesRes] = await Promise.all([
+    sb.from('purchase_invoice_items').select('grn_item_id, qty, purchase_invoice_id').in('grn_item_id', ids),
+    sb.from('purchase_return_items').select('grn_item_id, qty_returned, purchase_return_id').in('grn_item_id', ids),
+  ]);
+  const piLines = (piLinesRes.data ?? []) as Array<{ grn_item_id: string | null; qty: number; purchase_invoice_id: string }>;
+  const prLines = (prLinesRes.data ?? []) as Array<{ grn_item_id: string | null; qty_returned: number; purchase_return_id: string }>;
+
+  const piIds = [...new Set(piLines.map((r) => r.purchase_invoice_id).filter(Boolean))];
+  const prIds = [...new Set(prLines.map((r) => r.purchase_return_id).filter(Boolean))];
+  const [piHeadRes, prHeadRes] = await Promise.all([
+    piIds.length > 0 ? sb.from('purchase_invoices').select('id, invoice_number, status').in('id', piIds) : Promise.resolve({ data: [] }),
+    prIds.length > 0 ? sb.from('purchase_returns').select('id, return_number, status').in('id', prIds) : Promise.resolve({ data: [] }),
+  ]);
+  const piMeta = new Map<string, { docNumber: string; status: string }>();
+  for (const p of (piHeadRes.data ?? []) as Array<{ id: string; invoice_number: string | null; status: string | null }>) {
+    if ((p.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    piMeta.set(p.id, { docNumber: p.invoice_number ?? '—', status: (p.status ?? '').toUpperCase() });
+  }
+  const prMeta = new Map<string, { docNumber: string; status: string }>();
+  for (const p of (prHeadRes.data ?? []) as Array<{ id: string; return_number: string | null; status: string | null }>) {
+    if ((p.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    prMeta.set(p.id, { docNumber: p.return_number ?? '—', status: (p.status ?? '').toUpperCase() });
+  }
+
+  const push = (grnItemId: string | null, entry: GrnLineDownstream) => {
+    if (!grnItemId) return;
+    const arr = out.get(grnItemId) ?? [];
+    arr.push(entry);
+    out.set(grnItemId, arr);
+  };
+  for (const r of piLines) {
+    const meta = piMeta.get(r.purchase_invoice_id);
+    if (!meta) continue; // cancelled PI — excluded
+    push(r.grn_item_id, { docNumber: meta.docNumber, docType: 'PI', qty: Number(r.qty ?? 0), status: meta.status });
+  }
+  for (const r of prLines) {
+    const meta = prMeta.get(r.purchase_return_id);
+    if (!meta) continue; // cancelled PR — excluded
+    push(r.grn_item_id, { docNumber: meta.docNumber, docType: 'PR', qty: Number(r.qty_returned ?? 0), status: meta.status });
+  }
+  return out;
+}
+
 grns.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
@@ -469,10 +527,11 @@ grns.get('/:id', async (c) => {
      round trip (item → po_item → po). source_po_number is null for manual lines.
      received_at mirrors the GRN header date so the detail/list line table can show
      a per-line column without a separate column on grn_items. */
-  const lineItems = (i.data ?? []) as unknown as Array<Record<string, unknown> & { purchase_order_item_id: string | null }>;
+  const lineItems = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; purchase_order_item_id: string | null }>;
   const headerReceivedAt = (h.data as { received_at?: string | null }).received_at ?? null;
   const poItemIds = [...new Set(lineItems.map((it) => it.purchase_order_item_id).filter((x): x is string => Boolean(x)))];
   const poNoByItemId = new Map<string, string>();
+  const downstreamMap = await grnLineDownstream(sb, lineItems.map((it) => it.id));
   if (poItemIds.length > 0) {
     const { data: poiRows } = await sb.from('purchase_order_items')
       .select('id, po:purchase_orders ( po_number )')
@@ -486,6 +545,7 @@ grns.get('/:id', async (c) => {
     ...it,
     source_po_number: it.purchase_order_item_id ? (poNoByItemId.get(it.purchase_order_item_id) ?? null) : null,
     received_at: headerReceivedAt,
+    downstream: downstreamMap.get(it.id) ?? [],
   }));
   return c.json({ grn, items });
 });
