@@ -628,7 +628,7 @@ function DataGridInner<T>({
   const groupedCount = layout.groupBy.length;
 
   return (
-    <div className={styles.root}>
+    <div className={`${styles.root} ${embedded ? styles.rootEmbedded : ''}`}>
       {/* Toolbar — caller's actions + global search + Columns popover.
           Commander 2026-05-27 ("为什么不是跟houzs的一样"): Houzs surfaces
           column show/hide as a visible pill button. The right-click header
@@ -744,9 +744,9 @@ function DataGridInner<T>({
       )}
 
       {/* Table */}
-      <div className={styles.scroll}>
+      <div className={`${styles.scroll} ${embedded ? styles.scrollEmbedded : ''}`}>
         <table className={styles.table}>
-          <thead className={styles.thead}>
+          <thead className={`${styles.thead} ${embedded ? styles.theadEmbedded : ''}`}>
             <tr>
               {visibleColumns.map((col) => {
                 const w = layout.widths[col.key] ?? col.width ?? 140;

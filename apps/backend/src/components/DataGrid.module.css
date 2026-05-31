@@ -13,6 +13,19 @@
   font-family: var(--font-sans);
 }
 
+/* Embedded (drill-down) mode — no card chrome. The grid sits inside a
+   parent expansion row and must read as a plain inline nested table that
+   flows with the whole page, like the Daily Breakdown view. Strip the
+   border/shadow/radius/background so there is no "外框", and let it grow
+   to its natural height. */
+.rootEmbedded {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
 /* ── Toolbar ─────────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
@@ -250,6 +263,14 @@
      stretches to nearly the full viewport height like the rest of the system. */
   max-height: calc(100vh - 150px);
 }
+
+/* Embedded (drill-down) mode — no independent scrollbar, no height cap.
+   The drill-down must scroll with the whole page, not trap a separate
+   horizontal/vertical scrollbar inside a card. */
+.scrollEmbedded {
+  overflow: visible;
+  max-height: none;
+}
 .scroll::-webkit-scrollbar {
   height: 12px;
   width: 12px;
@@ -284,6 +305,12 @@
   top: 0;
   z-index: 2;
   background: var(--c-cream);
+}
+/* Embedded (drill-down) mode — the grid flows with the page, so there is
+   no inner scroll container for a sticky header to anchor to. Make the
+   header a plain non-sticky row like the Daily Breakdown view. */
+.theadEmbedded {
+  position: static;
 }
 .th {
   font-family: var(--font-button);
