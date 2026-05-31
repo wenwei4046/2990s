@@ -23,7 +23,7 @@
 // packages/shared/src/sofa-combo-pricing.ts for full spec.
 // ----------------------------------------------------------------------------
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { canonicalizeComboModulesForStorage, comboSlotsKey, sofaComboCostSen, type ComboSlots } from '@2990s/shared';
@@ -32,6 +32,29 @@ import { loadModelSofaModuleCosts } from '../lib/mfg-pricing-recompute';
 export const sofaCombos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 sofaCombos.use('*', supabaseAuth);
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+// Combo pricing is staff-curated, not open to every authenticated user. Writers:
+//   · coordinator — Backend SofaComboTab COST entry + supplier-scoped PO combos
+//   · master_account — POS Create Combo (SELLING)
+//   · admin / super_admin — full backend access
+// Mirrors delivery-fees.ts WRITE_ROLES (the cost-sell-split precedent) + the
+// admin superset. sofa_combo_pricing has no RLS, so this app-layer gate is the
+// only thing stopping a salesperson from rewriting combo prices (Phase 5
+// review — closes the pre-existing ungated-write gap). GET stays open (the POS
+// salesperson must read combos to price builds); only writes are gated.
+const WRITE_ROLES = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+
+async function requireWriteRole(c: AppContext): Promise<{ ok: true } | { ok: false; res: Response }> {
+  const supabase = c.get('supabase');
+  const userId = c.get('user').id;
+  const staffRes = await supabase.from('staff').select('role, active').eq('id', userId).maybeSingle();
+  if (staffRes.error) return { ok: false, res: c.json({ error: 'role_lookup_failed', reason: staffRes.error.message }, 500) };
+  if (!staffRes.data || !staffRes.data.active) return { ok: false, res: c.json({ error: 'forbidden', reason: 'no_active_staff' }, 403) };
+  if (!WRITE_ROLES.has(staffRes.data.role)) return { ok: false, res: c.json({ error: 'forbidden', reason: 'combo_editor_only' }, 403) };
+  return { ok: true };
+}
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -276,6 +299,9 @@ sofaCombos.get('/history', async (c) => {
 // Always INSERTs (append-only). To "edit" an existing combo, POST a new
 // row with the same scope tuple + a fresher effectiveFrom.
 sofaCombos.post('/', async (c) => {
+  const gate = await requireWriteRole(c);
+  if (!gate.ok) return gate.res;
+
   let body: {
     baseModel?: string;
     modules?: unknown;
@@ -402,6 +428,9 @@ sofaCombos.post('/', async (c) => {
 // POST directly with the tuple — this just saves the round-trip when the
 // UI already has a row id.
 sofaCombos.put('/:id', async (c) => {
+  const gate = await requireWriteRole(c);
+  if (!gate.ok) return gate.res;
+
   const id = c.req.param('id');
   const supabase = c.get('supabase');
 
@@ -483,6 +512,9 @@ sofaCombos.put('/:id', async (c) => {
 // Soft-delete. The History drawer still shows the row; pricing lookup
 // skips it (the picker filters deleted_at IS NULL).
 sofaCombos.delete('/:id', async (c) => {
+  const gate = await requireWriteRole(c);
+  if (!gate.ok) return gate.res;
+
   const id = c.req.param('id');
   const supabase = c.get('supabase');
 
