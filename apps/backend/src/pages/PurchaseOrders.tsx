@@ -35,6 +35,7 @@ import {
 } from '../lib/suppliers-queries';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useGrnFromPos } from '../lib/flow-queries';
+import { poStatusLabel } from '../lib/po-status';
 import { ItemGroupPill } from '../lib/category-badges';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import styles from './Suppliers.module.css';
@@ -177,15 +178,20 @@ const buildPoColumns = (
     sortFn: (a, b) => a.total_centi - b.total_centi,
   },
   {
-    key: 'status', label: 'Status', width: 150, sortable: true, groupable: true,
+    /* Status auto-detected (Wei Siang 2026-05-31) — relabelled into convert
+       vocabulary to mirror the SO list's "Partially Delivered / Delivered"
+       badge. PARTIALLY_RECEIVED → "Partially Converted", RECEIVED → "Converted".
+       The enum itself is recomputed server-side from GRN receipts; nothing here
+       is manually selectable. */
+    key: 'status', label: 'Status', width: 160, sortable: true, groupable: true,
     accessor: (po) => (
       <span className={styles.statusPill} style={{ background: STATUS_COLOR[po.status] }}>
-        {po.status.replace('_', ' ')}
+        {poStatusLabel(po.status)}
       </span>
     ),
-    searchValue: (po) => po.status.replace('_', ' '),
-    groupValue: (po) => po.status,
-    sortFn: (a, b) => a.status.localeCompare(b.status),
+    searchValue: (po) => poStatusLabel(po.status),
+    groupValue: (po) => poStatusLabel(po.status),
+    sortFn: (a, b) => poStatusLabel(a.status).localeCompare(poStatusLabel(b.status)),
   },
 ];
 
@@ -579,7 +585,7 @@ const ExpandedPoLines = ({
               ) : (
                 <span style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
                   {po.status === 'RECEIVED'
-                    ? 'Fully received — nothing left to convert.'
+                    ? 'Fully converted — nothing left to convert.'
                     : po.status === 'CANCELLED'
                       ? 'Cancelled — cannot convert.'
                       : 'No goods left to convert.'}
@@ -1113,7 +1119,7 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
                 <SmallStat label="PO Date" value={po.po_date} />
                 <SmallStat label="Expected" value={po.expected_at ?? '—'} />
                 <SmallStat label="Currency" value={po.currency} />
-                <SmallStat label="Status" value={po.status.replace('_', ' ')} />
+                <SmallStat label="Status" value={poStatusLabel(po.status)} />
                 <SmallStat label="Subtotal" value={fmtMoney(po.subtotal_centi, po.currency)} />
                 <SmallStat label="Total" value={fmtMoney(po.total_centi, po.currency)} />
               </div>
