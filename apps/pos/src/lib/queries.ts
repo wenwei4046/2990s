@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sofaModulePricesFromSkus } from '@2990s/shared/sofa-build';
-import { comboChargedPrices } from '@2990s/shared';
+import { comboChargedPrices, type MfgSeatHeightPrice } from '@2990s/shared';
 import { supabase } from './supabase';
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
@@ -828,6 +828,16 @@ export interface SofaCustomizerData {
   /** Compartments commander ticked on this Model, intersected with the master
    *  compartment pool. Each row carries the resolved photo + price + label. */
   compartments: ResolvedSofaCompartment[];
+  /** Raw per-module SELLING rows for this Model (code + flat sell_price_sen +
+   *  per-(size,tier) seat_height_prices). The Configurator builds a depth-aware
+   *  P1 selling map from these (sofaModuleSellingPricesFromSkus) so the grid's
+   *  per-seat-size price reaches the live total + palette; the query itself
+   *  stays depth-agnostic. */
+  sellingRows: Array<{
+    code: string;
+    sellPriceSen: number | null;
+    seatHeightPrices: MfgSeatHeightPrice[] | null;
+  }>;
   /** Seat-size inches commander ticked (24/26/28/30/32/35). */
   sizes:        string[];
   /** Leg height options ticked (subset of master pool). */
@@ -919,15 +929,25 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
       // today's data). model_code === base_model on every sofa SKU.
       const { data: skuPriceRows, error: skuPriceErr } = await supabase
         .from('mfg_products')
-        .select('code, sell_price_sen')
+        .select('code, sell_price_sen, seat_height_prices')
         .eq('base_model', model.model_code)
         .eq('category', 'SOFA');
       if (skuPriceErr) throw skuPriceErr;
-      const modulePrices = sofaModulePricesFromSkus(
-        ((skuPriceRows ?? []) as Array<{ code: string; sell_price_sen: number | null }>)
-          .map((r) => ({ code: r.code, sellPriceSen: r.sell_price_sen })),
-        model.model_code,
-      );
+      // Raw per-module SELLING rows. The flat `modulePrices` (depth/tier-agnostic
+      // sell_price_sen) is the fallback; the Configurator rebuilds a depth-aware
+      // P1 selling map from `sellingRows` so the per-seat-size grid price reaches
+      // the live total + palette (SOFA-SELLING Phase B; Chairman 2026-06-01: run
+      // at P1, no fabric-tier variation yet).
+      const sellingRows = ((skuPriceRows ?? []) as Array<{
+        code: string;
+        sell_price_sen: number | null;
+        seat_height_prices: MfgSeatHeightPrice[] | null;
+      }>).map((r) => ({
+        code: r.code,
+        sellPriceSen: r.sell_price_sen,
+        seatHeightPrices: r.seat_height_prices,
+      }));
+      const modulePrices = sofaModulePricesFromSkus(sellingRows, model.model_code);
 
       const allowed = (model.allowed_options ?? {}) as {
         compartments?: string[];
@@ -978,6 +998,7 @@ export const useSofaCustomizerData = (leadSkuId: string | undefined) =>
 
       return {
         compartments,
+        sellingRows,
         sizes:      allowed.sizes ?? [],
         legHeights: allowed.leg_heights ?? [],
         specials:   allowed.specials ?? [],
