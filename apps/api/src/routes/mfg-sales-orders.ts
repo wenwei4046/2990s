@@ -33,7 +33,7 @@ import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
-import { soDeliverableRemaining } from './delivery-orders-mfg';
+import { soDeliverableRemaining, soLineDeliveries } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -584,7 +584,27 @@ mfgSalesOrders.get('/:docNo', async (c) => {
     has_children: (doCount ?? 0) > 0 || (siCount ?? 0) > 0,
     customer_credit_centi: customerCreditCenti,
   };
-  return c.json({ salesOrder, items: i.data ?? [] });
+  /* Per-line delivery breakdown so the SO views can show a "Delivered" column
+     (which DO took how much, and the live balance) without a second round-trip.
+     remaining/delivered come from the authoritative soDeliverableRemaining
+     engine; the DO-number breakdown rides alongside from soLineDeliveries. */
+  const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; qty?: number | null }>;
+  const [remainingMap, deliveriesMap] = await Promise.all([
+    soDeliverableRemaining(sb, [docNo]),
+    soLineDeliveries(sb, itemRows.map((it) => it.id)),
+  ]);
+  const items = itemRows.map((it) => {
+    const rem = remainingMap.get(it.id);
+    const deliveries = deliveriesMap.get(it.id) ?? [];
+    const deliveredQty = deliveries.reduce((s, d) => s + d.qty, 0);
+    return {
+      ...it,
+      deliveries,
+      delivered_qty: rem?.delivered ?? deliveredQty,
+      remaining_qty: rem?.remaining ?? Number(it.qty ?? 0),
+    };
+  });
+  return c.json({ salesOrder, items });
 });
 
 /* Customer credit balance lookup — used by the New Sales Order form to flash

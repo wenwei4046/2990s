@@ -272,6 +272,11 @@ type SoItem = {
      when the header date changes. */
   line_delivery_date: string | null;
   line_delivery_date_overridden: boolean;
+  /* Delivery breakdown stamped by the SO detail endpoint — which DO took how
+     much off this line, plus the live balance still deliverable. */
+  deliveries?: { doNumber: string; qty: number; status: string }[];
+  delivered_qty?: number;
+  remaining_qty?: number;
 };
 
 /* Whole-order inline edit — build a SoLineDraft from a persisted SoItem.
@@ -991,6 +996,7 @@ export const SalesOrderDetail = () => {
               <tr>
                 <th>Item</th>
                 <th className={styles.tableRight}>Qty</th>
+                <th>Delivered</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 {/* PR-E — Per-line delivery date. Falls back to the SO
@@ -1033,6 +1039,27 @@ export const SalesOrderDetail = () => {
                     })()}
                   </td>
                   <td className={styles.tableRight}>{it.qty}</td>
+                  <td>
+                    {(it.deliveries && it.deliveries.length > 0) ? (
+                      <div>
+                        {it.deliveries.map((d, di) => (
+                          <div key={di} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            {d.doNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{d.qty}</span>
+                          </div>
+                        ))}
+                        {typeof it.remaining_qty === 'number' && (
+                          <div style={{
+                            fontSize: 'var(--fs-11)', marginTop: 1,
+                            color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                          }}>
+                            {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span className={styles.muted}>—</span>
+                    )}
+                  </td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
                   <td className={styles.tableRight}>

@@ -337,6 +337,12 @@ type SoItem = {
   total_centi: number | null;
   stock_status: string | null;
   cancelled: boolean | null;
+  /* Delivery breakdown stamped by the SO detail endpoint — which DO took how
+     much off this line, plus the live balance still deliverable. Drives the
+     drill-down's "Delivered" column. */
+  deliveries?: { doNumber: string; qty: number; status: string }[];
+  delivered_qty?: number;
+  remaining_qty?: number;
 };
 
 /* Inline `CategoryPill` re-uses the shared `badgeFor` palette so the pill
@@ -581,7 +587,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
              Description 240→1098px) and spread the cells far apart ("间距隔那么
              远"). A fixed 1180px keeps the columns compact and readable; the
              wrapper's overflow-x handles narrow viewports. */
-          width: 1270, minWidth: 1270, borderCollapse: 'collapse',
+          width: 1390, minWidth: 1390, borderCollapse: 'collapse',
           fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
           color: 'var(--c-ink)',
           tableLayout: 'fixed',
@@ -598,6 +604,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
             <th style={{ ...TH_BASE, width: 240, minWidth: 200, maxWidth: 320 }}>Description</th>
             <th style={{ ...TH_BASE, width: 60 }}>UOM</th>
             <th style={{ ...TH_RIGHT, width: 50 }}>Qty</th>
+            <th style={{ ...TH_BASE, width: 120 }}>Delivered</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Unit Price</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Total</th>
             <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
@@ -654,6 +661,27 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 </td>
                 <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
                 <td style={TD_RIGHT}>{it.qty ?? 0}</td>
+                <td style={TD_BASE}>
+                  {(it.deliveries && it.deliveries.length > 0) ? (
+                    <div>
+                      {it.deliveries.map((d, di) => (
+                        <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+                          {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
+                        </div>
+                      ))}
+                      {typeof it.remaining_qty === 'number' && (
+                        <div style={{
+                          fontSize: 'var(--fs-10)', marginTop: 1,
+                          color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                        }}>
+                          {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span style={{ color: 'var(--fg-muted)' }}>—</span>
+                  )}
+                </td>
                 <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
                 <td style={{ ...TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
                   {fmtRm(lineTotal)}
@@ -688,7 +716,7 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
         </tbody>
         <tfoot>
           <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
-            <td style={{ ...TFOOT_LABEL }} colSpan={6}>Subtotal</td>
+            <td style={{ ...TFOOT_LABEL }} colSpan={7}>Subtotal</td>
             <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: 'var(--c-burnt)' }}>
               {fmtRm(totalCenti)}
             </td>

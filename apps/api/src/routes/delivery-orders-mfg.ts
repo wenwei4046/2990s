@@ -501,6 +501,42 @@ export async function soDeliverableRemaining(
   return out;
 }
 
+/* Per-SO-line delivery breakdown — for each SO item id, the list of DO lines
+   it was delivered into (one entry per DO line), carrying the parent DO number
+   + qty + status. Cancelled DOs are excluded, mirroring soDeliverableRemaining
+   so the "Delivered" column and the remaining math never disagree. Read-only
+   display aid; the authoritative remaining stays in soDeliverableRemaining. */
+export type SoLineDelivery = { doNumber: string; qty: number; status: string };
+export async function soLineDeliveries(
+  sb: any,
+  soItemIds: string[],
+): Promise<Map<string, SoLineDelivery[]>> {
+  const out = new Map<string, SoLineDelivery[]>();
+  if (soItemIds.length === 0) return out;
+  const { data: doLines } = await sb
+    .from('delivery_order_items')
+    .select('so_item_id, qty, delivery_order_id')
+    .in('so_item_id', soItemIds);
+  const rows = (doLines ?? []) as Array<{ so_item_id: string | null; qty: number; delivery_order_id: string }>;
+  const doIds = [...new Set(rows.map((r) => r.delivery_order_id).filter(Boolean))];
+  if (doIds.length === 0) return out;
+  const { data: dos } = await sb.from('delivery_orders').select('id, do_number, status').in('id', doIds);
+  const doMeta = new Map<string, { doNumber: string; status: string }>();
+  for (const d of (dos ?? []) as Array<{ id: string; do_number: string | null; status: string | null }>) {
+    if ((d.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    doMeta.set(d.id, { doNumber: d.do_number ?? '—', status: (d.status ?? '').toUpperCase() });
+  }
+  for (const r of rows) {
+    if (!r.so_item_id) continue;
+    const meta = doMeta.get(r.delivery_order_id);
+    if (!meta) continue; // cancelled DO — excluded
+    const arr = out.get(r.so_item_id) ?? [];
+    arr.push({ doNumber: meta.doNumber, qty: Number(r.qty ?? 0), status: meta.status });
+    out.set(r.so_item_id, arr);
+  }
+  return out;
+}
+
 /* Live remaining-deliverable qty per SO line id (qty − delivered + returned),
    resolved straight from the SO item ids. Used by the write-path guards below
    so every DO-line create / add / qty-increase respects the SAME cap the

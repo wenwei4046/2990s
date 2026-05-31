@@ -18,9 +18,9 @@ import {
   forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
   type CSSProperties,
 } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Truck, ChevronDown, Ban, RotateCcw, ArrowRightLeft,
+  ArrowLeft, FileText, Pencil, Plus, Printer, Save, Truck, ChevronDown, Ban, RotateCcw,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { PhoneInput } from '../components/PhoneInput';
@@ -174,7 +174,6 @@ const draftFromItem = (it: DoItem): SoLineDraft => ({
 
 export const DeliveryOrderDetail = () => {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const detail = useMfgDeliveryOrderDetail(id ?? null);
   const updateHeader = useUpdateMfgDeliveryOrderHeader();
@@ -489,14 +488,6 @@ export const DeliveryOrderDetail = () => {
           <span className={`${styles.statusPill} ${STATUS_CLASS[header.status] ?? ''}`}>
             {header.status.replace(/_/g, ' ')}
           </span>
-          {/* Commander 2026-05-29 — "Convert from SO" inside the DO detail
-              (Edit mode), mirroring the PO detail's "Convert from SO" + the
-              Return detail's "Convert from DO". Opens the SO picker. */}
-          {isEditing && (
-            <Button variant="ghost" size="md" onClick={() => navigate('/mfg-delivery-orders/from-so')}>
-              <ArrowRightLeft {...ICON} /><span>Convert from SO</span>
-            </Button>
-          )}
           <RelationshipMapButton type="do" id={id} />
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} /><span>Print PDF</span>
