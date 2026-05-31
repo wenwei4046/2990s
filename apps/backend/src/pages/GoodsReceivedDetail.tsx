@@ -24,10 +24,10 @@
 // CLOSED → "Closed" (locked). isLocked = CANCELLED or CLOSED.
 // ----------------------------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown,
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, Plus, X,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
@@ -36,9 +36,13 @@ import {
   useUpdateGrnHeader,
   useUpdateGrnItem,
   useDeleteGrnItem,
+  useAddGrnItem,
   useCancelGrn,
 } from '../lib/flow-queries';
-import { useSuppliers, useSupplierDetail, type SupplierRow } from '../lib/suppliers-queries';
+import {
+  useSuppliers, useSupplierDetail, useOutstandingPoItems,
+  type SupplierRow, type OutstandingPoItem,
+} from '../lib/suppliers-queries';
 import { useWarehouses } from '../lib/inventory-queries';
 import { MoneyInput } from '../components/MoneyInput';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
@@ -122,7 +126,14 @@ export const GoodsReceivedDetail = () => {
   const updateHeader = useUpdateGrnHeader();
   const updateItem = useUpdateGrnItem();
   const deleteItem = useDeleteGrnItem();
+  const addItem = useAddGrnItem();
   const cancel = useCancelGrn();
+
+  /* Commander 2026-05-31 — a GRN aggregates lines from MANY POs, so instead of a
+     free "add line" (the DO pattern, which fits a 1:1 SO) it keeps converting
+     from PO: pick more outstanding PO lines into THIS GRN. Delete / qty-down
+     releases them back (the server recomputes received_qty either way). */
+  const [addFromPoOpen, setAddFromPoOpen] = useState(false);
 
   const grn = detail.data?.grn ?? null;
   const items = (detail.data?.items ?? []) as GrnItemRow[];
@@ -344,7 +355,41 @@ export const GoodsReceivedDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
+          {/* Add from PO — Edit mode only, and never while the GRN is locked
+              (cancelled / closed / has a downstream PI-PR). A GRN aggregates many
+              POs, so this "keeps converting from PO" instead of a free add-line. */}
+          {isEditing && !isLocked && (
+            <Button variant="ghost" size="sm" onClick={() => setAddFromPoOpen((v) => !v)}>
+              {addFromPoOpen ? <X {...SM_ICON} /> : <Plus {...SM_ICON} />}
+              <span>{addFromPoOpen ? 'Close' : 'Add from PO'}</span>
+            </Button>
+          )}
         </header>
+
+        {/* Outstanding-PO picker — same supplier + same receive-into warehouse as
+            this GRN. Tick lines + qty, confirm appends them to THIS GRN. */}
+        {isEditing && !isLocked && addFromPoOpen && (
+          <AddFromPoPanel
+            grn={grn}
+            existingPoItemIds={new Set(items.map((it) => String(it.purchase_order_item_id ?? '')).filter(Boolean))}
+            onAppend={async (picks) => {
+              for (const p of picks) {
+                await addItem.mutateAsync({
+                  grnId: grn.id,
+                  purchaseOrderItemId: p.poItemId,
+                  materialCode: p.itemCode,
+                  materialName: p.description ?? p.itemCode,
+                  itemGroup: p.itemGroup ?? undefined,
+                  variants: p.variants ?? undefined,
+                  qty: p.qty,
+                  unitPriceCenti: p.unitPriceCenti,
+                  deliveryDate: p.deliveryDate ?? undefined,
+                });
+              }
+              setAddFromPoOpen(false);
+            }}
+          />
+        )}
 
         {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>No items on this GRN.</p>
@@ -469,6 +514,147 @@ export const GoodsReceivedDetail = () => {
           </div>
         </div>
       </section>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   Add-from-PO picker — a GRN aggregates lines from MANY POs, so rather than a
+   free "add line" (the DO pattern, which fits a 1:1 SO) it keeps converting from
+   PO: lists this supplier's still-outstanding PO lines (limited to the GRN's
+   receive-into warehouse so the one-warehouse-per-GRN rule holds), lets you tick
+   + set qty, and appends them to THIS GRN. The server consumes the PO's
+   received_qty on append (and releases it again on delete / qty-down).
+   ════════════════════════════════════════════════════════════════════════ */
+
+type PoPick = {
+  poItemId: string;
+  itemCode: string;
+  description: string | null;
+  itemGroup: string | null;
+  variants: Record<string, unknown> | null;
+  qty: number;
+  unitPriceCenti: number;
+  deliveryDate: string | null;
+};
+
+const AddFromPoPanel = ({
+  grn, existingPoItemIds, onAppend,
+}: {
+  grn: any;
+  /** PO-item ids already on this GRN — hide them so we don't double-pick. */
+  existingPoItemIds: Set<string>;
+  onAppend: (picks: PoPick[]) => Promise<void>;
+}) => {
+  const outstandingQ = useOutstandingPoItems();
+  const [picks, setPicks] = useState<Record<string, { checked: boolean; qty: number }>>({});
+  const [busy, setBusy] = useState(false);
+
+  // Same supplier + same receive-into warehouse (one-warehouse-per-GRN), minus
+  // lines already on this GRN.
+  const rows = useMemo(() => {
+    const all = (outstandingQ.data ?? []) as OutstandingPoItem[];
+    return all.filter((r) =>
+      r.supplierId === grn.supplier_id &&
+      (!grn.warehouse_id || r.warehouseLocationId === grn.warehouse_id) &&
+      !existingPoItemIds.has(String(r.poItemId)),
+    );
+  }, [outstandingQ.data, grn.supplier_id, grn.warehouse_id, existingPoItemIds]);
+
+  const pickOf = (r: OutstandingPoItem) => picks[r.poItemId] ?? { checked: false, qty: r.remainingQty };
+  const setPick = (id: string, patch: Partial<{ checked: boolean; qty: number }>) =>
+    setPicks((prev) => ({ ...prev, [id]: { ...(prev[id] ?? { checked: false, qty: 0 }), ...patch } }));
+
+  const chosen = rows.filter((r) => pickOf(r).checked && pickOf(r).qty > 0);
+
+  const confirm = async () => {
+    if (busy || chosen.length === 0) return;
+    setBusy(true);
+    try {
+      await onAppend(chosen.map((r) => ({
+        poItemId:       r.poItemId,
+        itemCode:       r.itemCode,
+        description:    r.description ?? null,
+        itemGroup:      r.itemGroup ?? null,
+        variants:       (r.variants as Record<string, unknown> | null) ?? null,
+        qty:            Math.min(pickOf(r).qty, r.remainingQty),
+        unitPriceCenti: r.unitPriceCenti,
+        deliveryDate:   r.deliveryDate ?? null,
+      })));
+      setPicks({});
+    } catch (e) {
+      window.alert(`Add from PO failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{
+      margin: 'var(--space-3) 0',
+      padding: 'var(--space-3) var(--space-4)',
+      background: 'var(--c-cream)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+    }}>
+      {outstandingQ.isLoading ? (
+        <p className={styles.fieldLabel}>Loading outstanding PO lines…</p>
+      ) : rows.length === 0 ? (
+        <p className={styles.emptyRow} style={{ margin: 0 }}>
+          No outstanding PO lines for this supplier / warehouse.
+        </p>
+      ) : (
+        <>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th style={{ width: 32 }} />
+                <th>PO</th>
+                <th>Item</th>
+                <th className={styles.tableRight}>Remaining</th>
+                <th className={styles.tableRight}>Receive</th>
+                <th className={styles.tableRight}>Unit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const p = pickOf(r);
+                return (
+                  <tr key={r.poItemId}>
+                    <td>
+                      <input type="checkbox" checked={p.checked}
+                        onChange={(e) => setPick(r.poItemId, { checked: e.target.checked })} />
+                    </td>
+                    <td className={styles.muted}>{r.poDocNo}</td>
+                    <td>
+                      <div className={styles.codeCell}>{r.itemCode}</div>
+                      {(() => {
+                        const summary = buildVariantSummary(r.itemGroup ?? null, r.variants as Record<string, unknown> | null)
+                          || r.description;
+                        return summary ? <div className={styles.muted} style={{ fontSize: 'var(--fs-11)' }}>{summary}</div> : null;
+                      })()}
+                    </td>
+                    <td className={styles.tableRight}>{r.remainingQty}</td>
+                    <td className={styles.tableRight}>
+                      <input type="number" min={0} max={r.remainingQty}
+                        className={styles.fieldInput} style={{ width: 70, textAlign: 'right' }}
+                        value={p.qty} disabled={!p.checked}
+                        onChange={(e) => setPick(r.poItemId, { qty: Math.min(Number(e.target.value) || 0, r.remainingQty) })} />
+                    </td>
+                    <td className={styles.tableRight}>{fmtRm(r.unitPriceCenti, grn.currency)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-3)' }}>
+            <Button variant="primary" size="sm" onClick={confirm} disabled={busy || chosen.length === 0}>
+              <Plus {...SM_ICON} />
+              <span>{busy ? 'Adding…' : `Add ${chosen.length || ''} to GRN`.trim()}</span>
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 };
