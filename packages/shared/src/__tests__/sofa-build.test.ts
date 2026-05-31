@@ -20,6 +20,9 @@ import {
   fabricSurchargeFor,
   fabricColourSuffix,
   sofaModuleSellingPricesFromSkus,
+  mirrorCode,
+  mirrorModules,
+  canMirror,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -738,6 +741,30 @@ describe('analyzeSofa off-axis open-edge closure', () => {
     const r = analyzeSofa(group, '24');
     expect(r.closed).toBe(true);
     expect(r.reason).toBeNull();
+  });
+});
+
+describe('mirror helpers (Quick Pick L↔R flip)', () => {
+  it('mirrorCode swaps LHF↔RHF for dash + parens forms, leaves no-hand codes', () => {
+    expect(mirrorCode('2A-LHF')).toBe('2A-RHF');
+    expect(mirrorCode('L-RHF')).toBe('L-LHF');
+    expect(mirrorCode('1A(P)(LHF)')).toBe('1A(P)(RHF)');
+    expect(mirrorCode('1NA')).toBe('1NA');
+    expect(mirrorCode('WC-45')).toBe('WC-45');
+    expect(mirrorCode('CNR')).toBe('CNR');
+  });
+
+  it('mirrorModules reverses slot order and swaps each hand', () => {
+    expect(mirrorModules([['2A-LHF'], ['L-RHF']])).toEqual([['L-LHF'], ['2A-RHF']]);
+    expect(mirrorModules([['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']]))
+      .toEqual([['L-RHF', 'L-LHF'], ['2A-RHF', '2A-LHF']]);
+  });
+
+  it('canMirror is false for symmetric layouts, true for asymmetric', () => {
+    expect(canMirror([['2A-LHF'], ['2A-RHF']])).toBe(false);
+    expect(canMirror([['1A-LHF'], ['1A-RHF']])).toBe(false);
+    expect(canMirror([['2A-LHF'], ['L-RHF']])).toBe(true);
+    expect(canMirror([['1A-LHF'], ['2A-RHF']])).toBe(true);
   });
 });
 

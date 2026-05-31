@@ -246,6 +246,32 @@ export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup =
   return 'Other';
 };
 
+/* ─── Mirror helpers (Quick Pick L↔R flip, 2026-06-01) ───────────────────
+ * Flip a saved Quick Pick layout left↔right: reverse the slot order and swap
+ * each handed code's LHF↔RHF. Codes with no orientation (1NA, 2NA, Console,
+ * CNR, STOOL, power variants without a hand) pass through unchanged. Works on
+ * BOTH the dash form (`2A-LHF`) and the parens form (`1A(P)(LHF)`) because
+ * LHF/RHF only ever appear as the orientation token, never both in one code. */
+export const mirrorCode = (code: string): string => {
+  if (code.includes('LHF')) return code.replace('LHF', 'RHF');
+  if (code.includes('RHF')) return code.replace('RHF', 'LHF');
+  return code;
+};
+
+/** Mirror a Quick Pick's OR-set slot layout left↔right. Pure; identical result
+ *  on POS + server. */
+export const mirrorModules = (modules: string[][]): string[][] =>
+  modules.slice().reverse().map((slot) => slot.map(mirrorCode));
+
+/** True when mirroring actually changes the layout. Symmetric palindromes
+ *  (1-seater, 2-seater) mirror to themselves → false, so the POS hides the flip
+ *  control for them. Compares the representative-code sequence (first code per
+ *  slot) — that's what the preview + cart build consume. */
+export const canMirror = (modules: string[][]): boolean => {
+  const rep = (m: string[][]): string => m.map((s) => s[0] ?? '').join('+');
+  return rep(modules) !== rep(mirrorModules(modules));
+};
+
 /* ─── SELLING helpers (per-Model module-SKU prices — SOFA-SELLING-PLAN.md,
  * Chairman 2026-05-31) ───────────────────────────────────────────────────
  * A configured mfg sofa is priced from the Model's per-module SELLING prices.
