@@ -68,10 +68,10 @@ beforeEach(() => {
   adminFromMock.mockReset();
 });
 
-describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
-  it('POS-side role (sales) goes through inviteUserByEmail, inserts staff with pin_hash NULL, returns 201', async () => {
+describe('POST /admin/staff — role-based admin-set credential (WS2 2026-05-31)', () => {
+  it('sales role → createUser (not invite), staff row gets a bcrypt pin_hash, returns 201', async () => {
     const newUserId = '11111111-1111-1111-1111-111111111111';
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: newUserId } }, error: null });
+    createUserMock.mockResolvedValue({ data: { user: { id: newUserId } }, error: null });
     let insertedRow: any = null;
     adminFromMock.mockImplementation((table: string) => ({
       insert: (row: any) => {
@@ -90,22 +90,28 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'AW', name: 'Aisha Wong', role: 'sales',
-        email: 'aisha@2990s.my', initials: 'AW', color: '#E86B3A',
+        email: 'aisha@2990s.my', initials: 'AW', color: '#E86B3A', pin: '482917',
       }),
     }, baseEnv);
 
     expect(res.status).toBe(201);
-    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
-    expect(createUserMock).not.toHaveBeenCalled();
-    expect(inviteByEmailMock.mock.calls[0]![0]).toBe('aisha@2990s.my');
-    expect(insertedRow.pin_hash).toBeNull();
+    expect(createUserMock).toHaveBeenCalledTimes(1);
+    expect(inviteByEmailMock).not.toHaveBeenCalled();
+    expect(createUserMock.mock.calls[0]![0].email).toBe('aisha@2990s.my');
+    // Sales log in by PIN — the admin-set PIN is bcrypt-hashed onto the row.
+    expect(typeof insertedRow.pin_hash).toBe('string');
+    expect(insertedRow.pin_hash.length).toBeGreaterThan(20);
     expect(insertedRow.email).toBe('aisha@2990s.my');
   });
 
-  it('Backend-side role (coordinator) goes through inviteUserByEmail', async () => {
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-1' } }, error: null });
-    adminFromMock.mockImplementation(() => ({
-      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-1' }, error: null }) }) }),
+  it('non-sales role (coordinator) → createUser with the admin-set password, pin_hash NULL', async () => {
+    createUserMock.mockResolvedValue({ data: { user: { id: 'u-1' } }, error: null });
+    let insertedRow: any = null;
+    adminFromMock.mockImplementation((table: string) => ({
+      insert: (row: any) => {
+        if (table === 'staff') insertedRow = row;
+        return { select: () => ({ maybeSingle: async () => ({ data: { ...row, id: 'u-1' }, error: null }) }) };
+      },
     }));
     const app = buildApp('admin');
     const res = await app.request('/admin/staff', {
@@ -113,129 +119,62 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'ML', name: 'Mei Lin', role: 'coordinator',
-        email: 'ml@2990s.my', initials: 'ML', color: '#2F5D4F',
+        email: 'ml@2990s.my', initials: 'ML', color: '#2F5D4F', password: 'sup3rsecret',
       }),
     }, baseEnv);
     expect(res.status).toBe(201);
-    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
-    expect(createUserMock).not.toHaveBeenCalled();
-  });
-
-  // 2026-05-27 (role-based redirect) — magic-link `redirectTo` is per-role.
-  // POS-only roles anchor to POS_PORTAL_URL so the invited sales person
-  // lands in the POS app. Backend roles still anchor to BACKEND_PORTAL_URL.
-  it('sales role uses POS_PORTAL_URL in redirectTo', async () => {
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-pos' } }, error: null });
-    adminFromMock.mockImplementation(() => ({
-      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-pos' }, error: null }) }) }),
-    }));
-    const app = buildApp('admin');
-    const res = await app.request('/admin/staff', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        staffCode: 'AW', name: 'Aisha Wong', role: 'sales',
-        email: 'aisha@2990s.my', initials: 'AW', color: '#E86B3A',
-      }),
-    }, baseEnv);
-    expect(res.status).toBe(201);
-    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
-    const opts = inviteByEmailMock.mock.calls[0]![1];
-    expect(opts.redirectTo).toBe('https://pos.test/set-password');
-  });
-
-  it('master_account role uses POS_PORTAL_URL in redirectTo (POS-only selling role)', async () => {
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-ma' } }, error: null });
-    adminFromMock.mockImplementation(() => ({
-      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-ma' }, error: null }) }) }),
-    }));
-    const app = buildApp('admin');
-    const res = await app.request('/admin/staff', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        staffCode: 'MA', name: 'Master Account', role: 'master_account',
-        email: 'master@2990s.my', initials: 'MA', color: '#2F5D4F',
-      }),
-    }, baseEnv);
-    expect(res.status).toBe(201);
-    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
-    const opts = inviteByEmailMock.mock.calls[0]![1];
-    expect(opts.redirectTo).toBe('https://pos.test/set-password');
-  });
-
-  it('admin role uses BACKEND_PORTAL_URL in redirectTo', async () => {
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-be' } }, error: null });
-    adminFromMock.mockImplementation(() => ({
-      insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: { id: 'u-be' }, error: null }) }) }),
-    }));
-    const app = buildApp('admin');
-    const res = await app.request('/admin/staff', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        staffCode: 'LO', name: 'Loo', role: 'admin',
-        email: 'loo@2990s.my', initials: 'LO', color: '#221F20',
-      }),
-    }, baseEnv);
-    expect(res.status).toBe(201);
-    expect(inviteByEmailMock).toHaveBeenCalledTimes(1);
-    const opts = inviteByEmailMock.mock.calls[0]![1];
-    expect(opts.redirectTo).toBe('https://backend.test/set-password');
-  });
-
-  it('rejects invite without email (400 — email is now required for all roles)', async () => {
-    const app = buildApp('admin');
-    const res = await app.request('/admin/staff', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        staffCode: 'AW', name: 'Aisha', role: 'sales',
-        initials: 'AW', color: '#E86B3A',
-      }),
-    }, baseEnv);
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(JSON.stringify(body)).toContain('email');
-  });
-
-  it('rejects invite with pin field (400 — PIN model dropped)', async () => {
-    const app = buildApp('admin');
-    const res = await app.request('/admin/staff', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        staffCode: 'AW', name: 'Aisha', role: 'sales',
-        email: 'a@b.co', initials: 'AW', color: '#E86B3A', pin: '482917',
-      }),
-    }, baseEnv);
-    /* Zod in strict mode would 400 on unknown keys, but the schema isn't
-       strict — extras are dropped silently. The invite should still succeed
-       because the `pin` key is ignored. This test guards that the request
-       does NOT fail (no longer rejected on pin) and that no PIN ever lands
-       on the staff row. */
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-ignored-pin' } }, error: null });
-    let insertedRow: any = null;
-    adminFromMock.mockImplementation((table: string) => ({
-      insert: (row: any) => {
-        if (table === 'staff') insertedRow = row;
-        return { select: () => ({ maybeSingle: async () => ({ data: { ...row, id: 'u-ignored-pin' }, error: null }) }) };
-      },
-    }));
-    const res2 = await app.request('/admin/staff', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        staffCode: 'AW2', name: 'Aisha 2', role: 'sales',
-        email: 'a2@b.co', initials: 'A2', color: '#E86B3A', pin: '482917',
-      }),
-    }, baseEnv);
-    expect(res2.status).toBe(201);
+    expect(createUserMock).toHaveBeenCalledTimes(1);
+    expect(inviteByEmailMock).not.toHaveBeenCalled();
+    expect(createUserMock.mock.calls[0]![0].password).toBe('sup3rsecret');
     expect(insertedRow.pin_hash).toBeNull();
   });
 
+  it('sales role without a PIN → 400 (pin_required_for_sales)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'AW', name: 'Aisha', role: 'sales',
+        email: 'a@b.co', initials: 'AW', color: '#E86B3A',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('pin_required_for_sales');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  it('non-sales role without a password → 400 (password_required_for_non_sales)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'ML', name: 'Mei Lin', role: 'coordinator',
+        email: 'ml@b.co', initials: 'ML', color: '#2F5D4F',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('password_required_for_non_sales');
+    expect(createUserMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects without email (400 — email required for all roles)', async () => {
+    const app = buildApp('admin');
+    const res = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffCode: 'AW', name: 'Aisha', role: 'sales',
+        initials: 'AW', color: '#E86B3A', pin: '482917',
+      }),
+    }, baseEnv);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('email');
+  });
+
   it('rolls back auth user when staff insert fails', async () => {
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-rb' } }, error: null });
+    createUserMock.mockResolvedValue({ data: { user: { id: 'u-rb' } }, error: null });
     deleteUserMock.mockResolvedValue({ error: null });
     adminFromMock.mockImplementation(() => ({
       insert: () => ({ select: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'unique violation' } }) }) }),
@@ -246,7 +185,7 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'AW', name: 'A', role: 'sales',
-        email: 'a@b.co', initials: 'AW', color: '#E86B3A',
+        email: 'a@b.co', initials: 'AW', color: '#E86B3A', pin: '482917',
       }),
     }, baseEnv);
     expect(res.status).toBe(422);
@@ -254,7 +193,7 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
   });
 
   it('rolls back auth user when staff insert throws an exception (not just error)', async () => {
-    inviteByEmailMock.mockResolvedValue({ data: { user: { id: 'u-throw' } }, error: null });
+    createUserMock.mockResolvedValue({ data: { user: { id: 'u-throw' } }, error: null });
     deleteUserMock.mockResolvedValue({ error: null });
     adminFromMock.mockImplementation(() => ({
       insert: () => ({
@@ -269,7 +208,7 @@ describe('POST /admin/staff — unified magic-link invite (2026-05-27)', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         staffCode: 'AW', name: 'A', role: 'sales',
-        email: 'a@b.co', initials: 'AW', color: '#E86B3A',
+        email: 'a@b.co', initials: 'AW', color: '#E86B3A', pin: '482917',
       }),
     }, baseEnv);
     expect(res.status).toBe(422);

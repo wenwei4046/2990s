@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { Save, Trash2, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { useSetStaffPin, type StaffRow } from '../lib/admin-queries';
+import { useSetStaffPin } from '../lib/admin-queries';
 import styles from './PinDrawer.module.css';
 
 interface Props {
-  staff: StaffRow;
+  // Minimal shape so both the Users page (UserRow) and the legacy Settings
+  // staff list (StaffRow) can pass a record — only these fields are used.
+  staff: { id: string; name: string; staffCode: string };
   onClose: () => void;
 }
 

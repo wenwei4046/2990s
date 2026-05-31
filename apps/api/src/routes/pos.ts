@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Env, Variables } from '../env';
 import { supabaseAuth } from '../middleware/auth';
 import { pinRateLimiter, createPinRateLimiter } from '../lib/pin-rate-limit';
-import { verifyPin } from '../lib/bcrypt';
+import { hashPin, verifyPin } from '../lib/bcrypt';
 
 export const pos = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -69,14 +69,14 @@ pos.post('/pin-login', async (c) => {
   }
   const { staffId, pin } = parsed.data;
 
-  const limit = activeLimiter.check(staffId);
-  if (!limit.allowed) {
-    return c.json({ error: 'too_many_attempts', retryAfter: limit.retryAfter }, 429);
-  }
-
   const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  const limit = await activeLimiter.check(adminClient, staffId);
+  if (!limit.allowed) {
+    return c.json({ error: 'too_many_attempts', retryAfter: limit.retryAfter }, 429);
+  }
 
   const { data: staff, error: lookupErr } = await adminClient
     .from('staff')
@@ -96,8 +96,8 @@ pos.post('/pin-login', async (c) => {
 
   const ok = await verifyPin(pin, staff.pin_hash as string);
   if (!ok) {
-    activeLimiter.recordFailure(staffId);
-    const after = activeLimiter.check(staffId);
+    await activeLimiter.recordFailure(adminClient, staffId);
+    const after = await activeLimiter.check(adminClient, staffId);
     return c.json({
       error: 'invalid_pin',
       remainingAttempts: after.allowed ? after.remainingAttempts : 0,
@@ -105,7 +105,7 @@ pos.post('/pin-login', async (c) => {
   }
 
   // Success — issue a magic-link OTP for the sales user.
-  activeLimiter.reset(staffId);
+  await activeLimiter.reset(adminClient, staffId);
   const { data: link, error: linkErr } = await adminClient.auth.admin.generateLink({
     type: 'magiclink',
     email: staff.email as string,
@@ -133,14 +133,15 @@ pos.post('/verify-pin', supabaseAuth, async (c) => {
     return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
   }
 
-  const limit = activeLimiter.check(user.id);
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const limit = await activeLimiter.check(adminClient, user.id);
   if (!limit.allowed) {
     return c.json({ error: 'too_many_attempts', retryAfter: limit.retryAfter }, 429);
   }
 
-  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
   const { data: staff, error } = await adminClient
     .from('staff')
     .select('pin_hash, role, active')
@@ -156,16 +157,57 @@ pos.post('/verify-pin', supabaseAuth, async (c) => {
 
   const ok = await verifyPin(parsed.data.pin, staff.pin_hash as string);
   if (!ok) {
-    activeLimiter.recordFailure(user.id);
-    const after = activeLimiter.check(user.id);
+    await activeLimiter.recordFailure(adminClient, user.id);
+    const after = await activeLimiter.check(adminClient, user.id);
     return c.json({
       valid: false,
       remainingAttempts: after.allowed ? after.remainingAttempts : 0,
     }, 401);
   }
 
-  activeLimiter.reset(user.id);
+  await activeLimiter.reset(adminClient, user.id);
   return c.json({ valid: true }, 200);
+});
+
+// PATCH /pos/my-pin — a salesperson changes their OWN 6-digit PIN (self-service,
+// WS2 2026-05-31). Authenticated as themselves and scoped to their own id, so
+// they can never touch anyone else's PIN. Only role='sales' has a PIN. Admin PIN
+// resets go through PATCH /admin/staff/:id/pin instead.
+const MyPinBodySchema = z.object({
+  pin: z.string().regex(/^\d{6}$/),
+});
+pos.patch('/my-pin', supabaseAuth, async (c) => {
+  const user = c.get('user');
+
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const parsed = MyPinBodySchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'invalid_request', issues: parsed.error.issues }, 400);
+  }
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  // Look up the caller's OWN row (scoped to their id). Only an active sales
+  // member may set a PIN.
+  const { data: staff, error } = await adminClient
+    .from('staff')
+    .select('role, active')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (error) return c.json({ error: 'fetch_failed', detail: error.message }, 500);
+  if (!staff || !staff.active || staff.role !== 'sales') {
+    return c.json({ error: 'not_a_pin_user' }, 403);
+  }
+
+  const pinHash = await hashPin(parsed.data.pin);
+  const { error: updErr } = await adminClient
+    .from('staff')
+    .update({ pin_hash: pinHash })
+    .eq('id', user.id);
+  if (updErr) return c.json({ error: 'update_failed', detail: updErr.message }, 500);
+  return c.body(null, 204);
 });
 
 // GET /pos/sales-stats — current-calendar-month aggregates for the logged-in

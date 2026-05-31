@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { Login } from './pages/Login';
 import { SetPassword } from './pages/SetPassword';
+import { ChangePin } from './pages/ChangePin';
 import { Catalog } from './pages/Catalog';
 import { Configurator } from './pages/Configurator';
 import { Cart } from './pages/Cart';
@@ -34,6 +35,9 @@ export const router = createBrowserRouter([
   { path: '/handover-confirmed/:docNo', element: <AuthGate><HandoverConfirmed /></AuthGate> },
   { path: '/my-orders', element: <AuthGate><OrderStatus /></AuthGate> },
   { path: '/quotes', element: <AuthGate><Quotes /></AuthGate> },
+  /* WS2 (2026-05-31) — sales self-service PIN change. Inside AuthGate; the page
+     itself bounces non-sales to /catalog (they have no PIN). */
+  { path: '/change-pin', element: <AuthGate><ChangePin /></AuthGate> },
   { path: '/print/sales-order/:orderId', element: <AuthGate><SalesOrderPrint /></AuthGate> },
   /* PR — Commander 2026-05-28 ("把 Backend 的 Products 整个模块 port 到 POS").
      Sales-side roles see this readonly; sales_director / admin can edit.

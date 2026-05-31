@@ -25,7 +25,7 @@ import {
   type ProductFabricRow,
 } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
-import { useQuickPicks } from '../state/quickpicks';
+import { useMyQuickPicks, useDeletePersonalQuickPick } from '../lib/personal-quick-picks';
 import {
   useCart,
   type SofaConfigSnapshot,
@@ -242,9 +242,13 @@ export const Configurator = () => {
   const globalQPsQ = useSofaQuickPicks(product.data?.base_model);
   useSofaQuickPicksRealtime();
   const deleteGlobalQP = useDeleteSofaQuickPick();
-  const personalPicksAll = useQuickPicks((s) => s.picks);
-  const removePersonalPick = useQuickPicks((s) => s.removePick);
+  // Personal Quick Picks are now DB-backed (WS1) so they follow the salesperson
+  // across devices. The server RLS-scopes them to the logged-in staff; we also
+  // key the query by staff id (below) so a stale cache can't flash the previous
+  // user's picks after an in-SPA account switch on a shared tablet.
   const { data: staff } = useStaff();
+  const myQPsQ = useMyQuickPicks(staff?.id, product.data?.base_model);
+  const deletePersonalQP = useDeletePersonalQuickPick();
   const canCurateQP = isGlobalCurator(staff?.role);
   const addConfigured = useCart((s) => s.addConfigured);
   const cartLines = useCart((s) => s.lines);
@@ -265,15 +269,13 @@ export const Configurator = () => {
     [globalQPsQ.data, baseModelStr],
   );
   const personalQPItems = useMemo<QuickPickItem[]>(
-    // Wait for the staff identity before showing personal picks — otherwise a
-    // mid-load `staff?.id ?? null` would match no real pick and flash empty.
-    () => (!staff?.id ? [] : personalPicksAll
-      .filter((p) => p.staffId === staff.id && p.baseModel === baseModelStr)
-      .map((p) => ({
-        id: p.id, source: 'personal' as const, label: p.label,
-        modules: p.modules.map((m) => [m]), depth: p.depth,
-      }))),
-    [personalPicksAll, staff?.id, baseModelStr],
+    // Server already scopes to the logged-in salesperson (RLS) + this base
+    // model, and stores modules as string[][] (OR-set slots) — use them as-is.
+    () => (myQPsQ.data ?? []).map((p) => ({
+      id: p.id, source: 'personal' as const, label: p.label,
+      modules: p.modules, depth: p.depth,
+    })),
+    [myQPsQ.data],
   );
 
   // ─── Edit mode ───────────────────────────────────────────────────────────
@@ -1000,7 +1002,7 @@ export const Configurator = () => {
               setMode('custom');
             }}
             onQuickPickDelete={(item) => {
-              if (item.source === 'personal') removePersonalPick(item.id);
+              if (item.source === 'personal') deletePersonalQP.mutate(item.id);
               else deleteGlobalQP.mutate(item.id);
             }}
             fabricBlock={

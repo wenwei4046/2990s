@@ -126,7 +126,7 @@ export const LockScreen = () => {
           )}
           {staff.data && staff.data.length === 0 && (
             <div className={styles.empty}>
-              No POS users yet — add staff in Backend → Settings → Staff.
+              No POS users yet — add a sales user in Backend → Users.
             </div>
           )}
           {staff.data?.map((s) => (
