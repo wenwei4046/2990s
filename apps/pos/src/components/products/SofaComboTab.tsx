@@ -22,8 +22,8 @@
 //              + Edit/History/Delete actions.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, type CSSProperties } from 'react';
-import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Plus, Pencil, Trash2, History, X, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { SOFA_MODULES, type SofaPriceTier, buildComboLabel } from '@2990s/shared';
 import {
@@ -32,6 +32,8 @@ import {
   useUpdateSofaCombo,
   useDeleteSofaCombo,
   useSofaComboHistory,
+  useSofaComboTierPremiums,
+  useApplySofaComboTierPremiums,
   type SofaComboRule,
 } from '../../lib/products/sofa-combos-queries';
 import { useMfgProducts } from '../../lib/products/mfg-products-queries';
@@ -82,6 +84,7 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
   const [baseModelFilter, setBaseModelFilter] = useState<string>('');
   const [composer, setComposer] = useState<{ open: boolean; editing?: SofaComboRule }>({ open: false });
   const [historyFor, setHistoryFor] = useState<SofaComboRule | null>(null);
+  const [tierPanelOpen, setTierPanelOpen] = useState(false);
 
   // Default scope: customer_id = null (applies to all). 2990 is B2C, so we
   // never let the UI write a customer_id.
@@ -112,6 +115,10 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
   }, [combosQ.data]);
 
   const total = combosQ.data?.length ?? 0;
+  const p1Count = useMemo(
+    () => (combosQ.data ?? []).filter((r) => r.tier === 'PRICE_1').length,
+    [combosQ.data],
+  );
 
   const deleteM = useDeleteSofaCombo();
 
@@ -140,11 +147,18 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
             All combos apply to every customer (2990 B2C model).
           </p>
         </div>
-        {canAdd && (
-          <Button variant="primary" onClick={() => setComposer({ open: true })}>
-            <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
-          </Button>
-        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {canEdit && (
+            <Button variant="ghost" onClick={() => setTierPanelOpen(true)}>
+              <SlidersHorizontal {...ICON_PROPS} style={{ marginRight: 6 }} /> Overall Edit price tier
+            </Button>
+          )}
+          {canAdd && (
+            <Button variant="primary" onClick={() => setComposer({ open: true })}>
+              <Plus {...ICON_PROPS} style={{ marginRight: 6 }} /> New Combo
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -228,6 +242,10 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
           baseModels={baseModels}
           onClose={() => setComposer({ open: false })}
         />
+      )}
+
+      {tierPanelOpen && (
+        <TierPremiumModal p1Count={p1Count} onClose={() => setTierPanelOpen(false)} />
       )}
 
       {historyFor && (
@@ -581,6 +599,81 @@ function ComposerModal({
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={create.isPending || update.isPending}>
             {(create.isPending || update.isPending) ? 'Saving…' : (editing ? 'Save new effective row' : 'Create combo')}
+          </Button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+// ─── Overall Edit price tier (P1 base + global P2/P3 premiums) ─────────
+
+function TierPremiumModal({ p1Count, onClose }: { p1Count: number; onClose: () => void }) {
+  const premiumsQ = useSofaComboTierPremiums();
+  const applyM = useApplySofaComboTierPremiums();
+  const [p2, setP2] = useState('');
+  const [p3, setP3] = useState('');
+
+  // Pre-fill once the saved premiums load (RM = sen / 100).
+  useEffect(() => {
+    if (premiumsQ.data) {
+      setP2(String(premiumsQ.data.p2PremiumSen / 100));
+      setP3(String(premiumsQ.data.p3PremiumSen / 100));
+    }
+  }, [premiumsQ.data]);
+
+  const apply = async () => {
+    const p2n = Number(p2 || '0');
+    const p3n = Number(p3 || '0');
+    if (!Number.isFinite(p2n) || p2n < 0 || !Number.isFinite(p3n) || p3n < 0) {
+      return alert('Premiums must be ≥ 0.');
+    }
+    if (!confirm(
+      `This will (re)generate Price 2 & Price 3 for ${p1Count} Price-1 combo${p1Count === 1 ? '' : 's'}, ` +
+      `overwriting any manual edits. Continue?`,
+    )) return;
+    try {
+      const res = await applyM.mutateAsync({
+        p2PremiumSen: Math.round(p2n * 100),
+        p3PremiumSen: Math.round(p3n * 100),
+      });
+      alert(
+        `Generated Price 2 / Price 3 for ${res.p1Count} Price-1 combo(s) ` +
+        `(${res.generated} rows${res.skipped ? `, skipped ${res.skipped} with no price` : ''}).`,
+      );
+      onClose();
+    } catch (e) {
+      alert(`Apply failed: ${String(e)}`);
+    }
+  };
+
+  return (
+    <ModalShell title="Overall Edit price tier" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <p style={{
+          fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)',
+          color: 'var(--fg-soft)', margin: 0,
+        }}>
+          Set how much Price 2 and Price 3 sit above each combo's <strong>Price 1</strong>.
+          Applies to every combo and every seat height. Clicking Apply regenerates
+          Price 2 / Price 3 and overwrites any manual edits.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <Field label="Price 2 = Price 1 + RM">
+            <input type="number" step="1" min="0" value={p2}
+              onChange={(e) => setP2(e.target.value)} placeholder="0"
+              style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }} />
+          </Field>
+          <Field label="Price 3 = Price 1 + RM">
+            <input type="number" step="1" min="0" value={p3}
+              onChange={(e) => setP3(e.target.value)} placeholder="0"
+              style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }} />
+          </Field>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={apply} disabled={applyM.isPending || premiumsQ.isLoading}>
+            {applyM.isPending ? 'Applying…' : 'Apply'}
           </Button>
         </div>
       </div>
