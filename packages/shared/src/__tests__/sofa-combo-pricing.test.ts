@@ -9,6 +9,7 @@ import {
   comboSlotsKey,
   buildComboLabel,
   comboChargedPrices,
+  comboTierPrices,
   type SofaComboRow,
 } from '../sofa-combo-pricing';
 
@@ -354,5 +355,31 @@ describe('comboChargedPrices', () => {
   });
   it('null / undefined cost → just the set selling entries', () => {
     expect(comboChargedPrices({ '24': 380000 }, null)).toEqual({ '24': 380000 });
+  });
+});
+
+describe('comboTierPrices', () => {
+  it('adds the premium (sen) to each non-null height', () => {
+    expect(comboTierPrices({ '24': 245700, '28': 259900 }, 5000))
+      .toEqual({ '24': 250700, '28': 264900 });
+  });
+
+  it('preserves nulls — no base price means no derived price', () => {
+    expect(comboTierPrices({ '24': 245700, '32': null }, 5000))
+      .toEqual({ '24': 250700, '32': null });
+  });
+
+  it('zero premium returns the base unchanged', () => {
+    expect(comboTierPrices({ '24': 245700 }, 0)).toEqual({ '24': 245700 });
+  });
+
+  it('clamps a negative premium to 0 and rounds to integer sen', () => {
+    expect(comboTierPrices({ '24': 100 }, -50)).toEqual({ '24': 100 });
+    expect(comboTierPrices({ '24': 100 }, 49.6)).toEqual({ '24': 150 });
+  });
+
+  it('empty / undefined base → empty map', () => {
+    expect(comboTierPrices(undefined, 5000)).toEqual({});
+    expect(comboTierPrices({}, 5000)).toEqual({});
   });
 });

@@ -81,6 +81,24 @@ export const comboChargedPrices = (
   return out;
 };
 
+/** Derive a tier's per-height SELLING prices from a base (Price 1) selling map
+ *  by adding a flat premium (sen) to every priced height. A null/absent base
+ *  height stays null (no base price → no derived price). Premium is clamped to
+ *  a non-negative integer. Pure — POS UI preview and the server sweep both call
+ *  it so the generated prices can't diverge. (Chairman 2026-06-01: P1 base +
+ *  global P2/P3 lump-sum premiums.) */
+export const comboTierPrices = (
+  baseSelling: Record<string, number | null> | null | undefined,
+  premiumSen: number,
+): Record<string, number | null> => {
+  const prem = Math.max(0, Math.round(premiumSen));
+  const out: Record<string, number | null> = {};
+  for (const [height, v] of Object.entries(baseSelling ?? {})) {
+    out[height] = v === null || v === undefined ? null : v + prem;
+  }
+  return out;
+};
+
 /**
  * Coerce raw combo `modules` into the canonical `string[][]` slot shape.
  *
