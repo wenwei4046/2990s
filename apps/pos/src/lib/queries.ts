@@ -1280,6 +1280,54 @@ export const useUpdateDeliveryFeeConfig = () => {
   });
 };
 
+/** Master Admin — writes the 4 fabric-tier Δ amounts (PATCH /fabric-tier-addon).
+ *  Gated by the fabric_tier_addon_config UPDATE RLS + API WRITE_ROLES (0124). */
+export const useUpdateFabricTierAddonConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: Partial<FabricTierAddonConfigRow>) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-tier-addon`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /fabric-tier-addon failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-tier-addon-config'] }); },
+  });
+};
+
+/** Master Admin — sets a fabric's SELLING tier (PATCH /fabric-library/:id/tier).
+ *  field 'sofaTier' | 'bedframeTier'; tier PRICE_1/2/3 (migration 0124). */
+export const useUpdateFabricLibraryTier = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, field, tier }: { id: string; field: 'sofaTier' | 'bedframeTier'; tier: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }) => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const session = await supabase.auth.getSession();
+      const token   = session.data.session?.access_token;
+      if (!token) throw new Error('not_authenticated');
+      const res = await fetch(`${API_URL}/fabric-library/${encodeURIComponent(id)}/tier`, {
+        method: 'PATCH',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ field, tier }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string; reason?: string };
+        throw new Error(body.reason ?? body.error ?? `PATCH /fabric-library tier failed (${res.status})`);
+      }
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['fabric-library'] }); },
+  });
+};
+
 /* ─── Sales staff (LockScreen pre-session list) ───────────────────────
  *
  * This query is unique: it MUST work BEFORE Supabase auth, because the
