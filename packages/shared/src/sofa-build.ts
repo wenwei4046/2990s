@@ -31,7 +31,7 @@ export interface Cell {
 
 export interface SofaModuleSpec {
   id: string;
-  group: '1-seater' | '2-seater' | 'Corner' | 'L-Shape' | 'Accessory';
+  group: '1-seater' | '2-seater' | '3-seater' | 'Corner' | 'L-Shape' | 'Accessory';
   label: string;
   /** Width along the cushion axis (cm), 24″ baseline. */
   w: number;
@@ -168,10 +168,25 @@ export const SOFA_MODULES: readonly SofaModuleSpec[] = [
   { id: 'L-RHF',  group: 'L-Shape',   label: 'L · Right hand facing chaise', w: 95, d: 165, cushions: 1 },
   // Accessory — 45cm wood console. Slots between sofa pieces; doesn't count
   // toward bundles or closure.
-  { id: 'WC-45',  group: 'Accessory', label: 'Wood console · 45cm',    w: 45,  d: 95,  cushions: 0, accessory: true },
+  { id: 'Console', group: 'Accessory', label: 'Wood console · 45cm',    w: 45,  d: 95,  cushions: 0, accessory: true },
   // Ottoman / stool — 75×75 free-standing accessory (F1). Doesn't count toward
   // bundles or closure. Art: STOOL.png (Loo provides).
   { id: 'STOOL',  group: 'Accessory', label: 'Ottoman / stool',        w: 75,  d: 75,  cushions: 0, accessory: true },
+  // Pool-sourced first-class compartments (2026-06-01). Whole-unit presets carry
+  // both end arms; functional 1-seater variants (P=power, R=recliner, L=power leg)
+  // keep the base 1A/1NA closed footprint. Approx dims — Chairman adjusts later.
+  { id: '1S', group: '1-seater', label: '1-Seater (both arms)', w: 115, d: 95, cushions: 1 },
+  { id: '2S', group: '2-seater', label: '2-Seater (both arms)', w: 174, d: 95, cushions: 2 },
+  { id: '3S', group: '3-seater', label: '3-Seater (both arms)', w: 220, d: 95, cushions: 3 },
+  { id: '1A-P-LHF', group: '1-seater', label: '1A · Power · Left hand facing',      w: 95, d: 95, cushions: 1 },
+  { id: '1A-P-RHF', group: '1-seater', label: '1A · Power · Right hand facing',     w: 95, d: 95, cushions: 1 },
+  { id: '1A-R-LHF', group: '1-seater', label: '1A · Recliner · Left hand facing',   w: 95, d: 95, cushions: 1 },
+  { id: '1A-R-RHF', group: '1-seater', label: '1A · Recliner · Right hand facing',  w: 95, d: 95, cushions: 1 },
+  { id: '1A-L-LHF', group: '1-seater', label: '1A · Power leg · Left hand facing',  w: 95, d: 95, cushions: 1 },
+  { id: '1A-L-RHF', group: '1-seater', label: '1A · Power leg · Right hand facing', w: 95, d: 95, cushions: 1 },
+  { id: '1NA-P', group: '1-seater', label: '1NA · Power · No arms',    w: 75, d: 95, cushions: 1 },
+  { id: '1NA-R', group: '1-seater', label: '1NA · Recliner · No arms', w: 75, d: 95, cushions: 1 },
+  { id: '1NA-L', group: '1-seater', label: '1NA · Power leg · No arms', w: 75, d: 95, cushions: 1 },
 ];
 
 const MODULE_BY_ID = new Map<string, SofaModuleSpec>(SOFA_MODULES.map((m) => [m.id, m]));
@@ -203,6 +218,7 @@ export const normalizeCompartmentCode = (raw: string): string =>
 export type SofaCompartmentGroup =
   | '1-seater'
   | '2-seater'
+  | '3-seater'
   | 'Corner'
   | 'L-Shape'
   | 'Accessory'
@@ -259,9 +275,9 @@ export const moduleCodeFromSku = (skuCode: string, baseModel: string | null | un
 
 /** Build the per-Model module→price map (sen) from the Model's sofa SKU rows.
  *  Keyed by normalized module code. SKUs with a null `sell_price` are skipped
- *  (unpriced → no entry → priced 0 at lookup, never a phantom price). Whole-
- *  unit preset SKUs (1S / 2S) normalize to codes no laid-out cell carries, so
- *  they're harmless if present (their Quick-Pick pricing is a separate phase). */
+ *  (unpriced → no entry → priced 0 at lookup, never a phantom price). Whole-unit
+ *  preset codes (1S / 2S / 3S) ARE first-class placeable modules (2026-06-01), so
+ *  a laid-out cell can carry them and price directly from this map. */
 export const sofaModulePricesFromSkus = (
   rows: Array<{ code: string; sellPriceSen: number | null }>,
   baseModel: string | null | undefined,
@@ -395,7 +411,7 @@ export const BUNDLES: readonly BundleDef[] = [
   // 2-Seater + Console (F6) — two single-arm 1-seaters flanking a wood console,
   // Quick-Pick only. Non-matchable signature so a custom 1A+WC+1A never
   // auto-detects as this priced preset.
-  { id: '2WC', label: '2-Seater + Console', signature: '2WC-PRESET', canonicalModules: ['1A', 'WC-45', '1A'] },
+  { id: '2WC', label: '2-Seater + Console', signature: '2WC-PRESET', canonicalModules: ['1A', 'Console', '1A'] },
   // 2-Seater + 2 Power slide combo (F7, DSL 8027) — a 2-seater sold as a fixed
   // Quick-Pick at the combo price; per-seat power slide stays available in Custom
   // Build too. Label IS the invoice text. Non-matchable signature.
@@ -480,7 +496,7 @@ const BUNDLE_INVOICE_DECOMP: Record<string, string> = {
   '2+L': '2A-LHF + L-RHF',
   '3+L': '2A-LHF + 1NA + L-RHF',
   // Console (F6): two single-arm 1-seaters flanking a wood console.
-  '2WC': '1A-LHF + WC-45 + 1A-RHF',
+  '2WC': '1A-LHF + Console + 1A-RHF',
   // Corner package (F4, 5539): 1A + corner + 2A (1A is the chaise leg).
   'CORNER': '1A-LHF + CNR + 2A-RHF',
 };
@@ -588,8 +604,23 @@ const MODULE_EDGES_BASE: Record<string, [EdgeType, EdgeType, EdgeType, EdgeType]
   'CNR':    ['arm',  'arm',  'open', 'open'],
   'L-LHF':  ['open', 'back', 'open', 'front'],
   'L-RHF':  ['open', 'back', 'open', 'front'],
-  'WC-45':  ['open', 'open', 'open', 'open'],
+  'Console':['open', 'open', 'open', 'open'],
   'STOOL':  ['open', 'open', 'open', 'open'],
+  // Whole-unit presets — both end arms so a lone unit self-closes; two placed
+  // adjacent read as two separate armed units (arm-to-arm), priced individually.
+  '1S': ['arm', 'back', 'arm', 'front'],
+  '2S': ['arm', 'back', 'arm', 'front'],
+  '3S': ['arm', 'back', 'arm', 'front'],
+  // Functional 1-seater variants mirror their base 1A-LHF / 1A-RHF arm side.
+  '1A-P-LHF': ['arm',  'back', 'open', 'front'],
+  '1A-P-RHF': ['open', 'back', 'arm',  'front'],
+  '1A-R-LHF': ['arm',  'back', 'open', 'front'],
+  '1A-R-RHF': ['open', 'back', 'arm',  'front'],
+  '1A-L-LHF': ['arm',  'back', 'open', 'front'],
+  '1A-L-RHF': ['open', 'back', 'arm',  'front'],
+  '1NA-P': ['open', 'back', 'open', 'front'],
+  '1NA-R': ['open', 'back', 'open', 'front'],
+  '1NA-L': ['open', 'back', 'open', 'front'],
 };
 
 /** Clockwise 90° shifts [W,N,E,S] → [S,W,N,E]. */
