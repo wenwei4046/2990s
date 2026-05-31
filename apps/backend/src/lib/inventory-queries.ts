@@ -220,6 +220,43 @@ export function useInventoryLots(productCode: string | null, opts?: { warehouseI
   });
 }
 
+/* Stage 2 (Commander 2026-05-31) — open lots grouped by (warehouse, batch).
+   A batch = the source PO number; sofa set components share one batch so the
+   outbound side (Stage 3) can ship a whole colour-matched set from one dye lot. */
+export type BatchComponent = {
+  productCode: string;
+  variantKey: string | null;
+  productName: string | null;
+  qtyRemaining: number;
+  unitCostSen: number;
+  receivedAt: string | null;
+};
+export type InventoryBatch = {
+  warehouseId: string;
+  warehouseName: string | null;
+  batchNo: string;
+  supplierId: string | null;
+  supplierName: string | null;
+  receivedAt: string | null;
+  totalRemaining: number;
+  components: BatchComponent[];
+};
+
+export function useInventoryBatches(opts?: { warehouseId?: string; productCode?: string }) {
+  return useQuery({
+    queryKey: ['inventory', 'batches', opts ?? {}],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (opts?.warehouseId) params.set('warehouseId', opts.warehouseId);
+      if (opts?.productCode) params.set('productCode', opts.productCode);
+      return authedFetch<{ batches: InventoryBatch[] }>(
+        `/inventory/batches${params.toString() ? `?${params.toString()}` : ''}`,
+      ).then((r) => r.batches);
+    },
+    staleTime: 30_000,
+  });
+}
+
 export function useCogsEntries(opts?: { warehouseId?: string; productCode?: string; from?: string; to?: string }) {
   return useQuery({
     queryKey: ['inventory', 'cogs', opts ?? {}],

@@ -14,6 +14,8 @@
 //                                                ?showAll=true → LEFT JOIN every SKU
 //   GET   /inventory/movements                — ledger (filtered)
 //   GET   /inventory/lots/:productCode        — FIFO lots for one product
+//   GET   /inventory/batches                  — open lots grouped by (warehouse, batch)
+//                                                ?warehouseId&productCode (Stage 2 sofa batch view)
 //   GET   /inventory/cogs                     — COGS stream (consumption flat list)
 //   GET   /inventory/value                    — inventory valuation (qty × cost)
 //   POST  /inventory/adjustments              — manual correction
@@ -318,6 +320,113 @@ inventory.get('/lots/:productCode', async (c) => {
   const { data, error } = await q.order('received_at', { ascending: true });
   if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
   return c.json({ lots: data ?? [] });
+});
+
+/* ── Batch availability (Stage 2 — Commander 2026-05-31) ──────────────────
+   Sofa is colour-matched and produced as a SET on ONE PO (one dye lot). Stage 1
+   tagged every inbound lot with batch_no = source PO number. This view groups
+   the OPEN lots (qty_remaining > 0) by (warehouse, batch) so the outbound side
+   can see each batch's surviving component SKUs at a glance — the raw material
+   Stage 3 uses to ship a whole set from ONE batch.
+
+   Shape: one row per (warehouse_id, batch_no) with its component SKUs:
+     { warehouseId, warehouseName, batchNo, supplierId, supplierName,
+       receivedAt (earliest), totalRemaining,
+       components: [{ productCode, variantKey, productName, qtyRemaining,
+                      unitCostSen, receivedAt }] }
+   ?warehouseId filters; ?productCode keeps only batches that still hold that SKU.
+   batch_no IS NULL lots (free GRN / un-batched stock) are excluded by design —
+   only produced-to-PO stock carries a batch. */
+inventory.get('/batches', async (c) => {
+  const sb = c.get('supabase');
+  const warehouseId = c.req.query('warehouseId');
+  const productCode = c.req.query('productCode');
+
+  let q = sb.from('v_inventory_lots_open')
+    .select('warehouse_id, batch_no, product_code, variant_key, product_name, qty_remaining, unit_cost_sen, received_at')
+    .not('batch_no', 'is', null)
+    .gt('qty_remaining', 0);
+  if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+  const { data: lots, error } = await q.order('received_at', { ascending: true });
+  if (error) return c.json({ error: 'load_failed', reason: error.message }, 500);
+
+  type Lot = {
+    warehouse_id: string; batch_no: string; product_code: string;
+    variant_key: string | null; product_name: string | null;
+    qty_remaining: number; unit_cost_sen: number | null; received_at: string | null;
+  };
+  const rows = (lots ?? []) as Lot[];
+
+  // Warehouse names (small table).
+  const { data: whs } = await sb.from('warehouses').select('id, name');
+  const whName = new Map<string, string>();
+  for (const w of (whs ?? []) as Array<{ id: string; name: string }>) whName.set(w.id, w.name);
+
+  // batch_no = PO number → resolve supplier for display.
+  const batchNos = [...new Set(rows.map((r) => r.batch_no))];
+  const supplierByPo = new Map<string, { id: string | null; name: string | null }>();
+  if (batchNos.length > 0) {
+    const { data: pos } = await sb.from('purchase_orders')
+      .select('po_number, supplier_id, suppliers(name)')
+      .in('po_number', batchNos);
+    for (const p of (pos ?? []) as unknown as Array<{ po_number: string; supplier_id: string | null; suppliers: { name: string | null } | { name: string | null }[] | null }>) {
+      const sup = Array.isArray(p.suppliers) ? (p.suppliers[0] ?? null) : p.suppliers;
+      supplierByPo.set(p.po_number, { id: p.supplier_id ?? null, name: sup?.name ?? null });
+    }
+  }
+
+  type Component = {
+    productCode: string; variantKey: string | null; productName: string | null;
+    qtyRemaining: number; unitCostSen: number; receivedAt: string | null;
+  };
+  type Batch = {
+    warehouseId: string; warehouseName: string | null; batchNo: string;
+    supplierId: string | null; supplierName: string | null;
+    receivedAt: string | null; totalRemaining: number; components: Component[];
+  };
+  const byBatch = new Map<string, Batch>();
+  for (const r of rows) {
+    const key = `${r.warehouse_id}|${r.batch_no}`;
+    let b = byBatch.get(key);
+    if (!b) {
+      const sup = supplierByPo.get(r.batch_no) ?? { id: null, name: null };
+      b = {
+        warehouseId: r.warehouse_id,
+        warehouseName: whName.get(r.warehouse_id) ?? null,
+        batchNo: r.batch_no,
+        supplierId: sup.id,
+        supplierName: sup.name,
+        receivedAt: r.received_at,
+        totalRemaining: 0,
+        components: [],
+      };
+      byBatch.set(key, b);
+    }
+    // Merge same (product_code, variant_key) lots within a batch into one component.
+    const existing = b.components.find((c2) => c2.productCode === r.product_code && (c2.variantKey ?? '') === (r.variant_key ?? ''));
+    if (existing) {
+      existing.qtyRemaining += r.qty_remaining;
+    } else {
+      b.components.push({
+        productCode: r.product_code,
+        variantKey: r.variant_key,
+        productName: r.product_name,
+        qtyRemaining: r.qty_remaining,
+        unitCostSen: Number(r.unit_cost_sen ?? 0),
+        receivedAt: r.received_at,
+      });
+    }
+    b.totalRemaining += r.qty_remaining;
+    // Keep the earliest received_at on the batch header.
+    if (r.received_at && (!b.receivedAt || r.received_at < b.receivedAt)) b.receivedAt = r.received_at;
+  }
+
+  let batches = [...byBatch.values()];
+  if (productCode) batches = batches.filter((b) => b.components.some((c2) => c2.productCode === productCode));
+  // FIFO order — oldest batch first (matches outbound consumption preference).
+  batches.sort((a, b) => (a.receivedAt ?? '').localeCompare(b.receivedAt ?? ''));
+
+  return c.json({ batches });
 });
 
 /* ── COGS stream ─────────────────────────────────────────────────────── */
