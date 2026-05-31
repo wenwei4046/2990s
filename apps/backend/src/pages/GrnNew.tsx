@@ -160,6 +160,14 @@ export const GrnNew = () => {
      the header so the inventory-IN movement lands there. */
   const [warehouseId, setWarehouseId]         = useState<string>('');
   const warehousesQ = useWarehouses();
+  /* True once the on-mount From-PO picks restore has run (whether or not picks
+     were found). The warehouse-default effect MUST wait for this — otherwise it
+     races the async restore: on first render hasPicks is false simply because
+     the picks haven't loaded yet, and defaulting to warehousesQ.data[0] then
+     LOCKS the GRN to the wrong (first) warehouse, which the picks' real
+     warehouse can never override (the `if (warehouseId) return` guard blocks the
+     correction). This was the GRN-2605 "received into PG instead of SLGR" bug. */
+  const [picksResolved, setPicksResolved]     = useState<boolean>(false);
   const [dialog, setDialog] = useState<{ title: string; body: string; goTo?: string } | null>(null);
 
   // ── On mount: restore the stashed draft + merge the From-PO-multi picks.
@@ -180,6 +188,7 @@ export const GrnNew = () => {
       // No round-trip picks → drop any stale stashed draft (e.g. the picker was
       // cancelled, which navigates away) so a fresh New GRN starts clean.
       try { sessionStorage.removeItem('grnNewDraft'); } catch { /* ignore */ }
+      setPicksResolved(true); // no picks — release the warehouse-default effect
       return;
     }
     try { sessionStorage.removeItem('grnFromPoPicks'); } catch { /* ignore */ }
@@ -230,6 +239,10 @@ export const GrnNew = () => {
     for (const p of newPicks) pickMap.set(p.poItemId, p);
     const union = [...pickMap.values()];
     if (union.length) setPicks(union);
+    // Picks restore is done — now the warehouse-default effect may run, and it
+    // will see the picks' real warehouse (warehouseLocationId) before falling
+    // back to the first warehouse.
+    setPicksResolved(true);
   }, []);
 
   // Load lines from the selected single PO (only outstanding qty > 0). Skipped
@@ -341,6 +354,11 @@ export const GrnNew = () => {
      a manual choice. */
   useEffect(() => {
     if (warehouseId) return;
+    // CRITICAL ordering guard — do nothing until the on-mount picks restore has
+    // run. Before that hasPicks is false only because the async restore is still
+    // pending; defaulting to warehousesQ.data[0] now would lock the GRN to the
+    // wrong (first) warehouse and the picks' real warehouse could never win.
+    if (!picksResolved) return;
     // In the from-PO picks flow no single PO is selected (selPoId is unset, so
     // `po` is undefined). The picked lines all share one warehouse — honour it
     // first, so the GRN receives into the PO's warehouse instead of silently
@@ -351,7 +369,7 @@ export const GrnNew = () => {
     const poLoc = (po as { purchase_location_id?: string | null } | undefined)?.purchase_location_id ?? null;
     const fallback = pickLoc ?? poLoc ?? (warehousesQ.data?.[0]?.id ?? '');
     if (fallback) setWarehouseId(fallback);
-  }, [warehouseId, hasPicks, picks, po, warehousesQ.data]);
+  }, [warehouseId, picksResolved, hasPicks, picks, po, warehousesQ.data]);
 
   // ── Manual product search (gated by min query length, mirrors PO form). ──
   // Commander 2026-05-29 — the single top "ADD ITEM" box is gone. Each MANUAL
