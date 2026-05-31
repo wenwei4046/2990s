@@ -76,6 +76,9 @@ type DoRow = {
   /* Document-driven status (latest event wins) — 'invoiced' | 'returned', else
      'shipped' baseline. Sent by the list endpoint. */
   lifecycle_state?: 'shipped' | 'invoiced' | 'returned';
+  /* Current document — number of the furthest-forward document the flow has
+     reached (SI / DR), else this DO's own number. */
+  current_doc_no?: string | null;
 };
 
 const fmtRm = (centi: number): string =>
@@ -705,6 +708,18 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
     ),
     searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
     filterValue: (r) => r.do_number,
+  },
+  {
+    /* Current — which document the flow has reached now (SI / DR), or this DO's
+       own number when nothing downstream exists yet. */
+    key: 'current_doc_no', label: 'Current', width: 150, sortable: true, groupable: true,
+    accessor: (r) => (
+      <span style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+        {r.current_doc_no ?? r.do_number}
+      </span>
+    ),
+    searchValue: (r) => r.current_doc_no ?? r.do_number ?? '',
+    filterValue: (r) => r.current_doc_no ?? r.do_number ?? '—',
   },
   {
     key: 'so_doc_no', label: 'Transfer From (SO)', width: 130, sortable: true,

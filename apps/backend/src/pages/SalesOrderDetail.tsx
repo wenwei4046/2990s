@@ -752,6 +752,10 @@ export const SalesOrderDetail = () => {
             </h1>
             <p className={styles.subtitle}>
               SO date {fmtDateOrDash(header.so_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
+              {' · Current '}
+              <span style={{ color: 'var(--c-burnt)', fontWeight: 600 }}>
+                {(header as { current_doc_no?: string | null }).current_doc_no ?? header.doc_no}
+              </span>
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
               {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
               {(() => {

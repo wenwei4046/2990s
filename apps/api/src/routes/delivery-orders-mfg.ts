@@ -21,6 +21,7 @@ import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { checkStockAvailability, shortStockResponse } from '../lib/check-stock-availability';
+import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
 
 export const deliveryOrdersMfg = new Hono<{ Bindings: Env; Variables: Variables }>();
 deliveryOrdersMfg.use('*', supabaseAuth);
@@ -914,6 +915,105 @@ export async function computeDoLifecycle(
   return out;
 }
 
+/* Current document per Sales Order — the number of the furthest-forward document
+   the flow has reached (Wei Siang 2026-05-31). Same "latest event wins" ordering
+   as computeSoLifecycle, but it returns the winning document's NUMBER instead of
+   its kind, so the "Current" column never disagrees with the status badge.
+   Events: Delivery Order (do_number, rank 1) → Sales Invoice (invoice_number,
+   rank 2) → Delivery Return (return_number, rank 3, attributed back via the DO).
+   Cancelled documents are excluded. Sales Orders with no downstream are ABSENT
+   from the map — the caller falls back to the Sales Order's own number (the flow
+   is still sitting at the order). Keyed by SO doc_no. Read-only display aid. */
+export async function soCurrentDocNo(
+  sb: any,
+  docNos: string[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(docNos.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const byKey = new Map<string, CurrentEvent[]>();
+  const push = (doc: string | null | undefined, ev: CurrentEvent) => {
+    if (!doc) return;
+    const arr = byKey.get(doc) ?? [];
+    arr.push(ev);
+    byKey.set(doc, arr);
+  };
+
+  const [doRes, siRes] = await Promise.all([
+    sb.from('delivery_orders')
+      .select('id, so_doc_no, do_number, do_date, created_at, status')
+      .in('so_doc_no', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('sales_invoices')
+      .select('so_doc_no, invoice_number, invoice_date, created_at, status')
+      .in('so_doc_no', ids)
+      .neq('status', 'CANCELLED'),
+  ]);
+
+  const doToSo = new Map<string, string>();
+  for (const d of (doRes.data ?? []) as Array<{ id: string; so_doc_no: string | null; do_number: string | null; do_date: string | null; created_at: string | null }>) {
+    if (d.so_doc_no) doToSo.set(d.id, d.so_doc_no);
+    push(d.so_doc_no, { date: d.do_date ?? d.created_at ?? '', createdAt: d.created_at ?? '', rank: 1, docNumber: d.do_number ?? '—' });
+  }
+  for (const s of (siRes.data ?? []) as Array<{ so_doc_no: string | null; invoice_number: string | null; invoice_date: string | null; created_at: string | null }>) {
+    push(s.so_doc_no, { date: s.invoice_date ?? s.created_at ?? '', createdAt: s.created_at ?? '', rank: 2, docNumber: s.invoice_number ?? '—' });
+  }
+
+  const doIds = [...doToSo.keys()];
+  if (doIds.length > 0) {
+    const { data: drRows } = await sb.from('delivery_returns')
+      .select('delivery_order_id, return_number, return_date, created_at, status')
+      .in('delivery_order_id', doIds)
+      .neq('status', 'CANCELLED');
+    for (const r of (drRows ?? []) as Array<{ delivery_order_id: string | null; return_number: string | null; return_date: string | null; created_at: string | null }>) {
+      const so = r.delivery_order_id ? doToSo.get(r.delivery_order_id) : undefined;
+      push(so, { date: r.return_date ?? r.created_at ?? '', createdAt: r.created_at ?? '', rank: 3, docNumber: r.return_number ?? '—' });
+    }
+  }
+
+  return currentDocNoByKey(byKey);
+}
+
+/* Current document per Delivery Order — the number of the furthest-forward
+   document the DO's flow has reached. Same ordering as computeDoLifecycle.
+   Events: Sales Invoice (invoice_number, rank 1) → Delivery Return
+   (return_number, rank 2). Cancelled excluded. DOs with no downstream are absent
+   (caller falls back to the DO's own number). Keyed by DO id. */
+export async function doCurrentDocNo(
+  sb: any,
+  doIds: string[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(doIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const byKey = new Map<string, CurrentEvent[]>();
+  const push = (id: string | null | undefined, ev: CurrentEvent) => {
+    if (!id) return;
+    const arr = byKey.get(id) ?? [];
+    arr.push(ev);
+    byKey.set(id, arr);
+  };
+
+  const [siRes, drRes] = await Promise.all([
+    sb.from('sales_invoices')
+      .select('delivery_order_id, invoice_number, invoice_date, created_at, status')
+      .in('delivery_order_id', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('delivery_returns')
+      .select('delivery_order_id, return_number, return_date, created_at, status')
+      .in('delivery_order_id', ids)
+      .neq('status', 'CANCELLED'),
+  ]);
+  for (const s of (siRes.data ?? []) as Array<{ delivery_order_id: string | null; invoice_number: string | null; invoice_date: string | null; created_at: string | null }>) {
+    push(s.delivery_order_id, { date: s.invoice_date ?? s.created_at ?? '', createdAt: s.created_at ?? '', rank: 1, docNumber: s.invoice_number ?? '—' });
+  }
+  for (const r of (drRes.data ?? []) as Array<{ delivery_order_id: string | null; return_number: string | null; return_date: string | null; created_at: string | null }>) {
+    push(r.delivery_order_id, { date: r.return_date ?? r.created_at ?? '', createdAt: r.created_at ?? '', rank: 2, docNumber: r.return_number ?? '—' });
+  }
+
+  return currentDocNoByKey(byKey);
+}
+
 /* Live remaining-deliverable qty per SO line id (qty − delivered + returned),
    resolved straight from the SO item ids. Used by the write-path guards below
    so every DO-line create / add / qty-increase respects the SAME cap the
@@ -948,14 +1048,17 @@ deliveryOrdersMfg.get('/', async (c) => {
   const rows = (data ?? []) as unknown as Array<{ id: string } & Record<string, unknown>>;
   const childIds = new Set<string>();
   let lifecycleByDo = new Map<string, DoLifecycle>();
+  let currentByDo = new Map<string, string>();
   if (rows.length > 0) {
     const ids = rows.map((r) => r.id);
-    const [drRes, siRes, lc] = await Promise.all([
+    const [drRes, siRes, lc, cur] = await Promise.all([
       sb.from('delivery_returns').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
       sb.from('sales_invoices').select('delivery_order_id').in('delivery_order_id', ids).neq('status', 'CANCELLED'),
       computeDoLifecycle(sb, ids),
+      doCurrentDocNo(sb, ids),
     ]);
     lifecycleByDo = lc;
+    currentByDo = cur;
     for (const d of ((drRes.data ?? []) as Array<{ delivery_order_id: string | null }>)) {
       if (d.delivery_order_id) childIds.add(d.delivery_order_id);
     }
@@ -967,6 +1070,7 @@ deliveryOrdersMfg.get('/', async (c) => {
     ...r,
     has_children: childIds.has(r.id),
     lifecycle_state: lifecycleByDo.get(r.id) ?? 'shipped',
+    current_doc_no: currentByDo.get(r.id) ?? ((r as { do_number?: string | null }).do_number ?? null),
   }));
   return c.json({ deliveryOrders });
 });
@@ -1027,11 +1131,15 @@ deliveryOrdersMfg.get('/:id', async (c) => {
       .eq('delivery_order_id', id)
       .neq('status', 'CANCELLED'),
   ]);
-  const lifecycleByDo = await computeDoLifecycle(sb, [id]);
+  const [lifecycleByDo, currentByDo] = await Promise.all([
+    computeDoLifecycle(sb, [id]),
+    doCurrentDocNo(sb, [id]),
+  ]);
   const deliveryOrder = {
     ...(h.data as unknown as Record<string, unknown>),
     has_children: (drCount ?? 0) > 0 || (siCount ?? 0) > 0,
     lifecycle_state: lifecycleByDo.get(id) ?? 'shipped',
+    current_doc_no: currentByDo.get(id) ?? ((h.data as { do_number?: string | null }).do_number ?? null),
   };
   /* Per-line Warehouse column (Agent D, TASK #32): resolve the SAME ship-from
      warehouse the inventory OUT uses (SO line → DO header → default) and stamp

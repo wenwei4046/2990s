@@ -33,7 +33,7 @@ import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
-import { soDeliverableRemaining, soLineDeliveries, computeSoLifecycle } from './delivery-orders-mfg';
+import { soDeliverableRemaining, soLineDeliveries, computeSoLifecycle, soCurrentDocNo } from './delivery-orders-mfg';
 import { computeMrp, mrpLineCoverage } from './mrp';
 import type { Env, Variables } from '../env';
 
@@ -503,7 +503,10 @@ mfgSalesOrders.get('/', async (c) => {
 
     /* Per-SO status badge driver — "latest event wins" across DO / SI / DR
        (Wei Siang 2026-05-31). 'none' falls back to the stored status. */
-    const lifecycleByDoc = await computeSoLifecycle(sb, docNos);
+    const [lifecycleByDoc, currentByDoc] = await Promise.all([
+      computeSoLifecycle(sb, docNos),
+      soCurrentDocNo(sb, docNos),
+    ]);
 
     for (const r of rows) {
       const docNo = r.doc_no ?? '';
@@ -515,6 +518,7 @@ mfgSalesOrders.get('/', async (c) => {
       (r as Record<string, unknown>).delivery_state =
         dDelivered <= 0 ? 'none' : dRemaining > 0 ? 'partial' : 'full';
       (r as Record<string, unknown>).lifecycle_state = lifecycleByDoc.get(docNo) ?? 'none';
+      (r as Record<string, unknown>).current_doc_no = currentByDoc.get(docNo) ?? (docNo || null);
       (r as Record<string, unknown>).has_undelivered = hasUndelivered.has(docNo);
       const readiness = readinessByDoc.get(docNo);
       (r as Record<string, unknown>).stock_remark = readiness?.stockRemark ?? '';
@@ -714,8 +718,12 @@ mfgSalesOrders.get('/:docNo', async (c) => {
   (salesOrder as Record<string, unknown>).delivery_state =
     totalDelivered <= 0 ? 'none' : totalRemaining > 0 ? 'partial' : 'full';
   /* Status badge driver — same "latest event wins" engine as the list. */
-  const lifecycleByDoc = await computeSoLifecycle(sb, [docNo]);
+  const [lifecycleByDoc, currentByDoc] = await Promise.all([
+    computeSoLifecycle(sb, [docNo]),
+    soCurrentDocNo(sb, [docNo]),
+  ]);
   (salesOrder as Record<string, unknown>).lifecycle_state = lifecycleByDoc.get(docNo) ?? 'none';
+  (salesOrder as Record<string, unknown>).current_doc_no = currentByDoc.get(docNo) ?? (docNo || null);
   return c.json({ salesOrder, items });
 });
 

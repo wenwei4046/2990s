@@ -6,6 +6,7 @@ import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { buildVariantSummary, computeVariantKey, type VariantAttrs } from '@2990s/shared';
+import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
 
 export const grns = new Hono<{ Bindings: Env; Variables: Variables }>();
 grns.use('*', supabaseAuth);
@@ -322,13 +323,17 @@ grns.get('/', async (c) => {
   // convert-eligibility / lock flags (has_children / fully_invoiced /
   // fully_returned) in the SAME one-extra-query pass that computes total_centi.
   const linesByGrn = new Map<string, Array<{ qty_accepted: number | null; invoiced_qty: number | null; returned_qty: number | null }>>();
+  let currentByGrn = new Map<string, string>();
   if (ids.length > 0) {
-    const { data: lineRows, error: lineErr } = await sb
-      .from('grn_items')
-      .select('grn_id, qty_accepted, unit_price_centi, invoiced_qty, returned_qty')
-      .in('grn_id', ids);
-    if (lineErr) return c.json({ error: 'load_failed', reason: lineErr.message }, 500);
-    for (const li of (lineRows ?? []) as Array<{ grn_id: string; qty_accepted: number | null; unit_price_centi: number | null; invoiced_qty: number | null; returned_qty: number | null }>) {
+    const [lineRes, cur] = await Promise.all([
+      sb.from('grn_items')
+        .select('grn_id, qty_accepted, unit_price_centi, invoiced_qty, returned_qty')
+        .in('grn_id', ids),
+      grnCurrentDocNo(sb, ids),
+    ]);
+    if (lineRes.error) return c.json({ error: 'load_failed', reason: lineRes.error.message }, 500);
+    currentByGrn = cur;
+    for (const li of (lineRes.data ?? []) as Array<{ grn_id: string; qty_accepted: number | null; unit_price_centi: number | null; invoiced_qty: number | null; returned_qty: number | null }>) {
       const add = (li.qty_accepted ?? 0) * (li.unit_price_centi ?? 0);
       totals.set(li.grn_id, (totals.get(li.grn_id) ?? 0) + add);
       const arr = linesByGrn.get(li.grn_id) ?? [];
@@ -339,6 +344,7 @@ grns.get('/', async (c) => {
   const grns = rows.map((g) => ({
     ...g,
     total_centi: totals.get(g.id) ?? 0,
+    current_doc_no: currentByGrn.get(g.id) ?? ((g as { grn_number?: string | null }).grn_number ?? null),
     ...computeGrnFlags(linesByGrn.get(g.id) ?? []),
   }));
   return c.json({ grns });
@@ -508,6 +514,47 @@ export async function grnLineDownstream(
   return out;
 }
 
+/* Current document per Goods-Received Note — the number of the furthest-forward
+   document the GRN's flow has reached (Wei Siang 2026-05-31). Events: Purchase
+   Invoice (invoice_number, invoice_date, rank 1) → Purchase Return (return_number,
+   return_date, rank 2). PI / PR both carry grn_id directly. Cancelled excluded.
+   GRNs with no downstream are absent (caller falls back to the GRN's own number).
+   Keyed by GRN id. Read-only display aid. */
+export async function grnCurrentDocNo(
+  sb: any,
+  grnIds: string[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(grnIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const byKey = new Map<string, CurrentEvent[]>();
+  const push = (id: string | null | undefined, ev: CurrentEvent) => {
+    if (!id) return;
+    const arr = byKey.get(id) ?? [];
+    arr.push(ev);
+    byKey.set(id, arr);
+  };
+
+  const [piRes, prRes] = await Promise.all([
+    sb.from('purchase_invoices')
+      .select('grn_id, invoice_number, invoice_date, created_at, status')
+      .in('grn_id', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('purchase_returns')
+      .select('grn_id, return_number, return_date, created_at, status')
+      .in('grn_id', ids)
+      .neq('status', 'CANCELLED'),
+  ]);
+  for (const p of (piRes.data ?? []) as Array<{ grn_id: string | null; invoice_number: string | null; invoice_date: string | null; created_at: string | null }>) {
+    push(p.grn_id, { date: p.invoice_date ?? p.created_at ?? '', createdAt: p.created_at ?? '', rank: 1, docNumber: p.invoice_number ?? '—' });
+  }
+  for (const p of (prRes.data ?? []) as Array<{ grn_id: string | null; return_number: string | null; return_date: string | null; created_at: string | null }>) {
+    push(p.grn_id, { date: p.return_date ?? p.created_at ?? '', createdAt: p.created_at ?? '', rank: 2, docNumber: p.return_number ?? '—' });
+  }
+
+  return currentDocNoByKey(byKey);
+}
+
 grns.get('/:id', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id');
   const [h, i] = await Promise.all([
@@ -519,7 +566,12 @@ grns.get('/:id', async (c) => {
   // Migration 0106 — surface the convert-eligibility / lock flags on the grn
   // object so the detail page can lock once a PI/PR draws from it.
   const itemRows = (i.data ?? []) as Array<{ qty_accepted?: number | null; invoiced_qty?: number | null; returned_qty?: number | null }>;
-  const grn = { ...(h.data as Record<string, unknown>), ...computeGrnFlags(itemRows) };
+  const currentByGrn = await grnCurrentDocNo(sb, [id]);
+  const grn = {
+    ...(h.data as Record<string, unknown>),
+    ...computeGrnFlags(itemRows),
+    current_doc_no: currentByGrn.get(id) ?? ((h.data as { grn_number?: string | null }).grn_number ?? null),
+  };
 
   /* Bug #2 (Agent C 2026-05-31) — surface "received from which PO" + "receive
      date" per GRN line. The header carries received_at; each line links to a PO

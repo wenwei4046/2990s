@@ -643,7 +643,7 @@ const SupplierCard = ({
                 value={grn.supplier?.name ?? grn.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
             <InfoCell label="Currency" value={grn.currency || null} />
-            <div />
+            <InfoCell label="Current" value={grn.current_doc_no ?? grn.grn_number} />
             <InfoCell label="Received Date" value={grn.received_at ? fmtDateOrDash(grn.received_at) : null} />
             <InfoCell label="Delivery Note Ref" value={grn.delivery_note_ref || null} />
             <InfoCell label="Receive Into"

@@ -159,6 +159,10 @@ export type PoHeaderRow = {
       un-cancellable (the GRN must be cancelled / deleted first). Convert-to-
       GRN (partial receiving) is NOT gated. Mirrors GRN's has_children. */
   has_children?: boolean;
+  /** Current document — number of the furthest-forward document the PO's flow
+      has reached (GRN / PI / PR), else this PO's own number. Both list + detail
+      endpoints stamp it. */
+  current_doc_no?: string | null;
 };
 
 export type PoItemSummary = {

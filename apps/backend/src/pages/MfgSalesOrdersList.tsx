@@ -208,6 +208,10 @@ type SoRow = {
   /* Document-driven status (latest event wins) — 'delivered' | 'invoiced' |
      'returned', else 'none' before any downstream document exists. */
   lifecycle_state?: SoLifecycle;
+  /* Current document — the number of the furthest-forward document the flow has
+     reached (DO / SI / DR), falling back to this SO's own number when nothing
+     downstream exists yet. Same "latest event wins" order as the status badge. */
+  current_doc_no?: string | null;
 };
 
 const fmtRm = (centi: number): string =>
@@ -1314,6 +1318,18 @@ const buildColumns = (
     ),
     searchValue: (r) => `${r.doc_no} ${r.status ?? ''}`,
     filterValue: (r) => r.doc_no,
+  },
+  {
+    /* Current — which document the flow has reached now (DO / SI / DR), or this
+       SO's own number when nothing downstream exists yet. */
+    key: 'current_doc_no', label: 'Current', width: 150, sortable: true, groupable: true,
+    accessor: (r) => (
+      <span style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+        {r.current_doc_no ?? r.doc_no}
+      </span>
+    ),
+    searchValue: (r) => r.current_doc_no ?? r.doc_no ?? '',
+    filterValue: (r) => r.current_doc_no ?? r.doc_no ?? '—',
   },
   {
     key: 'so_date', label: 'Date', width: 110, sortable: true,

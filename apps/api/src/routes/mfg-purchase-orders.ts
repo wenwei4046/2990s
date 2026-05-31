@@ -30,6 +30,7 @@ import {
 import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { supabaseAuth } from '../middleware/auth';
 import { computeMrp } from './mrp';
+import { currentDocNoByKey, type CurrentEvent } from '../lib/current-doc';
 import type { Env, Variables } from '../env';
 
 /* ── Supplier sofa-combo auto-pricing (Commander 2026-05-29) ─────────────────
@@ -147,18 +148,27 @@ mfgPurchaseOrders.get('/', async (c) => {
      this to hide Edit / Cancel from POs that are downstream-locked. */
   const rows = (data ?? []) as Array<{ id: string } & Record<string, unknown>>;
   const childIds = new Set<string>();
+  let currentByPo = new Map<string, string>();
   if (rows.length > 0) {
     const ids = rows.map((r) => r.id);
-    const { data: grnRows } = await supabase
-      .from('grns')
-      .select('purchase_order_id')
-      .in('purchase_order_id', ids)
-      .neq('status', 'CANCELLED');
-    for (const g of (grnRows ?? []) as Array<{ purchase_order_id: string | null }>) {
+    const [grnChildRes, cur] = await Promise.all([
+      supabase
+        .from('grns')
+        .select('purchase_order_id')
+        .in('purchase_order_id', ids)
+        .neq('status', 'CANCELLED'),
+      poCurrentDocNo(supabase, ids),
+    ]);
+    currentByPo = cur;
+    for (const g of (grnChildRes.data ?? []) as Array<{ purchase_order_id: string | null }>) {
       if (g.purchase_order_id) childIds.add(g.purchase_order_id);
     }
   }
-  const purchaseOrders = rows.map((r) => ({ ...r, has_children: childIds.has(r.id) }));
+  const purchaseOrders = rows.map((r) => ({
+    ...r,
+    has_children: childIds.has(r.id),
+    current_doc_no: currentByPo.get(r.id) ?? ((r as { po_number?: string | null }).po_number ?? null),
+  }));
   return c.json({ purchaseOrders });
 });
 
@@ -328,6 +338,56 @@ async function poLineReceipts(
   return out;
 }
 
+/* Current document per Purchase Order — the number of the furthest-forward
+   document the PO's flow has reached (Wei Siang 2026-05-31). Same "latest event
+   wins" ordering as the lifecycle engines, returning the winning document's
+   NUMBER. Events: Goods-Received Note (grn_number, received_at, rank 1) →
+   Purchase Invoice (invoice_number, invoice_date, rank 2) → Purchase Return
+   (return_number, return_date, rank 3). PI / PR both carry purchase_order_id
+   directly, so no multi-hop is needed. Cancelled excluded. POs with no downstream
+   are absent (caller falls back to the PO's own number). Keyed by PO id. */
+export async function poCurrentDocNo(
+  sb: any,
+  poIds: string[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(poIds.filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const byKey = new Map<string, CurrentEvent[]>();
+  const push = (id: string | null | undefined, ev: CurrentEvent) => {
+    if (!id) return;
+    const arr = byKey.get(id) ?? [];
+    arr.push(ev);
+    byKey.set(id, arr);
+  };
+
+  const [grnRes, piRes, prRes] = await Promise.all([
+    sb.from('grns')
+      .select('purchase_order_id, grn_number, received_at, created_at, status')
+      .in('purchase_order_id', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('purchase_invoices')
+      .select('purchase_order_id, invoice_number, invoice_date, created_at, status')
+      .in('purchase_order_id', ids)
+      .neq('status', 'CANCELLED'),
+    sb.from('purchase_returns')
+      .select('purchase_order_id, return_number, return_date, created_at, status')
+      .in('purchase_order_id', ids)
+      .neq('status', 'CANCELLED'),
+  ]);
+  for (const g of (grnRes.data ?? []) as Array<{ purchase_order_id: string | null; grn_number: string | null; received_at: string | null; created_at: string | null }>) {
+    push(g.purchase_order_id, { date: g.received_at ?? g.created_at ?? '', createdAt: g.created_at ?? '', rank: 1, docNumber: g.grn_number ?? '—' });
+  }
+  for (const p of (piRes.data ?? []) as Array<{ purchase_order_id: string | null; invoice_number: string | null; invoice_date: string | null; created_at: string | null }>) {
+    push(p.purchase_order_id, { date: p.invoice_date ?? p.created_at ?? '', createdAt: p.created_at ?? '', rank: 2, docNumber: p.invoice_number ?? '—' });
+  }
+  for (const p of (prRes.data ?? []) as Array<{ purchase_order_id: string | null; return_number: string | null; return_date: string | null; created_at: string | null }>) {
+    push(p.purchase_order_id, { date: p.return_date ?? p.created_at ?? '', createdAt: p.created_at ?? '', rank: 3, docNumber: p.return_number ?? '—' });
+  }
+
+  return currentDocNoByKey(byKey);
+}
+
 // ── Detail ────────────────────────────────────────────────────────────
 mfgPurchaseOrders.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -347,13 +407,17 @@ mfgPurchaseOrders.get('/:id', async (c) => {
 
   /* Tier 2 downstream-lock — stamp has_children on the detail header so the
      PO Detail page can lock once any non-cancelled GRN exists. */
-  const { count: childCount } = await supabase.from('grns')
-    .select('id', { head: true, count: 'exact' })
-    .eq('purchase_order_id', id)
-    .neq('status', 'CANCELLED');
+  const [{ count: childCount }, currentByPo] = await Promise.all([
+    supabase.from('grns')
+      .select('id', { head: true, count: 'exact' })
+      .eq('purchase_order_id', id)
+      .neq('status', 'CANCELLED'),
+    poCurrentDocNo(supabase, [id]),
+  ]);
   const purchaseOrder = {
     ...(headerRes.data as Record<string, unknown>),
     has_children: (childCount ?? 0) > 0,
+    current_doc_no: currentByPo.get(id) ?? ((headerRes.data as { po_number?: string | null }).po_number ?? null),
   };
 
   /* Per-line GR breakdown so the PO list expansion can show a "Received" column
