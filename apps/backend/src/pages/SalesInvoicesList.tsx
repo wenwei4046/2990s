@@ -129,16 +129,6 @@ type SiItem = {
   line_total_centi: number | null;
 };
 
-const TH_BASE: CSSProperties = { padding: '2px 8px', textAlign: 'left' };
-const TH_RIGHT: CSSProperties = { ...TH_BASE, textAlign: 'right' };
-const TD_BASE: CSSProperties = { padding: '3px 8px', verticalAlign: 'top' };
-const TD_RIGHT: CSSProperties = { ...TD_BASE, textAlign: 'right' };
-const TFOOT_LABEL: CSSProperties = {
-  ...TD_RIGHT, paddingTop: 6, paddingBottom: 4,
-  fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em',
-  textTransform: 'uppercase', color: 'var(--fg-muted)',
-};
-
 const CategoryPill = ({ group }: { group: string | null | undefined }) => {
   const spec = badgeFor(group);
   return (
@@ -151,6 +141,101 @@ const CategoryPill = ({ group }: { group: string | null | undefined }) => {
     </span>
   );
 };
+
+/* Per-line cost/margin derivations — shared by the drill-down column
+   accessors AND their sort comparators so a sorted cell always agrees with
+   the value it sorted by (older rows lack the stored snapshots). */
+const siLineTotalOf = (it: SiItem): number => Number(it.line_total_centi ?? 0);
+const siLineCostOf = (it: SiItem): number =>
+  it.line_cost_centi != null
+    ? Number(it.line_cost_centi)
+    : Number(it.qty ?? 0) * Number(it.unit_cost_centi ?? 0);
+const siLineMarginOf = (it: SiItem): number =>
+  it.line_margin_centi != null
+    ? Number(it.line_margin_centi)
+    : siLineTotalOf(it) - siLineCostOf(it);
+
+/* Drill-down columns — display-only DataGridColumn specs so the SI drill-down
+   gets the SAME add/remove · drag-reorder · resize · right-click as the main
+   list grids (it used to be a hand-built fixed <table>). Shared layout key
+   so the operator's column prefs persist across every SI they expand. */
+const buildSiDrilldownColumns = (): DataGridColumn<SiItem>[] => [
+  {
+    key: 'group', label: 'Group', width: 90, groupable: true,
+    accessor: (it) => <CategoryPill group={it.item_group} />,
+    searchValue: (it) => it.item_group ?? '',
+    groupValue: (it) => it.item_group ?? '(none)',
+    sortFn: (a, b) => (a.item_group ?? '').localeCompare(b.item_group ?? ''),
+  },
+  {
+    key: 'item_code', label: 'Item Code', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.item_code ?? '—'}</span>,
+    searchValue: (it) => it.item_code ?? '',
+    sortFn: (a, b) => (a.item_code ?? '').localeCompare(b.item_code ?? ''),
+  },
+  {
+    key: 'description', label: 'Description', width: 240, minWidth: 180,
+    accessor: (it) => {
+      const manual = (it.description ?? '').trim();
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      if (manual) {
+        return (
+          <>
+            <div>{manual}</div>
+            {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>{summary}</div>}
+          </>
+        );
+      }
+      return summary ? <div>{summary}</div> : '—';
+    },
+    searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group, it.variants)}`.trim(),
+  },
+  {
+    key: 'uom', label: 'UOM', width: 70,
+    accessor: (it) => it.uom || 'UNIT',
+    searchValue: (it) => it.uom || 'UNIT',
+  },
+  {
+    key: 'qty', label: 'Qty', width: 60, align: 'right',
+    accessor: (it) => it.qty ?? 0,
+    searchValue: (it) => String(it.qty ?? 0),
+    sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',
+    accessor: (it) => fmtRm(Number(it.unit_price_centi ?? 0)),
+    searchValue: (it) => String(it.unit_price_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_price_centi ?? 0) - Number(b.unit_price_centi ?? 0),
+  },
+  {
+    key: 'total', label: 'Total', width: 100, align: 'right',
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtRm(siLineTotalOf(it))}</span>,
+    searchValue: (it) => String(siLineTotalOf(it)),
+    sortFn: (a, b) => siLineTotalOf(a) - siLineTotalOf(b),
+  },
+  {
+    key: 'unit_cost', label: 'Unit Cost', width: 100, align: 'right',
+    accessor: (it) => fmtRm(Number(it.unit_cost_centi ?? 0)),
+    searchValue: (it) => String(it.unit_cost_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_cost_centi ?? 0) - Number(b.unit_cost_centi ?? 0),
+  },
+  {
+    key: 'line_cost', label: 'Line Cost', width: 100, align: 'right',
+    accessor: (it) => fmtRm(siLineCostOf(it)),
+    searchValue: (it) => String(siLineCostOf(it)),
+    sortFn: (a, b) => siLineCostOf(a) - siLineCostOf(b),
+  },
+  {
+    key: 'margin', label: 'Margin', width: 100, align: 'right',
+    accessor: (it) => {
+      const m = siLineMarginOf(it);
+      const c = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+      return <span style={{ color: c, fontWeight: 600 }}>{fmtRm(m)}</span>;
+    },
+    searchValue: (it) => String(siLineMarginOf(it)),
+    sortFn: (a, b) => siLineMarginOf(a) - siLineMarginOf(b),
+  },
+];
 
 const ExpandedSiLines = ({ id }: { id: string }) => {
   const q = useSalesInvoiceDetail(id);
@@ -170,86 +255,37 @@ const ExpandedSiLines = ({ id }: { id: string }) => {
   }
   let totalCenti = 0, costCenti = 0;
   for (const it of items) {
-    totalCenti += Number(it.line_total_centi ?? 0);
+    totalCenti += siLineTotalOf(it);
     costCenti  += Number(it.line_cost_centi ?? 0);
   }
   const marginCenti = totalCenti - costCenti;
   const marginColor = marginCenti > 0 ? 'var(--c-secondary-a, #2F5D4F)'
     : marginCenti < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
 
+  const columns = buildSiDrilldownColumns();
+
   return (
     <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-2) 40px', background: 'var(--c-cream)' }}>
-      <div style={{ width: '100%', overflowX: 'auto' }}>
-        <table style={{
-          width: 1080, minWidth: 1080, borderCollapse: 'collapse',
-          fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)', tableLayout: 'fixed',
-        }}>
-          <thead>
-            <tr style={{
-              color: 'var(--fg-muted)', fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
-              letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: '1px solid rgba(34, 31, 32, 0.10)',
-            }}>
-              <th style={{ ...TH_BASE, width: 90 }}>Group</th>
-              <th style={{ ...TH_BASE, width: 130 }}>Item Code</th>
-              <th style={{ ...TH_BASE, width: 260, minWidth: 200, maxWidth: 340 }}>Description</th>
-              <th style={{ ...TH_BASE, width: 60 }}>UOM</th>
-              <th style={{ ...TH_RIGHT, width: 50 }}>Qty</th>
-              <th style={{ ...TH_RIGHT, width: 90 }}>Unit Price</th>
-              <th style={{ ...TH_RIGHT, width: 90 }}>Total</th>
-              <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
-              <th style={{ ...TH_RIGHT, width: 90 }}>Line Cost</th>
-              <th style={{ ...TH_RIGHT, width: 90 }}>Margin</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it) => {
-              const lineTotal = Number(it.line_total_centi ?? 0);
-              const lineCost = it.line_cost_centi != null
-                ? Number(it.line_cost_centi)
-                : Number(it.qty ?? 0) * Number(it.unit_cost_centi ?? 0);
-              const lineMargin = it.line_margin_centi != null ? Number(it.line_margin_centi) : lineTotal - lineCost;
-              const lineMarginColor = lineMargin > 0 ? 'var(--c-secondary-a, #2F5D4F)'
-                : lineMargin < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
-              return (
-                <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
-                  <td style={TD_BASE}><CategoryPill group={it.item_group} /></td>
-                  <td style={{ ...TD_BASE, fontWeight: 700, color: 'var(--c-burnt)' }}>{it.item_code ?? '—'}</td>
-                  <td style={TD_BASE}>
-                    {(() => {
-                      const manual = (it.description ?? '').trim();
-                      const summary = buildVariantSummary(it.item_group, it.variants);
-                      if (manual) {
-                        return (
-                          <>
-                            <div>{manual}</div>
-                            {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>{summary}</div>}
-                          </>
-                        );
-                      }
-                      return summary ? <div>{summary}</div> : '—';
-                    })()}
-                  </td>
-                  <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
-                  <td style={TD_RIGHT}>{it.qty ?? 0}</td>
-                  <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
-                  <td style={{ ...TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtRm(lineTotal)}</td>
-                  <td style={TD_RIGHT}>{fmtRm(Number(it.unit_cost_centi ?? 0))}</td>
-                  <td style={TD_RIGHT}>{fmtRm(lineCost)}</td>
-                  <td style={{ ...TD_RIGHT, color: lineMarginColor, fontWeight: 600 }}>{fmtRm(lineMargin)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
-              <td style={{ ...TFOOT_LABEL }} colSpan={6}>Subtotal</td>
-              <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtRm(totalCenti)}</td>
-              <td style={{ ...TD_RIGHT, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
-              <td style={{ ...TD_RIGHT, paddingTop: 6 }}>{fmtRm(costCenti)}</td>
-              <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: marginColor }}>{fmtRm(marginCenti)}</td>
-            </tr>
-          </tfoot>
-        </table>
+      <DataGrid<SiItem>
+        rows={items}
+        columns={columns}
+        storageKey="si-drilldown-grid.v1"
+        rowKey={(it) => it.id}
+        embedded
+        groupBanner={false}
+      />
+      <div style={{
+        display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end',
+        alignItems: 'baseline', padding: '8px 8px 2px',
+        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--fg-muted)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}>Subtotal</span>
+        <span>Total <strong style={{ color: 'var(--c-burnt)' }}>{fmtRm(totalCenti)}</strong></span>
+        <span>Line Cost <strong style={{ color: 'var(--c-ink)' }}>{fmtRm(costCenti)}</strong></span>
+        <span>Margin <strong style={{ color: marginColor }}>{fmtRm(marginCenti)}</strong></span>
       </div>
     </div>
   );

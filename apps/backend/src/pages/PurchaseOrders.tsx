@@ -10,7 +10,7 @@
 // 没做(后续):GRN 收货、3-way match、PDF 打印、邮件发送。
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
@@ -423,134 +423,166 @@ export const PurchaseOrders = () => {
    Partially-Convert actions + which GR(s) this PO converted to. Mirrors the
    SO list's ExpandedSoLines. Lazy-fetches detail (items) + linked (GRNs);
    TanStack caches both so re-expanding the same row is instant. */
-const PO_TD: CSSProperties = { padding: '3px 10px', verticalAlign: 'top', whiteSpace: 'nowrap' };
-const PO_TD_RIGHT: CSSProperties = { ...PO_TD, textAlign: 'right' };
-const PO_TH: CSSProperties = {
-  padding: '2px 10px', textAlign: 'left',
-  fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
-  letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)',
-};
-const PO_TH_RIGHT: CSSProperties = { ...PO_TH, textAlign: 'right' };
+/* Drill-down columns — display-only DataGridColumn specs so the PO drill-down
+   gets the SAME add/remove · drag-reorder · resize · right-click as the main
+   list grids (it used to be a hand-built fixed <table>). `currency` +
+   `headerExpectedAt` are header-level (identical on every row), threaded in
+   from the component. Shared layout key so column prefs persist across every
+   PO the operator expands. */
+const buildPoDrilldownColumns = (
+  currency: Currency,
+  headerExpectedAt: string | null,
+): DataGridColumn<PoItemRow>[] => [
+  {
+    key: 'group', label: 'Group', width: 90, groupable: true,
+    accessor: (it) => <ItemGroupPill group={it.item_group ?? null} />,
+    searchValue: (it) => it.item_group ?? '',
+    groupValue: (it) => it.item_group ?? '(none)',
+    sortFn: (a, b) => (a.item_group ?? '').localeCompare(b.item_group ?? ''),
+  },
+  {
+    key: 'item_code', label: 'Item Code', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code}</span>,
+    searchValue: (it) => it.material_code,
+    sortFn: (a, b) => a.material_code.localeCompare(b.material_code),
+  },
+  {
+    key: 'description', label: 'Description', width: 240, minWidth: 180,
+    accessor: (it) => {
+      const manual = (it.description ?? '').trim();
+      const summary = buildVariantSummary(it.item_group ?? null, it.variants ?? null);
+      if (manual) {
+        return (
+          <>
+            <div>{manual}</div>
+            {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>{summary}</div>}
+          </>
+        );
+      }
+      return summary || it.material_name || '—';
+    },
+    searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group ?? null, it.variants ?? null)} ${it.material_name ?? ''}`.trim(),
+  },
+  {
+    key: 'uom', label: 'UOM', width: 70,
+    accessor: (it) => it.uom || 'UNIT',
+    searchValue: (it) => it.uom || 'UNIT',
+  },
+  {
+    key: 'ordered', label: 'Ordered', width: 70, align: 'right',
+    accessor: (it) => it.qty ?? 0,
+    searchValue: (it) => String(it.qty ?? 0),
+    sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    /* "Received" mirrors the SO drill-down's "Status" column: list each GR
+       that took qty, then the live balance underneath. Balance derives from
+       the shown (non-cancelled) receipts so breakdown + balance reconciles to
+       Ordered. */
+    key: 'received', label: 'Received', width: 130,
+    accessor: (it) => {
+      const receipts = it.receipts ?? [];
+      if (receipts.length === 0) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      const receivedSum = receipts.reduce((s, r) => s + Number(r.qty ?? 0), 0);
+      const balance = Number(it.qty ?? 0) - receivedSum;
+      return (
+        <div>
+          {receipts.map((r, ri) => (
+            <div key={ri} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+              {r.grnNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{r.qty}</span>
+            </div>
+          ))}
+          <div style={{
+            fontSize: 'var(--fs-10)', marginTop: 1,
+            color: balance > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+          }}>
+            {balance > 0 ? `Balance ${balance}` : 'Fully Received'}
+          </div>
+        </div>
+      );
+    },
+    searchValue: (it) => (it.receipts ?? []).map((r) => r.grnNumber).join(' '),
+  },
+  {
+    key: 'delivery_date', label: 'Delivery Date', width: 120,
+    accessor: (it) => {
+      const due = it.delivery_date ?? headerExpectedAt ?? null;
+      return due
+        ? <span style={{ whiteSpace: 'nowrap' }}>{fmtDateOrDash(due)}</span>
+        : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+    },
+    searchValue: (it) => it.delivery_date ?? headerExpectedAt ?? '',
+    sortFn: (a, b) => (a.delivery_date ?? headerExpectedAt ?? '').localeCompare(b.delivery_date ?? headerExpectedAt ?? ''),
+  },
+  {
+    key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',
+    accessor: (it) => fmtMoney(Number(it.unit_price_centi ?? 0), currency),
+    searchValue: (it) => String(it.unit_price_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_price_centi ?? 0) - Number(b.unit_price_centi ?? 0),
+  },
+  {
+    key: 'line_total', label: 'Line Total', width: 110, align: 'right',
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtMoney(Number(it.line_total_centi ?? 0), currency)}</span>,
+    searchValue: (it) => String(it.line_total_centi ?? 0),
+    sortFn: (a, b) => Number(a.line_total_centi ?? 0) - Number(b.line_total_centi ?? 0),
+  },
+];
 
 const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
   const detail = usePurchaseOrderDetail(po.id);
 
+  if (detail.isLoading) {
+    return (
+      <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
+        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: 0 }}>Loading lines for {po.po_number}…</p>
+      </div>
+    );
+  }
+  if (detail.error) {
+    return (
+      <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
+        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)', margin: 0 }}>
+          Failed to load lines: {detail.error instanceof Error ? detail.error.message : String(detail.error)}
+        </p>
+      </div>
+    );
+  }
+
   const items = (detail.data?.items ?? []) as PoItemRow[];
+  if (items.length === 0) {
+    return (
+      <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
+        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: 0 }}>No line items.</p>
+      </div>
+    );
+  }
 
   let subtotal = 0;
   for (const it of items) subtotal += Number(it.line_total_centi ?? 0);
 
+  const columns = buildPoDrilldownColumns(po.currency, po.expected_at ?? null);
+
   return (
     <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
-      {detail.isLoading && (
-        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', margin: 0 }}>Loading lines for {po.po_number}…</p>
-      )}
-      {detail.error && (
-        <p style={{ fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)', margin: 0 }}>
-          Failed to load lines: {detail.error instanceof Error ? detail.error.message : String(detail.error)}
-        </p>
-      )}
-
-      {!detail.isLoading && !detail.error && (
-        <div style={{ width: '100%', overflowX: 'auto' }}>
-          <table style={{
-            width: '100%', minWidth: 900, borderCollapse: 'collapse',
-            fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--c-ink)',
-          }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid rgba(34, 31, 32, 0.10)' }}>
-                <th style={PO_TH}>Group</th>
-                <th style={PO_TH}>Item Code</th>
-                <th style={{ ...PO_TH, whiteSpace: 'normal' }}>Description</th>
-                <th style={PO_TH}>UOM</th>
-                <th style={PO_TH_RIGHT}>Ordered</th>
-                <th style={PO_TH}>Received</th>
-                <th style={PO_TH}>Delivery Date</th>
-                <th style={PO_TH_RIGHT}>Unit Price</th>
-                <th style={PO_TH_RIGHT}>Line Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.length === 0 && (
-                <tr><td style={{ ...PO_TD, color: 'var(--fg-muted)' }} colSpan={9}>No line items.</td></tr>
-              )}
-              {items.map((it) => {
-                const manual = (it.description ?? '').trim();
-                const summary = buildVariantSummary(it.item_group ?? null, it.variants ?? null);
-                /* "Received" column mirrors the SO list's "Delivered" column:
-                   list each GR that took qty, then the live balance underneath.
-                   Balance derives from the shown (non-cancelled) receipts so the
-                   breakdown sum + balance always reconciles to Ordered. */
-                const receipts = it.receipts ?? [];
-                const receivedSum = receipts.reduce((s, r) => s + Number(r.qty ?? 0), 0);
-                const balance = Number(it.qty ?? 0) - receivedSum;
-                return (
-                  <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
-                    <td style={PO_TD}><ItemGroupPill group={it.item_group ?? null} /></td>
-                    <td style={{ ...PO_TD, fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code}</td>
-                    <td style={{ ...PO_TD, whiteSpace: 'normal' }}>
-                      {manual ? (
-                        <>
-                          <div>{manual}</div>
-                          {summary && <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>{summary}</div>}
-                        </>
-                      ) : (summary || it.material_name || '—')}
-                    </td>
-                    <td style={PO_TD}>{it.uom || 'UNIT'}</td>
-                    <td style={PO_TD_RIGHT}>{it.qty ?? 0}</td>
-                    <td style={PO_TD}>
-                      {receipts.length > 0 ? (
-                        <div>
-                          {receipts.map((r, ri) => (
-                            <div key={ri} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
-                              {r.grnNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{r.qty}</span>
-                            </div>
-                          ))}
-                          <div style={{
-                            fontSize: 'var(--fs-10)', marginTop: 1,
-                            color: balance > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
-                          }}>
-                            {balance > 0 ? `Balance ${balance}` : 'Fully Received'}
-                          </div>
-                        </div>
-                      ) : (
-                        <span style={{ color: 'var(--fg-muted)' }}>—</span>
-                      )}
-                    </td>
-                    <td style={PO_TD}>
-                      {/* Per-line delivery date (PR #77) — falls back to the PO
-                          header's Expected date when the line has none, mirroring
-                          how the server inherits it. */}
-                      {(() => {
-                        const due = it.delivery_date ?? po.expected_at ?? null;
-                        return due
-                          ? <span style={{ whiteSpace: 'nowrap' }}>{fmtDateOrDash(due)}</span>
-                          : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-                      })()}
-                    </td>
-                    <td style={PO_TD_RIGHT}>{fmtMoney(Number(it.unit_price_centi ?? 0), po.currency)}</td>
-                    <td style={{ ...PO_TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
-                      {fmtMoney(Number(it.line_total_centi ?? 0), po.currency)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            {items.length > 0 && (
-              <tfoot>
-                <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
-                  <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)' }} colSpan={8}>
-                    Subtotal
-                  </td>
-                  <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontWeight: 800, color: 'var(--c-burnt)' }}>
-                    {fmtMoney(subtotal, po.currency)}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      )}
+      <DataGrid<PoItemRow>
+        rows={items}
+        columns={columns}
+        storageKey="po-drilldown-grid.v1"
+        rowKey={(it) => it.id}
+        embedded
+        groupBanner={false}
+      />
+      <div style={{
+        display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end',
+        alignItems: 'baseline', padding: '8px 8px 2px',
+        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--fg-muted)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}>Subtotal</span>
+        <span>Total <strong style={{ color: 'var(--c-burnt)' }}>{fmtMoney(subtotal, po.currency)}</strong></span>
+      </div>
     </div>
   );
 };
