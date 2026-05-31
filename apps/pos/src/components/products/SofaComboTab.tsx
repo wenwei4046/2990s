@@ -25,7 +25,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { SOFA_MODULES, type SofaPriceTier, buildComboLabel } from '@2990s/shared';
+import { SOFA_MODULES, normalizeCompartmentCode, type SofaPriceTier, buildComboLabel } from '@2990s/shared';
 import {
   useSofaCombos,
   useCreateSofaCombo,
@@ -34,7 +34,7 @@ import {
   useSofaComboHistory,
   type SofaComboRule,
 } from '../../lib/products/sofa-combos-queries';
-import { useMfgProducts } from '../../lib/products/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig } from '../../lib/products/mfg-products-queries';
 
 const HEIGHTS = ['24', '28', '30', '32', '35'] as const;
 const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
@@ -347,6 +347,17 @@ function ComposerModal({
   const create = useCreateSofaCombo();
   const update = useUpdateSofaCombo();
 
+  // Module chips come from the Maintenance Sofa Compartments pool (single source
+  // of truth — Chairman 2026-06-01) so adding/removing a compartment in
+  // Maintenance flows here with no code change. Normalized to dash form so a
+  // ticked code matches a laid-out cell + the stored combo slot. Falls back to
+  // SOFA_MODULES while the config query is loading.
+  const maint = useMaintenanceConfig('master');
+  const moduleCodes = useMemo(() => {
+    const pool = (maint.data?.data?.sofaCompartments ?? []).map(normalizeCompartmentCode);
+    return [...new Set(pool.length ? pool : ALL_MODULE_CODES)].sort();
+  }, [maint.data]);
+
   const [baseModel, setBaseModel] = useState(editing?.baseModel ?? '');
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
@@ -492,7 +503,7 @@ function ComposerModal({
                       </button>
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {ALL_MODULE_CODES.map((c) => {
+                      {moduleCodes.map((c) => {
                         const on = slot.includes(c);
                         return (
                           <button
