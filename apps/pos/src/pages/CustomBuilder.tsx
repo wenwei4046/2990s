@@ -815,7 +815,17 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     if (!analyses[i]?.closed) return [];
     const ids = new Set(groupCells.map((c) => c.id).filter((x): x is string => x != null));
     if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return [];
-    if (draftDelta != null && draftDelta.ids.some((id) => ids.has(id))) return [];
+    // During a drag, KEEP the seamless overlay (it tracks the group via
+    // displayCells) when the WHOLE group is being moved — Chairman 2026-06-01:
+    // the sofa should stay fixed/together while you drag it, not flicker back to
+    // separate modules. Only fall back to individual silhouettes for a PARTIAL
+    // drag (pulling one module out of the group), so the user can see the single
+    // piece they're repositioning.
+    if (draftDelta != null) {
+      const someDragging = draftDelta.ids.some((id) => ids.has(id));
+      const allDragging = Array.from(ids).every((id) => draftDelta.ids.includes(id));
+      if (someDragging && !allDragging) return [];
+    }
     if (groupCells.some((c) => (c.recliners ?? []).length > 0)) return [];
     // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
     // sync). Bail to per-module art on the off chance the rots are mixed.
