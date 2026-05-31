@@ -15,13 +15,37 @@
 // /products POST pattern at apps/api/src/routes/products.ts:37).
 // ----------------------------------------------------------------------------
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 
 export const mfgProducts = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 mfgProducts.use('*', supabaseAuth);
+
+type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
+
+// mfg_products has NO RLS — this app-layer gate is the only thing stopping a
+// junior salesperson from rewriting SKU prices/data via a direct API call (the
+// POS productsMode client gate is bypassable). Mirrors sofa-combos.ts.
+//   EDIT/DELETE: the POS "full" set {admin, super_admin, master_account} +
+//                backend coordinator.
+//   CREATE: the above + sales_director (POS add-only mode lets a director ADD
+//           new SKUs but not edit existing — Chairman 2026-05-28
+//           "只有 sales director 可以添加,不能 edit").
+// GET stays open — the POS salesperson must read the catalogue to price builds.
+const EDIT_ROLES   = new Set(['admin', 'super_admin', 'coordinator', 'master_account']);
+const CREATE_ROLES = new Set([...EDIT_ROLES, 'sales_director']);
+
+async function requireRole(c: AppContext, allowed: Set<string>): Promise<{ ok: true } | { ok: false; res: Response }> {
+  const supabase = c.get('supabase');
+  const userId = c.get('user').id;
+  const staffRes = await supabase.from('staff').select('role, active').eq('id', userId).maybeSingle();
+  if (staffRes.error) return { ok: false, res: c.json({ error: 'role_lookup_failed', reason: staffRes.error.message }, 500) };
+  if (!staffRes.data || !staffRes.data.active) return { ok: false, res: c.json({ error: 'forbidden', reason: 'no_active_staff' }, 403) };
+  if (!allowed.has(staffRes.data.role)) return { ok: false, res: c.json({ error: 'forbidden', reason: 'product_editor_only' }, 403) };
+  return { ok: true };
+}
 
 // Allowed values for the `field` column on master_price_history.
 const PRICE_FIELDS = new Set(['base_price_sen', 'price1_sen', 'cost_price_sen', 'sell_price_sen']);
@@ -69,6 +93,8 @@ mfgProducts.get('/', async (c) => {
 // id since the existing import uses Excel-style ids like 'mfg-xxxxxxx'.
 const VALID_CATEGORIES = new Set(['SOFA', 'BEDFRAME', 'ACCESSORY', 'MATTRESS', 'SERVICE']);
 mfgProducts.post('/', async (c) => {
+  const gate = await requireRole(c, CREATE_ROLES);
+  if (!gate.ok) return gate.res;
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch {
     return c.json({ error: 'invalid_json' }, 400);
@@ -121,6 +147,8 @@ mfgProducts.post('/', async (c) => {
 // Bulk upsert from a CSV import. Body: { rows: [{ code, name, category, ... }] }.
 // Upserts by code (ON CONFLICT DO UPDATE). Returns count inserted/updated.
 mfgProducts.post('/batch-import', async (c) => {
+  const gate = await requireRole(c, CREATE_ROLES);
+  if (!gate.ok) return gate.res;
   let body: { rows?: Array<Record<string, unknown>> };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const list = body.rows ?? [];
@@ -183,6 +211,8 @@ mfgProducts.post('/batch-import', async (c) => {
 // it as a follow-up "Force delete" button after a normal delete fails so
 // commander never destroys side data unintentionally.
 mfgProducts.delete('/:id', async (c) => {
+  const gate = await requireRole(c, EDIT_ROLES);
+  if (!gate.ok) return gate.res;
   const id    = c.req.param('id');
   const force = c.req.query('force') === 'true';
   const supabase = c.get('supabase');
@@ -265,6 +295,8 @@ mfgProducts.get('/:id', async (c) => {
 // Updates base/price1/cost prices. Each numeric change emits a row to
 // `master_price_history` for the audit drawer.
 mfgProducts.patch('/:id', async (c) => {
+  const gate = await requireRole(c, EDIT_ROLES);
+  if (!gate.ok) return gate.res;
   const id = c.req.param('id');
   let body: {
     basePriceSen?: number | null;
