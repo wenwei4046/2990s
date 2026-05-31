@@ -427,33 +427,42 @@ export const SalesOrderDetail = () => {
       }
     }
 
+    // Validate the header (date XOR + no-past-date) BEFORE writing anything,
+    // so an invalid date can't leave lines half-committed.
+    const headerErr = handle.validate();
+    if (headerErr) {
+      setSaveError(headerErr);
+      return;
+    }
+
     setSavingOrder(true);
     // Snapshot drafts up front so concurrent re-seeds don't shift the set.
     const lineEntries = Object.entries(editingDrafts);
     const pendingAdd = addingDraft;
 
-    handle.save({
-      onSuccess: () => {
-        // Header committed — now fan out the line writes in parallel, then
-        // the add-line (sequenced last so its photo drain has a stable id).
-        Promise.all(lineEntries.map(([id, d]) => commitEditingDraft(id, d)))
-          .then(() => (pendingAdd ? commitAddLine(pendingAdd) : Promise.resolve()))
-          .then(() => {
-            setSavingOrder(false);
-            setIsEditing(false);
-          })
-          .catch((e) => {
-            setSavingOrder(false);
-            setSaveError(
-              `Line items failed to save: ${e instanceof Error ? e.message : String(e)}`,
-            );
-          });
-      },
-      onError: (msg) => {
+    /* Order matters: commit the line variants FIRST, then the header. The
+       backend's "Processing Date requires complete variants" guard reads the
+       LIVE line variants from the DB — if the header (with the processing
+       date) is saved before the line edits land, that guard sees the stale
+       empty variants and rejects with 409, even though the operator just
+       filled them in. Lines-then-header keeps the DB consistent at the moment
+       the guard runs. */
+    Promise.all(lineEntries.map(([id, d]) => commitEditingDraft(id, d)))
+      .then(() => (pendingAdd ? commitAddLine(pendingAdd) : Promise.resolve()))
+      .then(() => new Promise<void>((resolve, rejectSave) => {
+        handle.save({
+          onSuccess: () => resolve(),
+          onError: (msg) => rejectSave(new Error(msg)),
+        });
+      }))
+      .then(() => {
         setSavingOrder(false);
-        setSaveError(msg);
-      },
-    });
+        setIsEditing(false);
+      })
+      .catch((e) => {
+        setSavingOrder(false);
+        setSaveError(e instanceof Error ? e.message : String(e));
+      });
   };
 
   /* Task #99 (UI perf) — Stable callbacks for the memo'd child cards. Without
@@ -1223,6 +1232,10 @@ export const SalesOrderDetail = () => {
    The parent calls save() with onSuccess/onError callbacks; reset() reverts
    the local form to the current header snapshot (used by Cancel). */
 type CustomerCardHandle = {
+  /** Returns the first blocking header error (date XOR / past date), or null
+      when the header is OK. Called by the page Save BEFORE any line is written
+      so a bad date never half-commits the order. */
+  validate: () => string | null;
   save: (cb: { onSuccess: () => void; onError: (msg: string) => void }) => void;
   reset: () => void;
 };
@@ -1499,13 +1512,33 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   const datesXor =
     (form.processingDate.trim() !== '') !== (form.customerDeliveryDate.trim() !== '');
 
-  const trySave = (cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
+  /* Commander 2026-05-28 — Processing/Delivery Date may only be today or a
+     future date. en-CA renders the local YYYY-MM-DD. Used as the <input min>
+     AND re-checked on Save (parity with the New SO form). */
+  const today = new Date().toLocaleDateString('en-CA');
+
+  /* Returns the first blocking date error, or null when the dates are valid.
+     Shared by the imperative validate() (page-level Save runs this BEFORE
+     committing any line) and trySave (defence-in-depth on the header write). */
+  const validateDates = (): string | null => {
     if (datesXor) {
-      const msg =
-        'Processing Date and Delivery Date must be set together.\n\n' +
+      return 'Processing Date and Delivery Date must be set together.\n\n' +
         'Either fill in BOTH dates, or leave BOTH empty.';
-      if (cb?.onError) cb.onError(msg);
-      else window.alert(msg);
+    }
+    if (form.processingDate && form.processingDate < today) {
+      return 'Processing Date cannot be in the past — pick today or a future date.';
+    }
+    if (form.customerDeliveryDate && form.customerDeliveryDate < today) {
+      return 'Delivery Date cannot be in the past — pick today or a future date.';
+    }
+    return null;
+  };
+
+  const trySave = (cb?: { onSuccess?: () => void; onError?: (msg: string) => void }) => {
+    const err = validateDates();
+    if (err) {
+      if (cb?.onError) cb.onError(err);
+      else window.alert(err);
       return;
     }
     onSave(buildPayload(), cb);
@@ -1516,6 +1549,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      state to the parent. No deps array → handle re-binds every render so
      `save` always closes over the latest form snapshot. */
   useImperativeHandle(ref, () => ({
+    validate: () => validateDates(),
     save: (cb) => trySave(cb),
     reset: () => setForm(initialFormFor(header)),
   }));
@@ -1696,6 +1730,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
               <span className={styles.fieldLabel}>Processing Date</span>
               <input type="date" className={styles.fieldInput} value={form.processingDate}
                 disabled={inputsDisabled}
+                min={today}
                 onChange={(e) => set('processingDate', e.target.value)}
                 style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>
@@ -1703,6 +1738,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
               <span className={styles.fieldLabel}>Delivery Date</span>
               <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
                 disabled={inputsDisabled}
+                min={today}
                 onChange={(e) => set('customerDeliveryDate', e.target.value)}
                 style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>
