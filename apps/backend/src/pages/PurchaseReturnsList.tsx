@@ -15,15 +15,16 @@ import { Plus, Undo2 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseReturns, useCancelPurchaseReturn } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-// purchase_return_status enum: POSTED / COMPLETED / CANCELLED. Tints mirror
-// the GRN list. POSTED reads as "Confirmed" — no Draft/lifecycle exposed.
+// purchase_return_status enum: POSTED / COMPLETED / CANCELLED. Tints use the
+// shared lifecycle palette (PO/SO): confirmed=burnt, complete=green, void=red.
 const STATUS_COLOR: Record<string, string> = {
-  POSTED: 'rgba(47, 93, 79, 0.12)',
-  COMPLETED: 'rgba(31, 58, 138, 0.10)',
+  POSTED: 'rgba(166, 71, 30, 0.12)',
+  COMPLETED: 'rgba(47, 93, 79, 0.28)',
   CANCELLED: 'rgba(184, 51, 31, 0.10)',
 };
 const STATUS_LABEL: Record<string, string> = {
@@ -54,7 +55,7 @@ type PrRow = Record<string, unknown> & {
 const buildPrColumns = (): DataGridColumn<PrRow>[] => [
   {
     key: 'return_number', label: 'Return No.', width: 150, sortable: true,
-    accessor: (r) => <span className={styles.codeChip}>{r.return_number}</span>,
+    accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.return_number}</span>,
     searchValue: (r) => r.return_number,
     sortFn: (a, b) => a.return_number.localeCompare(b.return_number),
   },
@@ -68,13 +69,13 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
   },
   {
     key: 'grn_number', label: 'From GRN', width: 150, sortable: true, groupable: true,
-    accessor: (r) => <span className={styles.codeChip}>{r.grn?.grn_number ?? '—'}</span>,
+    accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.grn?.grn_number ?? '—'}</span>,
     searchValue: (r) => r.grn?.grn_number ?? '',
     groupValue: (r) => r.grn?.grn_number ?? '(none)',
   },
   {
     key: 'return_date', label: 'Return Date', width: 120, sortable: true,
-    accessor: (r) => (r.return_date ?? '').slice(0, 10) || '—',
+    accessor: (r) => fmtDateOrDash(r.return_date),
     searchValue: (r) => r.return_date ?? '',
     sortFn: (a, b) => String(a.return_date ?? '').localeCompare(String(b.return_date ?? '')),
   },
@@ -129,11 +130,11 @@ export const PurchaseReturns = () => {
               GRN list where the user right-clicks "Convert to PR". */}
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <Undo2 {...ICON} />
-            <span>From GRN</span>
+            <span>From Goods Receipt</span>
           </Button>
           <Button variant="primary" size="md" onClick={() => navigate('/purchase-returns/new')}>
             <Plus {...ICON} />
-            <span>New Return</span>
+            <span>New Purchase Return</span>
           </Button>
         </div>
       </div>

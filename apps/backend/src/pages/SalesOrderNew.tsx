@@ -543,7 +543,7 @@ export const SalesOrderNew = () => {
     }
     const validLines = lines.filter((l) => l.itemCode.trim() && l.qty > 0);
     if (validLines.length === 0) {
-      window.alert('Add at least one item via "+ Add line item".');
+      window.alert('Add at least one item via "+ Add Line Item".');
       return;
     }
     // Variants are only mandatory once a processing date is set: with a date,

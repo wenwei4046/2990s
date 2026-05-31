@@ -313,13 +313,13 @@ export const Grns = () => {
     <div className={styles.page}>
       <Header
         title="Goods Receipt Notes"
-        newLabel="New GRN"
+        newLabel="New Goods Receipt"
         // PR — Commander 2026-05-27: open GrnNew directly. When poId is
         // missing the page now renders a "Pick a PO" card instead of
         // bouncing back to the PO list (one-click flow, was two before).
         onNew={() => navigate('/grns/new')}
         // PR — task #52: multi-PO-line picker → one GRN per PO, auto-posted.
-        secondary={{ label: 'From PO', onClick: () => navigate('/grns/from-po') }}
+        secondary={{ label: 'From Purchase Order', onClick: () => navigate('/grns/from-po') }}
       />
       <StatusChips chips={GRN_CHIPS} active={status} onPick={setStatus} />
       {poIdFilter && (
@@ -402,14 +402,14 @@ export const PurchaseInvoicesPage = () => {
     <div className={styles.page}>
       <Header
         title="Purchase Invoices"
-        newLabel="New Invoice"
+        newLabel="New Purchase Invoice"
         // Commander 2026-05-29: New Invoice lands on a standalone create form
         // (manual supplier + items), like New PO / New GRN — it no longer
         // forces you through a GRN first.
         onNew={() => navigate('/purchase-invoices/new')}
         // Keep the GRN→Invoice path: "From GRN" still opens the create form's
         // GRN picker (mirrors how the GRN page keeps a "From PO" secondary).
-        secondary={{ label: 'From GRN', onClick: () => navigate('/grns') }}
+        secondary={{ label: 'From Goods Receipt', onClick: () => navigate('/grns') }}
       />
       <StatusChips chips={PI_CHIPS} active={status} onPick={setStatus} />
       {poIdFilter  && <FilterPill label={`PO ${poIdFilter.slice(0, 8)}…`}    onClear={() => clearFilter('poId')} />}
@@ -488,7 +488,7 @@ export const SalesInvoicesPage = () => {
     <div className={styles.page}>
       <Header
         title={`Sales Invoices${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
-        newLabel="New Invoice"
+        newLabel="New Sales Invoice"
         onNew={() => setOpen(true)}
       />
       <ListingPickerDialog

@@ -15,21 +15,23 @@ import { Plus, FileText } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
 // purchase_invoice_status enum: POSTED / PARTIALLY_PAID / PAID / CANCELLED.
-// Tints mirror the GRN/PR lists. POSTED reads as "Confirmed" — no Draft exposed.
+// Tints use the shared lifecycle palette (PO/SO): confirmed=burnt,
+// in-progress=darker burnt, complete=green, void=red.
 const STATUS_COLOR: Record<string, string> = {
-  POSTED: 'rgba(47, 93, 79, 0.12)',
-  PARTIALLY_PAID: 'rgba(31, 58, 138, 0.10)',
-  PAID: 'rgba(31, 58, 138, 0.10)',
+  POSTED: 'rgba(166, 71, 30, 0.12)',
+  PARTIALLY_PAID: 'rgba(166, 71, 30, 0.18)',
+  PAID: 'rgba(47, 93, 79, 0.28)',
   CANCELLED: 'rgba(184, 51, 31, 0.10)',
 };
 const STATUS_LABEL: Record<string, string> = {
   POSTED: 'Confirmed',
-  PARTIALLY_PAID: 'Partially paid',
+  PARTIALLY_PAID: 'Partially Paid',
   PAID: 'Paid',
   CANCELLED: 'Cancelled',
 };
@@ -59,7 +61,7 @@ type PiRow = Record<string, unknown> & {
 const buildPiColumns = (): DataGridColumn<PiRow>[] => [
   {
     key: 'invoice_number', label: 'Invoice No.', width: 150, sortable: true,
-    accessor: (r) => <span className={styles.codeChip}>{r.invoice_number}</span>,
+    accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.invoice_number}</span>,
     searchValue: (r) => r.invoice_number,
     sortFn: (a, b) => a.invoice_number.localeCompare(b.invoice_number),
   },
@@ -74,20 +76,20 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
   {
     key: 'source_ref', label: 'From GRN/PO', width: 160, sortable: true, groupable: true,
     accessor: (r) => (
-      <span className={styles.codeChip}>{r.grn?.grn_number ?? r.purchase_order?.po_number ?? '—'}</span>
+      <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.grn?.grn_number ?? r.purchase_order?.po_number ?? '—'}</span>
     ),
     searchValue: (r) => `${r.grn?.grn_number ?? ''} ${r.purchase_order?.po_number ?? ''}`.trim(),
     groupValue: (r) => r.grn?.grn_number ?? r.purchase_order?.po_number ?? '(none)',
   },
   {
     key: 'invoice_date', label: 'Invoice Date', width: 120, sortable: true,
-    accessor: (r) => (r.invoice_date ?? '').slice(0, 10) || '—',
+    accessor: (r) => fmtDateOrDash(r.invoice_date),
     searchValue: (r) => r.invoice_date ?? '',
     sortFn: (a, b) => String(a.invoice_date ?? '').localeCompare(String(b.invoice_date ?? '')),
   },
   {
     key: 'due_date', label: 'Due Date', width: 120, sortable: true,
-    accessor: (r) => (r.due_date ?? '').slice(0, 10) || '—',
+    accessor: (r) => fmtDateOrDash(r.due_date),
     searchValue: (r) => r.due_date ?? '',
     sortFn: (a, b) => String(a.due_date ?? '').localeCompare(String(b.due_date ?? '')),
   },
@@ -142,11 +144,11 @@ export const PurchaseInvoices = () => {
               GRN list where the user right-clicks "Convert to PI". */}
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <FileText {...ICON} />
-            <span>From GRN</span>
+            <span>From Goods Receipt</span>
           </Button>
           <Button variant="primary" size="md" onClick={() => navigate('/purchase-invoices/new')}>
             <Plus {...ICON} />
-            <span>New Invoice</span>
+            <span>New Purchase Invoice</span>
           </Button>
         </div>
       </div>
@@ -190,7 +192,7 @@ export const PurchaseInvoices = () => {
           return menu;
         }}
         isLoading={isLoading}
-        emptyMessage='No invoices yet — convert a Goods Receipt via "From GRN".'
+        emptyMessage='No invoices yet — convert a Goods Receipt via "From Goods Receipt".'
       />
     </div>
   );

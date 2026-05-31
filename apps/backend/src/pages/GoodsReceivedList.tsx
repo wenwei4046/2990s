@@ -19,15 +19,16 @@ import {
   useCancelGrn,
 } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
+import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Suppliers.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
-// GRN status set (grn_status enum): POSTED / CLOSED / CANCELLED. Tints mirror
-// the PO list.
+// GRN status set (grn_status enum): POSTED / CLOSED / CANCELLED. Tints use the
+// shared lifecycle palette (PO/SO): confirmed=burnt, complete=green, void=red.
 const STATUS_COLOR: Record<string, string> = {
-  POSTED:    'rgba(47, 93, 79, 0.12)',
-  CLOSED:    'rgba(31, 58, 138, 0.10)',
+  POSTED:    'rgba(166, 71, 30, 0.12)',
+  CLOSED:    'rgba(47, 93, 79, 0.28)',
   CANCELLED: 'rgba(184, 51, 31, 0.10)',
 };
 // A GRN has no draft/lifecycle — POSTED reads as "Confirmed". No raw POSTED.
@@ -65,7 +66,7 @@ type GrnRow = Record<string, unknown> & {
 const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
   {
     key: 'grn_number', label: 'GRN No.', width: 150, sortable: true,
-    accessor: (g) => <span className={styles.codeChip}>{g.grn_number}</span>,
+    accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.grn_number}</span>,
     searchValue: (g) => g.grn_number,
     sortFn: (a, b) => a.grn_number.localeCompare(b.grn_number),
   },
@@ -79,13 +80,13 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
   },
   {
     key: 'po_number', label: 'From PO', width: 150, sortable: true, groupable: true,
-    accessor: (g) => <span className={styles.codeChip}>{g.purchase_order?.po_number ?? '—'}</span>,
+    accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.purchase_order?.po_number ?? '—'}</span>,
     searchValue: (g) => g.purchase_order?.po_number ?? '',
     groupValue: (g) => g.purchase_order?.po_number ?? '(none)',
   },
   {
     key: 'received_at', label: 'Received Date', width: 120, sortable: true,
-    accessor: (g) => (g.received_at ?? '').slice(0, 10) || '—',
+    accessor: (g) => fmtDateOrDash(g.received_at),
     searchValue: (g) => g.received_at ?? '',
     sortFn: (a, b) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
   },
@@ -135,7 +136,7 @@ export const GoodsReceived = () => {
   const convertToPr = (g: GrnRow) => {
     prFromGrn.mutate(g.id, {
       onSuccess: (res) => navigate(`/purchase-returns/${res.id}`),
-      onError: (e) => alert(`Convert to PR failed: ${e instanceof Error ? e.message : String(e)}`),
+      onError: (e) => alert(`To Purchase Return failed: ${e instanceof Error ? e.message : String(e)}`),
     });
   };
   // Cancel a GRN (right-click) — reverses the receipt server-side. Confirm first.
@@ -155,11 +156,11 @@ export const GoodsReceived = () => {
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>
             <Plus {...ICON} />
-            <span>From PO</span>
+            <span>From Purchase Order</span>
           </Button>
           <Button variant="primary" size="md" onClick={() => navigate('/grns/new')}>
             <Plus {...ICON} />
-            <span>New GRN</span>
+            <span>New Goods Receipt</span>
           </Button>
         </div>
       </div>
@@ -207,8 +208,8 @@ export const GoodsReceived = () => {
           const canPr = isPosted && !g.fully_returned;
           if (canPi || canPr) {
             menu.push({ divider: true as const });
-            if (canPi) menu.push({ label: 'Convert to PI', onClick: () => convertToPi(g) });
-            if (canPr) menu.push({ label: 'Convert to PR', onClick: () => convertToPr(g) });
+            if (canPi) menu.push({ label: 'To Purchase Invoice', onClick: () => convertToPi(g) });
+            if (canPr) menu.push({ label: 'To Purchase Return', onClick: () => convertToPr(g) });
           }
           // Cancel — soft-stop. Only POSTED && no downstream child.
           if (isPosted && !hasChildren) {
@@ -218,7 +219,7 @@ export const GoodsReceived = () => {
           return menu;
         }}
         isLoading={isLoading}
-        emptyMessage='No GRNs yet — click "New GRN" to receive goods.'
+        emptyMessage='No GRNs yet — click "New Goods Receipt" to receive goods.'
       />
     </div>
   );

@@ -383,21 +383,186 @@ const CategoryPill = ({ group }: { group: string | null | undefined }) => {
   );
 };
 
-/* Compact cell shells reused across the table — defined once at module
-   scope so we don't allocate fresh style objects on every render. */
-const TH_BASE: CSSProperties = {
-  padding: '2px 8px', textAlign: 'left',
+/* Per-line cost/margin/stock derivations — shared by the drill-down's column
+   accessors AND its sort comparators so a sorted cell always agrees with the
+   value it sorted by. Mirror the SO detail page's fallbacks (older rows lack
+   the stored line_cost/line_margin snapshots). */
+const lineCostOf = (it: SoItem): number =>
+  it.line_cost_centi != null
+    ? Number(it.line_cost_centi)
+    : Number(it.qty ?? 0) * Number(it.unit_cost_centi ?? 0);
+const lineMarginOf = (it: SoItem): number =>
+  it.line_margin_centi != null
+    ? Number(it.line_margin_centi)
+    : Number(it.total_centi ?? 0) - lineCostOf(it);
+/* Stock readiness label — STOCK (on hand) / PENDING (not yet) / DELIVERED
+   (fully shipped). The incoming-PO + ETA coverage hint that used to sit here
+   was removed (Wei Siang 2026-05-31): it's an MRP-side reminder, redundant in
+   the SO drill-down. */
+const stockLabelOf = (it: SoItem): string => {
+  const delivered = Number(it.delivered_qty ?? 0);
+  const remaining = Number(it.remaining_qty ?? it.qty ?? 0);
+  if (delivered > 0 && remaining <= 0) return 'DELIVERED';
+  const state = it.stock_state ?? (it.stock_status === 'READY' ? 'stock' : 'shortage');
+  return state === 'stock' ? 'STOCK' : 'PENDING';
 };
-const TH_RIGHT: CSSProperties = { ...TH_BASE, textAlign: 'right' };
-const TD_BASE: CSSProperties = { padding: '3px 8px', verticalAlign: 'top' };
-const TD_RIGHT: CSSProperties = { ...TD_BASE, textAlign: 'right' };
-const TFOOT_LABEL: CSSProperties = {
-  ...TD_RIGHT,
-  paddingTop: 6, paddingBottom: 4,
-  fontFamily: 'var(--font-button)',
-  fontSize: 'var(--fs-10)', letterSpacing: '0.06em',
-  textTransform: 'uppercase', color: 'var(--fg-muted)',
-};
+
+/* Drill-down columns — display-only DataGridColumn specs so the SO drill-down
+   gets the SAME add/remove · drag-reorder · resize · right-click as the main
+   list grids (it used to be a hand-built fixed <table> that couldn't). Shared
+   layout key (`so-drilldown-grid.v1`) so the operator's column prefs persist
+   across every SO they expand, not per-document. `paymentRefs` is order-level
+   (identical on every row), threaded in from the component.
+
+   The delivery column is labelled "Status" — Wei Siang 2026-05-31: "delivered
+   就是 status 的意思", so the header reads "Status" while the cell shows which
+   DO took how much + the live balance (which IS the delivery status). */
+const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] => [
+  {
+    key: 'group', label: 'Group', width: 90, groupable: true,
+    accessor: (it) => <CategoryPill group={it.item_group} />,
+    searchValue: (it) => it.item_group ?? '',
+    groupValue: (it) => it.item_group ?? '(none)',
+    sortFn: (a, b) => (a.item_group ?? '').localeCompare(b.item_group ?? ''),
+  },
+  {
+    key: 'item_code', label: 'Item Code', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.item_code ?? '—'}</span>,
+    searchValue: (it) => it.item_code ?? '',
+    sortFn: (a, b) => (a.item_code ?? '').localeCompare(b.item_code ?? ''),
+  },
+  {
+    key: 'description', label: 'Description', width: 240, minWidth: 180,
+    accessor: (it) => {
+      /* Manual Description 1 on top; live variant summary muted below (one
+         consistent " / " separator). Bare "—" only when neither exists — that
+         lone dash confused the operator ("那个 - 是什么"). */
+      const manual = (it.description ?? '').trim();
+      const summary = buildVariantSummary(it.item_group, it.variants);
+      if (manual) {
+        return (
+          <>
+            <div>{manual}</div>
+            {summary && (
+              <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>{summary}</div>
+            )}
+          </>
+        );
+      }
+      return summary ? <div>{summary}</div> : '—';
+    },
+    searchValue: (it) => `${it.description ?? ''} ${buildVariantSummary(it.item_group, it.variants)}`.trim(),
+  },
+  {
+    key: 'uom', label: 'UOM', width: 70,
+    accessor: (it) => it.uom || 'UNIT',
+    searchValue: (it) => it.uom || 'UNIT',
+  },
+  {
+    key: 'qty', label: 'Qty', width: 60, align: 'right',
+    accessor: (it) => it.qty ?? 0,
+    searchValue: (it) => String(it.qty ?? 0),
+    sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    key: 'delivered', label: 'Status', width: 130,
+    accessor: (it) => {
+      const hasDeliveries = it.deliveries && it.deliveries.length > 0;
+      if (!hasDeliveries) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return (
+        <div>
+          {it.deliveries!.map((d, di) => (
+            <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+              {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
+            </div>
+          ))}
+          {typeof it.remaining_qty === 'number' && (
+            <div style={{
+              fontSize: 'var(--fs-10)', marginTop: 1,
+              color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+            }}>
+              {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+            </div>
+          )}
+        </div>
+      );
+    },
+    searchValue: (it) => (it.deliveries ?? []).map((d) => d.doNumber).join(' '),
+  },
+  {
+    key: 'unit_price', label: 'Unit Price', width: 100, align: 'right',
+    accessor: (it) => fmtRm(Number(it.unit_price_centi ?? 0)),
+    searchValue: (it) => String(it.unit_price_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_price_centi ?? 0) - Number(b.unit_price_centi ?? 0),
+  },
+  {
+    key: 'total', label: 'Total', width: 100, align: 'right',
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtRm(Number(it.total_centi ?? 0))}</span>,
+    searchValue: (it) => String(it.total_centi ?? 0),
+    sortFn: (a, b) => Number(a.total_centi ?? 0) - Number(b.total_centi ?? 0),
+  },
+  {
+    key: 'unit_cost', label: 'Unit Cost', width: 100, align: 'right',
+    accessor: (it) => fmtRm(Number(it.unit_cost_centi ?? 0)),
+    searchValue: (it) => String(it.unit_cost_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_cost_centi ?? 0) - Number(b.unit_cost_centi ?? 0),
+  },
+  {
+    key: 'line_cost', label: 'Line Cost', width: 100, align: 'right',
+    accessor: (it) => fmtRm(lineCostOf(it)),
+    searchValue: (it) => String(lineCostOf(it)),
+    sortFn: (a, b) => lineCostOf(a) - lineCostOf(b),
+  },
+  {
+    key: 'margin', label: 'Margin', width: 100, align: 'right',
+    accessor: (it) => {
+      const m = lineMarginOf(it);
+      const c = m > 0 ? 'var(--c-secondary-a, #2F5D4F)' : m < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
+      return <span style={{ color: c, fontWeight: 600 }}>{fmtRm(m)}</span>;
+    },
+    searchValue: (it) => String(lineMarginOf(it)),
+    sortFn: (a, b) => lineMarginOf(a) - lineMarginOf(b),
+  },
+  {
+    key: 'stock', label: 'Stock', width: 100, groupable: true,
+    accessor: (it) => {
+      const label = stockLabelOf(it);
+      const green = label === 'STOCK' || label === 'DELIVERED';
+      return (
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px', borderRadius: 999,
+          color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+          background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+        }}>{label}</span>
+      );
+    },
+    searchValue: (it) => stockLabelOf(it),
+    groupValue: (it) => stockLabelOf(it),
+  },
+  {
+    /* Incoming-PO coverage (PO# + ETA), from the MRP allocation. Lifted out
+       of the Stock cell — crammed in there it read as an auxiliary hint, but
+       it's real content (which PO covers this line + when it lands), so it
+       gets its own normal, shown-by-default column (Wei Siang 2026-05-31).
+       The operator can still hide it via the Columns menu like any column. */
+    key: 'coverage', label: 'Incoming PO', width: 150,
+    accessor: (it) => {
+      if (!it.coverage_po) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+      return (
+        <span style={{ fontSize: 'var(--fs-10)', fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+          {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
+        </span>
+      );
+    },
+    searchValue: (it) => `${it.coverage_po ?? ''} ${it.coverage_eta ?? ''}`.trim(),
+  },
+  {
+    key: 'payment', label: 'Payment', width: 160,
+    accessor: () => <span style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>{paymentRefs || '—'}</span>,
+    searchValue: () => paymentRefs,
+  },
+];
 
 /* Issue #4 fix (so-list-pixel-perfect-houzs) — Houzs uses pill-style
    selects: `h-8 rounded-md border-[#DDE5E5] bg-white pl-2.5 pr-7
@@ -582,203 +747,42 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
     ? 'var(--c-secondary-a, #2F5D4F)'
     : marginCenti < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
 
+  const columns = buildDrilldownColumns(paymentRefs);
+
   return (
     <div style={{
       padding: 'var(--space-2) var(--space-3) var(--space-2) 40px',
       background: 'var(--c-cream)',
     }}>
-      {/* Issue #1 fix (so-list-pixel-perfect-houzs) — sub-table sits
-          inside a single <td colSpan> of the parent grid. Without its own
-          horizontal scroll, columns 4-11 (UOM / Qty / Unit Price / Total /
-          Unit Cost / Line Cost / Margin / Payment) get clipped because
-          the parent <td> is constrained to viewport width.
-          Wrap in overflow-x: auto so the drilldown gets its own scrollbar
-          independent of the main grid. Also constrain Description (col 3)
-          width so it stops stealing space from the right-hand cols. */}
-      <div style={{ width: '100%', overflowX: 'auto' }}>
-        <table style={{
-          /* Commander 2026-05-29 — pin to the columns' natural 1180px instead
-             of width:100%. The drill-down lives inside a <td colSpan> that
-             spans the FULL (very wide, ~5400px) main grid, so width:100% +
-             tableLayout:fixed ballooned every column ~4.5× (Group 90→412px,
-             Description 240→1098px) and spread the cells far apart ("间距隔那么
-             远"). A fixed 1180px keeps the columns compact and readable; the
-             wrapper's overflow-x handles narrow viewports. */
-          width: 1390, minWidth: 1390, borderCollapse: 'collapse',
-          fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
-          color: 'var(--c-ink)',
-          tableLayout: 'fixed',
-        }}>
-        <thead>
-          <tr style={{
-            color: 'var(--fg-muted)',
-            fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
-            letterSpacing: '0.06em', textTransform: 'uppercase',
-            borderBottom: '1px solid rgba(34, 31, 32, 0.10)',
-          }}>
-            <th style={{ ...TH_BASE, width: 90 }}>Group</th>
-            <th style={{ ...TH_BASE, width: 130 }}>Item Code</th>
-            <th style={{ ...TH_BASE, width: 240, minWidth: 200, maxWidth: 320 }}>Description</th>
-            <th style={{ ...TH_BASE, width: 60 }}>UOM</th>
-            <th style={{ ...TH_RIGHT, width: 50 }}>Qty</th>
-            <th style={{ ...TH_BASE, width: 120 }}>Delivered</th>
-            <th style={{ ...TH_RIGHT, width: 90 }}>Unit Price</th>
-            <th style={{ ...TH_RIGHT, width: 90 }}>Total</th>
-            <th style={{ ...TH_RIGHT, width: 90 }}>Unit Cost</th>
-            <th style={{ ...TH_RIGHT, width: 90 }}>Line Cost</th>
-            <th style={{ ...TH_RIGHT, width: 90 }}>Margin</th>
-            <th style={{ ...TH_BASE, width: 90 }}>Stock</th>
-            <th style={{ ...TH_BASE, width: 160 }}>Payment</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((it) => {
-            const lineTotal  = Number(it.total_centi ?? 0);
-            /* Prefer the stored `line_cost_centi` (set server-side) and
-               fall back to qty × unit_cost so older rows still display. */
-            const lineCost   = it.line_cost_centi != null
-              ? Number(it.line_cost_centi)
-              : Number(it.qty ?? 0) * Number(it.unit_cost_centi ?? 0);
-            const lineMargin = it.line_margin_centi != null
-              ? Number(it.line_margin_centi)
-              : lineTotal - lineCost;
-            const lineMarginColor = lineMargin > 0
-              ? 'var(--c-secondary-a, #2F5D4F)'
-              : lineMargin < 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--fg-muted)';
-            return (
-              <tr key={it.id} style={{ borderTop: '1px solid rgba(34, 31, 32, 0.05)' }}>
-                <td style={TD_BASE}><CategoryPill group={it.item_group} /></td>
-                <td style={{ ...TD_BASE, fontWeight: 700, color: 'var(--c-burnt)' }}>
-                  {it.item_code ?? '—'}
-                </td>
-                <td style={TD_BASE}>
-                  {/* Commander 2026-05-29 — show the variant summary, computed
-                      LIVE from variants (one consistent " / " separator). When
-                      there's no manual Description 1 we show the summary as the
-                      cell text (no bare "—" above it — that dash confused the
-                      operator: "那个 - 是什么"). Manual text, when present, sits
-                      on top with the summary muted below. */}
-                  {(() => {
-                    const manual = (it.description ?? '').trim();
-                    const summary = buildVariantSummary(it.item_group, it.variants);
-                    if (manual) {
-                      return (
-                        <>
-                          <div>{manual}</div>
-                          {summary && (
-                            <div style={{ color: 'var(--fg-muted)', fontSize: 'var(--fs-10)', lineHeight: 1.35 }}>
-                              {summary}
-                            </div>
-                          )}
-                        </>
-                      );
-                    }
-                    return summary ? <div>{summary}</div> : '—';
-                  })()}
-                </td>
-                <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
-                <td style={TD_RIGHT}>{it.qty ?? 0}</td>
-                <td style={TD_BASE}>
-                  {(() => {
-                    /* Delivered column = delivery documentation only (which DOs
-                       took how much + the live balance). The incoming-PO / ETA
-                       coverage moved to the Stock column under "Pending" (Wei
-                       Siang 2026-05-31) — it belongs with stock readiness, not
-                       with what has shipped. */
-                    const hasDeliveries = it.deliveries && it.deliveries.length > 0;
-                    if (!hasDeliveries) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;
-                    return (
-                      <div>
-                        {it.deliveries!.map((d, di) => (
-                          <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
-                            {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
-                          </div>
-                        ))}
-                        {typeof it.remaining_qty === 'number' && (
-                          <div style={{
-                            fontSize: 'var(--fs-10)', marginTop: 1,
-                            color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
-                          }}>
-                            {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </td>
-                <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
-                <td style={{ ...TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
-                  {fmtRm(lineTotal)}
-                </td>
-                <td style={TD_RIGHT}>{fmtRm(Number(it.unit_cost_centi ?? 0))}</td>
-                <td style={TD_RIGHT}>{fmtRm(lineCost)}</td>
-                <td style={{ ...TD_RIGHT, color: lineMarginColor, fontWeight: 600 }}>
-                  {fmtRm(lineMargin)}
-                </td>
-                <td style={TD_BASE}>
-                  {(() => {
-                    /* Stock column — same three states the MRP page shows, driven
-                       by the MRP allocation outcome (stock_state, Wei Siang
-                       2026-05-31): on hand → STOCK, ordered → PO + ETA, not yet
-                       ordered → PENDING. Once a line has fully shipped the goods
-                       already left, so DELIVERED wins over all three. */
-                    const delivered = Number(it.delivered_qty ?? 0);
-                    const remaining = Number(it.remaining_qty ?? it.qty ?? 0);
-                    const fullyDelivered = delivered > 0 && remaining <= 0;
-                    // Fall back to the operator's stock_status only when the MRP
-                    // allocation didn't reach this line (best-effort coverage).
-                    const state = it.stock_state ?? (it.stock_status === 'READY' ? 'stock' : 'shortage');
-                    const onHand = state === 'stock';
-                    const ordered = state === 'po' && Boolean(it.coverage_po);
-                    if (ordered) {
-                      // Ordered but not yet here — show the PO + when it lands.
-                      return (
-                        <span style={{
-                          fontSize: 'var(--fs-10)', fontWeight: 600,
-                          color: 'var(--c-burnt)', whiteSpace: 'nowrap',
-                        }}>
-                          {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
-                        </span>
-                      );
-                    }
-                    const label = fullyDelivered ? 'DELIVERED' : onHand ? 'STOCK' : 'PENDING';
-                    const green = fullyDelivered || onHand;
-                    return (
-                      <span style={{
-                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
-                        fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
-                        borderRadius: 999,
-                        color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
-                        background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
-                      }}>
-                        {label}
-                      </span>
-                    );
-                  })()}
-                </td>
-                <td style={{ ...TD_BASE, color: 'var(--fg-muted)', fontSize: 'var(--fs-10)' }}>
-                  {paymentRefs || '—'}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-        <tfoot>
-          <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
-            <td style={{ ...TFOOT_LABEL }} colSpan={7}>Subtotal</td>
-            <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: 'var(--c-burnt)' }}>
-              {fmtRm(totalCenti)}
-            </td>
-            <td style={{ ...TD_RIGHT, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
-            <td style={{ ...TD_RIGHT, paddingTop: 6 }}>{fmtRm(costCenti)}</td>
-            <td style={{ ...TD_RIGHT, paddingTop: 6, fontWeight: 700, color: marginColor }}>
-              {fmtRm(marginCenti)}
-            </td>
-            <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
-            <td style={{ ...TD_BASE, paddingTop: 6, color: 'var(--fg-muted)' }}>—</td>
-          </tr>
-        </tfoot>
-        </table>
+      {/* The drill-down is now the SAME configurable grid as the main list
+          (add/remove · drag-reorder · resize · right-click header), in compact
+          `embedded` mode (no search box / footer chrome). Layout persists under
+          one shared key so the operator's column choices follow them into every
+          SO they expand. */}
+      <DataGrid<SoItem>
+        rows={items}
+        columns={columns}
+        storageKey="so-drilldown-grid.v1"
+        rowKey={(it) => it.id}
+        embedded
+        groupBanner={false}
+      />
+      {/* Subtotal — a compact summary line under the grid rather than a
+          column-aligned footer row, which can't survive columns being
+          reordered / hidden now that they're configurable. */}
+      <div style={{
+        display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end',
+        alignItems: 'baseline', padding: '8px 8px 2px',
+        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums',
+        color: 'var(--fg-muted)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}>Subtotal</span>
+        <span>Total <strong style={{ color: 'var(--c-burnt)' }}>{fmtRm(totalCenti)}</strong></span>
+        <span>Line Cost <strong style={{ color: 'var(--c-ink)' }}>{fmtRm(costCenti)}</strong></span>
+        <span>Margin <strong style={{ color: marginColor }}>{fmtRm(marginCenti)}</strong></span>
       </div>
     </div>
   );

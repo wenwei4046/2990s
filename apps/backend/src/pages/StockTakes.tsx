@@ -32,7 +32,7 @@ const STATUS_TONE: Record<StockTakeStatus, { bg: string; fg: string; label: stri
 const fmtDate = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 const scopeLabel = (scopeType: string, scopeValue: string | null): string => {
@@ -200,7 +200,7 @@ export const StockTakes = () => {
                 <tr key={t.id} style={{ cursor: 'pointer' }}
                     onClick={() => navigate(`/inventory/stock-takes/${t.id}`)}>
                   <td>
-                    <span className={styles.codeChip}>{t.take_no}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{t.take_no}</span>
                   </td>
                   <td className={styles.numCellZero}>{fmtDate(t.take_date)}</td>
                   <td>

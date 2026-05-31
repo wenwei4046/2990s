@@ -700,7 +700,7 @@ export const SalesOrderDetailListing = () => {
               there and they show up here on next load. */}
           <Button variant="primary" size="sm" onClick={() => navigate('/mfg-sales-orders/new')}>
             <Plus {...SM_ICON} />
-            <span>New Line Item</span>
+            <span>Add Line Item</span>
           </Button>
         </div>
       </div>

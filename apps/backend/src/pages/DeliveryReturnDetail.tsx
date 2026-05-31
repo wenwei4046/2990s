@@ -360,7 +360,7 @@ export const DeliveryReturnDetail = () => {
           </span>
           {isEditing && (
             <Button variant="ghost" size="md" onClick={() => navigate('/delivery-returns/from-do')}>
-              <ArrowDownToLine {...ICON} /><span>Convert from DO</span>
+              <ArrowDownToLine {...ICON} /><span>From Delivery Order</span>
             </Button>
           )}
           {isCancelled ? (

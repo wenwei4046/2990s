@@ -498,7 +498,7 @@ export const SalesInvoiceDetail = () => {
         </header>
 
         {items.length === 0 && !isEditing ? (
-          <p className={styles.emptyRow}>No items yet — click "Edit" then "Add Line Item" or "Convert from DO" to begin.</p>
+          <p className={styles.emptyRow}>No items yet — click "Edit" then "Add Line Item" or "From Delivery Order" to begin.</p>
         ) : isEditing ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', padding: 'var(--space-3)' }}>
             {items.map((it, idx) => {
@@ -527,7 +527,7 @@ export const SalesInvoiceDetail = () => {
             )}
             {items.length === 0 && !addingDraft && (
               <p className={styles.emptyRow} style={{ padding: 'var(--space-3)' }}>
-                No items yet — click "Add Line Item" above or "Convert from DO" to begin.
+                No items yet — click "Add Line Item" above or "From Delivery Order" to begin.
               </p>
             )}
           </div>

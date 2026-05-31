@@ -173,6 +173,11 @@ type DoItem = {
   notes: string | null;
 };
 
+/* One not-yet-saved add-line. soItemId/maxQty are set when picked from the
+   parent SO (links + caps the create); null for an ad-hoc blank line. */
+type PendingAdd = { uid: string; soItemId: string | null; maxQty: number; draft: SoLineDraft };
+const newUid = (): string => Math.random().toString(36).slice(2, 10);
+
 const draftFromItem = (it: DoItem): SoLineDraft => ({
   itemCode: it.item_code ?? '',
   itemGroup: it.item_group ?? 'others',
@@ -213,11 +218,11 @@ export const DeliveryOrderDetail = () => {
   const [paymentDrafts, setPaymentDrafts] = useState<PaymentDraft[]>([]);
 
   const [editingDrafts, setEditingDrafts] = useState<Record<string, SoLineDraft>>({});
-  const [addingDraft, setAddingDraft] = useState<SoLineDraft | null>(null);
-  /* When the add line was picked from the parent SO, remember its SO line id +
-     remaining cap so the create links so_item_id and never over-delivers. */
-  const [addSoItemId, setAddSoItemId] = useState<string | null>(null);
-  const [addMaxQty, setAddMaxQty] = useState<number>(0);
+  /* Pending add-lines (Wei Siang 2026-05-31) — you can stack several before one
+     Save, so picking a second SO line no longer hides the first. Each carries
+     its own SO link + remaining cap (soItemId/maxQty) so the create links the
+     right SO line and never over-delivers. soItemId null = ad-hoc blank line. */
+  const [addingDrafts, setAddingDrafts] = useState<PendingAdd[]>([]);
 
   const [isEditing, setIsEditing] = useState(searchParams.get('edit') === '1');
   const [justCreated, setJustCreated] = useState(searchParams.get('created') === '1');
@@ -260,7 +265,7 @@ export const DeliveryOrderDetail = () => {
   useEffect(() => {
     if (!isEditing) {
       setEditingDrafts({});
-      setAddingDraft(null);
+      setAddingDrafts([]);
       setPaymentDrafts([]);
       return;
     }
@@ -321,27 +326,36 @@ export const DeliveryOrderDetail = () => {
     return map;
   }, [items, patchEditingDraft, removeEditingLine, deleteItem]);
 
-  const startAddLine = () => { setAddSoItemId(null); setAddMaxQty(0); setAddingDraft({ ...emptySoLine() }); };
-  /* Seed the add-line draft from a chosen SO remaining line (SO-linked DOs). */
+  const startAddLine = () =>
+    setAddingDrafts((prev) => [...prev, { uid: newUid(), soItemId: null, maxQty: 0, draft: { ...emptySoLine() } }]);
+  /* Append one more add-line seeded from a chosen SO remaining line (SO-linked
+     DOs). Stacking is allowed — pick SK then K and both sit as drafts until Save. */
   const addFromSoLine = (line: DeliverableSoLine) => {
-    setAddSoItemId(line.soItemId);
-    setAddMaxQty(line.remaining);
-    setAddingDraft({
-      itemCode: line.itemCode,
-      itemGroup: line.itemGroup ?? 'others',
-      description: line.description ?? '',
-      uom: line.uom ?? 'UNIT',
-      qty: line.remaining,
-      unitPriceCenti: line.unitPriceCenti,
-      discountCenti: line.discountCenti,
-      unitCostCenti: line.unitCostCenti,
-      variants: (line.variants as Record<string, unknown>) ?? {},
-      remark: '',
-    });
+    setAddingDrafts((prev) => [...prev, {
+      uid: newUid(),
+      soItemId: line.soItemId,
+      maxQty: line.remaining,
+      draft: {
+        itemCode: line.itemCode,
+        itemGroup: line.itemGroup ?? 'others',
+        description: line.description ?? '',
+        uom: line.uom ?? 'UNIT',
+        qty: line.remaining,
+        unitPriceCenti: line.unitPriceCenti,
+        discountCenti: line.discountCenti,
+        unitCostCenti: line.unitCostCenti,
+        variants: (line.variants as Record<string, unknown>) ?? {},
+        remark: '',
+      },
+    }]);
   };
-  const cancelAddLine = useCallback(() => { setAddingDraft(null); setAddSoItemId(null); setAddMaxQty(0); }, []);
+  const removeAddingDraft = useCallback(
+    (uid: string) => setAddingDrafts((prev) => prev.filter((p) => p.uid !== uid)),
+    [],
+  );
   const patchAddingDraft = useCallback(
-    (patch: Partial<SoLineDraft>) => setAddingDraft((prev) => prev ? { ...prev, ...patch } : prev),
+    (uid: string, patch: Partial<SoLineDraft>) =>
+      setAddingDrafts((prev) => prev.map((p) => (p.uid === uid ? { ...p, draft: { ...p.draft, ...patch } } : p))),
     [],
   );
 
@@ -353,16 +367,16 @@ export const DeliveryOrderDetail = () => {
       unitCostCenti: d.unitCostCenti, variants: d.variants, notes: d.remark,
     });
 
-  const commitAddLine = (d: SoLineDraft) =>
+  const commitAddLine = (p: PendingAdd) =>
     addItem.mutateAsync({
       id: header!.id,
       // Link to the SO line + clamp to remaining when this add came from the SO
       // picker; the backend enforces the same cap as a final guard.
-      soItemId: addSoItemId ?? undefined,
-      itemCode: d.itemCode, itemGroup: d.itemGroup, description: d.description,
-      uom: d.uom, qty: addSoItemId ? Math.min(d.qty, addMaxQty) : d.qty,
-      unitPriceCenti: d.unitPriceCenti, discountCenti: d.discountCenti,
-      unitCostCenti: d.unitCostCenti, variants: d.variants, notes: d.remark,
+      soItemId: p.soItemId ?? undefined,
+      itemCode: p.draft.itemCode, itemGroup: p.draft.itemGroup, description: p.draft.description,
+      uom: p.draft.uom, qty: p.soItemId ? Math.min(p.draft.qty, p.maxQty) : p.draft.qty,
+      unitPriceCenti: p.draft.unitPriceCenti, discountCenti: p.draft.discountCenti,
+      unitCostCenti: p.draft.unitCostCenti, variants: p.draft.variants, notes: p.draft.remark,
     });
 
   /* Persist the payment drafts: delete removed rows, POST new ones. Existing
@@ -407,7 +421,7 @@ export const DeliveryOrderDetail = () => {
     if (!handle || !header || savingOrder) return;
     setSaveError(null);
 
-    if (addingDraft && !addingDraft.itemCode.trim()) {
+    if (addingDrafts.some((p) => !p.draft.itemCode.trim())) {
       setSaveError('Pick a product for the new line, or remove it before saving.');
       return;
     }
@@ -419,12 +433,13 @@ export const DeliveryOrderDetail = () => {
 
     setSavingOrder(true);
     const lineEntries = Object.entries(editingDrafts);
-    const pendingAdd = addingDraft;
+    const pendingAdds = addingDrafts;
 
     handle.save({
       onSuccess: () => {
         Promise.all(lineEntries.map(([lineId, d]) => commitEditingDraft(lineId, d)))
-          .then(async () => { if (pendingAdd) await commitAddLine(pendingAdd); })
+          // Commit the stacked add-lines in order so each gets its own DO line.
+          .then(async () => { for (const p of pendingAdds) await commitAddLine(p); })
           .then(() => flushPaymentDrafts())
           .then(() => { setSavingOrder(false); setIsEditing(false); })
           .catch((e) => {
@@ -573,14 +588,21 @@ export const DeliveryOrderDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({items.length})</h2>
-          {isEditing && !addingDraft && !isLocked && (
+          {isEditing && !isLocked && (
             soDocNo ? (() => {
               if (deliverableQ.isLoading) {
                 return <span className={styles.fieldLabel}>Loading Sales Order lines…</span>;
               }
-              const remainingLines = (deliverableQ.data ?? []).filter((l) => l.remaining > 0);
-              if (remainingLines.length === 0) {
+              // Hide lines already stacked as a pending add — the dropdown stays
+              // open so you can keep picking the rest (Wei Siang 2026-05-31).
+              const picked = new Set(addingDrafts.map((p) => p.soItemId).filter(Boolean));
+              const deliverable = (deliverableQ.data ?? []).filter((l) => l.remaining > 0);
+              const remainingLines = deliverable.filter((l) => !picked.has(l.soItemId));
+              if (deliverable.length === 0) {
                 return <span className={styles.fieldLabel}>All Sales Order lines fully delivered — nothing left to add.</span>;
+              }
+              if (remainingLines.length === 0) {
+                return <span className={styles.fieldLabel}>All remaining lines added below — Save to confirm.</span>;
               }
               return (
                 <select
@@ -626,16 +648,17 @@ export const DeliveryOrderDetail = () => {
                 />
               );
             })}
-            {addingDraft && (
+            {addingDrafts.map((p, i) => (
               <SoLineCard
-                index={items.length}
-                draft={addingDraft}
-                onChange={patchAddingDraft}
-                onRemove={cancelAddLine}
+                key={p.uid}
+                index={items.length + i}
+                draft={p.draft}
+                onChange={(patch) => patchAddingDraft(p.uid, patch)}
+                onRemove={() => removeAddingDraft(p.uid)}
                 canRemove={true}
               />
-            )}
-            {items.length === 0 && !addingDraft && (
+            ))}
+            {items.length === 0 && addingDrafts.length === 0 && (
               <p className={styles.emptyRow} style={{ padding: 'var(--space-3)' }}>
                 No items yet — click "Add Line Item" above to begin.
               </p>

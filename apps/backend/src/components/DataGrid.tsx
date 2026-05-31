@@ -120,6 +120,15 @@ export type DataGridProps<T> = {
     /** Optional: derive a stable row id for expansion state. Defaults to rowKey. */
     rowExpansionKey?: (row: T) => string;
   };
+  /**
+   * Compact mode for grids embedded inside another grid's expansion row
+   * (the SO drill-down). Suppresses the search box and the bottom
+   * "N of M rows / Reset layout" status line — both read as heavy chrome
+   * inside a small sub-table. The Columns popover button, header drag-
+   * reorder, resize and right-click menu stay, so add/remove/reorder
+   * columns still work. Pair with `groupBanner={false}`.
+   */
+  embedded?: boolean;
 };
 
 type Layout = {
@@ -183,6 +192,7 @@ function DataGridInner<T>({
   isLoading = false,
   contextMenu,
   expandable,
+  embedded = false,
 }: DataGridProps<T>) {
   /* HOUZS-style inline expansion (PR so-list-houzs-port). Tracks the set of
      expanded row ids; rendering inserts a colSpan sub-<tr> directly under
@@ -626,17 +636,19 @@ function DataGridInner<T>({
       <div className={styles.toolbar}>
         {toolbar}
         <div className={styles.toolbarSpacer} />
-        <div className={styles.searchWrap}>
-          <Search {...ICON} aria-hidden />
-          <input
-            ref={searchRef}
-            className={styles.searchInput}
-            type="search"
-            placeholder={searchPlaceholder}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
+        {!embedded && (
+          <div className={styles.searchWrap}>
+            <Search {...ICON} aria-hidden />
+            <input
+              ref={searchRef}
+              className={styles.searchInput}
+              type="search"
+              placeholder={searchPlaceholder}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        )}
         <div className={styles.columnsAnchor}>
           <button
             ref={columnsBtnRef}
@@ -884,13 +896,16 @@ function DataGridInner<T>({
         </table>
       </div>
 
-      {/* Status / footer */}
-      <div className={styles.statusLine}>
-        <span>{isLoading ? 'Loading…' : `${filteredRows.length} of ${rows.length} rows`}</span>
-        <span>
-          <button className={styles.tbarBtn} onClick={resetLayout} title="Reset column layout">Reset layout</button>
-        </span>
-      </div>
+      {/* Status / footer — hidden in embedded (drill-down) mode where the
+          "N of M rows / Reset layout" line reads as heavy chrome. */}
+      {!embedded && (
+        <div className={styles.statusLine}>
+          <span>{isLoading ? 'Loading…' : `${filteredRows.length} of ${rows.length} rows`}</span>
+          <span>
+            <button className={styles.tbarBtn} onClick={resetLayout} title="Reset column layout">Reset layout</button>
+          </span>
+        </div>
+      )}
 
       {/* Context menu */}
       {ctx && (() => {

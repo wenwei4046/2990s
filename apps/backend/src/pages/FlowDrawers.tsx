@@ -285,7 +285,7 @@ export const CreatePurchaseInvoiceDrawer = ({ onClose }: { onClose: () => void }
             <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
           </div>
         ))}
-        <button type="button" className={sup.addBindingBtn} onClick={addLine}>+ Add line</button>
+        <button type="button" className={sup.addBindingBtn} onClick={addLine}>+ Add Line Item</button>
         <p style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-18)', color: 'var(--c-burnt)', fontWeight: 800 }}>
           Subtotal: {fmtMoney(subtotal)}
         </p>
@@ -407,7 +407,7 @@ export const CreateSalesOrderDrawer = ({ onClose }: { onClose: () => void }) => 
           </div>
         ))}
         <button type="button" className={sup.addBindingBtn} onClick={addLine}>
-          <Plus {...ICON} /> Add line
+          <Plus {...ICON} /> Add Line Item
         </button>
         <p style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-20)', color: 'var(--c-burnt)', fontWeight: 800 }}>
           Subtotal: {fmtMoney(subtotal)}
@@ -522,7 +522,7 @@ export const CreateSalesInvoiceDrawer = ({ onClose }: { onClose: () => void }) =
             <button type="button" className={sup.iconBtn} onClick={() => remLine(i)}><Trash2 {...ICON} /></button>
           </div>
         ))}
-        <button type="button" className={sup.addBindingBtn} onClick={addLine}>+ Add line</button>
+        <button type="button" className={sup.addBindingBtn} onClick={addLine}>+ Add Line Item</button>
         <p style={{ textAlign: 'right', fontFamily: 'var(--font-mark)', fontSize: 'var(--fs-18)', color: 'var(--c-burnt)', fontWeight: 800 }}>
           Subtotal: {fmtMoney(subtotal)}
         </p>

@@ -211,9 +211,17 @@ const deriveSalesLocationFromState = async (
 };
 
 const nextDocNo = async (sb: any): Promise<string> => {
-  // HOUZS pattern: SO-NNNNNN (6-digit zero-padded counter across all time)
-  const { count } = await sb.from('mfg_sales_orders').select('doc_no', { head: true, count: 'exact' });
-  return `SO-${String((count ?? 0) + 1 + 9000).padStart(6, '0')}`; // start at SO-009001
+  // Format: SO-YYMM-NNN (counts within month) — matches PO/DO/GRN/SI/DR/PI/PRT.
+  // Legacy SO-NNNNNN numbers stay as-is; only newly created SOs use this scheme.
+  const yymm = (() => {
+    const d = new Date();
+    return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}`;
+  })();
+  const { count } = await sb
+    .from('mfg_sales_orders')
+    .select('doc_no', { head: true, count: 'exact' })
+    .like('doc_no', `SO-${yymm}-%`);
+  return `SO-${yymm}-${String((count ?? 0) + 1).padStart(3, '0')}`;
 };
 
 /* ─────────────────────────── Cost snapshot ────────────────────────────

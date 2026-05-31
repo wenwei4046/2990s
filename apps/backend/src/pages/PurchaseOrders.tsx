@@ -50,11 +50,14 @@ const STATUS_CHIPS: { value: StatusFilter; label: string }[] = [
   { value: 'all', label: 'All' },
 ];
 
+// Lifecycle palette shared with every other module (see SalesOrderDetail.module.css):
+// active = burnt · in-progress = darker burnt · complete = green · cancelled = red.
+// Keeps the PO list pill colours identical to the PO detail page.
 const STATUS_COLOR: Record<PoStatus, string> = {
   // DRAFT removed in migration 0078.
-  SUBMITTED: 'rgba(31, 58, 138, 0.10)',
-  PARTIALLY_RECEIVED: 'rgba(232, 107, 58, 0.10)',
-  RECEIVED: 'rgba(47, 93, 79, 0.12)',
+  SUBMITTED: 'rgba(166, 71, 30, 0.12)',
+  PARTIALLY_RECEIVED: 'rgba(166, 71, 30, 0.18)',
+  RECEIVED: 'rgba(47, 93, 79, 0.28)',
   CANCELLED: 'rgba(184, 51, 31, 0.10)',
 };
 
@@ -108,7 +111,7 @@ const buildPoColumns = (
   },
   {
     key: 'po_number', label: 'PO No.', width: 150, sortable: true,
-    accessor: (po) => <span className={styles.codeChip}>{po.po_number}</span>,
+    accessor: (po) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{po.po_number}</span>,
     searchValue: (po) => po.po_number,
     sortFn: (a, b) => a.po_number.localeCompare(b.po_number),
   },
@@ -292,11 +295,11 @@ export const PurchaseOrders = () => {
               partial qty per line, and emit one PO per supplier. */}
           <Button variant="ghost" size="md" onClick={() => navigate('/purchase-orders/from-so')}>
             <Plus {...ICON} />
-            <span>From SO</span>
+            <span>From Sales Order</span>
           </Button>
           <Button variant="primary" size="md" onClick={() => navigate('/purchase-orders/new')}>
             <Plus {...ICON} />
-            <span>New PO</span>
+            <span>New Purchase Order</span>
           </Button>
         </div>
       </div>
@@ -353,7 +356,7 @@ export const PurchaseOrders = () => {
             <Button variant="primary" size="sm"
               onClick={convertToGrn}
               disabled={selectedSuppliers.size !== 1}>
-              {`Convert to GRN (${selectedIds.size})`}
+              {`To Goods Receipt (${selectedIds.size})`}
             </Button>
           </span>
         </div>
@@ -395,7 +398,7 @@ export const PurchaseOrders = () => {
           // never thinks the action disappeared. convertOneToGrn decides at click
           // time whether the PO still has goods inbound and otherwise shows a
           // plain "Nothing to be converted" message.
-          menu.push({ label: 'Convert to GRN', onClick: () => convertOneToGrn(po) });
+          menu.push({ label: 'To Goods Receipt', onClick: () => convertOneToGrn(po) });
           // Cancel — soft-stop. Hidden once already cancelled / received / locked.
           if (po.status !== 'CANCELLED' && po.status !== 'RECEIVED' && !hasChildren) {
             menu.push({ divider: true as const });
@@ -404,7 +407,7 @@ export const PurchaseOrders = () => {
           return menu;
         }}
         isLoading={isLoading}
-        emptyMessage='No POs yet — click "New PO" to start.'
+        emptyMessage='No POs yet — click "New Purchase Order" to start.'
       />
 
       {/* PR #97 — Create-PO drawer removed; full-page form at /purchase-orders/new */}

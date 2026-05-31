@@ -8,7 +8,7 @@
 // SUBMITTED → PARTIALLY_RECEIVED → RECEIVED from the GRN received_qty rollup on
 // every goods receipt. So this is a pure display relabel — nothing is manually
 // selectable; the operator only ever raises GRs and the status follows.
-//   SUBMITTED          → "Submitted"           (no goods received yet)
+//   SUBMITTED          → "Confirmed"           (no goods received yet — unified with SO's first-active label)
 //   PARTIALLY_RECEIVED → "Partially Received"  (some qty received into a GR)
 //   RECEIVED           → "Received"            (every line fully received)
 //   CANCELLED          → "Cancelled"
@@ -16,7 +16,7 @@
 import type { PoStatus } from './suppliers-queries';
 
 export const PO_STATUS_LABEL: Record<PoStatus, string> = {
-  SUBMITTED: 'Submitted',
+  SUBMITTED: 'Confirmed',
   PARTIALLY_RECEIVED: 'Partially Received',
   RECEIVED: 'Received',
   CANCELLED: 'Cancelled',

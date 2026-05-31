@@ -252,7 +252,7 @@ export const StockTransferNew = () => {
         <div className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Items</h2>
           <Button variant="ghost" size="sm" onClick={addLine}>
-            <Plus size={14} strokeWidth={1.75} /> Add line
+            <Plus size={14} strokeWidth={1.75} /> Add Line Item
           </Button>
         </div>
         <div className={styles.cardBody}>
@@ -352,7 +352,7 @@ export const StockTransferNew = () => {
 
           <div className={styles.addLineRow}>
             <Button variant="ghost" size="sm" onClick={addLine}>
-              <Plus size={14} strokeWidth={1.75} /> Add line
+              <Plus size={14} strokeWidth={1.75} /> Add Line Item
             </Button>
           </div>
 

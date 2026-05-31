@@ -440,7 +440,7 @@ export const DeliveryReturnsList = () => {
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="sm" onClick={onConvertFromDo}>
             <ArrowDownToLine size={14} strokeWidth={1.75} />
-            <span>Convert From DO</span>
+            <span>From Delivery Order</span>
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
@@ -552,7 +552,7 @@ export const DeliveryReturnsList = () => {
         onRowDoubleClick={(r) => openDetail(r)}
         rowStyle={(r) => ['CANCELLED', 'REJECTED'].includes(r.status) ? { opacity: 0.55, filter: 'grayscale(0.6)' } : undefined}
         isLoading={isLoading}
-        emptyMessage='No delivery returns yet — click "Convert From DO" to start.'
+        emptyMessage='No delivery returns yet — click "From Delivery Order" to start.'
         expandable={{
           renderExpansion: (row) => <ExpandedDrLines id={row.id} />,
           rowExpansionKey: (row) => row.id,

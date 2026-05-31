@@ -29,6 +29,7 @@
 import { Hono } from 'hono';
 import { computeVariantKey, buildVariantSummary, type VariantAttrs } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
+import { soDeliverableRemaining } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
 
 export const mrp = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -216,12 +217,28 @@ export async function computeMrp(
     .limit(5000);
   if (demandErr) throw new Error(`mrp_load_failed: ${demandErr.message}`);
 
-  const demand = ((demandRaw ?? []) as unknown as DemandRow[]).filter(
+  const demandActive = ((demandRaw ?? []) as unknown as DemandRow[]).filter(
     (r) => r.item_code && r.so && !SO_DONE.has(r.so.status) && r.qty > 0
       // Undated lines (no line delivery date AND no SO delivery date) are not
       // ready to order — drop them unless the caller explicitly asks for them.
       && (includeUndated || Boolean(r.line_delivery_date ?? r.so.customer_delivery_date)),
   );
+
+  // A partially-delivered SO keeps its header status active (the header only
+  // flips to DELIVERED once EVERY line is fully covered), so already-delivered
+  // lines would otherwise phantom back in as demand and over-order. Subtract
+  // delivered-net-of-returns per line and drop any line with nothing left to
+  // fulfil. Single source of truth: soDeliverableRemaining (same query the DO
+  // convert flow uses), so MRP can never disagree with the SO's remaining.
+  const demandDocNos = [...new Set(demandActive.map((d) => d.doc_no).filter(Boolean))];
+  const deliverable = await soDeliverableRemaining(sb, demandDocNos);
+  const deliveredNetOf = (soItemId: string): number => {
+    const d = deliverable.get(soItemId);
+    if (!d) return 0;
+    return Math.max(0, (d.delivered ?? 0) - (d.returned ?? 0));
+  };
+  const effQtyOf = (r: DemandRow): number => Math.max(0, r.qty - deliveredNetOf(r.id));
+  const demand = demandActive.filter((r) => effQtyOf(r) > 0);
 
   // ── 2. Product master — category + name + warehouses + categories list ─
   const { data: products } = await sb
@@ -365,7 +382,7 @@ export async function computeMrp(
     // total picked units (earliest ETA first — they belong to already-ordered
     // lines), then give each line only its UNPICKED remainder (qty - picked) to
     // the stock/PO competition below.
-    let lockedPicked = rows.reduce((acc, r) => acc + Math.min(r.po_qty_picked ?? 0, r.qty), 0);
+    let lockedPicked = rows.reduce((acc, r) => acc + Math.min(r.po_qty_picked ?? 0, effQtyOf(r)), 0);
     while (lockedPicked > 0 && poQueue.length > 0) {
       const front = poQueue[0];
       if (!front) break;
@@ -378,9 +395,10 @@ export async function computeMrp(
     const lines: MrpLine[] = [];
     let qtyNeeded = 0;
     for (const r of rows) {
-      qtyNeeded += r.qty;
-      const picked = Math.min(r.po_qty_picked ?? 0, r.qty); // units already on this line's own PO (locked)
-      let need = r.qty - picked;                            // only the unpicked remainder competes for supply
+      const eff = effQtyOf(r);                              // qty still to fulfil (ordered − delivered + returned)
+      qtyNeeded += eff;
+      const picked = Math.min(r.po_qty_picked ?? 0, eff);   // units already on this line's own PO (locked)
+      let need = eff - picked;                              // only the unpicked remainder competes for supply
       const fromStock = Math.min(stockLeft, need);
       stockLeft -= fromStock;
       need -= fromStock;
@@ -422,7 +440,7 @@ export async function computeMrp(
         deliveryDate: lineDelivery,
         processingDate: r.so?.internal_expected_dd ?? null,
         orderByDate: orderByOf(lineDelivery, prod?.category ?? null),
-        qty: r.qty,
+        qty: eff,
         source,
         poNumber,
         poEta,
@@ -483,7 +501,8 @@ export async function computeMrp(
       const cells = Array.isArray(v.cells) ? (v.cells as Array<{ moduleId?: string }>) : [];
       const modules = cells.map((c) => sstr(c.moduleId)).filter(Boolean);
       const colour = [sstr(v.fabricCode), sstr(v.colorCode) || sstr(v.colourCode)].filter(Boolean).join(' ');
-      const ordered = d.po_qty_picked ?? 0;
+      const eff = effQtyOf(d);                        // set qty still to fulfil (ordered − delivered + returned)
+      const ordered = Math.min(d.po_qty_picked ?? 0, eff);
       const prod = prodByCode.get(d.item_code);
       const setDelivery = d.line_delivery_date ?? d.so?.customer_delivery_date ?? null;
       // PO(s) this SO line's units were raised into, with the earliest supplier
@@ -502,9 +521,9 @@ export async function computeMrp(
         variantLabel: buildVariantSummary(d.item_group, v) || null,
         modules,
         colour: colour || null,
-        qty: d.qty,
+        qty: eff,
         orderedQty: ordered,
-        shortageQty: Math.max(0, d.qty - ordered),
+        shortageQty: Math.max(0, eff - ordered),
         poNumber: picked && picked.poNumbers.length > 0 ? picked.poNumbers.join(', ') : null,
         poEta: picked?.eta ?? null,
         suppliers: suppliersByCode.get(d.item_code) ?? [],

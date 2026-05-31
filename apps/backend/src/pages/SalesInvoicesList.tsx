@@ -454,7 +454,7 @@ export const SalesInvoicesList = () => {
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
-            <span>New Invoice</span>
+            <span>New Sales Invoice</span>
           </Button>
         </div>
       </div>

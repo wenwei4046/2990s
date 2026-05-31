@@ -471,7 +471,7 @@ export const MfgDeliveryOrdersList = () => {
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="sm" onClick={() => navigate('/mfg-delivery-orders/from-so')}>
             <ArrowRightLeft size={14} strokeWidth={1.75} />
-            <span>Convert From Sales Order</span>
+            <span>From Sales Order</span>
           </Button>
           <Button variant="primary" size="sm" onClick={onNew}>
             <Plus size={14} strokeWidth={1.75} />
@@ -611,14 +611,14 @@ export const MfgDeliveryOrdersList = () => {
           // never thinks they vanished. A CANCELLED DO has nothing to convert, so
           // clicking then tells them plainly instead of opening an empty form.
           items.push({
-            label: 'Convert to Sales Invoice',
+            label: 'To Sales Invoice',
             onClick: () => {
               if (status === 'CANCELLED') { window.alert('Nothing to be converted — this Delivery Order is cancelled.'); return; }
               navigate(`/sales-invoices/new?fromDo=${row.id}`);
             },
           });
           items.push({
-            label: 'Convert to Delivery Return',
+            label: 'To Delivery Return',
             onClick: () => {
               if (status === 'CANCELLED') { window.alert('Nothing to be converted — this Delivery Order is cancelled.'); return; }
               navigate(`/delivery-returns/new?fromDo=${row.id}`);

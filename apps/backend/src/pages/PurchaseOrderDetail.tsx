@@ -187,6 +187,30 @@ export const PurchaseOrderDetail = () => {
   const itemsSubtotal = visibleItems.reduce((s, it) => s + lineTotalOf(it), 0);
   const grandTotal = itemsSubtotal + (po.tax_centi ?? 0);
 
+  /* Per-line "Received" cell — which Goods Receipt took how much off this line,
+     plus the live balance still outstanding. Mirrors the SO "Delivered" column.
+     Cancelled GRNs are already excluded server-side. */
+  const renderReceived = (it: PoItemRow) => {
+    const receipts = it.receipts ?? [];
+    if (receipts.length === 0) return <span className={styles.muted}>—</span>;
+    const remaining = Math.max(0, it.qty - (it.received_qty ?? 0));
+    return (
+      <div>
+        {receipts.map((r, ri) => (
+          <div key={ri} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+            {r.grnNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{r.qty}</span>
+          </div>
+        ))}
+        <div style={{
+          fontSize: 'var(--fs-11)', marginTop: 1,
+          color: remaining > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+        }}>
+          {remaining > 0 ? `Balance ${remaining}` : 'Fully received'}
+        </div>
+      </div>
+    );
+  };
+
   const headerView = headerDraft ?? headerSnapshot(po);
 
   const setHeaderField = (k: keyof HeaderDraft, v: string) => {
@@ -314,7 +338,7 @@ export const PurchaseOrderDetail = () => {
               onClick={() => navigate(`/purchase-orders/from-so?poId=${po.id}`)}
             >
               <ArrowRightLeft {...ICON} />
-              <span>Convert from SO</span>
+              <span>From Sales Order</span>
             </Button>
           )}
           {/* PR — Commander 2026-05-27: "Cancel/Delete PO 没反应".
@@ -412,8 +436,8 @@ export const PurchaseOrderDetail = () => {
         {visibleItems.length === 0 ? (
           <p className={styles.emptyRow}>
             {isEditing
-              ? 'No items yet — click "Convert from SO" above to add lines.'
-              : 'No items yet — click "Edit" then "Convert from SO" to add lines.'}
+              ? 'No items yet — click "From Sales Order" above to add lines.'
+              : 'No items yet — click "Edit" then "From Sales Order" to add lines.'}
           </p>
         ) : (
           <table className={styles.table}>
@@ -422,6 +446,7 @@ export const PurchaseOrderDetail = () => {
                 <th>Item</th>
                 <th>Group</th>
                 <th className={styles.tableRight}>Qty</th>
+                <th>Received</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 <th className={styles.tableRight}>Total</th>
@@ -467,6 +492,7 @@ export const PurchaseOrderDetail = () => {
                             onChange={(e) => setLine(it, { qty: Number(e.target.value) || 0 })}
                           />
                         </td>
+                        <td>{renderReceived(it)}</td>
                         <td className={styles.tableRight}>
                           <MoneyInput bare selectOnFocus inputClassName={styles.fieldInput}
                             style={{ width: 110, textAlign: 'right' }}
@@ -510,6 +536,7 @@ export const PurchaseOrderDetail = () => {
                     ) : (
                       <>
                         <td className={styles.tableRight}>{it.qty}</td>
+                        <td>{renderReceived(it)}</td>
                         <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, po.currency)}</td>
                         <td className={styles.tableRight}>{(it.discount_centi ?? 0) > 0 ? fmtRm(it.discount_centi, po.currency) : '—'}</td>
                         <td className={styles.priceCell}>{fmtRm(it.line_total_centi, po.currency)}</td>

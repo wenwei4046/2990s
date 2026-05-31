@@ -486,7 +486,7 @@ export const GrnNew = () => {
         <div className={styles.actions}>
           {/* Bulk / multi-PO picker that FEEDS this form. */}
           <Button variant="ghost" size="md" onClick={goToFromPo}>
-            <Layers {...ICON} /> From PO (multi)
+            <Layers {...ICON} /> From Purchase Order
           </Button>
           <Button variant="ghost" size="md" onClick={() => navigate('/grns')}>
             <X {...ICON} /> Cancel
@@ -684,7 +684,7 @@ export const GrnNew = () => {
               {isManual
                 ? 'Pick a supplier in the header, then use “Add another item” below to receive items by hand. Receiving against a PO? Pick one in the header, or use '
                 : 'Choose a Purchase Order in the header to receive against it. Receiving lines from several POs at once? Use '}
-              <button type="button" onClick={goToFromPo} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From PO (multi)</button>.
+              <button type="button" onClick={goToFromPo} style={{ background: 'none', border: 'none', color: 'var(--c-orange)', cursor: 'pointer', padding: 0, font: 'inherit' }}>From Purchase Order</button>.
             </p>
           ) : (
             /* Card-per-line layout — Commander 2026-05-29: "PO 跟 GRN 界面要一样".

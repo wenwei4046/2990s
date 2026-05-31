@@ -31,7 +31,7 @@ const STATUS_TONE: Record<StockTransferStatus, { bg: string; fg: string; label: 
 const fmtDate = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 export const StockTransfers = () => {
@@ -205,7 +205,7 @@ export const StockTransfers = () => {
                 <tr key={t.id} style={{ cursor: 'pointer' }}
                     onClick={() => navigate(`/inventory/transfers/${t.id}`)}>
                   <td>
-                    <span className={styles.codeChip}>{t.transfer_no}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{t.transfer_no}</span>
                   </td>
                   <td className={styles.numCellZero}>{fmtDate(t.transfer_date)}</td>
                   <td>
