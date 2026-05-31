@@ -327,6 +327,13 @@ export const fabricLibrary = pgTable('fabric_library', {
   swatchKey:        text('swatch_key'),                          // optional R2 texture; else hex chip
   active:           boolean('active').notNull().default(true),
   sortOrder:        integer('sort_order').notNull().default(0),
+  // POS selling fabric-tier add-on (migration 0124). DB columns are the
+  // `fabric_price_tier` enum (PRICE_1/2/3); typed text() here because that enum
+  // is declared further down this file. SELLING tiers — distinct from the
+  // fabric_trackings COST tiers. fabric_code links to the procurement ledger row.
+  sofaTier:         text('sofa_tier'),
+  bedframeTier:     text('bedframe_tier'),
+  fabricCode:       text('fabric_code'),
 });
 
 export const fabricColours = pgTable('fabric_colours', {
@@ -349,6 +356,19 @@ export const productFabrics = pgTable('product_fabrics', {
 }, (t) => ({
   pk: primaryKey({ columns: [t.productId, t.fabricId] }),
 }));
+
+// Singleton (id=1) — flat POS SELLING add-on (whole MYR) per fabric tier, per
+// category. Mirrors deliveryFeeConfig. Read by all staff; written by
+// admin/coordinator/master_account (migration 0124 RLS).
+export const fabricTierAddonConfig = pgTable('fabric_tier_addon_config', {
+  id:                 integer('id').primaryKey().default(1),     // CHECK (id = 1) at DB
+  sofaTier2Delta:     integer('sofa_tier2_delta').notNull().default(0),
+  sofaTier3Delta:     integer('sofa_tier3_delta').notNull().default(0),
+  bedframeTier2Delta: integer('bedframe_tier2_delta').notNull().default(0),
+  bedframeTier3Delta: integer('bedframe_tier3_delta').notNull().default(0),
+  updatedAt:          timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:          uuid('updated_by'),                        // references staff(id)
+});
 
 /* ─────────────────────────── Bedframe configurator ──────────────────── */
 // Bedframe (pricing_kind='bedframe_build'): size variant (reuse product_size_
@@ -1145,6 +1165,9 @@ export const mfgSalesOrders = pgTable('mfg_sales_orders', {
   totalMarginCenti:  integer('total_margin_centi').notNull().default(0),
   marginPctBasis:    integer('margin_pct_basis').notNull().default(0), // × 100 (e.g. 23.50% = 2350)
   lineCount:         integer('line_count').notNull().default(0),
+  // Fabric-tier SELLING add-on total for the order (migration 0124). Reporting
+  // snapshot; the Δ also folds into each sofa/bedframe line's total_centi.
+  fabricTierAddonCenti: integer('fabric_tier_addon_centi').notNull().default(0),
 
   currency:          currencyCode('currency').notNull().default('MYR'),
   status:            mfgSoStatus('status').notNull().default('CONFIRMED'),
