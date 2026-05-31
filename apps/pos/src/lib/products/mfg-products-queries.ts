@@ -299,26 +299,11 @@ export function useUpdateMfgProductPrices() {
   });
 }
 
-/** D5 (cost/sell split Phase 2) — Master Account per-SKU POS catalog on/off.
- *  Writes the selling-only `pos_active` column (NOT cost-side `status`). The
- *  POS Products "Visible" toggle hits this; the customer catalog read filters
- *  on pos_active. Cost/PO discontinuation still lives on `status`, managed from
- *  the Backend Model-detail SKU-variants table (its own hook). */
-export function useUpdateMfgProductPosActive() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (args: { id: string; posActive: boolean }) => {
-      const { id, posActive } = args;
-      return authedFetch<{ ok: boolean; changed: number }>(`/mfg-products/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ posActive }),
-      });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['mfg-products'] });
-    },
-  });
-}
+/* (Removed 2026-06-01) useUpdateMfgProductPosActive — the standalone per-SKU
+   "Visible" toggle was retired so Master Admin's Modular ON/OFF (allowed_options)
+   is the single source of truth. The server mirrors allowed_options.sizes onto
+   pos_active (PATCH /product-models cascade); pos_active is no longer set from a
+   client toggle. */
 
 /** D7 (Phase 3) — Master Account per-SKU permanent free gifts. Writes the
  *  selling-only `included_addons` ({addonId, qty}[]). The POS Configurator

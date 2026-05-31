@@ -71,7 +71,6 @@ import {
 import {
   useMfgProducts,
   useUpdateMfgProductPrices,
-  useUpdateMfgProductPosActive,
   useUpdateMfgProductGifts,
   useCreateMfgProduct,
   useDeleteMfgProduct,
@@ -1225,15 +1224,16 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   //   PR #82 — leading checkbox column added (+1, only in full mode).
   //   PR #38 — Configure + History columns removed. Double-click a row to
   //   open the Suppliers drawer.
-  //   PR — Commander 2026-05-28: VISIBLE column added (+1 always).
-  //   - Sofa: [select?] + code + desc + model + N sizes + unit + visible
-  //   - Mattress: [select?] + code + desc + branding + size + price + unit + visible
-  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit + visible
+  //   Visibility is now controlled solely in Modular (Chairman 2026-06-01) —
+  //   the per-SKU "Visible" column was removed from SKU Master.
+  //   - Sofa: [select?] + code + desc + model + N sizes + unit
+  //   - Mattress: [select?] + code + desc + branding + size + price + unit
+  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit
   const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
-      : 7) + 1;
+      : 7);
 
   return (
     <>
@@ -1386,13 +1386,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
-              {/* PR — Commander 2026-05-28: per-SKU visibility toggle.
-                  Sales_director (add-only mode counts here as a permitted
-                  special case per commander explicit ask) + admin can flip
-                  whether a SKU surfaces on the POS Catalog. Toggle flips
-                  mfg_products.status between ACTIVE and INACTIVE; the
-                  Catalog query already filters by status === 'ACTIVE'. */}
-              <th style={{ textAlign: 'center' }}>Visible</th>
             </tr>
           </thead>
           <tbody>
@@ -1419,13 +1412,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 showSelectCol={canEdit}
                 selected={selectedIds.has(row.id)}
                 onToggleSelected={() => toggleRow(row.id)}
-                /* PR — Commander 2026-05-28: VISIBLE toggle gating. The
-                   toggle is technically an EDIT (mfg_products.status flip);
-                   commander explicitly granted sales_director the right
-                   to flip it as a special case. So canToggleVisible is
-                   true for both 'add-only' (sales_director) and 'full'
-                   (admin); 'view' roles see the toggle but it's disabled. */
-                canToggleVisible={mode !== 'view'}
               />
             ))}
             {!isLoading && !error && rows.length === 0 && (
@@ -1479,7 +1465,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
 const ProductRow = ({
   row, editMode, isSofaView, isMattressView, sofaSizes, onOpenSuppliers, onOpenGifts,
   showSelectCol = true, selected, onToggleSelected,
-  canToggleVisible = false,
 }: {
   row: MfgProductRow;
   editMode: boolean;
@@ -1497,28 +1482,11 @@ const ProductRow = ({
       the checkbox + reports clicks. */
   selected:         boolean;
   onToggleSelected: () => void;
-  /** PR — Commander 2026-05-28: whether the VISIBLE toggle can be flipped.
-      true for sales_director (add-only) and admin (full). View-only roles
-      see the toggle in its current state but the input is disabled. */
-  canToggleVisible?: boolean;
 }) => {
-  /* PR — Commander 2026-05-28; rewired in cost/sell split Phase 2 (D5): the
-     visibility toggle now flips the selling-only mfg_products.pos_active flag
-     (NOT cost-side status). The customer catalog read filters on pos_active,
-     so toggle-off pulls the SKU from the showroom while leaving status (cost /
-     PO surfacing) intact. Confirm with a native confirm before flipping OFF
-     since visibility lapses have customer impact. */
-  const posActiveMut = useUpdateMfgProductPosActive();
-  const isVisible = row.pos_active;
-  const onFlipVisible = () => {
-    if (!canToggleVisible) return;
-    const next = !isVisible;
-    if (!next) {
-      // eslint-disable-next-line no-alert
-      if (!confirm(`Hide ${row.code} from the POS catalog? Customers will no longer see this SKU.`)) return;
-    }
-    posActiveMut.mutate({ id: row.id, posActive: next });
-  };
+  // Per-SKU catalog visibility is no longer toggled here — it follows the
+  // Master Admin's Modular ON/OFF (allowed_options), which the server mirrors
+  // onto pos_active (Chairman 2026-06-01). The standalone "Visible" toggle was
+  // removed so Modular is the single source of truth.
   // Local draft of the seat_height_prices array — buffers user edits before
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
@@ -1745,51 +1713,6 @@ const ProductRow = ({
         </>
       )}
       <td className={styles.numCell}>{fmtUnit(row.unit_m3_milli)}</td>
-      {/* PR — Commander 2026-05-28: VISIBLE toggle. Per-SKU control over
-          whether this row surfaces on the POS Catalog. Cost/sell split Phase 2
-          (D5): wired to the selling-only mfg_products.pos_active flag (NOT
-          cost-side status). The pencil icon lands alongside per commander's
-          screenshot — currently inert (per-channel visibility is a later
-          phase); the toggle itself handles the catalog-level on/off. */}
-      <td
-        style={{ textAlign: 'center', whiteSpace: 'nowrap' }}
-        onClick={(e) => e.stopPropagation()}
-        onDoubleClick={(e) => e.stopPropagation()}
-      >
-        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'center' }}>
-          {/* Native checkbox styled as a green toggle pill via CSS in
-              Products.module.css (see .visibleToggle). Falls back to a
-              plain checkbox if the class isn't present. */}
-          <label
-            className={styles.visibleToggle}
-            title={isVisible ? 'Visible on POS catalog' : 'Hidden from POS catalog'}
-            style={{ cursor: canToggleVisible ? 'pointer' : 'not-allowed' }}
-          >
-            <input
-              type="checkbox"
-              aria-label={`Toggle ${row.code} visibility`}
-              checked={isVisible}
-              disabled={!canToggleVisible || posActiveMut.isPending}
-              onChange={onFlipVisible}
-            />
-            <span aria-hidden="true" />
-          </label>
-          {canToggleVisible && (
-            <button
-              type="button"
-              className={styles.maintRowIcon}
-              title="Edit visibility settings (channel-level — coming soon)"
-              onClick={() => {
-                // eslint-disable-next-line no-alert
-                alert('Per-channel visibility (catalog vs configurator) — Phase 2. The toggle on the left controls the global POS catalog visibility for now.');
-              }}
-              style={{ color: 'var(--fg-muted)' }}
-            >
-              <Edit3 {...ICON_PROPS} />
-            </button>
-          )}
-        </span>
-      </td>
     </tr>
   );
 };

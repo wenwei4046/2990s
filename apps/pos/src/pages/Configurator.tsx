@@ -516,25 +516,29 @@ export const Configurator = () => {
   }, [depthOptions, activeDepth]);
 
   // Build size rows once per data refresh (used by isSize render + topbar
-  // action slot). Rows are derived from the size library so staff see a
-  // stable grid of all four sizes; rows where this Model is inactive land
-  // dimmed + non-clickable, same as SofaQuickPick.
+  // action slot). Only sizes the Master Admin turned ON in Modular surface —
+  // useProductSizes already drops sizes that are OFF in allowed_options /
+  // pos_active, so a size that isn't returned is omitted from the grid entirely
+  // (Chairman 2026-06-01: OFF = gone, not a dimmed tile). A size kept but
+  // cost-discontinued (status) still lands dimmed + non-clickable.
   const sizeRows = useMemo<SizeRow[]>(() => {
     const lib = sizeLib.data ?? [];
     const variants = sizes.data ?? [];
     return lib
       .filter((l) => l.sortOrder < 100)
-      .map((l) => {
+      .map((l): SizeRow | null => {
         const variant = variants.find((v) => v.sizeId === l.id);
+        if (!variant) return null; // OFF in Modular / not offered → gone
         return {
           id: l.id,
           label: l.label,
           widthCm: l.widthCm,
           lengthCm: l.lengthCm,
-          price: variant?.price ?? null,
-          active: variant?.active ?? false,
+          price: variant.price ?? null,
+          active: variant.active,
         };
-      });
+      })
+      .filter((r): r is SizeRow => r !== null);
   }, [sizeLib.data, sizes.data]);
 
   const pickedSize = sizeRows.find((r) => r.id === pickedSizeId) ?? null;
