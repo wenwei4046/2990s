@@ -1228,12 +1228,12 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   //   the per-SKU "Visible" column was removed from SKU Master.
   //   - Sofa: [select?] + code + desc + model + N sizes + unit
   //   - Mattress: [select?] + code + desc + branding + size + price + unit
-  //   - Other: [select?] + code + desc + category + size + P2 + P1 + unit
+  //   - Other: [select?] + code + desc + category + size + base price + unit
   const colCount = (canEdit ? 1 : 0) + (isSofaView
     ? 3 + sofaSizes.length + 1
     : isMattressView
       ? 6
-      : 7);
+      : 6);   // Price 1 / price1_sen column removed — global fabric Δ replaces it (0124)
 
   return (
     <>
@@ -1381,8 +1381,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 <>
                   <th>Category</th>
                   <th>Size</th>
-                  <th style={{ textAlign: 'right' }}>Price 2</th>
-                  <th style={{ textAlign: 'right' }}>Price 1</th>
+                  <th style={{ textAlign: 'right' }}>Base Price</th>
                 </>
               )}
               <th style={{ textAlign: 'right' }}>Unit (m³)</th>
@@ -1491,7 +1490,6 @@ const ProductRow = ({
   // committing on blur. Reset whenever the row's data changes upstream.
   const [draftSeat, setDraftSeat] = useState<SeatHeightPrice[] | null>(null);
   const [draftSell, setDraftSell] = useState<number | null>(null);
-  const [draftP1, setDraftP1] = useState<number | null>(null);
   const [draftBranding, setDraftBranding] = useState<string | null>(null);
   const update = useUpdateMfgProductPrices();
 
@@ -1506,11 +1504,7 @@ const ProductRow = ({
     update.mutate({ id: row.id, seatHeightPrices: next });
   };
 
-  const flushBedframePrice = (field: 'basePriceSen' | 'price1Sen', val: number | null) => {
-    update.mutate({ id: row.id, [field]: val });
-  };
-
-  // SELLING price (sell_price_sen). The mattress + "Price 2" cells write this;
+  // SELLING price (sell_price_sen). The mattress + base-price cells write this;
   // base_price_sen / price1_sen are COST and not editable from the POS side.
   const flushSellPrice = (val: number | null) => {
     update.mutate({ id: row.id, sellPriceSen: val });
@@ -1695,19 +1689,6 @@ const ProductRow = ({
               />
             ) : (
               fmtRm(row.sell_price_sen ?? row.base_price_sen)
-            )}
-          </td>
-          <td className={(draftP1 ?? row.price1_sen) ? styles.price : styles.priceEmpty}>
-            {editMode ? (
-              <PriceInput
-                valueSen={draftP1 ?? row.price1_sen}
-                onCommit={(v) => {
-                  setDraftP1(v);
-                  flushBedframePrice('price1Sen', v);
-                }}
-              />
-            ) : (
-              fmtRm(row.price1_sen)
             )}
           </td>
         </>
