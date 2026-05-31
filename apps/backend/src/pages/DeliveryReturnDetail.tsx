@@ -34,7 +34,7 @@ import {
 } from '../lib/flow-queries';
 import { SoLineCard, emptySoLine, type SoLineDraft } from '../components/SoLineCard';
 import { RelationshipMapButton } from '../components/RelationshipMapButton';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
 } from '../lib/localities-queries';
@@ -377,7 +377,7 @@ export const DeliveryReturnDetail = () => {
               {header.return_number} — {header.debtor_name}
             </h1>
             <p className={styles.subtitle}>
-              Return date {header.return_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
+              Return date {fmtDateOrDash(header.return_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.do_doc_no && ` · From DO ${header.do_doc_no}`}
             </p>
           </div>

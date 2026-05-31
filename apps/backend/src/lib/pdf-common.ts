@@ -18,6 +18,25 @@ export const fmtRm = (centi: number | null, currency = 'MYR'): string => {
   })}`;
 };
 
+/** Document date → "2026/05/31". Null-safe ("—"). System-wide date format. */
+export const fmtDocDate = (d: string | null | undefined): string => {
+  if (d == null || d === '') return '—';
+  const date = new Date(d);
+  if (!Number.isFinite(date.getTime())) return String(d);
+  return date
+    .toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    .replace(/-/g, '/');
+};
+
+/** Generated-stamp timestamp → "2026/05/31, 11:20 AM". */
+export const fmtDocStamp = (d: Date = new Date()): string => {
+  const date = d
+    .toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    .replace(/-/g, '/');
+  const time = d.toLocaleTimeString('en-MY', { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${date}, ${time}`;
+};
+
 // Draw the 2990s header (top-left brand) + doc title + meta block on the right.
 // Returns the y position where the body should continue.
 export function drawHeader(

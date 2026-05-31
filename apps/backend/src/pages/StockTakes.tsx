@@ -32,7 +32,7 @@ const STATUS_TONE: Record<StockTakeStatus, { bg: string; fg: string; label: stri
 const fmtDate = (iso: string): string => {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return iso;
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
 };
 
 const scopeLabel = (scopeType: string, scopeValue: string | null): string => {

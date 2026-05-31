@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDateOrDash } from '@2990s/shared';
 import {
   useGrns, usePurchaseInvoices,
   useSalesInvoices,
@@ -427,7 +428,7 @@ export const PurchaseInvoicesPage = () => {
                 style={{ cursor: 'pointer' }}>
                 <td><span className={styles.codeChip}>{r.invoice_number}</span></td>
                 <td>{r.supplier?.name ?? '—'}</td>
-                <td>{r.invoice_date}</td>
+                <td>{fmtDateOrDash(r.invoice_date)}</td>
                 <td>{r.due_date ?? '—'}</td>
                 <td className={styles.priceCell}>{fmtMoney(r.total_centi, r.currency)}</td>
                 <td><span className={styles.statusPill}>{r.status}</span></td>
@@ -522,7 +523,7 @@ export const SalesInvoicesPage = () => {
                 <td><span className={styles.codeChip}>{r.invoice_number}</span></td>
                 <td><span className={styles.codeChip}>{r.so_doc_no ?? '—'}</span></td>
                 <td>{r.debtor_name}</td>
-                <td>{r.invoice_date}</td>
+                <td>{fmtDateOrDash(r.invoice_date)}</td>
                 <td>{r.due_date ?? '—'}</td>
                 <td className={styles.priceCell}>{fmtMoney(r.total_centi, r.currency)}</td>
                 <td className={styles.priceCell} style={{ color: 'var(--c-secondary-a)' }}>{fmtMoney(r.paid_centi, r.currency)}</td>
@@ -607,7 +608,7 @@ export const PurchaseReturnsPage = () => {
                 <td>{r.supplier?.name ?? '—'}</td>
                 <td><span className={styles.codeChip}>{r.purchase_order?.po_number ?? '—'}</span></td>
                 <td><span className={styles.codeChip}>{r.grn?.grn_number ?? '—'}</span></td>
-                <td>{r.return_date}</td>
+                <td>{fmtDateOrDash(r.return_date)}</td>
                 <td className={styles.muted}>{r.reason ?? '—'}</td>
                 <td className={styles.priceCell}>{fmtMoney(r.refund_centi)}</td>
                 <td><span className={styles.statusPill}>{r.status}</span></td>

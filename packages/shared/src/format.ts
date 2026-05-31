@@ -8,14 +8,12 @@ export const fmtMoney = (n: number): string =>
 /** Returns "RM 2,990" — for inline copy where PriceTag is overkill. */
 export const fmtRM = (n: number): string => `RM ${fmtMoney(n)}`;
 
-/** "4 May 2026" — short, no day-of-week, no comma noise. */
+/** "2026/05/31" — zero-padded ISO-style, matches the processing-date format. */
 export const fmtDate = (d: Date | string | number): string => {
   const date = d instanceof Date ? d : new Date(d);
-  return date.toLocaleDateString('en-MY', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
+  return date
+    .toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    .replace(/-/g, '/');
 };
 
 /** "11:20 AM" — local 12h format. */

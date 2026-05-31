@@ -213,16 +213,14 @@ type SoRow = {
 const fmtRm = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/* HOUZS-style compact date — "21 Apr 2026". Falls back to the raw ISO
-   string when the source isn't a parseable date so legacy data still shows. */
-const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/* Compact date — "2026/04/21". Falls back to the raw ISO string when the
+   source isn't a parseable date so legacy data still shows. */
 const compactDate = (iso: string | null | undefined): string => {
   if (!iso) return '';
   // Accept either YYYY-MM-DD or a full ISO timestamp.
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
   if (!m) return iso;
-  const y = m[1], mo = MONTH_3[Number(m[2]) - 1] ?? m[2], d = String(Number(m[3]));
-  return `${d} ${mo} ${y}`;
+  return `${m[1]}/${m[2]}/${m[3]}`;
 };
 
 /* Follow-up #83 — Balance column source-of-truth chain:

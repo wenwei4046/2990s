@@ -613,8 +613,8 @@ const DetailPoDrawer = ({ poId, onClose }: { poId: string; onClose: () => void }
               </div>
 
               <div className={styles.formGrid}>
-                <SmallStat label="PO Date" value={po.po_date} />
-                <SmallStat label="Expected" value={po.expected_at ?? '—'} />
+                <SmallStat label="PO Date" value={fmtDateOrDash(po.po_date)} />
+                <SmallStat label="Expected" value={fmtDateOrDash(po.expected_at)} />
                 <SmallStat label="Currency" value={po.currency} />
                 <SmallStat label="Status" value={poStatusLabel(po.status)} />
                 <SmallStat label="Subtotal" value={fmtMoney(po.subtotal_centi, po.currency)} />

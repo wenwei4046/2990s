@@ -1,4 +1,5 @@
 import { formatPhone } from '@2990s/shared/phone';
+import { fmtDocDate } from './pdf-common';
 
 // ----------------------------------------------------------------------------
 // Sales Order PDF generator — dynamic jspdf import so it doesn't bloat the
@@ -189,7 +190,7 @@ export async function generateSalesOrderPdf(
   doc.setFontSize(10);
   doc.text(`Doc No: ${header.doc_no}`, pageW - margin, rightY, { align: 'right' });
   rightY += 5;
-  doc.text(`Date:   ${header.so_date}`, pageW - margin, rightY, { align: 'right' });
+  doc.text(`Date:   ${fmtDocDate(header.so_date)}`, pageW - margin, rightY, { align: 'right' });
   rightY += 5;
   doc.text(`Status: ${header.status.replace(/_/g, ' ')}`, pageW - margin, rightY, { align: 'right' });
 

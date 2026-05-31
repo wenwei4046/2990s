@@ -1,5 +1,5 @@
 // Purchase Return PDF — to send to the supplier for credit note issuance.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 
 type PrHeader = {
   return_number: string; status: string; return_date: string;
@@ -26,7 +26,7 @@ export async function generatePurchaseReturnPdf(header: PrHeader, items: PrItem[
     docTitle: 'PURCHASE RETURN',
     rightMeta: [
       { label: 'PR No',   value: header.return_number },
-      { label: 'Date',    value: header.return_date },
+      { label: 'Date',    value: fmtDocDate(header.return_date) },
       { label: 'PO Ref',  value: header.purchase_order?.po_number ?? '—' },
       { label: 'GRN Ref', value: header.grn?.grn_number ?? '—' },
       { label: 'Status',  value: header.status },

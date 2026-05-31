@@ -18,6 +18,7 @@
 import { lazy, memo, Suspense, useCallback, useMemo, useState } from 'react';
 import { Pencil, Plus, Save, Trash2, DollarSign } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDateOrDash } from '@2990s/shared';
 import {
   useAddMfgSalesOrderItem,
   useUpdateMfgSalesOrderItem,
@@ -299,7 +300,7 @@ const LineItemsSectionInner = ({ header, items, isEditing, isLocked }: Props) =>
                     <td className={styles.tableRight}>
                       {displayDate ? (
                         <span style={isAuto ? { color: 'var(--fg-muted)' } : undefined}>
-                          {displayDate}
+                          {fmtDateOrDash(displayDate)}
                           {isAuto && (
                             <span style={{ marginLeft: 4, color: 'var(--c-orange)', fontSize: 'var(--fs-11)' }}>· auto</span>
                           )}

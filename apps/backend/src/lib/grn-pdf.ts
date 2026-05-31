@@ -1,5 +1,5 @@
 // Goods Receipt Note PDF — printable for warehouse / supplier reconciliation.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 
 type GrnHeader = {
   grn_number: string; status: string;
@@ -25,7 +25,7 @@ export async function generateGrnPdf(header: GrnHeader, items: GrnItem[]): Promi
     docTitle: 'GOODS RECEIPT NOTE',
     rightMeta: [
       { label: 'GRN No',   value: header.grn_number },
-      { label: 'Received', value: header.received_at },
+      { label: 'Received', value: fmtDocDate(header.received_at) },
       { label: 'DN Ref',   value: header.delivery_note_ref ?? '—' },
       { label: 'PO Ref',   value: header.purchase_order?.po_number ?? '—' },
       { label: 'Status',   value: header.status },

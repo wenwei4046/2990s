@@ -30,6 +30,8 @@
 // COMPANY constant below when 2990's signs off on the legal name + address.
 // ----------------------------------------------------------------------------
 
+import { fmtDocDate, fmtDocStamp } from './pdf-common';
+
 const COMPANY = {
   name:    "2990'S HOME SDN BHD",
   regNo:   '202301234567',                       // commander to confirm
@@ -159,8 +161,8 @@ export async function generatePurchaseOrderPdf(header: PoHeader, items: PoItem[]
   const metaLines: Array<[string, string]> = [
     ['Your Ref No.',      header.your_ref_no            ?? ''],
     ['Terms',             s?.payment_terms              ?? ''],
-    ['Date',              header.po_date],
-    ['Delivery Date',     header.expected_at            ?? ''],
+    ['Date',              fmtDocDate(header.po_date)],
+    ['Delivery Date',     header.expected_at ? fmtDocDate(header.expected_at) : ''],
     ['Purchase Location', header.purchase_location_name ?? ''],
     ['S/O No.',           header.source_so_doc_no       ?? ''],
     ['Page',              ''],                          // filled after pagination
@@ -193,7 +195,7 @@ export async function generatePurchaseOrderPdf(header: PoHeader, items: PoItem[]
     return [
       String(idx + 1),
       itemAndDesc,
-      it.delivery_date ?? '',
+      it.delivery_date ? fmtDocDate(it.delivery_date) : '',
       (it.uom ?? '').toUpperCase(),
       String(it.qty),
       fmtAmount(it.unit_price_centi),
@@ -273,7 +275,7 @@ export async function generatePurchaseOrderPdf(header: PoHeader, items: PoItem[]
     // Bottom footer
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(110);
     doc.text(
-      `Page ${p} of ${pageCount}    ·    Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+      `Page ${p} of ${pageCount}    ·    Generated ${fmtDocStamp()}`,
       pageW / 2, 287, { align: 'center' },
     );
     doc.setTextColor(0);

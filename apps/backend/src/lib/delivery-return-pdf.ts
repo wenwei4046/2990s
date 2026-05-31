@@ -1,5 +1,5 @@
 // Delivery Return PDF — printable for the customer to sign on collection.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate } from './pdf-common';
 
 type DrHeader = {
   return_number: string; status: string; return_date: string;
@@ -24,7 +24,7 @@ export async function generateDeliveryReturnPdf(header: DrHeader, items: DrItem[
     docTitle: 'DELIVERY RETURN',
     rightMeta: [
       { label: 'DR No',  value: header.return_number },
-      { label: 'Date',   value: header.return_date },
+      { label: 'Date',   value: fmtDocDate(header.return_date) },
       { label: 'Status', value: header.status },
     ],
   });

@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared'; // Commander 2026-05-28
+import { buildVariantSummary, fmtDateOrDash, fmtDateTime } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
@@ -751,7 +751,7 @@ export const SalesOrderDetail = () => {
                   in the .actions group so this <h1> reads compact again. */}
             </h1>
             <p className={styles.subtitle}>
-              SO date {header.so_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
+              SO date {fmtDateOrDash(header.so_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.po_doc_no && ` · Customer PO ${header.po_doc_no}`}
               {header.customer_so_no && ` · Customer SO Ref ${header.customer_so_no}`}
               {(() => {
@@ -1110,7 +1110,7 @@ export const SalesOrderDetail = () => {
                   <td className={styles.tableRight}>
                     {displayDate ? (
                       <span style={isAuto ? { color: 'var(--fg-muted)' } : undefined}>
-                        {displayDate}
+                        {fmtDateOrDash(displayDate)}
                         {isAuto && (
                           <span style={{ marginLeft: 4, color: 'var(--c-orange)', fontSize: 'var(--fs-11)' }}>· auto</span>
                         )}
@@ -1748,12 +1748,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
                   0110) the first time the POS marks this order Proceed. */}
               <input
                 className={styles.fieldInput}
-                value={header?.proceeded_at
-                  ? new Date(header.proceeded_at).toLocaleString('en-MY', {
-                      day: 'numeric', month: 'short', year: 'numeric',
-                      hour: '2-digit', minute: '2-digit',
-                    })
-                  : '—'}
+                value={header?.proceeded_at ? fmtDateTime(header.proceeded_at) : '—'}
                 disabled
                 readOnly
                 aria-label="Proceed Date (auto-stamped when the POS marks the order Proceed)" />
@@ -2302,7 +2297,7 @@ const relTime = (iso: string): string => {
   if (h < 24) return `${h}h ago`;
   const d = Math.round(h / 24);
   if (d < 14) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString('en-MY', { year: 'numeric', month: 'short', day: '2-digit' });
+  return new Date(iso).toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
 };
 
 /* Task #99 (UI perf) — Memoize the History drawer. It only mounts when
@@ -2380,10 +2375,7 @@ const HistoryPanel = memo(({
                       )}
                     </div>
                     <div className={styles.historyMeta}>
-                      {new Date(e.created_at).toLocaleString('en-MY', {
-                        year: 'numeric', month: 'short', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
+                      {fmtDateTime(e.created_at)}
                       {' · '}{relTime(e.created_at)}
                       {e.source ? ` · via ${e.source}` : ''}
                     </div>

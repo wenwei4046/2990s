@@ -25,6 +25,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { ArrowLeft, X, Sparkles, CheckSquare, Square, PlayCircle } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDateOrDash } from '@2990s/shared';
 import { useMfgProducts, type MfgProductRow } from '../lib/mfg-products-queries';
 import { useCreateMfgSalesOrder } from '../lib/flow-queries';
 import styles from './SalesOrderDetail.module.css';
@@ -364,8 +365,8 @@ export const SoFromProducts = () => {
                       <td style={{ padding: '5px 10px', color: 'var(--fg-muted)' }}>
                         {s.lines.map((l) => `${l.itemCode}${l.qty > 1 ? `×${l.qty}` : ''}`).join(' + ')}
                       </td>
-                      <td style={{ padding: '5px 10px' }}>{s.processingDate}</td>
-                      <td style={{ padding: '5px 10px' }}>{s.deliveryDate}</td>
+                      <td style={{ padding: '5px 10px' }}>{fmtDateOrDash(s.processingDate)}</td>
+                      <td style={{ padding: '5px 10px' }}>{fmtDateOrDash(s.deliveryDate)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -66,13 +66,12 @@ const fmtRm = (centi: number | null | undefined, currency = ''): string => {
   })}`;
 };
 
-/* Compact date — "04 May 2026" matching the Houzs reference shot. */
-const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/* Compact date — "2026/05/04". */
 const compactDate = (iso: string | null | undefined): string => {
   if (!iso) return '—';
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
   if (!m) return iso;
-  return `${String(Number(m[3])).padStart(2, '0')} ${MONTH_3[Number(m[2]) - 1] ?? m[2]} ${m[1]}`;
+  return `${m[1]}/${m[2]}/${m[3]}`;
 };
 
 /* Payment status pill — same warm/green/grey palette as item-group pill,

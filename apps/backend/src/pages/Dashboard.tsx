@@ -48,8 +48,11 @@ const greetingForHour = (h: number): string => {
   return 'Good evening';
 };
 
-const fmtDateLong = (d: Date): string =>
-  d.toLocaleDateString('en-MY', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmtDateLong = (d: Date): string => {
+  const weekday = d.toLocaleDateString('en-MY', { weekday: 'long' });
+  const ymd = d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
+  return `${weekday}, ${ymd}`;
+};
 
 const isToday = (iso: string | null | undefined): boolean => {
   if (!iso) return false;

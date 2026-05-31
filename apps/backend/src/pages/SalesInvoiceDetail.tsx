@@ -39,7 +39,7 @@ import { RelationshipMapButton } from '../components/RelationshipMapButton';
 import {
   PaymentsTable, labelToApi, parseInstallmentMonths, type PaymentDraft,
 } from '../components/PaymentsTable';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
 } from '../lib/localities-queries';
@@ -420,7 +420,7 @@ export const SalesInvoiceDetail = () => {
               {header.invoice_number} — {header.debtor_name}
             </h1>
             <p className={styles.subtitle}>
-              Invoice date {header.invoice_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
+              Invoice date {fmtDateOrDash(header.invoice_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.so_doc_no && ` · Linked SO ${header.so_doc_no}`}
               {header.delivery_order_id && ' · Linked DO'}
             </p>

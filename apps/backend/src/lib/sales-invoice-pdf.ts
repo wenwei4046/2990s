@@ -1,5 +1,5 @@
 // Sales Invoice PDF — issued to the customer.
-import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName } from './pdf-common';
+import { drawHeader, drawTwoColInfo, drawSignatureBoxes, fmtRm, safeName, fmtDocDate, fmtDocStamp } from './pdf-common';
 
 type SiHeader = {
   invoice_number: string; status: string;
@@ -29,8 +29,8 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
     docTitle: 'SALES INVOICE',
     rightMeta: [
       { label: 'Invoice No', value: header.invoice_number },
-      { label: 'Date',       value: header.invoice_date },
-      { label: 'Due',        value: header.due_date ?? '—' },
+      { label: 'Date',       value: fmtDocDate(header.invoice_date) },
+      { label: 'Due',        value: fmtDocDate(header.due_date) },
       { label: 'SO Ref',     value: header.so_doc_no ?? '—' },
       { label: 'Status',     value: header.status.replace(/_/g, ' ') },
     ],
@@ -98,7 +98,7 @@ export async function generateSalesInvoicePdf(header: SiHeader, items: SiItem[])
 
   doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(110);
   doc.text('Terms: Payment due as per invoice. Late payments may incur a service charge.', margin, ty);
-  doc.text(`Generated ${new Date().toLocaleString('en-MY')}`, pageW - margin, ty, { align: 'right' });
+  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
 
   doc.save(`${header.invoice_number}-${safeName(header.debtor_name)}.pdf`);
 }

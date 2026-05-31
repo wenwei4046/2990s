@@ -1,5 +1,5 @@
 // Purchase Invoice PDF — internal copy / for filing.
-import { drawHeader, drawTwoColInfo, fmtRm, safeName } from './pdf-common';
+import { drawHeader, drawTwoColInfo, fmtRm, safeName, fmtDocDate } from './pdf-common';
 
 type PiHeader = {
   invoice_number: string; supplier_invoice_ref: string | null; status: string;
@@ -25,8 +25,8 @@ export async function generatePurchaseInvoicePdf(header: PiHeader, items: PiItem
     rightMeta: [
       { label: 'Our PI No',    value: header.invoice_number },
       { label: 'Supplier Ref', value: header.supplier_invoice_ref ?? '—' },
-      { label: 'Date',         value: header.invoice_date },
-      { label: 'Due',          value: header.due_date ?? '—' },
+      { label: 'Date',         value: fmtDocDate(header.invoice_date) },
+      { label: 'Due',          value: fmtDocDate(header.due_date) },
       { label: 'Status',       value: header.status.replace(/_/g, ' ') },
     ],
   });

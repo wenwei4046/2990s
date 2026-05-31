@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useDrivers } from '../lib/queries';
 import { patchDispatchPrep } from '../lib/dispatch';
+import { fmtDateOrDash } from '@2990s/shared';
 import styles from './DriverPickerSection.module.css';
 
 interface Props {
@@ -121,7 +122,7 @@ export function DriverPickerSection({
 
       {overrideWarning && (
         <div className={styles.override}>
-          ⓘ This will override the customer's expected date <b>{customerExpectedDate}</b> → <b>{localDate}</b>.
+          ⓘ This will override the customer's expected date <b>{fmtDateOrDash(customerExpectedDate)}</b> → <b>{fmtDateOrDash(localDate)}</b>.
         </div>
       )}
 

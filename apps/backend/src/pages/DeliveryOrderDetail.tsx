@@ -43,7 +43,7 @@ import {
   PaymentsTable, labelToApi, parseInstallmentMonths,
   newPaymentDraft, type PaymentDraft,
 } from '../components/PaymentsTable';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   useLocalities, distinctStates, citiesInState, postcodesInCity,
 } from '../lib/localities-queries';
@@ -509,7 +509,7 @@ export const DeliveryOrderDetail = () => {
               {header.do_number} — {header.debtor_name}
             </h1>
             <p className={styles.subtitle}>
-              DO date {header.do_date} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
+              DO date {fmtDateOrDash(header.do_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.so_doc_no && ` · Linked SO ${header.so_doc_no}`}
             </p>
           </div>

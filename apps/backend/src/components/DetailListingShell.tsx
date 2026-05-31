@@ -26,6 +26,7 @@ import { DataGrid, type DataGridColumn } from './DataGrid';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { DetailListingFilters, DetailListingRow } from '../lib/flow-queries';
 import styles from '../pages/SalesOrderDetailListing.module.css';
+import { fmtDocStamp } from '../lib/pdf-common';
 
 const SM_ICON = { size: 14, strokeWidth: 1.75 } as const;
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -171,7 +172,7 @@ export function DetailListingShell<R extends DetailListingRow>({
       y += 5;
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
-      doc.text(`Generated ${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${data.length} rows`, margin, y);
+      doc.text(`Generated ${fmtDocStamp()} · ${data.length} rows`, margin, y);
       y += 4;
       autoTable(doc, {
         startY: y + 2,

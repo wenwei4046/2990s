@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Plus, Save, Trash2, X, ArrowRightLeft, ChevronDown } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import { useCreateGrn, usePostGrn } from '../lib/flow-queries';
 import { usePurchaseOrderDetail, usePurchaseOrders, useSuppliers, useSupplierDetail } from '../lib/suppliers-queries';
 import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
@@ -539,7 +539,7 @@ export const GrnNew = () => {
                   </option>
                   {outstanding.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.po_number} · {p.supplier?.name ?? p.supplier?.code ?? '—'} · {p.po_date}
+                      {p.po_number} · {p.supplier?.name ?? p.supplier?.code ?? '—'} · {fmtDateOrDash(p.po_date)}
                       {p.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ''}
                     </option>
                   ))}

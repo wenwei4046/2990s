@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, FileText } from 'lucide-react';
-import { fmtRM, fmtTime } from '@2990s/shared';
+import { fmtRM, fmtTime, fmtDate, fmtDateTime } from '@2990s/shared';
 import { useOrderDetail, usePurchaseOrders } from '../lib/queries';
 import { LANES } from '../lib/lanes';
 import { patchOrderLane } from '../lib/slip';
@@ -70,13 +70,7 @@ export function OrderDrawer({ orderId, onClose }: Props) {
       toast('Pop-up blocked — allow pop-ups for receipts');
       return;
     }
-    const placedFmt = new Date(order.placedAt).toLocaleString('en-MY', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    const placedFmt = fmtDateTime(order.placedAt);
     const addressBits = [
       [order.customerAddress, order.customerAddressLine2].filter(Boolean).join(', '),
       [order.customerPostcode, order.customerCity, order.customerState].filter(Boolean).join(' '),
@@ -137,7 +131,7 @@ export function OrderDrawer({ orderId, onClose }: Props) {
   </table>
   <div class="foot">
     Same price. Every piece. Always. — 2990's<br />
-    Generated ${new Date().toLocaleString('en-MY')}
+    Generated ${fmtDateTime(new Date())}
   </div>
   <script>setTimeout(function() { window.print(); }, 200);</script>
 </body></html>`;
@@ -280,9 +274,7 @@ function PoStatusSection({
   const pos = usePurchaseOrders(orderId);
   const firstPo = pos.data?.[0];
 
-  const formattedDate = poIssuedAt
-    ? new Date(poIssuedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
-    : null;
+  const formattedDate = poIssuedAt ? fmtDate(poIssuedAt) : null;
 
   return (
     <section className={styles.poSection}>

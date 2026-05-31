@@ -7,6 +7,7 @@
 import { memo, useState } from 'react';
 import { ChevronDown, ChevronRight, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDateTime } from '@2990s/shared';
 import {
   useSalesOrderAuditLog,
   type SoAuditEntry, type SoAuditFieldChange,
@@ -124,7 +125,7 @@ const relTime = (iso: string): string => {
   if (h < 24) return `${h}h ago`;
   const d = Math.round(h / 24);
   if (d < 14) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString('en-MY', { year: 'numeric', month: 'short', day: '2-digit' });
+  return new Date(iso).toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
 };
 
 const HistoryPanelInner = ({
@@ -195,10 +196,7 @@ const HistoryPanelInner = ({
                       )}
                     </div>
                     <div className={styles.historyMeta}>
-                      {new Date(e.created_at).toLocaleString('en-MY', {
-                        year: 'numeric', month: 'short', day: '2-digit',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
+                      {fmtDateTime(e.created_at)}
                       {' · '}{relTime(e.created_at)}
                       {e.source ? ` · via ${e.source}` : ''}
                     </div>

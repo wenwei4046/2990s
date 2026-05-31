@@ -3303,9 +3303,10 @@ const Field = ({
 
 const fmtDateTime = (iso: string): string => {
   const d = new Date(iso);
-  return Number.isFinite(d.getTime())
-    ? d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
-    : iso;
+  if (!Number.isFinite(d.getTime())) return iso;
+  const date = d.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/-/g, '/');
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return `${date} ${time}`;
 };
 
 const fmtRmCenti = (centi: number): string =>

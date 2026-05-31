@@ -4,6 +4,8 @@
 // box for customer to sign at delivery.
 // ----------------------------------------------------------------------------
 
+import { fmtDocDate, fmtDocStamp } from './pdf-common';
+
 type DoHeader = {
   do_number: string;
   status: string;
@@ -60,7 +62,7 @@ export async function generateDeliveryOrderPdf(header: DoHeader, items: DoItem[]
   rightY += 6;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
   doc.text(`DO No: ${header.do_number}`, pageW - margin, rightY, { align: 'right' }); rightY += 5;
-  doc.text(`Date:  ${header.do_date}`, pageW - margin, rightY, { align: 'right' }); rightY += 5;
+  doc.text(`Date:  ${fmtDocDate(header.do_date)}`, pageW - margin, rightY, { align: 'right' }); rightY += 5;
   if (header.so_doc_no) { doc.text(`SO Ref: ${header.so_doc_no}`, pageW - margin, rightY, { align: 'right' }); rightY += 5; }
   doc.text(`Status: ${header.status.replace(/_/g, ' ')}`, pageW - margin, rightY, { align: 'right' });
 
@@ -144,7 +146,7 @@ export async function generateDeliveryOrderPdf(header: DoHeader, items: DoItem[]
 
   doc.setFontSize(7.5);
   doc.text('Note: By signing above, the customer confirms receipt of the items listed in good order and condition.', margin, ty);
-  doc.text(`Generated ${new Date().toLocaleString('en-MY')}`, pageW - margin, ty, { align: 'right' });
+  doc.text(`Generated ${fmtDocStamp()}`, pageW - margin, ty, { align: 'right' });
 
   const safeName = (header.debtor_name || 'customer').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 32);
   doc.save(`${header.do_number}-${safeName}.pdf`);

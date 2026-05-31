@@ -25,6 +25,7 @@ import {
   type ApAgingRow,
 } from '../lib/flow-queries';
 import styles from './Suppliers.module.css';
+import { fmtDateOrDash } from '@2990s/shared';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
 
@@ -118,7 +119,7 @@ const JeTab = () => {
           ) : rows.map((r) => (
             <tr key={r.id}>
               <td><span className={styles.codeChip}>{r.je_no}</span></td>
-              <td>{r.entry_date}</td>
+              <td>{fmtDateOrDash(r.entry_date)}</td>
               <td>{r.source_type}</td>
               <td>{r.source_doc_no ?? '—'}</td>
               <td style={{ textAlign: 'right' }}>{fmt(r.total_debit_sen)}</td>
@@ -174,7 +175,7 @@ const GlTab = () => {
             <tr><td colSpan={7} className={styles.emptyRow}>No GL entries posted yet.</td></tr>
           ) : rows.map((r) => (
             <tr key={r.line_id}>
-              <td>{r.entry_date}</td>
+              <td>{fmtDateOrDash(r.entry_date)}</td>
               <td><span className={styles.codeChip}>{r.je_no}</span></td>
               <td>{r.source_type}{r.source_doc_no ? ` · ${r.source_doc_no}` : ''}</td>
               <td>{r.account_code} — {r.account_name}</td>
@@ -271,7 +272,7 @@ const ArAgingTab = () => {
               <tr key={r.invoice_id}>
                 <td><span className={styles.codeChip}>{r.invoice_number}</span></td>
                 <td>{r.debtor_name}{r.debtor_code ? ` (${r.debtor_code})` : ''}</td>
-                <td>{r.invoice_date}</td>
+                <td>{fmtDateOrDash(r.invoice_date)}</td>
                 <td>{r.due_date ?? '—'}</td>
                 <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(r.outstanding_centi)}</td>
                 <td>{r.days_overdue > 0 ? r.days_overdue : '—'}</td>
@@ -310,7 +311,7 @@ const ApAgingTab = () => {
               <tr key={r.invoice_id}>
                 <td><span className={styles.codeChip}>{r.invoice_number}</span></td>
                 <td>{r.supplier_name ?? '—'}{r.supplier_code ? ` (${r.supplier_code})` : ''}</td>
-                <td>{r.invoice_date}</td>
+                <td>{fmtDateOrDash(r.invoice_date)}</td>
                 <td>{r.due_date ?? '—'}</td>
                 <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmt(r.outstanding_centi)}</td>
                 <td>{r.days_overdue > 0 ? r.days_overdue : '—'}</td>

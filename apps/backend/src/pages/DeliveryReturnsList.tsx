@@ -74,13 +74,11 @@ type DrRow = {
 const fmtRm = (centi: number): string =>
   (centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-const MONTH_3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const compactDate = (iso: string | null | undefined): string => {
   if (!iso) return '';
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
   if (!m) return iso;
-  const y = m[1], mo = MONTH_3[Number(m[2]) - 1] ?? m[2], d = String(Number(m[3]));
-  return `${d} ${mo} ${y}`;
+  return `${m[1]}/${m[2]}/${m[3]}`;
 };
 
 /* DR status flow: RECEIVED (= goods back, stock added) → INSPECTED → REFUNDED
