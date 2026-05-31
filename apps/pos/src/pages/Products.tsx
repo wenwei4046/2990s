@@ -1019,44 +1019,53 @@ const fmtRm = (sen: number | null): string => {
 const fmtUnit = (milli: number): string =>
   (milli / 1000).toFixed(3);
 
-type Tier = SofaPriceTier;
+// The POS sofa Edit-Price grid authors the buyer SELLING price at the default
+// (P1) tier (Chairman 2026-06-01: run at P1; the per-fabric P2/P3 upcharge is a
+// later GLOBAL change, like delivery fee, so it is NOT a per-size grid cell).
+// Cost (priceSen) stays Backend-owned — these helpers only touch sellingPriceSen
+// and PRESERVE any cost already on the entry.
+const SOFA_SELL_TIER: SofaPriceTier = 'PRICE_1';
 
-const TIER_CHIPS: { value: Tier; label: string }[] = [
-  { value: 'PRICE_1', label: 'P1' },
-  { value: 'PRICE_2', label: 'P2' },
-  { value: 'PRICE_3', label: 'P3' },
-];
-
-// Look up the priceSen for a given (height, tier) pair. Legacy rows with no
-// `tier` field count as PRICE_2 (HOOKKA's historic default).
-const priceForHeightTier = (
+// Read the SELLING price (sellingPriceSen) for a (height, tier) slot.
+const sellingForHeightTier = (
   arr: SeatHeightPrice[] | null | undefined,
   height: string,
-  tier: Tier,
+  tier: SofaPriceTier,
 ): number | null => {
   if (!Array.isArray(arr)) return null;
   const hit = arr.find((p) => p.height === height && (p.tier ?? 'PRICE_2') === tier);
-  return hit ? hit.priceSen : null;
+  return hit?.sellingPriceSen ?? null;
 };
 
-// Replace (or insert) the priceSen for one (height × tier) slot in the array.
-const upsertHeightTier = (
+// Set the SELLING price for one (height × tier) slot, MERGING onto any existing
+// entry so the Backend-owned cost priceSen survives. Clearing the selling price
+// keeps a slot that still carries a cost; only a slot with neither cost nor
+// selling is dropped. A brand-new slot is created selling-only (no priceSen) so
+// the cost path falls back to base_price_sen (resolveSeatHeightSen skips it).
+const upsertHeightTierSelling = (
   arr: SeatHeightPrice[] | null | undefined,
   height: string,
-  tier: Tier,
-  priceSen: number | null,
+  tier: SofaPriceTier,
+  sellingPriceSen: number | null,
 ): SeatHeightPrice[] => {
   const next = Array.isArray(arr) ? [...arr] : [];
-  const idx = next.findIndex(
-    (p) => p.height === height && (p.tier ?? 'PRICE_2') === tier,
-  );
-  if (priceSen == null || priceSen === 0) {
-    if (idx >= 0) next.splice(idx, 1);
+  const idx = next.findIndex((p) => p.height === height && (p.tier ?? 'PRICE_2') === tier);
+  const cleared = sellingPriceSen == null || sellingPriceSen === 0;
+  if (idx >= 0) {
+    const existing = next[idx]!;
+    if (cleared) {
+      if (existing.priceSen != null && existing.priceSen !== 0) {
+        next[idx] = { height: existing.height, priceSen: existing.priceSen, tier: existing.tier };
+      } else {
+        next.splice(idx, 1);
+      }
+    } else {
+      next[idx] = { ...existing, sellingPriceSen };
+    }
     return next;
   }
-  const entry: SeatHeightPrice = { height, priceSen, tier };
-  if (idx >= 0) next[idx] = entry;
-  else next.push(entry);
+  if (cleared) return next;
+  next.push({ height, tier, sellingPriceSen });
   return next;
 };
 
@@ -1075,7 +1084,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
   const canAdd  = mode !== 'view';
   const canEdit = mode === 'full';
   const editMode = canEdit ? editModeRaw : false;
-  const [tier, setTier] = useState<Tier>('PRICE_2');
   // PR #39 — Model filter chip row (visible only on Sofa view).
   // Distinct base_model values pulled from current rows. 'all' = no filter.
   const [modelFilter, setModelFilter] = useState<string>('all');
@@ -1299,24 +1307,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
               </Button>
             </>
           )}
-          {isSofaView && (
-            <div className={styles.tierGroup}>
-              <span className={styles.tierLabel}>TIER</span>
-              <div className={styles.tierChips}>
-                {TIER_CHIPS.map((t) => (
-                  <button
-                    key={t.value}
-                    type="button"
-                    onClick={() => setTier(t.value)}
-                    data-active={tier === t.value}
-                    className={styles.tierChip}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
@@ -1421,7 +1411,6 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
                 isSofaView={isSofaView}
                 isMattressView={isMattressView}
                 sofaSizes={sofaSizes}
-                tier={tier}
                 /* Suppliers drawer + bulk-delete checkbox + truck icon are
                    admin-only (canEdit). sales_director / view roles see
                    selling prices but never the supplier purchase-cost data. */
@@ -1488,7 +1477,7 @@ const SkuMasterTab = ({ mode = 'view' }: { mode?: ProductsMode }) => {
 };
 
 const ProductRow = ({
-  row, editMode, isSofaView, isMattressView, sofaSizes, tier, onOpenSuppliers, onOpenGifts,
+  row, editMode, isSofaView, isMattressView, sofaSizes, onOpenSuppliers, onOpenGifts,
   showSelectCol = true, selected, onToggleSelected,
   canToggleVisible = false,
 }: {
@@ -1497,7 +1486,6 @@ const ProductRow = ({
   isSofaView: boolean;
   isMattressView: boolean;
   sofaSizes: string[];
-  tier: Tier;
   onOpenSuppliers?: (row: MfgProductRow) => void;
   /** D7 (Phase 3) — open the free-gifts editor for this SKU (full mode only). */
   onOpenGifts?: (row: MfgProductRow) => void;
@@ -1542,8 +1530,10 @@ const ProductRow = ({
   // The effective array we read from — draft if mid-edit, else the server row.
   const seatArr = draftSeat ?? row.seat_height_prices ?? [];
 
-  const updateSofaCell = (size: string, newPriceSen: number | null) => {
-    const next = upsertHeightTier(seatArr, size, tier, newPriceSen);
+  // POS writes the buyer SELLING price at the default (P1) tier, preserving any
+  // Backend-owned cost on the entry (Chairman 2026-06-01: run at P1).
+  const updateSofaCell = (size: string, newSellingSen: number | null) => {
+    const next = upsertHeightTierSelling(seatArr, size, SOFA_SELL_TIER, newSellingSen);
     setDraftSeat(next);
     update.mutate({ id: row.id, seatHeightPrices: next });
   };
@@ -1665,18 +1655,14 @@ const ProductRow = ({
             {row.base_model ?? '—'}
           </td>
           {sofaSizes.map((s) => {
-            const sen = priceForHeightTier(seatArr, s, tier);
-            // When user is on P1 or P3 and the cell is empty, surface the P2
-            // baseline as a placeholder so they have a reference price.
-            const baselineSen = tier !== 'PRICE_2'
-              ? priceForHeightTier(seatArr, s, 'PRICE_2')
-              : null;
+            // Buyer SELLING price at the default (P1) tier — what the POS grid
+            // authors and the configurator/server charge (Chairman 2026-06-01).
+            const sen = sellingForHeightTier(seatArr, s, SOFA_SELL_TIER);
             return (
               <td key={s} className={sen ? styles.price : styles.priceEmpty}>
                 {editMode ? (
                   <PriceInput
                     valueSen={sen}
-                    baselineSen={baselineSen}
                     onCommit={(v) => updateSofaCell(s, v)}
                   />
                 ) : (

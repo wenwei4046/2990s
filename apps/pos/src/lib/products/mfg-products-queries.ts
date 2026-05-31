@@ -55,7 +55,10 @@ export type SofaPriceTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
 
 export type SeatHeightPrice = {
   height: string;
-  priceSen: number;
+  /** COST (Backend-owned). Optional: an entry may be selling-only (a POS grid
+      price for a slot Backend hasn't costed). resolveSeatHeightSen skips
+      cost-absent entries so cost never falls to a fabricated 0. */
+  priceSen?: number;
   /** Missing tier means legacy row — treat as PRICE_2 (HOOKKA's historic default,
       kept so we don't have to one-shot migrate existing data). */
   tier?: SofaPriceTier;

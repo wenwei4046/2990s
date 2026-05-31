@@ -717,3 +717,38 @@ describe('resolveSeatHeightSelling (2026-06-01)', () => {
     expect(resolveSeatHeightSelling(rows, null, 'PRICE_1')).toBeNull();
   });
 });
+
+describe('cost path ignores selling-only seat rows (2026-06-01)', () => {
+  // The POS Edit-Price grid can author a sellingPriceSen for a (height,tier) slot
+  // that carries NO cost priceSen yet. computeMfgLineCost must NOT read that as a
+  // 0 cost — it must fall through to basePriceSen, leaving cost output identical
+  // to the no-entry case (Chairman: Backend cost stays unchanged).
+  it('a selling-only seat row (no priceSen) does NOT fabricate a 0 cost', () => {
+    const product = {
+      category: 'SOFA' as const,
+      basePriceSen: 70000,
+      seatHeightPrices: [
+        { height: '24', tier: 'PRICE_1' as const, sellingPriceSen: 99000 }, // no priceSen
+      ],
+    };
+    const cost = computeMfgLineCost(
+      { product, fabric: { tier: 'PRICE_1' }, qty: 1, seatSize: '24' },
+      null,
+    );
+    expect(cost.basePriceSen).toBe(70000); // base fallback, NOT 0
+  });
+  it('a real cost seat row (priceSen present) is still used — unchanged', () => {
+    const product = {
+      category: 'SOFA' as const,
+      basePriceSen: 70000,
+      seatHeightPrices: [
+        { height: '24', tier: 'PRICE_1' as const, priceSen: 50000, sellingPriceSen: 99000 },
+      ],
+    };
+    const cost = computeMfgLineCost(
+      { product, fabric: { tier: 'PRICE_1' }, qty: 1, seatSize: '24' },
+      null,
+    );
+    expect(cost.basePriceSen).toBe(50000); // cost from the seat row, unchanged
+  });
+});

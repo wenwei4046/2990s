@@ -69,11 +69,14 @@ export type MfgFabricTier = 'PRICE_1' | 'PRICE_2' | 'PRICE_3';
  *  treated as PRICE_2 (HOOKKA's historic default).
  *  `priceSen` = COST (read by computeMfgLineCost; NEVER the buyer price).
  *  `sellingPriceSen` = the buyer (SELLING) price the POS Master-Admin grid
- *  authors (decision 6). Unset on cost-only rows → selling reads fall through
- *  to the flat module sell_price_sen. */
+ *  authors (decision 6).
+ *  Both are optional so an entry can be cost-only (Backend), selling-only (a POS
+ *  grid price for a slot Backend hasn't costed), or both. resolveSeatHeightSen
+ *  skips entries with no `priceSen` (never fabricates a 0 cost from a selling-only
+ *  row); resolveSeatHeightSelling skips entries with no `sellingPriceSen`. */
 export type MfgSeatHeightPrice = {
   height: string;
-  priceSen: number;
+  priceSen?: number;
   tier?: MfgFabricTier;
   sellingPriceSen?: number;
 };
@@ -229,15 +232,20 @@ const resolveSeatHeightSen = (
   if (!rows || rows.length === 0 || !size) return null;
   const wantTier: MfgFabricTier = tier ?? 'PRICE_2';
   const normalize = (t: MfgFabricTier | undefined): MfgFabricTier => t ?? 'PRICE_2';
+  // Only consider rows that actually carry a cost. A selling-only row (priceSen
+  // unset, sellingPriceSen set by the POS grid) must NOT be read as a 0 cost —
+  // skipping it lets cost fall through to basePriceSen, identical to no-entry.
+  const costed = (r: MfgSeatHeightPrice): r is MfgSeatHeightPrice & { priceSen: number } =>
+    r.priceSen != null;
   // Try exact (height + tier).
-  const exact = rows.find((r) => r.height === size && normalize(r.tier) === wantTier);
-  if (exact) return { priceSen: exact.priceSen, matchedTier: wantTier };
+  const exact = rows.find((r) => r.height === size && normalize(r.tier) === wantTier && costed(r));
+  if (exact) return { priceSen: exact.priceSen!, matchedTier: wantTier };
   // PRICE_2 row for this height (commander: PRICE_2 is the default).
-  const fallback = rows.find((r) => r.height === size && normalize(r.tier) === 'PRICE_2');
-  if (fallback) return { priceSen: fallback.priceSen, matchedTier: 'PRICE_2' };
-  // Any row for this height.
-  const any = rows.find((r) => r.height === size);
-  return any ? { priceSen: any.priceSen, matchedTier: normalize(any.tier) } : null;
+  const fallback = rows.find((r) => r.height === size && normalize(r.tier) === 'PRICE_2' && costed(r));
+  if (fallback) return { priceSen: fallback.priceSen!, matchedTier: 'PRICE_2' };
+  // Any costed row for this height.
+  const any = rows.find((r) => r.height === size && costed(r));
+  return any ? { priceSen: any.priceSen!, matchedTier: normalize(any.tier) } : null;
 };
 
 /** SELLING-side sibling of resolveSeatHeightSen. Reads `.sellingPriceSen` for
