@@ -169,13 +169,18 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.sizeOther)             v.sizeOther = config.sizeOther;
     if (config.colourLabel != null)   v.colourLabel = config.colourLabel;
     if (config.colourHex)              v.colourHex = config.colourHex;
-    if (config.gapId)                 v.gap = config.gapId;
+    // The SO API validates (allowed-options), prices (maintenance config), and
+    // renders (Backend GRN) these variant fields by their human LABEL — the
+    // option `value` like `4"`, never the slug id `leg-4`. Send the label so a
+    // restricted Model (e.g. leg_heights) doesn't 409 with variant_not_allowed.
+    // Keep the *Label fields too; the SO detail card reads either.
+    if (config.gapId)                 v.gap = config.gapLabel ?? config.gapId;
     if (config.gapLabel != null)      v.gapLabel = config.gapLabel;
-    if (config.legHeightId)           v.legHeight = config.legHeightId;
+    if (config.legHeightId)           v.legHeight = config.legHeightLabel ?? config.legHeightId;
     if (config.legHeightLabel != null) v.legHeightLabel = config.legHeightLabel;
-    if (config.divanHeightId)         v.divanHeight = config.divanHeightId;
+    if (config.divanHeightId)         v.divanHeight = config.divanHeightLabel ?? config.divanHeightId;
     if (config.divanHeightLabel != null) v.divanHeightLabel = config.divanHeightLabel;
-    if (config.totalHeightId)         v.totalHeight = config.totalHeightId;
+    if (config.totalHeightId)         v.totalHeight = config.totalHeightLabel ?? config.totalHeightId;
     if (config.totalHeightLabel != null) v.totalHeightLabel = config.totalHeightLabel;
     if (config.specialIds && config.specialIds.length > 0) v.specialIds = config.specialIds;
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
