@@ -83,7 +83,6 @@ export const SystemHealth = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>System Health</h1>
-          <p className={styles.subtitle}>Last 24h · Cloudflare edge + Supabase Postgres</p>
         </div>
         <button type="button" className={styles.ghostBtn} onClick={() => setK(mockKpis(Math.floor(Math.random() * 10000)))}>
           <RefreshCw {...ICON} /> Refresh

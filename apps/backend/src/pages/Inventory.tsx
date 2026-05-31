@@ -100,9 +100,6 @@ export const Inventory = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Inventory</h1>
-          <p className={styles.subtitle}>
-            Stock + FIFO COGS across {warehouses.data?.length ?? 0} warehouses · double-click any SKU to drill in
-          </p>
         </div>
         <div className={styles.tabRow}>
           <button type="button" className={styles.tab} data-active={tab === 'balances'} onClick={() => setTab('balances')}>

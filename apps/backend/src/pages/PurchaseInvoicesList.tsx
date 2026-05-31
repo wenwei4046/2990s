@@ -136,7 +136,6 @@ export const PurchaseInvoices = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Purchase Invoices</h1>
-          <p className={styles.subtitle}>Supplier bills against received goods</p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           {/* A Purchase Invoice starts from a Goods Receipt — this routes to the

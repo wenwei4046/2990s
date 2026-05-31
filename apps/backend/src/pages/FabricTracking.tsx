@@ -68,10 +68,6 @@ export const FabricTracking = () => {
     <div className={styles.page}>
       <div className={styles.titleBlock}>
         <h1 className={styles.title}>Fabric Converter</h1>
-        <p className={styles.subtitle}>
-          Fabric master — drives sofa + bedframe pricing tier and the supplier code printed on POs.
-          Click Description / Supplier Code to edit. Same data shows in Products → Maintenance → Fabrics.
-        </p>
       </div>
 
       <div className={styles.filterRow}>
@@ -166,9 +162,6 @@ const NewFabricDialog = ({ onClose }: { onClose: () => void }) => {
           </button>
         </div>
 
-        <p className={styles.subtitle} style={{ marginTop: 4, marginBottom: 'var(--space-3)' }}>
-          Will appear immediately in both Fabric Converter + Products → Maintenance → Fabrics.
-        </p>
 
         <label style={{ display: 'block', marginBottom: 'var(--space-3)' }}>
           <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)', marginBottom: 4 }}>Fabric Code *</div>
@@ -279,11 +272,6 @@ const ImportPreviewDialog = ({
           </button>
         </div>
 
-        <p className={styles.subtitle} style={{ marginTop: 4, marginBottom: 'var(--space-3)' }}>
-          Match key is <strong>fabric_code</strong>. Rows present in the CSV are upserted; rows
-          missing from the CSV are left alone (no delete). Only columns present in the file
-          overwrite existing values.
-        </p>
 
         <div style={{ background: 'var(--bg-surface, #fff)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
           <div style={{ fontSize: 'var(--fs-14)' }}>

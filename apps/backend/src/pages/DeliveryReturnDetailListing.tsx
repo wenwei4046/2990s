@@ -126,7 +126,6 @@ export const DeliveryReturnDetailListing = () => {
   return (
     <DetailListingShell<DrRow>
       title="Delivery Return Detail Listing"
-      subtitle="AutoCount-style report · one row per Delivery Return line item"
       storageKey="dr-detail-listing-grid"
       docNoPlaceholder="DR-2605-001"
       useDetailQuery={useDeliveryReturnDetailListing}

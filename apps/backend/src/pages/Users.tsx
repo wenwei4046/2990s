@@ -131,9 +131,6 @@ export const Users = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Users</h1>
-          <p className={styles.subtitle}>
-            Staff directory · invite, edit and deactivate Backend + POS users
-          </p>
         </div>
         {canWrite && (
           <Button variant="primary" size="md" onClick={() => setInviting(true)}>

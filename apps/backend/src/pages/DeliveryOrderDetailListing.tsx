@@ -159,7 +159,6 @@ export const DeliveryOrderDetailListing = () => {
   return (
     <DetailListingShell<DoRow>
       title="Delivery Order Detail Listing"
-      subtitle="AutoCount-style report · one row per Delivery Order line item"
       storageKey="do-detail-listing-grid"
       docNoPlaceholder="DO-2605-001"
       useDetailQuery={useDeliveryOrderDetailListing}

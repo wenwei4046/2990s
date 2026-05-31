@@ -93,9 +93,9 @@ const fmtMoney = (centi: number, currency = 'MYR'): string =>
 type Chip = { value: string | 'all'; label: string };
 
 const Header = ({
-  title, subtitle, onNew, newLabel, secondary,
+  title, onNew, newLabel, secondary,
 }: {
-  title: string; subtitle: string; onNew?: () => void; newLabel: string;
+  title: string; onNew?: () => void; newLabel: string;
   /** Optional secondary action(s) rendered as a ghost button to the left of
       the primary "New X" button. Used by GRN/PI lists to surface the
       "From PO" / "From GRN" multi-pick pages (task #52). */
@@ -108,7 +108,6 @@ const Header = ({
     <div className={styles.headerRow}>
       <div>
         <h1 className={styles.title}>{title}</h1>
-        <p className={styles.subtitle}>{subtitle}</p>
       </div>
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
         {secondaryArr.map((s) => (
@@ -314,7 +313,6 @@ export const Grns = () => {
     <div className={styles.page}>
       <Header
         title="Goods Receipt Notes"
-        subtitle="GRN — receive stock against PO"
         newLabel="New GRN"
         // PR — Commander 2026-05-27: open GrnNew directly. When poId is
         // missing the page now renders a "Pick a PO" card instead of
@@ -404,7 +402,6 @@ export const PurchaseInvoicesPage = () => {
     <div className={styles.page}>
       <Header
         title="Purchase Invoices"
-        subtitle="Supplier invoices to us"
         newLabel="New Invoice"
         // Commander 2026-05-29: New Invoice lands on a standalone create form
         // (manual supplier + items), like New PO / New GRN — it no longer
@@ -491,7 +488,6 @@ export const SalesInvoicesPage = () => {
     <div className={styles.page}>
       <Header
         title={`Sales Invoices${picker.outstandingOnly ? ' · Outstanding only' : ''}`}
-        subtitle="Customer invoices from us"
         newLabel="New Invoice"
         onNew={() => setOpen(true)}
       />
@@ -583,7 +579,6 @@ export const PurchaseReturnsPage = () => {
     <div className={styles.page}>
       <Header
         title="Purchase Returns"
-        subtitle="Defects / oversupply / wrong items returned to the supplier"
         newLabel="New Purchase Return"
         // PR — Phase 4: opens free-form return page. Commander picks
         // supplier + lines manually. To pre-fill from a GRN or PO, use

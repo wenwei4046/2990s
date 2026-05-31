@@ -151,7 +151,6 @@ export const GoodsReceived = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Goods Received</h1>
-          <p className={styles.subtitle}>Goods Received Notes from suppliers</p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="md" onClick={() => navigate('/grns/from-po')}>

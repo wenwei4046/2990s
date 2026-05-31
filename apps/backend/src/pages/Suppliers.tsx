@@ -82,7 +82,6 @@ export const Suppliers = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Suppliers</h1>
-          <p className={styles.subtitle}>Master list + per-supplier material code bindings</p>
         </div>
         <Button variant="primary" size="md" onClick={() => setCreating(true)}>
           <Plus {...ICON} />

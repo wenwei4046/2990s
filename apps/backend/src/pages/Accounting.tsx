@@ -41,7 +41,6 @@ export const Accounting = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Accounting</h1>
-          <p className={styles.subtitle}>Journal entries · General Ledger · AR/AP aging</p>
         </div>
       </div>
 

@@ -75,9 +75,6 @@ export const StockTakes = () => {
             <ArrowLeft {...ICON} /> <span>Inventory</span>
           </Link>
           <h1 className={styles.title}>Stock Takes</h1>
-          <p className={styles.subtitle}>
-            Cycle count by warehouse + scope. Snapshot system qty, enter counted qty, post variance as ADJUSTMENT movements.
-          </p>
         </div>
         <Button variant="primary" size="md" onClick={() => navigate('/inventory/stock-takes/new')}>
           <Plus {...ICON_MD} />

@@ -678,19 +678,15 @@ export const SalesOrderDetailListing = () => {
               Sales Order Details
               {outstandingOnly && <span style={{ color: 'var(--c-burnt)', marginLeft: 8 }}>· Outstanding only</span>}
             </h1>
-            <p className={styles.subtitle}>
-              Line-item view · {kpis.totalLines} items · drag to reorder columns
-              {outstandingOnly && (
-                <>
-                  {' · '}
-                  <button type="button" onClick={clearOutstanding}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--c-burnt)',
-                      cursor: 'pointer', textDecoration: 'underline', font: 'inherit', padding: 0 }}>
-                    Clear outstanding filter
-                  </button>
-                </>
-              )}
-            </p>
+            {outstandingOnly && (
+              <p className={styles.subtitle}>
+                <button type="button" onClick={clearOutstanding}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--c-burnt)',
+                    cursor: 'pointer', textDecoration: 'underline', font: 'inherit', padding: 0 }}>
+                  Clear outstanding filter
+                </button>
+              </p>
+            )}
           </div>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>

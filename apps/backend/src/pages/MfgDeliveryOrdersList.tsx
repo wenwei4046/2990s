@@ -467,11 +467,6 @@ export const MfgDeliveryOrdersList = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Delivery Orders</h1>
-          <p className={styles.subtitle}>
-            AutoCount-style ledger view
-            {' · '}{isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} total`}
-            {' · drag :: to reorder columns'}
-          </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="sm" onClick={() => navigate('/mfg-delivery-orders/from-so')}>

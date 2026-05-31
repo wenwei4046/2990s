@@ -282,7 +282,6 @@ export const PurchaseOrders = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Purchase Orders</h1>
-          <p className={styles.subtitle}>Manufacturer POs to suppliers</p>
         </div>
         {/* PR #97 — Commander 2026-05-26: "Create PO 也要像这样子啊"
             Replaced the old side-drawer with a full-page AutoCount-style

@@ -69,9 +69,6 @@ export const StockTransfers = () => {
             <ArrowLeft {...ICON} /> <span>Inventory</span>
           </Link>
           <h1 className={styles.title}>Stock Transfers</h1>
-          <p className={styles.subtitle}>
-            Move stock between warehouses with a posted document trail (paired OUT + IN movements).
-          </p>
         </div>
         <Button variant="primary" size="md" onClick={() => navigate('/inventory/transfers/new')}>
           <Plus {...ICON_MD} />

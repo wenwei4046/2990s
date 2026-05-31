@@ -123,7 +123,6 @@ export const PurchaseReturns = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Purchase Returns</h1>
-          <p className={styles.subtitle}>Goods sent back to suppliers</p>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           {/* A Purchase Return starts from a Goods Receipt — this routes to the

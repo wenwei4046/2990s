@@ -1029,11 +1029,6 @@ export const MfgSalesOrdersList = () => {
           <h1 className={styles.title}>
             Sales Orders {outstandingOnly && <span style={{ color: 'var(--c-burnt)' }}>· Outstanding only</span>}
           </h1>
-          <p className={styles.subtitle}>
-            AutoCount-style ledger view
-            {' · '}{isLoading ? 'Loading…' : `${rows.length}${outstandingOnly ? ` of ${allRows.length}` : ''} total`}
-            {' · drag :: to reorder columns'}
-          </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           <Button variant="primary" size="sm" onClick={onNew}>

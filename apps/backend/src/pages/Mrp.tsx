@@ -472,11 +472,6 @@ export const Mrp = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>MRP · Stock Status Report</h1>
-          <p className={styles.subtitle}>
-            Open Sales-Order demand vs stock + incoming POs. Orange rows still
-            need ordering.
-            {data && (<> · as of {fmtDateTime(data.asOf)}</>)}
-          </p>
         </div>
         <div className={styles.actions}>
           {/* PO generation mode — same semantics as Create-PO-from-SO. */}

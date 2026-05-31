@@ -71,10 +71,6 @@ export const SalesOrderMaintenance = () => {
           </Link>
           <div>
             <h1 className={styles.title}>Sales Order Maintenance</h1>
-            <p className={styles.subtitle}>
-              State → warehouse mapping · cascading address dropdowns ·
-              customer / building / relationship / payment dropdowns
-            </p>
           </div>
         </div>
       </div>

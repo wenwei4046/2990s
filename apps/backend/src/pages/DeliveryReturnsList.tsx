@@ -436,11 +436,6 @@ export const DeliveryReturnsList = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Delivery Returns</h1>
-          <p className={styles.subtitle}>
-            Customer returning previously-delivered goods · stock goes back IN
-            {' · '}{isLoading ? 'Loading…' : `${rows.length} of ${allRows.length} total`}
-            {' · drag :: to reorder columns'}
-          </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 'var(--space-2)' }}>
           <Button variant="ghost" size="sm" onClick={onConvertFromDo}>

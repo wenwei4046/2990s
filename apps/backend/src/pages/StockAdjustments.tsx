@@ -74,9 +74,6 @@ export const StockAdjustments = () => {
             <ArrowLeft {...ICON} /> <span>Inventory</span>
           </Link>
           <h1 className={styles.title}>Stock Adjustments</h1>
-          <p className={styles.subtitle}>
-            Manual stock corrections — write-offs, found stock, damage, recount fixes.
-          </p>
         </div>
         <Button variant="primary" size="md" onClick={() => navigate('/inventory/adjustments/new')}>
           <Plus {...ICON_MD} />

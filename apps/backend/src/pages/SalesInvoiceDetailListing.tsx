@@ -144,7 +144,6 @@ export const SalesInvoiceDetailListing = () => {
   return (
     <DetailListingShell<SiRow>
       title="Sales Invoice Detail Listing"
-      subtitle="AutoCount-style report · one row per Sales Invoice line item"
       storageKey="si-detail-listing-grid"
       docNoPlaceholder="SI-2605-001"
       useDetailQuery={useSalesInvoiceDetailListing}

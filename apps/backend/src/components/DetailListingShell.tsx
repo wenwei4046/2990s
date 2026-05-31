@@ -44,7 +44,6 @@ export type DetailListingKpis = {
 
 export interface DetailListingShellProps<R extends DetailListingRow> {
   title: string;
-  subtitle: string;
   /** Stable localStorage key for the DataGrid layout. */
   storageKey: string;
   /** Static placeholder for the doc number filter input ("DO-2605-001" etc.) */
@@ -99,7 +98,7 @@ const defaultComputeKpis = <R extends DetailListingRow>(rows: R[]): DetailListin
 };
 
 export function DetailListingShell<R extends DetailListingRow>({
-  title, subtitle, storageKey, docNoPlaceholder,
+  title, storageKey, docNoPlaceholder,
   kpiLabels, hideKpis,
   useDetailQuery, buildColumns, computeKpis,
 }: DetailListingShellProps<R>) {
@@ -235,19 +234,15 @@ export function DetailListingShell<R extends DetailListingRow>({
               {title}
               {outstandingOnly && <span style={{ color: 'var(--c-burnt)', marginLeft: 8 }}>· Outstanding only</span>}
             </h1>
-            <p className={styles.subtitle}>
-              {subtitle}
-              {outstandingOnly && (
-                <>
-                  {' · '}
-                  <button type="button" onClick={clearOutstanding}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--c-burnt)',
-                      cursor: 'pointer', textDecoration: 'underline', font: 'inherit', padding: 0 }}>
-                    Clear outstanding filter
-                  </button>
-                </>
-              )}
-            </p>
+            {outstandingOnly && (
+              <p className={styles.subtitle}>
+                <button type="button" onClick={clearOutstanding}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--c-burnt)',
+                    cursor: 'pointer', textDecoration: 'underline', font: 'inherit', padding: 0 }}>
+                  Clear outstanding filter
+                </button>
+              </p>
+            )}
           </div>
         </div>
       </div>

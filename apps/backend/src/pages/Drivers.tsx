@@ -28,7 +28,6 @@ export const Drivers = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Drivers</h1>
-          <p className={styles.subtitle}>Drivers register — DOs pick from this list instead of free-text</p>
         </div>
         <Button variant="primary" size="md" onClick={() => setCreating(true)}>
           <Plus {...ICON} />

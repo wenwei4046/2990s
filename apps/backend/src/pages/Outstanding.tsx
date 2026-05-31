@@ -51,9 +51,6 @@ export const Outstanding = () => {
       <div className={styles.headerRow}>
         <div>
           <h1 className={styles.title}>Outstanding</h1>
-          <p className={styles.subtitle}>
-            Outstanding / completed filter across all 7 doc modules · by date range
-          </p>
         </div>
         <div className={styles.actionsRow}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--fs-13)' }}>
