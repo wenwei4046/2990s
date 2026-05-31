@@ -129,6 +129,18 @@ export const deliveryFeeConfig = pgTable('delivery_fee_config', {
   updatedBy:                uuid('updated_by'),                        // references staff(id)
 });
 
+/* ─────────────────── Sofa combo tier offsets ────────────────────────── */
+// Singleton (id = 1) — two flat premiums (sen) added to each combo's Price 1
+// to derive Price 2 / Price 3 (Chairman 2026-06-01). No RLS (matches
+// sofa_combo_pricing); app-layer requireWriteRole gates writes.
+export const sofaComboTierOffsets = pgTable('sofa_combo_tier_offsets', {
+  id:           integer('id').primaryKey().default(1),        // CHECK (id = 1) at DB
+  p2PremiumSen: integer('p2_premium_sen').notNull().default(0),
+  p3PremiumSen: integer('p3_premium_sen').notNull().default(0),
+  updatedAt:    timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy:    uuid('updated_by'),
+});
+
 /* ─────────────────────────── Venues ─────────────────────────────────── */
 // Migration 0086 (2026-05-27). Parallel concept to showrooms — venues are
 // where the sales force (sales / sales_executive / outlet_manager) actually
