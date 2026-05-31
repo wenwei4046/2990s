@@ -802,19 +802,30 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
      Computed once here, used by BOTH the cell render (to hide the modules
      sitting behind an active composite, so they don't ghost out past its
      edges) and the overlay render below. A group shows the unified Quick-Pick
-     artwork when it forms a recognised closed bundle shape and isn't an
-     accessory / recliner / edit-mode / mid-drag case. Unlike before, a ROTATED
+     artwork when it forms a recognised closed bundle shape and isn't a
+     recliner / edit-mode / mid-drag case. Accessories (console / stool) are
+     split off and drawn as their own pieces, so they no longer suppress the
+     sofa's seamless overlay. Unlike before, a ROTATED
      group is no longer skipped — the composite is rotated to match (mirroring
      how each module's cellArt rotates), so rotating a sofa keeps it whole
      instead of snapping back to separated module silhouettes. */
   const activeComposites = priceResult.groups.flatMap((g, i) => {
     const groupCells = analyses[i]?.group;
     if (!groupCells || groupCells.length === 0) return [];
-    const bundle = g.bundle ?? detectBundle(groupCells.map((c) => c.moduleId));
+    // Console / stool are standalone accessory pieces with no composite art —
+    // composite the SOFA-ONLY sub-group and let the accessory cells render as
+    // their own pieces beside it (Chairman 2026-06-01: a console next to a sofa
+    // must NOT stop the sofa itself from going seamless). detectBundle already
+    // ignores accessories; closure + covered-ids + bbox now run on the sofa
+    // cells only, so the composite art lands on the seat run, not over the
+    // console. A console BETWEEN two seats leaves the seat cells non-adjacent →
+    // analyzeSofa reports not-closed → we correctly fall back to raw modules.
+    const sofaCells = groupCells.filter((c) => !isAccessoryModule(c.moduleId));
+    if (sofaCells.length === 0) return [];
+    const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
     if (!bundle) return [];
-    if (groupCells.some((c) => isAccessoryModule(c.moduleId))) return [];
-    if (!analyses[i]?.closed) return [];
-    const ids = new Set(groupCells.map((c) => c.id).filter((x): x is string => x != null));
+    if (!(sofaCells.length === 1 || analyzeSofa(sofaCells, depth).closed)) return [];
+    const ids = new Set(sofaCells.map((c) => c.id).filter((x): x is string => x != null));
     if (editingGroupIds && Array.from(ids).every((id) => editingGroupIds.has(id))) return [];
     // During a drag, KEEP the seamless overlay (it tracks the group via
     // displayCells) when the WHOLE group is being moved — Chairman 2026-06-01:
@@ -827,12 +838,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       const allDragging = Array.from(ids).every((id) => draftDelta.ids.includes(id));
       if (someDragging && !allDragging) return [];
     }
-    if (groupCells.some((c) => (c.recliners ?? []).length > 0)) return [];
+    if (sofaCells.some((c) => (c.recliners ?? []).length > 0)) return [];
     // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
     // sync). Bail to per-module art on the off chance the rots are mixed.
-    const rot = groupCells[0]!.rot;
-    if (groupCells.some((c) => c.rot !== rot)) return [];
-    const flip: 'L' | 'R' = groupCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
+    const rot = sofaCells[0]!.rot;
+    if (sofaCells.some((c) => c.rot !== rot)) return [];
+    const flip: 'L' | 'R' = sofaCells.find((c) => c.moduleId === 'L-LHF') ? 'L' : 'R';
     const isLShape = bundle.id === '2+L' || bundle.id === '3+L';
     const src = `${ASSET_BASE}/${bundle.id}${isLShape ? `-${flip}` : ''}.png`;
     const compBbox = bboxCache.get(src);
