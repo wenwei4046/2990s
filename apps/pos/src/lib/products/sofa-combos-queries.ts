@@ -159,6 +159,38 @@ export function useDeleteSofaCombo() {
   });
 }
 
+export type SofaComboTierPremiums = {
+  p2PremiumSen: number;
+  p3PremiumSen: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+/** The two global flat premiums (sen) for combo Price 2 / Price 3. */
+export function useSofaComboTierPremiums() {
+  return useQuery({
+    queryKey: ['sofa-combo-tier-premiums'],
+    queryFn: () => authedFetch<SofaComboTierPremiums>('/sofa-combos/tier-premiums'),
+    staleTime: 30_000,
+  });
+}
+
+/** Persist the premiums + (re)generate every Price-1 combo's Price 2 / Price 3. */
+export function useApplySofaComboTierPremiums() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { p2PremiumSen: number; p3PremiumSen: number }) =>
+      authedFetch<{ generated: number; p1Count: number; skipped: number }>(
+        '/sofa-combos/tier-premiums/apply',
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sofa-combos'] });
+      qc.invalidateQueries({ queryKey: ['sofa-combo-tier-premiums'] });
+    },
+  });
+}
+
 // Customer hooks removed 2026-05-28 — commander dropped customer scoping
 // for 2990's B2C model. The DB column stays but the UI no longer writes
 // to it; useCopyCombosToCustomer + useCustomersLite were used only here.
