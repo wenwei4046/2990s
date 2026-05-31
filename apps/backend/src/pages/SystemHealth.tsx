@@ -10,7 +10,9 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Clock, Gauge, TrendingUp, RefreshCw } from 'lucide-react';
+import { Activity, AlertTriangle, Clock, Gauge, TrendingUp, RefreshCw, Trash2 } from 'lucide-react';
+import { useAuth } from '../lib/auth';
+import { useResetTestData } from '../lib/admin-queries';
 import styles from './SystemHealth.module.css';
 
 const ICON = { size: 16, strokeWidth: 1.75 } as const;
@@ -74,7 +76,73 @@ const KpiCard = ({ label, value, unit, icon: Icon, warn }: {
   </div>
 );
 
+/* TEMPORARY testing helper (Commander 2026-05-31) — one-key wipe of all
+   transactional documents so the team can re-test from a clean slate. Only
+   rendered for super_admin; the API double-checks the same gate. Requires
+   typing CLEAR to arm the button. Remove this block before the pilot. */
+const ResetTestDataCard = () => {
+  const reset = useResetTestData();
+  const [confirmText, setConfirmText] = useState('');
+  const [done, setDone] = useState(false);
+  const armed = confirmText.trim().toUpperCase() === 'CLEAR';
+
+  return (
+    <div className={styles.chartCard} style={{ borderColor: 'var(--c-orange)' }}>
+      <h2 className={styles.chartTitle} style={{ color: 'var(--c-orange)' }}>
+        <Trash2 {...ICON} /> Clear test data — danger zone (temporary)
+      </h2>
+      <p style={{ fontSize: 'var(--fs-13)', color: 'var(--c-fg-muted)', margin: '0 0 var(--space-3)' }}>
+        Wipes <strong>all</strong> transactional documents — purchasing (PO / GRN / invoices /
+        returns), sales (SO / DO / invoices / returns), inventory (movements / lots / transfers /
+        stock takes), their journal entries, and refund credits. Master &amp; config data
+        (suppliers, warehouses, products, pricing, staff, customers, chart of accounts) is kept.
+        Document numbers reset; SO restarts at 2990, PO at this year&apos;s 0001.
+        <strong> This is irreversible.</strong>
+      </p>
+      {done ? (
+        <div style={{ fontSize: 'var(--fs-14)', color: 'var(--c-fg)', fontWeight: 600 }}>
+          ✓ Test data cleared. Reload any open list to see the empty state.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+          <input
+            value={confirmText}
+            placeholder='Type CLEAR to confirm'
+            onChange={(e) => setConfirmText(e.target.value)}
+            style={{
+              padding: 'var(--space-2) var(--space-3)', borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--line)', fontSize: 'var(--fs-13)', minWidth: 220,
+            }}
+          />
+          <button
+            type="button"
+            disabled={!armed || reset.isPending}
+            onClick={() => reset.mutate(undefined, { onSuccess: () => setDone(true) })}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: 'var(--space-2) var(--space-4)', borderRadius: 'var(--radius-md)',
+              border: 'none', fontSize: 'var(--fs-13)', fontWeight: 700,
+              cursor: armed && !reset.isPending ? 'pointer' : 'not-allowed',
+              background: armed ? 'var(--c-orange)' : 'var(--c-fg-faint, #ccc)',
+              color: '#fff', opacity: reset.isPending ? 0.7 : 1,
+            }}
+          >
+            <Trash2 {...ICON} />
+            {reset.isPending ? 'Clearing…' : 'Clear all test data'}
+          </button>
+          {reset.isError && (
+            <span style={{ fontSize: 'var(--fs-12)', color: 'var(--c-orange)' }}>
+              Failed: {(reset.error as Error).message}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const SystemHealth = () => {
+  const { staff } = useAuth();
   const [k, setK] = useState<Kpis>(() => mockKpis());
   const critical = k.p95 >= 2000 || k.serverErrors > 0 || k.longTaskCount > 5000;
 
@@ -131,6 +199,8 @@ export const SystemHealth = () => {
           <span>now</span>
         </div>
       </div>
+
+      {staff?.role === 'super_admin' && <ResetTestDataCard />}
     </div>
   );
 };

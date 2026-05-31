@@ -318,6 +318,29 @@ admin.delete('/staff/:id', async (c) => {
   return c.json({ staff: updated });
 });
 
+/* POST /admin/reset-test-data — TEMPORARY testing helper (Commander
+   2026-05-31). Wipes every transactional document (purchasing + sales +
+   inventory + their journal entries + return credits), keeps all
+   master/config data, and resets order_seq → 2990 + clears po_sequences.
+   Backed by the SECURITY DEFINER function reset_test_transactions()
+   (migration 0116). Gated to super_admin ONLY — the most destructive
+   button in the app. Remove before pilot. */
+admin.post('/reset-test-data', async (c) => {
+  const callerRole = await loadStaffRole(c);
+  if (callerRole !== 'super_admin') {
+    return c.json({ error: 'not_authorized_role' }, 403);
+  }
+
+  const adminClient = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { error } = await adminClient.rpc('reset_test_transactions');
+  if (error) {
+    return c.json({ error: 'reset_failed', detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 const PatchPinBodySchema = z.object({
   pin: z.union([z.string().regex(/^\d{6}$/), z.null()]),
 });

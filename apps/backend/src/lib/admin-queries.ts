@@ -217,6 +217,31 @@ export const useSetStaffPin = () => {
   });
 };
 
+/* ─── Reset test data (TEMPORARY testing helper, Commander 2026-05-31) ───
+   Wipes every transactional document and resets the number counters. Gated
+   server-side to super_admin. Invalidates everything on success so the UI
+   reflects the empty state. */
+export const useResetTestData = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      if (!API_URL) throw new Error('VITE_API_URL is not set');
+      const token = await getToken();
+      const res = await fetch(`${API_URL}/admin/reset-test-data`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '<no body>');
+        throw new Error(`resetTestData failed (${res.status}): ${text}`);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries();
+    },
+  });
+};
+
 /* ─── App config ─── */
 
 export interface AppConfigRow {
