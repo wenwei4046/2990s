@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseInvoices, useCancelPurchaseInvoice, usePurchaseInvoiceDetail } from '../lib/flow-queries';
@@ -35,6 +35,7 @@ const STATUS_LABEL: Record<string, string> = {
   PAID: 'Paid',
   CANCELLED: 'Cancelled',
 };
+const STATUS_CHIPS = ['all', 'POSTED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -209,10 +210,22 @@ const ExpandedPiLines = ({ pi }: { pi: PiRow }) => {
 
 export const PurchaseInvoices = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusChip = searchParams.get('status') ?? 'all';
+  const setStatusChip = (s: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (s === 'all') next.delete('status'); else next.set('status', s);
+    setSearchParams(next, { replace: true });
+  };
+
   const { data, isLoading, error } = usePurchaseInvoices();
   const cancelPi = useCancelPurchaseInvoice();
 
-  const rows = useMemo<PiRow[]>(() => (data?.purchaseInvoices ?? []) as PiRow[], [data]);
+  const allRows = useMemo<PiRow[]>(() => (data?.purchaseInvoices ?? []) as PiRow[], [data]);
+  const rows = useMemo<PiRow[]>(
+    () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
+    [allRows, statusChip],
+  );
   const columns = useMemo(() => buildPiColumns(), []);
 
   // Cancel a PI (right-click) — flips status → CANCELLED (PI is AP-only, no
@@ -254,6 +267,22 @@ export const PurchaseInvoices = () => {
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* Status chips — matches the DR / SI list filter style. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {STATUS_CHIPS.map((s) => (
+          <button key={s} type="button" onClick={() => setStatusChip(s)}
+            style={{
+              height: 28, padding: '0 12px', borderRadius: 999, cursor: 'pointer',
+              fontSize: 11, fontWeight: 600,
+              border: '1px solid ' + (statusChip === s ? 'var(--c-burnt)' : '#DDE5E5'),
+              background: statusChip === s ? 'rgba(232, 107, 58, 0.10)' : '#FFFFFF',
+              color: statusChip === s ? 'var(--c-burnt)' : 'var(--fg-muted)',
+            }}>
+            {s === 'all' ? 'All' : STATUS_LABEL[s] ?? s}
+          </button>
+        ))}
+      </div>
 
       <DataGrid<PiRow>
         rows={rows}

@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Undo2, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { usePurchaseReturns, useCancelPurchaseReturn, usePurchaseReturnDetail } from '../lib/flow-queries';
@@ -32,6 +32,7 @@ const STATUS_LABEL: Record<string, string> = {
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
 };
+const STATUS_CHIPS = ['all', 'POSTED', 'COMPLETED', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -194,10 +195,22 @@ const ExpandedPrLines = ({ pr }: { pr: PrRow }) => {
 
 export const PurchaseReturns = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusChip = searchParams.get('status') ?? 'all';
+  const setStatusChip = (s: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (s === 'all') next.delete('status'); else next.set('status', s);
+    setSearchParams(next, { replace: true });
+  };
+
   const { data, isLoading, error } = usePurchaseReturns();
   const cancelPr = useCancelPurchaseReturn();
 
-  const rows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
+  const allRows = useMemo<PrRow[]>(() => (data?.purchaseReturns ?? []) as PrRow[], [data]);
+  const rows = useMemo<PrRow[]>(
+    () => (statusChip === 'all' ? allRows : allRows.filter((r) => r.status === statusChip)),
+    [allRows, statusChip],
+  );
   const columns = useMemo(() => buildPrColumns(), []);
 
   // Cancel a PR (right-click) — reverses the return server-side (stock goes back
@@ -239,6 +252,22 @@ export const PurchaseReturns = () => {
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* Status chips — matches the DR / SI list filter style. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {STATUS_CHIPS.map((s) => (
+          <button key={s} type="button" onClick={() => setStatusChip(s)}
+            style={{
+              height: 28, padding: '0 12px', borderRadius: 999, cursor: 'pointer',
+              fontSize: 11, fontWeight: 600,
+              border: '1px solid ' + (statusChip === s ? 'var(--c-burnt)' : '#DDE5E5'),
+              background: statusChip === s ? 'rgba(232, 107, 58, 0.10)' : '#FFFFFF',
+              color: statusChip === s ? 'var(--c-burnt)' : 'var(--fg-muted)',
+            }}>
+            {s === 'all' ? 'All' : STATUS_LABEL[s] ?? s}
+          </button>
+        ))}
+      </div>
 
       <DataGrid<PrRow>
         rows={rows}

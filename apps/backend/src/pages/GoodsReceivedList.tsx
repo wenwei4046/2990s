@@ -10,7 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import {
@@ -38,6 +38,7 @@ const STATUS_LABEL: Record<string, string> = {
   CLOSED:    'Closed',
   CANCELLED: 'Cancelled',
 };
+const STATUS_CHIPS = ['all', 'POSTED', 'CLOSED', 'CANCELLED'] as const;
 
 const fmtMoney = (centi: number, currency = 'MYR'): string =>
   `${currency} ${(centi / 100).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -213,11 +214,23 @@ const ExpandedGrnLines = ({ grn }: { grn: GrnRow }) => {
 
 export const GoodsReceived = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusChip = searchParams.get('status') ?? 'all';
+  const setStatusChip = (s: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (s === 'all') next.delete('status'); else next.set('status', s);
+    setSearchParams(next, { replace: true });
+  };
+
   const { data, isLoading, error } = useGrns();
   const prFromGrn = usePurchaseReturnFromGrn();
   const cancelGrn = useCancelGrn();
 
-  const rows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
+  const allRows = useMemo<GrnRow[]>(() => (data?.grns ?? []) as GrnRow[], [data]);
+  const rows = useMemo<GrnRow[]>(
+    () => (statusChip === 'all' ? allRows : allRows.filter((g) => g.status === statusChip)),
+    [allRows, statusChip],
+  );
   const columns = useMemo(() => buildGrnColumns(), []);
 
   // Single-GRN convert (right-click) → open the New PI review screen pre-loaded
@@ -268,6 +281,22 @@ export const GoodsReceived = () => {
           {error instanceof Error ? error.message : String(error)}
         </div>
       )}
+
+      {/* Status chips — matches the DR / SI list filter style. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {STATUS_CHIPS.map((s) => (
+          <button key={s} type="button" onClick={() => setStatusChip(s)}
+            style={{
+              height: 28, padding: '0 12px', borderRadius: 999, cursor: 'pointer',
+              fontSize: 11, fontWeight: 600,
+              border: '1px solid ' + (statusChip === s ? 'var(--c-burnt)' : '#DDE5E5'),
+              background: statusChip === s ? 'rgba(232, 107, 58, 0.10)' : '#FFFFFF',
+              color: statusChip === s ? 'var(--c-burnt)' : 'var(--fg-muted)',
+            }}>
+            {s === 'all' ? 'All' : STATUS_LABEL[s] ?? s}
+          </button>
+        ))}
+      </div>
 
       <DataGrid<GrnRow>
         rows={rows}
