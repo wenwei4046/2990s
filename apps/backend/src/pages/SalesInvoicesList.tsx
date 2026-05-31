@@ -641,6 +641,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] =
       <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.invoice_number}</span>
     ),
     searchValue: (r) => `${r.invoice_number} ${r.status ?? ''}`,
+    filterValue: (r) => r.invoice_number,
   },
   {
     key: 'so_doc_no', label: 'SO Ref', width: 130, sortable: true,

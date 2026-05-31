@@ -53,6 +53,12 @@ export type DataGridColumn<T> = {
   groupValue?: (row: T) => string;
   /** value used by global search (defaults to String(accessor(row))) */
   searchValue?: (row: T) => string;
+  /** Clean single value shown in (and matched by) the per-column filter
+      dropdown. Use this when `searchValue` deliberately bundles several
+      tokens (e.g. "SO-2605-001 CONFIRMED") so the funnel still lists the one
+      value the operator sees in the cell. Falls back to groupValue, then the
+      cell text — never to searchValue. */
+  filterValue?: (row: T) => string;
   /**
    * HOUZS port (so-list-houzs-port) — when true and the user hasn't manually
    * hidden/shown anything yet (no persisted `layout.hidden` for this key),
@@ -307,11 +313,23 @@ function DataGridInner<T>({
     };
   }, [filterMenu]);
 
-  // Value a column reports for grouping/filtering (groupValue → searchValue → text).
+  // Value a column reports for grouping/sorting (groupValue → searchValue → text).
   const colValue = useCallback((c: DataGridColumn<T>, row: T): string => {
     if (c.groupValue) return c.groupValue(row);
     if (c.searchValue) return c.searchValue(row);
     return coerceSearchString(c.accessor(row));
+  }, []);
+
+  // Clean value the per-column filter dropdown shows + matches on. Prefers the
+  // value the operator sees in the cell (filterValue → groupValue → cell text)
+  // and only falls back to searchValue — a broad multi-token blob — when the
+  // cell is JSX with no clean value to offer, so the funnel is never blank.
+  const filterColValue = useCallback((c: DataGridColumn<T>, row: T): string => {
+    if (c.filterValue) return c.filterValue(row);
+    if (c.groupValue) return c.groupValue(row);
+    const text = coerceSearchString(c.accessor(row));
+    if (text) return text;
+    return c.searchValue ? c.searchValue(row) : '';
   }, []);
 
   const toggleFilterValue = useCallback((colKey: string, val: string) => {
@@ -409,7 +427,7 @@ function DataGridInner<T>({
       for (const [colKey, vals] of active) {
         const c = columns.find((cc) => cc.key === colKey);
         if (!c) continue;
-        if (!vals.includes(colValue(c, row))) return false;
+        if (!vals.includes(filterColValue(c, row))) return false;
       }
       return true;
     });
@@ -421,17 +439,20 @@ function DataGridInner<T>({
     const c = columns.find((cc) => cc.key === filterMenu.colKey);
     if (!c) return [];
     const set = new Set<string>();
-    for (const row of rows) set.add(colValue(c, row));
+    for (const row of rows) set.add(filterColValue(c, row));
     return [...set].sort((a, b) => (a || '~').localeCompare(b || '~'));
-  }, [filterMenu, columns, rows, colValue]);
+  }, [filterMenu, columns, rows, filterColValue]);
 
   const sortedRows = useMemo(() => {
     if (!layout.sort) return filteredRows;
     const col = columns.find((c) => c.key === layout.sort!.key);
     if (!col) return filteredRows;
     const cmp = col.sortFn ?? ((a: T, b: T) => {
-      const va = coerceSearchString(col.accessor(a));
-      const vb = coerceSearchString(col.accessor(b));
+      // Fall back to the column's group/search value when the cell is JSX
+      // (accessor text is empty for a ReactNode) so columns without an
+      // explicit sortFn — e.g. Doc No — still sort instead of silently no-op.
+      const va = coerceSearchString(col.accessor(a)) || colValue(col, a);
+      const vb = coerceSearchString(col.accessor(b)) || colValue(col, b);
       // numeric-aware
       const na = Number(va), nb = Number(vb);
       if (Number.isFinite(na) && Number.isFinite(nb) && va !== '' && vb !== '') return na - nb;
@@ -439,7 +460,7 @@ function DataGridInner<T>({
     });
     const dir = layout.sort.dir === 'asc' ? 1 : -1;
     return [...filteredRows].sort((a, b) => cmp(a, b) * dir);
-  }, [filteredRows, columns, layout.sort]);
+  }, [filteredRows, columns, layout.sort, colValue]);
 
   // Selection callback when row changes.
   useEffect(() => {

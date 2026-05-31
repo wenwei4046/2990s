@@ -688,6 +688,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
       <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.do_number}</span>
     ),
     searchValue: (r) => `${r.do_number} ${r.status ?? ''}`,
+    filterValue: (r) => r.do_number,
   },
   {
     key: 'so_doc_no', label: 'SO Ref', width: 130, sortable: true,

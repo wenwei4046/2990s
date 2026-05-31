@@ -1315,11 +1315,13 @@ const buildColumns = (
       }}>{r.doc_no}</span>
     ),
     searchValue: (r) => `${r.doc_no} ${r.status ?? ''}`,
+    filterValue: (r) => r.doc_no,
   },
   {
     key: 'so_date', label: 'Date', width: 110, sortable: true,
     accessor: (r) => compactDate(r.so_date),
     searchValue: (r) => `${r.so_date ?? ''} ${compactDate(r.so_date)}`,
+    filterValue: (r) => compactDate(r.so_date),
     sortFn: (a, b) => (a.so_date ?? '').localeCompare(b.so_date ?? ''),
   },
   {
@@ -1355,6 +1357,7 @@ const buildColumns = (
     key: 'customer_so_no', label: 'Reference', width: 130, sortable: true,
     accessor: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref ?? '—',
     searchValue: (r) => `${r.customer_so_no ?? ''} ${r.po_doc_no ?? ''} ${r.ref ?? ''}`,
+    filterValue: (r) => r.customer_so_no ?? r.po_doc_no ?? r.ref ?? '—',
     sortFn: (a, b) =>
       (a.customer_so_no ?? a.po_doc_no ?? a.ref ?? '')
         .localeCompare(b.customer_so_no ?? b.po_doc_no ?? b.ref ?? ''),
@@ -1507,6 +1510,7 @@ const buildColumns = (
     key: 'phone', label: 'Phone', width: 130, sortable: true,
     accessor: (r) => formatPhone(r.phone) || '',
     searchValue: (r) => `${r.phone ?? ''} ${formatPhone(r.phone) ?? ''}`,
+    filterValue: (r) => formatPhone(r.phone) || '—',
   },
   {
     key: 'address1', label: 'Address 1', width: 180, sortable: true,

@@ -204,7 +204,7 @@ const deriveCountryFromState = async (
    and sends salesLocation; this server-side derive closes the gap for callers
    that set a State but no salesLocation (e.g. API/import) so Location is bound
    to the address everywhere, not only through the form. Returns the warehouse
-   name (or code) for the state, or null when unmapped. */
+   code for the state, or null when unmapped. */
 const deriveSalesLocationFromState = async (
   sb: any,
   state: string | null | undefined,
@@ -226,7 +226,7 @@ const deriveSalesLocationFromState = async (
     .eq('id', whId)
     .maybeSingle();
   const wh = w as { name?: string; code?: string } | null;
-  return wh ? (wh.name ?? wh.code ?? null) : null;
+  return wh ? (wh.code ?? wh.name ?? null) : null;
 };
 
 const nextDocNo = async (sb: any): Promise<string> => {
