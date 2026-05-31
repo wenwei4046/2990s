@@ -852,6 +852,30 @@
 }
 .qpFlipBtnActive { background: var(--c-orange); color: #fff; }
 
+/* Mirror (L↔R flip) control on the selected saved Quick Pick card. Top-left so
+   it never collides with the top-right delete affordance. */
+.qpMirrorBtn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--c-ink);
+  cursor: pointer;
+  z-index: 2;
+}
+.qpMirrorBtn[aria-pressed='true'] {
+  background: var(--c-orange);
+  border-color: var(--c-orange);
+  color: #fff;
+}
+
 /* Hero — big plan-view of the picked bundle, dim lines, grid paper bg. */
 .qpHero {
   display: flex;

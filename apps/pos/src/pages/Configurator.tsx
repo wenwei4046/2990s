@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -1029,6 +1029,8 @@ export const Configurator = () => {
             onPick={(id) => { setPicked(id); setPickedQP(null); }}
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
+            qpMirror={qpMirror}
+            onToggleQpMirror={() => setQpMirror((v) => !v)}
             depth={activeDepth}
             globalQuickPicks={globalQPItems}
             personalQuickPicks={personalQPItems}
@@ -1522,6 +1524,9 @@ interface SofaQuickPickProps {
   onPick: (id: string) => void;
   quickFlip: 'L' | 'R';
   onFlipChange: (flip: 'L' | 'R') => void;
+  /** L↔R mirror toggle for the selected saved Quick Pick (2026-06-01). */
+  qpMirror?: boolean;
+  onToggleQpMirror?: () => void;
   depth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
@@ -1658,7 +1663,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1823,6 +1828,18 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                         <Trash2 size={14} strokeWidth={1.75} />
                       </span>
                     )}
+                    {isPicked && canMirror(item.modules) && (
+                      <button
+                        type="button"
+                        className={styles.qpMirrorBtn}
+                        aria-pressed={qpMirror}
+                        onClick={(e) => { e.stopPropagation(); onToggleQpMirror?.(); }}
+                        title="Mirror left ↔ right"
+                        aria-label="Mirror left to right"
+                      >
+                        <FlipHorizontal2 size={14} strokeWidth={1.75} />
+                      </button>
+                    )}
                     {isPicked && (
                       <button
                         type="button"
@@ -1848,7 +1865,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             // Quick Pick selected — show its layout cells in the hero.
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview
-                cells={cellsFromComboModules(pickedQPRow.modules, depth)}
+                cells={cellsFromComboModules(qpMirror ? mirrorModules(pickedQPRow.modules) : pickedQPRow.modules, depth)}
                 depth={depth}
                 showDims
               />
