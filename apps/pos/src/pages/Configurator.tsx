@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -215,6 +215,10 @@ export const Configurator = () => {
   // surface in the topbar action slot per UI_REFERENCE.md.
   const [quickFlip, setQuickFlip] = useState<'L' | 'R'>('R');
   const [activeDepth, setActiveDepth] = useState<Depth>('24');
+  // Quick Pick L↔R mirror (2026-06-01). Per-order toggle on the selected saved
+  // Quick Pick; reset whenever a different pick is selected. Only meaningful for
+  // asymmetric layouts (canMirror) — the card hides the control otherwise.
+  const [qpMirror, setQpMirror] = useState(false);
   // Chosen fabric + colour (spec 2026-05-24). Required before Add-to-Cart for
   // sofas; the picker resolves labels/hex/surcharge so the snapshot + LIVE
   // TOTAL render without another lookup.
@@ -690,7 +694,17 @@ export const Configurator = () => {
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
 
   // Quick Pick selection price: computed from its layout via the engine.
-  const qpPickPrice = pickedQP ? (priceForLayout(pickedQP.modules) ?? 0) : 0;
+  // effectiveQPModules applies the L↔R mirror toggle (2026-06-01) so the price,
+  // hero preview, and cart line all reflect the flipped orientation.
+  const effectiveQPModules = pickedQP
+    ? (qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules)
+    : null;
+  // A mirrored pick can't reuse its stored label (it still names the un-flipped
+  // hands), so rebuild the label from the flipped modules.
+  const qpDisplayLabel = pickedQP
+    ? (qpMirror ? buildComboLabel(effectiveQPModules!) : (pickedQP.label || buildComboLabel(pickedQP.modules)))
+    : '';
+  const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
 
   // Fabric surcharge folds onto the bundle/Quick-Pick price (spec §3.2).
   const sofaTotal = pickedQP
@@ -737,9 +751,9 @@ export const Configurator = () => {
   // line carries the exact modular arrangement (and the engine reprices it,
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
-    if (pickedQP == null || fabricSel == null) return;
-    const cells = cellsFromComboModules(pickedQP.modules, activeDepth);
-    const label = pickedQP.label || buildComboLabel(pickedQP.modules);
+    if (pickedQP == null || fabricSel == null || effectiveQPModules == null) return;
+    const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
+    const label = qpDisplayLabel;
     const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
@@ -865,7 +879,7 @@ export const Configurator = () => {
         </span>
         <span className={styles.topbarChipName}>
           {pickedQP
-            ? `${pickedQP.label || buildComboLabel(pickedQP.modules)} · ${activeDepth}"`
+            ? `${qpDisplayLabel} · ${activeDepth}"`
             : pickedSofaRow
               ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
               : p.name}
@@ -1031,6 +1045,7 @@ export const Configurator = () => {
               }
               setPickedQP(item);
               setPicked(null);
+              setQpMirror(false);
             }}
             onQuickPickEdit={(item) => {
               // Load into Customize for further adjustment.
