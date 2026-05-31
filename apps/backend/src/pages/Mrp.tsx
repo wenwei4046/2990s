@@ -673,21 +673,22 @@ export const Mrp = () => {
               <th className={styles.num}>Stock</th>
               <th className={styles.num}>PO Outstanding</th>
               <th className={styles.num}>Shortage</th>
-              {/* Delivery date dropped from the main rows (Commander 2026-05-31)
-                  — it's shown per SO order in the expanded child table below.
-                  Lead time still drives the sort. */}
-              <th>Main Supplier</th>
+              {/* Delivery date + supplier dropped from the Model rows (Commander
+                  2026-05-31): both vary PER SO LINE, so showing one value on the
+                  SKU rollup is misleading. Warehouse + supplier now live on each
+                  SO order row in the expanded child table below. Lead time still
+                  drives the sort. */}
             </tr>
           </thead>
           <tbody>
             {q.isLoading && (
-              <tr><td colSpan={10} className={styles.stateCell}>Loading MRP…</td></tr>
+              <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
             )}
             {q.isError && (
-              <tr><td colSpan={10} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+              <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
             )}
             {data && displayModels.length === 0 && (
-              <tr><td colSpan={10} className={styles.stateCell}>
+              <tr><td colSpan={9} className={styles.stateCell}>
                 {onlyShort ? 'Nothing needs ordering — everything in view is covered.'
                   : hasWindow ? 'No demand delivering in this window.'
                   : 'No open Sales-Order demand for this filter.'}
@@ -875,15 +876,9 @@ const ModelRows = ({
         <td className={styles.num}>{group.stock}</td>
         <td className={styles.num}>{group.poOutstanding || '—'}</td>
         <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? group.shortage : '—'}</td>
-        {/* Supplier moved to each shortage SO line (Commander 2026-05-31). The
-            Model row shows the SKU's main supplier as a hint only. */}
-        <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
-          {group.suppliers.length === 0
-            ? <span className={styles.noSupplier}>— none —</span>
-            : <span title={group.suppliers.find((s) => s.isMain)?.code ?? group.suppliers[0]!.code}>
-                <Truck {...ICON} /> {(group.suppliers.find((s) => s.isMain) ?? group.suppliers[0]!).name}
-              </span>}
-        </td>
+        {/* Supplier column removed from the Model row (Commander 2026-05-31):
+            different SO lines under one SKU can pick different suppliers, so a
+            single value here was misleading. Supplier lives per SO line below. */}
       </tr>
 
       {/* Single-variant model → orders directly (2-level). Show the variant
@@ -891,7 +886,7 @@ const ModelRows = ({
       {modelOpen && single && (
         <tr className={styles.detailRow}>
           <td /><td />
-          <td colSpan={8}>
+          <td colSpan={7}>
             {onlyVariant.variantLabel && (
               <div className={styles.singleSpec}>
                 <span className={styles.variantBranch}>↳</span>
@@ -941,12 +936,11 @@ const ModelRows = ({
               <td className={styles.num}>{v.stock}</td>
               <td className={styles.num}>{v.poOutstanding || '—'}</td>
               <td className={`${styles.num} ${vShort ? styles.shortNum : ''}`}>{vShort ? v.shortage : '—'}</td>
-              <td />
             </tr>
             {vOpen && (
               <tr className={styles.detailRow}>
                 <td /><td />
-                <td colSpan={8}>
+                <td colSpan={7}>
                   <OrderLines sku={v} selected={selected} onToggleLine={onToggleLine}
                     lineSupplier={lineSupplier} onLineSupplierChange={onLineSupplierChange} />
                 </td>
@@ -977,6 +971,7 @@ const OrderLines = ({ sku, selected, onToggleLine, lineSupplier, onLineSupplierC
       <tr>
         <th className={styles.colSelect} />
         <th>SO No</th>
+        <th>Warehouse</th>
         <th>Customer</th>
         <th>Processing</th>
         <th>Delivery Date</th>
@@ -991,6 +986,8 @@ const OrderLines = ({ sku, selected, onToggleLine, lineSupplier, onLineSupplierC
           key={`${ln.soDocNo}-${i}`}
           ln={ln}
           suppliers={sku.suppliers}
+          whCode={sku.warehouseCode}
+          whName={sku.warehouseName}
           selected={selected.has(ln.soItemId)}
           onToggleLine={() => onToggleLine(ln.soItemId)}
           chosenSupplierId={lineSupplier[ln.soItemId] ?? null}
@@ -1001,9 +998,11 @@ const OrderLines = ({ sku, selected, onToggleLine, lineSupplier, onLineSupplierC
   </table>
 );
 
-const ChildLine = ({ ln, suppliers, selected, onToggleLine, chosenSupplierId, onSupplierChange }: {
+const ChildLine = ({ ln, suppliers, whCode, whName, selected, onToggleLine, chosenSupplierId, onSupplierChange }: {
   ln: MrpLine;
   suppliers: MrpSku['suppliers'];
+  whCode: string | null;
+  whName: string | null;
   selected: boolean;
   onToggleLine: () => void;
   chosenSupplierId: string | null;
@@ -1023,6 +1022,11 @@ const ChildLine = ({ ln, suppliers, selected, onToggleLine, chosenSupplierId, on
         )}
       </td>
       <td className={styles.codeCell}>{ln.soDocNo}</td>
+      <td className={styles.whCell}>
+        {whCode
+          ? <span className={styles.whTag} title={whName ?? undefined}>{whCode}</span>
+          : <span className={styles.whNone}>—</span>}
+      </td>
       <td>{ln.debtorName ?? '—'}</td>
       <td>{fmtDate(ln.processingDate)}</td>
       <td>{fmtDate(ln.deliveryDate)}</td>
