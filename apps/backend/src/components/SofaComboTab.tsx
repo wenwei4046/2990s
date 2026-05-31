@@ -18,7 +18,7 @@
 //   header   — "Sofa Combo Pricing" + subtitle + "+ New Combo"
 //   filters  — Base model dropdown + "N rules"
 //   list     — grouped by base model; each combo card has the module
-//              composition + tier + 5 height-tier prices + Effective date
+//              composition + tier + per-seat-height prices + Effective date
 //              + Edit/History/Delete actions.
 // ----------------------------------------------------------------------------
 
@@ -39,10 +39,13 @@ import {
   useSofaComboHistory,
   type SofaComboRule,
 } from '../lib/sofa-combos-queries';
-import { useMfgProducts } from '../lib/mfg-products-queries';
+import { useMfgProducts, useMaintenanceConfig } from '../lib/mfg-products-queries';
 import { useSupplierDetail } from '../lib/suppliers-queries';
 
-const HEIGHTS = ['24', '28', '30', '32', '35'] as const;
+// Seat-height columns mirror the live Maintenance pool (Products → Maintenance
+// → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
+// config fails to load — same default the rest of the app uses.
+const HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
 const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
 
 const ICON_PROPS = { size: 14, strokeWidth: 1.75 } as const;
@@ -89,6 +92,11 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
     supplierId,
   });
   const productsQ = useMfgProducts({ category: 'SOFA' });
+  // Seat-height columns = the live Maintenance Sizes pool (single source of
+  // truth, master scope), so a size added in Maintenance shows up here
+  // automatically — even on the supplier-scoped purchasing view.
+  const heightsCfgQ = useMaintenanceConfig('master');
+  const heights = heightsCfgQ.data?.data?.sofaSizes ?? HEIGHTS_FALLBACK;
 
   const baseModels = useMemo(() => {
     const set = new Set<string>();
@@ -273,6 +281,7 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
                 <ComboCard
                   key={r.id}
                   rule={r}
+                  heights={heights}
                   supplierCode={supplierCodeByBaseModel[r.baseModel]}
                   onEdit={() => setComposer({ open: true, editing: r })}
                   onHistory={() => setHistoryFor(r)}
@@ -294,12 +303,13 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
           modulesByBaseModel={modulesByBaseModel}
           supplierCodeByBaseModel={supplierCodeByBaseModel}
           supplierId={supplierId}
+          heights={heights}
           onClose={() => setComposer({ open: false })}
         />
       )}
 
       {historyFor && (
-        <HistoryModal rule={historyFor} supplierId={supplierId} onClose={() => setHistoryFor(null)} />
+        <HistoryModal rule={historyFor} supplierId={supplierId} heights={heights} onClose={() => setHistoryFor(null)} />
       )}
     </div>
   );
@@ -308,9 +318,10 @@ export const SofaComboTab = ({ supplierId }: ComboTabProps) => {
 // ─── Combo card ────────────────────────────────────────────────────────
 
 function ComboCard({
-  rule, supplierCode, onEdit, onHistory, onDelete,
+  rule, heights, supplierCode, onEdit, onHistory, onDelete,
 }: {
   rule: SofaComboRule;
+  heights: string[];
   /** Supplier's own model code for this base model (e.g. "5539"), shown next
       to our internal name on the supplier-scoped page. Undefined elsewhere. */
   supplierCode?: string;
@@ -358,8 +369,8 @@ function ComboCard({
       </div>
 
       {/* Height tiers */}
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 4 }}>
-        {HEIGHTS.map((h) => {
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4 }}>
+        {heights.map((h) => {
           const v = rule.pricesByHeight?.[h];
           return (
             <div key={h} style={{
@@ -407,9 +418,10 @@ function ComboCard({
 // ─── Composer modal (New / Edit) ──────────────────────────────────────
 
 function ComposerModal({
-  editing, modulesByBaseModel, supplierCodeByBaseModel, supplierId, onClose,
+  editing, modulesByBaseModel, supplierCodeByBaseModel, supplierId, heights, onClose,
 }: {
   editing?: SofaComboRule;
+  heights: string[];
   modulesByBaseModel: Record<string, string[]>;
   /** base_model → supplier's own model code (supplier-scoped page only). */
   supplierCodeByBaseModel: Record<string, string>;
@@ -448,7 +460,7 @@ function ComposerModal({
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
   const [prices, setPrices] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
-    for (const h of HEIGHTS) {
+    for (const h of heights) {
       const v = editing?.pricesByHeight?.[h];
       seed[h] = v == null ? '' : (v / 100).toFixed(2);
     }
@@ -485,7 +497,7 @@ function ComposerModal({
     if (orderedModules.length === 0) return alert('Add at least one module slot.');
 
     const pricesByHeight: Record<string, number | null> = {};
-    for (const h of HEIGHTS) {
+    for (const h of heights) {
       const raw = (prices[h] ?? '').trim();
       if (!raw) pricesByHeight[h] = null;
       else {
@@ -636,15 +648,15 @@ function ComposerModal({
         </Field>
 
         <Field label="Cost by seat height (RM) — selling price is set by Master Admin on POS">
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 8 }}>
-            {HEIGHTS.map((h) => (
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
               <div key={h}>
-                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}"</div>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>{h}{/^\d/.test(h) ? '"' : ''}</div>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
-                  value={prices[h]}
+                  value={prices[h] ?? ''}
                   onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
                   placeholder="—"
                   style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
@@ -695,7 +707,7 @@ function ComposerModal({
 
 // ─── History modal ────────────────────────────────────────────────────
 
-function HistoryModal({ rule, supplierId, onClose }: { rule: SofaComboRule; supplierId?: string; onClose: () => void }) {
+function HistoryModal({ rule, supplierId, heights, onClose }: { rule: SofaComboRule; supplierId?: string; heights: string[]; onClose: () => void }) {
   const historyQ = useSofaComboHistory({
     baseModel: rule.baseModel,
     modules: rule.modules,
@@ -720,8 +732,8 @@ function HistoryModal({ rule, supplierId, onClose }: { rule: SofaComboRule; supp
                 <strong>Effective {fmtDate(r.effectiveFrom)}</strong>
                 {r.deletedAt && <span style={statusPillPending}>Deleted</span>}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEIGHTS.length}, 1fr)`, gap: 4, marginTop: 6 }}>
-                {HEIGHTS.map((h) => (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 4, marginTop: 6 }}>
+                {heights.map((h) => (
                   <div key={h} style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>{h}</div>
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-12)' }}>
