@@ -75,7 +75,7 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
       (a.supplier?.name ?? a.supplier?.code ?? '').localeCompare(b.supplier?.name ?? b.supplier?.code ?? ''),
   },
   {
-    key: 'source_ref', label: 'From GRN/PO', width: 160, sortable: true, groupable: true,
+    key: 'source_ref', label: 'Transfer From (GRN/PO)', width: 160, sortable: true, groupable: true,
     accessor: (r) => (
       <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.grn?.grn_number ?? r.purchase_order?.po_number ?? '—'}</span>
     ),

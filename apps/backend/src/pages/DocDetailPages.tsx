@@ -560,7 +560,7 @@ export const SalesInvoiceDetail = () => {
         <div className={styles.cardBody}>
           <div className={styles.infoGrid}>
             <InfoCell label="Customer" value={`${si.debtor_code ?? ''}${si.debtor_code ? ' · ' : ''}${si.debtor_name}`} />
-            <InfoCell label="Linked SO" value={si.so_doc_no
+            <InfoCell label="Transfer From" value={si.so_doc_no
               ? <Link to={`/mfg-sales-orders/${si.so_doc_no}`} className={styles.infoLink}>{si.so_doc_no}</Link>
               : '—'} />
             <InfoCell label="Linked DO" value={si.delivery_order_id

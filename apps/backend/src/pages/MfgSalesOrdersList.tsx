@@ -463,7 +463,7 @@ const buildDrilldownColumns = (paymentRefs: string): DataGridColumn<SoItem>[] =>
     sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
   },
   {
-    key: 'delivered', label: 'Status', width: 130,
+    key: 'delivered', label: 'Transfer To (DO)', width: 130,
     accessor: (it) => {
       const hasDeliveries = it.deliveries && it.deliveries.length > 0;
       if (!hasDeliveries) return <span style={{ color: 'var(--fg-muted)' }}>—</span>;

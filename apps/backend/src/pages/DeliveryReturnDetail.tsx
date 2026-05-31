@@ -378,7 +378,7 @@ export const DeliveryReturnDetail = () => {
             </h1>
             <p className={styles.subtitle}>
               Return date {fmtDateOrDash(header.return_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
-              {header.do_doc_no && ` · From DO ${header.do_doc_no}`}
+              {header.do_doc_no && ` · Transfer From ${header.do_doc_no}`}
             </p>
           </div>
         </div>

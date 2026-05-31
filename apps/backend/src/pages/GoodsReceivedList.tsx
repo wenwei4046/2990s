@@ -80,7 +80,7 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
       (a.supplier?.name ?? a.supplier?.code ?? '').localeCompare(b.supplier?.name ?? b.supplier?.code ?? ''),
   },
   {
-    key: 'po_number', label: 'From PO', width: 150, sortable: true, groupable: true,
+    key: 'po_number', label: 'Transfer From (PO)', width: 150, sortable: true, groupable: true,
     accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.purchase_order?.po_number ?? '—'}</span>,
     searchValue: (g) => g.purchase_order?.po_number ?? '',
     groupValue: (g) => g.purchase_order?.po_number ?? '(none)',
@@ -143,7 +143,7 @@ const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] =
   },
   {
     /* Bug #2 — "received from which PO" per line (null for manual lines). */
-    key: 'source_po', label: 'From PO', width: 130,
+    key: 'source_po', label: 'Transfer From (PO)', width: 130,
     accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{it.source_po_number ?? '—'}</span>,
     searchValue: (it) => it.source_po_number ?? '',
     sortFn: (a, b) => (a.source_po_number ?? '').localeCompare(b.source_po_number ?? ''),

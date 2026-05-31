@@ -510,7 +510,7 @@ export const DeliveryOrderDetail = () => {
             </h1>
             <p className={styles.subtitle}>
               DO date {fmtDateOrDash(header.do_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
-              {header.so_doc_no && ` · Linked SO ${header.so_doc_no}`}
+              {header.so_doc_no && ` · Transfer From ${header.so_doc_no}`}
             </p>
           </div>
         </div>

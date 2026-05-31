@@ -630,7 +630,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DrRow>[] =
     filterValue: (r) => r.return_number,
   },
   {
-    key: 'do_doc_no', label: 'DO Ref', width: 130, sortable: true,
+    key: 'do_doc_no', label: 'Transfer From (DO)', width: 130, sortable: true,
     accessor: (r) => r.do_doc_no ?? '—',
     searchValue: (r) => r.do_doc_no ?? '',
   },

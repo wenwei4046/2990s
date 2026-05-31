@@ -421,7 +421,7 @@ export const SalesInvoiceDetail = () => {
             </h1>
             <p className={styles.subtitle}>
               Invoice date {fmtDateOrDash(header.invoice_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
-              {header.so_doc_no && ` · Linked SO ${header.so_doc_no}`}
+              {header.so_doc_no && ` · Transfer From ${header.so_doc_no}`}
               {header.delivery_order_id && ' · Linked DO'}
             </p>
           </div>

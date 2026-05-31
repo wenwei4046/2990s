@@ -69,7 +69,7 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
       (a.supplier?.name ?? a.supplier?.code ?? '').localeCompare(b.supplier?.name ?? b.supplier?.code ?? ''),
   },
   {
-    key: 'grn_number', label: 'From GRN', width: 150, sortable: true, groupable: true,
+    key: 'grn_number', label: 'Transfer From (GRN)', width: 150, sortable: true, groupable: true,
     accessor: (r) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{r.grn?.grn_number ?? '—'}</span>,
     searchValue: (r) => r.grn?.grn_number ?? '',
     groupValue: (r) => r.grn?.grn_number ?? '(none)',

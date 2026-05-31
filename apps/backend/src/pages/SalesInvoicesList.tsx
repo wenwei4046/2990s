@@ -642,7 +642,7 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<SiRow>[] =
     filterValue: (r) => r.invoice_number,
   },
   {
-    key: 'so_doc_no', label: 'SO Ref', width: 130, sortable: true,
+    key: 'so_doc_no', label: 'Transfer From (SO)', width: 130, sortable: true,
     accessor: (r) => r.so_doc_no ?? '—',
     searchValue: (r) => r.so_doc_no ?? '',
   },

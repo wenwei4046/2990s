@@ -1020,7 +1020,7 @@ export const SalesOrderDetail = () => {
               <tr>
                 <th>Item</th>
                 <th className={styles.tableRight}>Qty</th>
-                <th>Delivered</th>
+                <th>Transfer To</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
                 {/* PR-E — Per-line delivery date. Falls back to the SO

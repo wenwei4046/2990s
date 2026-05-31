@@ -61,7 +61,7 @@ export const DeliveryOrderDetailListing = () => {
       searchValue: (r) => String(r.do_date ?? r.line_date ?? ''),
     },
     {
-      key: 'so_doc_no', label: 'SO Ref', width: 110, sortable: true, groupable: true,
+      key: 'so_doc_no', label: 'Transfer From (SO)', width: 110, sortable: true, groupable: true,
       accessor: (r) => r.so_doc_no ?? '—',
       searchValue: (r) => r.so_doc_no ?? '',
     },
