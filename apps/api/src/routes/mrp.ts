@@ -15,15 +15,29 @@
 // Pure calculator — NO dedicated table, NO persistence (v1 per commander:
 // "先做即时计算"). Recomputed on every GET.
 //
+// Commander 2026-05-31 — PER-WAREHOUSE rebuild:
+//   · Every bucket is keyed by (warehouse_id, item_code, variant_key). Stock
+//     NEVER crosses warehouses (a cross-WH pull needs a stock transfer), so the
+//     warehouse is part of the demand AND the supply identity. The SO LINE's
+//     warehouse_id (migration 0118) is the binding — each line can ship from a
+//     different warehouse.
+//   · warehouseId omitted / 'all' → return the UNION of every warehouse's
+//     buckets (each warehouse computed independently), NOT a cross-WH pooled
+//     recompute. warehouseId=<uuid> → only that warehouse's buckets.
+//   · NO SO↔PO linkage. Supply is a pool of stock + ALL open PO lines (by
+//     warehouse+variant), allocated greedy by delivery date. The old
+//     po_qty_picked "lock" is gone — the same SO line is infinitely convertible
+//     to PO from MRP (reference only; see purchase_order_items.from_mrp).
+//
 // Output mirrors the xls the commander shared:
-//   parent row  (per SKU)  : Qty Needed / Stock / PO Outstanding / Shortage
-//   child rows  (per SO)   : SO No · Delivery Date · Qty · source tag
-//                            (stock | PO-xxxx + ETA | shortage → orange)
+//   parent row  (per SKU+warehouse) : Qty Needed / Stock / PO Outstanding / Shortage
+//   child rows  (per SO)            : SO No · Delivery Date · Qty · source tag
+//                                     (stock | PO-xxxx + ETA | shortage → orange)
 //
 // Endpoint:
 //   GET /mrp?category=BEDFRAME&warehouseId=<uuid>
 //            category  omitted / 'all' → every category
-//            warehouseId omitted / 'all' → stock summed across warehouses
+//            warehouseId omitted / 'all' → every warehouse (union of per-WH buckets)
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
@@ -48,7 +62,7 @@ type DemandRow = {
   item_group: string | null;
   variants: Record<string, unknown> | null;
   qty: number;
-  po_qty_picked: number | null; // units of this line already pulled into a PO
+  warehouse_id: string | null; // SO line's ship-from warehouse (migration 0118)
   line_delivery_date: string | null;
   cancelled: boolean;
   so: {
@@ -67,9 +81,9 @@ type PoLineRow = {
   qty: number;
   received_qty: number | null;
   delivery_date: string | null;
-  warehouse_id: string | null;
-  so_item_id: string | null; // SO line this PO line was raised from (release-on-delete + MRP coverage)
-  po: { po_number: string; status: string; expected_at: string | null } | null;
+  warehouse_id: string | null;        // per-line ship-to warehouse (overrides header)
+  so_item_id: string | null;          // SO line this PO line was raised from (informational only now)
+  po: { po_number: string; status: string; expected_at: string | null; purchase_location_id: string | null; supplier_id: string | null } | null;
 };
 
 type ProductRow = { code: string; name: string | null; category: string | null };
@@ -83,10 +97,15 @@ type AllocSource = 'stock' | 'po' | 'shortage';
    variant key is the shared inventory identity (computeVariantKey — same one
    inventory_balances.variant_key is built from, so stock matches byte-for-byte).
    Mattress/accessory have no soft attrs → key '' → behaves exactly as before. */
-const KEY_SEP = '';
 const variantKeyOf = (itemGroup: string | null | undefined, variants: unknown): string =>
   computeVariantKey(itemGroup, (variants ?? null) as VariantAttrs | null);
-const composite = (code: string, vkey: string): string => `${code}${KEY_SEP}${vkey}`;
+/* Commander 2026-05-31 — every bucket is scoped by warehouse: stock can't cross
+   warehouses, so a (code, variant) pair in KL is a DIFFERENT bucket from the
+   same pair in PJ. NULL warehouse (unmapped state / pre-backfill line) gets its
+   own WH_NONE bucket so it never silently shares another warehouse's stock. */
+const WH_NONE = 'NOWH';
+const composite = (whId: string | null, code: string, vkey: string): string =>
+  `${whId ?? WH_NONE}|${code}|${vkey}`;
 
 type MrpLine = {
   soItemId: string;    // mfg_sales_order_items.id — lets the UI one-click PO this line
@@ -103,9 +122,20 @@ type MrpLine = {
   poNumber: string | null;
   poEta: string | null;
   shortageQty: number; // units still uncovered on this line (orange highlight)
+  /* Commander 2026-05-31 — when this line is covered by a PO (source==='po'),
+     the covering PO's supplier so the UI can show it READ-ONLY (a raised PO's
+     supplier can't change). NULL for stock / shortage lines. */
+  poSupplierId: string | null;
+  poSupplierName: string | null;
 };
 
 type MrpSku = {
+  /* Commander 2026-05-31 — each row is scoped to ONE warehouse (per-WH MRP). The
+     same SKU+variant in two warehouses produces two rows; the UI groups by
+     warehouse. NULL when the demand line has no warehouse bound yet. */
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseName: string | null;
   itemCode: string;
   variantKey: string;
   variantLabel: string | null;
@@ -126,10 +156,14 @@ type MrpSku = {
 /* Commander 2026-05-29 — sofa is ordered as a colour-matched SET, one per SO
    line ("每张 SO 一套"). The inventory variant key only covers fabric+seat+leg,
    NOT the module layout (cells), so two differently-built sofas with the same
-   fabric collapse into one bucket. A correct set view therefore keys per SO
-   line. Coverage uses po_qty_picked (units already pulled into a PO) — precise
-   per line and immune to the variant-key pooling. */
+   fabric collapse into one bucket. The set view keys per SO line for display.
+   Commander 2026-05-31 — coverage now uses the SAME pooled (warehouse, code,
+   variant) stock+PO supply as the SKU path (greedy by delivery date), NOT
+   po_qty_picked — MRP ignores SO↔PO linkage. */
 type SofaSet = {
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseName: string | null;
   soItemId: string;
   soDocNo: string;
   debtorName: string | null;
@@ -143,9 +177,9 @@ type SofaSet = {
   modules: string[];   // e.g. ['2A','LL','2A'] from variants.cells
   colour: string | null; // fabricCode + colorCode
   qty: number;
-  orderedQty: number;  // po_qty_picked
+  orderedQty: number;  // units covered by pooled stock+PO supply
   shortageQty: number; // qty - orderedQty (still to order)
-  poNumber: string | null; // PO(s) this set's units were raised into
+  poNumber: string | null; // pooled PO that covers this set (earliest ETA), if any
   poEta: string | null;    // earliest PO-line delivery date (when goods arrive)
   suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
 };
@@ -210,7 +244,7 @@ export async function computeMrp(
   const { data: demandRaw, error: demandErr } = await sb
     .from('mfg_sales_order_items')
     .select(`
-      id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, line_delivery_date, cancelled,
+      id, doc_no, item_code, description, item_group, variants, qty, warehouse_id, line_delivery_date, cancelled,
       so:mfg_sales_orders!inner ( debtor_name, status, so_date, customer_delivery_date, internal_expected_dd )
     `)
     .eq('cancelled', false)
@@ -256,51 +290,65 @@ export async function computeMrp(
     .select('id, code, name')
     .eq('is_active', true)
     .order('code');
+  const whById = new Map<string, { code: string; name: string }>();
+  for (const w of (warehouses ?? []) as Array<{ id: string; code: string; name: string }>) {
+    whById.set(w.id, { code: w.code, name: w.name });
+  }
 
-  // ── 3. Stock on hand — inventory_balances keyed by (product_code, variant_key) ──
+  // ── 3. Stock on hand — inventory_balances keyed by (warehouse, code, variant) ──
+  // Commander 2026-05-31 — warehouse is part of the bucket identity (no cross-WH
+  // pooling). whFilter scopes the query to one warehouse; otherwise every
+  // warehouse's balance lands in its own bucket.
   let balQ = sb.from('inventory_balances').select('product_code, warehouse_id, variant_key, qty');
   if (whFilter) balQ = balQ.eq('warehouse_id', whFilter);
   const { data: balances } = await balQ;
   const stockByKey = new Map<string, number>();
   for (const b of (balances ?? []) as BalanceRow[]) {
-    const k = composite(b.product_code, b.variant_key ?? '');
+    const k = composite(b.warehouse_id ?? null, b.product_code, b.variant_key ?? '');
     stockByKey.set(k, (stockByKey.get(k) ?? 0) + (b.qty ?? 0));
   }
 
-  // ── 4. Outstanding PO supply — open PO lines with ETA, keyed by (code, variant) ──
+  // ── 4. Outstanding PO supply — open PO lines with ETA, keyed by (warehouse, code, variant) ──
+  // Each PO line's ship-to warehouse = line warehouse_id, falling back to the PO
+  // header's purchase_location_id. No SO↔PO linkage — supply is a pure pool.
   const { data: poRaw } = await sb
     .from('purchase_order_items')
     .select(`
       material_code, item_group, variants, qty, received_qty, delivery_date, warehouse_id, so_item_id,
-      po:purchase_orders!inner ( po_number, status, expected_at )
+      po:purchase_orders!inner ( po_number, status, expected_at, purchase_location_id, supplier_id )
     `)
     .limit(5000);
-  type PoSupply = { poNumber: string; eta: string | null; qtyLeft: number };
+  // Commander 2026-05-31 — carry the covering PO's supplier so a covered line
+  // can display it read-only (a raised PO's supplier is fixed). Name resolved
+  // from the suppliers map below.
+  type PoSupply = { poNumber: string; eta: string | null; qtyLeft: number; supplierId: string | null };
   const poByKey = new Map<string, PoSupply[]>();
   const poOutstandingByKey = new Map<string, number>();
-  /* Commander 2026-05-30 — map each SO line to the PO(s) its units were raised
-     into (via so_item_id), with the earliest PO-line delivery date (the date we
-     set for the supplier). Lets a line covered by its OWN pick show the PO
-     number + supplier delivery date instead of a bare "ordered". Includes
-     fully-received PO lines, since po_qty_picked counts them as ordered. */
-  const pickedPoByLineId = new Map<string, { poNumbers: string[]; eta: string | null }>();
+  const poSupplierIds = new Set<string>();
   for (const r of (poRaw ?? []) as unknown as PoLineRow[]) {
     if (!r.po || PO_DEAD.has(r.po.status)) continue;
     const eta = r.delivery_date ?? r.po.expected_at ?? null;
-    if (r.so_item_id) {
-      const entry = pickedPoByLineId.get(r.so_item_id) ?? { poNumbers: [], eta: null };
-      if (!entry.poNumbers.includes(r.po.po_number)) entry.poNumbers.push(r.po.po_number);
-      if (eta && (!entry.eta || eta < entry.eta)) entry.eta = eta;
-      pickedPoByLineId.set(r.so_item_id, entry);
-    }
     const left = (r.qty ?? 0) - (r.received_qty ?? 0);
     if (left <= 0) continue;
-    if (whFilter && r.warehouse_id && r.warehouse_id !== whFilter) continue;
-    const k = composite(r.material_code, variantKeyOf(r.item_group, r.variants));
+    const poWh = r.warehouse_id ?? r.po.purchase_location_id ?? null;
+    if (whFilter && poWh !== whFilter) continue;
+    const k = composite(poWh, r.material_code, variantKeyOf(r.item_group, r.variants));
     const arr = poByKey.get(k) ?? [];
-    arr.push({ poNumber: r.po.po_number, eta, qtyLeft: left });
+    arr.push({ poNumber: r.po.po_number, eta, qtyLeft: left, supplierId: r.po.supplier_id ?? null });
     poByKey.set(k, arr);
     poOutstandingByKey.set(k, (poOutstandingByKey.get(k) ?? 0) + left);
+    if (r.po.supplier_id) poSupplierIds.add(r.po.supplier_id);
+  }
+  // Resolve PO supplier ids → names for the read-only covered-line display.
+  const supplierNameById = new Map<string, string>();
+  if (poSupplierIds.size > 0) {
+    const { data: poSups } = await sb
+      .from('suppliers')
+      .select('id, name')
+      .in('id', [...poSupplierIds]);
+    for (const s of (poSups ?? []) as Array<{ id: string; name: string }>) {
+      supplierNameById.set(s.id, s.name);
+    }
   }
   for (const arr of poByKey.values()) arr.sort((a, b) => byDateAsc(a.eta, b.eta));
 
@@ -328,108 +376,88 @@ export async function computeMrp(
     }
   }
 
-  // ── 6. Group demand by (SKU + variant), apply category filter ──────────
-  // Commander 2026-05-29 — bedframe/sofa: each fabric/colour/divan/leg combo is
-  // its own demand bucket (own Qty Needed / Stock / Shortage). Mattress has no
-  // variant → key '' → one row per SKU as before.
-  type Bucket = { code: string; vkey: string; vlabel: string; rows: DemandRow[] };
+  // ── 6. Group demand by (warehouse + SKU + variant), apply category filter ─
+  // Commander 2026-05-31 — warehouse is part of the bucket: the same SKU+variant
+  // in two warehouses is two rows (no cross-WH pooling). When whFilter is set,
+  // only that warehouse's demand lines are grouped. Sofa is handled separately
+  // as colour-matched SETS (section 8) so it isn't double-counted here.
+  type Bucket = { whId: string | null; code: string; vkey: string; vlabel: string; rows: DemandRow[] };
   const demandByKey = new Map<string, Bucket>();
   for (const d of demand) {
     const prod = prodByCode.get(d.item_code);
     const cat = prod?.category ?? null;
     if (catFilter && cat !== catFilter) continue;
-    // Sofa is handled separately as colour-matched SETS (section 8) — keep it
-    // out of the per-SKU/variant buckets so it isn't double-counted.
     if (cat === 'SOFA') continue;
+    if (whFilter && (d.warehouse_id ?? null) !== whFilter) continue;
+    const whId = d.warehouse_id ?? null;
     const vkey = variantKeyOf(d.item_group, d.variants);
-    const k = composite(d.item_code, vkey);
+    const k = composite(whId, d.item_code, vkey);
     const bucket = demandByKey.get(k)
-      ?? { code: d.item_code, vkey, vlabel: buildVariantSummary(d.item_group, d.variants), rows: [] };
+      ?? { whId, code: d.item_code, vkey, vlabel: buildVariantSummary(d.item_group, d.variants), rows: [] };
     bucket.rows.push(d);
     demandByKey.set(k, bucket);
   }
 
-  // ── 7. Allocate (greedy by SO delivery date) per (SKU + variant) ───────
+  // ── 7. Allocate (greedy by SO delivery date) per (warehouse + SKU + variant) ─
+  // Commander 2026-05-31 — pure date-priority pooling, NO po_qty_picked lock.
+  // Supply = this bucket's stock + open PO lines (same warehouse+variant). The
+  // earliest-delivery SO line claims stock first, then the earliest-ETA PO; what
+  // remains is shortage. A line already on a PO is covered naturally because that
+  // PO is in the supply pool — no special "own pick" handling needed.
   const skus: MrpSku[] = [];
   for (const [k, bucket] of demandByKey.entries()) {
-    const { code, vlabel, rows } = bucket;
+    const { whId, code, vlabel, rows } = bucket;
     const prod = prodByCode.get(code);
-    rows.sort((a, b) => byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
-                                  b.line_delivery_date ?? b.so?.customer_delivery_date ?? null));
+    // Commander 2026-05-31 — deterministic same-day allocation: when two SO
+    // lines share a delivery date, allocate by SO doc number ascending so the
+    // greedy walk never flips nondeterministically (SO-2605-001 before -002).
+    rows.sort((a, b) => {
+      const byDate = byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
+                               b.line_delivery_date ?? b.so?.customer_delivery_date ?? null);
+      if (byDate !== 0) return byDate;
+      return (a.doc_no ?? '').localeCompare(b.doc_no ?? '');
+    });
 
     let stockLeft = stockByKey.get(k) ?? 0;
-    // Clone PO supply so the greedy walk can mutate qtyLeft without touching
-    // the shared map. Commander 2026-05-29 — also fold in the SKU's
-    // EMPTY-variant PO pool (legacy POs created before SO→PO carried variants:
-    // their line has no variant → key ''). Without this, a PO you just raised
-    // for a bedframe wouldn't show as "PO Outstanding" against the variant row.
-    // New POs (post-fix) carry the variant and match exactly, so the legacy
-    // pool is empty for them.
-    const legacyKey = composite(code, '');
+    // Clone PO supply so the greedy walk can mutate qtyLeft without touching the
+    // shared map. Fold in the same-warehouse EMPTY-variant PO pool (legacy POs
+    // created before SO→PO carried variants → key ''), so a PO raised for a
+    // bedframe still shows as supply against the variant row.
+    const legacyKey = composite(whId, code, '');
     const useLegacy = bucket.vkey !== '' && legacyKey !== k;
     const poQueue: PoSupply[] = [
       ...(poByKey.get(k) ?? []),
       ...(useLegacy ? (poByKey.get(legacyKey) ?? []) : []),
     ].map((p) => ({ ...p })).sort((a, b) => byDateAsc(a.eta, b.eta));
 
-    // Commander 2026-05-29 (MRP fusion) — each SO line's own po_qty_picked is
-    // LOCKED coverage for THAT line: those units are already on a PO raised from
-    // this exact line, so they can never be a shortage and must never be
-    // re-ordered (raising another PO for them 409s "qty_exceeds_remaining,
-    // remaining:0"). The old date-priority pooling ignored po_qty_picked and
-    // could hand a line's PO coverage to an earlier-dated sibling, marking the
-    // truly-ordered line SHORT. Fix: drain the shared PO pool by the bucket's
-    // total picked units (earliest ETA first — they belong to already-ordered
-    // lines), then give each line only its UNPICKED remainder (qty - picked) to
-    // the stock/PO competition below.
-    let lockedPicked = rows.reduce((acc, r) => acc + Math.min(r.po_qty_picked ?? 0, effQtyOf(r)), 0);
-    while (lockedPicked > 0 && poQueue.length > 0) {
-      const front = poQueue[0];
-      if (!front) break;
-      const take = Math.min(front.qtyLeft, lockedPicked);
-      front.qtyLeft -= take;
-      lockedPicked -= take;
-      if (front.qtyLeft <= 0) poQueue.shift();
-    }
-
     const lines: MrpLine[] = [];
     let qtyNeeded = 0;
     for (const r of rows) {
       const eff = effQtyOf(r);                              // qty still to fulfil (ordered − delivered + returned)
       qtyNeeded += eff;
-      const picked = Math.min(r.po_qty_picked ?? 0, eff);   // units already on this line's own PO (locked)
-      let need = eff - picked;                              // only the unpicked remainder competes for supply
+      let need = eff;
       const fromStock = Math.min(stockLeft, need);
       stockLeft -= fromStock;
       need -= fromStock;
 
       let poNumber: string | null = null;
       let poEta: string | null = null;
+      let poSupplierId: string | null = null;
       while (need > 0 && poQueue.length > 0) {
         const front = poQueue[0];
         if (!front) break;
         const take = Math.min(front.qtyLeft, need);
-        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; }
+        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; poSupplierId = front.supplierId; }
         front.qtyLeft -= take;
         need -= take;
         if (front.qtyLeft <= 0) poQueue.shift();
       }
 
-      // Commander 2026-05-30 — line covered by its OWN pick (po_qty_picked) but
-      // no pooled PO matched: surface the PO it was raised into + the supplier
-      // delivery date so the UI shows "PO-xxxx · ETA …" instead of bare "ordered".
-      if (poNumber == null && picked > 0) {
-        const own = pickedPoByLineId.get(r.id);
-        if (own && own.poNumbers.length > 0) { poNumber = own.poNumbers.join(', '); poEta = own.eta; }
-      }
-
-      // need>0 → still uncovered (SHORT; orderable up to qty-picked). need==0 →
-      // covered by the pooled PO (poNumber set), by this line's OWN pick
-      // (picked>0 → 'po', the UI shows "ordered"), or by stock.
+      // need>0 → still uncovered (SHORT). need==0 → covered by a pooled PO
+      // (poNumber set) or by stock.
       const source: AllocSource =
         need > 0 ? 'shortage'
         : poNumber != null ? 'po'
-        : picked > 0 ? 'po'
         : 'stock';
       const lineDelivery = r.line_delivery_date ?? r.so?.customer_delivery_date ?? null;
       lines.push({
@@ -445,21 +473,22 @@ export async function computeMrp(
         poNumber,
         poEta,
         shortageQty: need,
+        // Only covered-by-PO lines carry a read-only supplier; stock/shortage = null.
+        poSupplierId: source === 'po' ? poSupplierId : null,
+        poSupplierName: source === 'po' && poSupplierId ? (supplierNameById.get(poSupplierId) ?? null) : null,
       });
     }
 
     const stock = stockByKey.get(k) ?? 0;
     const poOutstanding = (poOutstandingByKey.get(k) ?? 0)
       + (useLegacy ? (poOutstandingByKey.get(legacyKey) ?? 0) : 0);
-    // Commander 2026-05-29 (MRP fusion) — shortage = sum of the per-line
-    // uncovered units (after locking each line's own pick). This is EXACTLY what
-    // Proceed-PO will try to order, so the parent total can never exceed what
-    // the lines can actually be ordered for. It also matches the client's own
-    // date-window recompute (which already sums line shortageQty), so the
-    // checkbox + "Proceed PO (N)" count stay honest in every view.
     const shortage = lines.reduce((acc, l) => acc + l.shortageQty, 0);
     const main = mainByCode.get(code);
+    const wh = whId ? whById.get(whId) : null;
     skus.push({
+      warehouseId: whId,
+      warehouseCode: wh?.code ?? null,
+      warehouseName: wh?.name ?? null,
       itemCode: code,
       variantKey: bucket.vkey,
       variantLabel: vlabel || null,
@@ -493,22 +522,70 @@ export async function computeMrp(
   });
 
   // ── 8. Sofa SETS — one per SO line ("每张 SO 一套"). ────────────────────
+  // Commander 2026-05-31 — sets draw from the SAME pooled (warehouse, code,
+  // variant) stock+PO supply as section 7, greedy by delivery date. Group the
+  // sofa demand into per-bucket queues so two sets sharing a fabric+seat+leg
+  // bucket compete for one stock pool (the variant key ignores module layout).
   const sstr = (v: unknown): string => (v == null ? '' : String(v).trim());
-  const sofaSets: SofaSet[] = demand
-    .filter((d) => (prodByCode.get(d.item_code)?.category ?? null) === 'SOFA')
-    .map((d) => {
+  type SofaBucket = { whId: string | null; rows: DemandRow[] };
+  const sofaByKey = new Map<string, SofaBucket>();
+  for (const d of demand) {
+    if ((prodByCode.get(d.item_code)?.category ?? null) !== 'SOFA') continue;
+    if (whFilter && (d.warehouse_id ?? null) !== whFilter) continue;
+    const whId = d.warehouse_id ?? null;
+    const k = composite(whId, d.item_code, variantKeyOf(d.item_group, d.variants));
+    const bucket = sofaByKey.get(k) ?? { whId, rows: [] };
+    bucket.rows.push(d);
+    sofaByKey.set(k, bucket);
+  }
+
+  const sofaSets: SofaSet[] = [];
+  for (const [k, bucket] of sofaByKey.entries()) {
+    const { whId, rows } = bucket;
+    const wh = whId ? whById.get(whId) : null;
+    // Same deterministic tie-break as section 7: equal delivery date → SO doc
+    // number ascending, so same-day sofa allocation is stable.
+    rows.sort((a, b) => {
+      const byDate = byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
+                               b.line_delivery_date ?? b.so?.customer_delivery_date ?? null);
+      if (byDate !== 0) return byDate;
+      return (a.doc_no ?? '').localeCompare(b.doc_no ?? '');
+    });
+    let stockLeft = stockByKey.get(k) ?? 0;
+    const poQueue: PoSupply[] = [...(poByKey.get(k) ?? [])]
+      .map((p) => ({ ...p }))
+      .sort((a, b) => byDateAsc(a.eta, b.eta));
+
+    for (const d of rows) {
       const v = (d.variants ?? {}) as Record<string, unknown>;
       const cells = Array.isArray(v.cells) ? (v.cells as Array<{ moduleId?: string }>) : [];
       const modules = cells.map((c) => sstr(c.moduleId)).filter(Boolean);
       const colour = [sstr(v.fabricCode), sstr(v.colorCode) || sstr(v.colourCode)].filter(Boolean).join(' ');
       const eff = effQtyOf(d);                        // set qty still to fulfil (ordered − delivered + returned)
-      const ordered = Math.min(d.po_qty_picked ?? 0, eff);
       const prod = prodByCode.get(d.item_code);
       const setDelivery = d.line_delivery_date ?? d.so?.customer_delivery_date ?? null;
-      // PO(s) this SO line's units were raised into, with the earliest supplier
-      // delivery date — so an "ordered" set shows which PO + when it lands.
-      const picked = pickedPoByLineId.get(d.id);
-      return {
+
+      let need = eff;
+      const fromStock = Math.min(stockLeft, need);
+      stockLeft -= fromStock;
+      need -= fromStock;
+      let poNumber: string | null = null;
+      let poEta: string | null = null;
+      while (need > 0 && poQueue.length > 0) {
+        const front = poQueue[0];
+        if (!front) break;
+        const take = Math.min(front.qtyLeft, need);
+        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; }
+        front.qtyLeft -= take;
+        need -= take;
+        if (front.qtyLeft <= 0) poQueue.shift();
+      }
+      const ordered = eff - need;                     // covered by pooled stock+PO
+
+      sofaSets.push({
+        warehouseId: whId,
+        warehouseCode: wh?.code ?? null,
+        warehouseName: wh?.name ?? null,
         soItemId: d.id,
         soDocNo: d.doc_no,
         debtorName: d.so?.debtor_name ?? null,
@@ -523,12 +600,13 @@ export async function computeMrp(
         colour: colour || null,
         qty: eff,
         orderedQty: ordered,
-        shortageQty: Math.max(0, eff - ordered),
-        poNumber: picked && picked.poNumbers.length > 0 ? picked.poNumbers.join(', ') : null,
-        poEta: picked?.eta ?? null,
+        shortageQty: need,
+        poNumber,
+        poEta,
         suppliers: suppliersByCode.get(d.item_code) ?? [],
-      };
-    });
+      });
+    }
+  }
   // To-order sets float to the top, then by earliest delivery date.
   sofaSets.sort((a, b) => {
     const sa = a.shortageQty > 0 ? 1 : 0;

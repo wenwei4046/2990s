@@ -549,7 +549,11 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   const supabase = c.get('supabase');
   const user = c.get('user');
   let body: {
-    picks?:    Array<{ soItemId: string; qty: number }>;
+    /* Commander 2026-05-31 — the MRP page now sends a per-pick supplierId so a
+       single SO line can be split to an alternate supplier in-place. It wins
+       over supplierByCode and the SKU's main-supplier binding (see
+       effectiveSupplierId below). Optional → the general SO→PO picker omits it. */
+    picks?:    Array<{ soItemId: string; qty: number; supplierId?: string | null }>;
     soItems?:  Array<{ soDocNo: string; itemCode: string; itemName: string; qty: number }>;
     expectedAt?: string;
     purchaseLocationId?: string;
@@ -569,9 +573,18 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
        whose supplier matches the PO's supplier), keeping each line's so_item_id
        so a later delete releases the SO quota. */
     targetPoId?: string;
+    /* Commander 2026-05-31 (MRP rebuild) — when the convert is raised from the
+       MRP page, the resulting PO line is REFERENCE-ONLY: it does NOT lock the
+       source SO line. MRP pools all open PO as supply regardless of SO↔PO
+       linkage, so the same SO line is infinitely convertible from MRP. This
+       flag (a) bypasses the qty_exceeds_remaining cap and (b) tags the PO line
+       from_mrp=true so the po_qty_picked recount excludes it. The ordinary
+       From-SO picker leaves this false → keeps its cap. */
+    fromMrp?: boolean;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const poMode: 'combined' | 'per-so' = body.mode === 'per-so' ? 'per-so' : 'combined';
+  const fromMrp = body.fromMrp === true;
   const supplierByCode = (body.supplierByCode ?? {}) as Record<string, string>;
   const targetPoId = body.targetPoId as string | undefined;
 
@@ -621,10 +634,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     // through to the PO line.
     item_group: string | null;
     variants: Record<string, unknown> | null;
+    // Commander 2026-05-31 (warehouse-flow bug) — the SO LINE's OWN ship-to
+    // warehouse (migration 0118). This is the AUTHORITATIVE per-line warehouse;
+    // it must flow through to the PO line so a KL SO line never lands stock in
+    // PG. The SO header sales_location is only a last-resort fallback now.
+    warehouse_id: string | null;
     so: { sales_location: string | null; customer_delivery_date: string | null } | null;
   };
   const SO_ITEM_SELECT =
-    'id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, unit_price_centi, line_delivery_date, ' +
+    'id, doc_no, item_code, description, item_group, variants, qty, po_qty_picked, unit_price_centi, line_delivery_date, warehouse_id, ' +
     'so:mfg_sales_orders!inner ( sales_location, customer_delivery_date )';
   // supabase-js returns the embedded parent as an object OR a 1-element array
   // depending on the relationship — normalise to a single object.
@@ -633,7 +651,10 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     if (Array.isArray(raw)) return (raw[0] as SoItem['so']) ?? null;
     return (raw as SoItem['so']) ?? null;
   };
-  let pickedItems: Array<{ row: SoItem; qty: number }> = [];
+  // Commander 2026-05-31 — pickSupplierId carries the per-pick supplier override
+  // (MRP) through to effectiveSupplierId / the PO grouping key. null on the
+  // legacy soItems path and the general picker (those have no per-pick supplier).
+  let pickedItems: Array<{ row: SoItem; qty: number; pickSupplierId: string | null }> = [];
 
   if (body.picks && body.picks.length > 0) {
     const ids = body.picks.map((p) => p.soItemId);
@@ -650,8 +671,12 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       if (!row) return c.json({ error: 'item_not_found', soItemId: p.soItemId }, 400);
       const remaining = row.qty - row.po_qty_picked;
       if (p.qty <= 0)         return c.json({ error: 'qty_must_be_positive', soItemId: p.soItemId }, 400);
-      if (p.qty > remaining)  return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
-      pickedItems.push({ row, qty: p.qty });
+      // Commander 2026-05-31 — MRP-origin converts skip the remaining cap: the
+      // line is reference-only and infinitely convertible. The ordinary picker
+      // keeps the cap so a normal SO→PO can't over-order.
+      if (!fromMrp && p.qty > remaining)
+        return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
+      pickedItems.push({ row, qty: p.qty, pickSupplierId: p.supplierId ?? null });
     }
   } else {
     // Legacy soItems path — kept so old callers don't break.
@@ -674,9 +699,15 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
         row: row ?? {
           id: '', doc_no: it.soDocNo, item_code: it.itemCode, description: it.itemName,
           qty: it.qty, po_qty_picked: 0, unit_price_centi: 0,
-          line_delivery_date: null, item_group: null, variants: null, so: null,
+          line_delivery_date: null, item_group: null, variants: null,
+          // No SO line warehouse on the legacy fabricated row → falls back to
+          // the SO header sales_location resolution below.
+          warehouse_id: null, so: null,
         },
         qty: it.qty,
+        // Legacy path has no per-pick supplier → effectiveSupplierId falls back
+        // to supplierByCode / the SKU main-supplier binding.
+        pickSupplierId: null,
       });
     }
   }
@@ -686,11 +717,18 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   // Re-project into the legacy soItems shape for the rest of the handler.
   // Commander 2026-05-28 — carry the per-line derived warehouse + delivery
   // date so they survive the supplier grouping below.
-  const soItems = pickedItems.map(({ row, qty }) => {
-    // Per-line warehouse = SO header sales_location resolved to a warehouse id;
-    // a caller-sent purchaseLocationId override wins if present.
+  const soItems = pickedItems.map(({ row, qty, pickSupplierId }) => {
+    // Commander 2026-05-31 (warehouse-flow bug) — per-line warehouse precedence:
+    //   1. explicit caller override (purchaseLocationId) — defense-in-depth,
+    //   2. the SO LINE's OWN warehouse_id (migration 0118) — AUTHORITATIVE,
+    //   3. the SO header sales_location resolved to a warehouse id — last-resort
+    //      fallback (legacy soItems path / SO lines that predate per-line wh).
+    // This is the fix: previously (2) was ignored, so a KL SO line's PO could
+    // land stock in PG. The SO line's warehouse now flows straight to the PO.
     const lineWarehouseId =
-      (purchaseLocationOverride as string | undefined) ?? resolveWarehouseId(row.so?.sales_location);
+      (purchaseLocationOverride as string | undefined)
+      ?? row.warehouse_id
+      ?? resolveWarehouseId(row.so?.sales_location);
     // Per-line delivery date = SO LINE's own date, falling back to the SO
     // header customer_delivery_date; an explicit override wins if present.
     const lineDeliveryDate =
@@ -713,6 +751,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       // Commander 2026-05-29 — the source SO line id, threaded to the PO line so
       // the append-to-existing-PO path can persist so_item_id (release-on-delete).
       soItemId:  row.id || null,
+      // Commander 2026-05-31 — per-pick supplier override (MRP), the highest
+      // precedence input to effectiveSupplierId below.
+      pickSupplierId,
     };
   });
 
@@ -751,9 +792,20 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     unit_price_centi: number; currency: string;
     price_matrix: Record<string, unknown> | null;
   };
+  /* Commander 2026-05-31 — per-pick supplier support. A single SKU can now be
+     split across suppliers within one convert (MRP per-line supplierId), so a
+     single "main binding per code" is no longer enough to cost / group a line.
+     Build BOTH:
+       • mainByCode — the SKU's default (override/main) binding, used as the
+         FINAL fallback when a line has no per-pick supplier;
+       • bindingByCodeSupplier (`code|supplierId`) — every live binding, so a
+         line bound to a specific effective supplier can resolve ITS binding
+         (sku, price_matrix, currency) for costing + grouping. */
   const mainByCode = new Map<string, MainBinding>();
+  const bindingByCodeSupplier = new Map<string, MainBinding>();
   for (const b of (bindings ?? []) as MainBinding[]) {
     if (!liveSupplierIds.has(b.supplier_id)) continue; // orphaned binding — skip
+    bindingByCodeSupplier.set(`${b.material_code}|${b.supplier_id}`, b);
     const override = supplierByCode[b.material_code];
     const existing = mainByCode.get(b.material_code);
     if (override) {
@@ -763,6 +815,24 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     }
     if (!existing) mainByCode.set(b.material_code, b);
   }
+
+  /* Commander 2026-05-31 — resolve the EFFECTIVE binding for a picked line.
+     Supplier precedence (matches effectiveSupplierId):
+       1. the line's per-pick supplierId (MRP),
+       2. supplierByCode[itemCode] (general picker / MRP per-SKU override),
+       3. the SKU's main-supplier binding (mainByCode).
+     Returns null only when the SKU has NO live binding at all (→ surfaced via
+     missing_bindings). If a per-pick/override supplier is named but has no live
+     binding for this SKU, fall back to main so the convert still produces a PO
+     against a valid supplier rather than silently dropping the line. */
+  const effectiveBindingFor = (it: { itemCode: string; pickSupplierId: string | null }): MainBinding | null => {
+    const chosen = it.pickSupplierId ?? supplierByCode[it.itemCode] ?? null;
+    if (chosen) {
+      const exact = bindingByCodeSupplier.get(`${it.itemCode}|${chosen}`);
+      if (exact) return exact;
+    }
+    return mainByCode.get(it.itemCode) ?? null;
+  };
 
   /* Phase 3 — resolve the fabric tier for each SO line's fabricCode (split
      per category: sofa_price_tier vs bedframe_price_tier), mirroring the
@@ -805,7 +875,14 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   /* Phase 3 — maintenance config per supplier (supplier scope → master
      fallback), resolved ONCE per supplier that owns a picked line. The cost
      engine reads each option's priceSen as the cost surcharge. */
-  const supplierIdsInvolved = [...new Set([...mainByCode.values()].map((b) => b.supplier_id))];
+  // Commander 2026-05-31 — derive from each picked line's EFFECTIVE binding so
+  // a per-pick alternate supplier's maintenance config + combos are loaded too
+  // (not just the main-supplier set).
+  const supplierIdsInvolved = [...new Set(
+    soItems
+      .map((it) => effectiveBindingFor(it)?.supplier_id)
+      .filter((x): x is string => Boolean(x)),
+  )];
   const maintBySupplier = new Map<string, MaintenanceConfig | null>();
   await Promise.all(supplierIdsInvolved.map(async (sid) => {
     const { config } = await resolveMaintenanceConfigForSupplier(supabase, sid);
@@ -817,8 +894,10 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
      (the supplier's set deal) instead of the per-seat-size matrix. */
   const combosBySupplier = await loadSupplierSofaCombos(supabase, supplierIdsInvolved);
 
-  // Items with no LIVE supplier binding can't be PO'd.
-  const noBinding = soItems.filter((it) => !mainByCode.has(it.itemCode));
+  // Items with no LIVE supplier binding can't be PO'd. Uses the effective
+  // binding (per-pick → override → main) so the check matches what grouping
+  // will actually resolve.
+  const noBinding = soItems.filter((it) => !effectiveBindingFor(it));
   if (noBinding.length > 0) {
     return c.json({
       error: 'missing_bindings',
@@ -846,7 +925,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   type SoLine = (typeof soItems)[number];
   const baseCostByItem = new Map<SoLine, number>();
   for (const it of soItems) {
-    const b = mainByCode.get(it.itemCode);
+    const b = effectiveBindingFor(it);
     if (!b) continue; // guarded by the missing_bindings check above
     const category = (it.itemGroup?.toUpperCase() ?? '') as
       'BEDFRAME' | 'SOFA' | 'MATTRESS' | 'ACCESSORY' | 'SERVICE' | '';
@@ -877,7 +956,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   const sofaGroups = new Map<string, SoLine[]>();
   for (const it of soItems) {
     if ((it.itemGroup?.toUpperCase() ?? '') !== 'SOFA') continue;
-    const b = mainByCode.get(it.itemCode);
+    const b = effectiveBindingFor(it);
     if (!b) continue;
     const { baseModel, sizeCode } = splitSofaCode(it.itemCode);
     if (!sizeCode.includes('-')) continue; // not a module (e.g. BLATT-2S) → no combo
@@ -928,22 +1007,36 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
   // Group items into PO buckets.
   // Commander 2026-05-28 — each line carries its own derived warehouse +
   // delivery date (from the source SO), so they ride through to the insert.
-  // Grouping key depends on poMode:
-  //   'combined' → supplier_id            (one PO per supplier)
-  //   'per-so'   → supplier_id :: soDocNo (one PO per supplier × SO)
+  // Commander 2026-05-31 (warehouse-flow bug) — the grouping key is now
+  // (lineWarehouseId, effectiveSupplierId), with soDocNo appended in 'per-so'
+  // mode. Folding the LINE warehouse into the key guarantees every emitted PO
+  // is SINGLE-WAREHOUSE: the downstream GRN receive-into (PO header
+  // purchase_location_id) then always lands stock in the correct warehouse —
+  // a KL line and a PG line of the same SKU+supplier now split into two POs
+  // instead of one mixed-warehouse PO. effectiveSupplierId resolves per line as
+  //   pick.supplierId ?? supplierByCode[itemCode] ?? <SKU main supplier id>.
   type Line = {
     itemCode: string; itemName: string; qty: number; supplierSku: string; unitPriceCenti: number;
     warehouseId: string | null; deliveryDate: string | null;
     itemGroup: string | null; variants: Record<string, unknown> | null;
     soItemId: string | null;
   };
-  type Bucket = { supplierId: string; currency: string; lines: Line[]; soDocNos: Set<string> };
+  type Bucket = {
+    supplierId: string; warehouseId: string | null; currency: string;
+    lines: Line[]; soDocNos: Set<string>;
+  };
   const byGroup = new Map<string, Bucket>();
   for (const it of soItems) {
-    const b = mainByCode.get(it.itemCode)!;
-    const groupKey = poMode === 'per-so' ? `${b.supplier_id}::${it.soDocNo}` : b.supplier_id;
+    const b = effectiveBindingFor(it)!;
+    const effectiveSupplierId = b.supplier_id;
+    const lineWarehouseId = it.lineWarehouseId;
+    // (warehouse, supplier) → one single-warehouse PO; soDocNo splits further in
+    // 'per-so' mode. A null warehouse buckets together under the literal 'null'.
+    const groupKey = poMode === 'per-so'
+      ? `${lineWarehouseId ?? 'null'}::${effectiveSupplierId}::${it.soDocNo}`
+      : `${lineWarehouseId ?? 'null'}::${effectiveSupplierId}`;
     const bucket = byGroup.get(groupKey)
-      ?? { supplierId: b.supplier_id, currency: b.currency, lines: [], soDocNos: new Set<string>() };
+      ?? { supplierId: effectiveSupplierId, warehouseId: lineWarehouseId, currency: b.currency, lines: [], soDocNos: new Set<string>() };
 
     // Cost was resolved in the pre-pass above: a combo-redistributed cost wins,
     // else the per-line base cost (matrix + surcharges), else the flat price.
@@ -957,7 +1050,7 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       qty: it.qty,
       supplierSku: b.supplier_sku,
       unitPriceCenti: autoCostCenti,
-      warehouseId: it.lineWarehouseId,
+      warehouseId: lineWarehouseId,
       deliveryDate: it.lineDeliveryDate,
       itemGroup: it.itemGroup,
       variants: it.variants,
@@ -991,11 +1084,19 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
     if (target.status !== 'SUBMITTED' && target.status !== 'PARTIALLY_RECEIVED') {
       return c.json({ error: 'po_not_editable', reason: `Cannot add lines to a ${target.status} PO.` }, 409);
     }
-    const bucket = byGroup.get(target.supplier_id);
-    if (!bucket || bucket.lines.length === 0) {
+    /* Commander 2026-05-31 — the grouping key is now (warehouse, supplier), so a
+       target supplier can span multiple buckets (one per line warehouse). The
+       append path targets a single existing PO, so gather EVERY bucket whose
+       supplier matches the target and append all their lines. Each line keeps
+       its own per-line warehouse_id (the SO line's warehouse); the target PO's
+       header purchase_location_id is left as-is. */
+    const targetLines = [...byGroup.values()]
+      .filter((bk) => bk.supplierId === target.supplier_id)
+      .flatMap((bk) => bk.lines);
+    if (targetLines.length === 0) {
       return c.json({ error: 'supplier_mismatch', reason: 'None of the picked SO lines belong to this PO’s supplier.' }, 409);
     }
-    const rows = bucket.lines.map((l) => ({
+    const rows = targetLines.map((l) => ({
       purchase_order_id: target.id,
       material_kind: 'mfg_product',
       material_code: l.itemCode,
@@ -1011,15 +1112,17 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       description2: buildVariantSummary(String(l.itemGroup ?? ''), l.variants ?? null) || null,
       // Release-on-delete link (migration 0098).
       so_item_id: l.soItemId,
+      // Commander 2026-05-31 — MRP-origin lines are reference-only (no SO lock).
+      from_mrp: fromMrp,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500);
     await recomputePoTotals(supabase, target.id);
     // Recount po_qty_picked from the live PO lines for every appended SO line
     // (drops them from the picker). Self-healing — see recomputeSoPicked.
-    try { await recomputeSoPicked(supabase, bucket.lines.map((l) => l.soItemId)); }
+    try { await recomputeSoPicked(supabase, targetLines.map((l) => l.soItemId)); }
     catch { /* lines already inserted — don't fail on counter recount */ }
-    return c.json({ targetPoId: target.id, poNumber: target.po_number, added: bucket.lines.length }, 200);
+    return c.json({ targetPoId: target.id, poNumber: target.po_number, added: targetLines.length }, 200);
   }
 
   // Generate PO numbers + create one PO per supplier.
@@ -1040,23 +1143,17 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
 
     /* Commander 2026-05-28 — derive the PO HEADER fields from this PO's lines:
          expected_at          = earliest non-null line delivery date, else null
-         purchase_location_id = most-common resolved line warehouse, else first,
-                                else null */
+       Commander 2026-05-31 (warehouse-flow bug) — purchase_location_id is now
+       the bucket's OWN warehouse. Because the grouping key folds in the line
+       warehouse, every line in a bucket shares it, so the header location is
+       unambiguous (no most-common heuristic needed). This is what makes the
+       downstream GRN receive-into land stock in the SO LINE's warehouse. */
     const lineDates = bucket.lines
       .map((l) => l.deliveryDate)
       .filter((d): d is string => Boolean(d))
       .sort();
     const headerExpectedAt = lineDates[0] ?? null;
-
-    const whCounts = new Map<string, number>();
-    for (const l of bucket.lines) {
-      if (l.warehouseId) whCounts.set(l.warehouseId, (whCounts.get(l.warehouseId) ?? 0) + 1);
-    }
-    let headerPurchaseLocationId: string | null = null;
-    let bestCount = 0;
-    for (const [wid, n] of whCounts.entries()) {
-      if (n > bestCount) { bestCount = n; headerPurchaseLocationId = wid; }
-    }
+    const headerPurchaseLocationId: string | null = bucket.warehouseId;
 
     const { data: headerData, error: hErr } = await supabase
       .from('purchase_orders')
@@ -1103,6 +1200,8 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       // Release-on-delete link (migration 0098) — every from-SO line carries
       // its source SO line so recomputeSoPicked can release it on delete/cancel.
       so_item_id: l.soItemId,
+      // Commander 2026-05-31 — MRP-origin lines are reference-only (no SO lock).
+      from_mrp: fromMrp,
     }));
     const { error: iErr } = await supabase.from('purchase_order_items').insert(rows);
     if (iErr) {
@@ -1181,9 +1280,15 @@ async function recomputeSoPicked(sb: any, soItemIds: Array<string | null | undef
   try {
     const { data: lines } = await sb
       .from('purchase_order_items')
-      .select('so_item_id, qty, purchase_order_id')
+      .select('so_item_id, qty, purchase_order_id, from_mrp')
       .in('so_item_id', ids);
-    const rows = (lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string }>;
+    /* Commander 2026-05-31 — MRP-origin PO lines are reference-only: they do
+       NOT lock the source SO line, so the recount excludes them. Without this,
+       converting a line from MRP would bump po_qty_picked and drop the line
+       from the From-SO picker / cap further converts — exactly what the
+       infinite-convert model must avoid. */
+    const rows = ((lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string; from_mrp: boolean | null }>)
+      .filter((r) => r.from_mrp !== true);
     const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter(Boolean))];
     const cancelled = new Set<string>();
     if (poIds.length > 0) {

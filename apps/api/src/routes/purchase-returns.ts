@@ -99,7 +99,19 @@ purchaseReturns.get('/:id', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ purchaseReturn: h.data, items: i.data ?? [] });
+  /* Per-line Warehouse column (Agent D, TASK #32): resolve the SAME warehouse
+     the return OUT pulls stock from (grn_item → GRN warehouse → header GRN →
+     default) so the operator sees which warehouse each line ships back from.
+     Display-only. */
+  const rawItems = (i.data ?? []) as unknown as Array<{ id: string; grn_item_id?: string | null } & Record<string, unknown>>;
+  const headerGrnId = (h.data as { grn_id?: string | null }).grn_id ?? null;
+  const lineWh = await resolvePrLineWarehouses(sb, rawItems, headerGrnId);
+  const codeMap = await warehouseCodeMap(sb, [...lineWh.values()]);
+  const items = rawItems.map((it) => {
+    const wid = lineWh.get(it.id) ?? null;
+    return { ...it, warehouse_id: wid, warehouse_code: wid ? (codeMap.get(wid) ?? null) : null };
+  });
+  return c.json({ purchaseReturn: h.data, items });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────
@@ -132,31 +144,104 @@ purchaseReturns.get('/:id/linked', async (c) => {
 /* PR-DRAFT-removal — shared inventory-OUT side-effect. Called inline on
    POST so the new PR is created as POSTED with movements already written.
    Best-effort: doesn't roll back the row on movement failure. */
-async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber: string, grnId: string | null, userId: string) {
-  let warehouseId: string | null = null;
-  if (grnId) {
-    const { data: grn } = await sb.from('grns').select('warehouse_id').eq('id', grnId).maybeSingle();
-    warehouseId = (grn as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
+/* ── resolvePrLineWarehouses (Agent D 2026-05-31, TASK #32) ───────────────────
+   PER-WAREHOUSE CORRECTNESS for the supplier-return side. A Purchase Return
+   takes stock OUT of the warehouse the goods were RECEIVED into — i.e. the
+   source GRN line's warehouse. A PR built via /from-grns can batch lines from
+   several GRNs that may sit in different warehouses (same supplier), so a single
+   primary-GRN warehouse for every line could draw OUT of the wrong warehouse.
+   Resolve per line via grn_item_id → grn_items.grn_id → grns.warehouse_id.
+
+   Resolution order per PR line:
+     1. the source GRN line's GRN warehouse (grn_item_id → … → grns)
+     2. the primary GRN's warehouse (manual lines with no grn_item_id)
+     3. the global default warehouse (last-resort fallback)
+
+   Returns a map of purchase_return_items.id → warehouse_id (or null when even
+   the fallbacks are absent — the caller skips those lines). */
+async function resolvePrLineWarehouses(
+  sb: any,
+  items: Array<{ id: string; grn_item_id?: string | null }>,
+  primaryGrnId: string | null,
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const grnItemIds = [...new Set(items
+    .map((it) => it.grn_item_id ?? null)
+    .filter((x): x is string => !!x))];
+
+  // grn_item_id → grn_id → warehouse_id.
+  const grnItemToGrn = new Map<string, string | null>();
+  const grnIds = new Set<string>();
+  if (grnItemIds.length > 0) {
+    const { data: giRows } = await sb.from('grn_items')
+      .select('id, grn_id').in('id', grnItemIds);
+    for (const r of (giRows ?? []) as Array<{ id: string; grn_id: string | null }>) {
+      grnItemToGrn.set(r.id, r.grn_id ?? null);
+      if (r.grn_id) grnIds.add(r.grn_id);
+    }
   }
-  if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
-  if (!warehouseId) return;
+  if (primaryGrnId) grnIds.add(primaryGrnId);
+  const grnWh = new Map<string, string | null>();
+  if (grnIds.size > 0) {
+    const { data: grnRows } = await sb.from('grns')
+      .select('id, warehouse_id').in('id', [...grnIds]);
+    for (const r of (grnRows ?? []) as Array<{ id: string; warehouse_id: string | null }>) {
+      grnWh.set(r.id, r.warehouse_id ?? null);
+    }
+  }
+
+  const fallback = (primaryGrnId ? grnWh.get(primaryGrnId) ?? null : null) ?? (await defaultWarehouseId(sb));
+  for (const it of items) {
+    const grnId = it.grn_item_id ? (grnItemToGrn.get(it.grn_item_id) ?? null) : null;
+    const fromGrn = grnId ? (grnWh.get(grnId) ?? null) : null;
+    out.set(it.id, fromGrn ?? fallback);
+  }
+  return out;
+}
+
+/* warehouseCodeMap (Agent D 2026-05-31, TASK #32) — warehouse_id → display
+   CODE for the per-line Warehouse column on the PR detail GET. Read-only. */
+async function warehouseCodeMap(
+  sb: any,
+  ids: Array<string | null | undefined>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const uniq = [...new Set(ids.filter((x): x is string => !!x))];
+  if (uniq.length === 0) return out;
+  const { data } = await sb.from('warehouses').select('id, code, name').in('id', uniq);
+  for (const w of (data ?? []) as Array<{ id: string; code: string | null; name: string | null }>) {
+    out.set(w.id, w.code ?? w.name ?? '');
+  }
+  return out;
+}
+
+async function writePurchaseReturnMovements(sb: any, prId: string, returnNumber: string, grnId: string | null, userId: string) {
   const { data: items } = await sb.from('purchase_return_items')
-    .select('material_code, material_name, qty_returned, item_group, variants')
+    .select('id, grn_item_id, material_code, material_name, qty_returned, item_group, variants')
     .eq('purchase_return_id', prId);
-  const movements = ((items ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
+  if (!items) return;
+  // Per-line warehouse — each line draws OUT of its source GRN line's warehouse,
+  // not a single primary-GRN default (a batched PR can span warehouses).
+  const lineWh = await resolvePrLineWarehouses(sb, items as Array<{ id: string; grn_item_id?: string | null }>, grnId);
+  const movements = ((items ?? []) as Array<{ id: string; material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
     .filter((it) => it.qty_returned > 0)
-    .map((it) => ({
-      movement_type: 'OUT' as const,
-      warehouse_id: warehouseId!,
-      product_code: it.material_code,
-      variant_key: computeVariantKey(it.item_group, it.variants ?? null),
-      product_name: it.material_name,
-      qty: it.qty_returned,
-      source_doc_type: 'PURCHASE_RETURN' as const,
-      source_doc_id: prId,
-      source_doc_no: returnNumber,
-      performed_by: userId,
-    }));
+    .map((it) => {
+      const warehouseId = lineWh.get(it.id) ?? null;
+      if (!warehouseId) return null;
+      return {
+        movement_type: 'OUT' as const,
+        warehouse_id: warehouseId,
+        product_code: it.material_code,
+        variant_key: computeVariantKey(it.item_group, it.variants ?? null),
+        product_name: it.material_name,
+        qty: it.qty_returned,
+        source_doc_type: 'PURCHASE_RETURN' as const,
+        source_doc_id: prId,
+        source_doc_no: returnNumber,
+        performed_by: userId,
+      };
+    })
+    .filter((m): m is NonNullable<typeof m> => m !== null);
   if (movements.length > 0) {
     await writeMovements(sb, movements);
     /* PR post = stock OUT to supplier → other READY SOs that needed it may
@@ -506,35 +591,37 @@ purchaseReturns.patch('/:id/cancel', async (c) => {
     return c.json({ error: 'cannot_cancel' }, 409);
   }
 
-  // Reverse the inventory OUT: write an IN per line for qty_returned. The
-  // create path debited the GRN's warehouse (else the default) — credit the
-  // same. Best-effort; never un-cancel on a movement failure.
+  // Reverse the inventory OUT: write an IN per line for qty_returned. The create
+  // path debited each line's SOURCE GRN warehouse (else the primary GRN / the
+  // default) — credit back the SAME per-line warehouse so a batched PR spanning
+  // warehouses reverses correctly. Best-effort; never un-cancel on a movement
+  // failure.
   try {
-    let warehouseId: string | null = null;
-    if (head.grn_id) {
-      const { data: grn } = await sb.from('grns').select('warehouse_id').eq('id', head.grn_id).maybeSingle();
-      warehouseId = (grn as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
-    }
-    if (!warehouseId) warehouseId = await defaultWarehouseId(sb);
-    if (warehouseId) {
-      const { data: lines } = await sb.from('purchase_return_items')
-        .select('material_code, material_name, qty_returned, item_group, variants')
-        .eq('purchase_return_id', id);
-      const movements = ((lines ?? []) as Array<{ material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
+    const { data: lines } = await sb.from('purchase_return_items')
+      .select('id, grn_item_id, material_code, material_name, qty_returned, item_group, variants')
+      .eq('purchase_return_id', id);
+    if (lines) {
+      const lineWh = await resolvePrLineWarehouses(sb, lines as Array<{ id: string; grn_item_id?: string | null }>, head.grn_id);
+      const movements = ((lines ?? []) as Array<{ id: string; material_code: string; material_name: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)
         .filter((it) => (it.qty_returned ?? 0) > 0)
-        .map((it) => ({
-          movement_type: 'IN' as const,
-          warehouse_id: warehouseId!,
-          product_code: it.material_code,
-          variant_key: computeVariantKey(it.item_group, it.variants ?? null),
-          product_name: it.material_name,
-          qty: it.qty_returned,
-          source_doc_type: 'PURCHASE_RETURN' as const,
-          source_doc_id: id,
-          source_doc_no: head.return_number,
-          performed_by: user.id,
-          notes: 'Purchase return cancelled — reversing return',
-        }));
+        .map((it) => {
+          const warehouseId = lineWh.get(it.id) ?? null;
+          if (!warehouseId) return null;
+          return {
+            movement_type: 'IN' as const,
+            warehouse_id: warehouseId,
+            product_code: it.material_code,
+            variant_key: computeVariantKey(it.item_group, it.variants ?? null),
+            product_name: it.material_name,
+            qty: it.qty_returned,
+            source_doc_type: 'PURCHASE_RETURN' as const,
+            source_doc_id: id,
+            source_doc_no: head.return_number,
+            performed_by: user.id,
+            notes: 'Purchase return cancelled — reversing return',
+          };
+        })
+        .filter((m): m is NonNullable<typeof m> => m !== null);
       if (movements.length > 0) {
         await writeMovements(sb, movements);
         /* PR cancel reversed stock IN → may unlock PENDING SOs. Re-walk. */

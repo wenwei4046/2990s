@@ -286,6 +286,22 @@
 .codeCell { font-weight: 700; white-space: nowrap; }
 .descCell { color: var(--fg-muted); }
 
+/* Per-warehouse MRP (Commander 2026-05-31) — each Model row is scoped to one
+   warehouse; the tag makes the binding visible at a glance. */
+.whCell { white-space: nowrap; }
+.whTag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--c-cream);
+  border: 1px solid var(--line);
+  color: var(--c-ink);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.whNone { color: var(--fg-muted); }
+
 /* Variant sub-rows (3-level General view: Model → Variant → orders). */
 .variantRow {
   cursor: pointer;
@@ -351,6 +367,17 @@
   white-space: nowrap;
 }
 .noSupplier { color: var(--c-orange); font-weight: 600; }
+/* Read-only supplier on a covered (already-PO'd) SO line — a raised PO's
+   supplier can't change, so it's shown as plain text, not a dropdown. */
+.poSupplierRO {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
 .supplierSelect {
   font-family: var(--font-sans);
   font-size: var(--fs-12);

@@ -139,6 +139,63 @@ async function recomputeTotals(sb: any, deliveryOrderId: string) {
    UNIQUE index uq_inv_mov_do_source (migration 0100) is the hard backstop
    against a race. Best-effort — a movement failure never rolls back the
    status change (audit-DLQ pattern, same as the rest of inventory-movements). */
+/* ── resolveDoLineWarehouses (Agent D 2026-05-31, TASK #32) ───────────────────
+   PER-WAREHOUSE CORRECTNESS for the OUTBOUND side. A DO line MUST deduct from
+   the warehouse of the Sales Order LINE it delivers (mfg_sales_order_items.
+   warehouse_id, migration 0118) — never a single DO-header default. A KL SO
+   line must ship from KL stock even if the DO header (or the default) points at
+   PG; stock never crosses warehouses (CLAUDE.md locked rule).
+
+   Resolution order per DO line:
+     1. the linked SO line's warehouse_id (so_item_id → mfg_sales_order_items)
+     2. the DO header's warehouse_id (ad-hoc lines with no so_item_id)
+     3. the global default warehouse (last-resort fallback)
+
+   Returns a map of delivery_order_items.id → warehouse_id (or null when even
+   the fallbacks are absent — the caller skips those lines so a wrong warehouse
+   is never guessed). */
+async function resolveDoLineWarehouses(
+  sb: any,
+  items: Array<{ id: string; so_item_id?: string | null }>,
+  headerWarehouseId: string | null,
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const soItemIds = [...new Set(items
+    .map((it) => it.so_item_id ?? null)
+    .filter((x): x is string => !!x))];
+  const soWh = new Map<string, string | null>();
+  if (soItemIds.length > 0) {
+    const { data: soRows } = await sb.from('mfg_sales_order_items')
+      .select('id, warehouse_id').in('id', soItemIds);
+    for (const r of (soRows ?? []) as Array<{ id: string; warehouse_id: string | null }>) {
+      soWh.set(r.id, r.warehouse_id ?? null);
+    }
+  }
+  const fallback = headerWarehouseId ?? (await defaultWarehouseId(sb));
+  for (const it of items) {
+    const fromSo = it.so_item_id ? (soWh.get(it.so_item_id) ?? null) : null;
+    out.set(it.id, fromSo ?? fallback);
+  }
+  return out;
+}
+
+/* warehouseCodeMap (Agent D 2026-05-31, TASK #32) — resolve a set of
+   warehouse_ids to their display CODE so the detail GET can stamp a per-line
+   Warehouse column. Read-only label lookup; never touches stock. */
+async function warehouseCodeMap(
+  sb: any,
+  ids: Array<string | null | undefined>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const uniq = [...new Set(ids.filter((x): x is string => !!x))];
+  if (uniq.length === 0) return out;
+  const { data } = await sb.from('warehouses').select('id, code, name').in('id', uniq);
+  for (const w of (data ?? []) as Array<{ id: string; code: string | null; name: string | null }>) {
+    out.set(w.id, w.code ?? w.name ?? '');
+  }
+  return out;
+}
+
 async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedBy: string) {
   // Idempotency guard #1 — has this DO already written OUT movements?
   const { count: existing } = await sb
@@ -153,33 +210,37 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     .select('do_number, warehouse_id')
     .eq('id', deliveryOrderId).maybeSingle();
   const { data: items } = await sb.from('delivery_order_items')
-    .select('item_code, description, qty, item_group, variants')
+    .select('id, so_item_id, item_code, description, qty, item_group, variants')
     .eq('delivery_order_id', deliveryOrderId);
-  const warehouseId = (doHeader as { warehouse_id: string | null } | null)?.warehouse_id
-    ?? (await defaultWarehouseId(sb));
+  const headerWarehouseId = (doHeader as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
   const doNo = (doHeader as { do_number: string } | null)?.do_number ?? deliveryOrderId;
-  if (!warehouseId || !items) return;
+  if (!items) return;
 
-  /* Collapse identical (product_code, variant_key) lines into one OUT row.
-     A DO can legitimately list the same product across two lines (qty split);
-     the UNIQUE index keys on (doc, product_code, variant_key) so two raw rows
-     for the same bucket would collide. Summing keeps the deduction correct
-     and idempotency-safe. */
+  // Per-line warehouse — each line ships from its SO line's warehouse (0118),
+  // not a single DO-header default. Stock never crosses warehouses.
+  const lineWh = await resolveDoLineWarehouses(sb, items as Array<{ id: string; so_item_id?: string | null }>, headerWarehouseId);
+
+  /* Collapse identical (warehouse_id, product_code, variant_key) lines into one
+     OUT row. A DO can legitimately list the same product across two lines (qty
+     split) AND across two warehouses; bucketing by warehouse keeps each
+     warehouse's deduction correct and idempotency-safe. */
   const byKey = new Map<string, {
-    product_code: string; variant_key: string; product_name: string | null; qty: number;
+    warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number;
   }>();
-  for (const it of (items as Array<{ item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
+    const warehouseId = lineWh.get(it.id) ?? null;
+    if (!warehouseId) continue; // no resolvable warehouse — skip rather than guess
     const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${it.item_code}::${variantKey}`;
+    const k = `${warehouseId}::${it.item_code}::${variantKey}`;
     const cur = byKey.get(k);
     if (cur) { cur.qty += qty; }
-    else byKey.set(k, { product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
+    else byKey.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
   }
   const movements = [...byKey.values()].map((m) => ({
     movement_type: 'OUT' as const,
-    warehouse_id: warehouseId,
+    warehouse_id: m.warehouse_id,
     product_code: m.product_code,
     variant_key: m.variant_key,
     product_name: m.product_name,
@@ -225,42 +286,45 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
   if (!doHeader) return;
   const status = ((doHeader as { status: string | null }).status ?? '').toUpperCase();
   if (!SHIPPED_STATES.includes(status)) return; // not yet shipped → no OUT yet → nothing to sync
-  const warehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id
-    ?? (await defaultWarehouseId(sb));
-  if (!warehouseId) return;
+  const headerWarehouseId = (doHeader as { warehouse_id: string | null }).warehouse_id ?? null;
   const doNo = (doHeader as { do_number: string }).do_number;
 
-  // 1. Target qty per (product_code, variant_key) bucket — sum of current
-  //    active DO lines (mirror of deductInventoryForDo's collapsing).
+  // 1. Target qty per (warehouse_id, product_code, variant_key) bucket — sum of
+  //    current active DO lines (mirror of deductInventoryForDo's collapsing).
+  //    Each line's warehouse comes from its SO line (0118), not a header default,
+  //    so a resync delta lands in the SAME warehouse the first ship debited.
   const { data: items } = await sb.from('delivery_order_items')
-    .select('item_code, description, qty, item_group, variants')
+    .select('id, so_item_id, item_code, description, qty, item_group, variants')
     .eq('delivery_order_id', deliveryOrderId);
-  type Bucket = { product_code: string; variant_key: string; product_name: string | null; qty: number };
+  const lineWh = await resolveDoLineWarehouses(sb, (items ?? []) as Array<{ id: string; so_item_id?: string | null }>, headerWarehouseId);
+  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number };
   const targetByBucket = new Map<string, Bucket>();
-  for (const it of (items as Array<{ item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
+  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
+    const warehouseId = lineWh.get(it.id) ?? null;
+    if (!warehouseId) continue; // no resolvable warehouse — skip rather than guess
     const variant_key = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${it.item_code}::${variant_key}`;
+    const k = `${warehouseId}::${it.item_code}::${variant_key}`;
     const cur = targetByBucket.get(k);
     if (cur) { cur.qty += qty; }
-    else targetByBucket.set(k, { product_code: it.item_code, variant_key, product_name: it.description, qty });
+    else targetByBucket.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key, product_name: it.description, qty });
   }
 
-  // 2. Aggregate existing movements per bucket — current OUT qty / IN qty.
-  //    Also accumulate OUT total_cost_sen so the reversing IN re-introduces
-  //    stock at the same weighted cost basis (matches reverseMovements).
+  // 2. Aggregate existing movements per (warehouse, product, variant) bucket —
+  //    current OUT qty / IN qty. Also accumulate OUT total_cost_sen so the
+  //    reversing IN re-introduces stock at the same weighted cost basis.
   const { data: movs } = await sb.from('inventory_movements')
-    .select('movement_type, product_code, variant_key, qty, unit_cost_sen, total_cost_sen, product_name')
+    .select('movement_type, warehouse_id, product_code, variant_key, qty, unit_cost_sen, total_cost_sen, product_name')
     .eq('source_doc_type', 'DO')
     .eq('source_doc_id', deliveryOrderId);
   type Agg = { out_qty: number; in_qty: number; out_total_cost: number; product_name: string | null };
   const aggByBucket = new Map<string, Agg>();
   for (const m of (movs ?? []) as Array<{
-    movement_type: string; product_code: string; variant_key: string | null;
+    movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null;
     qty: number; unit_cost_sen: number | null; total_cost_sen: number | null; product_name: string | null;
   }>) {
-    const k = `${m.product_code}::${m.variant_key ?? ''}`;
+    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}`;
     let agg = aggByBucket.get(k);
     if (!agg) { agg = { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, agg); }
     if (m.movement_type === 'OUT') {
@@ -273,7 +337,8 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
   }
 
   // 3. Per-bucket delta = target − current_net_out. Positive → need more OUT;
-  //    negative → need more IN (return some stock).
+  //    negative → need more IN (return some stock). Bucket key is
+  //    warehouse_id::product_code::variant_key.
   const allKeys = new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()]);
   type MovOut = Parameters<typeof writeMovements>[1][number];
   const writes: MovOut[] = [];
@@ -285,14 +350,15 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
     const delta = target_qty - current_net_out;
     if (delta === 0) continue;
     const parts = k.split('::');
-    const product_code = parts[0] ?? '';
-    const variant_key = parts[1] ?? '';
+    const warehouse_id = parts[0] ?? '';
+    const product_code = parts[1] ?? '';
+    const variant_key = parts[2] ?? '';
     const product_name = t?.product_name ?? a.product_name ?? null;
     if (delta > 0) {
       // Need more OUT — operator increased a line qty or added a new line on a shipped DO.
       writes.push({
         movement_type: 'OUT',
-        warehouse_id: warehouseId,
+        warehouse_id,
         product_code, variant_key, product_name,
         qty: delta,
         source_doc_type: 'DO',
@@ -308,7 +374,7 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
       const unit_cost_sen = a.out_qty > 0 ? Math.round(a.out_total_cost / a.out_qty) : 0;
       writes.push({
         movement_type: 'IN',
-        warehouse_id: warehouseId,
+        warehouse_id,
         product_code, variant_key, product_name,
         qty: -delta,
         unit_cost_sen,
@@ -909,7 +975,19 @@ deliveryOrdersMfg.get('/:id', async (c) => {
     has_children: (drCount ?? 0) > 0 || (siCount ?? 0) > 0,
     lifecycle_state: lifecycleByDo.get(id) ?? 'shipped',
   };
-  return c.json({ deliveryOrder, items: i.data ?? [] });
+  /* Per-line Warehouse column (Agent D, TASK #32): resolve the SAME ship-from
+     warehouse the inventory OUT uses (SO line → DO header → default) and stamp
+     warehouse_id + warehouse_code on each item so the operator can see which
+     warehouse each line moves. Display-only — does not alter stock. */
+  const rawItems = (i.data ?? []) as unknown as Array<{ id: string; so_item_id?: string | null } & Record<string, unknown>>;
+  const headerWh = (h.data as { warehouse_id?: string | null }).warehouse_id ?? null;
+  const lineWh = await resolveDoLineWarehouses(sb, rawItems, headerWh);
+  const codeMap = await warehouseCodeMap(sb, [...lineWh.values()]);
+  const items = rawItems.map((it) => {
+    const wid = lineWh.get(it.id) ?? null;
+    return { ...it, warehouse_id: wid, warehouse_code: wid ? (codeMap.get(wid) ?? null) : null };
+  });
+  return c.json({ deliveryOrder, items });
 });
 
 // ── Create ──────────────────────────────────────────────────────────────

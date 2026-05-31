@@ -908,6 +908,11 @@ export const purchaseOrderItems = pgTable('purchase_order_items', {
      line was converted from (From-SO picker). NULL for manually-added lines.
      Lets the delete handler release po_qty_picked back to the SO line. */
   soItemId:                uuid('so_item_id').references(() => mfgSalesOrderItems.id, { onDelete: 'set null' }),
+  /* Migration 0118 — Commander 2026-05-31. Tags a PO line raised through the MRP
+     "convert to PO" path. MRP-origin lines are REFERENCE-ONLY: excluded from the
+     po_qty_picked recount + the qty_exceeds_remaining cap, so the same SO line is
+     infinitely convertible from MRP. Ordinary SO→PO picks keep from_mrp=false. */
+  fromMrp:                 boolean('from_mrp').notNull().default(false),
   createdAt:        timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   idxPo:        index('idx_po_items_po').on(t.purchaseOrderId),
@@ -1248,6 +1253,12 @@ export const mfgSalesOrderItems = pgTable('mfg_sales_order_items', {
   description2:      text('description2'),
   uom:               text('uom').notNull().default('UNIT'),
   location:          text('location'),
+  /* Migration 0118 — Commander 2026-05-31. Per-LINE ship-from warehouse (the
+     warehouse binding; supersedes the never-populated header-level
+     allocation_warehouse_id from 0112). Defaults from the SO's customer_state
+     via state_warehouse_mappings, editable per line. MRP + auto-allocation run
+     strictly per-warehouse off this — stock never crosses warehouses. */
+  warehouseId:       uuid('warehouse_id').references(() => warehouses.id, { onDelete: 'set null' }),
   qty:               integer('qty').notNull().default(1),
   unitPriceCenti:    integer('unit_price_centi').notNull().default(0),
   discountCenti:     integer('discount_centi').notNull().default(0),

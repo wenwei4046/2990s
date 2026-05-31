@@ -171,6 +171,11 @@ type DoItem = {
   line_margin_centi: number;
   variants: Record<string, unknown> | null;
   notes: string | null;
+  /* Per-line ship-from warehouse (Agent D, TASK #32): resolved server-side from
+     the SO line → DO header → default; display-only so the operator can see
+     which warehouse each line deducts from. */
+  warehouse_id?: string | null;
+  warehouse_code?: string | null;
 };
 
 /* One not-yet-saved add-line. soItemId/maxQty are set when picked from the
@@ -669,6 +674,7 @@ export const DeliveryOrderDetail = () => {
             <thead>
               <tr>
                 <th>Item</th>
+                <th>Warehouse</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
@@ -689,6 +695,7 @@ export const DeliveryOrderDetail = () => {
                       return summary ? <div className={styles.muted}>{summary}</div> : null;
                     })()}
                   </td>
+                  <td><span className={styles.muted}>{it.warehouse_code ?? '—'}</span></td>
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>

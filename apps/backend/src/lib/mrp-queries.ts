@@ -37,9 +37,20 @@ export type MrpLine = {
   poNumber: string | null;
   poEta: string | null;
   shortageQty: number;
+  /* Commander 2026-05-31 — when source==='po', the covering PO's supplier so a
+     covered line shows it READ-ONLY (a raised PO's supplier can't change).
+     NULL on stock / shortage lines. */
+  poSupplierId: string | null;
+  poSupplierName: string | null;
 };
 
 export type MrpSku = {
+  /* Commander 2026-05-31 — each row is scoped to ONE warehouse (per-WH MRP);
+     the same SKU+variant in two warehouses produces two rows. NULL when the
+     demand line has no warehouse bound yet. */
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseName: string | null;
   itemCode: string;
   variantKey: string;
   variantLabel: string | null;
@@ -59,6 +70,9 @@ export type MrpWarehouse = { id: string; code: string; name: string };
 
 /* Sofa is ordered as a colour-matched SET, one per SO line ("每张 SO 一套"). */
 export type SofaSet = {
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseName: string | null;
   soItemId: string;
   soDocNo: string;
   debtorName: string | null;

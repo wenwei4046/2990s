@@ -109,6 +109,90 @@ async function recomputeTotals(sb: any, deliveryReturnId: string) {
    per IN row), one row per (product_code, variant_key) bucket. The lot's unit
    cost is seeded from the line's unit_cost_centi (sen) so returned stock
    re-enters at its original cost rather than zero. */
+/* ── resolveDrLineWarehouses (Agent D 2026-05-31, TASK #32) ───────────────────
+   PER-WAREHOUSE CORRECTNESS for the RETURNS side. A Delivery Return must put
+   stock BACK into the SAME warehouse the Delivery Order took it OUT of — never a
+   single DR-header default. The DO took it from its SO line's warehouse
+   (migration 0118), so each DR line resolves its warehouse by tracing
+   do_item_id → delivery_order_items.so_item_id → mfg_sales_order_items.
+   warehouse_id.
+
+   Resolution order per DR line:
+     1. the linked DO line's SO-line warehouse (do_item_id → … → SO line)
+     2. the linked DO header's warehouse_id
+     3. the DR header's warehouse_id (free/ad-hoc lines — none exist now that
+        "no DO, no return" is enforced, but kept as a safety net)
+     4. the global default warehouse (last-resort fallback)
+
+   Returns a map of delivery_return_items.id → warehouse_id (or null when even
+   the fallbacks are absent — the caller skips those lines). */
+async function resolveDrLineWarehouses(
+  sb: any,
+  items: Array<{ id: string; do_item_id?: string | null }>,
+  drHeaderWarehouseId: string | null,
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const doItemIds = [...new Set(items
+    .map((it) => it.do_item_id ?? null)
+    .filter((x): x is string => !!x))];
+
+  // do_item_id → { so_item_id, do header warehouse }
+  const doLineMeta = new Map<string, { soItemId: string | null; doWarehouseId: string | null }>();
+  const soItemIds = new Set<string>();
+  if (doItemIds.length > 0) {
+    const { data: doLines } = await sb.from('delivery_order_items')
+      .select('id, so_item_id, delivery_order_id').in('id', doItemIds);
+    const doRows = (doLines ?? []) as Array<{ id: string; so_item_id: string | null; delivery_order_id: string }>;
+    const doIds = [...new Set(doRows.map((r) => r.delivery_order_id).filter(Boolean))];
+    const doHeaderWh = new Map<string, string | null>();
+    if (doIds.length > 0) {
+      const { data: doHeaders } = await sb.from('delivery_orders')
+        .select('id, warehouse_id').in('id', doIds);
+      for (const d of (doHeaders ?? []) as Array<{ id: string; warehouse_id: string | null }>) {
+        doHeaderWh.set(d.id, d.warehouse_id ?? null);
+      }
+    }
+    for (const r of doRows) {
+      if (r.so_item_id) soItemIds.add(r.so_item_id);
+      doLineMeta.set(r.id, { soItemId: r.so_item_id ?? null, doWarehouseId: doHeaderWh.get(r.delivery_order_id) ?? null });
+    }
+  }
+
+  // so_item_id → warehouse_id (the authoritative ship-from, 0118).
+  const soWh = new Map<string, string | null>();
+  if (soItemIds.size > 0) {
+    const { data: soRows } = await sb.from('mfg_sales_order_items')
+      .select('id, warehouse_id').in('id', [...soItemIds]);
+    for (const r of (soRows ?? []) as Array<{ id: string; warehouse_id: string | null }>) {
+      soWh.set(r.id, r.warehouse_id ?? null);
+    }
+  }
+
+  const fallback = drHeaderWarehouseId ?? (await defaultWarehouseId(sb));
+  for (const it of items) {
+    const meta = it.do_item_id ? doLineMeta.get(it.do_item_id) : undefined;
+    const fromSo = meta?.soItemId ? (soWh.get(meta.soItemId) ?? null) : null;
+    out.set(it.id, fromSo ?? meta?.doWarehouseId ?? fallback);
+  }
+  return out;
+}
+
+/* warehouseCodeMap (Agent D 2026-05-31, TASK #32) — warehouse_id → display
+   CODE for the per-line Warehouse column on the DR detail GET. Read-only. */
+async function warehouseCodeMap(
+  sb: any,
+  ids: Array<string | null | undefined>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const uniq = [...new Set(ids.filter((x): x is string => !!x))];
+  if (uniq.length === 0) return out;
+  const { data } = await sb.from('warehouses').select('id, code, name').in('id', uniq);
+  for (const w of (data ?? []) as Array<{ id: string; code: string | null; name: string | null }>) {
+    out.set(w.id, w.code ?? w.name ?? '');
+  }
+  return out;
+}
+
 async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
   // Idempotency guard #1 — has this DR already written IN movements?
   const { count: existing } = await sb
@@ -123,30 +207,35 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
     .select('return_number, warehouse_id')
     .eq('id', deliveryReturnId).maybeSingle();
   const { data: items } = await sb.from('delivery_return_items')
-    .select('item_code, description, qty_returned, item_group, variants, unit_cost_centi')
+    .select('id, do_item_id, item_code, description, qty_returned, item_group, variants, unit_cost_centi')
     .eq('delivery_return_id', deliveryReturnId);
-  const warehouseId = (drHeader as { warehouse_id: string | null } | null)?.warehouse_id
-    ?? (await defaultWarehouseId(sb));
+  const drHeaderWarehouseId = (drHeader as { warehouse_id: string | null } | null)?.warehouse_id ?? null;
   const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
-  if (!warehouseId || !items) return;
+  if (!items) return;
 
-  /* Collapse identical (product_code, variant_key) lines into one IN row.
-     A DR can legitimately list the same product across two lines; the UNIQUE
-     index keys on (doc, product_code, variant_key) so two raw rows for the same
-     bucket would collide. Summing keeps the increase correct + idempotency-safe.
-     The unit cost is carried from the first line in the bucket (returned stock
-     re-enters at its original per-unit cost). */
+  // Per-line warehouse — each returned line re-enters the warehouse the DO line
+  // shipped from (its SO line's warehouse, 0118), not a single DR-header default.
+  const lineWh = await resolveDrLineWarehouses(sb, items as Array<{ id: string; do_item_id?: string | null }>, drHeaderWarehouseId);
+
+  /* Collapse identical (warehouse_id, product_code, variant_key) lines into one
+     IN row. A DR can list the same product across two lines AND across two
+     warehouses (multi-DO merge); bucketing by warehouse keeps each warehouse's
+     increase correct + idempotency-safe. Unit cost carried from the first line
+     in the bucket (returned stock re-enters at its original per-unit cost). */
   const byKey = new Map<string, {
-    product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number;
+    warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; unit_cost_sen: number;
   }>();
-  for (const it of (items as Array<{ item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null; unit_cost_centi?: number | null }>)) {
+  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null; unit_cost_centi?: number | null }>)) {
     const qty = Number(it.qty_returned ?? 0);
     if (qty <= 0) continue;
+    const warehouseId = lineWh.get(it.id) ?? null;
+    if (!warehouseId) continue; // no resolvable warehouse — skip rather than guess
     const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${it.item_code}::${variantKey}`;
+    const k = `${warehouseId}::${it.item_code}::${variantKey}`;
     const cur = byKey.get(k);
     if (cur) { cur.qty += qty; }
     else byKey.set(k, {
+      warehouse_id: warehouseId,
       product_code: it.item_code,
       variant_key: variantKey,
       product_name: it.description,
@@ -156,7 +245,7 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
   }
   const movements = [...byKey.values()].map((m) => ({
     movement_type: 'IN' as const,
-    warehouse_id: warehouseId,
+    warehouse_id: m.warehouse_id,
     product_code: m.product_code,
     variant_key: m.variant_key,
     product_name: m.product_name,
@@ -201,41 +290,50 @@ async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, perf
   if ((existing ?? 0) > 0) return; // already reversed — no-op
 
   const { data: drHeader } = await sb.from('delivery_returns')
-    .select('return_number, warehouse_id')
+    .select('return_number')
     .eq('id', deliveryReturnId).maybeSingle();
-  const { data: items } = await sb.from('delivery_return_items')
-    .select('item_code, description, qty_returned, item_group, variants')
-    .eq('delivery_return_id', deliveryReturnId);
-  const warehouseId = (drHeader as { warehouse_id: string | null } | null)?.warehouse_id
-    ?? (await defaultWarehouseId(sb));
   const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
-  if (!warehouseId || !items) return;
 
-  // Collapse identical (product_code, variant_key) lines into one reversal row,
-  // mirroring increaseInventoryForReturn's bucketing.
-  const byKey = new Map<string, { product_code: string; variant_key: string; product_name: string | null; qty: number }>();
-  for (const it of (items as Array<{ item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
-    const qty = Number(it.qty_returned ?? 0);
-    if (qty <= 0) continue;
-    const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${it.item_code}::${variantKey}`;
-    const cur = byKey.get(k);
-    if (cur) { cur.qty += qty; }
-    else byKey.set(k, { product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
+  /* Net IN per (warehouse, product, variant) bucket from THIS DR's OWN
+     movements. Reversing from the actual rows (not the line list + a single
+     header warehouse) guarantees the negative ADJUSTMENT lands in exactly the
+     warehouse(s) the IN created — critical now that increaseInventoryForReturn
+     books each line into its DO line's SOURCE warehouse (0118), which can differ
+     per line. Mirrors reverseInventoryForDo on the DO side. */
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, warehouse_id, product_code, variant_key, qty, product_name')
+    .eq('source_doc_type', 'DR')
+    .eq('source_doc_id', deliveryReturnId);
+  type Agg = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; net_in: number };
+  const byBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{
+    movement_type: string; warehouse_id: string; product_code: string;
+    variant_key: string | null; qty: number; product_name: string | null;
+  }>) {
+    if (m.movement_type !== 'IN' && m.movement_type !== 'OUT') continue;
+    const variant_key = m.variant_key ?? '';
+    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}`;
+    let agg = byBucket.get(k);
+    if (!agg) { agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, product_name: m.product_name, net_in: 0 }; byBucket.set(k, agg); }
+    const q = Number(m.qty ?? 0);
+    if (m.movement_type === 'IN') agg.net_in += q; else agg.net_in -= q;
+    if (!agg.product_name) agg.product_name = m.product_name;
   }
-  const movements = [...byKey.values()].map((m) => ({
-    movement_type: 'ADJUSTMENT' as const,
-    warehouse_id: warehouseId,
-    product_code: m.product_code,
-    variant_key: m.variant_key,
-    product_name: m.product_name,
-    qty: -m.qty, // signed: negative removes the stock the return added
-    source_doc_type: 'ADJUSTMENT' as const,
-    source_doc_id: deliveryReturnId,
-    source_doc_no: drNo,
-    performed_by: performedBy,
-    notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
-  }));
+  const movements = [...byBucket.values()]
+    .filter((b) => b.net_in > 0)
+    .map((b) => ({
+      movement_type: 'ADJUSTMENT' as const,
+      warehouse_id: b.warehouse_id,
+      product_code: b.product_code,
+      variant_key: b.variant_key,
+      product_name: b.product_name,
+      qty: -b.net_in, // signed: negative removes the stock the return added
+      source_doc_type: 'ADJUSTMENT' as const,
+      source_doc_id: deliveryReturnId,
+      source_doc_no: drNo,
+      performed_by: performedBy,
+      notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
+    }));
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
@@ -361,7 +459,19 @@ deliveryReturns.get('/:id', async (c) => {
   ]);
   if (h.error) return c.json({ error: 'load_failed', reason: h.error.message }, 500);
   if (!h.data) return c.json({ error: 'not_found' }, 404);
-  return c.json({ deliveryReturn: h.data, items: i.data ?? [] });
+  /* Per-line Warehouse column (Agent D, TASK #32): resolve the SAME warehouse
+     the return IN puts stock back into (DO/SO line → DO header → DR header →
+     default) so the operator sees which warehouse each line restocks.
+     Display-only. */
+  const rawItems = (i.data ?? []) as unknown as Array<{ id: string; do_item_id?: string | null } & Record<string, unknown>>;
+  const headerWh = (h.data as { warehouse_id?: string | null }).warehouse_id ?? null;
+  const lineWh = await resolveDrLineWarehouses(sb, rawItems, headerWh);
+  const codeMap = await warehouseCodeMap(sb, [...lineWh.values()]);
+  const items = rawItems.map((it) => {
+    const wid = lineWh.get(it.id) ?? null;
+    return { ...it, warehouse_id: wid, warehouse_code: wid ? (codeMap.get(wid) ?? null) : null };
+  });
+  return c.json({ deliveryReturn: h.data, items });
 });
 
 /* Insert the DR header from a client body. Shared by POST / and the

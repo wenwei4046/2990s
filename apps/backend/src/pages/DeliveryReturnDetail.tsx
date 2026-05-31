@@ -136,6 +136,11 @@ type DrItem = {
   line_margin_centi: number;
   variants: Record<string, unknown> | null;
   notes: string | null;
+  /* Per-line restock warehouse (Agent D, TASK #32): resolved server-side as the
+     same warehouse the DO took the stock OUT of, so the return IN lands back in
+     that warehouse. Display-only. */
+  warehouse_id?: string | null;
+  warehouse_code?: string | null;
 };
 
 const draftFromItem = (it: DrItem): SoLineDraft => ({
@@ -492,6 +497,7 @@ export const DeliveryReturnDetail = () => {
             <thead>
               <tr>
                 <th>Item</th>
+                <th>Warehouse</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>
@@ -513,6 +519,7 @@ export const DeliveryReturnDetail = () => {
                     })()}
                     {it.condition && <div className={styles.muted}>Condition: {it.condition}</div>}
                   </td>
+                  <td><span className={styles.muted}>{it.warehouse_code ?? '—'}</span></td>
                   <td className={styles.tableRight}>{it.qty_returned}</td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>

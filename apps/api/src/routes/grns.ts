@@ -356,8 +356,20 @@ grns.get('/outstanding-po-items', async (c) => {
     .filter((r) => r.po.status === 'SUBMITTED' || r.po.status === 'PARTIALLY_RECEIVED')
     .filter((r) => r.qty - (r.received_qty ?? 0) > 0);
 
-  // Resolve each PO's purchase_location warehouse code/name in one round trip.
-  const whIds = [...new Set(rows.map((r) => r.po.purchase_location_id).filter((x): x is string => Boolean(x)))];
+  /* Warehouse-lock fix (Agent C 2026-05-31, bug #1 "No outstanding PO lines") —
+     the warehouse a PO line ships into is the LINE's own warehouse_id when set,
+     falling back to the PO header's purchase_location_id (the per-line warehouse
+     OVERRIDES the header — see schema comment on purchase_order_items.warehouse_id).
+     The GRN's warehouse_id is set from this same effective value at create time, so
+     the append-picker's lock (GrnFromPo: r.warehouseLocationId === grn.warehouse_id)
+     only matched when both happened to use the header. When a PO carried only a
+     per-line warehouse (header purchase_location_id NULL), every outstanding line
+     was filtered out → "No outstanding PO lines". Key the lock off the effective
+     warehouse so genuinely-outstanding lines surface. */
+  const effWh = (r: Row): string | null => r.warehouse_id ?? r.po.purchase_location_id ?? null;
+
+  // Resolve each line's effective warehouse code/name in one round trip.
+  const whIds = [...new Set(rows.map((r) => effWh(r)).filter((x): x is string => Boolean(x)))];
   const whById = new Map<string, { code: string; name: string }>();
   if (whIds.length > 0) {
     const { data: whs } = await sb.from('warehouses').select('id, code, name').in('id', whIds);
@@ -367,7 +379,8 @@ grns.get('/outstanding-po-items', async (c) => {
   }
 
   const outstanding = rows.map((r) => {
-    const wh = r.po.purchase_location_id ? whById.get(r.po.purchase_location_id) ?? null : null;
+    const effWhId = effWh(r);
+    const wh = effWhId ? whById.get(effWhId) ?? null : null;
     return {
       poItemId:        r.id,
       poId:            r.po.id,
@@ -389,9 +402,10 @@ grns.get('/outstanding-po-items', async (c) => {
       supplierName:    r.po.supplier?.name ?? '',
       poDate:          r.po.po_date,
       expectedAt:      r.po.expected_at,
-      /* Warehouse-lock (Deliverable 4) — the PO's purchase_location, the GRN's
-         receive-into warehouse. One warehouse per GRN. */
-      warehouseLocationId:   r.po.purchase_location_id,
+      /* Warehouse-lock (Deliverable 4) — the line's EFFECTIVE ship-into warehouse
+         (per-line warehouse_id, else PO header purchase_location_id). This is the
+         GRN's receive-into warehouse. One warehouse per GRN. */
+      warehouseLocationId:   effWhId,
       warehouseLocationCode: wh?.code ?? null,
       warehouseLocationName: wh?.name ?? null,
     };
@@ -412,7 +426,32 @@ grns.get('/:id', async (c) => {
   // object so the detail page can lock once a PI/PR draws from it.
   const itemRows = (i.data ?? []) as Array<{ qty_accepted?: number | null; invoiced_qty?: number | null; returned_qty?: number | null }>;
   const grn = { ...(h.data as Record<string, unknown>), ...computeGrnFlags(itemRows) };
-  return c.json({ grn, items: i.data ?? [] });
+
+  /* Bug #2 (Agent C 2026-05-31) — surface "received from which PO" + "receive
+     date" per GRN line. The header carries received_at; each line links to a PO
+     item (purchase_order_item_id), so resolve its source PO number in one extra
+     round trip (item → po_item → po). source_po_number is null for manual lines.
+     received_at mirrors the GRN header date so the detail/list line table can show
+     a per-line column without a separate column on grn_items. */
+  const lineItems = (i.data ?? []) as unknown as Array<Record<string, unknown> & { purchase_order_item_id: string | null }>;
+  const headerReceivedAt = (h.data as { received_at?: string | null }).received_at ?? null;
+  const poItemIds = [...new Set(lineItems.map((it) => it.purchase_order_item_id).filter((x): x is string => Boolean(x)))];
+  const poNoByItemId = new Map<string, string>();
+  if (poItemIds.length > 0) {
+    const { data: poiRows } = await sb.from('purchase_order_items')
+      .select('id, po:purchase_orders ( po_number )')
+      .in('id', poItemIds);
+    for (const r of (poiRows ?? []) as Array<{ id: string; po: { po_number: string } | Array<{ po_number: string }> | null }>) {
+      const po = Array.isArray(r.po) ? r.po[0] : r.po;
+      if (po?.po_number) poNoByItemId.set(r.id, po.po_number);
+    }
+  }
+  const items = lineItems.map((it) => ({
+    ...it,
+    source_po_number: it.purchase_order_item_id ? (poNoByItemId.get(it.purchase_order_item_id) ?? null) : null,
+    received_at: headerReceivedAt,
+  }));
+  return c.json({ grn, items });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────

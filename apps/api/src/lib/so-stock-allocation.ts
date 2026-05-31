@@ -80,14 +80,13 @@ export async function recomputeSoStockAllocation(
             b) created_at ASC  — tiebreaker so order is deterministic */
     const { data: orderRows } = await sb
       .from('mfg_sales_orders')
-      .select('doc_no, status, created_at, customer_delivery_date, allocation_warehouse_id')
+      .select('doc_no, status, created_at, customer_delivery_date')
       .not('status', 'in', '(CANCELLED,CLOSED,SHIPPED,DELIVERED,INVOICED)')
       .order('customer_delivery_date',  { ascending: true, nullsFirst: false })
       .order('created_at',              { ascending: true });
     const orders = (orderRows ?? []) as Array<{
       doc_no: string; status: string; created_at: string;
       customer_delivery_date: string | null;
-      allocation_warehouse_id: string | null;
     }>;
     if (orders.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
     const orderByDoc = new Map(orders.map((o) => [o.doc_no, o]));
@@ -97,12 +96,13 @@ export async function recomputeSoStockAllocation(
     const docNos = orders.map((o) => o.doc_no);
     const { data: lineRows } = await sb
       .from('mfg_sales_order_items')
-      .select('id, doc_no, item_code, item_group, variants, qty, stock_status, stock_qty_ready, cancelled')
+      .select('id, doc_no, item_code, item_group, variants, qty, warehouse_id, stock_status, stock_qty_ready, cancelled')
       .in('doc_no', docNos)
       .eq('cancelled', false);
     const lines = (lineRows ?? []) as Array<{
       id: string; doc_no: string; item_code: string; item_group: string | null;
-      variants: VariantAttrs | null; qty: number; stock_status: string; stock_qty_ready: number | null;
+      variants: VariantAttrs | null; qty: number; warehouse_id: string | null;
+      stock_status: string; stock_qty_ready: number | null;
     }>;
     if (lines.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
 
@@ -154,11 +154,17 @@ export async function recomputeSoStockAllocation(
       }
     }
 
-    /* 4. Build per-line allocation request. Per-SO allocation_warehouse_id
-          (#3) scopes the bucket key, so two SOs on different warehouses sharing
-          the same SKU stay isolated. Drop lines with deliverable_remaining ≤ 0
-          (already shipped). curReady is the line's existing stock_qty_ready —
-          used to compute "did the value change". */
+    /* 4. Build per-line allocation request. Commander 2026-05-31 — the LINE's
+          own warehouse_id (migration 0118) scopes the bucket key. MRP + auto-
+          allocation run strictly PER-WAREHOUSE: 2990 can't pull stock across
+          warehouses, so a KL line draws only KL stock, a PJ line only PJ. A
+          line with NO warehouse bound yet (NULL) gets its own 'NOWH' bucket —
+          inventory always carries a warehouse_id, so a NULL-warehouse line sees
+          no stock and stays PENDING until a warehouse is assigned. Drop lines
+          with deliverable_remaining ≤ 0 (already shipped). curReady is the
+          line's existing stock_qty_ready — used to compute "did the value
+          change". */
+    const WH_NONE = 'NOWH';
     type LineNeed = { id: string; doc_no: string; bucket: string; whId: string | null; need: number; current: string; curReady: number };
     const needs: LineNeed[] = [];
     for (const l of lines) {
@@ -167,13 +173,8 @@ export async function recomputeSoStockAllocation(
       const remaining = Number(l.qty ?? 0) - delivered + returned;
       if (remaining <= 0) continue;
       const variant_key = computeVariantKey(l.item_group ?? null, l.variants ?? null);
-      const order = orderByDoc.get(l.doc_no);
-      const whId = order?.allocation_warehouse_id ?? null;
-      /* When the SO carries an allocation_warehouse_id the bucket key includes
-         it, so per-warehouse SOs draw from a distinct bucket-key namespace and
-         can't accidentally share stock with cross-warehouse SOs of the same
-         SKU. NULL whId → cross-warehouse bucket as before. */
-      const bucket = `${whId ?? '*'}::${l.item_code}::${variant_key}`;
+      const whId = l.warehouse_id ?? null;
+      const bucket = `${whId ?? WH_NONE}::${l.item_code}::${variant_key}`;
       needs.push({
         id: l.id, doc_no: l.doc_no, bucket, whId,
         need: remaining, current: l.stock_status,
@@ -182,24 +183,25 @@ export async function recomputeSoStockAllocation(
     }
     if (needs.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
 
-    /* 5. Sort needs by allocation priority (delivery date, then created_at —
-          same ordering as the SQL query above so allocation order is
-          deterministic). Line id breaks final ties. */
+    /* 5. Sort needs by allocation priority. Commander 2026-05-31 — equal
+          delivery date now tie-breaks by SO doc number ascending (SO-2605-001
+          before SO-2605-002) so same-day allocation is deterministic, matching
+          the MRP engine. created_at + line id break any remaining ties. */
     const FAR_FUTURE = '9999-12-31';
     needs.sort((a, b) => {
       const A = orderByDoc.get(a.doc_no); const B = orderByDoc.get(b.doc_no);
       const ad = A?.customer_delivery_date ?? FAR_FUTURE;
       const bd = B?.customer_delivery_date ?? FAR_FUTURE;
       if (ad !== bd) return ad.localeCompare(bd);                         // a) delivery date
+      if (a.doc_no !== b.doc_no) return a.doc_no.localeCompare(b.doc_no); // b) SO doc number
       const ac = A?.created_at ?? '';
       const bc = B?.created_at ?? '';
-      return ac.localeCompare(bc) || a.id.localeCompare(b.id);            // b) created_at + line id
+      return ac.localeCompare(bc) || a.id.localeCompare(b.id);            // c) created_at + line id
     });
 
-    /* 6. Pull live on-hand. Two parallel maps:
-            · onHandWhAll        — Σ qty across ALL warehouses (for cross-WH SOs)
-            · onHandByWh[whId]   — per-warehouse qty (for #3 scoped SOs)
-          Each need's bucket key encodes whether it's whId-scoped or '*'-wide. */
+    /* 6. Pull live on-hand, keyed strictly per-warehouse to match the per-line
+          buckets above. No cross-warehouse aggregate — a line draws only its
+          own warehouse's stock. */
     const productCodes = [...new Set(needs.map((n) => {
       const parts = n.bucket.split('::');
       return parts[1] ?? '';
@@ -212,8 +214,6 @@ export async function recomputeSoStockAllocation(
     for (const r of (balRows ?? []) as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; qty: number }>) {
       const v = r.variant_key ?? '';
       const qty = Number(r.qty ?? 0);
-      const allKey = `*::${r.product_code}::${v}`;
-      onHandByBucket.set(allKey, (onHandByBucket.get(allKey) ?? 0) + qty);
       const whKey = `${r.warehouse_id}::${r.product_code}::${v}`;
       onHandByBucket.set(whKey, (onHandByBucket.get(whKey) ?? 0) + qty);
     }
