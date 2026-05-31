@@ -1058,14 +1058,16 @@ export const SalesOrderDetail = () => {
                     {(() => {
                       const hasDeliveries = it.deliveries && it.deliveries.length > 0;
                       const notFullyDelivered = (it.remaining_qty ?? 1) > 0;
+                      /* Incoming-PO coverage (burnt, not green) — the goods are
+                         ordered but not yet here, so it must read differently from
+                         "Stock"/"Fully delivered". coverage_po is set only when the
+                         MRP allocation covers the line with an outstanding PO. */
                       const coverage = (it.coverage_po && notFullyDelivered)
                         ? (
                           <div style={{
                             display: 'inline-block', marginTop: hasDeliveries ? 3 : 0,
                             fontSize: 'var(--fs-11)', fontWeight: 600,
-                            padding: '1px 7px', borderRadius: 999,
-                            color: 'var(--c-secondary-a, #2F5D4F)', background: 'rgba(47,93,79,0.12)',
-                            whiteSpace: 'nowrap',
+                            whiteSpace: 'nowrap', color: 'var(--c-burnt)',
                           }}>
                             {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
                           </div>

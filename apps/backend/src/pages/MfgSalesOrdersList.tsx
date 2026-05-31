@@ -359,6 +359,7 @@ type SoItem = {
      earliest ETA, shown when the line hasn't shipped yet. null when no PO. */
   coverage_po?: string | null;
   coverage_eta?: string | null;
+  stock_state?: 'stock' | 'po' | 'shortage' | null;
 };
 
 /* Inline `CategoryPill` re-uses the shared `badgeFor` palette so the pill
@@ -716,44 +717,42 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 </td>
                 <td style={TD_BASE}>
                   {(() => {
-                    /* Once a line has fully shipped the stock-readiness question
-                       is moot — the goods already left for the customer. The
-                       allocation engine freezes stock_status on shipped lines
-                       (it skips remaining ≤ 0), so without this they'd show a
-                       stale PENDING. Show DELIVERED instead. */
+                    /* Stock column — same three states the MRP page shows, driven
+                       by the MRP allocation outcome (stock_state, Wei Siang
+                       2026-05-31): on hand → STOCK, ordered → PO + ETA, not yet
+                       ordered → PENDING. Once a line has fully shipped the goods
+                       already left, so DELIVERED wins over all three. */
                     const delivered = Number(it.delivered_qty ?? 0);
                     const remaining = Number(it.remaining_qty ?? it.qty ?? 0);
                     const fullyDelivered = delivered > 0 && remaining <= 0;
-                    const ready = it.stock_status === 'READY';
-                    const label = fullyDelivered ? 'DELIVERED' : ready ? 'READY' : 'PENDING';
-                    const green = fullyDelivered || ready;
-                    /* Pending = goods not yet on hand. Show where they're coming
-                       from (the allocated PO + ETA from MRP) right under the
-                       Pending chip (Wei Siang 2026-05-31). Once stock is Ready or
-                       the line is Delivered, the goods are here / gone — no
-                       incoming tag, so the old "Ready but ETA 3 Jun" contradiction
-                       can't happen. */
-                    const showCoverage = label === 'PENDING' && Boolean(it.coverage_po);
-                    return (
-                      <div>
+                    // Fall back to the operator's stock_status only when the MRP
+                    // allocation didn't reach this line (best-effort coverage).
+                    const state = it.stock_state ?? (it.stock_status === 'READY' ? 'stock' : 'shortage');
+                    const onHand = state === 'stock';
+                    const ordered = state === 'po' && Boolean(it.coverage_po);
+                    if (ordered) {
+                      // Ordered but not yet here — show the PO + when it lands.
+                      return (
                         <span style={{
-                          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
-                          fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
-                          borderRadius: 999,
-                          color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
-                          background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                          fontSize: 'var(--fs-10)', fontWeight: 600,
+                          color: 'var(--c-burnt)', whiteSpace: 'nowrap',
                         }}>
-                          {label}
+                          {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
                         </span>
-                        {showCoverage && (
-                          <div style={{
-                            marginTop: 3, fontSize: 'var(--fs-10)', fontWeight: 600,
-                            color: 'var(--c-burnt)', whiteSpace: 'nowrap',
-                          }}>
-                            {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
-                          </div>
-                        )}
-                      </div>
+                      );
+                    }
+                    const label = fullyDelivered ? 'DELIVERED' : onHand ? 'STOCK' : 'PENDING';
+                    const green = fullyDelivered || onHand;
+                    return (
+                      <span style={{
+                        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+                        fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
+                        borderRadius: 999,
+                        color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                        background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                      }}>
+                        {label}
+                      </span>
                     );
                   })()}
                 </td>

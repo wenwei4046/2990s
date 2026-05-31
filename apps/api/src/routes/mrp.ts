@@ -157,16 +157,33 @@ function byDateAsc(a: string | null, b: string | null): number {
   return a < b ? -1 : 1;
 }
 
-mrp.get('/', async (c) => {
-  const sb = c.get('supabase');
-  const category = c.req.query('category');
-  const warehouseId = c.req.query('warehouseId');
-  const catFilter = category && category !== 'all' ? category.toUpperCase() : null;
-  const whFilter = warehouseId && warehouseId !== 'all' ? warehouseId : null;
-  // Commander 2026-05-29 — an SO line with NO delivery date means the customer
-  // isn't ready for goods yet, so it shouldn't drive ordering. Exclude undated
-  // demand by default; ?includeUndated=true brings it back for a full view.
-  const includeUndated = c.req.query('includeUndated') === 'true';
+export type MrpResult = {
+  asOf: string;
+  categories: string[];
+  warehouses: unknown[];
+  skus: MrpSku[];
+  sofaSets: SofaSet[];
+  totals: {
+    skuCount: number;
+    shortageSkuCount: number;
+    shortageUnits: number;
+    sofaSetCount: number;
+    sofaSetShortageCount: number;
+  };
+};
+
+/* Per-SO-line coverage the drill-down needs: is this line covered by stock, by
+   an outstanding PO (then which + when), or still short (shows as Pending). */
+export type SoLineCoverage = { source: AllocSource; po: string | null; eta: string | null };
+
+/* Shared MRP allocation engine. The /mrp route is a thin wrapper around this;
+   the Sales-Order drill-down reads the SAME allocation (via mrpLineCoverage) so
+   the Stock column and the MRP page can never disagree. */
+export async function computeMrp(
+  sb: any,
+  opts: { catFilter: string | null; whFilter: string | null; includeUndated: boolean },
+): Promise<MrpResult> {
+  const { catFilter, whFilter, includeUndated } = opts;
 
   // ── 0. Per-category lead times (Commander 2026-05-29) ─────────────────
   // order-by date = delivery date − lead_days[category]. Keyed lowercase to
@@ -197,7 +214,7 @@ mrp.get('/', async (c) => {
     `)
     .eq('cancelled', false)
     .limit(5000);
-  if (demandErr) return c.json({ error: 'load_failed', reason: demandErr.message }, 500);
+  if (demandErr) throw new Error(`mrp_load_failed: ${demandErr.message}`);
 
   const demand = ((demandRaw ?? []) as unknown as DemandRow[]).filter(
     (r) => r.item_code && r.so && !SO_DONE.has(r.so.status) && r.qty > 0
@@ -502,7 +519,7 @@ mrp.get('/', async (c) => {
     return byDateAsc(a.orderByDate, b.orderByDate);
   });
 
-  return c.json({
+  return {
     asOf: new Date().toISOString(),
     categories: [...categorySet].sort(),
     warehouses: warehouses ?? [],
@@ -515,5 +532,45 @@ mrp.get('/', async (c) => {
       sofaSetCount: sofaSets.length,
       sofaSetShortageCount: sofaSets.filter((s) => s.shortageQty > 0).length,
     },
-  });
+  };
+}
+
+/* Flatten an MRP result into a per-SO-line coverage map (keyed by
+   mfg_sales_order_items.id). The Sales-Order drill-down stamps each line from
+   this so its Stock column shows the exact same Stock / PO·ETA / Pending the
+   MRP page computed — one allocation, one source of truth. */
+export function mrpLineCoverage(result: MrpResult): Map<string, SoLineCoverage> {
+  const map = new Map<string, SoLineCoverage>();
+  for (const sku of result.skus) {
+    for (const l of sku.lines) {
+      map.set(l.soItemId, { source: l.source, po: l.poNumber, eta: l.poEta });
+    }
+  }
+  // Sofa SETS aren't in skus[].lines — derive their source from picked vs short.
+  for (const s of result.sofaSets) {
+    const source: AllocSource =
+      s.shortageQty > 0 ? (s.poNumber ? 'po' : 'shortage')
+      : s.poNumber ? 'po'
+      : 'stock';
+    map.set(s.soItemId, { source, po: s.poNumber, eta: s.poEta });
+  }
+  return map;
+}
+
+mrp.get('/', async (c) => {
+  const sb = c.get('supabase');
+  const category = c.req.query('category');
+  const warehouseId = c.req.query('warehouseId');
+  const catFilter = category && category !== 'all' ? category.toUpperCase() : null;
+  const whFilter = warehouseId && warehouseId !== 'all' ? warehouseId : null;
+  // Commander 2026-05-29 — an SO line with NO delivery date means the customer
+  // isn't ready for goods yet, so it shouldn't drive ordering. Exclude undated
+  // demand by default; ?includeUndated=true brings it back for a full view.
+  const includeUndated = c.req.query('includeUndated') === 'true';
+  try {
+    const result = await computeMrp(sb, { catFilter, whFilter, includeUndated });
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: 'load_failed', reason: e instanceof Error ? e.message : String(e) }, 500);
+  }
 });

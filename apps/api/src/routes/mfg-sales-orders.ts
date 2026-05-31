@@ -33,7 +33,8 @@ import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
-import { soDeliverableRemaining, soLineDeliveries, soLinePoCoverage, computeSoLifecycle } from './delivery-orders-mfg';
+import { soDeliverableRemaining, soLineDeliveries, computeSoLifecycle } from './delivery-orders-mfg';
+import { computeMrp, mrpLineCoverage } from './mrp';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -606,26 +607,40 @@ mfgSalesOrders.get('/:docNo', async (c) => {
      remaining/delivered come from the authoritative soDeliverableRemaining
      engine; the DO-number breakdown rides alongside from soLineDeliveries. */
   const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; qty?: number | null }>;
-  const [remainingMap, deliveriesMap, coverageMap] = await Promise.all([
+  /* Coverage comes from the SAME allocation engine the MRP page uses (Wei Siang
+     2026-05-31): stock first → earliest-ETA outstanding PO → shortage. A bare
+     FK-only PO lookup missed stock-replenishment POs (raised without a per-line
+     link), so genuinely-ordered lines showed "—". Running the MRP allocation
+     here keeps the Stock column and the MRP page in lock-step. Best-effort: if
+     the allocation fails the page still loads, lines just fall back to Pending. */
+  let coverageMap = new Map<string, { source: string; po: string | null; eta: string | null }>();
+  try {
+    const mrpResult = await computeMrp(sb, { catFilter: null, whFilter: null, includeUndated: true });
+    coverageMap = mrpLineCoverage(mrpResult);
+  } catch {
+    coverageMap = new Map();
+  }
+  const [remainingMap, deliveriesMap] = await Promise.all([
     soDeliverableRemaining(sb, [docNo]),
     soLineDeliveries(sb, itemRows.map((it) => it.id)),
-    soLinePoCoverage(sb, itemRows.map((it) => it.id)),
   ]);
   const items = itemRows.map((it) => {
     const rem = remainingMap.get(it.id);
     const deliveries = deliveriesMap.get(it.id) ?? [];
     const deliveredQty = deliveries.reduce((s, d) => s + d.qty, 0);
     const cov = coverageMap.get(it.id);
+    const covered = cov?.source === 'po';
     return {
       ...it,
       deliveries,
       delivered_qty: rem?.delivered ?? deliveredQty,
       remaining_qty: rem?.remaining ?? Number(it.qty ?? 0),
-      /* Incoming-stock coverage (Wei Siang 2026-05-31) — the PO this line's
-         goods were raised into + earliest ETA, so the SO views can show where
-         not-yet-delivered stock is coming from. null when no open PO. */
-      coverage_po: cov?.po ?? null,
-      coverage_eta: cov?.eta ?? null,
+      /* Incoming-stock coverage (Wei Siang 2026-05-31) — stock_state is the
+         allocation outcome (stock / po / shortage). coverage_po + eta are only
+         set when an outstanding PO covers the line, so the UI shows PO·ETA. */
+      stock_state: cov?.source ?? null,
+      coverage_po: covered ? cov?.po ?? null : null,
+      coverage_eta: covered ? cov?.eta ?? null : null,
     };
   });
   const totalDelivered = items.reduce((s, it) => s + Number(it.delivered_qty ?? 0), 0);
