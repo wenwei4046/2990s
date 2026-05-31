@@ -262,7 +262,7 @@ purchaseReturns.post('/from-grns', async (c) => {
 
   // Load rejected items across all GRNs.
   const { data: items } = await sb.from('grn_items')
-    .select('id, grn_id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi')
+    .select('id, grn_id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi, item_group, variants, description, description2, uom')
     .in('grn_id', grnIds)
     .gt('qty_rejected', 0);
   // Cap each line's return at its remaining (qty_accepted - returned_qty, 0106) —
@@ -271,6 +271,7 @@ purchaseReturns.post('/from-grns', async (c) => {
   const rejectedItems = ((items ?? []) as Array<{
     id: string; grn_id: string; material_kind: string; material_code: string; material_name: string;
     qty_accepted: number; qty_rejected: number; returned_qty: number; rejection_reason: string | null; unit_price_centi: number;
+    item_group: string | null; variants: Record<string, unknown> | null; description: string | null; description2: string | null; uom: string | null;
   }>)
     .map((it) => {
       const remaining = (it.qty_accepted ?? 0) - (it.returned_qty ?? 0);
@@ -318,6 +319,11 @@ purchaseReturns.post('/from-grns', async (c) => {
     unit_price_centi: it.unit_price_centi,
     line_refund_centi: it._qty * it.unit_price_centi,
     reason: it.rejection_reason,
+    item_group: it.item_group,
+    variants: it.variants,
+    description: it.description,
+    description2: it.description2 ?? (buildVariantSummary(String(it.item_group ?? ''), it.variants ?? null) || null),
+    uom: it.uom ?? 'UNIT',
   }));
   const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
   if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
@@ -355,12 +361,13 @@ purchaseReturns.post('/from-grn', async (c) => {
   if (g.status !== 'POSTED') return c.json({ error: 'grn_not_posted', status: g.status }, 409);
 
   const { data: items } = await sb.from('grn_items')
-    .select('id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi')
+    .select('id, material_kind, material_code, material_name, qty_accepted, qty_rejected, returned_qty, rejection_reason, unit_price_centi, item_group, variants, description, description2, uom')
     .eq('grn_id', grnId)
     .gt('qty_accepted', 0);
   const allLines = ((items ?? []) as Array<{
     id: string; material_kind: string; material_code: string; material_name: string;
     qty_accepted: number; qty_rejected: number; returned_qty: number; rejection_reason: string | null; unit_price_centi: number;
+    item_group: string | null; variants: Record<string, unknown> | null; description: string | null; description2: string | null; uom: string | null;
   }>);
   // Only copy lines with remaining = qty_accepted - returned_qty > 0, and return
   // the REMAINING qty (a GRN can be returned across multiple PRs, 0106).
@@ -398,6 +405,11 @@ purchaseReturns.post('/from-grn', async (c) => {
     unit_price_centi: it.unit_price_centi,
     line_refund_centi: it._remaining * it.unit_price_centi,
     reason: it.rejection_reason,
+    item_group: it.item_group,
+    variants: it.variants,
+    description: it.description,
+    description2: it.description2 ?? (buildVariantSummary(String(it.item_group ?? ''), it.variants ?? null) || null),
+    uom: it.uom ?? 'UNIT',
   }));
   const { error: iErr } = await sb.from('purchase_return_items').insert(rows);
   if (iErr) { await sb.from('purchase_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }

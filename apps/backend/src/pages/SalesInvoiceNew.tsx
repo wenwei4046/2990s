@@ -100,6 +100,12 @@ export const SalesInvoiceNew = () => {
   const [salesLocation, setSalesLocation] = useState('');
   const [branding, setBranding] = useState('');
 
+  // ── Provenance (Transfer From) — carried silently from the source DO so the
+  //    invoice keeps its SO reference, customer PO and free-text ref. ──
+  const [soDocNo, setSoDocNo] = useState('');
+  const [poDocNo, setPoDocNo] = useState('');
+  const [ref, setRef] = useState('');
+
   // ── Emergency ──
   const [emergencyName, setEmergencyName] = useState('');
   const [emergencyRel, setEmergencyRel] = useState('');
@@ -138,6 +144,9 @@ export const SalesInvoiceNew = () => {
     setPostcode((doc.postcode as string) ?? '');
     setSalesLocation((doc.sales_location as string) ?? '');
     setBranding((doc.branding as string) ?? '');
+    setSoDocNo((doc.so_doc_no as string) ?? '');
+    setPoDocNo((doc.po_doc_no as string) ?? '');
+    setRef((doc.ref as string) ?? '');
     setEmergencyName((doc.emergency_contact_name as string) ?? '');
     setEmergencyRel((doc.emergency_contact_relationship as string) ?? '');
     setEmergencyPhone((doc.emergency_contact_phone as string) ?? '');
@@ -299,6 +308,9 @@ export const SalesInvoiceNew = () => {
         city: city || undefined,
         postcode: postcode || undefined,
         salesLocation: salesLocation || undefined,
+        soDocNo: soDocNo || undefined,
+        poDocNo: poDocNo || undefined,
+        ref: ref || undefined,
         invoiceDate: invoiceDate || undefined,
         dueDate: dueDate || undefined,
         customerDeliveryDate: customerDeliveryDate || undefined,
