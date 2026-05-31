@@ -876,6 +876,55 @@
   color: #fff;
 }
 
+/* TV reference marker on the Quick Pick hero — ported from CustomBuilder's room
+   TV. A fixed-size reference pinned bottom-center of .qpHeroFrame (which is
+   position:relative), not a to-scale room object. Hero-only. */
+.tv {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 130px;
+  height: 28px;
+  background: #221f20;
+  border-radius: 4px;
+  box-shadow: 0 6px 14px rgba(34, 31, 32, 0.18);
+  pointer-events: none;
+  z-index: 3;
+}
+.tvScreen {
+  position: absolute;
+  inset: 4px;
+  background: linear-gradient(180deg, #2a4356 0%, #1a2a35 100%);
+  border-radius: 2px;
+}
+.tvLabel {
+  position: relative;
+  font-family: var(--font-button);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.18em;
+  color: #fff9eb;
+  text-transform: uppercase;
+}
+.tvBeam {
+  position: absolute;
+  left: 50%;
+  bottom: 42px;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 10px solid var(--c-orange);
+  pointer-events: none;
+  z-index: 3;
+}
+
 /* Hero — big plan-view of the picked bundle, dim lines, grid paper bg. */
 .qpHero {
   display: flex;

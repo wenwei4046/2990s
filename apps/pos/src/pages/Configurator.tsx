@@ -1907,6 +1907,14 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
           ) : (
             <div className={styles.qpHeroCells} />
           )}
+          {/* TV reference marker (2026-06-01) — bottom-center of the hero, sofa
+              faces it. Hero-only: NOT rendered inside SofaCellsPreview, so the
+              small rail card thumbnails stay TV-free. Pure decoration. */}
+          <div className={styles.tvBeam} aria-hidden="true" />
+          <div className={styles.tv} aria-hidden="true" title="TV — sofas face this way">
+            <div className={styles.tvScreen} />
+            <div className={styles.tvLabel}>TV</div>
+          </div>
         </div>
         <footer className={styles.qpHeroFoot}>
           <span className={styles.qpHeroFootEyebrow}>Plan view</span>
