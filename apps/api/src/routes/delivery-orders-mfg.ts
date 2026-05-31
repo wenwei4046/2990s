@@ -1374,6 +1374,12 @@ deliveryOrdersMfg.patch('/:id', async (c) => {
   }
   if (Object.keys(updates).length === 1) return c.json({ ok: true, changed: 0 });
 
+  /* Header is locked once a Sales Invoice / Delivery Return exists — mirrors the
+     line-add / line-edit / cancel guards. Prevents editing a DO that a child
+     document already snapshotted. */
+  const headerLock = await doHasDownstream(sb, id);
+  if (headerLock) return c.json(headerLock, 409);
+
   const { data, error } = await sb.from('delivery_orders').update(updates).eq('id', id).select('id').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   if (!data) return c.json({ error: 'not_found' }, 404);

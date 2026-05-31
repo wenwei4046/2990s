@@ -64,6 +64,26 @@ async function soHasDownstream(sb: any, soDocNo: string): Promise<{ error: strin
   return null;
 }
 
+/* Owner 2026-05-31 — Identity + value columns a downstream DO / SI snapshots.
+   These are frozen on the SO header once a non-cancelled child exists; payment,
+   remark and scheduling columns are intentionally NOT in this set so the shop
+   can still record payment after delivery. Keyed by DB column name. */
+const SO_IDENTITY_LOCK_COLS = new Set<string>([
+  'debtor_code', 'debtor_name', 'agent', 'sales_location', 'ref', 'po_doc_no',
+  'venue', 'venue_id', 'branding', 'address1', 'address2', 'address3', 'address4',
+  'phone', 'currency', 'so_date', 'customer_id', 'customer_state', 'customer_po',
+  'customer_po_id', 'customer_po_date', 'customer_po_image_b64', 'customer_so_no',
+  'hub_id', 'hub_name', 'ship_to_address', 'bill_to_address', 'install_to_address',
+  'email', 'customer_type', 'salesperson_id', 'city', 'postcode', 'building_type',
+  'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relationship',
+]);
+
+/* Loose equality for the lock diff — null / undefined / '' all collapse so a
+   UI re-sending an empty field as '' does not read as a change from null. */
+function norm(v: unknown): string {
+  return v === null || v === undefined ? '' : String(v);
+}
+
 /* Pricing trust boundary (Owner 2026-05-31).
    The selling unit price is operator-authored on the Backend SO form, and the
    owner ruled the selling price legitimately varies per order. So a Backend /
@@ -1510,6 +1530,30 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   // in the audit log. Only fields actually in the patch body are compared.
   const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
   const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
+  /* Owner 2026-05-31 — Partial header lock. Once a non-cancelled DO / SI exists,
+     the IDENTITY + VALUE fields that downstream documents snapshot (customer,
+     branding, addresses, ref, location, customer PO, currency, SO date, etc.)
+     are frozen. Payment / remark / scheduling fields stay editable because a
+     small shop records customer payment AFTER delivery. We compare the patch
+     against the stored row so a UI that re-sends unchanged identity fields does
+     not falsely trip the lock — only a genuine change to a locked field blocks. */
+  if (before) {
+    const beforeRow = before as unknown as Record<string, unknown>;
+    const changedLocked = [...SO_IDENTITY_LOCK_COLS].filter(
+      (col) => col in updates && norm(updates[col]) !== norm(beforeRow[col]),
+    );
+    if (changedLocked.length > 0) {
+      const lock = await soHasDownstream(sb, docNo);
+      if (lock) {
+        return c.json({
+          error: 'so_identity_locked',
+          message: 'SO has a Delivery Order / Sales Invoice — customer, branding, address, reference and value fields are locked. Payment and remarks can still be edited.',
+          lockedFields: changedLocked,
+        }, 409);
+      }
+    }
+  }
 
   const { data, error } = await sb.from('mfg_sales_orders').update(updates).eq('doc_no', docNo).select('doc_no').maybeSingle();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
