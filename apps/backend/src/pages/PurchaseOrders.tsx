@@ -108,18 +108,6 @@ const buildPoColumns = (
     sortFn: (a, b) => a.po_number.localeCompare(b.po_number),
   },
   {
-    /* Current — which document the flow has reached now (GRN / PI / PR), or this
-       PO's own number when nothing downstream exists yet. */
-    key: 'current_doc_no', label: 'Current', width: 150, sortable: true, groupable: true,
-    accessor: (po) => (
-      <span style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
-        {po.current_doc_no ?? po.po_number}
-      </span>
-    ),
-    searchValue: (po) => po.current_doc_no ?? po.po_number,
-    sortFn: (a, b) => (a.current_doc_no ?? a.po_number).localeCompare(b.current_doc_no ?? b.po_number),
-  },
-  {
     key: 'supplier', label: 'Supplier', width: 200, sortable: true, groupable: true,
     accessor: (po) => po.supplier?.name ?? po.supplier?.code ?? '—',
     searchValue: (po) => `${po.supplier?.name ?? ''} ${po.supplier?.code ?? ''}`,

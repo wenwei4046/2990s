@@ -62,9 +62,6 @@ type GrnRow = Record<string, unknown> & {
   has_children?: boolean;
   fully_invoiced?: boolean;
   fully_returned?: boolean;
-  /* Current document — number of the furthest-forward document the flow has
-     reached (PI / PR), else this GRN's own number. */
-  current_doc_no?: string | null;
 };
 
 const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
@@ -73,18 +70,6 @@ const buildGrnColumns = (): DataGridColumn<GrnRow>[] => [
     accessor: (g) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{g.grn_number}</span>,
     searchValue: (g) => g.grn_number,
     sortFn: (a, b) => a.grn_number.localeCompare(b.grn_number),
-  },
-  {
-    /* Current — which document the flow has reached now (PI / PR), or this GRN's
-       own number when nothing downstream exists yet. */
-    key: 'current_doc_no', label: 'Current', width: 150, sortable: true, groupable: true,
-    accessor: (g) => (
-      <span style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
-        {g.current_doc_no ?? g.grn_number}
-      </span>
-    ),
-    searchValue: (g) => g.current_doc_no ?? g.grn_number,
-    sortFn: (a, b) => (a.current_doc_no ?? a.grn_number).localeCompare(b.current_doc_no ?? b.grn_number),
   },
   {
     key: 'supplier', label: 'Supplier', width: 220, sortable: true, groupable: true,

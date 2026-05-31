@@ -631,7 +631,7 @@ const SupplierCard = ({
                 value={po.supplier?.name ?? po.supplier?.code ?? supplier?.name ?? supplier?.code ?? null} />
             </div>
             <InfoCell label="Currency" value={po.currency || null} />
-            <InfoCell label="Current" value={po.current_doc_no ?? po.po_number} />
+            <div />
             <InfoCell label="PO Date" value={po.po_date || null} />
             <InfoCell label="Expected Delivery" value={po.expected_at || null} />
             <InfoCell label="Purchase Location"

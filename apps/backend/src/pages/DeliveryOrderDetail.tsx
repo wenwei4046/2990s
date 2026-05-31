@@ -101,7 +101,6 @@ type DoHeader = {
   id: string;
   do_number: string;
   so_doc_no: string | null;
-  current_doc_no?: string | null;
   status: DoStatus;
   do_date: string;
   expected_delivery_at: string | null;
@@ -515,10 +514,6 @@ export const DeliveryOrderDetail = () => {
             <p className={styles.subtitle}>
               DO date {fmtDateOrDash(header.do_date)} · {header.line_count} {header.line_count === 1 ? 'line' : 'lines'}
               {header.so_doc_no && ` · Transfer From ${header.so_doc_no}`}
-              {' · Current '}
-              <span style={{ color: 'var(--c-burnt)', fontWeight: 600 }}>
-                {header.current_doc_no ?? header.do_number}
-              </span>
             </p>
           </div>
         </div>
