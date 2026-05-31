@@ -53,7 +53,16 @@ interface ArtBbox { l: number; t: number; r: number; b: number }
 // square-ish, etc.). To make the rendered cell exactly match the module's
 // cm bbox, we measure each silhouette's alpha-channel bbox once and use the
 // fractions to scale + offset the img so the silhouette fills the cellArt.
-const ART_BBOX_FALLBACK: ArtBbox = { l: 0.10, t: 0.20, r: 0.90, b: 0.80 };
+// Default silhouette inset used when a module art's exact alpha-bbox hasn't
+// been measured yet (the measure is async) OR measurement failed. Both the
+// bundled SVGs (a uniform ~20-unit transparent margin inside their viewBox)
+// and the 1024² PNGs draw the silhouette ~18-20% inset, so cropping to this
+// fills the cell footprint on the FIRST paint instead of letterboxing the
+// square-ish art inside a non-square (wide-arm / deep-seat) cell. The async
+// measureArtBbox refines it to the exact bbox a tick later. Tuned to the
+// single-seaters — those are the modules whose footprint is wider than deep,
+// so they were the ones that visibly gapped before this fallback filled.
+const ART_BBOX_FALLBACK: ArtBbox = { l: 0.20, t: 0.18, r: 0.80, b: 0.82 };
 const bboxCache = new Map<string, ArtBbox>();
 const bboxPending = new Map<string, Promise<ArtBbox>>();
 const measureArtBbox = (src: string): Promise<ArtBbox> => {
@@ -1111,23 +1120,27 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                 >
                   {(() => {
                     const artSrc = resolveModuleArtSrc(c.moduleId);
-                    const bbox = bboxCache.get(artSrc);
-                    let imgStyle: CSSProperties;
-                    if (bbox) {
-                      const bw = bbox.r - bbox.l;
-                      const bh = bbox.b - bbox.t;
-                      const imgW = nativeW / bw;
-                      const imgH = nativeH / bh;
-                      imgStyle = {
-                        position: 'absolute',
-                        width: imgW,
-                        height: imgH,
-                        left: -bbox.l * imgW,
-                        top: -bbox.t * imgH,
-                      };
-                    } else {
-                      imgStyle = { width: '100%', height: '100%', objectFit: 'contain' };
-                    }
+                    // Crop the art to its silhouette bbox so it fills the cell
+                    // footprint. Until the async measure resolves (or if it
+                    // fails) fall back to ART_BBOX_FALLBACK — a stretch-fill, NOT
+                    // objectFit:contain. contain preserves the art's aspect, so a
+                    // square-ish PNG/SVG sits letterboxed inside a non-square cell
+                    // (wide-arm or deep-seat modules whose footprint is wider than
+                    // deep), leaving a ~5cm margin on each side that reads as a gap
+                    // between adjacent modules on the first paint. Filling removes
+                    // that flash; the measured bbox refines the crop a tick later.
+                    const bbox = bboxCache.get(artSrc) ?? ART_BBOX_FALLBACK;
+                    const bw = bbox.r - bbox.l;
+                    const bh = bbox.b - bbox.t;
+                    const imgW = nativeW / bw;
+                    const imgH = nativeH / bh;
+                    const imgStyle: CSSProperties = {
+                      position: 'absolute',
+                      width: imgW,
+                      height: imgH,
+                      left: -bbox.l * imgW,
+                      top: -bbox.t * imgH,
+                    };
                     return <img src={artSrc} style={imgStyle} alt={m.label} draggable={false} />;
                   })()}
 
