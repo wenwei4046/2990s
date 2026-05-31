@@ -1524,7 +1524,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         </footer>
         {saveComboOpen && (
           <SaveQuickPickModal
-            modules={cells.map((c) => c.moduleId)}
+            modules={[...cells].sort((a, b) => a.x - b.x || a.y - b.y).map((c) => c.moduleId)}
             depth={depth}
             baseModel={baseModel ?? ''}
             curator={canCurate}
@@ -1534,7 +1534,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
         )}
         {createComboOpen && (
           <CreateComboModal
-            modules={cells.map((c) => c.moduleId)}
+            modules={[...cells].sort((a, b) => a.x - b.x || a.y - b.y).map((c) => c.moduleId)}
             depth={depth}
             currentPriceCenti={priceResult.total}
             baseModel={baseModel ?? ''}
