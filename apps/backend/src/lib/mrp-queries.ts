@@ -74,6 +74,8 @@ export type SofaSet = {
   qty: number;
   orderedQty: number;
   shortageQty: number;
+  poNumber: string | null; // PO(s) this set's units were raised into
+  poEta: string | null;    // earliest PO-line delivery date (when goods arrive)
   suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
 };
 

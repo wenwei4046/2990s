@@ -119,7 +119,7 @@ function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
       soItemId: s.soItemId, soDocNo: s.soDocNo, debtorName: s.debtorName,
       soDate: s.soDate, deliveryDate: s.deliveryDate, processingDate: s.processingDate,
       orderByDate: s.orderByDate, qty: s.qty,
-      source: s.shortageQty > 0 ? 'shortage' : 'po', poNumber: null, poEta: null,
+      source: s.shortageQty > 0 ? 'shortage' : 'po', poNumber: s.poNumber, poEta: s.poEta,
       shortageQty: s.shortageQty,
     });
   }
@@ -641,22 +641,21 @@ export const Mrp = () => {
               <th className={styles.num}>Stock</th>
               <th className={styles.num}>PO Outstanding</th>
               <th className={styles.num}>Shortage</th>
-              {/* Commander 2026-05-29 — soonest delivery date so the buyer
-                  sees the nearest due date without expanding (Order-By column
-                  dropped; lead time still drives the sort). */}
-              <th>Delivery</th>
+              {/* Delivery date dropped from the main rows (Commander 2026-05-31)
+                  — it's shown per SO order in the expanded child table below.
+                  Lead time still drives the sort. */}
               <th>Main Supplier</th>
             </tr>
           </thead>
           <tbody>
             {q.isLoading && (
-              <tr><td colSpan={10} className={styles.stateCell}>Loading MRP…</td></tr>
+              <tr><td colSpan={9} className={styles.stateCell}>Loading MRP…</td></tr>
             )}
             {q.isError && (
-              <tr><td colSpan={10} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
+              <tr><td colSpan={9} className={styles.stateCell}>Failed to load: {(q.error as Error)?.message}</td></tr>
             )}
             {data && displayModels.length === 0 && (
-              <tr><td colSpan={10} className={styles.stateCell}>
+              <tr><td colSpan={9} className={styles.stateCell}>
                 {onlyShort ? 'Nothing needs ordering — everything in view is covered.'
                   : hasWindow ? 'No demand delivering in this window.'
                   : 'No open Sales-Order demand for this filter.'}
@@ -772,16 +771,6 @@ const SupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
   );
 };
 
-/* Soonest delivery date across a set of SO lines, NULLs last. Lets a
-   parent/variant row show the nearest due date at a glance. (Commander
-   2026-05-29 — main row shows Delivery only; lead time still drives sort.) */
-function earliestDelivery(lines: MrpLine[]): string | null {
-  return lines.reduce<string | null>(
-    (min, l) => (l.deliveryDate && (!min || l.deliveryDate < min) ? l.deliveryDate : min),
-    null,
-  );
-}
-
 /* General tab — one Model and its variants. Multi-variant models expand into
    variant sub-rows (each expandable to its SO orders). Single-variant models
    (mattress, accessory) expand straight to their SO orders. */
@@ -843,7 +832,6 @@ const ModelRows = ({
         <td className={styles.num}>{group.stock}</td>
         <td className={styles.num}>{group.poOutstanding || '—'}</td>
         <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? group.shortage : '—'}</td>
-        <td className={styles.orderByCell}>{fmtDate(earliestDelivery(group.variants.flatMap((v) => v.lines)))}</td>
         <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
           <SupplierCell suppliers={group.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
         </td>
@@ -854,7 +842,7 @@ const ModelRows = ({
       {modelOpen && single && (
         <tr className={styles.detailRow}>
           <td /><td />
-          <td colSpan={8}>
+          <td colSpan={7}>
             {onlyVariant.variantLabel && (
               <div className={styles.singleSpec}>
                 <span className={styles.variantBranch}>↳</span>
@@ -896,13 +884,12 @@ const ModelRows = ({
               <td className={styles.num}>{v.stock}</td>
               <td className={styles.num}>{v.poOutstanding || '—'}</td>
               <td className={`${styles.num} ${vShort ? styles.shortNum : ''}`}>{vShort ? v.shortage : '—'}</td>
-              <td className={styles.orderByCell}>{fmtDate(earliestDelivery(v.lines))}</td>
               <td />
             </tr>
             {vOpen && (
               <tr className={styles.detailRow}>
                 <td /><td />
-                <td colSpan={8}><OrderLines lines={v.lines} /></td>
+                <td colSpan={7}><OrderLines lines={v.lines} /></td>
               </tr>
             )}
           </FragmentRow>

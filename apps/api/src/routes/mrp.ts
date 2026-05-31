@@ -144,6 +144,8 @@ type SofaSet = {
   qty: number;
   orderedQty: number;  // po_qty_picked
   shortageQty: number; // qty - orderedQty (still to order)
+  poNumber: string | null; // PO(s) this set's units were raised into
+  poEta: string | null;    // earliest PO-line delivery date (when goods arrive)
   suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
 };
 
@@ -467,6 +469,9 @@ mrp.get('/', async (c) => {
       const ordered = d.po_qty_picked ?? 0;
       const prod = prodByCode.get(d.item_code);
       const setDelivery = d.line_delivery_date ?? d.so?.customer_delivery_date ?? null;
+      // PO(s) this SO line's units were raised into, with the earliest supplier
+      // delivery date — so an "ordered" set shows which PO + when it lands.
+      const picked = pickedPoByLineId.get(d.id);
       return {
         soItemId: d.id,
         soDocNo: d.doc_no,
@@ -483,6 +488,8 @@ mrp.get('/', async (c) => {
         qty: d.qty,
         orderedQty: ordered,
         shortageQty: Math.max(0, d.qty - ordered),
+        poNumber: picked && picked.poNumbers.length > 0 ? picked.poNumbers.join(', ') : null,
+        poEta: picked?.eta ?? null,
         suppliers: suppliersByCode.get(d.item_code) ?? [],
       };
     });
