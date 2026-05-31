@@ -4,9 +4,8 @@
 //   • double-click a row → open the GRN detail page
 //   • right-click → context menu (View · Edit · Convert to PI · Convert to PR)
 //
-// The legacy CreatePoDrawer / DetailPoDrawer below the PO list were NOT cloned
-// (dead code). GRN creation stays on the existing /grns/new + /grns/from-po
-// pages — this list just adds the New GRN button.
+// GRN creation stays on the existing /grns/new + /grns/from-po pages — this
+// list just adds the New GRN button.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
