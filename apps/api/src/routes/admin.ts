@@ -318,51 +318,19 @@ admin.delete('/staff/:id', async (c) => {
   return c.json({ staff: updated });
 });
 
-/* Transactional tables wiped by POST /admin/reset-test-data, ordered
-   children-before-parents. Used both as the TRUNCATE CASCADE list (DB
-   function) and as the fallback multi-pass DELETE list. */
-const RESET_WIPE_TABLES = [
-  // Purchasing
-  'purchase_return_items', 'purchase_returns',
-  'purchase_invoice_items', 'purchase_invoices',
-  'grn_items', 'grns',
-  'purchase_order_lines', 'purchase_order_items', 'purchase_orders',
-  'purchase_consignment_note_items', 'purchase_consignment_notes',
-  'purchase_consignment_order_items', 'purchase_consignment_orders',
-  // Sales (ERP / mfg)
-  'mfg_so_audit_log', 'mfg_so_status_changes', 'mfg_so_price_overrides',
-  'mfg_sales_order_payments', 'mfg_sales_order_items',
-  'delivery_order_payments', 'delivery_order_items', 'delivery_orders',
-  'sales_invoice_payments', 'sales_invoice_items', 'sales_invoices',
-  'delivery_return_items', 'delivery_returns',
-  'mfg_sales_orders',
-  // Sales (legacy POS)
-  'order_slip_events', 'order_lane_history', 'pending_slip_uploads',
-  'payments', 'quotes', 'order_items', 'orders',
-  'consignment_note_items', 'consignment_notes',
-  'consignment_order_items', 'consignment_orders',
-  // Inventory
-  'inventory_lot_consumptions', 'inventory_lots', 'inventory_movements',
-  'stock_transfer_lines', 'stock_transfers',
-  'stock_take_lines', 'stock_takes',
-  'warehouse_rack_movements', 'warehouse_rack_items',
-  // Accounting
-  'journal_entry_lines', 'journal_entries',
-  // Return/refund credits
-  'customer_credits',
-] as const;
-
 /* POST /admin/reset-test-data — TEMPORARY testing helper (Commander
    2026-05-31). Wipes every transactional document (purchasing + sales +
    inventory + their journal entries + return credits), keeps all
-   master/config data. Gated to super_admin ONLY — the most destructive
-   button in the app. Remove before pilot.
+   master/config data, resets order_seq → 2990 + clears po_sequences. Gated
+   to super_admin ONLY — the most destructive button in the app. Remove
+   before pilot.
 
-   Self-contained: it does NOT require any migration to be applied first.
-   Fast path uses the SECURITY DEFINER reset_test_transactions() function
-   (atomic TRUNCATE CASCADE + resets order_seq → 2990) if present; if that
-   function doesn't exist yet, it falls back to a multi-pass row delete with
-   the service-role key that needs zero SQL setup. */
+   Implemented as a single call to the SECURITY DEFINER function
+   reset_test_transactions() (migration 0116). This MUST be one subrequest:
+   deleting the ~50 tables individually from the Worker blows past
+   Cloudflare's per-invocation subrequest cap, so the atomic in-database
+   TRUNCATE CASCADE is the only workable approach. If the function isn't
+   installed yet, return a clear setup hint instead of a raw 500. */
 admin.post('/reset-test-data', async (c) => {
   const callerRole = await loadStaffRole(c);
   if (callerRole !== 'super_admin') {
@@ -373,45 +341,18 @@ admin.post('/reset-test-data', async (c) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // ── Fast path: atomic TRUNCATE CASCADE via the DB function, if installed.
-  const rpc = await adminClient.rpc('reset_test_transactions');
-  if (!rpc.error) {
-    return c.json({ ok: true, method: 'rpc' });
-  }
-
-  // ── Fallback: multi-pass DELETE. Each pass retries every table and
-  // tolerates FK errors; cross-document references (DO→SO, SI→SO, GRN→PO…)
-  // clear over successive passes once their children are gone. No hand-tuned
-  // topological order or migration needed.
-  let lastErrors: Record<string, string> = {};
-  for (let pass = 0; pass < 8; pass++) {
-    let progressed = false;
-    lastErrors = {};
-    for (const t of RESET_WIPE_TABLES) {
-      const { error, count } = await adminClient
-        .from(t)
-        .delete({ count: 'exact' })
-        .not('id', 'is', null);
-      if (error) {
-        // Missing table (dropped consignment_*) → skip silently. Other
-        // errors (usually transient FK) are retried next pass.
-        if (!/does not exist|could not find the table|schema cache/i.test(error.message)) {
-          lastErrors[t] = error.message;
-        }
-        continue;
-      }
-      if ((count ?? 0) > 0) progressed = true;
+  const { error } = await adminClient.rpc('reset_test_transactions');
+  if (error) {
+    if (/reset_test_transactions|schema cache|does not exist|could not find the function/i.test(error.message)) {
+      return c.json({
+        error: 'setup_required',
+        detail: 'The reset_test_transactions() function is not installed yet. '
+          + 'Run migration 0116_reset_test_transactions_fn.sql in the Supabase SQL Editor once.',
+      }, 412);
     }
-    if (!progressed) break;
+    return c.json({ error: 'reset_failed', detail: error.message }, 500);
   }
-
-  // Clear the PO-number counter table (keyed by year, no `id` column).
-  await adminClient.from('po_sequences').delete().gte('year', 0);
-
-  if (Object.keys(lastErrors).length > 0) {
-    return c.json({ error: 'reset_incomplete', method: 'delete', tables: lastErrors }, 500);
-  }
-  return c.json({ ok: true, method: 'delete' });
+  return c.json({ ok: true });
 });
 
 const PatchPinBodySchema = z.object({
