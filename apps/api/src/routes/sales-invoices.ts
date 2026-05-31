@@ -22,7 +22,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { postSiRevenue, reverseSiRevenue } from '../lib/post-si-revenue';
+import { postSiRevenue, reverseSiRevenue, resyncSiRevenue } from '../lib/post-si-revenue';
 import { doLineRemaining, doRemainingByItemId, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
 import { applyCustomerCreditToSi, creditFromCancelledSi, getCustomerCreditBalance, reconcileSiOverpay } from '../lib/customer-credits';
@@ -700,10 +700,13 @@ salesInvoices.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('sales_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
-  // A blank invoice that gets its first line should now record revenue (the
-  // POST-time post was a no-op when total was 0). Idempotent — re-posts the
-  // already-posted JE for a no-op once a JE exists.
-  await postSiRevenue(sb, (header as { invoice_number: string }).invoice_number);
+  // Adding a line raises the invoice total. resyncSiRevenue posts the first JE
+  // for a blank invoice's first line AND, on an already-posted invoice, voids the
+  // stale entry + re-posts at the higher total (a bare postSiRevenue would no-op
+  // and leave the GL under-stated). Best-effort.
+  try {
+    await resyncSiRevenue(sb, (header as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[si-revenue] post-add-line resync failed:', e); }
   return c.json({ item: data }, 201);
 });
 
@@ -760,6 +763,13 @@ salesInvoices.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('sales_invoice_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Editing a line changes the invoice total — re-align the revenue entry in the
+     accounts (void the stale one + re-post at the new amount). Best-effort: a GL
+     hiccup never blocks the edit. */
+  try {
+    const { data: h } = await sb.from('sales_invoices').select('invoice_number').eq('id', id).maybeSingle();
+    if (h) await resyncSiRevenue(sb, (h as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[si-revenue] post-line-edit resync failed:', e); }
   return c.json({ ok: true });
 });
 
@@ -768,6 +778,12 @@ salesInvoices.delete('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('sales_invoice_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Deleting a line lowers the invoice total — re-align the revenue entry (void
+     stale + re-post, or void to nothing if it was the last line). Best-effort. */
+  try {
+    const { data: h } = await sb.from('sales_invoices').select('invoice_number').eq('id', id).maybeSingle();
+    if (h) await resyncSiRevenue(sb, (h as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[si-revenue] post-line-delete resync failed:', e); }
   return c.json({ ok: true });
 });
 

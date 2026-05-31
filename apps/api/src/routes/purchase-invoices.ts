@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary } from '@2990s/shared';
-import { reversePiAccounting } from './accounting';
+import { reversePiAccounting, resyncPiAccounting } from './accounting';
 import { recostForPi, recostFromGrn } from '../lib/recost';
 
 export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -914,6 +914,13 @@ purchaseInvoices.patch('/:id/items/:itemId', async (c) => {
   // Costing B — a PI price EDIT (incl. human-error correction) re-costs the
   // GRN's lots and cascades to every shipped DO + Sales Invoice in real time.
   await recostForPi(sb, piId);
+  /* If this PI was already posted to the accounts, its total just changed — void
+     the stale entry + re-post at the new amount. No-op when never posted (PI
+     posts to the GL only on demand). Best-effort. */
+  try {
+    const { data: h } = await sb.from('purchase_invoices').select('invoice_number').eq('id', piId).maybeSingle();
+    if (h) await resyncPiAccounting(sb, (h as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pi-accounting] post-line-edit resync failed:', e); }
   return c.json({ ok: true });
 });
 
@@ -943,5 +950,12 @@ purchaseInvoices.delete('/:id/items/:itemId', async (c) => {
     }
   }
   await recomputePiTotals(sb, piId);
+  /* Deleting a line lowers the PI total — if it was posted to the accounts, void
+     the stale entry + re-post (or void to nothing if it was the last line). No-op
+     when never posted. Best-effort. */
+  try {
+    const { data: h } = await sb.from('purchase_invoices').select('invoice_number').eq('id', piId).maybeSingle();
+    if (h) await resyncPiAccounting(sb, (h as { invoice_number: string }).invoice_number);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[pi-accounting] post-line-delete resync failed:', e); }
   return c.body(null, 204);
 });

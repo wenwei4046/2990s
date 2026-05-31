@@ -1953,6 +1953,15 @@ deliveryOrdersMfg.patch('/:id/items/:itemId', async (c) => {
   // TASK #24 — if the DO has shipped, propagate the qty change to inventory
   // (delta OUT for increase, delta IN for decrease). No-op when not shipped.
   await resyncInventoryForDo(sb, id, user?.id);
+  /* SO #4 — a qty change on a DO line shifts how much of the SO line is
+     delivered. Re-derive the SO's stored delivery status from live qtys so a
+     DECREASE can release the SO from DELIVERED back to a partial/booked status
+     (bidirectional + idempotent). Without this the SO stays latched DELIVERED
+     against a quantity that no longer exists. Best-effort. */
+  try {
+    const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+    await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user?.id);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-sync] post-do-line-edit failed:', e); }
   return c.json({ ok: true });
 });
 
@@ -1996,6 +2005,14 @@ deliveryOrdersMfg.delete('/:id/items/:itemId', async (c) => {
   // TASK #24 — give the deleted qty back to stock (delta IN per bucket). No-op
   // when the DO hasn't shipped yet.
   await resyncInventoryForDo(sb, id, user?.id);
+  /* SO #4 — deleting a DO line drops its delivered qty to zero for that SO
+     line. Re-derive the SO's stored delivery status so it releases from
+     DELIVERED back to a partial/booked status (bidirectional + idempotent).
+     Best-effort. */
+  try {
+    const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+    await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user?.id);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-sync] post-do-line-delete failed:', e); }
   return c.json({ ok: true });
 });
 

@@ -305,97 +305,154 @@ async function increaseInventoryForReturn(sb: any, deliveryReturnId: string, per
   if (movements.length > 0) await writeMovements(sb, movements);
 }
 
-/* Commander 2026-05-30 (Phase B) — REVERSE a DR's inventory increase when it is
-   CANCELLED. The return wrote IN movements on create (creating FIFO lots);
-   cancelling must remove that stock so on-hand isn't permanently inflated.
+/* ── resyncInventoryForReturn (2026-06-01 — DR line-edit/delete/cancel rollback) ──
+   A DR books goods BACK INTO stock on create (increaseInventoryForReturn writes
+   IN rows under source_doc_type 'DR'). But a later LINE EDIT (qty reduced) or
+   LINE DELETE left those IN rows untouched → on-hand stayed permanently inflated
+   by the removed qty. This helper re-derives the DR's intended net stock impact
+   from its CURRENT lines and writes a single signed ADJUSTMENT delta per bucket
+   to close the gap — the exact mirror of resyncInventoryForDo on the DO side.
 
-   We write a NEGATIVE ADJUSTMENT row per (product_code, variant_key) bucket
-   (qty = −returned). The inventory_balances view treats ADJUSTMENT as signed
-   (migration 0095: `WHEN movement_type = 'ADJUSTMENT' THEN qty`), so a negative
-   qty subtracts exactly what the IN added — net stock impact of the return
-   becomes zero. We deliberately do NOT write an 'OUT' row here:
-     • an OUT would FIFO-consume an arbitrary lot + compute a spurious COGS, and
-     • source_doc_type 'DR' carries a UNIQUE index (uq_inv_mov_dr_source on
-       doc+product+variant, migration 0102) that an OUT reusing the DR id would
-       collide with. An ADJUSTMENT row is unindexed and FIFO-neutral.
+   It also SUBSUMES the old cancel reversal: when the DR is CANCELLED the target
+   is zero, so the delta removes the full remaining net — one code path for every
+   rollback (edit / delete / cancel), so the three can't drift.
 
-   IDEMPOTENT: an existence check for a prior ADJUSTMENT row tagged with this
-   DR's id skips a re-reversal. Best-effort — a movement failure never un-cancels
-   the DR (audit-DLQ pattern, same as increaseInventoryForReturn). */
-async function reverseInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
-  // Idempotency guard — has this DR already been reversed? Reversal rows are
-  // tagged source_doc_type='ADJUSTMENT' + this DR's id, and may be ADJUSTMENT
-  // (non-sofa) OR a batch-removing OUT (sofa, Stage 4), so DON'T filter on
-  // movement_type — either kind means we already reversed.
-  const { count: existing } = await sb
-    .from('inventory_movements')
-    .select('id', { head: true, count: 'exact' })
-    .eq('source_doc_type', 'ADJUSTMENT')
-    .eq('source_doc_id', deliveryReturnId);
-  if ((existing ?? 0) > 0) return; // already reversed — no-op
+   BATCH-AWARE (Stage 4): the forward IN rows carry batch_no for sofa/dye-lot
+   items (resolveDrLineBatches). A negative delta on a batched bucket is written
+   as an OUT carrying that batch_no so the FIFO/lot consumer removes stock from
+   the EXACT lot it re-entered (keeping inventory_lots truthful); a positive delta
+   on a batched bucket re-opens the lot with an IN. Non-batched buckets use a
+   FIFO-neutral signed ADJUSTMENT. Either way the row is tagged
+   source_doc_type='ADJUSTMENT' so it sidesteps uq_inv_mov_dr_source (scoped to
+   source_doc_type='DR', migration 0102).
 
+   We write the delta as a FIFO-neutral ADJUSTMENT (movement_type 'ADJUSTMENT',
+   source_doc_type 'ADJUSTMENT', source_doc_id = DR id). The inventory_balances
+   view treats ADJUSTMENT as signed (migration 0095), and the DR source key's
+   UNIQUE index (uq_inv_mov_dr_source, 0102) does NOT cover ADJUSTMENT rows, so
+   any number of delta rows coexist. IDEMPOTENT by construction: re-running finds
+   delta 0 (the prior ADJUSTMENT already closed the gap) → no write. Best-effort:
+   a movement failure never blocks the edit/cancel. */
+async function resyncInventoryForReturn(sb: any, deliveryReturnId: string, performedBy: string) {
   const { data: drHeader } = await sb.from('delivery_returns')
-    .select('return_number')
+    .select('return_number, status, warehouse_id')
     .eq('id', deliveryReturnId).maybeSingle();
-  const drNo = (drHeader as { return_number: string } | null)?.return_number ?? deliveryReturnId;
+  if (!drHeader) return;
+  const drStatus = ((drHeader as { status: string | null }).status ?? '').toUpperCase();
+  const drHeaderWarehouseId = (drHeader as { warehouse_id: string | null }).warehouse_id ?? null;
+  const drNo = (drHeader as { return_number: string }).return_number ?? deliveryReturnId;
 
-  /* Net IN per (warehouse, product, variant, batch_no) bucket from THIS DR's OWN
-     movements. Reversing from the actual rows (not the line list + a single
-     header warehouse) guarantees the reversal lands in exactly the warehouse(s)
-     the IN created — critical now that increaseInventoryForReturn books each line
-     into its DO line's SOURCE warehouse (0118), which can differ per line.
-     batch_no is read from the IN rows so a sofa reversal removes stock from the
-     EXACT batch it re-entered. Forward-compat: pre-0120 the column doesn't exist
-     → retry without it, every bucket's batch is '' (plain ADJUSTMENT). */
-  const sel = 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, product_name';
-  let movsRes = await sb.from('inventory_movements').select(sel)
-    .eq('source_doc_type', 'DR').eq('source_doc_id', deliveryReturnId);
-  if (movsRes.error && (movsRes.error.message ?? '').includes('batch_no')) {
-    movsRes = await sb.from('inventory_movements')
-      .select('movement_type, warehouse_id, product_code, variant_key, qty, product_name')
-      .eq('source_doc_type', 'DR').eq('source_doc_id', deliveryReturnId);
+  // 1. TARGET net IN per (warehouse, product, variant, batch_no) bucket = sum of
+  //    the DR's CURRENT lines (mirror of increaseInventoryForReturn's bucketing,
+  //    batch_no included so a sofa line targets its OWN dye-lot). A CANCELLED DR
+  //    has a target of zero — every bucket must drain back out.
+  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; batch_no: string | null; product_name: string | null; qty: number; unit_cost_sen: number };
+  const targetByBucket = new Map<string, Bucket>();
+  if (drStatus !== 'CANCELLED') {
+    const { data: items } = await sb.from('delivery_return_items')
+      .select('id, do_item_id, item_code, description, qty_returned, item_group, variants, unit_cost_centi')
+      .eq('delivery_return_id', deliveryReturnId);
+    const lineRows = (items ?? []) as Array<{ id: string; do_item_id?: string | null; item_code: string; description: string | null; qty_returned: number; item_group?: string | null; variants?: VariantAttrs | null; unit_cost_centi?: number | null }>;
+    const lineWh = await resolveDrLineWarehouses(sb, lineRows as Array<{ id: string; do_item_id?: string | null }>, drHeaderWarehouseId);
+    const lineBatch = await resolveDrLineBatches(sb, lineRows as Array<{ id: string; do_item_id?: string | null }>);
+    for (const it of lineRows) {
+      const qty = Number(it.qty_returned ?? 0);
+      if (qty <= 0) continue;
+      const warehouseId = lineWh.get(it.id) ?? null;
+      if (!warehouseId) continue; // unresolvable warehouse — skip rather than guess
+      const variant_key = computeVariantKey(it.item_group ?? null, it.variants ?? null);
+      const batch_no = lineBatch.get(it.id) ?? null;
+      const k = `${warehouseId}::${it.item_code}::${variant_key}::${batch_no ?? ''}`;
+      const cur = targetByBucket.get(k);
+      if (cur) { cur.qty += qty; }
+      else targetByBucket.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key, batch_no, product_name: it.description, qty, unit_cost_sen: Number(it.unit_cost_centi ?? 0) });
+    }
   }
-  const movs = movsRes.data;
-  type Agg = { warehouse_id: string; product_code: string; variant_key: string; batch_no: string | null; product_name: string | null; net_in: number };
-  const byBucket = new Map<string, Agg>();
-  for (const m of (movs ?? []) as Array<{
-    movement_type: string; warehouse_id: string; product_code: string;
-    variant_key: string | null; batch_no?: string | null; qty: number; product_name: string | null;
-  }>) {
-    if (m.movement_type !== 'IN' && m.movement_type !== 'OUT') continue;
-    const variant_key = m.variant_key ?? '';
-    const batch_no = m.batch_no ?? null;
-    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}::${batch_no ?? ''}`;
-    let agg = byBucket.get(k);
-    if (!agg) { agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, batch_no, product_name: m.product_name, net_in: 0 }; byBucket.set(k, agg); }
+
+  // 2. CURRENT net IN already booked for this DR = Σ IN/OUT rows (source 'DR')
+  //    plus Σ prior resync rows (source 'ADJUSTMENT' — signed ADJUSTMENT for
+  //    plain buckets, or IN/OUT carrying batch_no for sofa buckets). Bucketing by
+  //    batch_no keeps each dye-lot's delta independent. Forward-compat: pre-0120
+  //    the batch_no column doesn't exist → retry without it (every batch '').
+  type Agg = { net_in: number; product_name: string | null };
+  const aggByBucket = new Map<string, Agg>();
+  const addMov = (m: { movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null; qty: number; product_name: string | null }) => {
+    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}::${m.batch_no ?? ''}`;
+    let agg = aggByBucket.get(k);
+    if (!agg) { agg = { net_in: 0, product_name: m.product_name }; aggByBucket.set(k, agg); }
     const q = Number(m.qty ?? 0);
-    if (m.movement_type === 'IN') agg.net_in += q; else agg.net_in -= q;
+    if (m.movement_type === 'IN') agg.net_in += q;
+    else if (m.movement_type === 'OUT') agg.net_in -= q;
+    else if (m.movement_type === 'ADJUSTMENT') agg.net_in += q; // already signed
     if (!agg.product_name) agg.product_name = m.product_name;
+  };
+  const readDrMovs = async (sourceType: string) => {
+    const sel = 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, product_name';
+    let res = await sb.from('inventory_movements').select(sel)
+      .eq('source_doc_type', sourceType).eq('source_doc_id', deliveryReturnId);
+    if (res.error && (res.error.message ?? '').includes('batch_no')) {
+      res = await sb.from('inventory_movements')
+        .select('movement_type, warehouse_id, product_code, variant_key, qty, product_name')
+        .eq('source_doc_type', sourceType).eq('source_doc_id', deliveryReturnId);
+    }
+    return (res.data ?? []) as any[];
+  };
+  for (const m of await readDrMovs('DR')) addMov(m);
+  for (const m of await readDrMovs('ADJUSTMENT')) addMov(m);
+
+  // 3. Per-bucket delta = target − current_net. delta > 0 adds stock back (a line
+  //    qty was raised); delta < 0 removes over-booked stock (line reduced /
+  //    deleted / DR cancelled). BATCHED bucket → write an IN/OUT carrying batch_no
+  //    so the FIFO/lot consumer touches the EXACT dye-lot (keeping inventory_lots
+  //    truthful). PLAIN bucket → FIFO-neutral signed ADJUSTMENT. Either way the
+  //    row is source_doc_type='ADJUSTMENT' (uq_inv_mov_dr_source is scoped to
+  //    source_doc_type='DR', so no collision).
+  const allKeys = new Set<string>([...targetByBucket.keys(), ...aggByBucket.keys()]);
+  type MovOut = Parameters<typeof writeMovements>[1][number];
+  const writes: MovOut[] = [];
+  for (const k of allKeys) {
+    const t = targetByBucket.get(k);
+    const a = aggByBucket.get(k) ?? { net_in: 0, product_name: null };
+    const delta = (t?.qty ?? 0) - a.net_in;
+    if (delta === 0) continue;
+    const parts = k.split('::');
+    const batchNo = parts[3] || null;
+    const note = drStatus === 'CANCELLED'
+      ? `Delivery return ${drNo} cancelled — reversing return (stock removed)`
+      : `Delivery return ${drNo} line edited — resyncing returned stock`;
+    const base = {
+      warehouse_id: parts[0] ?? '',
+      product_code: parts[1] ?? '',
+      variant_key: parts[2] ?? '',
+      product_name: t?.product_name ?? a.product_name ?? null,
+      source_doc_type: 'ADJUSTMENT' as const,
+      source_doc_id: deliveryReturnId,
+      source_doc_no: drNo,
+      performed_by: performedBy,
+      notes: note,
+    };
+    if (batchNo) {
+      // Sofa/dye-lot: move the exact lot. + re-opens it (IN), − consumes it (OUT).
+      writes.push(delta > 0
+        ? { ...base, movement_type: 'IN', qty: delta, unit_cost_sen: t?.unit_cost_sen ?? 0, batch_no: batchNo }
+        : { ...base, movement_type: 'OUT', qty: -delta, batch_no: batchNo });
+    } else {
+      writes.push({
+        ...base,
+        movement_type: 'ADJUSTMENT',
+        qty: delta, // signed: + adds stock, − removes it
+        unit_cost_sen: delta > 0 ? (t?.unit_cost_sen ?? 0) : 0,
+      });
+    }
   }
-  /* BATCHED (sofa) bucket → write an OUT carrying batch_no so the batch-scoped
-     FIFO consumer removes the stock from that EXACT batch's lot (keeping
-     inventory_lots truthful). Plain bucket → FIFO-neutral negative ADJUSTMENT.
-     Both use source_doc_type='ADJUSTMENT' (ix_inv_mov_dr_source is scoped to
-     source_doc_type='DR', so no collision). */
-  const movements = [...byBucket.values()]
-    .filter((b) => b.net_in > 0)
-    .map((b) => {
-      const base = {
-        warehouse_id: b.warehouse_id,
-        product_code: b.product_code,
-        variant_key: b.variant_key,
-        product_name: b.product_name,
-        source_doc_type: 'ADJUSTMENT' as const,
-        source_doc_id: deliveryReturnId,
-        source_doc_no: drNo,
-        performed_by: performedBy,
-        notes: `Delivery return ${drNo} cancelled — reversing return (stock removed)`,
-      };
-      return b.batch_no
-        ? { ...base, movement_type: 'OUT' as const, qty: b.net_in, batch_no: b.batch_no }
-        : { ...base, movement_type: 'ADJUSTMENT' as const, qty: -b.net_in };
-    });
-  if (movements.length > 0) await writeMovements(sb, movements);
+  if (writes.length > 0) {
+    await writeMovements(sb, writes);
+    /* Returned-stock level changed → re-walk SO allocation. Best-effort. */
+    try {
+      const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+      await recomputeSoStockAllocation(sb);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-dr-resync failed:', e); }
+  }
 }
 
 /* Commander 2026-05-30 (Phase B) — LINE-LEVEL, QUANTITY-BASED DO → Delivery
@@ -934,7 +991,7 @@ deliveryReturns.post('/:id/items', async (c) => {
 });
 
 deliveryReturns.patch('/:id/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
@@ -977,14 +1034,20 @@ deliveryReturns.patch('/:id/items/:itemId', async (c) => {
   const { error } = await sb.from('delivery_return_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* A DR put goods back into stock on create; an edited qty must re-sync that
+     stock or on-hand stays inflated. Idempotent + best-effort. */
+  try { await resyncInventoryForReturn(sb, id, user?.id); } catch { /* best-effort */ }
   return c.json({ ok: true });
 });
 
 deliveryReturns.delete('/:id/items/:itemId', async (c) => {
-  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId');
+  const sb = c.get('supabase'); const id = c.req.param('id'); const itemId = c.req.param('itemId'); const user = c.get('user');
   const { error } = await sb.from('delivery_return_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Deleting a returned line must take its re-stocked goods back out, or on-hand
+     stays inflated by the removed qty. Idempotent + best-effort. */
+  try { await resyncInventoryForReturn(sb, id, user?.id); } catch { /* best-effort */ }
   return c.json({ ok: true });
 });
 
@@ -995,11 +1058,13 @@ deliveryReturns.delete('/:id/items/:itemId', async (c) => {
 //
 // Migration 0107 — CANCELLED reverses the inventory IN a DR wrote on create
 // (a DR put goods BACK into stock; cancelling must take them out again), via
-// reverseInventoryForReturn (a FIFO-neutral negative ADJUSTMENT that sidesteps
-// the uq_inv_mov_dr_source unique index). Idempotent: we read the current status
-// first and skip if already CANCELLED, plus the helper's own ADJUSTMENT existence
-// check. The cancelled return's qty also returns to Pending automatically (the
-// do-line-remaining formula filters non-cancelled DRs).
+// resyncInventoryForReturn with a CANCELLED target of zero — the same delta-based
+// helper that also handles line edit/delete, so the three rollback paths can't
+// drift. It writes batch-scoped IN/OUT for sofa lots and a FIFO-neutral signed
+// ADJUSTMENT otherwise, all tagged source_doc_type='ADJUSTMENT' so they sidestep
+// the uq_inv_mov_dr_source unique index. Idempotent by construction: a re-run
+// finds delta 0. The cancelled return's qty also returns to Pending automatically
+// (the do-line-remaining formula filters non-cancelled DRs).
 deliveryReturns.patch('/:id/status', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string; inspectionNotes?: string };
@@ -1047,16 +1112,19 @@ deliveryReturns.patch('/:id/status', async (c) => {
     data = updated as { id: string; status: string };
   }
 
-  // Cancelling a DR → reverse the inventory IN it wrote on create. We CANNOT use
-  // reverseMovements here: it writes a balancing OUT that reuses the DR's
-  // (source_doc_type, source_doc_id, product_code, variant_key) key, which the
-  // partial UNIQUE index uq_inv_mov_dr_source (migration 0102, keyed WITHOUT
-  // movement_type) rejects → the insert silently fails and the returned stock is
-  // left permanently added. reverseInventoryForReturn writes a FIFO-neutral
-  // negative ADJUSTMENT (unindexed by the DR source key, carrying variant_key) so
-  // the reversal actually lands. Best-effort + idempotent.
+  // Cancelling a DR → drain the inventory IN it wrote on create back out, via
+  // resyncInventoryForReturn (target net 0). It writes a FIFO-neutral signed
+  // ADJUSTMENT (unindexed by the DR source key, carrying variant_key) — we CANNOT
+  // reuse reverseMovements: its balancing OUT reuses the DR's (source_doc_type,
+  // source_doc_id, product_code, variant_key) key, which the partial UNIQUE index
+  // uq_inv_mov_dr_source (migration 0102, keyed WITHOUT movement_type) rejects →
+  // the insert silently fails and the returned stock stays added.
   if (body.status === 'CANCELLED') {
-    try { await reverseInventoryForReturn(sb, id, user.id); } catch { /* best-effort */ }
+    // Unified rollback: target net = 0 for a cancelled DR, so the resync drains
+    // back out exactly the stock still booked by this return (the create IN minus
+    // any line-edit adjustments). Same code path as line edit/delete — they can't
+    // drift. Idempotent + best-effort.
+    try { await resyncInventoryForReturn(sb, id, user.id); } catch { /* best-effort */ }
     /* DR cancel pulled stock back out → other READY SOs that relied on it may
        now regress to PENDING. Re-walk allocation. Best-effort. */
     try {
