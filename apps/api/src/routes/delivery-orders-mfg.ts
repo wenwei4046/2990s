@@ -323,34 +323,61 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
     .select('id, so_item_id, item_code, description, qty, item_group, variants')
     .eq('delivery_order_id', deliveryOrderId);
   const lineWh = await resolveDoLineWarehouses(sb, (items ?? []) as Array<{ id: string; so_item_id?: string | null }>, headerWarehouseId);
-  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number };
+
+  /* Sofa batch per so_item — same source the first ship used (allocated_batch_no).
+     batch_no JOINS the bucket key so a resync delta consumes/returns the SAME
+     dye-lot batch the original OUT drew from, not a random FIFO lot. Best-effort:
+     absent column (pre-0121) / non-sofa → empty map → plain non-batched resync,
+     identical to the old behaviour. */
+  const batchBySoItem = new Map<string, string>();
+  const soItemIds = [...new Set(((items ?? []) as Array<{ so_item_id?: string | null }>).map((it) => it.so_item_id).filter((x): x is string => !!x))];
+  if (soItemIds.length > 0) {
+    try {
+      const { data: bRows, error } = await sb.from('mfg_sales_order_items')
+        .select('id, allocated_batch_no').in('id', soItemIds);
+      if (!error) for (const r of (bRows ?? []) as Array<{ id: string; allocated_batch_no: string | null }>) {
+        if (r.allocated_batch_no) batchBySoItem.set(r.id, r.allocated_batch_no);
+      }
+    } catch { /* column absent pre-0121 — no batches, plain FIFO resync */ }
+  }
+  const batchAware = batchBySoItem.size > 0;
+
+  type Bucket = { warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; batch_no: string | null };
   const targetByBucket = new Map<string, Bucket>();
-  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
+  for (const it of (items as Array<{ id: string; so_item_id?: string | null; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }> ?? [])) {
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
     const warehouseId = lineWh.get(it.id) ?? null;
     if (!warehouseId) continue; // no resolvable warehouse — skip rather than guess
     const variant_key = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${warehouseId}::${it.item_code}::${variant_key}`;
+    const batch_no = it.so_item_id ? (batchBySoItem.get(it.so_item_id) ?? null) : null;
+    const k = `${warehouseId}::${it.item_code}::${variant_key}::${batch_no ?? ''}`;
     const cur = targetByBucket.get(k);
     if (cur) { cur.qty += qty; }
-    else targetByBucket.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key, product_name: it.description, qty });
+    else targetByBucket.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key, product_name: it.description, qty, batch_no });
   }
 
   // 2. Aggregate existing movements per (warehouse, product, variant) bucket —
   //    current OUT qty / IN qty. Also accumulate OUT total_cost_sen so the
   //    reversing IN re-introduces stock at the same weighted cost basis.
+  /* Select batch_no too when we're batch-aware so existing OUT/IN rows aggregate
+     into the SAME batched buckets as the target. Pre-0121 (not batch-aware) we
+     skip the column entirely — it may not exist yet — and every bucket's batch
+     segment is '' (matches the non-batched target keys above). */
+  const movSelect = batchAware
+    ? 'movement_type, warehouse_id, product_code, variant_key, batch_no, qty, unit_cost_sen, total_cost_sen, product_name'
+    : 'movement_type, warehouse_id, product_code, variant_key, qty, unit_cost_sen, total_cost_sen, product_name';
   const { data: movs } = await sb.from('inventory_movements')
-    .select('movement_type, warehouse_id, product_code, variant_key, qty, unit_cost_sen, total_cost_sen, product_name')
+    .select(movSelect)
     .eq('source_doc_type', 'DO')
     .eq('source_doc_id', deliveryOrderId);
   type Agg = { out_qty: number; in_qty: number; out_total_cost: number; product_name: string | null };
   const aggByBucket = new Map<string, Agg>();
   for (const m of (movs ?? []) as Array<{
-    movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null;
+    movement_type: string; warehouse_id: string; product_code: string; variant_key: string | null; batch_no?: string | null;
     qty: number; unit_cost_sen: number | null; total_cost_sen: number | null; product_name: string | null;
   }>) {
-    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}`;
+    const k = `${m.warehouse_id}::${m.product_code}::${m.variant_key ?? ''}::${m.batch_no ?? ''}`;
     let agg = aggByBucket.get(k);
     if (!agg) { agg = { out_qty: 0, in_qty: 0, out_total_cost: 0, product_name: m.product_name }; aggByBucket.set(k, agg); }
     if (m.movement_type === 'OUT') {
@@ -379,6 +406,7 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
     const warehouse_id = parts[0] ?? '';
     const product_code = parts[1] ?? '';
     const variant_key = parts[2] ?? '';
+    const batch_no = parts[3] || null; // '' → null (non-sofa); else the bound dye-lot batch
     const product_name = t?.product_name ?? a.product_name ?? null;
     if (delta > 0) {
       // Need more OUT — operator increased a line qty or added a new line on a shipped DO.
@@ -392,6 +420,7 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
         source_doc_no: doNo,
         performed_by: performedBy,
         notes: 'Resync: line qty increased / line added (shipped DO).',
+        ...(batch_no ? { batch_no } : {}),
       });
     } else {
       // delta < 0 — operator reduced a line qty or deleted a line. Give stock back.
@@ -409,6 +438,7 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
         source_doc_no: doNo,
         performed_by: performedBy,
         notes: 'Resync: line qty reduced / line deleted (shipped DO).',
+        ...(batch_no ? { batch_no } : {}),
       });
     }
   }
