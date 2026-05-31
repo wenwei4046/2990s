@@ -305,7 +305,7 @@ export const PurchaseReturnNew = () => {
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
             <Save {...ICON} />
-            {saving ? 'Posting…' : 'Save & Post'}
+            {saving ? 'Saving…' : 'Create Purchase Return'}
           </Button>
         </div>
       </div>

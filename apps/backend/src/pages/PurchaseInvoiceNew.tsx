@@ -393,7 +393,7 @@ export const PurchaseInvoiceNew = () => {
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
             <Save {...ICON} />
-            {saving ? 'Posting…' : 'Save & Post'}
+            {saving ? 'Saving…' : 'Create Purchase Invoice'}
           </Button>
         </div>
       </div>

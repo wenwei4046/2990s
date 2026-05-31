@@ -374,7 +374,7 @@ export const DeliveryOrderNew = () => {
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>
             <Save {...ICON} />
-            {create.isPending ? 'Saving…' : 'Create DO'}
+            {create.isPending ? 'Saving…' : 'Create Delivery Order'}
           </Button>
         </div>
       </div>

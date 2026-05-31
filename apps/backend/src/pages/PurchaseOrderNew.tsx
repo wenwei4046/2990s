@@ -663,7 +663,7 @@ export const PurchaseOrderNew = () => {
           >
             <Save {...ICON} />
             {/* PR #131 + 0078 — POST creates SUBMITTED; DRAFT removed entirely. */}
-            {create.isPending ? 'Creating…' : 'Create PO'}
+            {create.isPending ? 'Saving…' : 'Create Purchase Order'}
           </Button>
         </div>
       </div>

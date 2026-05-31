@@ -493,7 +493,7 @@ export const GrnNew = () => {
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={saving || !canSave}>
             <Save {...ICON} />
-            {saving ? 'Receiving…' : 'Receive & Post'}
+            {saving ? 'Saving…' : 'Create Goods Receipt'}
           </Button>
         </div>
       </div>

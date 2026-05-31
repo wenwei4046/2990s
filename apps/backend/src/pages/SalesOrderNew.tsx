@@ -668,7 +668,7 @@ export const SalesOrderNew = () => {
             disabled={create.isPending || !canSave || datesXor}
           >
             <Save {...ICON} />
-            {create.isPending ? 'Saving…' : 'Create SO'}
+            {create.isPending ? 'Saving…' : 'Create Sales Order'}
           </Button>
         </div>
       </div>

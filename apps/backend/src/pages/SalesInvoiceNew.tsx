@@ -359,7 +359,7 @@ export const SalesInvoiceNew = () => {
           </Button>
           <Button variant="primary" size="md" onClick={onSave} disabled={create.isPending || !canSave || loadingPrefill}>
             <Save {...ICON} />
-            {create.isPending ? 'Saving…' : 'Create Invoice'}
+            {create.isPending ? 'Saving…' : 'Create Sales Invoice'}
           </Button>
         </div>
       </div>
