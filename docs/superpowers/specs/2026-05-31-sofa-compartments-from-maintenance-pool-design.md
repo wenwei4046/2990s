@@ -204,17 +204,37 @@ IDs below are in the **normalized dash form** (`normalizeCompartmentCode` collap
   So the 供买家参考 price = exactly what Master Admin typed in the grid.
 - Supersedes the deferral noted in `[[sofa-pos-price-grid-edits-cost-not-selling]]`.
 
+### 7. Tier auto-derive from P1 (sofa Edit-Price grid) — Chairman 2026-06-01
+- **P1 is the base.** In the sofa Edit-Price grid, Master Admin enters only the **P1**
+  price per seat-size (24/26/28…). P2 and P3 auto-derive — no typing each tier.
+- **Global fixed lump sums** (ONE pair, applies to ALL sofa fabric — not %, not per-size,
+  not per-Model): `P2 = P1 + Δ2`, `P3 = P1 + Δ3` (e.g. Δ2 = RM 100 → P2 is RM 100 over
+  P1; Δ3 = RM 300 → P3 is RM 300 over P1). The two offsets are the P2/P3 fabric-tier
+  upcharge, entered once. Direction: P1 cheapest → P3 priciest.
+- **Where Δ2/Δ3 are set (confirmed):** two global inputs in a header row on the grid —
+  `P2 = P1 + [__]`, `P3 = P1 + [__]`, applied to ALL sofas (one global pair).
+- **Override + Save semantics (confirmed 2026-06-01):**
+  - Default: P2/P3 auto-fill = P1 + Δ, live as P1 is typed.
+  - Manually editing a P2/P3 cell **pins** it (manual value overrides the formula); the
+    pin persists across Saves.
+  - **Save** persists everything — pinned cells keep their manual value, the rest = P1 + Δ.
+  - An explicit **"Reset to formula"** button re-applies P2/P3 = P1 + Δ to all cells
+    (clears pins). Chairman chose this over the earlier "double-save resets" idea (a
+    stray double-tap must not wipe manual work).
+- **POS SELLING tiers only** (Phase B). Backend **COST is NOT auto-derived** — cost is the
+  real per-piece purchase price, recorded manually on Backend, and "differs a lot per
+  module" (Chairman). No formula on the cost side.
+
 ---
 
 ## Edge cases & considerations
-- **Code form**: pool stores parens (`1A(LHF)`, `1A(P)(LHF)`, `Console/WC`); shared lib
-  uses dash. All comparisons go through `normalizeCompartmentCode`. New geometry ids
-  must match the normalized output exactly (table above).
+- **Code form**: pool stores parens (`1A(LHF)`, `1A(P)(LHF)`); shared lib uses dash. All
+  comparisons go through `normalizeCompartmentCode`. New geometry ids must match the
+  normalized output exactly (table above).
 - **Console**: merged to a single `Console` (decision 5 / architecture #5) — a
   45-wide accessory that doesn't count toward closure/bundles.
-- **Unpriced modules**: a Model that activated `1S` but never set `OMMBUC-1S.sell_price_sen`
-  shows the piece priced `TBC`/0 (existing behavior). Selling-price authoring for sofa
-  modules is a separate gap (see `[[sofa-pos-price-grid-edits-cost-not-selling]]`).
+- **Unpriced modules**: a Model that activated `1S` but never set its selling price shows
+  the piece as `TBC`/0 until Master Admin enters P1 in the Edit-Price grid (Phase B / #6).
 - **Fabric gate**: the Customize palette currently sits next to a fabric picker that
   shows "No fabrics enabled" when a Model has no `allowed_options.fabrics`. That does
   NOT block the module palette (verified the emptiness was the `SOFA_MODULES` filter,
