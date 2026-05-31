@@ -768,6 +768,34 @@ describe('mirror helpers (Quick Pick L↔R flip)', () => {
   });
 });
 
+describe('mirror price-invariance (à-la-carte fallback)', () => {
+  it('prices a mirrored layout identically when only one hand is priced', () => {
+    // Only the LHF hands carry a price; the RHF rows are absent.
+    const oneHand = pricing({
+      compartments: [
+        { compartmentId: '2A-LHF', active: true, price: 2400 },
+        { compartmentId: 'L-LHF',  active: true, price: 1900 },
+      ],
+      bundles: [],
+      combos: [],
+    });
+    // 2A(LHF) + L(RHF) laid out left→right.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '2A-LHF', x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: 'L-RHF',  x: 188, y: 0, rot: 0 },
+    ];
+    // Its mirror: L(LHF) + 2A(RHF).
+    const mirrored: Cell[] = [
+      { id: 'a', moduleId: 'L-LHF',  x: 0,   y: 0, rot: 0 },
+      { id: 'b', moduleId: '2A-RHF', x: 188, y: 0, rot: 0 },
+    ];
+    const t1 = computeSofaPrice(cells, '24', oneHand).total;
+    const t2 = computeSofaPrice(mirrored, '24', oneHand).total;
+    expect(t1).toBeGreaterThan(0);
+    expect(t2).toBe(t1); // 2400 + 1900 both ways, thanks to the mirror fallback
+  });
+});
+
 /* Case 10 — cellsToPoSkus: bundle-first PO line translation. */
 describe('cellsToPoSkus', () => {
   it('empty cells → empty', () => {

@@ -854,7 +854,13 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   // price it via its row's `price` so the customer-facing total never blows up).
   let aLaCarteTotal = 0;
   for (const cell of group) {
-    const row = compRow(pricing, cell.moduleId);
+    // Mirror fallback (2026-06-01): a flipped Quick Pick swaps LHF↔RHF. If a
+    // Model priced only one hand, resolve the other hand to the SAME row so a
+    // mirrored sofa never prices to RM 0 or differs from its un-flipped twin.
+    // Additive only — never lowers a priced module. POS + server share this
+    // function, so the drift-reject on POST /orders can't fire from mirroring.
+    const row = compRow(pricing, cell.moduleId)
+      ?? compRow(pricing, mirrorCode(cell.moduleId));
     aLaCarteTotal += row?.price ?? 0;
   }
 
