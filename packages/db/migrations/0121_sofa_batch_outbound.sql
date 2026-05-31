@@ -5,14 +5,15 @@
 -- batch (Stage 1 stamped inventory_lots.batch_no = source PO number). To ship a
 -- set without colour difference the whole set must leave from ONE batch.
 --
--- LOCKED RULES (Commander 2026-05-31):
---   • A batch matches a Sales Order's sofa set ONLY when the batch's surviving
---     component multiset EQUALS the SO's sofa-need multiset (EXACT match).
---   • Whole batch is atomic — all components allocate to one SO together or none.
---   • One batch → exactly one SO. Pure made-to-stock: a batch may go to ANY
---     variant-matching SO, FIFO by delivery date, NOT tied to its origin SO.
---   • Enforced at BOTH layers: allocation (so-stock-allocation stamps the matched
---     batch on the SO line) AND outbound (the DO consumes from that exact batch).
+-- LOCKED RULES (Commander 2026-05-31, corrected model):
+--   • A sofa set's batch is FIXED at procurement time, NOT auto-matched. The PO
+--     raised from the sofa SO line IS the batch (po_number = batch_no, tied back
+--     via purchase_order_items.so_item_id). One batch → exactly one SO, by origin.
+--   • Whole set ships from that one batch (one dye lot) so there's no colour diff.
+--   • Enforced at BOTH layers: allocation (so-stock-allocation reads the bound PO
+--     and stamps allocated_batch_no on the SO line) AND outbound (the DO consumes
+--     from that exact batch).
+--   • BEDFRAME is by-SKU — it is NOT batched and keeps plain FIFO.
 --
 -- This migration adds the OUTBOUND plumbing:
 --   1. mfg_sales_order_items.allocated_batch_no — the batch the allocator locked
@@ -37,7 +38,7 @@ BEGIN;
 ALTER TABLE mfg_sales_order_items ADD COLUMN IF NOT EXISTS allocated_batch_no TEXT;
 
 COMMENT ON COLUMN mfg_sales_order_items.allocated_batch_no IS
-  'Sofa batch (source PO number) the auto-allocator locked to this line so the whole colour-matched set ships from one dye lot. Set by so-stock-allocation when a batch EXACTLY matches the SO''s sofa set; cleared when the match breaks or the line cancels/returns (Stage 4). NULL for non-sofa / unmatched lines.';
+  'Sofa batch (source PO number) bound to this line so the whole colour-matched set ships from one dye lot. Set by so-stock-allocation by reading the PO raised from this SO line (purchase_order_items.so_item_id -> purchase_orders.po_number); cleared when the PO is cancelled or the line cancels/returns. NULL for non-sofa / no-PO lines (bedframe is by-SKU, never batched).';
 
 -- ── 2. Batch-scoped FIFO consumer — clone of fn_consume_fifo + batch filter ──
 CREATE OR REPLACE FUNCTION fn_consume_fifo_batch(

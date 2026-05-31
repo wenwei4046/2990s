@@ -32,7 +32,6 @@
 
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { summariseReadiness } from './so-readiness';
-import { matchSofaBatches, type SofaSetNeed, type BatchSupply } from './sofa-batch-match';
 
 export type AllocationResult = {
   ok: boolean;
@@ -112,20 +111,22 @@ export async function recomputeSoStockAllocation(
        allocated per-line off the qty bucket like everything else; instead the
        SO's whole sofa set is matched atomically to ONE batch whose component
        multiset EXACTLY equals the set's need. Identify sofa lines via the
-       product catalog's category so the per-line walk below can skip them. */
+       product catalog's category so the per-line walk below can skip them.
+       BEDFRAME is by-SKU (Commander 2026-05-31) — it stays on plain per-line
+       FIFO and is NOT batched. */
     const { data: catRows } = await sb.from('mfg_products').select('code, category');
-    const sofaCodes = new Set<string>();
+    const batchedCodes = new Set<string>();
     for (const p of (catRows ?? []) as Array<{ code: string; category: string | null }>) {
-      if ((p.category ?? '').toUpperCase() === 'SOFA') sofaCodes.add(p.code);
+      if ((p.category ?? '').toUpperCase() === 'SOFA') batchedCodes.add(p.code);
     }
-    const isSofaLine = (item_code: string, item_group: string | null) =>
-      sofaCodes.has(item_code) || (item_group ?? '').toUpperCase().includes('SOFA');
+    const isBatchedLine = (item_code: string, item_group: string | null) =>
+      batchedCodes.has(item_code) || (item_group ?? '').toUpperCase().includes('SOFA');
 
     /* Read each sofa line's currently-locked batch so we can tell what changed.
        Forward-compat (migration 0121): allocated_batch_no may not exist yet —
        read it best-effort; on any error treat every line's batch as unset. */
     const curBatchByLine = new Map<string, string | null>();
-    const sofaLineIds = lines.filter((l) => isSofaLine(l.item_code, l.item_group)).map((l) => l.id);
+    const sofaLineIds = lines.filter((l) => isBatchedLine(l.item_code, l.item_group)).map((l) => l.id);
     if (sofaLineIds.length > 0) {
       try {
         const { data: bRows, error: bErr } = await sb
@@ -201,9 +202,9 @@ export async function recomputeSoStockAllocation(
     const WH_NONE = 'NOWH';
     type LineNeed = { id: string; doc_no: string; bucket: string; whId: string | null; need: number; current: string; curReady: number };
     const needs: LineNeed[] = [];
-    /* Sofa lines walk the batch-atomic path instead of the per-line bucket
-       fill. Keep the SKU + variant + remaining so we can build each SO's set
-       multiset for matchSofaBatches below. */
+    /* Sofa lines walk the batch-bound path instead of the per-line bucket
+       fill. Keep the SKU + variant + remaining so we can check each module's
+       on-hand within its bound batch below. */
     type SofaLineRec = {
       id: string; doc_no: string; whId: string | null; item_code: string;
       variant_key: string; need: number; current: string; curReady: number; curBatch: string | null;
@@ -216,7 +217,7 @@ export async function recomputeSoStockAllocation(
       if (remaining <= 0) continue;
       const variant_key = computeVariantKey(l.item_group ?? null, l.variants ?? null);
       const whId = l.warehouse_id ?? null;
-      if (isSofaLine(l.item_code, l.item_group)) {
+      if (isBatchedLine(l.item_code, l.item_group)) {
         sofaLineRecs.push({
           id: l.id, doc_no: l.doc_no, whId, item_code: l.item_code, variant_key,
           need: remaining, current: l.stock_status, curReady: Number(l.stock_qty_ready ?? 0),
@@ -288,57 +289,86 @@ export async function recomputeSoStockAllocation(
       }
     }
 
-    /* 7b. SOFA batch-atomic matching (Stage 3, Commander 2026-05-31). Build each
-           open batch's surviving sofa-component multiset and each SO's sofa-set
-           need multiset, then match EXACT + atomic + FIFO via matchSofaBatches.
-           A matched SO's sofa lines all go READY and carry the locked batch;
-           unmatched lines go PENDING (sofa is all-or-nothing — never PARTIAL). */
+    /* 7b. SOFA batch binding (Stage 3, Commander 2026-05-31 — corrected model).
+           A sofa set's batch is NOT auto-matched by quantity; it is FIXED at
+           procurement time. The PO raised from the sofa SO line carries
+           po_number = batch_no (the PO line ties back via so_item_id). So we
+           read the bound batch straight off the procurement chain
+           (SO line → purchase_order_items.so_item_id → purchase_orders.po_number)
+           and lock it on the line — exactly the same number GRN stamps onto the
+           lot. Readiness is then checked against THAT batch's lots only, strictly
+           per-warehouse. Sofa is all-or-nothing: the whole set is READY only when
+           every module line's bound batch has enough on hand; otherwise the set
+           stays PENDING (never PARTIAL). allocated_batch_no is stamped whenever a
+           PO exists — even while PENDING — because the batch is decided at PO
+           time and outbound must consume from it. */
     const batchTargetByLine = new Map<string, string | null>();
     if (sofaLineRecs.length > 0) {
-      /* Pull ALL open batched lots whose product_code is a sofa SKU (not only the
-         needed ones) so a batch carrying an extra module can't falsely equal a
-         smaller set need. Per-warehouse: stock never crosses warehouses. */
-      const { data: lotRows } = await sb
-        .from('v_inventory_lots_open')
-        .select('warehouse_id, product_code, variant_key, batch_no, qty_remaining, received_at')
-        .not('batch_no', 'is', null)
-        .gt('qty_remaining', 0)
-        .in('product_code', [...sofaCodes]);
-      type Lot = { warehouse_id: string; product_code: string; variant_key: string | null; batch_no: string; qty_remaining: number; received_at: string | null };
-      const batchMap = new Map<string, BatchSupply>(); // key = `${wh}|${batch}`
-      for (const r of (lotRows ?? []) as Lot[]) {
-        const key = `${r.warehouse_id}|${r.batch_no}`;
-        let b = batchMap.get(key);
-        if (!b) { b = { batchNo: r.batch_no, warehouseId: r.warehouse_id, receivedAt: r.received_at, components: new Map() }; batchMap.set(key, b); }
-        const ck = `${r.product_code}|${r.variant_key ?? ''}`;
-        b.components.set(ck, (b.components.get(ck) ?? 0) + Number(r.qty_remaining ?? 0));
-        if (r.received_at && (!b.receivedAt || r.received_at < b.receivedAt)) b.receivedAt = r.received_at;
-      }
-      // Each SO's sofa-set need within one warehouse (lines summed by SKU+variant).
-      const needMap = new Map<string, SofaSetNeed>(); // key = `${wh}|${docNo}`
-      for (const s of sofaLineRecs) {
-        if (s.whId == null) continue; // no warehouse bound → can't draw stock; stays PENDING
-        const key = `${s.whId}|${s.doc_no}`;
-        let n = needMap.get(key);
-        if (!n) {
-          const order = orderByDoc.get(s.doc_no);
-          n = { soDocNo: s.doc_no, warehouseId: s.whId, deliveryDate: order?.customer_delivery_date ?? null, components: new Map() };
-          needMap.set(key, n);
+      const sofaIds = sofaLineRecs.map((s) => s.id);
+      // SO line → its live PO's batch number. One sofa set = one PO; each module
+      // line points at it via so_item_id. Two-step (no embed) to mirror grns.ts
+      // resolvePoBatchByItem and dodge supabase nested-array typing. Skip
+      // cancelled POs (cancelled_at set).
+      const batchBySoLine = new Map<string, string>();
+      const { data: poiRows } = await sb
+        .from('purchase_order_items')
+        .select('so_item_id, purchase_order_id')
+        .in('so_item_id', sofaIds);
+      const poiTyped = (poiRows ?? []) as Array<{ so_item_id: string | null; purchase_order_id: string | null }>;
+      const poIds = [...new Set(poiTyped.map((r) => r.purchase_order_id).filter((x): x is string => !!x))];
+      const poNoById = new Map<string, string>();
+      if (poIds.length > 0) {
+        const { data: poRows } = await sb
+          .from('purchase_orders')
+          .select('id, po_number, cancelled_at')
+          .in('id', poIds);
+        for (const p of (poRows ?? []) as Array<{ id: string; po_number: string; cancelled_at: string | null }>) {
+          if (p.cancelled_at) continue; // cancelled PO no longer binds its batch
+          poNoById.set(p.id, p.po_number);
         }
-        const ck = `${s.item_code}|${s.variant_key}`;
-        n.components.set(ck, (n.components.get(ck) ?? 0) + s.need);
       }
-      const assignments = matchSofaBatches([...needMap.values()], [...batchMap.values()]);
-      const batchByWhDoc = new Map<string, string>();
-      for (const a of assignments) batchByWhDoc.set(`${a.warehouseId}|${a.soDocNo}`, a.batchNo);
+      for (const r of poiTyped) {
+        if (!r.so_item_id || !r.purchase_order_id) continue;
+        const no = poNoById.get(r.purchase_order_id);
+        if (no && !batchBySoLine.has(r.so_item_id)) batchBySoLine.set(r.so_item_id, no);
+      }
+
+      // Live on-hand within each bound batch, keyed (wh|batch|code|variant).
+      const boundBatches = [...new Set(batchBySoLine.values())];
+      const stockByKey = new Map<string, number>();
+      if (boundBatches.length > 0) {
+        const { data: lotRows } = await sb
+          .from('v_inventory_lots_open')
+          .select('warehouse_id, product_code, variant_key, batch_no, qty_remaining')
+          .in('batch_no', boundBatches)
+          .gt('qty_remaining', 0);
+        for (const r of (lotRows ?? []) as Array<{ warehouse_id: string; product_code: string; variant_key: string | null; batch_no: string; qty_remaining: number }>) {
+          const k = `${r.warehouse_id}|${r.batch_no}|${r.product_code}|${r.variant_key ?? ''}`;
+          stockByKey.set(k, (stockByKey.get(k) ?? 0) + Number(r.qty_remaining ?? 0));
+        }
+      }
+
+      // Group sofa lines per SO set (within a warehouse) for the all-or-nothing
+      // readiness decision; a set is one PO = one batch.
+      const setLines = new Map<string, SofaLineRec[]>(); // key = `${wh}|${docNo}`
       for (const s of sofaLineRecs) {
-        const matched = s.whId != null ? (batchByWhDoc.get(`${s.whId}|${s.doc_no}`) ?? null) : null;
-        if (matched) {
-          targetById.set(s.id, { status: 'READY', qtyReady: s.need });
-          batchTargetByLine.set(s.id, matched);
-        } else {
-          targetById.set(s.id, { status: 'PENDING', qtyReady: 0 });
-          batchTargetByLine.set(s.id, null);
+        const key = `${s.whId ?? WH_NONE}|${s.doc_no}`;
+        const arr = setLines.get(key) ?? [];
+        arr.push(s); setLines.set(key, arr);
+      }
+      for (const group of setLines.values()) {
+        // READY only when every line has a bound batch + a warehouse + enough of
+        // its own module on hand in that batch.
+        let ready = true;
+        for (const s of group) {
+          const batch = batchBySoLine.get(s.id) ?? null;
+          if (!batch || s.whId == null) { ready = false; continue; }
+          const have = stockByKey.get(`${s.whId}|${batch}|${s.item_code}|${s.variant_key}`) ?? 0;
+          if (have < s.need) ready = false;
+        }
+        for (const s of group) {
+          batchTargetByLine.set(s.id, batchBySoLine.get(s.id) ?? null);
+          targetById.set(s.id, ready ? { status: 'READY', qtyReady: s.need } : { status: 'PENDING', qtyReady: 0 });
         }
       }
     }
