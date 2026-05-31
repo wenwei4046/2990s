@@ -60,7 +60,7 @@ export const DEFAULT_SOFA_QUICK_PRESETS: SofaQuickPreset[] = [
   { id: '2+L-R',    label: '2 + L (chaise right)',    modules: ['2A-LHF', 'L-RHF'] },
   { id: '3+L-L',    label: '3 + L (chaise left)',     modules: ['L-LHF', '1NA', '2A-RHF'] },
   { id: '3+L-R',    label: '3 + L (chaise right)',    modules: ['2A-LHF', '1NA', 'L-RHF'] },
-  { id: '2WC',      label: '2-Seater + Console',      modules: ['1A-LHF', 'WC-45', '1A-RHF'] },
+  { id: '2WC',      label: '2-Seater + Console',      modules: ['1A-LHF', 'Console', '1A-RHF'] },
   { id: 'CORNER-L', label: 'Corner (LHF)',            modules: ['1A-LHF', 'CNR', '2A-RHF'] },
   { id: 'CORNER-R', label: 'Corner (RHF)',            modules: ['2A-LHF', 'CNR', '1A-RHF'] },
 ];

@@ -54,7 +54,7 @@ INSERT INTO compartment_library (id, comp_group, label, width_cm, depth_cm, cush
   ('CNR',    'Corner',    'Corner piece',                    95,  95, 1, 1490, 'CNR.png',    FALSE, 11),
   ('L-LHF',  'L-Shape',   'L · Left hand facing chaise',     95, 165, 1, 1490, 'L-LHF.png',  FALSE, 12),
   ('L-RHF',  'L-Shape',   'L · Right hand facing chaise',    95, 165, 1, 1490, 'L-RHF.png',  FALSE, 13),
-  ('WC-45',  'Accessory', 'Wood console · 45cm',             45,  95, 0,  590, 'WC-45.png',  TRUE,  14),
+  ('Console', 'Accessory', 'Wood console · 45cm',            45,  95, 0,  590, 'Console.png', TRUE,  14),
   ('STOOL',  'Accessory', 'Ottoman / stool',                 75,  75, 0,  490, 'STOOL.png',  TRUE,  15)
 ON CONFLICT (id) DO UPDATE SET
   label = EXCLUDED.label, width_cm = EXCLUDED.width_cm, depth_cm = EXCLUDED.depth_cm,

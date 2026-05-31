@@ -105,10 +105,10 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
   if (bundleId === '2WC') {
     // 1A + wood console + 1A, left to right.
     const a = wOf('1A-LHF');
-    const c = wOf('WC-45');
+    const c = wOf('Console');
     cells = [
       { id: 'wc-l', moduleId: '1A-LHF', x: 0,     y: 0, rot: 0 },
-      { id: 'wc-c', moduleId: 'WC-45',  x: a,     y: 0, rot: 0 },
+      { id: 'wc-c', moduleId: 'Console', x: a,     y: 0, rot: 0 },
       { id: 'wc-r', moduleId: '1A-RHF', x: a + c, y: 0, rot: 0 },
     ];
   } else if (bundleId === 'CORNER') {
