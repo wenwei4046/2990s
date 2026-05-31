@@ -221,23 +221,47 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
   // not a single DO-header default. Stock never crosses warehouses.
   const lineWh = await resolveDoLineWarehouses(sb, items as Array<{ id: string; so_item_id?: string | null }>, headerWarehouseId);
 
-  /* Collapse identical (warehouse_id, product_code, variant_key) lines into one
-     OUT row. A DO can legitimately list the same product across two lines (qty
-     split) AND across two warehouses; bucketing by warehouse keeps each
-     warehouse's deduction correct and idempotency-safe. */
+  /* Stage 3 (Commander 2026-05-31) — SOFA ships as a whole colour-matched set
+     from ONE batch (= one dye lot). The allocator locked that batch onto the SO
+     line as allocated_batch_no; carry it onto the OUT movement so the FIFO
+     trigger consumes strictly from that batch (fn_consume_fifo_batch, 0121).
+     Only sofa lines carry a batch — non-sofa lines stay NULL → plain FIFO.
+     Forward-compat: read best-effort; absent column → every line un-batched. */
+  const batchBySoItem = new Map<string, string>();
+  const soItemIds = [...new Set((items as Array<{ so_item_id?: string | null }>).map((it) => it.so_item_id ?? null).filter((x): x is string => !!x))];
+  if (soItemIds.length > 0) {
+    try {
+      const { data: bRows, error: bErr } = await sb
+        .from('mfg_sales_order_items')
+        .select('id, allocated_batch_no')
+        .in('id', soItemIds);
+      if (!bErr) {
+        for (const r of (bRows ?? []) as Array<{ id: string; allocated_batch_no: string | null }>) {
+          if (r.allocated_batch_no) batchBySoItem.set(r.id, r.allocated_batch_no);
+        }
+      }
+    } catch { /* column absent pre-0121 — no batches, plain FIFO */ }
+  }
+
+  /* Collapse identical (warehouse_id, product_code, variant_key, batch_no) lines
+     into one OUT row. A DO can legitimately list the same product across two
+     lines (qty split) AND across two warehouses; bucketing by warehouse keeps
+     each warehouse's deduction correct and idempotency-safe. batch_no joins the
+     key so two batches of the same sofa SKU each consume their own lots. */
   const byKey = new Map<string, {
-    warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number;
+    warehouse_id: string; product_code: string; variant_key: string; product_name: string | null; qty: number; batch_no: string | null;
   }>();
-  for (const it of (items as Array<{ id: string; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
+  for (const it of (items as Array<{ id: string; so_item_id?: string | null; item_code: string; description: string | null; qty: number; item_group?: string | null; variants?: VariantAttrs | null }>)) {
     const qty = Number(it.qty ?? 0);
     if (qty <= 0) continue;
     const warehouseId = lineWh.get(it.id) ?? null;
     if (!warehouseId) continue; // no resolvable warehouse — skip rather than guess
     const variantKey = computeVariantKey(it.item_group ?? null, it.variants ?? null);
-    const k = `${warehouseId}::${it.item_code}::${variantKey}`;
+    const batchNo = it.so_item_id ? (batchBySoItem.get(it.so_item_id) ?? null) : null;
+    const k = `${warehouseId}::${it.item_code}::${variantKey}::${batchNo ?? ''}`;
     const cur = byKey.get(k);
     if (cur) { cur.qty += qty; }
-    else byKey.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty });
+    else byKey.set(k, { warehouse_id: warehouseId, product_code: it.item_code, variant_key: variantKey, product_name: it.description, qty, batch_no: batchNo });
   }
   const movements = [...byKey.values()].map((m) => ({
     movement_type: 'OUT' as const,
@@ -249,6 +273,7 @@ async function deductInventoryForDo(sb: any, deliveryOrderId: string, performedB
     source_doc_type: 'DO' as const,
     source_doc_id: deliveryOrderId,
     source_doc_no: doNo,
+    ...(m.batch_no ? { batch_no: m.batch_no } : {}),
     performed_by: performedBy,
   }));
   if (movements.length > 0) {
