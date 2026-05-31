@@ -106,7 +106,7 @@ describe('matchComboSubset (HOOKKA findComboSubset 1:1)', () => {
     // 2A-LHF→slot0, L-RHF→slot1; the 1NA at index 2 is an extra (not returned).
     expect(matchComboSubset(['2A-LHF', 'L-RHF', '1NA'], slots)).toEqual([0, 1]);
     // Even two extras ride free.
-    expect(matchComboSubset(['2A-LHF', 'L-RHF', '1NA', 'WC-45'], slots)).toEqual([0, 1]);
+    expect(matchComboSubset(['2A-LHF', 'L-RHF', '1NA', 'Console'], slots)).toEqual([0, 1]);
   });
 
   it('extra module that ALSO fits a slot still only consumes one per slot', () => {

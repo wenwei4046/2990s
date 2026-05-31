@@ -236,6 +236,7 @@ const nextCellId = (): string =>
 const PALETTE_GROUPS: SofaModuleSpec['group'][] = [
   '1-seater',
   '2-seater',
+  '3-seater',
   'Corner',
   'L-Shape',
   'Accessory',
@@ -899,7 +900,11 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                         title={m.label}
                       >
                         <div className={styles.paletteArt}>
-                          <img src={resolveModuleArtSrc(m.id)} alt={m.label} draggable={false} />
+                          {/* Decision 6 (Chairman 2026-06-01): palette art is the
+                              PNG uploaded in Maintenance (compartment.imageUrl),
+                              falling back to the bundled module art only when no
+                              upload exists. */}
+                          <img src={customRow?.imageUrl ?? resolveModuleArtSrc(m.id)} alt={m.label} draggable={false} />
                         </div>
                         <div className={styles.paletteInfo}>
                           <div className={styles.paletteCode}>{m.id}</div>

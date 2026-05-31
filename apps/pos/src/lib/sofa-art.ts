@@ -23,7 +23,7 @@ const bboxPending = new Map<string, Promise<ArtBbox>>();
 const SEED_BBOX: Record<string, ArtBbox> = {
   '/sofa-modules/1A-LHF.png': { l: 0.2207, t: 0.1758, r: 0.7773, b: 0.8242 },
   '/sofa-modules/1A-RHF.png': { l: 0.2207, t: 0.1758, r: 0.7773, b: 0.8242 },
-  '/sofa-modules/WC-45.png':  { l: 0.3027, t: 0.1973, r: 0.6953, b: 0.8008 },
+  '/sofa-modules/Console.png': { l: 0.3027, t: 0.1973, r: 0.6953, b: 0.8008 },
   '/sofa-modules/1B-LHF.png': { l: 0.2207, t: 0.1758, r: 0.7773, b: 0.8242 },
   '/sofa-modules/CNR.png':    { l: 0.1758, t: 0.1758, r: 0.8242, b: 0.8242 },
   '/sofa-modules/2A-RHF.png': { l: 0.1211, t: 0.2773, r: 0.8789, b: 0.7227 },

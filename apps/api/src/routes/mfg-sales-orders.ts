@@ -936,7 +936,11 @@ mfgSalesOrders.post('/', async (c) => {
     // module-SKU sell_price_sen; load them so the drift gate reprices the build
     // from the same source the POS used. Non-sofa lines skip it.
     const sofaModulePrices = product?.category === 'SOFA'
-      ? await loadModelSofaModulePrices(sb, product.base_model)
+      ? await loadModelSofaModulePrices(
+          sb,
+          product.base_model,
+          String((it.variants as { depth?: unknown } | null)?.depth ?? '24'),
+        )
       : null;
     const draft: MfgItemForRecompute = {
       itemCode,
@@ -1813,7 +1817,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
   ]);
   // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
   const sofaModulePricesLite = productLite?.category === 'SOFA'
-    ? await loadModelSofaModulePrices(sb, productLite.base_model)
+    ? await loadModelSofaModulePrices(
+        sb,
+        productLite.base_model,
+        String((variantsObj as { depth?: unknown } | null)?.depth ?? '24'),
+      )
     : null;
   const recomputed = recomputeFromSnapshot(
     {
@@ -1991,7 +1999,11 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
     ]);
     // SOFA-SELLING-PLAN — per-Model module SELLING prices for the sofa drift gate.
     const sofaModulePricesPatch = prodLite?.category === 'SOFA'
-      ? await loadModelSofaModulePrices(sb, prodLite.base_model)
+      ? await loadModelSofaModulePrices(
+          sb,
+          prodLite.base_model,
+          String((variantsAfter as { depth?: unknown } | null)?.depth ?? '24'),
+        )
       : null;
     recomputedPatch = recomputeFromSnapshot(
       {

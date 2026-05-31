@@ -32,6 +32,7 @@ import {
 import {
   computeSofaSellingSen,
   sofaModulePricesFromSkus,
+  sofaModuleSellingPricesFromSkus,
   type Cell,
   type SofaComboRow,
   type SofaModulePriceSen,
@@ -326,28 +327,36 @@ export async function loadProductByCode(sb: any, code: string): Promise<ProductR
 }
 
 /** Load a Model's sofa module SELLING prices (per-Model module→sen map) from
- *  mfg_products. Each module of a Model is its own SKU (e.g. `BOOQIT-2A(LHF)`);
- *  its `sell_price_sen` is the per-Model module price. Returns null when
- *  base_model is absent so the caller treats the sofa as "can't price → trust
- *  operator" (never a false reject). Built via the shared `sofaModulePricesFromSkus`
- *  so the server's map is byte-for-byte what the POS builds. */
+ *  mfg_products, for the given seat `depth`. Each module of a Model is its own
+ *  SKU (e.g. `BOOQIT-2A(LHF)`). The per-(depth, P1) `seat_height_prices[].
+ *  sellingPriceSen` (what the POS Edit-Price grid writes) wins; otherwise the
+ *  flat `sell_price_sen`. Tier is fixed at P1 (Chairman 2026-06-01: run at P1 —
+ *  no fabric-tier variation yet). Returns null when base_model is absent so the
+ *  caller treats the sofa as "can't price → trust operator" (never a false
+ *  reject). Built via the shared `sofaModuleSellingPricesFromSkus` at the SAME
+ *  (depth, P1) the POS Configurator uses, so the server map is byte-for-byte
+ *  what the POS builds and the drift gate can't diverge. */
 export async function loadModelSofaModulePrices(
   sb: any,
   baseModel: string | null | undefined,
+  depth: string | null | undefined,
 ): Promise<SofaModulePriceSen | null> {
   if (!baseModel) return null;
   const { data } = await sb
     .from('mfg_products')
-    .select('code, sell_price_sen')
+    .select('code, sell_price_sen, seat_height_prices')
     .eq('base_model', baseModel)
     .eq('category', 'SOFA');
   if (!data) return null;
-  return sofaModulePricesFromSkus(
-    (data as Array<{ code: string; sell_price_sen: number | null }>).map((r) => ({
+  return sofaModuleSellingPricesFromSkus(
+    (data as Array<{ code: string; sell_price_sen: number | null; seat_height_prices: MfgSeatHeightPrice[] | null }>).map((r) => ({
       code: r.code,
       sellPriceSen: r.sell_price_sen,
+      seatHeightPrices: r.seat_height_prices,
     })),
     baseModel,
+    depth,
+    'PRICE_1',
   );
 }
 
@@ -418,7 +427,11 @@ export async function recomputeOneLine(
     loadFabricByCode(sb, item.variants?.fabricCode ?? null),
   ]);
   const sofaModulePrices = product?.category === 'SOFA'
-    ? await loadModelSofaModulePrices(sb, product.base_model)
+    ? await loadModelSofaModulePrices(
+        sb,
+        product.base_model,
+        String((item.variants as { depth?: unknown } | null | undefined)?.depth ?? '24'),
+      )
     : null;
   return recomputeFromSnapshot(item, product, fabric, config, null, sofaModulePrices);
 }

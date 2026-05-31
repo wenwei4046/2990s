@@ -23,6 +23,7 @@ import {
   computeMfgLineCost,
   computeMfgPoUnitCost,
   mfgPricingDriftExceeds,
+  resolveSeatHeightSelling,
   type MaintenanceConfig,
   type MfgPricingProduct,
 } from './mfg-pricing';
@@ -676,5 +677,78 @@ describe('computeMfgPoUnitCost — supplier binding projection', () => {
     expect(r.basePriceSen).toBe(52000);
     expect(r.divanSurchargeSen).toBe(0);
     expect(r.unitPriceSen).toBe(52000);
+  });
+});
+
+describe('resolveSeatHeightSelling (2026-06-01)', () => {
+  const rows = [
+    { height: '24', priceSen: 50000, tier: 'PRICE_1' as const, sellingPriceSen: 90000 },
+    { height: '24', priceSen: 60000, tier: 'PRICE_2' as const }, // cost-only, no selling
+  ];
+  it('returns sellingPriceSen for an exact (height,tier) hit', () => {
+    expect(resolveSeatHeightSelling(rows, '24', 'PRICE_1'))
+      .toEqual({ sellingPriceSen: 90000, matchedTier: 'PRICE_1' });
+  });
+  it('SKIPS rows whose sellingPriceSen is null/undefined (falls through)', () => {
+    // wants PRICE_2 but that row has no sellingPriceSen → no PRICE_2 selling →
+    // no any-row selling either → null (caller falls back to flat sell_price_sen)
+    expect(resolveSeatHeightSelling(rows, '24', 'PRICE_2')).toBeNull();
+  });
+  it('NEVER leaks priceSen (cost) into selling', () => {
+    const res = resolveSeatHeightSelling(rows, '24', 'PRICE_2');
+    expect(res).toBeNull(); // not { sellingPriceSen: 60000 }
+  });
+  it('falls back to a PRICE_2-default selling row, but NEVER to a non-PRICE_2 tier', () => {
+    const r2 = [
+      { height: '24', priceSen: 60000, tier: 'PRICE_2' as const, sellingPriceSen: 88000 },
+      { height: '24', priceSen: 70000, tier: 'PRICE_3' as const, sellingPriceSen: 99000 },
+    ];
+    // wants PRICE_1 (no PRICE_1 row) → PRICE_2-default selling fallback
+    expect(resolveSeatHeightSelling(r2, '24', 'PRICE_1'))
+      .toEqual({ sellingPriceSen: 88000, matchedTier: 'PRICE_2' });
+    // wants PRICE_1, only PRICE_3 priced (no exact, no PRICE_2) → null, NOT a
+    // cross-tier leak of the PRICE_3 selling price (honest-pricing promise).
+    const r3 = [{ height: '24', priceSen: 70000, tier: 'PRICE_3' as const, sellingPriceSen: 99000 }];
+    expect(resolveSeatHeightSelling(r3, '24', 'PRICE_1')).toBeNull();
+  });
+  it('returns null for empty/missing rows or missing size', () => {
+    expect(resolveSeatHeightSelling([], '24', 'PRICE_1')).toBeNull();
+    expect(resolveSeatHeightSelling(null, '24', 'PRICE_1')).toBeNull();
+    expect(resolveSeatHeightSelling(rows, null, 'PRICE_1')).toBeNull();
+  });
+});
+
+describe('cost path ignores selling-only seat rows (2026-06-01)', () => {
+  // The POS Edit-Price grid can author a sellingPriceSen for a (height,tier) slot
+  // that carries NO cost priceSen yet. computeMfgLineCost must NOT read that as a
+  // 0 cost — it must fall through to basePriceSen, leaving cost output identical
+  // to the no-entry case (Chairman: Backend cost stays unchanged).
+  it('a selling-only seat row (no priceSen) does NOT fabricate a 0 cost', () => {
+    const product = {
+      category: 'SOFA' as const,
+      basePriceSen: 70000,
+      seatHeightPrices: [
+        { height: '24', tier: 'PRICE_1' as const, sellingPriceSen: 99000 }, // no priceSen
+      ],
+    };
+    const cost = computeMfgLineCost(
+      { product, fabric: { tier: 'PRICE_1' }, qty: 1, seatSize: '24' },
+      null,
+    );
+    expect(cost.basePriceSen).toBe(70000); // base fallback, NOT 0
+  });
+  it('a real cost seat row (priceSen present) is still used — unchanged', () => {
+    const product = {
+      category: 'SOFA' as const,
+      basePriceSen: 70000,
+      seatHeightPrices: [
+        { height: '24', tier: 'PRICE_1' as const, priceSen: 50000, sellingPriceSen: 99000 },
+      ],
+    };
+    const cost = computeMfgLineCost(
+      { product, fabric: { tier: 'PRICE_1' }, qty: 1, seatSize: '24' },
+      null,
+    );
+    expect(cost.basePriceSen).toBe(50000); // cost from the seat row, unchanged
   });
 });

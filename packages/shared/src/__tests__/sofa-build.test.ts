@@ -8,6 +8,8 @@ import {
   cellBbox,
   moduleFootprint,
   findModule,
+  classifySofaCompartment,
+  isAccessoryModule,
   computeSofaPrice,
   analyzeSofa,
   hasArmConflict,
@@ -17,6 +19,7 @@ import {
   describeSofaLine,
   fabricSurchargeFor,
   fabricColourSuffix,
+  sofaModuleSellingPricesFromSkus,
   SNAP_CM,
   type Cell,
   type SofaProductPricing,
@@ -39,7 +42,7 @@ const pricing = (overrides: Partial<SofaProductPricing> = {}): SofaProductPricin
     { compartmentId: 'CNR',   active: true, price: 1800 },
     { compartmentId: 'L-RHF',   active: true, price: 1900 },
     { compartmentId: 'L-LHF',   active: true, price: 1900 },
-    { compartmentId: 'WC-45', active: true, price: 800  },
+    { compartmentId: 'Console', active: true, price: 800  },
   ],
   bundles: [
     { bundleId: '1S',  active: true, price: 1400 },
@@ -98,8 +101,8 @@ describe('summarizeSofaCells upgrade suffix', () => {
     expect(summarizeSofaCells(cells, '24', 'Headrest')).toBe('1-Seater');
   });
   it('drops accessories before signing', () => {
-    expect(familySignature(['1A-LHF', 'WC-45', '2A-RHF'])).toBe('1A+2A');
-    expect(detectBundle(['1A-LHF', 'WC-45', '2A-RHF'])?.id).toBe('3S');
+    expect(familySignature(['1A-LHF', 'Console', '2A-RHF'])).toBe('1A+2A');
+    expect(detectBundle(['1A-LHF', 'Console', '2A-RHF'])?.id).toBe('3S');
   });
 });
 
@@ -124,8 +127,8 @@ describe('describeSofaLine', () => {
     expect(describeSofaLine({ bundleId: '2+L' })).toBe('2A-LHF + L-RHF');
   });
 
-  it('quick-pick console bundle (2WC) shows 1A-LHF + WC-45 + 1A-RHF (F6)', () => {
-    expect(describeSofaLine({ bundleId: '2WC' })).toBe('1A-LHF + WC-45 + 1A-RHF');
+  it('quick-pick console bundle (2WC) shows 1A-LHF + Console + 1A-RHF (F6)', () => {
+    expect(describeSofaLine({ bundleId: '2WC' })).toBe('1A-LHF + Console + 1A-RHF');
   });
 
   it('quick-pick power-slide combo (2PS) shows its bundle name (F7)', () => {
@@ -148,8 +151,8 @@ describe('describeSofaLine', () => {
   });
 
   it('custom with a console lists the accessory inline (not collapsed to a bundle)', () => {
-    const cells = [cell('1A-LHF', 0), cell('WC-45', 95), cell('1A-RHF', 140)];
-    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + WC-45 + 1A-RHF');
+    const cells = [cell('1A-LHF', 0), cell('Console', 95), cell('1A-RHF', 140)];
+    expect(describeSofaLine({ cells, depth: '24' })).toBe('1A-LHF + Console + 1A-RHF');
   });
 
   it('falls back gracefully when neither bundleId nor cells are present', () => {
@@ -541,11 +544,11 @@ describe('computeSofaPrice multi-group + accessory', () => {
 
   it('preserves prototype quirk: bundle replaces base, accessory contribution drops', () => {
     // 3+L group with a console wedged in. Signature ignores accessory, so bundle still detects.
-    // À la carte = 1500 (1A-LHF) + 2200 (2NA) + 1900 (L-RHF) + 800 (WC-45) = 6400.
+    // À la carte = 1500 (1A-LHF) + 2200 (2NA) + 1900 (L-RHF) + 800 (Console) = 6400.
     // Bundle 3+L price = 4500 → wins. Console's 800 is dropped under documented quirk.
     const cells: Cell[] = [
       { moduleId: '1A-LHF', x: 0,    y: 0,  rot: 0 },
-      { moduleId: 'WC-45', x: 95,  y: 0,  rot: 0 },
+      { moduleId: 'Console', x: 95,  y: 0,  rot: 0 },
       { moduleId: '2NA',  x: 140,  y: 0,  rot: 0 },
       { moduleId: 'L-RHF',  x: 282,  y: 0,  rot: 0 },
     ];
@@ -631,7 +634,7 @@ describe('analyzeSofa closure', () => {
   });
 
   it('reports "Console needs a sofa next to it" for accessory-only group', () => {
-    const r = analyzeSofa([{ id: 'a', moduleId: 'WC-45', x: 0, y: 0, rot: 0 }], '24');
+    const r = analyzeSofa([{ id: 'a', moduleId: 'Console', x: 0, y: 0, rot: 0 }], '24');
     expect(r.closed).toBe(false);
     expect(r.reason).toBe('Console needs a sofa next to it');
   });
@@ -725,11 +728,11 @@ describe('analyzeSofa off-axis open-edge closure', () => {
   });
 
   it('accessory open edges do NOT fail closure', () => {
-    // 1A-LHF + WC-45 + 1A-RHF — the console's N/S faces are 'open' by
+    // 1A-LHF + Console + 1A-RHF — the console's N/S faces are 'open' by
     // design. Closure must ignore them (else 3+L bundle pricing breaks).
     const group: Cell[] = [
       { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'w', moduleId: 'WC-45',  x: 95,  y: 0, rot: 0 },
+      { id: 'w', moduleId: 'Console',  x: 95,  y: 0, rot: 0 },
       { id: 'b', moduleId: '1A-RHF', x: 140, y: 0, rot: 0 },
     ];
     const r = analyzeSofa(group, '24');
@@ -796,27 +799,27 @@ describe('cellsToPoSkus', () => {
     ]);
   });
 
-  it('accessory (WC-45) wedged in a closed bundle → bundle line + accessory line', () => {
+  it('accessory (Console) wedged in a closed bundle → bundle line + accessory line', () => {
     // 3+L canonical with a console wedged in — bundle still detects because
-    // signature ignores accessories. PO must still mention the WC-45.
+    // signature ignores accessories. PO must still mention the Console.
     const cells: Cell[] = [
       { id: 'a', moduleId: '1A-LHF', x: 0,   y: 0, rot: 0 },
-      { id: 'w', moduleId: 'WC-45',  x: 95,  y: 0, rot: 0 },
+      { id: 'w', moduleId: 'Console',  x: 95,  y: 0, rot: 0 },
       { id: 'b', moduleId: '2NA',    x: 140, y: 0, rot: 0 },
       { id: 'c', moduleId: 'L-RHF',  x: 282, y: 0, rot: 0 },
     ];
     const skus = cellsToPoSkus(cells, '24');
     // Order: accessories come out first (split-off pass), then the bundle line.
     expect(skus).toEqual([
-      { sku: 'WC-45', label: 'Wood console · 45cm', qty: 1 },
+      { sku: 'Console', label: 'Wood console · 45cm', qty: 1 },
       { sku: '3+L',   label: '3 + L',               qty: 1 },
     ]);
   });
 
   it('only-accessory group → accessory line, no bundle', () => {
-    const cells: Cell[] = [{ id: 'w', moduleId: 'WC-45', x: 0, y: 0, rot: 0 }];
+    const cells: Cell[] = [{ id: 'w', moduleId: 'Console', x: 0, y: 0, rot: 0 }];
     const skus = cellsToPoSkus(cells, '24');
-    expect(skus).toEqual([{ sku: 'WC-45', label: 'Wood console · 45cm', qty: 1 }]);
+    expect(skus).toEqual([{ sku: 'Console', label: 'Wood console · 45cm', qty: 1 }]);
   });
 });
 
@@ -853,5 +856,101 @@ describe('fabricColourSuffix', () => {
     expect(fabricColourSuffix(null, null)).toBe('');
     expect(fabricColourSuffix('Velvet', null)).toBe('');
     expect(fabricColourSuffix(undefined, 'Sand')).toBe('');
+  });
+});
+
+/* 2026-06-01 — pool-sourced compartments now first-class in SOFA_MODULES:
+ * 12 new codes (3 whole-unit presets + 9 functional 1-seater variants) + the
+ * WC-45 → Console rename. */
+describe('pool-sourced modules (12 new) + Console rename', () => {
+  it('findModule resolves all 12 new codes with explicit dims', () => {
+    expect(findModule('1S')).toMatchObject({ group: '1-seater', w: 115, d: 95, cushions: 1 });
+    expect(findModule('2S')).toMatchObject({ group: '2-seater', w: 174, d: 95, cushions: 2 });
+    expect(findModule('3S')).toMatchObject({ group: '3-seater', w: 220, d: 95, cushions: 3 });
+    for (const id of ['1A-P-LHF', '1A-P-RHF', '1A-R-LHF', '1A-R-RHF', '1A-L-LHF', '1A-L-RHF']) {
+      expect(findModule(id)).toMatchObject({ group: '1-seater', w: 95, d: 95, cushions: 1 });
+    }
+    for (const id of ['1NA-P', '1NA-R', '1NA-L']) {
+      expect(findModule(id)).toMatchObject({ group: '1-seater', w: 75, d: 95, cushions: 1 });
+    }
+  });
+  it('classifySofaCompartment buckets new codes (parens form normalizes to dash)', () => {
+    expect(classifySofaCompartment('1S')).toBe('1-seater');
+    expect(classifySofaCompartment('2S')).toBe('2-seater');
+    expect(classifySofaCompartment('3S')).toBe('3-seater');
+    expect(classifySofaCompartment('1A(P)(LHF)')).toBe('1-seater');
+    expect(classifySofaCompartment('1A(L)(RHF)')).toBe('1-seater');
+    expect(classifySofaCompartment('1NA(L)')).toBe('1-seater');
+  });
+  it('Console replaces WC-45: resolvable accessory, WC-45 gone', () => {
+    expect(findModule('WC-45')).toBeUndefined();
+    expect(isAccessoryModule('Console')).toBe(true);
+    expect(findModule('Console')).toMatchObject({ group: 'Accessory', w: 45, accessory: true });
+  });
+  it('a placed lone whole-unit cell does NOT match a bundle (namespace check)', () => {
+    // The 1S/2S/3S BUNDLE signatures are 1A / 2A / 1A+2A — NOT the literal codes,
+    // so a laid-out cell carrying "1S"/"2S"/"3S" prices à-la-carte, never as a bundle.
+    expect(detectBundle(['1S'])).toBeNull();
+    expect(detectBundle(['2S'])).toBeNull();
+    expect(detectBundle(['3S'])).toBeNull();
+  });
+});
+
+/* A5 — placed whole-unit cells: price + combo-match + label, end-to-end. */
+describe('whole-unit preset cells — placement, combo match, labelling', () => {
+  it('prices a placed 1S cell from its compartment price (a-la-carte, no bundle)', () => {
+    const p = pricing({
+      compartments: [{ compartmentId: '1S', active: true, price: 1111 }],
+      bundles: [],
+    });
+    const g = computeSofaPrice([{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], '24', p).groups[0]!;
+    expect(g.basis).toBe('a_la_carte');
+    expect(g.finalPrice).toBe(1111);
+  });
+
+  it('a combo defined with the whole-unit code 1S applies to a built 1S cell', () => {
+    const p = pricing({
+      compartments: [{ compartmentId: '1S', active: true, price: 1111 }],
+      bundles: [],
+      baseModel: '',
+      fabricTier: 'PRICE_2',
+      comboHeight: '24',
+      combos: [{
+        id: 'c1s', baseModel: '', modules: [['1S']], tier: 'PRICE_2', customerId: null,
+        pricesByHeight: { '24': 90000 }, label: null, effectiveFrom: '2026-01-01', deletedAt: null,
+      }],
+    });
+    const g = computeSofaPrice([{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], '24', p).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(900); // 90000 centi / 100
+  });
+
+  it('describeSofaLine lists a placed 1S cell by its own code, not a bundle name', () => {
+    expect(describeSofaLine({ cells: [{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], depth: '24' })).toBe('1S');
+  });
+});
+
+describe('sofaModuleSellingPricesFromSkus (2026-06-01)', () => {
+  it('prefers per-(depth,tier) sellingPriceSen, falls back to flat sell, then drops 0', () => {
+    const rows = [
+      { code: 'OMMBUC-1S', sellPriceSen: 120000, seatHeightPrices: [
+        { height: '24', priceSen: 50000, tier: 'PRICE_1' as const, sellingPriceSen: 99000 },
+      ]},
+      { code: 'OMMBUC-2S', sellPriceSen: 150000, seatHeightPrices: null }, // flat fallback
+      { code: 'OMMBUC-1NA', sellPriceSen: null, seatHeightPrices: null },  // unpriced → dropped
+    ];
+    const map = sofaModuleSellingPricesFromSkus(rows, 'Ommbuc', '24', 'PRICE_1');
+    expect(map['1S']).toBe(99000);   // seat selling wins
+    expect(map['2S']).toBe(150000);  // flat sell fallback
+    expect(map['1NA']).toBeUndefined(); // unpriced → no entry
+  });
+  it('a cost-only seat row (no sellingPriceSen) falls back to flat sell, never leaks priceSen', () => {
+    const rows = [
+      { code: 'OMMBUC-1A-LHF', sellPriceSen: 70000, seatHeightPrices: [
+        { height: '24', priceSen: 50000, tier: 'PRICE_2' as const }, // cost-only
+      ]},
+    ];
+    const map = sofaModuleSellingPricesFromSkus(rows, 'Ommbuc', '24', 'PRICE_2');
+    expect(map['1A-LHF']).toBe(70000); // flat sell, NOT the 50000 cost
   });
 });

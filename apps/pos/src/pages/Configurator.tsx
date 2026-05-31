@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -105,10 +105,10 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
   if (bundleId === '2WC') {
     // 1A + wood console + 1A, left to right.
     const a = wOf('1A-LHF');
-    const c = wOf('WC-45');
+    const c = wOf('Console');
     cells = [
       { id: 'wc-l', moduleId: '1A-LHF', x: 0,     y: 0, rot: 0 },
-      { id: 'wc-c', moduleId: 'WC-45',  x: a,     y: 0, rot: 0 },
+      { id: 'wc-c', moduleId: 'Console', x: a,     y: 0, rot: 0 },
       { id: 'wc-r', moduleId: '1A-RHF', x: a + c, y: 0, rot: 0 },
     ];
   } else if (bundleId === 'CORNER') {
@@ -396,6 +396,38 @@ export const Configurator = () => {
   }, [isEditing, editingLine, bedframeColours.data, bedframeOptions.data,
       productFabrics.data, sofaCustomizer.data, fabricLib.data, productId, derivedFabricRows]);
 
+  // Depth-aware per-Model module SELLING map (sen) at the current seat depth,
+  // tier P1 (SOFA-SELLING Phase B; Chairman 2026-06-01: run at P1 — the default
+  // — with no fabric-tier variation yet; the global Δ2/Δ3 tier add is a later
+  // change). Prefers each SKU's per-(depth,P1) seat_height_prices[].sellingPriceSen
+  // (what the POS Edit-Price grid writes), falls back to flat sell_price_sen.
+  // Built from the SAME raw rows + same (depth, P1) the server recompute uses, so
+  // the drift gate can't diverge. Re-derives when the user toggles seat depth.
+  const depthSellingMap = useMemo(
+    () => sofaModuleSellingPricesFromSkus(
+      sofaCustomizer.data?.sellingRows ?? [],
+      sofaCustomizer.data?.modelCode,
+      activeDepth,
+      'PRICE_1',
+    ),
+    [sofaCustomizer.data?.sellingRows, sofaCustomizer.data?.modelCode, activeDepth],
+  );
+  // The modelCustomizer the Customize palette renders, with each compartment's
+  // displayed price overridden to the depth-aware P1 selling (so the palette card
+  // shows exactly what the live total + server charge). Falls back to the flat
+  // query price when a module isn't in the depth map.
+  const modelCustomizerForDepth = useMemo(() => {
+    const base = sofaCustomizer.data;
+    if (!base) return null;
+    return {
+      ...base,
+      compartments: base.compartments.map((cc) => ({
+        ...cc,
+        priceSen: depthSellingMap[cc.normalizedCode] ?? cc.priceSen,
+      })),
+    };
+  }, [sofaCustomizer.data, depthSellingMap]);
+
   // Build the SofaProductPricing struct that the shared pure functions expect.
   // Commander 2026-05-28 — added combos + fabricTier + comboHeight so groupPrice
   // can apply combo-price OVERRIDE: when the group's modules + tier match a
@@ -409,13 +441,13 @@ export const Configurator = () => {
        per-compartment SELLING price from the Model's per-module SKU prices
        (SOFA-SELLING-PLAN, Chairman 2026-05-31: each module = its own mfg SKU
        sell_price_sen; a custom build SUMS them, a matched Combo overrides) —
-       useSofaCustomizerData.compartments[].priceSen carries that. compartmentId
-       = normalizedCode so it matches a laid-out cell.moduleId. The server
-       selling recompute builds the SAME map from the same SKUs, so its
-       drift-reject can't diverge. */
+       depth-aware P1 selling from modelCustomizerForDepth.compartments[].priceSen.
+       compartmentId = normalizedCode so it matches a laid-out cell.moduleId. The
+       server selling recompute builds the SAME map from the same SKUs at the same
+       (depth, P1), so its drift-reject can't diverge. */
     compartments: (compartments.data && compartments.data.length > 0)
       ? compartments.data
-      : (sofaCustomizer.data?.compartments ?? []).map((cc) => ({
+      : (modelCustomizerForDepth?.compartments ?? []).map((cc) => ({
           compartmentId: cc.normalizedCode,
           active: true,
           price: Math.round(cc.priceSen / 100),
@@ -437,7 +469,7 @@ export const Configurator = () => {
        live price and the server recompute never diverge (Phase 5 review). */
     baseModel: '',
   }), [
-    compartments.data, bundles.data, sofaCustomizer.data?.compartments,
+    compartments.data, bundles.data, modelCustomizerForDepth,
     product.data?.recliner_upgrade_price,
     product.data?.seat_upgrade_label,
     product.data?.seat_upgrade_footrest,
@@ -1024,7 +1056,7 @@ export const Configurator = () => {
             setCells={setSofaCells}
             editingKey={isEditing && editKey ? editKey : undefined}
             initialFabric={isEditing ? fabricSel : null}
-            modelCustomizer={sofaCustomizer.data ?? null}
+            modelCustomizer={modelCustomizerForDepth}
             baseModel={p.base_model ?? undefined}
             onAdded={() => navigate(isEditing ? '/cart' : '/catalog')}
           />

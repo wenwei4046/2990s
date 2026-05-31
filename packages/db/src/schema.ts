@@ -1737,7 +1737,7 @@ export const mfgProducts = pgTable('mfg_products', {
   // view; available for other categories too if useful.
   branding:               text('branding'),
   pieces:                 jsonb('pieces'),                        // { count, names: string[] }
-  seatHeightPrices:       jsonb('seat_height_prices'),            // [{height,priceSen}] — COST (computeMfgLineCost); SELLING is sell_price_sen / sofaCompartmentMeta
+  seatHeightPrices:       jsonb('seat_height_prices'),            // [{height,priceSen,tier?,sellingPriceSen?}] — priceSen=COST (computeMfgLineCost, Backend-owned); sellingPriceSen=buyer SELLING per (height,tier) from the POS Edit-Price grid (Chairman 2026-06-01); resolveSeatHeightSelling reads it, falls back to flat sell_price_sen
   defaultVariants:        jsonb('default_variants'),              // {fabricCode,divanHeight,legHeight,gap,specials}
   retailProductId:        uuid('retail_product_id').references(() => products.id, { onDelete: 'set null' }),
   // PR #49 — FK to product_models (the "template" second layer that owns
