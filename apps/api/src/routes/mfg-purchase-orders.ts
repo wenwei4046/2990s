@@ -260,6 +260,45 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
   return c.json({ items: outstanding });
 });
 
+/* Per-line goods-receipt breakdown — which GR(s) each PO line was received into
+   (one entry per GRN line), carrying the GR number + net qty + status. The PO
+   counterpart of soLineDeliveries: lets the PO list show a "Received" column
+   identical to the SO "Delivered" column. Cancelled GRNs are excluded so the
+   breakdown never shows a voided receipt. Net qty = qty_accepted − returned_qty;
+   zero/negative nets (fully returned) are dropped. Read-only display aid. */
+export type PoLineReceipt = { grnNumber: string; qty: number; status: string };
+async function poLineReceipts(
+  sb: any,
+  poItemIds: string[],
+): Promise<Map<string, PoLineReceipt[]>> {
+  const out = new Map<string, PoLineReceipt[]>();
+  if (poItemIds.length === 0) return out;
+  const { data: grnLines } = await sb
+    .from('grn_items')
+    .select('purchase_order_item_id, qty_accepted, returned_qty, grn_id')
+    .in('purchase_order_item_id', poItemIds);
+  const rows = (grnLines ?? []) as Array<{ purchase_order_item_id: string | null; qty_accepted: number; returned_qty: number; grn_id: string }>;
+  const grnIds = [...new Set(rows.map((r) => r.grn_id).filter(Boolean))];
+  if (grnIds.length === 0) return out;
+  const { data: grns } = await sb.from('grns').select('id, grn_number, status').in('id', grnIds);
+  const grnMeta = new Map<string, { grnNumber: string; status: string }>();
+  for (const g of (grns ?? []) as Array<{ id: string; grn_number: string | null; status: string | null }>) {
+    if ((g.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    grnMeta.set(g.id, { grnNumber: g.grn_number ?? '—', status: (g.status ?? '').toUpperCase() });
+  }
+  for (const r of rows) {
+    if (!r.purchase_order_item_id) continue;
+    const meta = grnMeta.get(r.grn_id);
+    if (!meta) continue; // cancelled GRN — excluded
+    const net = Number(r.qty_accepted ?? 0) - Number(r.returned_qty ?? 0);
+    if (net <= 0) continue;
+    const arr = out.get(r.purchase_order_item_id) ?? [];
+    arr.push({ grnNumber: meta.grnNumber, qty: net, status: meta.status });
+    out.set(r.purchase_order_item_id, arr);
+  }
+  return out;
+}
+
 // ── Detail ────────────────────────────────────────────────────────────
 mfgPurchaseOrders.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -287,7 +326,14 @@ mfgPurchaseOrders.get('/:id', async (c) => {
     ...(headerRes.data as Record<string, unknown>),
     has_children: (childCount ?? 0) > 0,
   };
-  return c.json({ purchaseOrder, items: itemsRes.data ?? [] });
+
+  /* Per-line GR breakdown so the PO list expansion can show a "Received" column
+     (which GR took how much) identical to the SO "Delivered" column. */
+  const itemRows = (itemsRes.data ?? []) as unknown as Array<Record<string, unknown> & { id: string }>;
+  const receiptsMap = await poLineReceipts(supabase, itemRows.map((it) => it.id));
+  const items = itemRows.map((it) => ({ ...it, receipts: receiptsMap.get(it.id) ?? [] }));
+
+  return c.json({ purchaseOrder, items });
 });
 
 // ── Linked docs (Smart Buttons fan-out) ─────────────────────────────

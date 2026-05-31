@@ -200,7 +200,13 @@ export type PoItemRow = {
       PO header when null). */
   delivery_date?: string | null;
   warehouse_id?: string | null;
+  /** Per-line GR breakdown (which goods receipt took how much) — set by
+      GET /:id so the PO list expansion can show a "Received" column identical
+      to the SO "Delivered" column. Cancelled GRNs excluded server-side. */
+  receipts?: PoLineReceipt[];
 };
+
+export type PoLineReceipt = { grnNumber: string; qty: number; status: string };
 
 /* ── Suppliers ──────────────────────────────────────────────────────── */
 
