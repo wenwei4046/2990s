@@ -115,15 +115,18 @@ UPDATE mfg_sales_orders SET linked_do_doc_no = NULL WHERE linked_do_doc_no IS NO
 -- Lines: release the PO pick-lock + the stock allocation. All four are driven
 -- by the now-deleted PO / DO / inventory rows; with zero live downstream the
 -- recount helpers would land exactly here.
+-- NOTE (verified 2026-06-01 against PROD dolvxrchzbnqvahocwsu): the live
+-- mfg_sales_order_items has NO allocated_batch_no column — that field exists only
+-- in the repo schema (a migration not applied to PROD). It is therefore dropped
+-- from this reset; there is nothing to clear. All 34 wipe-list tables above were
+-- confirmed to exist on PROD.
 UPDATE mfg_sales_order_items
    SET po_qty_picked      = 0,
        stock_status       = 'PENDING',
-       stock_qty_ready    = 0,
-       allocated_batch_no = NULL
+       stock_qty_ready    = 0
  WHERE po_qty_picked      <> 0
     OR stock_status       IS DISTINCT FROM 'PENDING'
-    OR stock_qty_ready    <> 0
-    OR allocated_batch_no IS NOT NULL;
+    OR stock_qty_ready    <> 0;
 
 COMMIT;
 
