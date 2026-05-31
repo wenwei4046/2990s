@@ -14,7 +14,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, X, FileText, Printer, Truck, Package, Search, Edit3 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   usePurchaseOrders,
   usePurchaseOrderDetail,
@@ -147,14 +147,17 @@ const buildPoColumns = (
     searchValue: (po) => (po.items ?? []).map((it) => `${it.material_code} ${it.qty}`).join(' '),
   },
   {
-    key: 'po_date', label: 'Date', width: 110, sortable: true,
-    accessor: (po) => po.po_date,
+    /* Date columns formatted to match the SO list ("31 May 2026" not the raw
+       ISO string) — Commander 2026-05-31 "跟 SO 一模一样". Sort still keys on the
+       raw ISO so chronological order is preserved. */
+    key: 'po_date', label: 'Date', width: 120, sortable: true,
+    accessor: (po) => fmtDateOrDash(po.po_date),
     searchValue: (po) => po.po_date,
     sortFn: (a, b) => (a.po_date ?? '').localeCompare(b.po_date ?? ''),
   },
   {
-    key: 'expected_at', label: 'Expected', width: 110, sortable: true,
-    accessor: (po) => po.expected_at ?? '—',
+    key: 'expected_at', label: 'Expected', width: 120, sortable: true,
+    accessor: (po) => fmtDateOrDash(po.expected_at),
     searchValue: (po) => po.expected_at ?? '',
     sortFn: (a, b) => (a.expected_at ?? '').localeCompare(b.expected_at ?? ''),
   },
@@ -460,13 +463,14 @@ const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
                 <th style={PO_TH}>UOM</th>
                 <th style={PO_TH_RIGHT}>Ordered</th>
                 <th style={PO_TH}>Received</th>
+                <th style={PO_TH}>Delivery Date</th>
                 <th style={PO_TH_RIGHT}>Unit Price</th>
                 <th style={PO_TH_RIGHT}>Line Total</th>
               </tr>
             </thead>
             <tbody>
               {items.length === 0 && (
-                <tr><td style={{ ...PO_TD, color: 'var(--fg-muted)' }} colSpan={8}>No line items.</td></tr>
+                <tr><td style={{ ...PO_TD, color: 'var(--fg-muted)' }} colSpan={9}>No line items.</td></tr>
               )}
               {items.map((it) => {
                 const manual = (it.description ?? '').trim();
@@ -511,6 +515,17 @@ const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
                         <span style={{ color: 'var(--fg-muted)' }}>—</span>
                       )}
                     </td>
+                    <td style={PO_TD}>
+                      {/* Per-line delivery date (PR #77) — falls back to the PO
+                          header's Expected date when the line has none, mirroring
+                          how the server inherits it. */}
+                      {(() => {
+                        const due = it.delivery_date ?? po.expected_at ?? null;
+                        return due
+                          ? <span style={{ whiteSpace: 'nowrap' }}>{fmtDateOrDash(due)}</span>
+                          : <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+                      })()}
+                    </td>
                     <td style={PO_TD_RIGHT}>{fmtMoney(Number(it.unit_price_centi ?? 0), po.currency)}</td>
                     <td style={{ ...PO_TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
                       {fmtMoney(Number(it.line_total_centi ?? 0), po.currency)}
@@ -522,7 +537,7 @@ const ExpandedPoLines = ({ po }: { po: PoHeaderRow }) => {
             {items.length > 0 && (
               <tfoot>
                 <tr style={{ borderTop: '1px solid rgba(34, 31, 32, 0.18)' }}>
-                  <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)' }} colSpan={7}>
+                  <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--fg-muted)' }} colSpan={8}>
                     Subtotal
                   </td>
                   <td style={{ ...PO_TD_RIGHT, paddingTop: 6, fontWeight: 800, color: 'var(--c-burnt)' }}>
