@@ -4,6 +4,50 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-001 — Editing/deleting a posted downstream document left stale effects (4 reverse-logic gaps)
+
+**Symptom:** When a downstream document was edited or deleted AFTER it had already
+pushed its effects upstream/into the ledger, the effects did not fully reverse:
+1. **Delivery Return** line edit/delete only ran on cancel, not on per-line
+   change — so inventory the return had added back stayed wrong after a line edit.
+2. **Delivery Order** line edit/delete recomputed DO inventory but never told the
+   Sales Order to recount its delivered qty — the SO kept a stale DELIVERED count.
+3. **Purchase Invoice** line edit/delete left the posted GL journal entry at the
+   old amount (no re-sync of Dr 1200 / Cr 2000).
+4. **Sales Invoice** line edit/delete left the auto-posted revenue journal entry at
+   the old amount; worse, `postSiRevenue` returned `already_posted` whenever ANY
+   journal entry existed, so a plain re-call could never correct a stale entry, and
+   the reverse helpers picked an arbitrary entry via `.limit(1)` and guarded on
+   "any reversal for this invoice" — which broke after multiple void/repost cycles.
+
+**Root cause:** Reverse/re-sync was wired only to the create and cancel paths, not
+to the line-level PATCH/DELETE paths; and the GL helpers were not idempotent across
+repeated void→repost cycles (no targeting of the *active* non-reversed entry).
+
+**Fix:** (all on `fix/downstream-reverse-gaps`)
+- **Delivery Return** (`delivery-returns.ts`): deleted the old cancel-only
+  `reverseInventoryForReturn`; added a single delta-based `resyncInventoryForReturn`
+  (target net-IN per bucket = sum of current lines, or 0 if CANCELLED; writes signed
+  ADJUSTMENT deltas) and wired it to line PATCH, line DELETE, and cancel.
+- **Delivery Order** (`delivery-orders-mfg.ts`): after the DO inventory resync on
+  line PATCH/DELETE, also call `syncSoDeliveredFromDo` so the SO recounts delivered.
+- **Purchase Invoice** (`accounting.ts` + `purchase-invoices.ts`): extracted reusable
+  `postPiAccounting`; added `resyncPiAccounting` (void active JE + repost at new total,
+  or reverse-to-zero); wired to PI line PATCH/DELETE. Reverse helper now targets the
+  active non-reversed JE and keys idempotency on `reversed_by_je = orig.id`.
+- **Sales Invoice** (`post-si-revenue.ts` + `sales-invoices.ts`): `postSiRevenue`
+  guard now only blocks on an ACTIVE (non-reversed) JE; added `resyncSiRevenue`
+  (void + repost at new total); wired to SI line PATCH/DELETE and the add-line handler.
+  `reverseSiRevenue` now targets the active JE and keys idempotency on
+  `reversed_by_je = orig.id`. Accounting approach chosen by owner: auto-void the stale
+  journal entry and re-post at the new amount.
+
+**Caught by:** Rollback-completeness audit (every downstream module must reverse all
+its effects so the upstream SO returns to fresh/unconverted). All four were the
+edit/delete paths the original cancel-only rollback missed.
+
+---
+
 ## BUG-2026-05-31-002 — GRN/PI/PR detail dates rendered raw ISO
 
 **Symptom:** On the Goods Received, Purchase Invoice and Purchase Return DETAIL
