@@ -17,7 +17,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
+import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { doLineRemaining, resolveCandidateDoIds, custKeyOf, type DoRemainingLine } from '../lib/do-line-remaining';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
@@ -249,10 +249,11 @@ async function doReturnableRemaining(sb: any, doIds: string[]): Promise<Map<stri
 }
 
 /* Over-return guard for the bulk create POST. Every DO-linked line must respect
-   the live Pending pool (delivered − invoiced − returned). Lines with no doItemId
-   are ad-hoc free-entry returns and stay uncapped. Mirrors the convert-from-DO
-   picker's per-line check so the New-Return form is not a back door that returns
-   more than was delivered. Returns a 409 body to reject, or null to allow. */
+   the live Pending pool (delivered − invoiced − returned). Callers reject lines
+   with no doItemId BEFORE calling this (bug #16 — "no DO, no Return"), so any line
+   reaching here is DO-linked. Mirrors the convert-from-DO picker's per-line check
+   so the New-Return form is not a back door that returns more than was delivered.
+   Returns a 409 body to reject, or null to allow. */
 async function checkDrOverRemaining(
   sb: any,
   items: Array<Record<string, unknown>>,
@@ -432,6 +433,21 @@ deliveryReturns.post('/', async (c) => {
     if (!codeCheck.ok) return c.json(unknownItemCodeResponse(codeCheck.unknown), 409);
   }
 
+  /* Bug #16 (Commander 2026-05-31) — "no DO, no Return". Every return line MUST
+     be tied to a Delivery Order line; only goods actually shipped can come back.
+     Free-entry (doItemId=null) lines were a back door that wrote stock IN with no
+     cap — reject them outright rather than letting them through uncapped. */
+  {
+    const freeEntry = items.filter((it) => !((it.doItemId as string | undefined) ?? null));
+    if (freeEntry.length > 0) {
+      return c.json({
+        error: 'do_link_required',
+        message: 'Every return line must reference a delivered Delivery Order line. Only shipped goods can be returned.',
+        lines: freeEntry.map((it) => ({ itemCode: (it.itemCode as string) ?? null })),
+      }, 409);
+    }
+  }
+
   /* Remaining-to-return guard — every DO-linked line must respect the live
      Pending pool. Mirrors the convert-from-DO picker so the New-Return form
      can't over-return a delivered line. */
@@ -448,6 +464,38 @@ deliveryReturns.post('/', async (c) => {
   const { error: iErr } = await sb.from('delivery_return_items').insert(rows);
   if (iErr) { await sb.from('delivery_returns').delete().eq('id', h.id); return c.json({ error: 'items_insert_failed', reason: iErr.message }, 500); }
   await recomputeTotals(sb, h.id);
+
+  /* Bug #3/#11 — over-return race guard. checkDrOverRemaining above is
+     read-before-write, so two parallel returns of the same DO line could both
+     pass and over-return. After inserting (and BEFORE writing any stock), re-derive
+     the live remaining for the referenced DO lines — now counting THIS DR — and
+     ROLLBACK (delete the just-created DR) if any line went negative. No inventory
+     was written yet, so the rollback is clean. Mirrors the /from-sos Edge #E
+     pattern. */
+  {
+    const drItemDoIds = [...new Set(items
+      .map((it) => (it.doItemId as string | undefined) ?? null)
+      .filter((x): x is string => !!x))];
+    if (drItemDoIds.length > 0) {
+      const { data: rowsForDo } = await sb.from('delivery_order_items')
+        .select('delivery_order_id').in('id', drItemDoIds);
+      const doIds = [...new Set(((rowsForDo ?? []) as Array<{ delivery_order_id: string }>)
+        .map((r) => r.delivery_order_id))];
+      const recheck = await doReturnableRemaining(sb, doIds);
+      const overReturned = drItemDoIds
+        .map((doItemId) => recheck.get(doItemId))
+        .filter((l): l is DoRemainingLine => l !== undefined && l.remaining < 0);
+      if (overReturned.length > 0) {
+        await sb.from('delivery_return_items').delete().eq('delivery_return_id', h.id);
+        await sb.from('delivery_returns').delete().eq('id', h.id);
+        return c.json({
+          error: 'race_conflict',
+          message: 'Another operator just returned overlapping qty from this Delivery Order. Refresh and try again.',
+          conflicts: overReturned.map((l) => ({ doNumber: l.doNumber, itemCode: l.itemCode, remaining: l.remaining })),
+        }, 409);
+      }
+    }
+  }
 
   /* A DR = goods received back on creation → increase stock now (idempotent:
      the existence check + UNIQUE index mean this never double-increases even
@@ -684,6 +732,14 @@ deliveryReturns.post('/:id/items', async (c) => {
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   if (!it.itemCode) return c.json({ error: 'item_code_required' }, 400);
 
+  /* Bug #16 — "no DO, no Return": a single-added line must also reference a DO line. */
+  if (!((it.doItemId as string | undefined) ?? null)) {
+    return c.json({
+      error: 'do_link_required',
+      message: 'Every return line must reference a delivered Delivery Order line. Only shipped goods can be returned.',
+    }, 409);
+  }
+
   /* Edge #4 — itemCode catalog guard. */
   {
     const codeCheck = await validateItemCodes(sb, [it.itemCode as string]);
@@ -692,6 +748,12 @@ deliveryReturns.post('/:id/items', async (c) => {
 
   const { data: header } = await sb.from('delivery_returns').select('id').eq('id', id).maybeSingle();
   if (!header) return c.json({ error: 'not_found' }, 404);
+
+  /* Over-return guard for the single-add path too. */
+  {
+    const over = await checkDrOverRemaining(sb, [it]);
+    if (over) return c.json(over, 409);
+  }
 
   const row = buildItemRow(id, it);
   const { data, error } = await sb.from('delivery_return_items').insert(row).select(ITEM).single();
@@ -761,10 +823,12 @@ deliveryReturns.delete('/:id/items/:itemId', async (c) => {
 // REJECTED) remain valid enum values and stamp their timestamp.
 //
 // Migration 0107 — CANCELLED reverses the inventory IN a DR wrote on create
-// (a DR put goods BACK into stock; cancelling must take them out again), via the
-// shared reverseMovements helper (#375). Idempotent: we read the current status
-// first and skip if already CANCELLED. The cancelled return's qty also returns to
-// Pending automatically (the do-line-remaining formula filters non-cancelled DRs).
+// (a DR put goods BACK into stock; cancelling must take them out again), via
+// reverseInventoryForReturn (a FIFO-neutral negative ADJUSTMENT that sidesteps
+// the uq_inv_mov_dr_source unique index). Idempotent: we read the current status
+// first and skip if already CANCELLED, plus the helper's own ADJUSTMENT existence
+// check. The cancelled return's qty also returns to Pending automatically (the
+// do-line-remaining formula filters non-cancelled DRs).
 deliveryReturns.patch('/:id/status', async (c) => {
   const sb = c.get('supabase'); const id = c.req.param('id'); const user = c.get('user');
   let body: { status?: string; inspectionNotes?: string };
@@ -785,13 +849,43 @@ deliveryReturns.patch('/:id/status', async (c) => {
   if (body.status === 'RECEIVED') ts.received_at = now;
   if (body.status === 'INSPECTED') { ts.inspected_at = now; if (body.inspectionNotes) ts.inspection_notes = body.inspectionNotes; }
   if (body.status === 'REFUNDED') ts.refunded_at = now;
-  const { data, error } = await sb.from('delivery_returns').update(ts).eq('id', id).select('id, status').single();
-  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
 
-  // Cancelling a DR → reverse the inventory IN it wrote on create (balancing
-  // OUT per line, via the shared reverseMovements helper). Best-effort.
+  /* Bug #3/#11 — ATOMIC cancel guard. The read-then-write above has a TOCTOU
+     window: two concurrent cancels can both read a non-cancelled status and both
+     fall through to reverse the return's stock (double-reverse). For the CANCELLED
+     transition we make the write conditional on the row still being non-cancelled
+     and treat "no row returned" as "someone else already cancelled" → idempotent
+     echo, NO second reversal. Postgres serialises the UPDATEs so exactly one wins
+     the row and fires the single reversal. */
+  let data: { id: string; status: string } | null;
   if (body.status === 'CANCELLED') {
-    try { await reverseMovements(sb, 'DR', id, user.id); } catch { /* best-effort */ }
+    const { data: updated, error } = await sb.from('delivery_returns')
+      .update(ts).eq('id', id).neq('status', 'CANCELLED')
+      .select('id, status').maybeSingle();
+    if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+    if (!updated) {
+      // Lost the race — another concurrent cancel already flipped it. Do NOT
+      // reverse again; echo the cancelled state.
+      return c.json({ deliveryReturn: { id, status: 'CANCELLED' } });
+    }
+    data = updated as { id: string; status: string };
+  } else {
+    const { data: updated, error } = await sb.from('delivery_returns')
+      .update(ts).eq('id', id).select('id, status').single();
+    if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+    data = updated as { id: string; status: string };
+  }
+
+  // Cancelling a DR → reverse the inventory IN it wrote on create. We CANNOT use
+  // reverseMovements here: it writes a balancing OUT that reuses the DR's
+  // (source_doc_type, source_doc_id, product_code, variant_key) key, which the
+  // partial UNIQUE index uq_inv_mov_dr_source (migration 0102, keyed WITHOUT
+  // movement_type) rejects → the insert silently fails and the returned stock is
+  // left permanently added. reverseInventoryForReturn writes a FIFO-neutral
+  // negative ADJUSTMENT (unindexed by the DR source key, carrying variant_key) so
+  // the reversal actually lands. Best-effort + idempotent.
+  if (body.status === 'CANCELLED') {
+    try { await reverseInventoryForReturn(sb, id, user.id); } catch { /* best-effort */ }
     /* DR cancel pulled stock back out → other READY SOs that relied on it may
        now regress to PENDING. Re-walk allocation. Best-effort. */
     try {

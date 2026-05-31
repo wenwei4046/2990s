@@ -315,6 +315,121 @@ accounting.post('/post/pi/:invoiceNumber', async (c) => {
 });
 
 /* ════════════════════════════════════════════════════════════════════════
+   PI accounting reversal (bug #5) — mirror of reverseSiRevenue
+   ────────────────────────────────────────────────────────────────────────
+   PI posting writes Dr Inventory (1200) / Cr Payables (2000). On PI cancel we
+   must trace that back ("取消 PI 要追溯回去") with a contra JE that nets the
+   original to zero + flags the original `reversed = true`, so payables +
+   inventory value stop being overstated. The balance views only count
+   `posted = TRUE AND reversed = FALSE` (migration 0052), so the reversing entry
+   exactly cancels the original — net GL impact zero.
+
+   IDEMPOTENT: keyed on the original JE's `reversed` flag AND on the existence of
+   a reversing JE (source_type='PI_REVERSAL', source_doc_no=invoice_number).
+   Re-cancelling / retries / a second cancel PATCH all no-op. Best-effort
+   (audit-DLQ pattern): the caller logs but never un-cancels the PI on failure. */
+export async function reversePiAccounting(
+  sb: any,
+  invoiceNumber: string,
+): Promise<{ ok: boolean; status: string; jeNo?: string; jeId?: string; reason?: string }> {
+  // Find the original posted PI JE. Nothing posted → nothing to reverse.
+  const { data: origRows } = await sb
+    .from('journal_entries')
+    .select('id, je_no, entry_date, reversed, total_debit_sen, total_credit_sen, narration')
+    .eq('source_type', 'PI')
+    .eq('source_doc_no', invoiceNumber)
+    .limit(1);
+  const orig = origRows?.[0] as
+    | { id: string; je_no: string; entry_date: string; reversed: boolean; total_debit_sen: number; total_credit_sen: number; narration: string | null }
+    | undefined;
+  if (!orig) return { ok: true, status: 'nothing_to_reverse' };
+
+  // Idempotency guard #1 — the original is already flagged reversed.
+  if (orig.reversed) return { ok: true, status: 'already_reversed' };
+
+  // Idempotency guard #2 — a reversing JE already exists for this invoice.
+  const { data: revExisting } = await sb
+    .from('journal_entries')
+    .select('id, je_no')
+    .eq('source_type', 'PI_REVERSAL')
+    .eq('source_doc_no', invoiceNumber)
+    .limit(1);
+  if (revExisting && revExisting.length > 0) {
+    // The reversing JE exists but the flag never got set — make the flag stick.
+    await sb.from('journal_entries').update({ reversed: true, reversed_by_je: revExisting[0].id }).eq('id', orig.id);
+    return { ok: true, status: 'already_reversed' };
+  }
+
+  const totalSen = Number(orig.total_debit_sen ?? orig.total_credit_sen ?? 0);
+  if (totalSen <= 0) {
+    // Nothing of value to reverse — just flag it so re-cancels no-op.
+    await sb.from('journal_entries').update({ reversed: true }).eq('id', orig.id);
+    return { ok: true, status: 'reversed', jeNo: orig.je_no, jeId: orig.id };
+  }
+
+  // Load the original lines so the reversal mirrors the SAME accounts + parties,
+  // just with debit/credit swapped (a faithful contra entry).
+  const { data: origLines } = await sb
+    .from('journal_entry_lines')
+    .select('account_code, debit_sen, credit_sen, party_type, party_code, party_name, notes')
+    .eq('journal_entry_id', orig.id)
+    .order('line_no');
+  const oLines = (origLines ?? []) as Array<{
+    account_code: string; debit_sen: number; credit_sen: number;
+    party_type: string | null; party_code: string | null; party_name: string | null; notes: string | null;
+  }>;
+
+  const revJeNo = await nextJeNo(sb, new Date(orig.entry_date));
+  const { data: revJe, error: revErr } = await sb
+    .from('journal_entries')
+    .insert({
+      je_no: revJeNo,
+      entry_date: new Date().toISOString().slice(0, 10),
+      source_type: 'PI_REVERSAL',
+      source_doc_no: invoiceNumber,
+      narration: `Reversal of ${orig.je_no} — Purchase invoice ${invoiceNumber} cancelled`,
+      total_debit_sen: totalSen,
+      total_credit_sen: totalSen,
+      reversed_by_je: orig.id,
+    })
+    .select('*')
+    .single();
+  if (revErr) return { ok: false, status: 'reversal_insert_failed', reason: revErr.message };
+
+  // Swap each original line's debit/credit so the reversal nets the original to
+  // zero (Dr Payables / Cr Inventory). Fall back to the canonical 2-line entry
+  // if the original had no lines.
+  const swapped = oLines.length > 0
+    ? oLines.map((l, i) => ({
+        journal_entry_id: revJe.id,
+        line_no: i + 1,
+        account_code: l.account_code,
+        debit_sen: Number(l.credit_sen ?? 0),
+        credit_sen: Number(l.debit_sen ?? 0),
+        party_type: l.party_type ?? null,
+        party_code: l.party_code ?? null,
+        party_name: l.party_name ?? null,
+        notes: `Reversal — ${l.notes ?? ''}`.trim(),
+      }))
+    : [
+        { journal_entry_id: revJe.id, line_no: 1, account_code: '2000', debit_sen: totalSen, credit_sen: 0, party_type: null, party_code: null, party_name: null, notes: `Reverse AP ${invoiceNumber}` },
+        { journal_entry_id: revJe.id, line_no: 2, account_code: '1200', debit_sen: 0, credit_sen: totalSen, party_type: null, party_code: null, party_name: null, notes: `Reverse inventory ${invoiceNumber}` },
+      ];
+  const { error: linesErr } = await sb.from('journal_entry_lines').insert(swapped);
+  if (linesErr) {
+    await sb.from('journal_entries').delete().eq('id', revJe.id);
+    return { ok: false, status: 'reversal_lines_failed', reason: linesErr.message };
+  }
+
+  // Post the reversal + flag the original. Order matters: if the flag update
+  // fails the reversing JE still exists, so guard #2 makes a retry idempotent.
+  await sb.from('journal_entries').update({ posted: true }).eq('id', revJe.id);
+  await sb.from('journal_entries').update({ reversed: true, reversed_by_je: revJe.id }).eq('id', orig.id);
+
+  return { ok: true, status: 'reversed', jeNo: revJe.je_no, jeId: revJe.id };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    GL stream + balances + aging
    ════════════════════════════════════════════════════════════════════════ */
 

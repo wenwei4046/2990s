@@ -2160,6 +2160,7 @@ export const stockTransferLines = pgTable('stock_transfer_lines', {
   stockTransferId:   uuid('stock_transfer_id').notNull().references(() => stockTransfers.id, { onDelete: 'cascade' }),
   productCode:       text('product_code').notNull(),
   productName:       text('product_name'),
+  variantKey:        text('variant_key').notNull().default(''),  // migration 0117 — FIFO variant bucket
   qty:               integer('qty').notNull(),
   notes:             text('notes'),
   createdAt:         timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

@@ -36,14 +36,28 @@ export function isSoFullyCovered(soLines: SoLineQty[], doLines: DoLineQty[]): bo
 }
 
 // SO statuses we may auto-advance to DELIVERED. Anything already at
-// DELIVERED/INVOICED/CLOSED is done; ON_HOLD/CANCELLED must NOT be auto-flipped.
+// INVOICED/CLOSED is done; ON_HOLD/CANCELLED must NOT be auto-flipped.
 const DELIVERABLE_FROM = ['CONFIRMED', 'IN_PRODUCTION', 'READY_TO_SHIP', 'SHIPPED'];
 
-/** For each SO doc no, flip it to DELIVERED iff a DO now fully covers it.
- *  Records the transition in BOTH audit tables (status-changes + unified audit
- *  log, source='automation') so the SO History panel matches manual moves.
- *  Best-effort: every SO is wrapped so one failure can't block the DO or the
- *  other SOs. */
+// Bug #4 — the status we RELEASE a DELIVERED SO back to when its DO is cancelled
+// (or a line shrinks) and it is no longer fully covered. The SO enum has no
+// 'PARTIALLY_DELIVERED', so the reversible target within DELIVERABLE_FROM is
+// READY_TO_SHIP: goods are on hand to ship the remaining qty again. Only an SO
+// whose stored status is exactly DELIVERED is released — INVOICED/CLOSED/ON_HOLD/
+// CANCELLED are left to manual control (an invoiced order isn't "un-delivered" by
+// a DO edit; finance unwinds the SI first).
+const RELEASE_TO = 'READY_TO_SHIP';
+
+/** For each SO doc no, recompute its delivery status from CURRENT live delivered
+ *  quantities and reconcile the stored status — BIDIRECTIONAL + IDEMPOTENT:
+ *    • fully covered  & status ∈ DELIVERABLE_FROM → advance to DELIVERED
+ *    • NOT fully covered & status == DELIVERED    → release to READY_TO_SHIP
+ *    • otherwise (already correct / terminal / manual) → no-op
+ *  This makes cancelling an SO's only DO rebook the order and release it (Fully →
+ *  Partially), instead of leaving it latched at DELIVERED. Records the transition
+ *  in BOTH audit tables (status-changes + unified audit log, source='automation')
+ *  so the SO History panel matches manual moves. Best-effort: every SO is wrapped
+ *  so one failure can't block the DO or the other SOs. */
 export async function syncSoDeliveredFromDo(
   sb: SupabaseClient,
   soDocNos: Array<string | null | undefined>,
@@ -55,7 +69,12 @@ export async function syncSoDeliveredFromDo(
       const { data: so } = await sb
         .from('mfg_sales_orders').select('status').eq('doc_no', docNo).maybeSingle();
       const status = (so as { status?: string } | null)?.status;
-      if (!status || !DELIVERABLE_FROM.includes(status)) continue;
+      // Only DELIVERABLE_FROM (forward) or a currently-DELIVERED SO (reverse) are
+      // in play; everything else is terminal/manual and left untouched.
+      if (!status) continue;
+      const canAdvance = DELIVERABLE_FROM.includes(status);
+      const canRelease = status === 'DELIVERED';
+      if (!canAdvance && !canRelease) continue;
 
       const { data: soItemsRaw } = await sb
         .from('mfg_sales_order_items').select('id, qty')
@@ -65,7 +84,8 @@ export async function syncSoDeliveredFromDo(
       if (soLines.length === 0) continue;
 
       // Cumulative delivered qty per SO line across ALL non-cancelled DOs that
-      // reference these SO items (a line may be split over several DOs).
+      // reference these SO items (a line may be split over several DOs). This is
+      // re-derived live every call, so a cancelled DO drops out of the sum.
       const { data: doItemsRaw } = await sb
         .from('delivery_order_items')
         .select('so_item_id, qty, delivery_orders!inner(status)')
@@ -74,22 +94,31 @@ export async function syncSoDeliveredFromDo(
       const doLines = ((doItemsRaw ?? []) as Array<{ so_item_id: string | null; qty: number }>)
         .map((d) => ({ soItemId: d.so_item_id, qty: Number(d.qty) }));
 
-      if (!isSoFullyCovered(soLines, doLines)) continue;
+      const fullyCovered = isSoFullyCovered(soLines, doLines);
 
+      // Decide the reconciled status. No-op when it already matches (idempotent).
+      let target: string | null = null;
+      if (fullyCovered && canAdvance) target = 'DELIVERED';
+      else if (!fullyCovered && canRelease) target = RELEASE_TO;
+      if (!target || target === status) continue;
+
+      const note = target === 'DELIVERED'
+        ? 'Auto: Delivery Order fully covers this SO'
+        : 'Auto: Delivery Order no longer fully covers this SO (DO cancelled / reduced) — released';
       await sb.from('mfg_sales_orders')
-        .update({ status: 'DELIVERED', updated_at: new Date().toISOString() })
+        .update({ status: target, updated_at: new Date().toISOString() })
         .eq('doc_no', docNo);
       // Mirror the status-PATCH audit trail (both tables) so the SO History
-      // panel shows this auto-delivery beside manual transitions.
+      // panel shows this auto-transition beside manual transitions.
       await sb.from('mfg_so_status_changes').insert({
-        doc_no: docNo, from_status: status, to_status: 'DELIVERED',
-        changed_by: actorId ?? null, notes: 'Auto: Delivery Order fully covers this SO',
+        doc_no: docNo, from_status: status, to_status: target,
+        changed_by: actorId ?? null, notes: note,
       });
       await recordSoAudit(sb, {
         docNo, action: 'UPDATE_STATUS', actorId: actorId ?? null,
-        fieldChanges: [{ field: 'status', from: status, to: 'DELIVERED' }],
-        statusSnapshot: 'DELIVERED', source: 'automation',
-        note: 'Delivery Order fully covers this SO',
+        fieldChanges: [{ field: 'status', from: status, to: target }],
+        statusSnapshot: target, source: 'automation',
+        note,
       });
     } catch {
       /* best-effort — a sync failure must NEVER roll back or block the DO */

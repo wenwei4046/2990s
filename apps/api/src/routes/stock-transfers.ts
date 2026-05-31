@@ -13,14 +13,17 @@
 //   GET   /stock-transfers/:id            — header + lines + warehouse names
 //   POST  /stock-transfers                — create + post (writes movements)
 //   PATCH /stock-transfers/:id/post       — idempotent no-op (legacy)
-//   PATCH /stock-transfers/:id/cancel     — POSTED → CANCELLED (also reverses)
+//   PATCH /stock-transfers/:id/cancel     — POSTED → CANCELLED + reverses the
+//                                            inter-warehouse movement (variant-
+//                                            aware, idempotent: only fires on
+//                                            ACTIVE→CANCELLED)
 //   DELETE /stock-transfers/:id           — disabled (only CANCELLED allowed)
 // ----------------------------------------------------------------------------
 
 import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { writeMovements } from '../lib/inventory-movements';
+import { writeMovements, reverseMovements } from '../lib/inventory-movements';
 
 export const stockTransfers = new Hono<{ Bindings: Env; Variables: Variables }>();
 stockTransfers.use('*', supabaseAuth);
@@ -29,7 +32,7 @@ const HEADER =
   'id, transfer_no, status, from_warehouse_id, to_warehouse_id, transfer_date, ' +
   'notes, posted_at, cancelled_at, created_at, created_by';
 const LINE =
-  'id, stock_transfer_id, product_code, product_name, qty, notes, created_at';
+  'id, stock_transfer_id, product_code, product_name, variant_key, qty, notes, created_at';
 
 const VALID_STATUS = new Set(['POSTED', 'CANCELLED']);
 
@@ -128,15 +131,19 @@ async function writeTransferMovements(
 ): Promise<string[]> {
   const movementErrors: string[] = [];
   const { data: lines } = await sb.from('stock_transfer_lines')
-    .select('product_code, product_name, qty')
+    .select('product_code, product_name, variant_key, qty')
     .eq('stock_transfer_id', header.id);
 
-  for (const ln of (lines as Array<{ product_code: string; product_name: string | null; qty: number }>) ?? []) {
+  for (const ln of (lines as Array<{ product_code: string; product_name: string | null; variant_key: string | null; qty: number }>) ?? []) {
     if (ln.qty <= 0) continue;
+    // Variant bucket the line moves; '' = unclassified/legacy. FIFO consumes
+    // the OUT@from from THIS variant's oldest batch and re-opens it at IN@to.
+    const variantKey = ln.variant_key ?? '';
     const { data: outRow, error: outErr } = await sb.from('inventory_movements').insert({
       movement_type:  'OUT',
       warehouse_id:   header.from_warehouse_id,
       product_code:   ln.product_code,
+      variant_key:    variantKey,
       product_name:   ln.product_name,
       qty:            ln.qty,
       source_doc_type:'STOCK_TRANSFER',
@@ -156,6 +163,7 @@ async function writeTransferMovements(
       movement_type:  'IN',
       warehouse_id:   header.to_warehouse_id,
       product_code:   ln.product_code,
+      variant_key:    variantKey,
       product_name:   ln.product_name,
       qty:            ln.qty,
       unit_cost_sen:  inUnitCost,
@@ -179,7 +187,7 @@ async function writeTransferMovements(
 
 // ── Create + auto-post ────────────────────────────────────────────────
 // body: { fromWarehouseId, toWarehouseId, transferDate?, notes?,
-//         items: [{ productCode, productName?, qty, notes? }] }
+//         items: [{ productCode, productName?, variantKey?, qty, notes? }] }
 // PR-DRAFT-removal: row is inserted as POSTED and inventory_movements
 // are written inline. No separate /post call needed.
 stockTransfers.post('/', async (c) => {
@@ -228,6 +236,9 @@ stockTransfers.post('/', async (c) => {
       stock_transfer_id: header.id,
       product_code: String(it.productCode),
       product_name: (it.productName as string | undefined) ?? null,
+      // Variant bucket so the OUT@from / IN@to movements consume + re-open the
+      // matching FIFO batch. Omit / '' = unclassified (legacy behaviour).
+      variant_key: (it.variantKey as string | undefined) ?? '',
       qty,
       notes: (it.notes as string | undefined) ?? null,
     };
@@ -249,20 +260,45 @@ stockTransfers.post('/', async (c) => {
 });
 
 // ── Cancel POSTED ─────────────────────────────────────────────────────
-// Note: this does NOT reverse the inventory movements that were written
-// on create. Commander needs to manually post a counter-transfer if they
-// want to undo the inventory effect. Same posture as PO cancel.
+// Cancel actually REVERSES the inter-warehouse movement: it posts an
+// opposite-direction movement per original row (IN@to → OUT@to, OUT@from →
+// IN@from) via reverseMovements, so stock flows back to the source warehouse
+// and the FIFO cost basis is restored. Variant-aware (reverseMovements buckets
+// by product_code + variant_key + warehouse). Idempotent two ways: the
+// status flip is gated POSTED→CANCELLED (the .neq guard returns no row on a
+// second call → 409), and reverseMovements itself skips buckets whose signed
+// net is already 0, so even a retry that slipped past the gate is a no-op.
 stockTransfers.patch('/:id/cancel', async (c) => {
   const sb = c.get('supabase');
+  const user = c.get('user');
   const id = c.req.param('id');
 
+  // Gate on the ACTIVE(=POSTED)→CANCELLED transition. Only the call that
+  // actually flips the status proceeds to reverse — never on an already
+  // CANCELLED row.
   const { data, error } = await sb.from('stock_transfers')
     .update({ status: 'CANCELLED', cancelled_at: new Date().toISOString() })
     .eq('id', id).neq('status', 'CANCELLED')
     .select('id, status, cancelled_at').single();
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
   if (!data)  return c.json({ error: 'already_cancelled' }, 409);
-  return c.json({ transfer: data });
+
+  // Reverse the paired OUT/IN movements this transfer wrote. Best-effort,
+  // mirroring the post path: a failed reversal row is logged + reported, it
+  // does NOT roll back the CANCELLED status (audit-DLQ posture).
+  const rev = await reverseMovements(sb, 'STOCK_TRANSFER', id, user?.id ?? null);
+  // Net-zero across warehouses again — re-walk B2C stock allocation in case a
+  // partial reversal actually shifted a bucket.
+  try {
+    const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+    await recomputeSoStockAllocation(sb);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-cancel failed:', e); }
+
+  return c.json({
+    transfer: data,
+    reversal: { reversed: rev.reversed, skipped: rev.skipped, failed: rev.failed },
+    reversalErrors: rev.failed > 0 ? (rev.reason ?? 'partial reversal') : undefined,
+  });
 });
 
 // ── Post → idempotent no-op (legacy compat) ───────────────────────────

@@ -16,7 +16,7 @@ import { normalizePhone } from '@2990s/shared/phone';
 import { buildVariantSummary } from '@2990s/shared';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
-import { writeMovements, defaultWarehouseId, reverseMovements } from '../lib/inventory-movements';
+import { writeMovements, defaultWarehouseId } from '../lib/inventory-movements';
 import { computeVariantKey, type VariantAttrs } from '@2990s/shared';
 import { syncSoDeliveredFromDo } from '../lib/so-delivery-sync';
 import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item-codes';
@@ -330,6 +330,96 @@ async function resyncInventoryForDo(sb: any, deliveryOrderId: string, performedB
   }
 }
 
+/* ── reverseInventoryForDo (Bug #1 twin of delivery-returns.reverseInventoryForReturn) ──
+   REVERSE a DO's inventory OUT when it is CANCELLED. The DO wrote OUT movements
+   on ship (consuming FIFO lots); cancelling must put that stock back so on-hand
+   isn't permanently depleted.
+
+   We CANNOT reuse reverseMovements: it writes a balancing IN that reuses the DO's
+   (source_doc_type, source_doc_id, product_code, variant_key) key, which the
+   partial UNIQUE index uq_inv_mov_do_source (migration 0100, keyed WITHOUT
+   movement_type) rejects → the insert silently fails (swallowed by the cancel
+   path's best-effort catch) and the shipped stock is left permanently deducted.
+
+   Instead we write a POSITIVE ADJUSTMENT row per (product_code, variant_key)
+   bucket (qty = +net_out). The inventory_balances view treats ADJUSTMENT as
+   signed (migration 0095: `WHEN movement_type = 'ADJUSTMENT' THEN qty`), so a
+   positive qty adds back exactly what the DO removed — net stock impact of the
+   cancelled DO becomes zero. An ADJUSTMENT row is unindexed by the DO source key
+   and FIFO-neutral (no spurious COGS, no arbitrary lot re-open).
+
+   net_out per bucket = Σ OUT qty − Σ IN qty across THIS DO's own movements (the
+   ship OUT plus any resync delta rows from line edits), so an edited DO reverses
+   exactly its currently-booked outflow. variant_key is carried so it nets the
+   right variant batch (Agent C makes the FIFO trigger variant-aware).
+
+   IDEMPOTENT: an existence check for a prior ADJUSTMENT row tagged with this DO's
+   id skips a re-reversal. Best-effort — a movement failure never un-cancels the
+   DO (audit-DLQ pattern). */
+async function reverseInventoryForDo(sb: any, deliveryOrderId: string, performedBy: string) {
+  // Idempotency guard — has this DO already been reversed via ADJUSTMENT?
+  const { count: existing } = await sb
+    .from('inventory_movements')
+    .select('id', { head: true, count: 'exact' })
+    .eq('source_doc_type', 'ADJUSTMENT')
+    .eq('source_doc_id', deliveryOrderId)
+    .eq('movement_type', 'ADJUSTMENT');
+  if ((existing ?? 0) > 0) return; // already reversed — no-op
+
+  const { data: doHeader } = await sb.from('delivery_orders')
+    .select('do_number, warehouse_id')
+    .eq('id', deliveryOrderId).maybeSingle();
+  const doNo = (doHeader as { do_number: string } | null)?.do_number ?? deliveryOrderId;
+
+  // Net OUT per (warehouse, product_code, variant_key) bucket from THIS DO's own
+  // IN/OUT movements. Carry the warehouse + cost basis so the add-back is exact.
+  const { data: movs } = await sb.from('inventory_movements')
+    .select('movement_type, warehouse_id, product_code, variant_key, qty, total_cost_sen, product_name')
+    .eq('source_doc_type', 'DO')
+    .eq('source_doc_id', deliveryOrderId);
+  type Agg = {
+    warehouse_id: string; product_code: string; variant_key: string;
+    product_name: string | null; net_out: number; out_total_cost: number; out_qty: number;
+  };
+  const byBucket = new Map<string, Agg>();
+  for (const m of (movs ?? []) as Array<{
+    movement_type: string; warehouse_id: string; product_code: string;
+    variant_key: string | null; qty: number; total_cost_sen: number | null; product_name: string | null;
+  }>) {
+    if (m.movement_type !== 'IN' && m.movement_type !== 'OUT') continue;
+    const variant_key = m.variant_key ?? '';
+    const k = `${m.warehouse_id}::${m.product_code}::${variant_key}`;
+    let agg = byBucket.get(k);
+    if (!agg) {
+      agg = { warehouse_id: m.warehouse_id, product_code: m.product_code, variant_key, product_name: m.product_name, net_out: 0, out_total_cost: 0, out_qty: 0 };
+      byBucket.set(k, agg);
+    }
+    const q = Number(m.qty ?? 0);
+    if (m.movement_type === 'OUT') { agg.net_out += q; agg.out_total_cost += Number(m.total_cost_sen ?? 0); agg.out_qty += q; }
+    else { agg.net_out -= q; }
+    if (!agg.product_name) agg.product_name = m.product_name;
+  }
+
+  const movements = [...byBucket.values()]
+    .filter((b) => b.net_out > 0)
+    .map((b) => ({
+      movement_type: 'ADJUSTMENT' as const,
+      warehouse_id: b.warehouse_id,
+      product_code: b.product_code,
+      variant_key: b.variant_key,
+      product_name: b.product_name,
+      qty: b.net_out, // signed: positive adds back the stock the DO shipped out
+      // Carry the weighted-avg OUT cost so the re-added stock has a cost basis.
+      unit_cost_sen: b.out_qty > 0 ? Math.round(b.out_total_cost / b.out_qty) : 0,
+      source_doc_type: 'ADJUSTMENT' as const,
+      source_doc_id: deliveryOrderId,
+      source_doc_no: doNo,
+      performed_by: performedBy,
+      notes: `Delivery order ${doNo} cancelled — reversing shipment (stock returned to shelf)`,
+    }));
+  if (movements.length > 0) await writeMovements(sb, movements);
+}
+
 /* ── doLineConsumedQty (Commander 2026-05-30, TASK #24) ───────────────────────
    Σ invoiced + Σ returned for a DO line — the downstream-paper-consumption
    floor below which the line's qty can't shrink (and below which the line
@@ -608,7 +698,11 @@ export async function computeSoLifecycle(
     let best: Ev | null = null;
     for (const ev of evs) {
       if (!best) { best = ev; continue; }
-      const dc = ev.date.localeCompare(best.date);
+      // Bug #10 — business dates mix plain 'YYYY-MM-DD' (do_date / invoice_date /
+      // return_date) and full ISO timestamps (created_at fallback). Compare on a
+      // normalized date-only key so a same-day return doesn't sort before a
+      // shipment merely because one string is longer; ties fall to created_at.
+      const dc = normalizeEventDay(ev.date).localeCompare(normalizeEventDay(best.date));
       if (dc > 0) { best = ev; continue; }
       if (dc < 0) continue;
       const cc = ev.createdAt.localeCompare(best.createdAt);
@@ -619,6 +713,15 @@ export async function computeSoLifecycle(
     out.set(doc, best ? best.kind : 'none');
   }
   return out;
+}
+
+/* Bug #10 — normalize a lifecycle event's business date to a single comparable
+   representation. Inputs are a mix of plain 'YYYY-MM-DD' dates and full ISO
+   timestamps; both share the leading 'YYYY-MM-DD', so truncating to the first 10
+   chars yields a stable day-level key that sorts correctly regardless of which
+   form the row carried. (created_at is the tie-breaker, applied separately.) */
+function normalizeEventDay(d: string): string {
+  return (d ?? '').slice(0, 10);
 }
 
 /* Per-DO lifecycle state by "latest event wins" (Wei Siang 2026-05-31). A
@@ -672,7 +775,9 @@ export async function computeDoLifecycle(
     let best: Ev | null = null;
     for (const ev of evs) {
       if (!best) { best = ev; continue; }
-      const dc = ev.date.localeCompare(best.date);
+      // Bug #10 — normalize mixed plain-date / ISO-timestamp business dates to a
+      // day-level key before comparing (created_at remains the tie-breaker).
+      const dc = normalizeEventDay(ev.date).localeCompare(normalizeEventDay(best.date));
       if (dc > 0) { best = ev; continue; }
       if (dc < 0) continue;
       const cc = ev.createdAt.localeCompare(best.createdAt);
@@ -1604,8 +1709,32 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
   if (body.status === 'SIGNED')     ts.signed_at = now;
   if (body.status === 'DELIVERED')  ts.delivered_at = now;
 
-  const { data, error } = await sb.from('delivery_orders').update({ status: body.status, ...ts }).eq('id', id).select('id, status').single();
-  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  /* Bug #3/#11 — ATOMIC cancel guard. The read-then-write above has a TOCTOU
+     window: two concurrent cancels can both read a non-cancelled status and both
+     fall through to reverse inventory (double-reverse). For the CANCELLED
+     transition we make the write conditional on the row still being non-cancelled
+     (status != CANCELLED) and treat "no row returned" as "someone else already
+     cancelled" → idempotent echo, NO second reversal. Postgres serialises the two
+     UPDATEs, so exactly one wins the row and fires the single reversal. */
+  let data: { id: string; status: string } | null;
+  if (body.status === 'CANCELLED') {
+    const { data: updated, error } = await sb.from('delivery_orders')
+      .update({ status: body.status, ...ts })
+      .eq('id', id).neq('status', 'CANCELLED')
+      .select('id, status').maybeSingle();
+    if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+    if (!updated) {
+      // Lost the race — another concurrent cancel already flipped it. Do NOT
+      // reverse again; echo the cancelled state.
+      return c.json({ deliveryOrder: { id, status: 'CANCELLED' } });
+    }
+    data = updated as { id: string; status: string };
+  } else {
+    const { data: updated, error } = await sb.from('delivery_orders')
+      .update({ status: body.status, ...ts }).eq('id', id).select('id, status').single();
+    if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+    data = updated as { id: string; status: string };
+  }
 
   /* Inventory OUT — fire on the first transition into ANY shipped state.
      deductInventoryForDo is idempotent (existence check + UNIQUE index), so a
@@ -1622,19 +1751,25 @@ deliveryOrdersMfg.patch('/:id/status', async (c) => {
     await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user.id);
   }
 
-  /* Commander 2026-05-30 — cancelling a DO AUTO-REVERSES the stock OUT: the
-     create/dispatch wrote an OUT (source_doc_type:'DO'), so cancel writes the
-     balancing IN back, putting the goods back on the shelf. reverseMovements is
-     idempotent (its signed-net guard skips an already-reversed doc) and
-     best-effort (a movement failure never un-cancels the DO).
-
-     NOTE: the partial UNIQUE index uq_inv_mov_do_source (migration 0100) keys on
-     (source_doc_type, source_doc_id, product_code, variant_key) — WITHOUT
-     movement_type — so it rejects a reversing IN that shares the original OUT's
-     key. reverseMovements inserts per-row + reports failures; see its doc + the
-     deviation note. */
+  /* Bug #1 — cancelling a DO AUTO-REVERSES the stock OUT: the create/dispatch
+     wrote an OUT (source_doc_type:'DO'), so cancel must put the goods back on the
+     shelf. We do NOT use reverseMovements here: its balancing IN reuses the DO's
+     (source_doc_type, source_doc_id, product_code, variant_key) key, which the
+     partial UNIQUE index uq_inv_mov_do_source (migration 0100, keyed WITHOUT
+     movement_type) rejects → the insert silently fails and the shipped stock is
+     left permanently deducted. reverseInventoryForDo writes a FIFO-neutral
+     positive ADJUSTMENT (unindexed by the DO source key, carrying variant_key) so
+     the reversal actually lands. Idempotent (ADJUSTMENT existence check) +
+     best-effort (a movement failure never un-cancels the DO). */
   if (body.status === 'CANCELLED') {
-    try { await reverseMovements(sb, 'DO', id, user.id); } catch { /* best-effort */ }
+    try { await reverseInventoryForDo(sb, id, user.id); } catch { /* best-effort */ }
+    /* SO #4 — this DO's cancellation may release its SO from DELIVERED back to a
+       partial/booked status. Recompute the SO's delivery status from live
+       delivered qtys (bidirectional + idempotent). Best-effort. */
+    try {
+      const { data: doRow } = await sb.from('delivery_orders').select('so_doc_no').eq('id', id).maybeSingle();
+      await syncSoDeliveredFromDo(sb, [(doRow as { so_doc_no?: string } | null)?.so_doc_no], user.id);
+    } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-sync] post-do-cancel failed:', e); }
     /* DO cancel reversed stock — re-walk SO lines so previously-PENDING orders
        can flip back to READY now that stock is available again. Best-effort. */
     try {

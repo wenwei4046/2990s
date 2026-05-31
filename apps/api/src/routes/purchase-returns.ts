@@ -476,10 +476,23 @@ purchaseReturns.patch('/:id/cancel', async (c) => {
   // double-credit inventory).
   if (head.status === 'CANCELLED') return c.json({ purchaseReturn: { id, status: 'CANCELLED' } });
 
-  const { error: updErr } = await sb.from('purchase_returns').update({
+  /* Bug #3/#11 — ATOMIC single ACTIVE→CANCELLED transition. The conditional
+     UPDATE excludes COMPLETED and CANCELLED so two concurrent cancels race on
+     the row and only ONE flips it (the other gets no row back → idempotent
+     no-op), so the inventory IN reversal + returned_qty release below run
+     exactly once, never double-crediting stock. */
+  const { data: updRow, error: updErr } = await sb.from('purchase_returns').update({
     status: 'CANCELLED', updated_at: new Date().toISOString(),
-  }).eq('id', id);
+  }).eq('id', id).neq('status', 'CANCELLED').neq('status', 'COMPLETED').select('id').maybeSingle();
   if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+  if (!updRow) {
+    // Lost the race (already cancelled) or it became COMPLETED meanwhile.
+    const { data: now } = await sb.from('purchase_returns').select('id, status').eq('id', id).maybeSingle();
+    const st = (now as { status: string } | null)?.status;
+    if (st === 'CANCELLED') return c.json({ purchaseReturn: { id, status: 'CANCELLED' } });
+    if (st === 'COMPLETED') return c.json({ error: 'cannot_cancel', message: 'Already completed' }, 409);
+    return c.json({ error: 'cannot_cancel' }, 409);
+  }
 
   // Reverse the inventory OUT: write an IN per line for qty_returned. The
   // create path debited the GRN's warehouse (else the default) — credit the
@@ -615,6 +628,40 @@ purchaseReturns.post('/:id/items', async (c) => {
   };
   const { data, error } = await sb.from('purchase_return_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* Bug #3/#11 — POST-INSERT over-return verification. The pre-check is a
+     read-then-write race: two concurrent adds against the same GRN line can each
+     read remaining and both insert → over-returned. After committing, re-read
+     the GRN line's accepted + the LIVE sum of qty_returned across all
+     non-cancelled PR lines for it; if returned now exceeds accepted, OUR insert
+     broke the cap → delete it + 409. (Fully DB-atomic needs an RPC — see report.) */
+  if (grnItemId) {
+    const inserted = data as unknown as { id: string } | null;
+    const { data: gi } = await sb.from('grn_items')
+      .select('qty_accepted').eq('id', grnItemId).maybeSingle();
+    if (gi) {
+      const cap = (gi as { qty_accepted: number }).qty_accepted ?? 0;
+      const { data: sib } = await sb.from('purchase_return_items')
+        .select('qty_returned, purchase_return_id').eq('grn_item_id', grnItemId);
+      const sibRows = (sib ?? []) as Array<{ qty_returned: number; purchase_return_id: string }>;
+      const prIds = [...new Set(sibRows.map((r) => r.purchase_return_id))];
+      const cancelled = new Set<string>();
+      if (prIds.length > 0) {
+        const { data: prs } = await sb.from('purchase_returns').select('id, status').in('id', prIds);
+        for (const p of (prs ?? []) as Array<{ id: string; status: string }>) {
+          if (p.status === 'CANCELLED') cancelled.add(p.id);
+        }
+      }
+      const liveReturned = sibRows
+        .filter((r) => !cancelled.has(r.purchase_return_id))
+        .reduce((s, r) => s + Number(r.qty_returned ?? 0), 0);
+      if (liveReturned > cap && inserted?.id) {
+        await sb.from('purchase_return_items').delete().eq('id', inserted.id);
+        return c.json({ error: 'qty_exceeds_remaining', requested: qtyReturned, remaining: cap - (liveReturned - qtyReturned) }, 409);
+      }
+    }
+  }
+
   // Consume the GRN line if this PR line is GRN-linked (manual lines consume
   // nothing). Increment returned_qty by the new line's qty.
   if (grnItemId) await adjustGrnReturnedQty(sb, grnItemId, qtyReturned);

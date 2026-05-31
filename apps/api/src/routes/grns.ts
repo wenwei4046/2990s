@@ -194,6 +194,66 @@ async function grnHasDownstream(sb: any, grnId: string): Promise<{ error: string
   return null;
 }
 
+/* ── Downstream-consumption guard (bug #2) ─────────────────────────────────
+   Reversing a GRN receipt (whole-cancel or line-delete) writes an inventory OUT
+   per line. The FIFO trigger (migration 0053) ALLOWS negative stock, so if the
+   received goods were ALREADY consumed downstream (shipped on a DO / drawn into
+   production), that reversing OUT eats some OTHER lot's FIFO batch → negative
+   stock + wrong COGS. grnHasDownstream only catches PI/PR draws, NOT physical
+   consumption.
+
+   This guard checks, per (warehouse, product, variant) bucket, whether the
+   CURRENT on-hand (inventory_balances) still covers the qty we're about to
+   reverse out. If on-hand < what we'd reverse, the received stock is (at least
+   partly) already gone downstream — BLOCK the cancel/delete.
+
+   `lines` carry each reversing line's accepted qty + variant; warehouseId is the
+   GRN's receive-into warehouse (same one the OUT would target). Returns the
+   blocking JSON, or null when every bucket still has enough on-hand to reverse
+   safely. Best-effort read: if the balance query errors we DON'T block (the
+   primary lock semantics in grnHasDownstream still apply). */
+async function grnReverseWouldGoNegative(
+  sb: any,
+  warehouseId: string | null,
+  lines: Array<{ qty_accepted: number; material_code: string; item_group?: string | null; variants?: VariantAttrs | null }>,
+): Promise<{ error: string; message: string } | null> {
+  if (!warehouseId) return null;
+  // Sum the qty we'd reverse OUT per (product_code, variant_key) bucket.
+  const needByBucket = new Map<string, { product_code: string; variant_key: string; need: number }>();
+  for (const l of lines) {
+    const qty = Number(l.qty_accepted ?? 0);
+    if (qty <= 0) continue;
+    const variant_key = computeVariantKey(l.item_group, l.variants ?? null);
+    const k = `${l.material_code}::${variant_key}`;
+    const cur = needByBucket.get(k) ?? { product_code: l.material_code, variant_key, need: 0 };
+    cur.need += qty;
+    needByBucket.set(k, cur);
+  }
+  if (needByBucket.size === 0) return null;
+
+  const productCodes = [...new Set([...needByBucket.values()].map((b) => b.product_code))];
+  const { data: balRows, error } = await sb
+    .from('inventory_balances')
+    .select('product_code, variant_key, qty')
+    .eq('warehouse_id', warehouseId)
+    .in('product_code', productCodes);
+  if (error) return null; // best-effort: don't block on a balance read failure
+  const onHand = new Map<string, number>();
+  for (const r of (balRows ?? []) as Array<{ product_code: string; variant_key: string | null; qty: number }>) {
+    onHand.set(`${r.product_code}::${r.variant_key ?? ''}`, Number(r.qty ?? 0));
+  }
+  for (const [k, b] of needByBucket) {
+    const have = onHand.get(k) ?? 0;
+    if (have < b.need) {
+      return {
+        error: 'grn_consumed_downstream',
+        message: 'Received goods were already consumed downstream (shipped / used in production) — cannot reverse this GRN. Make a Purchase Return instead.',
+      };
+    }
+  }
+  return null;
+}
+
 /* ── Per-GRN consumption flags (migration 0106) ────────────────────────────
    From a GRN's items compute: has_children (any line invoiced_qty>0 or
    returned_qty>0), fully_invoiced (every accepted line has invoiced_qty >=
@@ -842,12 +902,8 @@ grns.patch('/:id/cancel', async (c) => {
   const childLock = await grnHasDownstream(sb, id);
   if (childLock) return c.json(childLock, 409);
 
-  const { error: updErr } = await sb.from('grns')
-    .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
-    .eq('id', id);
-  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
-
-  // Load the GRN lines once for both reversals.
+  // Load the GRN lines once — needed by the downstream-consumption guard BELOW
+  // and by both reversals further down.
   const { data: lines } = await sb.from('grn_items')
     .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi, item_group, variants')
     .eq('grn_id', id);
@@ -856,6 +912,25 @@ grns.patch('/:id/cancel', async (c) => {
     material_code: string; material_name: string | null; unit_price_centi: number | null;
     item_group?: string | null; variants?: VariantAttrs | null;
   }>;
+
+  // Bug #2 — block the cancel if the received stock was already consumed
+  // downstream (reversing it out would drive on-hand negative + corrupt COGS).
+  const consumedLock = await grnReverseWouldGoNegative(sb, head.warehouse_id, lineList);
+  if (consumedLock) return c.json(consumedLock, 409);
+
+  /* Bug #3/#11 — ATOMIC single ACTIVE→CANCELLED transition. The conditional
+     UPDATE excludes CANCELLED so two concurrent cancels race on the row and
+     only ONE flips it (the other gets no row back → idempotent no-op), so the
+     inventory reversal + PO recount below run exactly once, never double. */
+  const { data: updRow, error: updErr } = await sb.from('grns')
+    .update({ status: 'CANCELLED', updated_at: new Date().toISOString() })
+    .eq('id', id).neq('status', 'CANCELLED').select('id').maybeSingle();
+  if (updErr) return c.json({ error: 'cancel_failed', reason: updErr.message }, 500);
+  if (!updRow) {
+    // Lost the race — a concurrent cancel already flipped it. Echo idempotently.
+    const { data } = await sb.from('grns').select(HEADER).eq('id', id).maybeSingle();
+    return c.json({ grn: data ?? { id, status: 'CANCELLED' } });
+  }
 
   // (a) Inventory OUT per line — negate the original GRN IN. Best-effort.
   try {
@@ -996,6 +1071,41 @@ grns.post('/:id/items', async (c) => {
   };
   const { data, error } = await sb.from('grn_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* Bug #3/#11 — POST-INSERT over-receipt verification. The pre-check above is a
+     read-then-write race: two concurrent adds against the same PO line can each
+     read remaining=10 and both insert → 20 received. After committing our row we
+     re-read the PO line's qty + the LIVE sum of qty_accepted across all
+     non-cancelled GRN lines for it; if that now exceeds qty, OUR insert is the
+     one that broke the cap → delete it + 409. (Deterministic compensating guard;
+     a fully DB-atomic claim needs an RPC — see report.) */
+  if (addLinePoItemId) {
+    const inserted = data as unknown as { id: string } | null;
+    const { data: poItem } = await sb.from('purchase_order_items')
+      .select('qty').eq('id', addLinePoItemId).maybeSingle();
+    if (poItem) {
+      const cap = (poItem as { qty: number }).qty ?? 0;
+      const { data: sib } = await sb.from('grn_items')
+        .select('qty_accepted, grn_id').eq('purchase_order_item_id', addLinePoItemId);
+      const sibRows = (sib ?? []) as Array<{ qty_accepted: number; grn_id: string }>;
+      const grnIds = [...new Set(sibRows.map((r) => r.grn_id))];
+      const cancelled = new Set<string>();
+      if (grnIds.length > 0) {
+        const { data: gs } = await sb.from('grns').select('id, status').in('id', grnIds);
+        for (const g of (gs ?? []) as Array<{ id: string; status: string }>) {
+          if (g.status === 'CANCELLED') cancelled.add(g.id);
+        }
+      }
+      const liveAccepted = sibRows
+        .filter((r) => !cancelled.has(r.grn_id))
+        .reduce((s, r) => s + Number(r.qty_accepted ?? 0), 0);
+      if (liveAccepted > cap && inserted?.id) {
+        await sb.from('grn_items').delete().eq('id', inserted.id);
+        return c.json({ error: 'qty_exceeds_remaining', poItemId: addLinePoItemId, requested: qtyReceived, remaining: cap - (liveAccepted - qtyReceived) }, 409);
+      }
+    }
+  }
+
   await recomputeGrnTotals(sb, grnId);
 
   // A line added to a POSTED GRN must roll up exactly like one created at post
@@ -1043,17 +1153,19 @@ grns.patch('/:id/items/:itemId', async (c) => {
   let it: Record<string, unknown>;
   try { it = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
   const sb = c.get('supabase');
+  const user = c.get('user');
 
   // GRN child-lock: a GRN with any downstream PI/PR is read-only.
   const childLock = await grnHasDownstream(sb, grnId);
   if (childLock) return c.json(childLock, 409);
 
   const { data: prev } = await sb.from('grn_items')
-    .select('qty_received, unit_price_centi, discount_centi, item_group, variants, purchase_order_item_id')
+    .select('qty_received, qty_accepted, unit_price_centi, discount_centi, item_group, variants, purchase_order_item_id, material_code, material_name')
     .eq('id', itemId).maybeSingle();
   if (!prev) return c.json({ error: 'not_found' }, 404);
 
   // The editable quantity is qty_received (also keep qty_accepted in lockstep).
+  const prevAccepted = (prev as { qty_accepted: number }).qty_accepted ?? 0;
   const qtyReceived = it.qty !== undefined ? Number(it.qty) : (prev as { qty_received: number }).qty_received;
 
   /* Over-receipt guard on edit — a PO-linked line can't be raised past the PO
@@ -1107,8 +1219,102 @@ grns.patch('/:id/items/:itemId', async (c) => {
     updates['description2'] = buildVariantSummary(String(effGroup ?? ''), effVariants ?? null) || null;
   }
 
+  /* Bug #7 — emit the inventory delta for a posted GRN line qty edit. Before
+     this, editing qty changed only the row + header money, NOT stock, leaving
+     ghost stock (receive 10 → edit to 4 → on-hand still 10 → a later cancel
+     reverses only 4 → +6 ghost). qty_accepted is the inventory-relevant qty and
+     moves in lockstep with qty_received here, so the delta is newAccepted −
+     prevAccepted. Variant-aware (bug C), cost follows the line's unit price.
+
+     When item_group / variants ALSO change, the stock bucket changes too, so a
+     plain delta would mis-bucket: reverse the FULL old bucket + re-add the FULL
+     new bucket. When only qty changes, emit a single IN (delta>0) / OUT (delta<0).
+
+     We GUARD then WRITE: any OUT we'd write (qty reduction, or the old-bucket
+     reversal on a variant change) must not drive on-hand negative — that means
+     the stock was already consumed downstream (bug #2). Guard runs BEFORE the
+     row UPDATE so a block leaves the row untouched (no undo needed). */
+  const newAccepted = updates.qty_accepted as number;
+  const oldGroup = (prev as { item_group?: string | null }).item_group ?? null;
+  const oldVariants = (prev as { variants?: VariantAttrs | null }).variants ?? null;
+  const effGroup = (updates.item_group !== undefined ? (updates.item_group as string | null) : oldGroup);
+  const effVariants = (updates.variants !== undefined ? (updates.variants as VariantAttrs | null) : oldVariants);
+  const oldKey = computeVariantKey(oldGroup, oldVariants);
+  const newKey = computeVariantKey(effGroup, effVariants);
+  const matCode = (updates.material_code as string | undefined) ?? (prev as { material_code: string }).material_code;
+  const matName = (updates.material_name as string | undefined) ?? (prev as { material_name: string | null }).material_name;
+  const bucketChanged = oldKey !== newKey;
+  const qtyChanged = newAccepted !== prevAccepted;
+  const inventoryChange = (qtyChanged || bucketChanged) && (prevAccepted > 0 || newAccepted > 0);
+
+  // Resolve warehouse once (needed by both the guard and the movement write).
+  let editWarehouseId: string | null = null;
+  let editGrnNo = grnId;
+  if (inventoryChange) {
+    const { data: grnHead } = await sb.from('grns').select('grn_number, warehouse_id').eq('id', grnId).maybeSingle();
+    editWarehouseId = (grnHead as { warehouse_id: string | null } | null)?.warehouse_id
+      ?? (await defaultWarehouseId(sb));
+    editGrnNo = (grnHead as { grn_number: string } | null)?.grn_number ?? grnId;
+
+    // GUARD (bug #2) — pre-check any OUT against current on-hand BEFORE writing.
+    if (editWarehouseId) {
+      const guardLines: Array<{ qty_accepted: number; material_code: string; item_group?: string | null; variants?: VariantAttrs | null }> = [];
+      if (bucketChanged) {
+        if (prevAccepted > 0) guardLines.push({ qty_accepted: prevAccepted, material_code: matCode, item_group: oldGroup, variants: oldVariants });
+      } else if (newAccepted < prevAccepted) {
+        guardLines.push({ qty_accepted: prevAccepted - newAccepted, material_code: matCode, item_group: effGroup, variants: effVariants });
+      }
+      const consumedLock = await grnReverseWouldGoNegative(sb, editWarehouseId, guardLines);
+      if (consumedLock) return c.json(consumedLock, 409); // row untouched — safe
+    }
+  }
+
   const { error } = await sb.from('grn_items').update(updates).eq('id', itemId);
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+
+  // Now write the inventory delta (best-effort, mirroring add/delete-line).
+  if (inventoryChange && editWarehouseId) {
+    const warehouseId = editWarehouseId;
+    const movements: Array<Parameters<typeof writeMovements>[1][number]> = [];
+    if (bucketChanged) {
+      if (prevAccepted > 0) movements.push({
+        movement_type: 'OUT', warehouse_id: warehouseId, product_code: matCode,
+        variant_key: oldKey, product_name: matName, qty: prevAccepted,
+        source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
+        performed_by: user.id, notes: 'GRN line edited — variant changed, reversing old bucket',
+      });
+      if (newAccepted > 0) movements.push({
+        movement_type: 'IN', warehouse_id: warehouseId, product_code: matCode,
+        variant_key: newKey, product_name: matName, qty: newAccepted, unit_cost_sen: unit,
+        source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
+        performed_by: user.id, notes: 'GRN line edited — variant changed, re-adding new bucket',
+      });
+    } else {
+      const delta = newAccepted - prevAccepted;
+      if (delta > 0) movements.push({
+        movement_type: 'IN', warehouse_id: warehouseId, product_code: matCode,
+        variant_key: newKey, product_name: matName, qty: delta, unit_cost_sen: unit,
+        source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
+        performed_by: user.id, notes: 'GRN line qty edited — receiving delta',
+      });
+      else if (delta < 0) movements.push({
+        movement_type: 'OUT', warehouse_id: warehouseId, product_code: matCode,
+        variant_key: newKey, product_name: matName, qty: -delta,
+        source_doc_type: 'GRN', source_doc_id: grnId, source_doc_no: editGrnNo,
+        performed_by: user.id, notes: 'GRN line qty edited — reversing delta',
+      });
+    }
+    if (movements.length > 0) {
+      try {
+        await writeMovements(sb, movements);
+        try {
+          const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+          await recomputeSoStockAllocation(sb);
+        } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn-line-edit failed:', e); }
+      } catch { /* best-effort */ }
+    }
+  }
+
   await recomputeGrnTotals(sb, grnId);
   // Editing qty_accepted changes how much the PO counts as received — recount it.
   try { await recomputePoReceived(sb, [(prev as { purchase_order_item_id: string | null }).purchase_order_item_id]); } catch { /* best-effort */ }
@@ -1135,6 +1341,24 @@ grns.delete('/:id/items/:itemId', async (c) => {
   const { data: line } = await sb.from('grn_items')
     .select('qty_accepted, purchase_order_item_id, material_code, material_name, unit_price_centi, item_group, variants')
     .eq('id', itemId).maybeSingle();
+
+  // Bug #2 — deleting a posted GRN line writes an OUT to reverse its receipt.
+  // If that line's received stock was already consumed downstream the OUT would
+  // drive on-hand negative + corrupt COGS, so block it. Resolve the GRN's
+  // warehouse the same way the reversal below does.
+  if (line) {
+    const lg = line as {
+      qty_accepted: number; material_code: string;
+      item_group?: string | null; variants?: VariantAttrs | null;
+    };
+    if ((lg.qty_accepted ?? 0) > 0) {
+      const { data: grnHead } = await sb.from('grns').select('warehouse_id').eq('id', grnId).maybeSingle();
+      const warehouseId = (grnHead as { warehouse_id: string | null } | null)?.warehouse_id
+        ?? (await defaultWarehouseId(sb));
+      const consumedLock = await grnReverseWouldGoNegative(sb, warehouseId, [lg]);
+      if (consumedLock) return c.json(consumedLock, 409);
+    }
+  }
 
   const { error } = await sb.from('grn_items').delete().eq('id', itemId);
   if (error) return c.json({ error: 'delete_failed', reason: error.message }, 500);

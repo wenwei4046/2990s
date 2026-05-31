@@ -902,14 +902,85 @@ salesInvoices.patch('/:id/status', async (c) => {
   if (body.status === 'PAID') ts.paid_at = now;
   const status = body.status === 'ISSUED' ? 'SENT' : body.status;
 
+  /* Bug #12 — transition guard. Previously this PATCH applied any target status
+     and leaned on downstream-helper idempotency, which allowed nonsense like
+     CANCELLED→PAID→CANCELLED (double-reversing revenue) and out-of-order jumps.
+     We now read the current status first and gate transitions:
+       • already-CANCELLED + target CANCELLED → idempotent early return (never
+         re-reverse revenue / re-credit a payment).
+       • CANCEL is allowed from any ACTIVE status (SENT / PARTIALLY_PAID / PAID /
+         OVERDUE).
+       • REOPEN is a FIRST-CLASS flow but ONLY back to SENT — the live payments
+         ledger (recomputePaid) then re-derives PARTIALLY_PAID / PAID. A direct
+         CANCELLED→PAID/PARTIALLY_PAID jump is the illegitimate move we block.
+       • The money statuses (PARTIALLY_PAID / PAID / OVERDUE) are ledger-driven,
+         not set by hand here; we only accept them on an already-active invoice
+         (no-op / idempotent), never as a reopen target.
+     This keeps status real-time + reversible without permitting illegitimate
+     latches. */
+  const { data: curRow, error: curErr } = await sb.from('sales_invoices')
+    .select('status').eq('id', id).maybeSingle();
+  if (curErr) return c.json({ error: 'load_failed', reason: curErr.message }, 500);
+  if (!curRow) return c.json({ error: 'not_found' }, 404);
+  const prevStatus = ((curRow as { status: string }).status ?? '').toUpperCase();
+
+  // Idempotent cancel — already cancelled and asked to cancel again: echo back
+  // WITHOUT re-running the revenue reversal / cancel-credit (would double-book).
+  if (status === 'CANCELLED' && prevStatus === 'CANCELLED') {
+    return c.json({ salesInvoice: { id, status: 'CANCELLED' } });
+  }
+
+  const ACTIVE = new Set(['SENT', 'PARTIALLY_PAID', 'PAID', 'OVERDUE']);
+  const isReopen = prevStatus === 'CANCELLED' && status !== 'CANCELLED';
+  if (isReopen && status !== 'SENT') {
+    // Block CANCELLED→PAID / CANCELLED→PARTIALLY_PAID etc. Reopen lands on SENT;
+    // the payments ledger re-derives the paid state from there.
+    return c.json({
+      error: 'invalid_transition',
+      message: `Cannot reopen a cancelled invoice straight to ${status}. Reopen to SENT first; payment status is re-derived from the ledger.`,
+      from: prevStatus, to: status,
+    }, 409);
+  }
+  // A money status may only be set on an already-active invoice (idempotent echo
+  // of the ledger-derived state) — never as a from-cancelled reopen target.
+  if (status !== 'CANCELLED' && status !== 'SENT' && !ACTIVE.has(prevStatus)) {
+    return c.json({
+      error: 'invalid_transition',
+      message: `Cannot move from ${prevStatus} to ${status}. Payment statuses are derived from the payments ledger.`,
+      from: prevStatus, to: status,
+    }, 409);
+  }
+
   // Need the invoice_number + paid_centi + debtor for the revenue reversal +
   // the Edge #11 cancel-with-payment credit on CANCEL.
-  const { data, error } = await sb.from('sales_invoices')
-    .update({ status, ...ts })
-    .eq('id', id)
-    .select('id, status, invoice_number, paid_centi, debtor_code, debtor_name')
-    .single();
-  if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+  /* Bug #3/#11 — ATOMIC cancel guard. Two concurrent cancels could both pass the
+     read-based guard above and both reverse revenue / re-credit the payment. For
+     the CANCELLED transition we make the write conditional on the row still being
+     non-cancelled; "no row returned" means a concurrent cancel already won →
+     idempotent echo, NO second reversal. Postgres serialises the UPDATEs so the
+     reversal fires exactly once. Non-cancel transitions keep the plain update. */
+  let data: { id: string; status: string; invoice_number: string; paid_centi: number | null; debtor_code: string | null; debtor_name: string | null } | null;
+  if (status === 'CANCELLED') {
+    const { data: updated, error } = await sb.from('sales_invoices')
+      .update({ status, ...ts })
+      .eq('id', id).neq('status', 'CANCELLED')
+      .select('id, status, invoice_number, paid_centi, debtor_code, debtor_name')
+      .maybeSingle();
+    if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+    if (!updated) {
+      // Lost the race — already cancelled by a concurrent submit. No re-reversal.
+      return c.json({ salesInvoice: { id, status: 'CANCELLED' } });
+    }
+    data = updated as typeof data;
+  } else {
+    const { data: updated, error } = await sb.from('sales_invoices')
+      .update({ status, ...ts })
+      .eq('id', id)
+      .select('id, status, invoice_number, paid_centi, debtor_code, debtor_name')
+      .single();
+    if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
+    data = updated as typeof data;
+  }
 
   /* Reverse revenue on CANCEL. Best-effort (audit-DLQ pattern) — a reversal
      failure never un-cancels the invoice; it can be retried (idempotent). */

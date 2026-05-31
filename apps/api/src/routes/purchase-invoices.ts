@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { supabaseAuth } from '../middleware/auth';
 import type { Env, Variables } from '../env';
 import { buildVariantSummary } from '@2990s/shared';
+import { reversePiAccounting } from './accounting';
 
 export const purchaseInvoices = new Hono<{ Bindings: Env; Variables: Variables }>();
 purchaseInvoices.use('*', supabaseAuth);
@@ -391,18 +392,42 @@ purchaseInvoices.patch('/:id/cancel', async (c) => {
   // Idempotent — already cancelled, echo back without re-releasing.
   if (head.status === 'CANCELLED') return c.json({ purchaseInvoice: { id, status: 'CANCELLED' } });
 
+  /* Bug #3/#11 — ATOMIC single ACTIVE→CANCELLED transition. The conditional
+     UPDATE excludes both PAID and CANCELLED, so two concurrent cancels race on
+     the same row and only ONE flips it (the other gets no row back → idempotent
+     no-op). This guarantees the accounting reversal + GRN release below run
+     exactly once, never double-reversing. .maybeSingle() (not .single()) so a
+     lost race returns null instead of a PGRST116 throw. */
   const { data, error } = await sb.from('purchase_invoices').update({
     status: 'CANCELLED', updated_at: new Date().toISOString(),
-  }).eq('id', id).neq('status', 'PAID').select('id, status').single();
+  }).eq('id', id).neq('status', 'PAID').neq('status', 'CANCELLED').select('id, status, invoice_number').maybeSingle();
   if (error) return c.json({ error: 'cancel_failed', reason: error.message }, 500);
-  if (!data) return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
+  if (!data) {
+    // Lost the race (a concurrent cancel already flipped it) or it became PAID.
+    // Re-read to distinguish: a CANCELLED row → idempotent success echo.
+    const { data: now } = await sb.from('purchase_invoices').select('id, status').eq('id', id).maybeSingle();
+    if ((now as { status: string } | null)?.status === 'CANCELLED') {
+      return c.json({ purchaseInvoice: now });
+    }
+    return c.json({ error: 'cannot_cancel', message: 'PI already paid' }, 409);
+  }
+  const cancelled = data as { id: string; status: string; invoice_number: string };
+
+  /* Bug #5 — reverse the PI accounting (Dr Inventory / Cr Payables → contra).
+     "取消 PI 要追溯回去". Best-effort (audit-DLQ): a reversal failure never
+     un-cancels the PI; it's idempotent so a retry / re-cancel converges. */
+  const rev = await reversePiAccounting(sb, cancelled.invoice_number);
+  if (!rev.ok) {
+    // eslint-disable-next-line no-console
+    console.error(`[pi-accounting] reversal failed for ${cancelled.invoice_number}:`, rev.status, rev.reason);
+  }
 
   // Release the GRN-line consumption: recount invoiced_qty from live PI lines —
   // this cancelled PI's lines now drop out, auto-releasing the GRN line.
   const { data: lines } = await sb.from('purchase_invoice_items')
     .select('grn_item_id').eq('purchase_invoice_id', id);
   await recomputeGrnInvoiced(sb, (lines ?? []).map((l: { grn_item_id: string | null }) => l.grn_item_id));
-  return c.json({ purchaseInvoice: data });
+  return c.json({ purchaseInvoice: { id: cancelled.id, status: cancelled.status } });
 });
 
 /* ── POST /from-grn-items ───────────────────────────────────────────────
@@ -758,6 +783,41 @@ purchaseInvoices.post('/:id/items', async (c) => {
   };
   const { data, error } = await sb.from('purchase_invoice_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
+
+  /* Bug #3/#11 — POST-INSERT over-invoice verification. The pre-check is a
+     read-then-write race: two concurrent adds against the same GRN line can each
+     read remaining and both insert → over-billed. After committing, re-read the
+     GRN line's accepted/returned + the LIVE sum of qty across all non-cancelled
+     PI lines for it; if invoiced now exceeds (accepted - returned), OUR insert
+     broke the cap → delete it + 409. (Fully DB-atomic needs an RPC — see report.) */
+  if (grnItemId) {
+    const inserted = data as unknown as { id: string } | null;
+    const { data: gi } = await sb.from('grn_items')
+      .select('qty_accepted, returned_qty').eq('id', grnItemId).maybeSingle();
+    if (gi) {
+      const g = gi as { qty_accepted: number; returned_qty: number };
+      const cap = (g.qty_accepted ?? 0) - (g.returned_qty ?? 0);
+      const { data: sib } = await sb.from('purchase_invoice_items')
+        .select('qty, purchase_invoice_id').eq('grn_item_id', grnItemId);
+      const sibRows = (sib ?? []) as Array<{ qty: number; purchase_invoice_id: string }>;
+      const piIds = [...new Set(sibRows.map((r) => r.purchase_invoice_id))];
+      const cancelled = new Set<string>();
+      if (piIds.length > 0) {
+        const { data: pis } = await sb.from('purchase_invoices').select('id, status').in('id', piIds);
+        for (const p of (pis ?? []) as Array<{ id: string; status: string }>) {
+          if (p.status === 'CANCELLED') cancelled.add(p.id);
+        }
+      }
+      const liveInvoiced = sibRows
+        .filter((r) => !cancelled.has(r.purchase_invoice_id))
+        .reduce((s, r) => s + Number(r.qty ?? 0), 0);
+      if (liveInvoiced > cap && inserted?.id) {
+        await sb.from('purchase_invoice_items').delete().eq('id', inserted.id);
+        return c.json({ error: 'qty_exceeds_remaining', requested: qty, remaining: cap - (liveInvoiced - qty) }, 409);
+      }
+    }
+  }
+
   // Consume the GRN line if this PI line is GRN-linked (manual lines consume
   // nothing). Recount invoiced_qty from live PI lines.
   if (grnItemId) await recomputeGrnInvoiced(sb, [grnItemId]);
