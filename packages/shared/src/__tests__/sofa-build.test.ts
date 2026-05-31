@@ -894,3 +894,37 @@ describe('pool-sourced modules (12 new) + Console rename', () => {
     expect(detectBundle(['3S'])).toBeNull();
   });
 });
+
+/* A5 — placed whole-unit cells: price + combo-match + label, end-to-end. */
+describe('whole-unit preset cells — placement, combo match, labelling', () => {
+  it('prices a placed 1S cell from its compartment price (a-la-carte, no bundle)', () => {
+    const p = pricing({
+      compartments: [{ compartmentId: '1S', active: true, price: 1111 }],
+      bundles: [],
+    });
+    const g = computeSofaPrice([{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], '24', p).groups[0]!;
+    expect(g.basis).toBe('a_la_carte');
+    expect(g.finalPrice).toBe(1111);
+  });
+
+  it('a combo defined with the whole-unit code 1S applies to a built 1S cell', () => {
+    const p = pricing({
+      compartments: [{ compartmentId: '1S', active: true, price: 1111 }],
+      bundles: [],
+      baseModel: '',
+      fabricTier: 'PRICE_2',
+      comboHeight: '24',
+      combos: [{
+        id: 'c1s', baseModel: '', modules: [['1S']], tier: 'PRICE_2', customerId: null,
+        pricesByHeight: { '24': 90000 }, label: null, effectiveFrom: '2026-01-01', deletedAt: null,
+      }],
+    });
+    const g = computeSofaPrice([{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], '24', p).groups[0]!;
+    expect(g.basis).toBe('combo');
+    expect(g.comboPrice).toBe(900); // 90000 centi / 100
+  });
+
+  it('describeSofaLine lists a placed 1S cell by its own code, not a bundle name', () => {
+    expect(describeSofaLine({ cells: [{ id: 'a', moduleId: '1S', x: 0, y: 0, rot: 0 }], depth: '24' })).toBe('1S');
+  });
+});
