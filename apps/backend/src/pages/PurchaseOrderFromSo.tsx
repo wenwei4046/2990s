@@ -23,6 +23,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Save, X, CheckSquare, Square, Filter } from 'lucide-react';
 import { Button } from '@2990s/design-system';
+import { fmtDateOrDash } from '@2990s/shared';
 import { VariantDescription } from '../components/VariantDescription';
 import {
   useOutstandingSoItems,
@@ -391,13 +392,13 @@ export const PurchaseOrderFromSo = () => {
     {
       /* Commander 2026-05-29 — add Processing Date column. */
       key: 'processingDate', label: 'Processing Date', width: 120, sortable: true,
-      accessor: (r) => r.processingDate ?? '',
+      accessor: (r) => fmtDateOrDash(r.processingDate ?? null),
       searchValue: (r) => r.processingDate ?? '',
       sortFn: (a, b) => String(a.processingDate ?? '').localeCompare(String(b.processingDate ?? '')),
     },
     {
       key: 'deliveryDate', label: 'Delivery Date', width: 120, sortable: true,
-      accessor: (r) => r.lineDeliveryDate ?? r.deliveryDate ?? '',
+      accessor: (r) => fmtDateOrDash((r.lineDeliveryDate ?? r.deliveryDate) ?? null),
       searchValue: (r) => r.lineDeliveryDate ?? r.deliveryDate ?? '',
       sortFn: (a, b) =>
         String(a.lineDeliveryDate ?? a.deliveryDate ?? '')

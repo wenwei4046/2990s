@@ -4,6 +4,7 @@
 // ----------------------------------------------------------------------------
 
 import { useCallback } from 'react';
+import { fmtDateOrDash } from '@2990s/shared';
 import { DetailListingShell } from '../components/DetailListingShell';
 import { useSalesInvoiceDetailListing, type DetailListingRow } from '../lib/flow-queries';
 import type { DataGridColumn } from '../components/DataGrid';
@@ -49,12 +50,12 @@ export const SalesInvoiceDetailListing = () => {
     },
     {
       key: 'invoice_date', label: 'Date', width: 100, sortable: true,
-      accessor: (r) => (r.invoice_date ?? r.line_date ?? '—') as string,
+      accessor: (r) => fmtDateOrDash((r.invoice_date ?? r.line_date) as string | null),
       searchValue: (r) => String(r.invoice_date ?? r.line_date ?? ''),
     },
     {
       key: 'due_date', label: 'Due', width: 100, sortable: true,
-      accessor: (r) => (r.due_date ?? '—') as string,
+      accessor: (r) => fmtDateOrDash(r.due_date ?? null),
       searchValue: (r) => r.due_date ?? '',
     },
     {

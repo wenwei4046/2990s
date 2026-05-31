@@ -6,6 +6,7 @@
 // ----------------------------------------------------------------------------
 
 import { useCallback } from 'react';
+import { fmtDateOrDash } from '@2990s/shared';
 import { DetailListingShell } from '../components/DetailListingShell';
 import { useDeliveryReturnDetailListing, type DetailListingRow } from '../lib/flow-queries';
 import type { DataGridColumn } from '../components/DataGrid';
@@ -49,7 +50,7 @@ export const DeliveryReturnDetailListing = () => {
     },
     {
       key: 'return_date', label: 'Date', width: 100, sortable: true,
-      accessor: (r) => (r.return_date ?? r.line_date ?? '—') as string,
+      accessor: (r) => fmtDateOrDash((r.return_date ?? r.line_date) as string | null),
       searchValue: (r) => String(r.return_date ?? r.line_date ?? ''),
     },
     {
@@ -102,12 +103,12 @@ export const DeliveryReturnDetailListing = () => {
     },
     {
       key: 'received_at', label: 'Received', width: 130, sortable: true,
-      accessor: (r) => (r.received_at ? String(r.received_at).slice(0, 10) : '—'),
+      accessor: (r) => fmtDateOrDash(r.received_at ?? null),
       searchValue: (r) => r.received_at ? String(r.received_at).slice(0, 10) : '',
     },
     {
       key: 'refunded_at', label: 'Refunded', width: 130, sortable: true,
-      accessor: (r) => (r.refunded_at ? String(r.refunded_at).slice(0, 10) : '—'),
+      accessor: (r) => fmtDateOrDash(r.refunded_at ?? null),
       searchValue: (r) => r.refunded_at ? String(r.refunded_at).slice(0, 10) : '',
     },
     {

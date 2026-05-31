@@ -5,6 +5,7 @@
 // ----------------------------------------------------------------------------
 
 import { useCallback } from 'react';
+import { fmtDateOrDash } from '@2990s/shared';
 import { DetailListingShell } from '../components/DetailListingShell';
 import { useDeliveryOrderDetailListing, type DetailListingRow } from '../lib/flow-queries';
 import type { DataGridColumn } from '../components/DataGrid';
@@ -56,7 +57,7 @@ export const DeliveryOrderDetailListing = () => {
     },
     {
       key: 'do_date', label: 'Date', width: 100, sortable: true,
-      accessor: (r) => (r.do_date ?? r.line_date ?? '—') as string,
+      accessor: (r) => fmtDateOrDash((r.do_date ?? r.line_date) as string | null),
       searchValue: (r) => String(r.do_date ?? r.line_date ?? ''),
     },
     {
@@ -96,7 +97,7 @@ export const DeliveryOrderDetailListing = () => {
     },
     {
       key: 'expected_delivery_at', label: 'Expected', width: 110, sortable: true,
-      accessor: (r) => (r.expected_delivery_at ?? '—') as string,
+      accessor: (r) => fmtDateOrDash(r.expected_delivery_at ?? null),
       searchValue: (r) => r.expected_delivery_at ?? '',
     },
     {

@@ -1592,14 +1592,14 @@ const buildColumns = (
        Duplicate "Internal DD" column removed. Commander 2026-05-28. */
     key: 'processing_date', label: 'Processing Date', width: 130, sortable: true,
     defaultHidden: true,
-    accessor: (r) => r.internal_expected_dd ?? '',
-    searchValue: (r) => r.internal_expected_dd ?? '',
+    accessor: (r) => compactDate(r.internal_expected_dd),
+    searchValue: (r) => `${r.internal_expected_dd ?? ''} ${compactDate(r.internal_expected_dd)}`,
   },
   {
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true,
     defaultHidden: true,
-    accessor: (r) => r.customer_delivery_date ?? '',
-    searchValue: (r) => r.customer_delivery_date ?? '',
+    accessor: (r) => compactDate(r.customer_delivery_date),
+    searchValue: (r) => `${r.customer_delivery_date ?? ''} ${compactDate(r.customer_delivery_date)}`,
   },
   {
     /* #19 (Commander 2026-05-29) — Payment Method summarises the per-receipt

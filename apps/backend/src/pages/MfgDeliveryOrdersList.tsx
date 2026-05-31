@@ -849,8 +849,8 @@ const buildColumns = (staffById: Map<string, string>): DataGridColumn<DoRow>[] =
   },
   {
     key: 'customer_delivery_date', label: 'Delivery Date', width: 130, sortable: true, defaultHidden: true,
-    accessor: (r) => r.customer_delivery_date ?? '',
-    searchValue: (r) => r.customer_delivery_date ?? '',
+    accessor: (r) => compactDate(r.customer_delivery_date),
+    searchValue: (r) => `${r.customer_delivery_date ?? ''} ${compactDate(r.customer_delivery_date)}`,
   },
   {
     key: 'vehicle', label: 'Vehicle', width: 120, sortable: true, defaultHidden: true,

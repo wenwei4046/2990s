@@ -274,7 +274,7 @@ export const Grns = () => {
     },
     {
       key: 'received_at', label: 'Received Date', width: 120, sortable: true,
-      accessor: (r: any) => (r.received_at ?? '').slice(0, 10),
+      accessor: (r: any) => fmtDateOrDash(r.received_at ?? null),
       searchValue: (r: any) => r.received_at ?? '',
       sortFn: (a: any, b: any) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
     },
@@ -300,7 +300,7 @@ export const Grns = () => {
     },
     {
       key: 'posted_at', label: 'Posted At', width: 120, sortable: true, defaultHidden: true,
-      accessor: (r: any) => (r.posted_at ?? '').slice(0, 10),
+      accessor: (r: any) => fmtDateOrDash(r.posted_at ?? null),
       searchValue: (r: any) => r.posted_at ?? '',
     },
     {
