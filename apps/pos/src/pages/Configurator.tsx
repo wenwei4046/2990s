@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, type BundleDef, type Cell, type Depth, type SofaProductPricing } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -225,6 +225,10 @@ export const Configurator = () => {
   // surface in the topbar action slot per UI_REFERENCE.md.
   const [quickFlip, setQuickFlip] = useState<'L' | 'R'>('R');
   const [activeDepth, setActiveDepth] = useState<Depth>('24');
+  // Quick Pick L↔R mirror (2026-06-01). Per-order toggle on the selected saved
+  // Quick Pick; reset whenever a different pick is selected. Only meaningful for
+  // asymmetric layouts (canMirror) — the card hides the control otherwise.
+  const [qpMirror, setQpMirror] = useState(false);
   // Chosen fabric + colour (spec 2026-05-24). Required before Add-to-Cart for
   // sofas; the picker resolves labels/hex/surcharge so the snapshot + LIVE
   // TOTAL render without another lookup.
@@ -700,7 +704,17 @@ export const Configurator = () => {
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
 
   // Quick Pick selection price: computed from its layout via the engine.
-  const qpPickPrice = pickedQP ? (priceForLayout(pickedQP.modules) ?? 0) : 0;
+  // effectiveQPModules applies the L↔R mirror toggle (2026-06-01) so the price,
+  // hero preview, and cart line all reflect the flipped orientation.
+  const effectiveQPModules = pickedQP
+    ? (qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules)
+    : null;
+  // A mirrored pick can't reuse its stored label (it still names the un-flipped
+  // hands), so rebuild the label from the flipped modules.
+  const qpDisplayLabel = pickedQP
+    ? (qpMirror ? buildComboLabel(effectiveQPModules!) : (pickedQP.label || buildComboLabel(pickedQP.modules)))
+    : '';
+  const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
 
   // Fabric surcharge folds onto the bundle/Quick-Pick price (spec §3.2).
   const sofaTotal = pickedQP
@@ -747,9 +761,9 @@ export const Configurator = () => {
   // line carries the exact modular arrangement (and the engine reprices it,
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
-    if (pickedQP == null || fabricSel == null) return;
-    const cells = cellsFromComboModules(pickedQP.modules, activeDepth);
-    const label = pickedQP.label || buildComboLabel(pickedQP.modules);
+    if (pickedQP == null || fabricSel == null || effectiveQPModules == null) return;
+    const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
+    const label = qpDisplayLabel;
     const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
@@ -875,7 +889,7 @@ export const Configurator = () => {
         </span>
         <span className={styles.topbarChipName}>
           {pickedQP
-            ? `${pickedQP.label || buildComboLabel(pickedQP.modules)} · ${activeDepth}"`
+            ? `${qpDisplayLabel} · ${activeDepth}"`
             : pickedSofaRow
               ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
               : p.name}
@@ -1025,6 +1039,8 @@ export const Configurator = () => {
             onPick={(id) => { setPicked(id); setPickedQP(null); }}
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
+            qpMirror={qpMirror}
+            onToggleQpMirror={() => setQpMirror((v) => !v)}
             depth={activeDepth}
             maxDepth={depthOptions[depthOptions.length - 1] ?? activeDepth}
             globalQuickPicks={globalQPItems}
@@ -1042,6 +1058,7 @@ export const Configurator = () => {
               }
               setPickedQP(item);
               setPicked(null);
+              setQpMirror(false);
             }}
             onQuickPickEdit={(item) => {
               // Load into Customize for further adjustment.
@@ -1518,6 +1535,9 @@ interface SofaQuickPickProps {
   onPick: (id: string) => void;
   quickFlip: 'L' | 'R';
   onFlipChange: (flip: 'L' | 'R') => void;
+  /** L↔R mirror toggle for the selected saved Quick Pick (2026-06-01). */
+  qpMirror?: boolean;
+  onToggleQpMirror?: () => void;
   depth: Depth;
   /** Largest seat size offered by this Model (max of depthOptions). The composed
    *  hero anchors its preview height on the layout's aspect at this size so the
@@ -1658,7 +1678,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, maxDepth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1833,6 +1853,18 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                         <Trash2 size={14} strokeWidth={1.75} />
                       </span>
                     )}
+                    {isPicked && canMirror(item.modules) && (
+                      <button
+                        type="button"
+                        className={styles.qpMirrorBtn}
+                        aria-pressed={qpMirror}
+                        onClick={(e) => { e.stopPropagation(); onToggleQpMirror?.(); }}
+                        title="Mirror left ↔ right"
+                        aria-label="Mirror left to right"
+                      >
+                        <FlipHorizontal2 size={14} strokeWidth={1.75} />
+                      </button>
+                    )}
                     {isPicked && (
                       <button
                         type="button"
@@ -1858,7 +1890,7 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             // Quick Pick selected — show its layout cells in the hero.
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview
-                cells={cellsFromComboModules(pickedQPRow.modules, depth)}
+                cells={cellsFromComboModules(qpMirror ? mirrorModules(pickedQPRow.modules) : pickedQPRow.modules, depth)}
                 depth={depth}
                 anchorAspect={qpAnchorAspect}
                 showDims
@@ -1901,6 +1933,14 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
           ) : (
             <div className={styles.qpHeroCells} />
           )}
+          {/* TV reference marker (2026-06-01) — bottom-center of the hero, sofa
+              faces it. Hero-only: NOT rendered inside SofaCellsPreview, so the
+              small rail card thumbnails stay TV-free. Pure decoration. */}
+          <div className={styles.tvBeam} aria-hidden="true" />
+          <div className={styles.tv} aria-hidden="true" title="TV — sofas face this way">
+            <div className={styles.tvScreen} />
+            <div className={styles.tvLabel}>TV</div>
+          </div>
         </div>
         <footer className={styles.qpHeroFoot}>
           <span className={styles.qpHeroFootEyebrow}>Plan view</span>
