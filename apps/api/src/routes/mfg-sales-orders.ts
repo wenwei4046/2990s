@@ -64,6 +64,25 @@ async function soHasDownstream(sb: any, soDocNo: string): Promise<{ error: strin
   return null;
 }
 
+/* Pricing trust boundary (Owner 2026-05-31).
+   The selling unit price is operator-authored on the Backend SO form, and the
+   owner ruled the selling price legitimately varies per order. So a Backend /
+   office author may set ANY selling price: the server still recomputes COST,
+   but it PERSISTS the operator's selling figure and never drift-rejects it.
+
+   The POS tablet roles (sales / sales_executive / outlet_manager) stay on the
+   server-authoritative selling price + >0.5% drift reject — this preserves the
+   CLAUDE.md anti-tamper non-negotiable (a tampered POS must never submit a
+   doctored low total). Returns true ONLY for those POS tablet callers; every
+   Backend / office role (admin, super_admin, sales_director, coordinator, …)
+   returns false and is trusted to author the price. */
+const POS_TABLET_ROLES = ['sales', 'sales_executive', 'outlet_manager'];
+async function isPosTabletCaller(sb: any, userId: string | null | undefined): Promise<boolean> {
+  if (!userId) return false;
+  const { data } = await sb.from('staff').select('role').eq('id', userId).maybeSingle();
+  return !!data && POS_TABLET_ROLES.includes(String(data.role));
+}
+
 /* PR — Commander 2026-05-28 — Server-side combo recompute.
    Fetches all active sofa_combo_pricing rows once (small table; ~64 rows
    in steady state) and returns them as SofaComboRow[] for the pure
@@ -897,21 +916,24 @@ mfgSalesOrders.post('/', async (c) => {
      `extractSofaComboLookupArgs` is retained for the POS handover path. */
   void extractSofaComboLookupArgs;
 
-  // Drift rejection retained for structural stability; `r.drift` is always
-  // false now (manual selling is accepted in recomputeFromSnapshot), so this
-  // loop never fires — but it keeps the SO atomic if a future path sets drift.
-  for (let i = 0; i < recomputes.length; i++) {
-    const r = recomputes[i];
-    if (r && r.drift) {
-      return c.json({
-        error:    'pricing_drift',
-        reason:   'Client unitPriceCenti differs >0.5% from server compute.',
-        lineIdx:  i,
-        itemCode: r.itemCode,
-        client:   Number(items[i]?.unitPriceCenti ?? 0),
-        server:   r.unit_price_sen,
-        breakdown: r.breakdown,
-      }, 400);
+  /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). Only the
+     untrusted POS tablet roles are drift-rejected; a Backend / office author
+     sets the selling price freely (the owner ruled it varies per order). */
+  const posTablet = await isPosTabletCaller(sb, user.id);
+  if (posTablet) {
+    for (let i = 0; i < recomputes.length; i++) {
+      const r = recomputes[i];
+      if (r && r.drift) {
+        return c.json({
+          error:    'pricing_drift',
+          reason:   'Client unitPriceCenti differs >0.5% from server compute.',
+          lineIdx:  i,
+          itemCode: r.itemCode,
+          client:   Number(items[i]?.unitPriceCenti ?? 0),
+          server:   r.unit_price_sen,
+          breakdown: r.breakdown,
+        }, 400);
+      }
     }
   }
   /* Task #114 — snapshot unit cost from mfg_products when client didn't.
@@ -920,8 +942,10 @@ mfgSalesOrders.post('/', async (c) => {
   const itemRows = await Promise.all(items.map(async (it, idx) => {
     const qty = Number(it.qty ?? 1);
     const recomputed = recomputes[idx] ?? null;
-    // Server-computed unit price wins. Client value is informational
-    // (already drift-checked above).
+    /* The server-computed selling price (the bound price-list figure) is always
+       persisted — the Backend is costing-only and sends no real selling price,
+       so we carry the catalog price out instead of the client's junk value.
+       POS-tablet drift is rejected above; Backend drift is accepted silently. */
     const unit = recomputed ? recomputed.unit_price_sen : Number(it.unitPriceCenti ?? 0);
     const discount = Number(it.discountCenti ?? 0);
     const lineTotal = (qty * unit) - discount;
@@ -1719,7 +1743,11 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
     sofaCombosLite,
     sofaModulePricesLite,
   );
-  if (recomputed.drift) {
+  /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). POS tablet
+     roles are drift-rejected + take the server price; Backend / office authors
+     set the selling price freely. */
+  const posTablet = await isPosTabletCaller(sb, user.id);
+  if (posTablet && recomputed.drift) {
     return c.json({
       error:    'pricing_drift',
       reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -1729,6 +1757,8 @@ mfgSalesOrders.post('/:docNo/items', async (c) => {
       breakdown: recomputed.breakdown,
     }, 400);
   }
+  /* Carry the bound price-list figure out (costing-only Backend sends no real
+     selling price). POS drift rejects above; Backend drift saves silently. */
   const unit = recomputed.unit_price_sen;
   const lineTotal = (qty * unit) - discount;
   // Commander 2026-05-28 — server-computed cost (base + Σ backend priceSen
@@ -1824,6 +1854,9 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
   const childLock = await soHasDownstream(sb, docNo);
   if (childLock) return c.json(childLock, 409);
 
+  /* Pricing trust boundary (Owner 2026-05-31, see isPosTabletCaller). */
+  const posTablet = await isPosTabletCaller(sb, user.id);
+
   // Re-derive totals if qty/price/discount changed. PR-D — also pull the
   // human-facing columns (item_code, description, uom) for the audit diff.
   const { data: prev } = await sb.from('mfg_sales_order_items')
@@ -1887,7 +1920,7 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       sofaCombosPatch,
       sofaModulePricesPatch,
     );
-    if (recomputedPatch.drift) {
+    if (posTablet && recomputedPatch.drift) {
       return c.json({
         error:    'pricing_drift',
         reason:   'Client unitPriceCenti differs >0.5% from server compute.',
@@ -1898,6 +1931,9 @@ mfgSalesOrders.patch('/:docNo/items/:itemId', async (c) => {
       }, 400);
     }
   }
+  /* Carry the bound price-list figure out when a recompute ran (costing-only
+     Backend sends no real selling price). POS drift rejects above; Backend
+     drift saves silently. */
   const unit = recomputedPatch ? recomputedPatch.unit_price_sen : clientUnit;
   /* Commander 2026-05-28 — cost snapshot on PATCH. Order of precedence:
        1. Client sent unitCostCenti > 0 → use it (explicit override).
