@@ -631,7 +631,11 @@ export function useCreatePosFromSoItems() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
-      picks: Array<{ soItemId: string; qty: number }>;
+      /* Commander 2026-05-31 — each pick now carries its own chosen supplier
+         (MRP picks supplier per shortage SO line). NULL = let the server fall
+         back to the SKU's main supplier. The backend groups by
+         (warehouse, supplier). */
+      picks: Array<{ soItemId: string; qty: number; supplierId?: string | null }>;
       /* Commander 2026-05-28 — Expected Delivery + Purchase Location are no
          longer asked: the server derives them per-line from the source SO.
          Kept optional for any legacy caller that still wants to force them. */

@@ -323,6 +323,7 @@ export const PurchaseReturnDetail = () => {
               <tr>
                 <th>Item</th>
                 <th>Group</th>
+                <th>Warehouse</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Total</th>
@@ -346,6 +347,9 @@ export const PurchaseReturnDetail = () => {
                       })()}
                     </td>
                     <td className={styles.muted}>{it.item_group ?? it.material_kind ?? '—'}</td>
+                    {/* Per-line ship-from warehouse (Agent D, TASK #32): the same
+                        warehouse the PR OUT pulls stock from. Display-only. */}
+                    <td className={styles.muted}>{(it.warehouse_code as string | null) ?? '—'}</td>
 
                     {/* Qty(returned) / Unit are inline-editable in Edit mode (no
                         per-line modal). */}

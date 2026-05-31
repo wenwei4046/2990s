@@ -27,7 +27,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, Plus,
+  ArrowLeft, FileText, Pencil, Trash2, Printer, Save, Ban, ChevronDown, ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { buildVariantSummary } from '@2990s/shared';
@@ -100,6 +100,10 @@ type GrnItemRow = Record<string, unknown> & {
   material_kind?: string | null;
   description?: string | null;
   variants?: Record<string, unknown> | null;
+  /* Bug #2 (2026-05-31) — server-resolved per-line source PO number + the GRN's
+     receive date, so each line surfaces "received from which PO" + "receive date". */
+  source_po_number?: string | null;
+  received_at?: string | null;
 };
 
 const headerSnapshot = (g: any): HeaderDraft => ({
@@ -287,6 +291,22 @@ export const GoodsReceivedDetail = () => {
             {STATUS_LABEL[grn.status as string] ?? String(grn.status)}
           </span>
           <RelationshipMapButton type="grn" id={id} />
+          {/* From Purchase Order — Commander 2026-05-31: the EDIT flow uses the
+              SAME top-level convert-from-PO picker as Create GR (a GRN is built by
+              CONVERTING from POs, aggregating the supplier's outstanding PO lines
+              for THIS warehouse — not a free line-by-line add). Mirrors GrnNew's
+              header action; appends the picked lines into THIS GRN. Shown only in
+              Edit mode and never while locked (cancelled / closed / has PI-PR). */}
+          {isEditing && !isLocked && (
+            <Button
+              variant="ghost" size="md"
+              onClick={() => navigate(`/grns/from-po?appendToGrn=${grn.id}`)}
+              title="Add the supplier's outstanding PO lines for this warehouse into this GRN"
+            >
+              <ArrowRightLeft {...ICON} />
+              <span>From Purchase Order</span>
+            </Button>
+          )}
           <Button variant="ghost" size="md" onClick={handlePrint}>
             <Printer {...ICON} />
             <span>Print PDF</span>
@@ -347,21 +367,10 @@ export const GoodsReceivedDetail = () => {
       <section className={styles.card}>
         <header className={styles.cardHeader}>
           <h2 className={styles.cardTitle}>Line Items ({visibleItems.length})</h2>
-          {/* Add from PO — Edit mode only, and never while the GRN is locked
-              (cancelled / closed / has a downstream PI-PR). Commander 2026-05-31:
-              opens the SAME multi-pick "From PO (multi)" interface as Create GR,
-              scoped to this GRN's supplier + warehouse, appending the picked PO
-              lines straight into THIS GRN. A GRN aggregates many POs, so it keeps
-              converting from PO instead of offering a free add-line. */}
-          {isEditing && !isLocked && (
-            <Button
-              variant="ghost" size="sm"
-              onClick={() => navigate(`/grns/from-po?appendToGrn=${grn.id}`)}
-            >
-              <Plus {...ICON} />
-              <span>Add from PO</span>
-            </Button>
-          )}
+          {/* Entry-point consistency (Commander 2026-05-31): the convert-from-PO
+              action now lives as a prominent TOP-LEVEL header button (see actions
+              row above), mirroring Create GR — NOT a buried line-level add. A GRN
+              is built by CONVERTING from POs, never by free add-line. */}
         </header>
 
         {visibleItems.length === 0 ? (
@@ -455,6 +464,25 @@ export const GoodsReceivedDetail = () => {
                   {variantSummary && (
                     <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>{variantSummary}</div>
                   )}
+
+                  {/* Bug #2 (2026-05-31) — "received from which PO" + "receive date"
+                      per line. source_po_number is server-resolved from the line's
+                      purchase_order_item_id (null for manual lines); received_at
+                      mirrors the GRN header date. */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
+                    <span>
+                      Received from PO:{' '}
+                      <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg)' }}>
+                        {it.source_po_number ?? '— (manual)'}
+                      </strong>
+                    </span>
+                    <span>
+                      Receive date:{' '}
+                      <strong style={{ color: 'var(--fg)' }}>
+                        {(it.received_at ?? grn.received_at ?? '').slice(0, 10) || '—'}
+                      </strong>
+                    </span>
+                  </div>
 
                   {/* Fields row — Received · Unit Price · Discount · Delivery Date.
                       Editable inline in Edit; read-only display in View. */}

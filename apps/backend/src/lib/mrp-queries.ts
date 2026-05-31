@@ -37,6 +37,11 @@ export type MrpLine = {
   poNumber: string | null;
   poEta: string | null;
   shortageQty: number;
+  /* Commander 2026-05-31 — when source==='po', the covering PO's supplier so a
+     covered line shows it READ-ONLY (a raised PO's supplier can't change).
+     NULL on stock / shortage lines. */
+  poSupplierId: string | null;
+  poSupplierName: string | null;
 };
 
 export type MrpSku = {

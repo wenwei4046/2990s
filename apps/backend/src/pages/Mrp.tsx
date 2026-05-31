@@ -65,6 +65,15 @@ const WH_NONE = 'NOWH';
 const skuGroupKey = (s: MrpSku) => `${s.warehouseId ?? WH_NONE}|${s.itemCode}`;
 const rowKey = (s: MrpSku) => `${s.warehouseId ?? WH_NONE}|${s.itemCode}${s.variantKey}`;
 
+/* The SKU's default supplier id for a freshly-shown shortage line — its main
+   supplier (suppliers is main-first), else the first bound supplier, else null
+   (unbound SKU: no PO can be raised until a supplier is assigned). */
+const skuDefaultSupplierId = (s: MrpSku): string | null =>
+  (s.suppliers.find((x) => x.isMain) ?? s.suppliers[0])?.supplierId ?? null;
+
+/* Only SHORTAGE lines are selectable / orderable. */
+const shortageLinesOf = (s: MrpSku) => s.lines.filter((l) => l.source === 'shortage' && l.shortageQty > 0 && l.soItemId);
+
 function groupByModel(skus: MrpSku[]): ModelGroup[] {
   const map = new Map<string, ModelGroup>();
   for (const s of skus) {
@@ -140,6 +149,9 @@ function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
       orderByDate: s.orderByDate, qty: s.qty,
       source: s.shortageQty > 0 ? 'shortage' : 'po', poNumber: s.poNumber, poEta: s.poEta,
       shortageQty: s.shortageQty,
+      /* Sofa SETs don't carry the covering PO's supplier; covered sofa lines
+         show the PO number only (read-only supplier unavailable here). */
+      poSupplierId: null, poSupplierName: null,
     });
   }
   return [...map.values()];
@@ -154,6 +166,9 @@ export const Mrp = () => {
      view reuses expandedVariants (each sofa row is variant-level). */
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   const [expandedVariants, setExpandedVariants] = useState<Set<string>>(new Set());
+  /* Commander 2026-05-31 — selection lives at the SO ORDER-LINE level: each
+     individual shortage line (soItemId) has its own checkbox. The Model/Variant
+     checkboxes are parent "select all shortage lines beneath me" toggles. */
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [poMode, setPoMode] = useState<'combined' | 'per-so'>('combined');
   /* Commander 2026-05-29 — turnover control: order by delivery-date window.
@@ -167,11 +182,13 @@ export const Mrp = () => {
      show ONLY the rows that still need ordering (shortage > 0), so the operator
      can go straight to Proceed PO without wading past the Ready ones. */
   const [onlyShort, setOnlyShort] = useState<boolean>(false);
-  /* Commander 2026-05-29 — switch a SKU to an alternate supplier in-place
-     (AutoCount Post-to-PO). { itemCode: supplierId }; wins over main binding. */
-  const [supplierOverride, setSupplierOverride] = useState<Record<string, string>>({});
-  const setRowSupplier = (itemCode: string, supplierId: string) =>
-    setSupplierOverride((prev) => ({ ...prev, [itemCode]: supplierId }));
+  /* Commander 2026-05-31 — supplier is chosen PER SHORTAGE SO LINE (different
+     lines of the same SKU may pick different suppliers). { soItemId: supplierId };
+     defaults to the SKU's main supplier when no entry. Covered / already-PO'd
+     lines never appear here — they show the PO's supplier read-only. */
+  const [lineSupplier, setLineSupplier] = useState<Record<string, string>>({});
+  const setLineSupplierId = (soItemId: string, supplierId: string) =>
+    setLineSupplier((prev) => ({ ...prev, [soItemId]: supplierId }));
   /* In-app result dialog (Commander 2026-05-29: confirm INSIDE the page, not a
      browser window.confirm/alert). null = closed.
      'confirm' (Commander 2026-05-29) — Proceed PO first opens a confirm step so
@@ -180,7 +197,7 @@ export const Mrp = () => {
   const [dialog, setDialog] = useState<
     | { kind: 'info'; title: string; body: string }
     | { kind: 'created'; title: string; body: string }
-    | { kind: 'confirm'; picks: Array<{ soItemId: string; qty: number }>; orderedCodes: Set<string>; count: number; units: number }
+    | { kind: 'confirm'; picks: Array<{ soItemId: string; qty: number; supplierId: string | null }>; orderedCodes: Set<string>; count: number; units: number }
     | null
   >(null);
   /* The Expected Delivery date the operator typed into the confirm dialog
@@ -249,13 +266,6 @@ export const Mrp = () => {
       return next;
     });
 
-  const toggleSelect = (key: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
-
   const expandAll = () => {
     setExpandedModels(new Set(models.map((m) => m.groupKey)));
     setExpandedVariants(new Set(viewSkus.map(rowKey)));
@@ -276,23 +286,19 @@ export const Mrp = () => {
      PO header expected_at AND every PO line's delivery date for the whole batch;
      when blank we send nothing so it keeps using each SO's own dates. */
   const runCreatePos = (
-    picks: Array<{ soItemId: string; qty: number }>,
-    orderedCodes: Set<string>,
+    picks: Array<{ soItemId: string; qty: number; supplierId: string | null }>,
+    _orderedCodes: Set<string>,
     expectedAt?: string,
   ) => {
     if (picks.length === 0) {
       setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) lines in the current selection / window.' });
       return;
     }
-    // Only send overrides for the SKUs actually being ordered.
-    const supplierByCode: Record<string, string> = {};
-    for (const [code, sup] of Object.entries(supplierOverride)) {
-      if (orderedCodes.has(code) && sup) supplierByCode[code] = sup;
-    }
-    /* Commander 2026-05-31 — every convert from the MRP page is reference-only:
-       fromMrp tags the PO line so it never locks the source SO line, and the
-       same SO line stays infinitely convertible from MRP. */
-    const body = { picks, mode: poMode, supplierByCode, fromMrp: true, ...(expectedAt ? { expectedAt } : {}) };
+    /* Commander 2026-05-31 — supplier now travels PER PICK (the per-line
+       dropdown), so we no longer send supplierByCode/mode from MRP — the
+       backend groups by (warehouse, supplier). fromMrp tags every PO line as
+       reference-only so it never locks the source SO line (infinite-convert). */
+    const body = { picks, fromMrp: true, ...(expectedAt ? { expectedAt } : {}) };
     createPos.mutate(body, {
       onSuccess: (res) => {
         if (!res.total) {
@@ -345,24 +351,30 @@ export const Mrp = () => {
     });
   };
 
-  /* General — picks (+ codes + unit count) for the SHORT lines of the given
-     SKUs (shortage qty only). Pure gather; the confirm dialog fires the order. */
-  const gatherShortages = (skus: MrpResponse['skus']) => {
-    const picks = skus
-      .filter((s) => s.shortage > 0)
-      .flatMap((s) => s.lines
-        .filter((l) => l.source === 'shortage' && l.shortageQty > 0)
-        .map((l) => ({ soItemId: l.soItemId, qty: l.shortageQty })))
-      .filter((p) => p.soItemId);
-    const orderedCodes = new Set(skus.filter((s) => s.shortage > 0).map((s) => s.itemCode));
-    const units = skus.filter((s) => s.shortage > 0).reduce((a, s) => a + s.shortage, 0);
+  /* General — picks (+ codes + unit count) from SHORTAGE order-lines. When a
+     line-level selection exists, only the selected soItemIds are gathered;
+     otherwise every visible shortage line. Each pick carries its per-line
+     chosen supplier (defaulting to the SKU's main supplier). */
+  const gatherShortages = (skus: MrpResponse['skus'], onlySelected: boolean) => {
+    const picks: Array<{ soItemId: string; qty: number; supplierId: string | null }> = [];
+    const orderedCodes = new Set<string>();
+    let units = 0;
+    for (const s of skus) {
+      const def = skuDefaultSupplierId(s);
+      for (const l of shortageLinesOf(s)) {
+        if (onlySelected && !selected.has(l.soItemId)) continue;
+        picks.push({ soItemId: l.soItemId, qty: l.shortageQty, supplierId: lineSupplier[l.soItemId] ?? def });
+        orderedCodes.add(s.itemCode);
+        units += l.shortageQty;
+      }
+    }
     return { picks, orderedCodes, units };
   };
 
   /* Sofa — same per-SO-line shortage picks as General (the adapter already
      unified the sets into MrpSku lines), PLUS the pillow pull-in. */
-  const gatherSofa = (skus: MrpResponse['skus']) => {
-    const base = gatherShortages(skus);
+  const gatherSofa = (skus: MrpResponse['skus'], onlySelected: boolean) => {
+    const base = gatherShortages(skus, onlySelected);
     const picks = [...base.picks];
     const orderedCodes = new Set(base.orderedCodes);
     let units = base.units;
@@ -382,55 +394,61 @@ export const Mrp = () => {
     const already = new Set(picks.map((p) => p.soItemId));
     const accessoryLines = (data?.skus ?? [])
       .filter((s) => (s.category ?? '').toUpperCase() === 'ACCESSORY')
-      .flatMap((s) => s.lines.map((l) => ({ line: l, itemCode: s.itemCode })))
+      .flatMap((s) => s.lines.map((l) => ({ line: l, itemCode: s.itemCode, supplierId: lineSupplier[l.soItemId] ?? skuDefaultSupplierId(s) })))
       .filter(({ line }) =>
         line.source === 'shortage' && line.shortageQty > 0 && line.soItemId
         && setDocs.has(line.soDocNo) && (!hasWindow || lineInWindow(line)));
-    for (const { line, itemCode } of accessoryLines) {
+    for (const { line, itemCode, supplierId } of accessoryLines) {
       if (already.has(line.soItemId)) continue;
       already.add(line.soItemId);
-      picks.push({ soItemId: line.soItemId, qty: line.shortageQty });
+      picks.push({ soItemId: line.soItemId, qty: line.shortageQty, supplierId });
       orderedCodes.add(itemCode);
       units += line.shortageQty;
     }
     return { picks, orderedCodes, units };
   };
 
-  // Shortage variants (both views are now hierarchical Model → Variant → SO).
+  /* Commander 2026-05-31 — selection is now per SO ORDER-LINE (soItemId). Every
+     shortage line in view is one selectable unit. */
   const shortageSkus = viewSkus.filter((s) => s.shortage > 0);
-  const selectedShortageSkus = shortageSkus.filter((s) => selected.has(rowKey(s)));
+  // All selectable shortage line ids currently in view (header select-all set).
+  const allShortageLineIds = shortageSkus.flatMap((s) => shortageLinesOf(s).map((l) => l.soItemId));
 
-  /* Sofa set-selection (Commander 2026-05-30 — "选1 就整套一起选 同个SO"). A sofa
+  /* Sofa set-selection (Commander 2026-05-30 — "选1 就整套一起选 同个SO"): a sofa
      is colour-matched and proceeded as ONE PO per SO, so selecting any sofa
-     variant must select every sofa variant that shares one of its Sales Orders.
-     Build two indexes off the sofa shortage lines: SO doc ↔ the rowKeys that
-     need it. (General selection stays per-variant.) */
-  const docToKeys = new Map<string, Set<string>>();
-  const keyToDocs = new Map<string, Set<string>>();
+     shortage line must also select every sofa shortage line on the SAME SO. Now
+     that selection is per soItemId, index SO doc ↔ the shortage line ids that
+     share it. (General selection stays strictly per line.) */
+  const docToLineIds = new Map<string, Set<string>>();
+  const lineIdToDocs = new Map<string, Set<string>>();
   if (view === 'sofa') {
     for (const s of shortageSkus) {
-      const k = rowKey(s);
-      for (const l of s.lines) {
-        if (l.source !== 'shortage' || l.shortageQty <= 0) continue;
-        let dk = docToKeys.get(l.soDocNo);
-        if (!dk) { dk = new Set(); docToKeys.set(l.soDocNo, dk); }
-        dk.add(k);
-        let kd = keyToDocs.get(k);
-        if (!kd) { kd = new Set(); keyToDocs.set(k, kd); }
+      for (const l of shortageLinesOf(s)) {
+        let dk = docToLineIds.get(l.soDocNo);
+        if (!dk) { dk = new Set(); docToLineIds.set(l.soDocNo, dk); }
+        dk.add(l.soItemId);
+        let kd = lineIdToDocs.get(l.soItemId);
+        if (!kd) { kd = new Set(); lineIdToDocs.set(l.soItemId, kd); }
         kd.add(l.soDocNo);
       }
     }
   }
-  const sofaSiblings = (keys: Iterable<string>): Set<string> => {
+  /* Expand a set of line ids to include every same-SO sibling line (sofa only;
+     in General the input set is returned unchanged). */
+  const expandSofaSiblings = (ids: Iterable<string>): Set<string> => {
     const out = new Set<string>();
-    for (const k of keys) {
-      out.add(k);
-      for (const d of keyToDocs.get(k) ?? []) for (const sib of docToKeys.get(d) ?? []) out.add(sib);
+    for (const id of ids) {
+      out.add(id);
+      if (view === 'sofa') {
+        for (const d of lineIdToDocs.get(id) ?? []) for (const sib of docToLineIds.get(d) ?? []) out.add(sib);
+      }
     }
     return out;
   };
-  const toggleSofaVariant = (key: string) => {
-    const group = sofaSiblings([key]);
+
+  /* Toggle one SO order-line (General = just that line; Sofa = its whole set). */
+  const toggleSelectLine = (soItemId: string) => {
+    const group = expandSofaSiblings([soItemId]);
     setSelected((prev) => {
       const next = new Set(prev);
       const allOn = [...group].every((k) => next.has(k));
@@ -438,8 +456,10 @@ export const Mrp = () => {
       return next;
     });
   };
-  const setSofaModelSelected = (g: ModelGroup, on: boolean) => {
-    const group = sofaSiblings(g.variants.filter((v) => v.shortage > 0).map(rowKey));
+  /* Parent toggle: select / deselect every shortage line beneath the given
+     line ids (used by the Model + Variant parent checkboxes). */
+  const setLinesSelected = (ids: string[], on: boolean) => {
+    const group = expandSofaSiblings(ids);
     setSelected((prev) => {
       const next = new Set(prev);
       for (const k of group) { if (on) next.add(k); else next.delete(k); }
@@ -447,9 +467,10 @@ export const Mrp = () => {
     });
   };
 
-  // View-agnostic counts the header / select-all / summary read from.
-  const shortCount = shortageSkus.length;
-  const selectedShortCount = selectedShortageSkus.length;
+  // View-agnostic counts the header / select-all / summary read from — now
+  // line-based (each shortage SO order-line is one unit).
+  const shortCount = allShortageLineIds.length;
+  const selectedShortCount = allShortageLineIds.filter((id) => selected.has(id)).length;
   const shortageUnits = shortageSkus.reduce((a, s) => a + s.shortage, 0);
   const inDemandCount = viewSkus.length;
 
@@ -457,26 +478,17 @@ export const Mrp = () => {
   const someShortSelected = selectedShortCount > 0 && !allShortSelected;
   const toggleSelectAll = () => {
     if (allShortSelected) { setSelected(new Set()); return; }
-    setSelected(new Set(shortageSkus.map(rowKey)));
+    setSelected(new Set(allShortageLineIds));
   };
-  /* Toggle every shortage variant under a model on/off as a unit (General). */
-  const setModelSelected = (g: ModelGroup, on: boolean) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const v of g.variants) {
-        if (v.shortage > 0) { if (on) next.add(rowKey(v)); else next.delete(rowKey(v)); }
-      }
-      return next;
-    });
 
-  /* Proceed PO — gather the selected shortages (or all if none selected) and
-     open the confirm dialog so the operator can OPTIONALLY pick one Expected
-     Delivery date for the whole batch before the POs are generated. */
+  /* Proceed PO — gather the selected shortage lines (or all visible shortage
+     lines if none selected) and open the confirm dialog so the operator can
+     OPTIONALLY pick one Expected Delivery date for the whole batch. */
   const onProceed = () => {
-    const source = selectedShortageSkus.length > 0 ? selectedShortageSkus : shortageSkus;
+    const onlySelected = selectedShortCount > 0;
     const { picks, orderedCodes, units } = view === 'sofa'
-      ? gatherSofa(source)
-      : gatherShortages(source);
+      ? gatherSofa(shortageSkus, onlySelected)
+      : gatherShortages(shortageSkus, onlySelected);
     if (picks.length === 0) {
       setDialog({ kind: 'info', title: 'Nothing to order', body: 'No uncovered (shortage) lines in the current selection / window.' });
       return;
@@ -690,10 +702,10 @@ export const Mrp = () => {
                 expandedVariants={expandedVariants}
                 onToggleVariant={toggleVariant}
                 selected={selected}
-                onSelectVariant={view === 'sofa' ? toggleSofaVariant : toggleSelect}
-                onSelectModel={view === 'sofa' ? setSofaModelSelected : setModelSelected}
-                chosenSupplierId={supplierOverride[g.itemCode] ?? null}
-                onSupplierChange={(sid) => setRowSupplier(g.itemCode, sid)}
+                onToggleLine={toggleSelectLine}
+                onSetLinesSelected={setLinesSelected}
+                lineSupplier={lineSupplier}
+                onLineSupplierChange={setLineSupplierId}
               />
             ))}
           </tbody>
@@ -764,23 +776,23 @@ export const Mrp = () => {
   );
 };
 
-/* Supplier cell — shared by Model rows and the flat sofa rows. Single supplier
-   shows the name (code as tooltip); multiple show a switch dropdown. */
-const SupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
+/* Per-shortage-line supplier dropdown (Commander 2026-05-31). Each shortage SO
+   line picks its own supplier, defaulting to the SKU's main supplier; different
+   lines of the same SKU MAY differ. Unbound SKU → "— none —" (can't be ordered
+   until a supplier is assigned). */
+const LineSupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
   suppliers: MrpSku['suppliers']; chosenSupplierId: string | null;
   onSupplierChange: (supplierId: string) => void;
 }) => {
   if (suppliers.length === 0) return <span className={styles.noSupplier}>— none —</span>;
-  if (suppliers.length === 1) {
-    return <span title={suppliers[0]!.code}><Truck {...ICON} /> {suppliers[0]!.name}</span>;
-  }
   const defaultSupplierId = suppliers.find((s) => s.isMain)?.supplierId ?? suppliers[0]!.supplierId;
   return (
     <select
       className={styles.supplierSelect}
       value={chosenSupplierId ?? defaultSupplierId}
       onChange={(e) => onSupplierChange(e.target.value)}
-      title="Switch supplier for this SKU before posting the PO"
+      onClick={(e) => e.stopPropagation()}
+      title="Supplier for this SO line — defaults to the SKU's main supplier"
     >
       {suppliers.map((s) => (
         <option key={s.supplierId} value={s.supplierId}>
@@ -791,12 +803,17 @@ const SupplierCell = ({ suppliers, chosenSupplierId, onSupplierChange }: {
   );
 };
 
+/* All shortage line ids beneath a variant (sku). */
+const shortageLineIdsOf = (s: MrpSku): string[] =>
+  s.lines.filter((l) => l.source === 'shortage' && l.shortageQty > 0 && l.soItemId).map((l) => l.soItemId);
+
 /* General tab — one Model and its variants. Multi-variant models expand into
    variant sub-rows (each expandable to its SO orders). Single-variant models
-   (mattress, accessory) expand straight to their SO orders. */
+   (mattress, accessory) expand straight to their SO orders. Selection + supplier
+   live on each SO ORDER LINE; the Model / Variant checkboxes are parent toggles. */
 const ModelRows = ({
   group, modelOpen, onToggleModel, expandedVariants, onToggleVariant,
-  selected, onSelectVariant, onSelectModel, chosenSupplierId, onSupplierChange,
+  selected, onToggleLine, onSetLinesSelected, lineSupplier, onLineSupplierChange,
 }: {
   group: ModelGroup;
   modelOpen: boolean;
@@ -804,16 +821,17 @@ const ModelRows = ({
   expandedVariants: Set<string>;
   onToggleVariant: (key: string) => void;
   selected: Set<string>;
-  onSelectVariant: (key: string) => void;
-  onSelectModel: (g: ModelGroup, on: boolean) => void;
-  chosenSupplierId: string | null;
-  onSupplierChange: (supplierId: string) => void;
+  onToggleLine: (soItemId: string) => void;
+  onSetLinesSelected: (ids: string[], on: boolean) => void;
+  lineSupplier: Record<string, string>;
+  onLineSupplierChange: (soItemId: string, supplierId: string) => void;
 }) => {
   const short = group.shortage > 0;
-  const shortVariants = group.variants.filter((v) => v.shortage > 0);
-  const selectedShort = shortVariants.filter((v) => selected.has(rowKey(v)));
-  const allSel = shortVariants.length > 0 && selectedShort.length === shortVariants.length;
-  const someSel = selectedShort.length > 0 && !allSel;
+  // Parent (Model) checkbox state — over every shortage line beneath the model.
+  const modelLineIds = group.variants.flatMap(shortageLineIdsOf);
+  const modelSel = modelLineIds.filter((id) => selected.has(id));
+  const allSel = modelLineIds.length > 0 && modelSel.length === modelLineIds.length;
+  const someSel = modelSel.length > 0 && !allSel;
   /* Single-variant models (mattress, single-variant bedframe, single-config
      sofa) collapse to 2 levels: expanding the model jumps straight to its SO
      orders (Commander 2026-05-30 — bedframe must show which SO needs it without
@@ -828,13 +846,13 @@ const ModelRows = ({
     <>
       <tr className={`${styles.skuRow} ${short ? styles.skuRowShort : ''}`} onClick={onToggleModel}>
         <td className={styles.colSelect} onClick={(e) => e.stopPropagation()}>
-          {short && (
+          {modelLineIds.length > 0 && (
             <input
               type="checkbox"
               checked={allSel}
               ref={(el) => { if (el) el.indeterminate = someSel; }}
-              onChange={(e) => onSelectModel(group, e.target.checked)}
-              aria-label={`Select all shortages under ${group.itemCode}`}
+              onChange={(e) => onSetLinesSelected(modelLineIds, e.target.checked)}
+              aria-label={`Select all shortage lines under ${group.itemCode}`}
             />
           )}
         </td>
@@ -857,8 +875,14 @@ const ModelRows = ({
         <td className={styles.num}>{group.stock}</td>
         <td className={styles.num}>{group.poOutstanding || '—'}</td>
         <td className={`${styles.num} ${short ? styles.shortNum : ''}`}>{short ? group.shortage : '—'}</td>
+        {/* Supplier moved to each shortage SO line (Commander 2026-05-31). The
+            Model row shows the SKU's main supplier as a hint only. */}
         <td className={styles.supplierCell} onClick={(e) => e.stopPropagation()}>
-          <SupplierCell suppliers={group.suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
+          {group.suppliers.length === 0
+            ? <span className={styles.noSupplier}>— none —</span>
+            : <span title={group.suppliers.find((s) => s.isMain)?.code ?? group.suppliers[0]!.code}>
+                <Truck {...ICON} /> {(group.suppliers.find((s) => s.isMain) ?? group.suppliers[0]!).name}
+              </span>}
         </td>
       </tr>
 
@@ -874,7 +898,8 @@ const ModelRows = ({
                 <span className={styles.variantTag}>{onlyVariant.variantLabel}</span>
               </div>
             )}
-            <OrderLines lines={onlyVariant.lines} />
+            <OrderLines sku={onlyVariant} selected={selected} onToggleLine={onToggleLine}
+              lineSupplier={lineSupplier} onLineSupplierChange={onLineSupplierChange} />
           </td>
         </tr>
       )}
@@ -884,16 +909,22 @@ const ModelRows = ({
         const k = rowKey(v);
         const vShort = v.shortage > 0;
         const vOpen = expandedVariants.has(k);
+        // Variant parent checkbox — over this variant's shortage lines.
+        const vLineIds = shortageLineIdsOf(v);
+        const vSel = vLineIds.filter((id) => selected.has(id));
+        const vAllSel = vLineIds.length > 0 && vSel.length === vLineIds.length;
+        const vSomeSel = vSel.length > 0 && !vAllSel;
         return (
           <FragmentRow key={k}>
             <tr className={`${styles.variantRow} ${vShort ? styles.variantRowShort : ''}`} onClick={() => onToggleVariant(k)}>
               <td className={styles.colSelect} onClick={(e) => e.stopPropagation()}>
-                {vShort && (
+                {vLineIds.length > 0 && (
                   <input
                     type="checkbox"
-                    checked={selected.has(k)}
-                    onChange={() => onSelectVariant(k)}
-                    aria-label={`Select ${v.variantLabel ?? v.itemCode} to order`}
+                    checked={vAllSel}
+                    ref={(el) => { if (el) el.indeterminate = vSomeSel; }}
+                    onChange={(e) => onSetLinesSelected(vLineIds, e.target.checked)}
+                    aria-label={`Select all shortage lines under ${v.variantLabel ?? v.itemCode}`}
                   />
                 )}
               </td>
@@ -915,7 +946,10 @@ const ModelRows = ({
             {vOpen && (
               <tr className={styles.detailRow}>
                 <td /><td />
-                <td colSpan={8}><OrderLines lines={v.lines} /></td>
+                <td colSpan={8}>
+                  <OrderLines sku={v} selected={selected} onToggleLine={onToggleLine}
+                    lineSupplier={lineSupplier} onLineSupplierChange={onLineSupplierChange} />
+                </td>
               </tr>
             )}
           </FragmentRow>
@@ -928,29 +962,66 @@ const ModelRows = ({
 /* Tiny helper so multi-element returns inside .map keep a single key. */
 const FragmentRow = ({ children }: { children: ReactNode }) => <>{children}</>;
 
-/* The SO-order child table — shared by every leaf level. */
-const OrderLines = ({ lines }: { lines: MrpLine[] }) => (
+/* The SO-order child table — shared by every leaf level. Each shortage line has
+   its own select checkbox + supplier dropdown; covered lines show the covering
+   PO's supplier read-only (Commander 2026-05-31). */
+const OrderLines = ({ sku, selected, onToggleLine, lineSupplier, onLineSupplierChange }: {
+  sku: MrpSku;
+  selected: Set<string>;
+  onToggleLine: (soItemId: string) => void;
+  lineSupplier: Record<string, string>;
+  onLineSupplierChange: (soItemId: string, supplierId: string) => void;
+}) => (
   <table className={styles.childTable}>
     <thead>
       <tr>
+        <th className={styles.colSelect} />
         <th>SO No</th>
         <th>Customer</th>
         <th>Processing</th>
         <th>Delivery Date</th>
         <th className={styles.num}>Qty</th>
         <th>Coverage</th>
+        <th>Supplier</th>
       </tr>
     </thead>
     <tbody>
-      {lines.map((ln, i) => <ChildLine key={`${ln.soDocNo}-${i}`} ln={ln} />)}
+      {sku.lines.map((ln, i) => (
+        <ChildLine
+          key={`${ln.soDocNo}-${i}`}
+          ln={ln}
+          suppliers={sku.suppliers}
+          selected={selected.has(ln.soItemId)}
+          onToggleLine={() => onToggleLine(ln.soItemId)}
+          chosenSupplierId={lineSupplier[ln.soItemId] ?? null}
+          onSupplierChange={(sid) => onLineSupplierChange(ln.soItemId, sid)}
+        />
+      ))}
     </tbody>
   </table>
 );
 
-const ChildLine = ({ ln }: { ln: MrpLine }) => {
-  const short = ln.source === 'shortage';
+const ChildLine = ({ ln, suppliers, selected, onToggleLine, chosenSupplierId, onSupplierChange }: {
+  ln: MrpLine;
+  suppliers: MrpSku['suppliers'];
+  selected: boolean;
+  onToggleLine: () => void;
+  chosenSupplierId: string | null;
+  onSupplierChange: (supplierId: string) => void;
+}) => {
+  const short = ln.source === 'shortage' && ln.shortageQty > 0 && Boolean(ln.soItemId);
   return (
     <tr className={short ? styles.childShort : undefined}>
+      <td className={styles.colSelect}>
+        {short && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleLine}
+            aria-label={`Select ${ln.soDocNo} to order`}
+          />
+        )}
+      </td>
       <td className={styles.codeCell}>{ln.soDocNo}</td>
       <td>{ln.debtorName ?? '—'}</td>
       <td>{fmtDate(ln.processingDate)}</td>
@@ -970,6 +1041,18 @@ const ChildLine = ({ ln }: { ln: MrpLine }) => {
             SHORT{ln.shortageQty > 1 ? ` ×${ln.shortageQty}` : ''}
           </span>
         )}
+      </td>
+      <td className={styles.supplierCell}>
+        {short
+          /* Shortage line → editable per-line supplier dropdown. */
+          ? <LineSupplierCell suppliers={suppliers} chosenSupplierId={chosenSupplierId} onSupplierChange={onSupplierChange} />
+          /* Covered / already-PO'd line → the PO's supplier, READ-ONLY (a raised
+             PO's supplier can't change). Stock lines show a dash. */
+          : ln.source === 'po'
+            ? <span className={styles.poSupplierRO} title="Supplier locked — this line is already on a PO">
+                <Truck {...ICON} /> {ln.poSupplierName ?? '—'}
+              </span>
+            : <span className={styles.whNone}>—</span>}
       </td>
     </tr>
   );

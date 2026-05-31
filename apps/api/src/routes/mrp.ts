@@ -83,7 +83,7 @@ type PoLineRow = {
   delivery_date: string | null;
   warehouse_id: string | null;        // per-line ship-to warehouse (overrides header)
   so_item_id: string | null;          // SO line this PO line was raised from (informational only now)
-  po: { po_number: string; status: string; expected_at: string | null; purchase_location_id: string | null } | null;
+  po: { po_number: string; status: string; expected_at: string | null; purchase_location_id: string | null; supplier_id: string | null } | null;
 };
 
 type ProductRow = { code: string; name: string | null; category: string | null };
@@ -122,6 +122,11 @@ type MrpLine = {
   poNumber: string | null;
   poEta: string | null;
   shortageQty: number; // units still uncovered on this line (orange highlight)
+  /* Commander 2026-05-31 — when this line is covered by a PO (source==='po'),
+     the covering PO's supplier so the UI can show it READ-ONLY (a raised PO's
+     supplier can't change). NULL for stock / shortage lines. */
+  poSupplierId: string | null;
+  poSupplierName: string | null;
 };
 
 type MrpSku = {
@@ -310,12 +315,16 @@ export async function computeMrp(
     .from('purchase_order_items')
     .select(`
       material_code, item_group, variants, qty, received_qty, delivery_date, warehouse_id, so_item_id,
-      po:purchase_orders!inner ( po_number, status, expected_at, purchase_location_id )
+      po:purchase_orders!inner ( po_number, status, expected_at, purchase_location_id, supplier_id )
     `)
     .limit(5000);
-  type PoSupply = { poNumber: string; eta: string | null; qtyLeft: number };
+  // Commander 2026-05-31 — carry the covering PO's supplier so a covered line
+  // can display it read-only (a raised PO's supplier is fixed). Name resolved
+  // from the suppliers map below.
+  type PoSupply = { poNumber: string; eta: string | null; qtyLeft: number; supplierId: string | null };
   const poByKey = new Map<string, PoSupply[]>();
   const poOutstandingByKey = new Map<string, number>();
+  const poSupplierIds = new Set<string>();
   for (const r of (poRaw ?? []) as unknown as PoLineRow[]) {
     if (!r.po || PO_DEAD.has(r.po.status)) continue;
     const eta = r.delivery_date ?? r.po.expected_at ?? null;
@@ -325,9 +334,21 @@ export async function computeMrp(
     if (whFilter && poWh !== whFilter) continue;
     const k = composite(poWh, r.material_code, variantKeyOf(r.item_group, r.variants));
     const arr = poByKey.get(k) ?? [];
-    arr.push({ poNumber: r.po.po_number, eta, qtyLeft: left });
+    arr.push({ poNumber: r.po.po_number, eta, qtyLeft: left, supplierId: r.po.supplier_id ?? null });
     poByKey.set(k, arr);
     poOutstandingByKey.set(k, (poOutstandingByKey.get(k) ?? 0) + left);
+    if (r.po.supplier_id) poSupplierIds.add(r.po.supplier_id);
+  }
+  // Resolve PO supplier ids → names for the read-only covered-line display.
+  const supplierNameById = new Map<string, string>();
+  if (poSupplierIds.size > 0) {
+    const { data: poSups } = await sb
+      .from('suppliers')
+      .select('id, name')
+      .in('id', [...poSupplierIds]);
+    for (const s of (poSups ?? []) as Array<{ id: string; name: string }>) {
+      supplierNameById.set(s.id, s.name);
+    }
   }
   for (const arr of poByKey.values()) arr.sort((a, b) => byDateAsc(a.eta, b.eta));
 
@@ -387,8 +408,15 @@ export async function computeMrp(
   for (const [k, bucket] of demandByKey.entries()) {
     const { whId, code, vlabel, rows } = bucket;
     const prod = prodByCode.get(code);
-    rows.sort((a, b) => byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
-                                  b.line_delivery_date ?? b.so?.customer_delivery_date ?? null));
+    // Commander 2026-05-31 — deterministic same-day allocation: when two SO
+    // lines share a delivery date, allocate by SO doc number ascending so the
+    // greedy walk never flips nondeterministically (SO-2605-001 before -002).
+    rows.sort((a, b) => {
+      const byDate = byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
+                               b.line_delivery_date ?? b.so?.customer_delivery_date ?? null);
+      if (byDate !== 0) return byDate;
+      return (a.doc_no ?? '').localeCompare(b.doc_no ?? '');
+    });
 
     let stockLeft = stockByKey.get(k) ?? 0;
     // Clone PO supply so the greedy walk can mutate qtyLeft without touching the
@@ -414,11 +442,12 @@ export async function computeMrp(
 
       let poNumber: string | null = null;
       let poEta: string | null = null;
+      let poSupplierId: string | null = null;
       while (need > 0 && poQueue.length > 0) {
         const front = poQueue[0];
         if (!front) break;
         const take = Math.min(front.qtyLeft, need);
-        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; }
+        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; poSupplierId = front.supplierId; }
         front.qtyLeft -= take;
         need -= take;
         if (front.qtyLeft <= 0) poQueue.shift();
@@ -444,6 +473,9 @@ export async function computeMrp(
         poNumber,
         poEta,
         shortageQty: need,
+        // Only covered-by-PO lines carry a read-only supplier; stock/shortage = null.
+        poSupplierId: source === 'po' ? poSupplierId : null,
+        poSupplierName: source === 'po' && poSupplierId ? (supplierNameById.get(poSupplierId) ?? null) : null,
       });
     }
 
@@ -511,8 +543,14 @@ export async function computeMrp(
   for (const [k, bucket] of sofaByKey.entries()) {
     const { whId, rows } = bucket;
     const wh = whId ? whById.get(whId) : null;
-    rows.sort((a, b) => byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
-                                  b.line_delivery_date ?? b.so?.customer_delivery_date ?? null));
+    // Same deterministic tie-break as section 7: equal delivery date → SO doc
+    // number ascending, so same-day sofa allocation is stable.
+    rows.sort((a, b) => {
+      const byDate = byDateAsc(a.line_delivery_date ?? a.so?.customer_delivery_date ?? null,
+                               b.line_delivery_date ?? b.so?.customer_delivery_date ?? null);
+      if (byDate !== 0) return byDate;
+      return (a.doc_no ?? '').localeCompare(b.doc_no ?? '');
+    });
     let stockLeft = stockByKey.get(k) ?? 0;
     const poQueue: PoSupply[] = [...(poByKey.get(k) ?? [])]
       .map((p) => ({ ...p }))

@@ -367,6 +367,17 @@
   white-space: nowrap;
 }
 .noSupplier { color: var(--c-orange); font-weight: 600; }
+/* Read-only supplier on a covered (already-PO'd) SO line — a raised PO's
+   supplier can't change, so it's shown as plain text, not a dropdown. */
+.poSupplierRO {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
 .supplierSelect {
   font-family: var(--font-sans);
   font-size: var(--fs-12);

@@ -183,18 +183,20 @@ export async function recomputeSoStockAllocation(
     }
     if (needs.length === 0) return { ok: true, linesFlipped: 0, ordersAdvanced: 0, ordersRegressed: 0 };
 
-    /* 5. Sort needs by allocation priority (delivery date, then created_at —
-          same ordering as the SQL query above so allocation order is
-          deterministic). Line id breaks final ties. */
+    /* 5. Sort needs by allocation priority. Commander 2026-05-31 — equal
+          delivery date now tie-breaks by SO doc number ascending (SO-2605-001
+          before SO-2605-002) so same-day allocation is deterministic, matching
+          the MRP engine. created_at + line id break any remaining ties. */
     const FAR_FUTURE = '9999-12-31';
     needs.sort((a, b) => {
       const A = orderByDoc.get(a.doc_no); const B = orderByDoc.get(b.doc_no);
       const ad = A?.customer_delivery_date ?? FAR_FUTURE;
       const bd = B?.customer_delivery_date ?? FAR_FUTURE;
       if (ad !== bd) return ad.localeCompare(bd);                         // a) delivery date
+      if (a.doc_no !== b.doc_no) return a.doc_no.localeCompare(b.doc_no); // b) SO doc number
       const ac = A?.created_at ?? '';
       const bc = B?.created_at ?? '';
-      return ac.localeCompare(bc) || a.id.localeCompare(b.id);            // b) created_at + line id
+      return ac.localeCompare(bc) || a.id.localeCompare(b.id);            // c) created_at + line id
     });
 
     /* 6. Pull live on-hand, keyed strictly per-warehouse to match the per-line

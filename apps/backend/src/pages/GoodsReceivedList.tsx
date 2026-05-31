@@ -129,6 +129,9 @@ type GrnItem = Record<string, unknown> & {
   qty_received?: number | null;
   unit_price_centi?: number | null;
   line_total_centi?: number | null;
+  /* Bug #2 (2026-05-31) — server-resolved per-line source PO + the GRN receive date. */
+  source_po_number?: string | null;
+  received_at?: string | null;
 };
 
 const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] => [
@@ -137,6 +140,13 @@ const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] =
     accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code ?? '—'}</span>,
     searchValue: (it) => it.material_code ?? '',
     sortFn: (a, b) => (a.material_code ?? '').localeCompare(b.material_code ?? ''),
+  },
+  {
+    /* Bug #2 — "received from which PO" per line (null for manual lines). */
+    key: 'source_po', label: 'From PO', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)', fontVariantNumeric: 'tabular-nums' }}>{it.source_po_number ?? '—'}</span>,
+    searchValue: (it) => it.source_po_number ?? '',
+    sortFn: (a, b) => (a.source_po_number ?? '').localeCompare(b.source_po_number ?? ''),
   },
   {
     key: 'description', label: 'Description', width: 260, minWidth: 180,
@@ -160,6 +170,13 @@ const buildGrnDrilldownColumns = (currency: string): DataGridColumn<GrnItem>[] =
     accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtMoney(Number(it.line_total_centi ?? 0), currency)}</span>,
     searchValue: (it) => String(it.line_total_centi ?? 0),
     sortFn: (a, b) => Number(a.line_total_centi ?? 0) - Number(b.line_total_centi ?? 0),
+  },
+  {
+    /* Bug #2 — receive date per line (mirrors the GRN header received_at). */
+    key: 'received_at', label: 'Receive Date', width: 120,
+    accessor: (it) => fmtDateOrDash((it.received_at ?? '').slice(0, 10) || null),
+    searchValue: (it) => it.received_at ?? '',
+    sortFn: (a, b) => String(a.received_at ?? '').localeCompare(String(b.received_at ?? '')),
   },
 ];
 
