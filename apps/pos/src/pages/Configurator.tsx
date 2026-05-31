@@ -138,6 +138,27 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
    in Customize and the combo price still matches (set-cover match is
    order-independent). */
 const cellsFromComboModules = (modules: readonly string[][], depth: Depth): Cell[] => {
+  // Corner layout (corner + 2-seater + 1-seater) is an L, not a straight row.
+  // A saved Quick Pick stores only its module LIST (no x/y/rot), so without this
+  // an L-corner would re-render flat — "one line, no curve". Mirror
+  // buildPresetCells('CORNER'): corner at the angle, the 2-seater across the
+  // top, the 1-seater dropping down the side (rot 270). The cells abut, so
+  // groupSofas still sees one connected sofa and pricing is unchanged. Any other
+  // module-set falls through to the straight left-to-right row below.
+  const ids = modules.map((slot) => slot[0] ?? '').filter(Boolean);
+  if (ids.length === 3) {
+    const cnr = ids.find((id) => findModule(id)?.group === 'Corner');
+    const two = ids.find((id) => findModule(id)?.group === '2-seater');
+    const one = ids.find((id) => findModule(id)?.group === '1-seater');
+    if (cnr && two && one) {
+      const cnrFp = moduleFootprint(findModule(cnr)!, 0, depth);
+      return [
+        { id: 'combo-cnr', moduleId: cnr, x: 0,        y: 0,         rot: 0 },
+        { id: 'combo-2a',  moduleId: two, x: cnrFp.w,  y: 0,         rot: 0 },
+        { id: 'combo-1a',  moduleId: one, x: 0,        y: cnrFp.h,   rot: 270 },
+      ];
+    }
+  }
   const cells: Cell[] = [];
   let x = 0;
   modules.forEach((slot, idx) => {
