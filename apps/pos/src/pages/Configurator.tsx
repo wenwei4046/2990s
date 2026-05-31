@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2 } from 'lucide-react';
+import { ArrowLeft, Hourglass, X, Plus, Minus, Sparkles, Package, Trash2, FlipHorizontal2 } from 'lucide-react';
 import { Button, IconButton, PriceTag } from '@2990s/design-system';
-import { fmtRM, BUNDLES, findModule, moduleFootprint, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, fabricTierAddon, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
+import { fmtRM, BUNDLES, findModule, moduleFootprint, cellsBbox, buildComboLabel, computeSofaPrice, sofaModuleSellingPricesFromSkus, mirrorModules, canMirror, fabricTierAddon, type BundleDef, type Cell, type Depth, type SofaProductPricing, type FabricTier } from '@2990s/shared';
 import {
   useProduct,
   useProductBundles,
@@ -139,6 +139,27 @@ const buildPresetCells = (bundleId: string, depth: Depth): Cell[] | undefined =>
    in Customize and the combo price still matches (set-cover match is
    order-independent). */
 const cellsFromComboModules = (modules: readonly string[][], depth: Depth): Cell[] => {
+  // Corner layout (corner + 2-seater + 1-seater) is an L, not a straight row.
+  // A saved Quick Pick stores only its module LIST (no x/y/rot), so without this
+  // an L-corner would re-render flat — "one line, no curve". Mirror
+  // buildPresetCells('CORNER'): corner at the angle, the 2-seater across the
+  // top, the 1-seater dropping down the side (rot 270). The cells abut, so
+  // groupSofas still sees one connected sofa and pricing is unchanged. Any other
+  // module-set falls through to the straight left-to-right row below.
+  const ids = modules.map((slot) => slot[0] ?? '').filter(Boolean);
+  if (ids.length === 3) {
+    const cnr = ids.find((id) => findModule(id)?.group === 'Corner');
+    const two = ids.find((id) => findModule(id)?.group === '2-seater');
+    const one = ids.find((id) => findModule(id)?.group === '1-seater');
+    if (cnr && two && one) {
+      const cnrFp = moduleFootprint(findModule(cnr)!, 0, depth);
+      return [
+        { id: 'combo-cnr', moduleId: cnr, x: 0,        y: 0,         rot: 0 },
+        { id: 'combo-2a',  moduleId: two, x: cnrFp.w,  y: 0,         rot: 0 },
+        { id: 'combo-1a',  moduleId: one, x: 0,        y: cnrFp.h,   rot: 270 },
+      ];
+    }
+  }
   const cells: Cell[] = [];
   let x = 0;
   modules.forEach((slot, idx) => {
@@ -162,6 +183,16 @@ const quickPresetDims = (bundleId: string, depth: Depth): { w: number; d: number
 
 const isLShapeBundle = (id: string | null | undefined): boolean =>
   id === '2+L' || id === '3+L';
+
+// Aspect (w/h) of a sofa layout at a given seat size. The composed hero anchors
+// its preview HEIGHT on the layout's aspect at the LARGEST offered seat size, so
+// growing the seat widens the sofa left-right instead of shrinking the whole
+// plan-view (mirrors the single-PNG hero's scaleX widen). undefined when the
+// layout has no measurable footprint.
+const layoutAnchorAspect = (cells: Cell[], depth: Depth): number | undefined => {
+  const bb = cellsBbox(cells, depth);
+  return bb && bb.h > 0 ? bb.w / bb.h : undefined;
+};
 
 /* A salesperson-facing Quick Pick — a saved sofa LAYOUT (Chairman 2026-05-31).
    Unifies the two layers the configurator shows: GLOBAL (sofa_quick_picks,
@@ -223,6 +254,10 @@ export const Configurator = () => {
   // surface in the topbar action slot per UI_REFERENCE.md.
   const [quickFlip, setQuickFlip] = useState<'L' | 'R'>('R');
   const [activeDepth, setActiveDepth] = useState<Depth>('24');
+  // Quick Pick L↔R mirror (2026-06-01). Per-order toggle on the selected saved
+  // Quick Pick; reset whenever a different pick is selected. Only meaningful for
+  // asymmetric layouts (canMirror) — the card hides the control otherwise.
+  const [qpMirror, setQpMirror] = useState(false);
   // Chosen fabric + colour (spec 2026-05-24). Required before Add-to-Cart for
   // sofas; the picker resolves labels/hex/surcharge so the snapshot + LIVE
   // TOTAL render without another lookup.
@@ -721,7 +756,17 @@ export const Configurator = () => {
   const pickedSofaRow = sofaBundleRows.find((r) => r.bundle.id === picked) ?? null;
 
   // Quick Pick selection price: computed from its layout via the engine.
-  const qpPickPrice = pickedQP ? (priceForLayout(pickedQP.modules) ?? 0) : 0;
+  // effectiveQPModules applies the L↔R mirror toggle (2026-06-01) so the price,
+  // hero preview, and cart line all reflect the flipped orientation.
+  const effectiveQPModules = pickedQP
+    ? (qpMirror ? mirrorModules(pickedQP.modules) : pickedQP.modules)
+    : null;
+  // A mirrored pick can't reuse its stored label (it still names the un-flipped
+  // hands), so rebuild the label from the flipped modules.
+  const qpDisplayLabel = pickedQP
+    ? (qpMirror ? buildComboLabel(effectiveQPModules!) : (pickedQP.label || buildComboLabel(pickedQP.modules)))
+    : '';
+  const qpPickPrice = effectiveQPModules ? (priceForLayout(effectiveQPModules) ?? 0) : 0;
 
   // Fabric-tier add-on (migration 0124): per-item flat Δ from the chosen
   // fabric's SELLING tier — replaces the old per-fabric surcharge. The server
@@ -774,9 +819,9 @@ export const Configurator = () => {
   // line carries the exact modular arrangement (and the engine reprices it,
   // applying any matched Combo, server-side on submit).
   const handleAddQuickPick = () => {
-    if (pickedQP == null || fabricSel == null) return;
-    const cells = cellsFromComboModules(pickedQP.modules, activeDepth);
-    const label = pickedQP.label || buildComboLabel(pickedQP.modules);
+    if (pickedQP == null || fabricSel == null || effectiveQPModules == null) return;
+    const cells = cellsFromComboModules(effectiveQPModules, activeDepth);
+    const label = qpDisplayLabel;
     const fabricSuffix = ` · ${fabricSel.fabricLabel}/${fabricSel.colourLabel}`;
     const snapshot: SofaConfigSnapshot = {
       kind: 'sofa',
@@ -902,7 +947,7 @@ export const Configurator = () => {
         </span>
         <span className={styles.topbarChipName}>
           {pickedQP
-            ? `${pickedQP.label || buildComboLabel(pickedQP.modules)} · ${activeDepth}"`
+            ? `${qpDisplayLabel} · ${activeDepth}"`
             : pickedSofaRow
               ? `${pickedSofaRow.bundle.label} · ${activeDepth}"`
               : p.name}
@@ -1052,7 +1097,10 @@ export const Configurator = () => {
             onPick={(id) => { setPicked(id); setPickedQP(null); }}
             quickFlip={quickFlip}
             onFlipChange={setQuickFlip}
+            qpMirror={qpMirror}
+            onToggleQpMirror={() => setQpMirror((v) => !v)}
             depth={activeDepth}
+            maxDepth={depthOptions[depthOptions.length - 1] ?? activeDepth}
             globalQuickPicks={globalQPItems}
             personalQuickPicks={personalQPItems}
             pickedQuickPickId={pickedQP?.id ?? null}
@@ -1068,6 +1116,7 @@ export const Configurator = () => {
               }
               setPickedQP(item);
               setPicked(null);
+              setQpMirror(false);
             }}
             onQuickPickEdit={(item) => {
               // Load into Customize for further adjustment.
@@ -1556,7 +1605,14 @@ interface SofaQuickPickProps {
   onPick: (id: string) => void;
   quickFlip: 'L' | 'R';
   onFlipChange: (flip: 'L' | 'R') => void;
+  /** L↔R mirror toggle for the selected saved Quick Pick (2026-06-01). */
+  qpMirror?: boolean;
+  onToggleQpMirror?: () => void;
   depth: Depth;
+  /** Largest seat size offered by this Model (max of depthOptions). The composed
+   *  hero anchors its preview height on the layout's aspect at this size so the
+   *  seat-size toggle widens the sofa instead of shrinking the whole plan-view. */
+  maxDepth: Depth;
   /** Fabric + Colour picker, rendered in the rail below the layout grid. */
   fabricBlock?: React.ReactNode;
   /** Global Quick Picks (Master-Admin-curated, shared). */
@@ -1692,7 +1748,7 @@ const heroAnchorStyle = (
 // Two-column layout port from prototype: left rail = compact bundle cards,
 // right hero = big plan-view of the currently picked bundle with W × D
 // dimension lines. Only bundles that are active + priced on this Model show.
-const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, depth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
+const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChange, qpMirror, onToggleQpMirror, depth, maxDepth, fabricBlock, globalQuickPicks, personalQuickPicks, pickedQuickPickId, priceForLayout, canDeleteGlobal, onQuickPickSelect, onQuickPickEdit, onQuickPickDelete }: SofaQuickPickProps) => {
   // Hide bundles not activated for this Model. The productSchema refine
   // guarantees ≥1 active+priced bundle exists for every sofa SKU.
   const activeRows = useMemo(
@@ -1739,6 +1795,16 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
   const baseW = (pickedRow && QUICK_PRESET_META[pickedRow.bundle.id]?.baseW) ?? dims.w;
   const depthScale = baseW > 0 ? dims.w / baseW : 1;
   const heroCells = pickedRow ? buildPresetCells(pickedRow.bundle.id, depth) : undefined;
+  // Hero only — anchor the composed-preview HEIGHT on the layout's aspect at the
+  // LARGEST seat size so toggling the seat WIDENS the sofa left-right instead of
+  // shrinking the whole plan-view (the single-PNG hero already does this via
+  // scaleX). pickedQPRow → saved-layout hero; heroCells → console/corner preset.
+  const qpAnchorAspect = pickedQPRow
+    ? layoutAnchorAspect(cellsFromComboModules(pickedQPRow.modules, maxDepth), maxDepth)
+    : undefined;
+  const presetAnchorAspect = pickedRow && heroCells
+    ? layoutAnchorAspect(buildPresetCells(pickedRow.bundle.id, maxDepth) ?? [], maxDepth)
+    : undefined;
 
   return (
     <>
@@ -1857,6 +1923,18 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
                         <Trash2 size={14} strokeWidth={1.75} />
                       </span>
                     )}
+                    {isPicked && canMirror(item.modules) && (
+                      <button
+                        type="button"
+                        className={styles.qpMirrorBtn}
+                        aria-pressed={qpMirror}
+                        onClick={(e) => { e.stopPropagation(); onToggleQpMirror?.(); }}
+                        title="Mirror left ↔ right"
+                        aria-label="Mirror left to right"
+                      >
+                        <FlipHorizontal2 size={14} strokeWidth={1.75} />
+                      </button>
+                    )}
                     {isPicked && (
                       <button
                         type="button"
@@ -1882,14 +1960,15 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
             // Quick Pick selected — show its layout cells in the hero.
             <div className={styles.qpHeroCells}>
               <SofaCellsPreview
-                cells={cellsFromComboModules(pickedQPRow.modules, depth)}
+                cells={cellsFromComboModules(qpMirror ? mirrorModules(pickedQPRow.modules) : pickedQPRow.modules, depth)}
                 depth={depth}
+                anchorAspect={qpAnchorAspect}
                 showDims
               />
             </div>
           ) : heroCells ? (
             <div className={styles.qpHeroCells}>
-              <SofaCellsPreview cells={heroCells} depth={depth} showDims />
+              <SofaCellsPreview cells={heroCells} depth={depth} anchorAspect={presetAnchorAspect} showDims />
             </div>
           ) : pickedRow ? (
           <div className={styles.qpHeroBox} style={heroAnchorStyle(heroBounds, depthScale)}>
@@ -1924,6 +2003,14 @@ const SofaQuickPick = ({ isLoading, rows, picked, onPick, quickFlip, onFlipChang
           ) : (
             <div className={styles.qpHeroCells} />
           )}
+          {/* TV reference marker (2026-06-01) — bottom-center of the hero, sofa
+              faces it. Hero-only: NOT rendered inside SofaCellsPreview, so the
+              small rail card thumbnails stay TV-free. Pure decoration. */}
+          <div className={styles.tvBeam} aria-hidden="true" />
+          <div className={styles.tv} aria-hidden="true" title="TV — sofas face this way">
+            <div className={styles.tvScreen} />
+            <div className={styles.tvLabel}>TV</div>
+          </div>
         </div>
         <footer className={styles.qpHeroFoot}>
           <span className={styles.qpHeroFootEyebrow}>Plan view</span>

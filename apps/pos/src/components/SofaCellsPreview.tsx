@@ -10,6 +10,11 @@ interface Props {
   className?: string;
   /** Hero only — draw W (top) × D (right) cm dimension lines, like the PNG presets. */
   showDims?: boolean;
+  /** Hero only — anchor the box HEIGHT on this aspect (the layout's w/h at its
+   *  LARGEST seat size). Keeps the front-back depth at a STABLE screen height
+   *  across the seat-size toggle so the WIDTH visibly extends as the seat grows.
+   *  Omitted (rail cards) → fit-to-box (width binds, height follows). */
+  anchorAspect?: number;
 }
 
 // Dimension-line styling — inline port of the .qpDim family in
@@ -34,7 +39,7 @@ const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, o
  * whose aspect-ratio is the layout's cm bbox; cells positioned in %; rotated
  * modules draw their native art centred then rotated (same math as the canvas).
  */
-export const SofaCellsPreview = ({ cells, depth, className, showDims }: Props) => {
+export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspect }: Props) => {
   // Re-render once each module's silhouette bbox has been measured.
   const [, bump] = useState(0);
   useEffect(() => {
@@ -53,15 +58,22 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims }: Props) =
       style={{
         position: 'relative',
         aspectRatio: `${bb.w} / ${bb.h}`,
-        // Contain within a `container-type: size` parent (qpHeroCells in the
-        // hero, qpCardArt in the rail card), preserving the layout's cm aspect
-        // ratio, centred, never overflowing either axis. Width is the binding
-        // dimension; height follows from the aspect ratio. Both call sites
-        // establish a query container, so 100cqw/100cqh resolve to the parent's
-        // box — NOT the viewport (which previously rendered presets full-bleed).
-        width: `min(100cqw, calc(100cqh * ${bb.w} / ${bb.h}))`,
-        height: 'auto',
         margin: 'auto',
+        // Both call sites establish a `container-type: size` query container
+        // (qpHeroCells in the hero, qpCardArt in the rail card), so 100cqw/100cqh
+        // resolve to the parent's box — NOT the viewport.
+        //
+        // Rail card (no anchorAspect): fit-to-box — WIDTH binds, height follows
+        // the aspect ratio; centred, never overflows either axis.
+        //
+        // Hero (anchorAspect set): anchor the box HEIGHT on the layout's aspect
+        // at its LARGEST seat size, so the front-back depth keeps a STABLE screen
+        // height across the seat-size toggle and the WIDTH visibly extends as the
+        // seat grows (mirrors the single-PNG hero's scaleX widen). The widest
+        // seat fills 100cqw; smaller seats sit narrower — neither overflows.
+        ...(anchorAspect
+          ? { height: `min(100cqh, calc(100cqw / ${anchorAspect}))`, width: 'auto' }
+          : { width: `min(100cqw, calc(100cqh * ${bb.w} / ${bb.h}))`, height: 'auto' }),
       }}
     >
       {cells.map((c, i) => {

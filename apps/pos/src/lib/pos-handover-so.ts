@@ -171,13 +171,18 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
     if (config.sizeOther)             v.sizeOther = config.sizeOther;
     if (config.colourLabel != null)   v.colourLabel = config.colourLabel;
     if (config.colourHex)              v.colourHex = config.colourHex;
-    if (config.gapId)                 v.gap = config.gapId;
+    // The SO API validates (allowed-options), prices (maintenance config), and
+    // renders (Backend GRN) these variant fields by their human LABEL — the
+    // option `value` like `4"`, never the slug id `leg-4`. Send the label so a
+    // restricted Model (e.g. leg_heights) doesn't 409 with variant_not_allowed.
+    // Keep the *Label fields too; the SO detail card reads either.
+    if (config.gapId)                 v.gap = config.gapLabel ?? config.gapId;
     if (config.gapLabel != null)      v.gapLabel = config.gapLabel;
-    if (config.legHeightId)           v.legHeight = config.legHeightId;
+    if (config.legHeightId)           v.legHeight = config.legHeightLabel ?? config.legHeightId;
     if (config.legHeightLabel != null) v.legHeightLabel = config.legHeightLabel;
-    if (config.divanHeightId)         v.divanHeight = config.divanHeightId;
+    if (config.divanHeightId)         v.divanHeight = config.divanHeightLabel ?? config.divanHeightId;
     if (config.divanHeightLabel != null) v.divanHeightLabel = config.divanHeightLabel;
-    if (config.totalHeightId)         v.totalHeight = config.totalHeightId;
+    if (config.totalHeightId)         v.totalHeight = config.totalHeightLabel ?? config.totalHeightId;
     if (config.totalHeightLabel != null) v.totalHeightLabel = config.totalHeightLabel;
     if (config.specialIds && config.specialIds.length > 0) v.specialIds = config.specialIds;
     if (config.specialLabels && config.specialLabels.length > 0) v.specialLabels = config.specialLabels;
@@ -194,19 +199,109 @@ const buildVariants = (config: CartConfig): Record<string, unknown> | null => {
   return null;
 };
 
-/** Marshal one POS CartLine into the SO items payload. The product lookup
- *  resolves itemCode (= product.sku) + itemGroup (= product.category). We
- *  use cart-line config.total (whole MYR) × 100 for unitPriceCenti — POS
- *  stores prices as whole ringgit, but the Backend SO is sen-based. */
+/** Map a size-library id (mattress/bedframe picker vocab) → mfg size_code.
+ *  Inverse of MFG_SIZE_CODE_TO_LIB in queries.ts. Only the 4 standard sizes
+ *  are pickable in POS, so this covers every cart-line sizeId. */
+const SIZE_LIB_TO_MFG: Record<string, string> = {
+  king: 'K', queen: 'Q', single: 'S', 'super-single': 'SS',
+};
+
+interface MfgCodeRow {
+  id: string;
+  code: string;
+  model_id: string | null;
+  category: string;
+  size_code: string | null;
+}
+
+/** Resolve the real mfg_products.code an SO line should book, given the line's
+ *  config, its mfg row (looked up by productId), and that Model's sibling SKUs.
+ *
+ *  Why this exists: the POS cart stores `productId` = an mfg_products.id
+ *  (`mfg-xxxx`), but the Sales Order API validates + reprices against
+ *  mfg_products.CODE (e.g. "2990 AKKA-FIRM MATT (K)"). For mattress / bedframe
+ *  each size is its OWN SKU/code, so we resolve the size-specific sibling by
+ *  matching the chosen sizeId → size_code. Sofas / flat lines book the row's
+ *  own code (sofas reprice from module SKUs server-side; flat is single-SKU).
+ *  Returns undefined when the id isn't a known mfg row — caller falls back. */
+export const pickSoItemCode = (
+  config: CartConfig,
+  baseRow: MfgCodeRow | undefined,
+  siblings: Array<{ code: string; size_code: string | null }>,
+): string | undefined => {
+  if (!baseRow) return undefined;
+  const sizeId = config.kind === 'size' || config.kind === 'bedframe' ? config.sizeId : null;
+  if (sizeId && baseRow.model_id) {
+    const want = SIZE_LIB_TO_MFG[sizeId];
+    if (want) {
+      const sib = siblings.find((s) => (s.size_code ?? '').toUpperCase() === want);
+      if (sib) return sib.code;
+    }
+  }
+  return baseRow.code;
+};
+
+/** Build a {cartLineKey → mfg_products.code} map for a cart. Two reads:
+ *  (1) the cart's mfg rows by id, (2) their Models' sibling SKUs (only when a
+ *  size-variant line needs the size-specific code). The legacy `products`
+ *  catalog is empty in production, so this — not product.sku — is the real
+ *  itemCode source the SO handover depends on. */
+export const fetchItemCodeMap = async (lines: CartLine[]): Promise<Map<string, string>> => {
+  const result = new Map<string, string>();
+  const productIds = [...new Set(lines.map((l) => l.config.productId).filter(Boolean))];
+  if (productIds.length === 0) return result;
+
+  const { data: baseData } = await supabase
+    .from('mfg_products')
+    .select('id, code, model_id, category, size_code')
+    .in('id', productIds);
+  const byId = new Map<string, MfgCodeRow>(((baseData ?? []) as MfgCodeRow[]).map((r) => [r.id, r]));
+
+  // Siblings only matter for size-variant lines (mattress / bedframe).
+  const modelIds = [...new Set(
+    lines
+      .filter((l) => l.config.kind === 'size' || l.config.kind === 'bedframe')
+      .map((l) => byId.get(l.config.productId)?.model_id)
+      .filter((m): m is string => Boolean(m)),
+  )];
+  const sibsByModel = new Map<string, Array<{ code: string; size_code: string | null }>>();
+  if (modelIds.length > 0) {
+    const { data: sibData } = await supabase
+      .from('mfg_products')
+      .select('code, model_id, size_code')
+      .in('model_id', modelIds);
+    for (const s of (sibData ?? []) as Array<{ code: string; model_id: string; size_code: string | null }>) {
+      const arr = sibsByModel.get(s.model_id) ?? [];
+      arr.push({ code: s.code, size_code: s.size_code });
+      sibsByModel.set(s.model_id, arr);
+    }
+  }
+
+  for (const l of lines) {
+    const base = byId.get(l.config.productId);
+    const sibs = base?.model_id ? sibsByModel.get(base.model_id) ?? [] : [];
+    const code = pickSoItemCode(l.config, base, sibs);
+    if (code) result.set(l.key, code);
+  }
+  return result;
+};
+
+/** Marshal one POS CartLine into the SO items payload. itemCode is the
+ *  size-specific mfg_products.code resolved by fetchItemCodeMap (passed in as
+ *  `resolvedItemCode`); falls back to the legacy catalog sku, then the raw
+ *  productId, so a partial catalog never blocks confirm. itemGroup = category.
+ *  unitPriceCenti = config.total (whole MYR) × 100 — POS stores whole ringgit,
+ *  the Backend SO ledger is sen. */
 export const cartLineToSoItem = (
   line: CartLine,
   productById: Map<string, CatalogProduct>,
+  resolvedItemCode?: string,
 ): PosHandoffItem => {
   const product = productById.get(line.config.productId);
-  // Fallback to the line's productId if the catalog hasn't loaded — the
-  // coordinator's SO detail surface uses item_code as the human ref, so a
-  // missing SKU is preferable to a blocking failure at confirm time.
-  const itemCode = product?.sku ?? line.config.productId;
+  // Fallback to the line's productId if neither the resolver nor the catalog
+  // produced a code — the coordinator's SO detail surface uses item_code as the
+  // human ref, so a missing SKU is preferable to a blocking failure at confirm.
+  const itemCode = resolvedItemCode ?? product?.sku ?? line.config.productId;
   const itemGroup = inferItemGroup(line.config, product);
   // Whole-MYR → sen. POS uses INTEGER ringgit (db/schema.ts §Money), the
   // Backend SO ledger is sen — multiply at the boundary.
@@ -222,15 +317,18 @@ export const cartLineToSoItem = (
   };
 };
 
-/** Marshal the full cart into the items array. Empty cart returns []. */
+/** Marshal the full cart into the items array. Empty cart returns []. Pass
+ *  `codeByKey` (from fetchItemCodeMap) so each line books its real mfg code;
+ *  omit it only in tests that exercise the legacy catalog-sku fallback. */
 export const cartLinesToSoItems = (
   lines: CartLine[],
   products: CatalogProduct[] | undefined,
+  codeByKey?: Map<string, string>,
 ): PosHandoffItem[] => {
   const productById = new Map<string, CatalogProduct>(
     (products ?? []).map((p) => [p.id, p]),
   );
-  return lines.map((l) => cartLineToSoItem(l, productById));
+  return lines.map((l) => cartLineToSoItem(l, productById, codeByKey?.get(l.key)));
 };
 
 /* ─── Mutation ───────────────────────────────────────────────────────── */

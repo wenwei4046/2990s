@@ -6,8 +6,8 @@ import { describe, it, expect, vi } from 'vitest';
 // exercise only the pure cart→SO-item transforms.
 vi.mock('./supabase', () => ({ supabase: { auth: { getSession: vi.fn() } } }));
 
-import { cartLineToSoItem, cartLinesToSoItems } from './pos-handover-so';
-import type { CartLine } from '../state/cart';
+import { cartLineToSoItem, cartLinesToSoItems, pickSoItemCode } from './pos-handover-so';
+import type { CartLine, CartConfig } from '../state/cart';
 import type { CatalogProduct } from './queries';
 
 const product = (over: Partial<CatalogProduct> = {}): CatalogProduct => ({
@@ -140,6 +140,15 @@ describe('cartLineToSoItem', () => {
       totalHeightLabel: '12"',
       specialLabels: ['Power outlet'],
     });
+    // The server validates + prices height/gap variants by their human LABEL
+    // (`4"`), not the slug id (`leg-4`). Sending the id 409'd as
+    // variant_not_allowed on Models with a restricted leg/divan/total pool.
+    expect(item.variants).toMatchObject({
+      legHeight: '4"',
+      divanHeight: '8"',
+      totalHeight: '12"',
+      gap: '6"',
+    });
   });
 
   it('maps a size-priced mattress line', () => {
@@ -245,5 +254,61 @@ describe('cartLinesToSoItems', () => {
     ];
     const items = cartLinesToSoItems(lines, [p1, p2]);
     expect(items.map((i) => i.itemCode)).toEqual(['SKU-1', 'SKU-2']);
+  });
+
+  it('books the resolved mfg code when codeByKey is supplied', () => {
+    const lines: CartLine[] = [
+      {
+        key: 'k1',
+        qty: 1,
+        config: { kind: 'size', productId: 'mfg-akkafirm', productName: 'Akka Firm', sizeId: 'king', total: 2990, summary: 'King' },
+      },
+    ];
+    const codeByKey = new Map([['k1', '2990 AKKA-FIRM MATT (K)']]);
+    const items = cartLinesToSoItems(lines, [], codeByKey);
+    expect(items[0]!.itemCode).toBe('2990 AKKA-FIRM MATT (K)');
+  });
+});
+
+describe('pickSoItemCode', () => {
+  const base = (over: Partial<Parameters<typeof pickSoItemCode>[1]> = {}) => ({
+    id: 'mfg-rep', code: 'REP-CODE', model_id: 'model-1', category: 'MATTRESS', size_code: 'Q', ...over,
+  });
+
+  it('resolves the size-specific sibling code for a mattress line', () => {
+    const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'Akka Firm', sizeId: 'king', total: 2990, summary: 'King' };
+    const sibs = [
+      { code: '2990 AKKA-FIRM MATT (Q)', size_code: 'Q' },
+      { code: '2990 AKKA-FIRM MATT (K)', size_code: 'K' },
+    ];
+    expect(pickSoItemCode(config, base(), sibs)).toBe('2990 AKKA-FIRM MATT (K)');
+  });
+
+  it('resolves the size-specific sibling code for a bedframe line', () => {
+    const config: CartConfig = {
+      kind: 'bedframe', productId: 'mfg-rep', productName: 'Baron', sizeId: 'queen',
+      colourId: 'c1', colourLabel: 'Sand', legHeightId: 'leg-4', total: 1990, summary: 'Queen',
+    };
+    const sibs = [
+      { code: 'BARON-(K)', size_code: 'K' },
+      { code: 'BARON-(Q)', size_code: 'Q' },
+    ];
+    expect(pickSoItemCode(config, base({ category: 'BEDFRAME' }), sibs)).toBe('BARON-(Q)');
+  });
+
+  it('uses the row code as-is for sofa / flat lines (no size resolution)', () => {
+    const sofa: CartConfig = { kind: 'sofa', productId: 'mfg-rep', productName: 'Tanah', total: 5980, summary: '' };
+    expect(pickSoItemCode(sofa, base({ category: 'SOFA', code: 'TANAH-BASE' }), [])).toBe('TANAH-BASE');
+  });
+
+  it('returns undefined when the mfg row is unknown (caller falls back)', () => {
+    const config: CartConfig = { kind: 'flat', productId: 'mfg-gone', productName: 'X', total: 1, summary: '' };
+    expect(pickSoItemCode(config, undefined, [])).toBeUndefined();
+  });
+
+  it('falls back to the row code when the chosen size has no sibling', () => {
+    const config: CartConfig = { kind: 'size', productId: 'mfg-rep', productName: 'Akka', sizeId: 'super-single', total: 1, summary: '' };
+    const sibs = [{ code: '2990 AKKA-FIRM MATT (K)', size_code: 'K' }];
+    expect(pickSoItemCode(config, base(), sibs)).toBe('REP-CODE');
   });
 });

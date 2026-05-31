@@ -246,6 +246,32 @@ export const classifySofaCompartment = (rawCode: string): SofaCompartmentGroup =
   return 'Other';
 };
 
+/* ─── Mirror helpers (Quick Pick L↔R flip, 2026-06-01) ───────────────────
+ * Flip a saved Quick Pick layout left↔right: reverse the slot order and swap
+ * each handed code's LHF↔RHF. Codes with no orientation (1NA, 2NA, Console,
+ * CNR, STOOL, power variants without a hand) pass through unchanged. Works on
+ * BOTH the dash form (`2A-LHF`) and the parens form (`1A(P)(LHF)`) because
+ * LHF/RHF only ever appear as the orientation token, never both in one code. */
+export const mirrorCode = (code: string): string => {
+  if (code.includes('LHF')) return code.replace('LHF', 'RHF');
+  if (code.includes('RHF')) return code.replace('RHF', 'LHF');
+  return code;
+};
+
+/** Mirror a Quick Pick's OR-set slot layout left↔right. Pure; identical result
+ *  on POS + server. */
+export const mirrorModules = (modules: string[][]): string[][] =>
+  modules.slice().reverse().map((slot) => slot.map(mirrorCode));
+
+/** True when mirroring actually changes the layout. Symmetric palindromes
+ *  (1-seater, 2-seater) mirror to themselves → false, so the POS hides the flip
+ *  control for them. Compares the representative-code sequence (first code per
+ *  slot) — that's what the preview + cart build consume. */
+export const canMirror = (modules: string[][]): boolean => {
+  const rep = (m: string[][]): string => m.map((s) => s[0] ?? '').join('+');
+  return rep(modules) !== rep(mirrorModules(modules));
+};
+
 /* ─── SELLING helpers (per-Model module-SKU prices — SOFA-SELLING-PLAN.md,
  * Chairman 2026-05-31) ───────────────────────────────────────────────────
  * A configured mfg sofa is priced from the Model's per-module SELLING prices.
@@ -828,7 +854,13 @@ const groupPrice = (group: Cell[], depth: Depth, pricing: SofaProductPricing): S
   // price it via its row's `price` so the customer-facing total never blows up).
   let aLaCarteTotal = 0;
   for (const cell of group) {
-    const row = compRow(pricing, cell.moduleId);
+    // Mirror fallback (2026-06-01): a flipped Quick Pick swaps LHF↔RHF. If a
+    // Model priced only one hand, resolve the other hand to the SAME row so a
+    // mirrored sofa never prices to RM 0 or differs from its un-flipped twin.
+    // Additive only — never lowers a priced module. POS + server share this
+    // function, so the drift-reject on POST /orders can't fire from mirroring.
+    const row = compRow(pricing, cell.moduleId)
+      ?? compRow(pricing, mirrorCode(cell.moduleId));
     aLaCarteTotal += row?.price ?? 0;
   }
 
