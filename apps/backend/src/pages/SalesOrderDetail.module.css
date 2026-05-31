@@ -129,6 +129,22 @@
 .statusCancelled { background: rgba(184, 51, 31, 0.10); color: var(--c-festive-b, #B8331F); }
 .statusReturned  { background: rgba(214, 158, 46, 0.18); color: #8a5a00; }
 
+/* Costing Pending pill (Commander 2026-06-01) — a shipped line whose actual
+   cost isn't known yet (GR received with no price, no Purchase Invoice). Marked
+   on Line Cost + Total Cost; auto-clears to the real number once a price lands
+   and the recost engine fills it. Amber, calm — not an error state. */
+.pendingPill {
+  display: inline-block;
+  font-size: var(--fs-12, 0.75rem);
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(214, 158, 46, 0.18);
+  color: #8a5a00;
+  white-space: nowrap;
+}
+
 /* ── Cards ──────────────────────────────────────────────────────────── */
 
 .card {
