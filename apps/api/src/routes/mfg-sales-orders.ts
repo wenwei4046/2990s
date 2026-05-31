@@ -33,7 +33,7 @@ import { validateItemCodes, unknownItemCodeResponse } from '../lib/validate-item
 import { recomputeSoStockAllocation } from '../lib/so-stock-allocation';
 import { creditFromCancelledSo, getCustomerCreditBalance } from '../lib/customer-credits';
 import { summariseReadiness } from '../lib/so-readiness';
-import { soDeliverableRemaining, soLineDeliveries } from './delivery-orders-mfg';
+import { soDeliverableRemaining, soLineDeliveries, soLinePoCoverage } from './delivery-orders-mfg';
 import type { Env, Variables } from '../env';
 
 export const mfgSalesOrders = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -601,19 +601,26 @@ mfgSalesOrders.get('/:docNo', async (c) => {
      remaining/delivered come from the authoritative soDeliverableRemaining
      engine; the DO-number breakdown rides alongside from soLineDeliveries. */
   const itemRows = (i.data ?? []) as unknown as Array<Record<string, unknown> & { id: string; qty?: number | null }>;
-  const [remainingMap, deliveriesMap] = await Promise.all([
+  const [remainingMap, deliveriesMap, coverageMap] = await Promise.all([
     soDeliverableRemaining(sb, [docNo]),
     soLineDeliveries(sb, itemRows.map((it) => it.id)),
+    soLinePoCoverage(sb, itemRows.map((it) => it.id)),
   ]);
   const items = itemRows.map((it) => {
     const rem = remainingMap.get(it.id);
     const deliveries = deliveriesMap.get(it.id) ?? [];
     const deliveredQty = deliveries.reduce((s, d) => s + d.qty, 0);
+    const cov = coverageMap.get(it.id);
     return {
       ...it,
       deliveries,
       delivered_qty: rem?.delivered ?? deliveredQty,
       remaining_qty: rem?.remaining ?? Number(it.qty ?? 0),
+      /* Incoming-stock coverage (Wei Siang 2026-05-31) — the PO this line's
+         goods were raised into + earliest ETA, so the SO views can show where
+         not-yet-delivered stock is coming from. null when no open PO. */
+      coverage_po: cov?.po ?? null,
+      coverage_eta: cov?.eta ?? null,
     };
   });
   const totalDelivered = items.reduce((s, it) => s + Number(it.delivered_qty ?? 0), 0);

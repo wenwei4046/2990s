@@ -537,6 +537,43 @@ export async function soLineDeliveries(
   return out;
 }
 
+/* Per-SO-line PO coverage (Wei Siang 2026-05-31) — which outstanding PO each
+   SO line's goods were raised into, plus the earliest expected arrival (ETA).
+   Lets the SO views show "incoming PO · ETA" for lines whose stock hasn't
+   arrived yet, the same Coverage info the MRP report shows. Mirrors MRP's
+   pickedPoByLineId mapping: join purchase_order_items → purchase_orders by
+   so_item_id, skip CANCELLED POs, eta = PO line delivery_date ?? PO header
+   expected_at (earliest across the line's POs). Read-only display aid. */
+export type SoLinePoCoverage = { po: string; eta: string | null };
+export async function soLinePoCoverage(
+  sb: any,
+  soItemIds: string[],
+): Promise<Map<string, SoLinePoCoverage>> {
+  const out = new Map<string, SoLinePoCoverage>();
+  const ids = [...new Set(soItemIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  const { data } = await sb
+    .from('purchase_order_items')
+    .select('so_item_id, delivery_date, po:purchase_orders!inner ( po_number, status, expected_at )')
+    .in('so_item_id', ids);
+  type Row = {
+    so_item_id: string | null;
+    delivery_date: string | null;
+    po: { po_number: string; status: string; expected_at: string | null } | null;
+  };
+  const agg = new Map<string, { poNumbers: string[]; eta: string | null }>();
+  for (const r of (data ?? []) as unknown as Row[]) {
+    if (!r.so_item_id || !r.po || (r.po.status ?? '').toUpperCase() === 'CANCELLED') continue;
+    const eta = r.delivery_date ?? r.po.expected_at ?? null;
+    const entry = agg.get(r.so_item_id) ?? { poNumbers: [], eta: null };
+    if (!entry.poNumbers.includes(r.po.po_number)) entry.poNumbers.push(r.po.po_number);
+    if (eta && (!entry.eta || eta < entry.eta)) entry.eta = eta;
+    agg.set(r.so_item_id, entry);
+  }
+  for (const [id, v] of agg) out.set(id, { po: v.poNumbers.sort().join(', '), eta: v.eta });
+  return out;
+}
+
 /* Live remaining-deliverable qty per SO line id (qty − delivered + returned),
    resolved straight from the SO item ids. Used by the write-path guards below
    so every DO-line create / add / qty-increase respects the SAME cap the

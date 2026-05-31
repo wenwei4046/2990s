@@ -36,7 +36,7 @@ import { Button } from '@2990s/design-system';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ListingPickerDialog, type ListingChoice } from '../components/ListingPickerDialog';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary } from '@2990s/shared';
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared';
 import {
   useMfgSalesOrders, useUpdateMfgSalesOrderStatus,
   useMfgSalesOrderDetail,
@@ -351,6 +351,10 @@ type SoItem = {
   deliveries?: { doNumber: string; qty: number; status: string }[];
   delivered_qty?: number;
   remaining_qty?: number;
+  /* Incoming-stock coverage — the PO this line's goods were raised into +
+     earliest ETA, shown when the line hasn't shipped yet. null when no PO. */
+  coverage_po?: string | null;
+  coverage_eta?: string | null;
 };
 
 /* Inline `CategoryPill` re-uses the shared `badgeFor` palette so the pill
@@ -670,25 +674,44 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 <td style={TD_BASE}>{it.uom || 'UNIT'}</td>
                 <td style={TD_RIGHT}>{it.qty ?? 0}</td>
                 <td style={TD_BASE}>
-                  {(it.deliveries && it.deliveries.length > 0) ? (
-                    <div>
-                      {it.deliveries.map((d, di) => (
-                        <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
-                          {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
-                        </div>
-                      ))}
-                      {typeof it.remaining_qty === 'number' && (
+                  {(() => {
+                    const hasDeliveries = it.deliveries && it.deliveries.length > 0;
+                    const notFullyDelivered = (it.remaining_qty ?? 1) > 0;
+                    const coverage = (it.coverage_po && notFullyDelivered)
+                      ? (
                         <div style={{
-                          fontSize: 'var(--fs-10)', marginTop: 1,
-                          color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                          display: 'inline-block', marginTop: hasDeliveries ? 3 : 0,
+                          fontSize: 'var(--fs-10)', fontWeight: 600,
+                          padding: '1px 6px', borderRadius: 999,
+                          color: 'var(--c-secondary-a, #2F5D4F)', background: 'rgba(47,93,79,0.12)',
+                          whiteSpace: 'nowrap',
                         }}>
-                          {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                          {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <span style={{ color: 'var(--fg-muted)' }}>—</span>
-                  )}
+                      )
+                      : null;
+                    if (hasDeliveries) {
+                      return (
+                        <div>
+                          {it.deliveries!.map((d, di) => (
+                            <div key={di} style={{ fontWeight: 600, color: 'var(--c-burnt)', whiteSpace: 'nowrap' }}>
+                              {d.doNumber} <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>×{d.qty}</span>
+                            </div>
+                          ))}
+                          {typeof it.remaining_qty === 'number' && (
+                            <div style={{
+                              fontSize: 'var(--fs-10)', marginTop: 1,
+                              color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                            }}>
+                              {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                            </div>
+                          )}
+                          {coverage}
+                        </div>
+                      );
+                    }
+                    return coverage ?? <span style={{ color: 'var(--fg-muted)' }}>—</span>;
+                  })()}
                 </td>
                 <td style={TD_RIGHT}>{fmtRm(Number(it.unit_price_centi ?? 0))}</td>
                 <td style={{ ...TD_RIGHT, fontWeight: 700, color: 'var(--c-burnt)' }}>
@@ -701,16 +724,26 @@ const ExpandedSoLines = ({ docNo }: { docNo: string }) => {
                 </td>
                 <td style={TD_BASE}>
                   {(() => {
+                    /* Once a line has fully shipped the stock-readiness question
+                       is moot — the goods already left for the customer. The
+                       allocation engine freezes stock_status on shipped lines
+                       (it skips remaining ≤ 0), so without this they'd show a
+                       stale PENDING. Show DELIVERED instead. */
+                    const delivered = Number(it.delivered_qty ?? 0);
+                    const remaining = Number(it.remaining_qty ?? it.qty ?? 0);
+                    const fullyDelivered = delivered > 0 && remaining <= 0;
                     const ready = it.stock_status === 'READY';
+                    const label = fullyDelivered ? 'DELIVERED' : ready ? 'READY' : 'PENDING';
+                    const green = fullyDelivered || ready;
                     return (
                       <span style={{
                         fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
                         fontWeight: 700, letterSpacing: 0.5, padding: '2px 8px',
                         borderRadius: 999,
-                        color: ready ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
-                        background: ready ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
+                        color: green ? 'var(--c-secondary-a, #2F5D4F)' : 'var(--fg-muted)',
+                        background: green ? 'rgba(47,93,79,0.12)' : 'rgba(34,31,32,0.06)',
                       }}>
-                        {ready ? 'READY' : 'PENDING'}
+                        {label}
                       </span>
                     );
                   })()}

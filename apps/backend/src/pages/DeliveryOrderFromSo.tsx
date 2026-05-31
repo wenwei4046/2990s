@@ -15,19 +15,21 @@
 // A customer-lock keeps the merge clean: once one line is ticked, lines of a
 // DIFFERENT customer grey out — a DO ships to ONE customer.
 //
-// On convert the server creates ONE DO (status DISPATCHED) with one line per
-// pick (at the picked qty) and deducts stock; we land on the new DO in Edit
-// mode so the operator can review before it settles.
+// On "Continue" the picked lines are carried into the normal New Delivery Order
+// form (prefilled, reviewable) — NOTHING is created or shipped yet. The operator
+// reviews/edits and clicks "Create DO" there to actually ship + deduct stock.
+// This mirrors the PO picker (PurchaseOrderFromSo), which also stashes its picks
+// and hands them to the New PO form rather than auto-creating.
 //
-// Routing: /mfg-delivery-orders/from-so.
+// Routing: /mfg-delivery-orders/from-so → /mfg-delivery-orders/new.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ArrowLeft, ArrowRightLeft, X, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, X, CheckSquare, Square } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { VariantDescription } from '../components/VariantDescription';
-import { useDeliverableSoLines, useConvertSoLinesToDo, type DeliverableSoLine } from '../lib/flow-queries';
+import { useDeliverableSoLines, type DeliverableSoLine } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { ActionResultDialog } from '../components/ActionResultDialog';
 import { ItemGroupPill } from '../lib/category-badges';
@@ -66,7 +68,6 @@ type Pick = { picked: boolean; qty: number };
 export const DeliveryOrderFromSo = () => {
   const navigate = useNavigate();
   const linesQ = useDeliverableSoLines();
-  const convert = useConvertSoLinesToDo();
 
   // Map<soItemId, { picked, qty }>. Defaults: picked = false; when ticked,
   // qty defaults to the line's remaining.
@@ -248,33 +249,44 @@ export const DeliveryOrderFromSo = () => {
     },
   ], [picks, lockedCustomer]);
 
-  const onConvert = () => {
+  const onContinue = () => {
     if (pickedCount === 0) {
       setDialog({ title: 'Nothing picked', body: 'Tick at least one Sales Order line to deliver first.' });
       return;
     }
-    const picksPayload = picked.map(([soItemId, v]) => ({ soItemId, qty: v.qty }));
-    convert.mutate(
-      { picks: picksPayload },
-      {
-        onSuccess: (res) => {
-          /* Land on the new DO in READ-ONLY view (not edit mode) so it's obvious
-             the order is already created + stock already deducted. Edit mode looked
-             like an unsaved draft and confused the operator into thinking the
-             Convert hadn't committed (Wei Siang 2026-05-30). ?created=1 shows the
-             "DO created" confirmation banner on the detail page. */
-          navigate(`/mfg-delivery-orders/${res.id}?created=1`);
-        },
-        onError: (e) => {
-          /* Short-stock is handled systemically in authedFetch (it prompts and
-             replays with confirmShortStock). A short_stock error reaching here
-             means the operator declined to ship — swallow it silently. */
-          const raw = e instanceof Error ? e.message : String(e);
-          if (raw.includes('"short_stock"')) return;
-          setDialog({ title: 'Convert failed', body: raw });
-        },
-      },
-    );
+    /* Carry the picked lines into the normal New Delivery Order form (prefilled,
+       reviewable) — NOTHING is created or shipped here. The operator reviews the
+       draft and clicks Create on the next screen. Mirrors the PO picker, which
+       also stashes picks and navigates to the New PO form. */
+    const stash = picked
+      .map(([soItemId, v]) => {
+        const r = rowById.get(soItemId);
+        if (!r) return null;
+        return {
+          soItemId,
+          docNo: r.docNo,
+          itemCode: r.itemCode,
+          itemGroup: r.itemGroup ?? 'others',
+          description: r.description ?? '',
+          uom: r.uom ?? 'UNIT',
+          qty: v.qty,
+          unitPriceCenti: r.unitPriceCenti,
+          discountCenti: r.discountCenti,
+          unitCostCenti: r.unitCostCenti,
+          variants: r.variants ?? {},
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+    if (stash.length === 0) {
+      setDialog({ title: 'Nothing picked', body: 'Tick at least one Sales Order line to deliver first.' });
+      return;
+    }
+    /* Header/address prefill mirrors the same-customer rule: use the SO of the
+       sorted-first picked line. Each line keeps its own soItemId, so multiple
+       same-customer SOs still link back correctly. */
+    const firstDocNo = stash.map((s) => s.docNo).sort()[0] ?? '';
+    sessionStorage.setItem('doFromSoPicks', JSON.stringify(stash));
+    navigate(`/mfg-delivery-orders/new?fromSo=${encodeURIComponent(firstDocNo)}&fromPicks=1`);
   };
 
   const toolbar = (
@@ -303,24 +315,22 @@ export const DeliveryOrderFromSo = () => {
           </Button>
           <Button
             variant="primary" size="md"
-            onClick={() => onConvert()}
-            disabled={pickedCount === 0 || convert.isPending}
-            title="Combine the picked Sales Order lines into one Delivery Order"
+            onClick={() => onContinue()}
+            disabled={pickedCount === 0}
+            title="Carry the picked Sales Order lines into a new Delivery Order to review"
           >
-            <ArrowRightLeft {...ICON} />
-            {convert.isPending
-              ? 'Converting…'
-              : pickedCount === 0
-                ? 'Pick at least 1 line'
-                : `Convert ${pickedCount} line${pickedCount === 1 ? '' : 's'} to Delivery Order`}
+            <ArrowRight {...ICON} />
+            {pickedCount === 0
+              ? 'Pick at least 1 line'
+              : `Continue with ${pickedCount} line${pickedCount === 1 ? '' : 's'}`}
           </Button>
         </div>
       </div>
       <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
         Pick the Sales Order lines you want to deliver and set the quantity for each. A line can be
         delivered in parts across several Delivery Orders — only the remaining (not-yet-delivered)
-        quantity is shown. On convert it ships immediately and deducts stock — you can review and edit
-        the new Delivery Order on the next screen.
+        quantity is shown. Continue carries the picked lines into a new Delivery Order form for you to
+        review — nothing ships and no stock is deducted until you click Create on that screen.
       </p>
       {lockedCustomerName && (
         <p style={{ margin: '0 0 var(--space-2)', fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>

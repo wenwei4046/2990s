@@ -55,6 +55,7 @@ export const DeliveryOrderNew = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const fromSo = searchParams.get('fromSo');
+  const fromPicks = searchParams.get('fromPicks') === '1';
 
   const create = useCreateMfgDeliveryOrder();
   const addPayment = useAddDeliveryOrderPayment();
@@ -146,11 +147,37 @@ export const DeliveryOrderNew = () => {
     setEmergencyRel((so.emergency_contact_relationship as string) ?? '');
     setEmergencyPhone((so.emergency_contact_phone as string) ?? '');
 
-    // Line items — carry variants + prices + costs. Only the lines that still
-    // have an undelivered balance are prefilled, and each line is seeded with
-    // its REMAINING qty (not the ordered qty) so converting a partly-delivered
-    // SO shows just what is left to ship. remaining_qty rides on the SO detail.
-    if (soItems.length > 0) {
+    // Line items.
+    //  • From the SO-line picker (fromPicks): the operator has already chosen
+    //    exactly which lines + quantities to deliver — possibly across several
+    //    same-customer Sales Orders — so the lines come from that picked set,
+    //    not from this one SO's items.
+    //  • Direct from a single SO (?fromSo only): carry every line that still has
+    //    an undelivered balance, seeded with its REMAINING qty.
+    if (fromPicks) {
+      let stash: Array<Record<string, unknown>> = [];
+      try {
+        stash = JSON.parse(sessionStorage.getItem('doFromSoPicks') ?? '[]');
+      } catch { stash = []; }
+      if (Array.isArray(stash) && stash.length > 0) {
+        setLines(stash.map((it, i) => ({
+          ...emptySoLine(),
+          rid: `l${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
+          itemCode: (it.itemCode as string) ?? '',
+          itemGroup: (it.itemGroup as string) ?? 'others',
+          description: (it.description as string) ?? '',
+          uom: (it.uom as string) ?? 'UNIT',
+          qty: Number(it.qty ?? 1),
+          unitPriceCenti: Number(it.unitPriceCenti ?? 0),
+          discountCenti: Number(it.discountCenti ?? 0),
+          unitCostCenti: Number(it.unitCostCenti ?? 0),
+          variants: (it.variants as Record<string, unknown>) ?? {},
+          remark: '',
+          soItemId: (it.soItemId as string) ?? undefined,
+        } as DraftLine & { soItemId?: string })));
+      }
+      sessionStorage.removeItem('doFromSoPicks');
+    } else if (soItems.length > 0) {
       setLines(soItems
         .filter((it) => !it.cancelled && Number(it.remaining_qty ?? it.qty ?? 0) > 0)
         .map((it) => ({
@@ -170,8 +197,10 @@ export const DeliveryOrderNew = () => {
         } as DraftLine & { soItemId?: string })));
     }
 
-    // Payment records — map SO payments to PaymentsTable drafts.
-    const pays = soPayments.data ?? [];
+    // Payment records — map SO payments to PaymentsTable drafts. Skipped on the
+    // picker path: a multi-SO delivery has no single SO's payments to copy, and
+    // the auto-convert path it replaces never copied payments either.
+    const pays = fromPicks ? [] : (soPayments.data ?? []);
     if (pays.length > 0) {
       setPaymentDrafts(pays.map((p) => {
         const methodLabel = p.method === 'cash' ? 'Cash' : p.method === 'transfer' ? 'Online' : 'Merchant';
@@ -192,7 +221,7 @@ export const DeliveryOrderNew = () => {
     }
 
     setPrefilled(true);
-  }, [fromSo, prefilled, soDetail.data, soPayments.data]);
+  }, [fromSo, fromPicks, prefilled, soDetail.data, soPayments.data]);
 
   const staffList = useMemo(() => (staffQ.data ?? []).filter((s) => s.active), [staffQ.data]);
   const drivers = driversQ.data ?? [];

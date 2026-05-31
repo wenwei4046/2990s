@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@2990s/design-system';
 import { formatPhone } from '@2990s/shared/phone';
-import { buildVariantSummary } from '@2990s/shared'; // Commander 2026-05-28
+import { buildVariantSummary, fmtDateOrDash } from '@2990s/shared'; // Commander 2026-05-28
 import { PhoneInput } from '../components/PhoneInput';
 import {
   useMfgSalesOrderDetail,
@@ -278,6 +278,10 @@ type SoItem = {
   deliveries?: { doNumber: string; qty: number; status: string }[];
   delivered_qty?: number;
   remaining_qty?: number;
+  /* Incoming-stock coverage — the PO this line's goods were raised into +
+     earliest ETA, shown when the line hasn't shipped yet. null when no PO. */
+  coverage_po?: string | null;
+  coverage_eta?: string | null;
 };
 
 /* Whole-order inline edit — build a SoLineDraft from a persisted SoItem.
@@ -1046,25 +1050,44 @@ export const SalesOrderDetail = () => {
                   </td>
                   <td className={styles.tableRight}>{it.qty}</td>
                   <td>
-                    {(it.deliveries && it.deliveries.length > 0) ? (
-                      <div>
-                        {it.deliveries.map((d, di) => (
-                          <div key={di} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            {d.doNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{d.qty}</span>
-                          </div>
-                        ))}
-                        {typeof it.remaining_qty === 'number' && (
+                    {(() => {
+                      const hasDeliveries = it.deliveries && it.deliveries.length > 0;
+                      const notFullyDelivered = (it.remaining_qty ?? 1) > 0;
+                      const coverage = (it.coverage_po && notFullyDelivered)
+                        ? (
                           <div style={{
-                            fontSize: 'var(--fs-11)', marginTop: 1,
-                            color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                            display: 'inline-block', marginTop: hasDeliveries ? 3 : 0,
+                            fontSize: 'var(--fs-11)', fontWeight: 600,
+                            padding: '1px 7px', borderRadius: 999,
+                            color: 'var(--c-secondary-a, #2F5D4F)', background: 'rgba(47,93,79,0.12)',
+                            whiteSpace: 'nowrap',
                           }}>
-                            {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                            {it.coverage_po}{it.coverage_eta ? ` · ETA ${fmtDateOrDash(it.coverage_eta)}` : ''}
                           </div>
-                        )}
-                      </div>
-                    ) : (
-                      <span className={styles.muted}>—</span>
-                    )}
+                        )
+                        : null;
+                      if (hasDeliveries) {
+                        return (
+                          <div>
+                            {it.deliveries!.map((d, di) => (
+                              <div key={di} style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                {d.doNumber} <span className={styles.muted} style={{ fontWeight: 400 }}>×{d.qty}</span>
+                              </div>
+                            ))}
+                            {typeof it.remaining_qty === 'number' && (
+                              <div style={{
+                                fontSize: 'var(--fs-11)', marginTop: 1,
+                                color: it.remaining_qty > 0 ? 'var(--c-festive-b, #B8331F)' : 'var(--c-secondary-a, #2F5D4F)',
+                              }}>
+                                {it.remaining_qty > 0 ? `Balance ${it.remaining_qty}` : 'Fully delivered'}
+                              </div>
+                            )}
+                            {coverage}
+                          </div>
+                        );
+                      }
+                      return coverage ?? <span className={styles.muted}>—</span>;
+                    })()}
                   </td>
                   <td className={styles.tableRight}>{fmtRm(it.unit_price_centi, header.currency)}</td>
                   <td className={styles.tableRight}>{it.discount_centi > 0 ? fmtRm(it.discount_centi, header.currency) : '—'}</td>
