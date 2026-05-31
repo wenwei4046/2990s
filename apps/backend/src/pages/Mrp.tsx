@@ -149,9 +149,10 @@ function sofaSetsToSkus(sets: SofaSet[]): MrpSku[] {
       orderByDate: s.orderByDate, qty: s.qty,
       source: s.shortageQty > 0 ? 'shortage' : 'po', poNumber: s.poNumber, poEta: s.poEta,
       shortageQty: s.shortageQty,
-      /* Sofa SETs don't carry the covering PO's supplier; covered sofa lines
-         show the PO number only (read-only supplier unavailable here). */
-      poSupplierId: null, poSupplierName: null,
+      /* Commander 2026-05-31 — sofa SETs now carry the covering PO's supplier
+         (backend mrp.ts), so a PO-covered sofa line shows it read-only instead
+         of "—", identical to the General tab. NULL for stock/shortage sets. */
+      poSupplierId: s.poSupplierId, poSupplierName: s.poSupplierName,
     });
   }
   return [...map.values()];

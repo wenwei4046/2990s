@@ -181,6 +181,12 @@ type SofaSet = {
   shortageQty: number; // qty - orderedQty (still to order)
   poNumber: string | null; // pooled PO that covers this set (earliest ETA), if any
   poEta: string | null;    // earliest PO-line delivery date (when goods arrive)
+  /* Commander 2026-05-31 — covering PO's supplier so a PO-covered sofa set can
+     show it read-only (mirrors MrpLine.poSupplierId on the general path). The
+     sofa Convert grid previously showed "—" because this wasn't carried. NULL
+     for stock / shortage sets. */
+  poSupplierId: string | null;
+  poSupplierName: string | null;
   suppliers: Array<{ supplierId: string; code: string; name: string; isMain: boolean }>;
 };
 
@@ -571,11 +577,12 @@ export async function computeMrp(
       need -= fromStock;
       let poNumber: string | null = null;
       let poEta: string | null = null;
+      let poSupplierId: string | null = null;
       while (need > 0 && poQueue.length > 0) {
         const front = poQueue[0];
         if (!front) break;
         const take = Math.min(front.qtyLeft, need);
-        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; }
+        if (poNumber == null) { poNumber = front.poNumber; poEta = front.eta; poSupplierId = front.supplierId; }
         front.qtyLeft -= take;
         need -= take;
         if (front.qtyLeft <= 0) poQueue.shift();
@@ -603,6 +610,12 @@ export async function computeMrp(
         shortageQty: need,
         poNumber,
         poEta,
+        // PO-covered sets carry the covering PO's supplier (read-only); it's
+        // only non-null when a PO was actually consumed above. Name resolved
+        // from the same map the general path uses, so sofa + general display
+        // identically (fixes the sofa "—" supplier).
+        poSupplierId,
+        poSupplierName: poSupplierId ? (supplierNameById.get(poSupplierId) ?? null) : null,
         suppliers: suppliersByCode.get(d.item_code) ?? [],
       });
     }

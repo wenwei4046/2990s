@@ -29,6 +29,7 @@ import {
 } from '@2990s/shared/mfg-pricing';
 import { resolveMaintenanceConfigForSupplier } from '../lib/po-pricing';
 import { supabaseAuth } from '../middleware/auth';
+import { computeMrp } from './mrp';
 import type { Env, Variables } from '../env';
 
 /* ── Supplier sofa-combo auto-pricing (Commander 2026-05-29) ─────────────────
@@ -229,33 +230,61 @@ mfgPurchaseOrders.get('/outstanding-so-items', async (c) => {
     }
   }
 
+  /* Commander 2026-05-31 — the picker is now a STOCK-AWARE shortage view, the
+     SAME pooled (stock + open-PO) allocation MRP uses (computeMrp → per-line
+     shortageQty), so it can never disagree with the MRP page. A line is shown
+     ONLY if it still has an uncovered shortage:
+       • an SO already ordered via MRP is covered by that open PO in the supply
+         pool → shortage 0 → drops off the picker (the Commander's ask);
+       • when that stock is later consumed by another order, MRP re-reports a
+         shortage → the line re-appears (same SO can be converted again).
+     remainingQty becomes the pooled shortage (what still needs a PO), not the
+     raw qty − po_qty_picked. Best-effort: if the pooled compute fails we fall
+     back to the per-line picked cap so the picker still works (degraded). */
+  const shortageBySoItem = new Map<string, number>();
+  let pooledOk = true;
+  try {
+    const mrpRes = await computeMrp(supabase, { catFilter: null, whFilter: null, includeUndated: true });
+    for (const sku of mrpRes.skus) {
+      for (const l of sku.lines) shortageBySoItem.set(l.soItemId, l.shortageQty);
+    }
+    for (const s of mrpRes.sofaSets) shortageBySoItem.set(s.soItemId, s.shortageQty);
+  } catch (e) {
+    pooledOk = false;
+    // eslint-disable-next-line no-console
+    console.error('[outstanding-so-items] pooled shortage compute failed; falling back to picked cap', e);
+  }
+
   const outstanding = ((items ?? []) as unknown as Row[])
     .filter((r) => r.so.status !== 'CANCELLED')
-    .filter((r) => r.qty - r.po_qty_picked > 0)
-    .map((r) => ({
-      soItemId:        r.id,
-      soDocNo:         r.doc_no,
-      debtorName:      r.so.debtor_name,
-      branding:        r.so.branding,
-      soStatus:        r.so.status,
-      soDate:          r.so.so_date,
-      deliveryDate:    r.so.customer_delivery_date,
-      itemCode:        r.item_code,
-      description:     r.description,
-      itemGroup:       r.item_group,
-      qty:             r.qty,
-      poQtyPicked:     r.po_qty_picked,
-      remainingQty:    r.qty - r.po_qty_picked,
-      unitPriceCenti:  r.unit_price_centi,
-      variants:        r.variants,
-      lineSuffix:      r.line_suffix,
-      // Commander 2026-05-28 — new fields for the redesigned PO-from-SO grid.
-      processingDate:   r.so.internal_expected_dd,
-      salesLocation:    r.so.sales_location,
-      lineDeliveryDate: r.line_delivery_date,
-      mainSupplierCode: mainSupplierByCode.get(r.item_code)?.code ?? null,
-      mainSupplierName: mainSupplierByCode.get(r.item_code)?.name ?? null,
-    }));
+    .filter((r) => (pooledOk ? (shortageBySoItem.get(r.id) ?? 0) > 0 : r.qty - r.po_qty_picked > 0))
+    .map((r) => {
+      const remaining = pooledOk ? (shortageBySoItem.get(r.id) ?? 0) : (r.qty - r.po_qty_picked);
+      return {
+        soItemId:        r.id,
+        soDocNo:         r.doc_no,
+        debtorName:      r.so.debtor_name,
+        branding:        r.so.branding,
+        soStatus:        r.so.status,
+        soDate:          r.so.so_date,
+        deliveryDate:    r.so.customer_delivery_date,
+        itemCode:        r.item_code,
+        description:     r.description,
+        itemGroup:       r.item_group,
+        qty:             r.qty,
+        poQtyPicked:     r.po_qty_picked,
+        remainingQty:    remaining,
+        unitPriceCenti:  r.unit_price_centi,
+        variants:        r.variants,
+        lineSuffix:      r.line_suffix,
+        // Commander 2026-05-28 — new fields for the redesigned PO-from-SO grid.
+        processingDate:   r.so.internal_expected_dd,
+        salesLocation:    r.so.sales_location,
+        lineDeliveryDate: r.line_delivery_date,
+        mainSupplierCode: mainSupplierByCode.get(r.item_code)?.code ?? null,
+        mainSupplierName: mainSupplierByCode.get(r.item_code)?.name ?? null,
+      };
+    });
 
   return c.json({ items: outstanding });
 });
@@ -573,13 +602,16 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
        whose supplier matches the PO's supplier), keeping each line's so_item_id
        so a later delete releases the SO quota. */
     targetPoId?: string;
-    /* Commander 2026-05-31 (MRP rebuild) — when the convert is raised from the
-       MRP page, the resulting PO line is REFERENCE-ONLY: it does NOT lock the
-       source SO line. MRP pools all open PO as supply regardless of SO↔PO
-       linkage, so the same SO line is infinitely convertible from MRP. This
-       flag (a) bypasses the qty_exceeds_remaining cap and (b) tags the PO line
-       from_mrp=true so the po_qty_picked recount excludes it. The ordinary
-       From-SO picker leaves this false → keeps its cap. */
+    /* Commander 2026-05-31 — when the convert is raised from the MRP page the PO
+       line is REFERENCE-ONLY: it does NOT lock the source SO line via
+       po_qty_picked. MRP pools all open PO as supply regardless of SO↔PO linkage,
+       so the same SO line is infinitely convertible from MRP. This flag (a)
+       bypasses the qty_exceeds_remaining cap and (b) tags the PO line from_mrp so
+       the po_qty_picked recount excludes it. The "an MRP-ordered SO disappears
+       from Convert-from-SO" expectation is met by the picker now hiding lines
+       with no pooled shortage (stock+open-PO fully covers) — the from_mrp PO is
+       part of that supply pool — NOT by per-line locking. The ordinary From-SO
+       picker leaves this false → keeps its cap. */
     fromMrp?: boolean;
   };
   try { body = (await c.req.json()) as typeof body; } catch { return c.json({ error: 'invalid_json' }, 400); }
@@ -672,8 +704,9 @@ mfgPurchaseOrders.post('/from-sos', async (c) => {
       const remaining = row.qty - row.po_qty_picked;
       if (p.qty <= 0)         return c.json({ error: 'qty_must_be_positive', soItemId: p.soItemId }, 400);
       // Commander 2026-05-31 — MRP-origin converts skip the remaining cap: the
-      // line is reference-only and infinitely convertible. The ordinary picker
-      // keeps the cap so a normal SO→PO can't over-order.
+      // line is reference-only and infinitely convertible (the pooled picker, not
+      // this per-line cap, decides what still needs ordering). The ordinary
+      // picker keeps the cap so a normal SO→PO can't over-order a single line.
       if (!fromMrp && p.qty > remaining)
         return c.json({ error: 'qty_exceeds_remaining', soItemId: p.soItemId, requested: p.qty, remaining }, 409);
       pickedItems.push({ row, qty: p.qty, pickSupplierId: p.supplierId ?? null });
@@ -1288,11 +1321,15 @@ async function recomputeSoPicked(sb: any, soItemIds: Array<string | null | undef
       .from('purchase_order_items')
       .select('so_item_id, qty, purchase_order_id, from_mrp')
       .in('so_item_id', ids);
-    /* Commander 2026-05-31 — MRP-origin PO lines are reference-only: they do
-       NOT lock the source SO line, so the recount excludes them. Without this,
-       converting a line from MRP would bump po_qty_picked and drop the line
-       from the From-SO picker / cap further converts — exactly what the
-       infinite-convert model must avoid. */
+    /* Commander 2026-05-31 — MRP-origin PO lines are reference-only: they do NOT
+       lock the source SO line via po_qty_picked, so the recount excludes them.
+       The Commander's "an MRP-ordered SO must drop off the Convert-from-SO
+       picker" is instead handled by POOLED SUPPLY: the picker now hides any line
+       whose pooled stock+open-PO coverage leaves no shortage (computeMrp), and
+       the from_mrp PO is part of that supply pool — so a converted line drops
+       off because it's covered, and re-appears if stock is later consumed. Using
+       po_qty_picked for that would break the pure-pool model (a PO raised for a
+       late SO can cover an earlier one). */
     const rows = ((lines ?? []) as Array<{ so_item_id: string; qty: number; purchase_order_id: string; from_mrp: boolean | null }>)
       .filter((r) => r.from_mrp !== true);
     const poIds = [...new Set(rows.map((r) => r.purchase_order_id).filter(Boolean))];
