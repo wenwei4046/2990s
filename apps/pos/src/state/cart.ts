@@ -71,6 +71,10 @@ export interface BedframeConfigSnapshot {
   colourId: string;
   colourLabel: string | null;
   colourHex?: string;
+  // Fabric (migration 0124) — bedframe picks a fabric, then its colour (above).
+  fabricId?: string;
+  fabricLabel?: string;
+  fabricTierDelta?: number;
   gapId?: string;
   legHeightId: string;
   divanHeightId?: string;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { fmtRM } from '@2990s/shared';
 import { useBedframeColours, useBedframeOptions, type BedframeOptionRow } from '../lib/queries';
@@ -40,6 +40,9 @@ export interface BedframeOptionsProps {
   isDivan: boolean;
   value: BedframeSelection;
   onChange: (next: BedframeSelection) => void;
+  /** Fabric+colour picker (migration 0124) — bedframe picks a fabric, then the
+   *  fabric's colour (replaces the standalone colour dropdown). */
+  fabricBlock?: ReactNode;
 }
 
 // Colour + dimension option dropdowns for a bedframe_build Model. Controlled —
@@ -49,7 +52,7 @@ export interface BedframeOptionsProps {
 // bedframe_options grouped by kind. The single-select options are dropdowns so
 // the rail stays compact on the tablet (no long chip rows to scroll past);
 // specials remain a multi-select chip row.
-export const BedframeOptions = ({ productId, isDivan, value, onChange }: BedframeOptionsProps) => {
+export const BedframeOptions = ({ productId, isDivan, value, onChange, fabricBlock }: BedframeOptionsProps) => {
   const colours = useBedframeColours(productId);
   const options = useBedframeOptions();
 
@@ -91,8 +94,9 @@ export const BedframeOptions = ({ productId, isDivan, value, onChange }: Bedfram
 
   return (
     <div className={styles.rows}>
-      {/* Colour — dropdown with a swatch dot in the trigger so the chosen
-          colour stays recognisable without the full swatch grid. */}
+      {/* Fabric+colour (migration 0124): pick a fabric, then its colour — the
+          fabricBlock replaces the legacy standalone colour dropdown (fallback). */}
+      {fabricBlock ?? (
       <div className={styles.row}>
         <span className={styles.rowLabel}>
           Colour <span className={styles.req}>Required</span>
@@ -123,6 +127,7 @@ export const BedframeOptions = ({ productId, isDivan, value, onChange }: Bedfram
           </div>
         )}
       </div>
+      )}
 
       {!isDivan && (
         <OptionSelect label="Mattress gap" required opts={byKind.gap ?? []} selectedId={value.gapId} onPick={pickGap} />

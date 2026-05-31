@@ -189,6 +189,12 @@ export const Configurator = () => {
   // the product_fabrics UUID-FK table.
   const fabricLib = useFabricLibrary();
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ amounts
+  // Bedframe fabric list (migration 0124): all active fabric_library fabrics
+  // (no per-Model gating) shaped as ProductFabricRow for the FabricColourPicker.
+  const bedframeFabricRows = useMemo<ProductFabricRow[]>(
+    () => (fabricLib.data ?? []).map((f) => ({ fabricId: f.id, active: f.active, surcharge: f.defaultSurcharge })),
+    [fabricLib.data],
+  );
   useProductPricingRealtime(productId);
   /* PR — Commander 2026-05-28: Sofa Customize wires to Model.allowed_options.
    * The query resolves to null for non-sofa SKUs / orphan SKUs (no model_id),
@@ -336,7 +342,7 @@ export const Configurator = () => {
       setPillowExtras(next);
       hydratedRef.current = true;
     } else if (cfg.kind === 'bedframe') {
-      if (bedframeColours.data == null || bedframeOptions.data == null) return;
+      if (bedframeColours.data == null || bedframeOptions.data == null || fabricLib.data == null) return;
       const cRow = bedframeColours.data.find((c) => c.id === cfg.colourId);
       const optById = new Map(bedframeOptions.data.map((o) => [o.id, o]));
       const gap = cfg.gapId ? optById.get(cfg.gapId) : undefined;
@@ -363,6 +369,17 @@ export const Configurator = () => {
           return { id, label: o?.value ?? cfg.specialLabels?.[i] ?? '', surcharge: o?.surcharge ?? 0 };
         }),
       });
+      // Bedframe colour now comes from the chosen fabric (migration 0124) —
+      // hydrate fabricSel from the snapshot so editing pre-selects it.
+      if (cfg.fabricId && cfg.colourId) {
+        const libRow = (fabricLib.data ?? []).find((f) => f.id === cfg.fabricId);
+        setFabricSel({
+          fabricId: cfg.fabricId, colourId: cfg.colourId,
+          fabricLabel: cfg.fabricLabel ?? '', colourLabel: cfg.colourLabel ?? '',
+          colourHex: cfg.colourHex ?? null, surcharge: 0,
+          sofaTier: libRow?.sofaTier ?? null, bedframeTier: libRow?.bedframeTier ?? null,
+        });
+      }
       hydratedRef.current = true;
     } else if (cfg.kind === 'sofa') {
       // Wait for fabric data to be ready — for mfg products this means both
@@ -614,19 +631,25 @@ export const Configurator = () => {
 
   // Bedframe line total = picked size base + every selected surcharge (all 0
   // for pilot, but threaded so a future Backend price edit flows through).
-  const bedframeTotal = sizeBase + bedframeSurcharge(bfSel);
+  // Fabric-tier add-on (migration 0124) — bedframe picks a fabric (fabricSel);
+  // its bedframe tier adds a flat Δ (server adds the same). 0 with default data.
+  const bedframeFabricDelta = fabricSel && addonCfgQ.data
+    ? fabricTierAddon('BEDFRAME', fabricSel.bedframeTier as FabricTier | null, addonCfgQ.data)
+    : 0;
+  const bedframeTotal = sizeBase + bedframeSurcharge(bfSel) + bedframeFabricDelta;
   // Required: size (active+priced) + colour + leg always; gap/divan/total also
   // for non-DIVAN. Specials are optional. Mirrors the server recompute's
   // required-ness so a gated Add-to-Cart never produces a 400.
   const canAddBedframe =
     isBedframe && pickedSize != null && pickedSize.active && pickedSize.price != null &&
-    bfSel.colourId != null && bfSel.legId != null &&
+    fabricSel != null && bfSel.legId != null &&
     (isDivan || (bfSel.gapId != null && bfSel.divanId != null));
 
   const handleAddBedframe = () => {
-    if (!canAddBedframe || pickedSize == null || pickedSize.price == null || bfSel.colourId == null || bfSel.legId == null) return;
+    if (!canAddBedframe || pickedSize == null || pickedSize.price == null || fabricSel == null || bfSel.legId == null) return;
     const parts = [pickedSize.label + (bfSizeOther.trim() ? ` (${bfSizeOther.trim()})` : '')];
-    if (bfSel.colourLabel) parts.push(bfSel.colourLabel);
+    if (fabricSel.fabricLabel) parts.push(fabricSel.fabricLabel);
+    if (fabricSel.colourLabel) parts.push(fabricSel.colourLabel);
     if (bfSel.gapLabel) parts.push(`Gap ${bfSel.gapLabel}`);
     if (bfSel.legLabel) parts.push(`Leg ${bfSel.legLabel}`);
     if (bfSel.divanLabel) parts.push(`Divan ${bfSel.divanLabel}`);
@@ -637,9 +660,12 @@ export const Configurator = () => {
       productName: p.name,
       sizeId: pickedSize.id,
       ...(bfSizeOther.trim() ? { sizeOther: bfSizeOther.trim() } : {}),
-      colourId: bfSel.colourId,
-      colourLabel: bfSel.colourLabel,
-      ...(bfSel.colourHex ? { colourHex: bfSel.colourHex } : {}),
+      colourId: fabricSel.colourId,
+      colourLabel: fabricSel.colourLabel,
+      ...(fabricSel.colourHex ? { colourHex: fabricSel.colourHex } : {}),
+      fabricId: fabricSel.fabricId,
+      fabricLabel: fabricSel.fabricLabel,
+      fabricTierDelta: bedframeFabricDelta,
       ...(bfSel.gapId ? { gapId: bfSel.gapId, gapLabel: bfSel.gapLabel } : {}),
       legHeightId: bfSel.legId,
       legHeightLabel: bfSel.legLabel,
@@ -833,10 +859,9 @@ export const Configurator = () => {
           {pickedSize ? ` · ${pickedSize.label}` : ''}
           {isDivan ? ' · Divan' : ''}
         </span>
-        {bfSel.colourLabel && (
+        {(fabricSel || bfSel.legLabel) && (
           <span className={styles.topbarChipSub}>
-            {bfSel.colourLabel}
-            {bfSel.legLabel ? ` · Leg ${bfSel.legLabel}` : ''}
+            {[fabricSel?.fabricLabel, fabricSel?.colourLabel, bfSel.legLabel ? `Leg ${bfSel.legLabel}` : null].filter(Boolean).join(' · ')}
           </span>
         )}
       </span>
@@ -1220,6 +1245,16 @@ export const Configurator = () => {
                 isDivan={isDivan}
                 value={bfSel}
                 onChange={setBfSel}
+                fabricBlock={
+                  <FabricColourPicker
+                    productFabrics={bedframeFabricRows}
+                    fabricId={fabricSel?.fabricId ?? null}
+                    colourId={fabricSel?.colourId ?? null}
+                    onChange={setFabricSel}
+                    category="BEDFRAME"
+                    addonConfig={addonCfgQ.data ?? null}
+                  />
+                }
               />
             </RailSection>
           </aside>
