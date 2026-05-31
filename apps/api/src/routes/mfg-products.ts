@@ -307,7 +307,7 @@ mfgProducts.patch('/:id', async (c) => {
     defaultVariants?: unknown;
     subAssemblies?: unknown;
     pieces?: unknown;
-    seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' }>;
+    seatHeightPrices?: Array<{ height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3'; sellingPriceSen?: number }>;
     branding?: string | null;
     /** PR #87 — per-SKU active toggle. Commander uses this from the Model
         detail "SKU variants" table to mark individual SKUs as no longer sold
@@ -403,9 +403,17 @@ mfgProducts.patch('/:id', async (c) => {
   // Sofa tier matrix — diff per (height × tier) slot so the audit trail
   // captures each change instead of a single opaque blob write.
   if (Array.isArray(body.seatHeightPrices)) {
+    // Light validation: a present sellingPriceSen must be a finite, non-negative
+    // integer (sen). priceSen (cost) keeps its existing tolerant handling.
+    for (const s of body.seatHeightPrices) {
+      if (s.sellingPriceSen != null &&
+          (!Number.isInteger(s.sellingPriceSen) || s.sellingPriceSen < 0)) {
+        return c.json({ error: 'invalid_selling_price' }, 400);
+      }
+    }
     updates.seat_height_prices = body.seatHeightPrices;
 
-    type Slot = { height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3' };
+    type Slot = { height: string; priceSen: number; tier?: 'PRICE_1' | 'PRICE_2' | 'PRICE_3'; sellingPriceSen?: number };
     const oldArr = (Array.isArray(current.seat_height_prices)
       ? (current.seat_height_prices as Slot[])
       : []);
@@ -419,6 +427,19 @@ mfgProducts.patch('/:id', async (c) => {
       const newVal = newMap.get(k) ?? null;
       if (oldVal !== newVal) {
         priceChanges.push({ field: `seat_height:${k}`, oldValueSen: oldVal, newValueSen: newVal });
+      }
+    }
+    // SELLING side (POS Edit-Price grid writes sellingPriceSen; Chairman
+    // 2026-06-01). The array is stored verbatim above, so sellingPriceSen
+    // persists with NO migration (JSONB) — here we just diff it for the audit
+    // trail under field `seat_height_selling:<height>|<tier>`.
+    const oldSellMap = new Map(oldArr.map((s) => [keyOf(s), s.sellingPriceSen ?? null] as const));
+    const newSellMap = new Map(newArr.map((s) => [keyOf(s), s.sellingPriceSen ?? null] as const));
+    for (const k of new Set([...oldSellMap.keys(), ...newSellMap.keys()])) {
+      const oldVal = oldSellMap.get(k) ?? null;
+      const newVal = newSellMap.get(k) ?? null;
+      if (oldVal !== newVal) {
+        priceChanges.push({ field: `seat_height_selling:${k}`, oldValueSen: oldVal, newValueSen: newVal });
       }
     }
   }
@@ -445,7 +466,10 @@ mfgProducts.patch('/:id', async (c) => {
   // committed, so we log and move on (matches the audit-dlq pattern used
   // elsewhere in 2990s).
   for (const ch of priceChanges) {
-    if (!PRICE_FIELDS.has(ch.field)) continue;
+    // PRICE_FIELDS covers the flat columns; `seat_height*` carries the per-(height,
+    // tier) cost + selling diffs (the old guard silently dropped ALL seat_height
+    // rows — fixed here in one line; master_price_history.field is free-text).
+    if (!PRICE_FIELDS.has(ch.field) && !ch.field.startsWith('seat_height')) continue;
     await supabase.from('master_price_history').insert({
       product_code: current.code,
       field: ch.field,

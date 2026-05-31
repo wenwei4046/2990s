@@ -59,6 +59,10 @@ export type SeatHeightPrice = {
   /** Missing tier means legacy row — treat as PRICE_2 (HOOKKA's historic default,
       kept so we don't have to one-shot migrate existing data). */
   tier?: SofaPriceTier;
+  /** Buyer SELLING price (sen) the POS Edit-Price grid authors (Chairman
+      2026-06-01). `priceSen` stays COST (Backend-owned). Unset on cost-only rows
+      → the selling read falls through to the flat module sell_price_sen. */
+  sellingPriceSen?: number;
 };
 
 export type MfgProductRow = {
