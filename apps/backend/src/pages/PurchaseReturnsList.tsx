@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Undo2, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { usePurchaseReturns, useCancelPurchaseReturn } from '../lib/flow-queries';
+import { usePurchaseReturns, useCancelPurchaseReturn, usePurchaseReturnDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Suppliers.module.css';
@@ -102,6 +102,96 @@ const buildPrColumns = (): DataGridColumn<PrRow>[] => [
   },
 ];
 
+/* ── Drill-down — per-line breakdown for one PR, mirrors ExpandedPoLines ─── */
+type PrItem = Record<string, unknown> & {
+  id: string;
+  material_code?: string | null;
+  material_name?: string | null;
+  description?: string | null;
+  qty_returned?: number | null;
+  unit_price_centi?: number | null;
+  line_refund_centi?: number | null;
+};
+
+const buildPrDrilldownColumns = (): DataGridColumn<PrItem>[] => [
+  {
+    key: 'item_code', label: 'Item Code', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code ?? '—'}</span>,
+    searchValue: (it) => it.material_code ?? '',
+    sortFn: (a, b) => (a.material_code ?? '').localeCompare(b.material_code ?? ''),
+  },
+  {
+    key: 'description', label: 'Description', width: 260, minWidth: 180,
+    accessor: (it) => (it.description ?? '').trim() || it.material_name || '—',
+    searchValue: (it) => `${it.description ?? ''} ${it.material_name ?? ''}`.trim(),
+  },
+  {
+    key: 'qty_returned', label: 'Qty Returned', width: 100, align: 'right',
+    accessor: (it) => it.qty_returned ?? 0,
+    searchValue: (it) => String(it.qty_returned ?? 0),
+    sortFn: (a, b) => Number(a.qty_returned ?? 0) - Number(b.qty_returned ?? 0),
+  },
+  {
+    key: 'unit_price', label: 'Unit Price', width: 110, align: 'right',
+    accessor: (it) => fmtMoney(Number(it.unit_price_centi ?? 0)),
+    searchValue: (it) => String(it.unit_price_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_price_centi ?? 0) - Number(b.unit_price_centi ?? 0),
+  },
+  {
+    key: 'line_total', label: 'Line Total', width: 120, align: 'right',
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtMoney(Number(it.line_refund_centi ?? 0))}</span>,
+    searchValue: (it) => String(it.line_refund_centi ?? 0),
+    sortFn: (a, b) => Number(a.line_refund_centi ?? 0) - Number(b.line_refund_centi ?? 0),
+  },
+];
+
+const ExpandedPrLines = ({ pr }: { pr: PrRow }) => {
+  const detail = usePurchaseReturnDetail(pr.id);
+
+  if (detail.isLoading) {
+    return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading lines…</div>;
+  }
+  if (detail.error) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)' }}>
+        Failed to load lines: {detail.error instanceof Error ? detail.error.message : String(detail.error)}
+      </div>
+    );
+  }
+  const items = (detail.data?.items ?? []) as PrItem[];
+  if (items.length === 0) {
+    return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No line items.</div>;
+  }
+  let subtotal = 0;
+  for (const it of items) subtotal += Number(it.line_refund_centi ?? 0);
+
+  const columns = buildPrDrilldownColumns();
+
+  return (
+    <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
+      <DataGrid<PrItem>
+        rows={items}
+        columns={columns}
+        storageKey="pr-drilldown-grid.v1"
+        rowKey={(it) => it.id}
+        embedded
+        groupBanner={false}
+      />
+      <div style={{
+        display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end',
+        alignItems: 'baseline', padding: '8px 8px 2px',
+        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--fg-muted)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}>Subtotal</span>
+        <span>Total <strong style={{ color: 'var(--c-burnt)' }}>{fmtMoney(subtotal)}</strong></span>
+      </div>
+    </div>
+  );
+};
+
 export const PurchaseReturns = () => {
   const navigate = useNavigate();
   const { data, isLoading, error } = usePurchaseReturns();
@@ -163,6 +253,11 @@ export const PurchaseReturns = () => {
         rowStyle={(r) => r.status === 'COMPLETED' || r.status === 'CANCELLED'
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
           : undefined}
+        /* Click a row → reveal full line-item detail (mirrors the PO list). */
+        expandable={{
+          renderExpansion: (r) => <ExpandedPrLines pr={r} />,
+          rowExpansionKey: (r) => r.id,
+        }}
         contextMenu={(r) => {
           // Mirror the PO/GRN list's right-click menu: View / Edit · divider ·
           // Cancel (danger). View opens read-only; Edit lands on the detail page

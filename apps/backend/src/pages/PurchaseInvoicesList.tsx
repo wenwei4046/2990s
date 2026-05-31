@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, FileText, ArrowRightLeft } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { usePurchaseInvoices, useCancelPurchaseInvoice } from '../lib/flow-queries';
+import { usePurchaseInvoices, useCancelPurchaseInvoice, usePurchaseInvoiceDetail } from '../lib/flow-queries';
 import { DataGrid, type DataGridColumn } from '../components/DataGrid';
 import { fmtDateOrDash } from '@2990s/shared';
 import styles from './Suppliers.module.css';
@@ -116,6 +116,97 @@ const buildPiColumns = (): DataGridColumn<PiRow>[] => [
   },
 ];
 
+/* ── Drill-down — per-line breakdown for one PI, mirrors ExpandedPoLines ─── */
+type PiItem = Record<string, unknown> & {
+  id: string;
+  material_code?: string | null;
+  material_name?: string | null;
+  description?: string | null;
+  qty?: number | null;
+  unit_price_centi?: number | null;
+  line_total_centi?: number | null;
+};
+
+const buildPiDrilldownColumns = (currency: string): DataGridColumn<PiItem>[] => [
+  {
+    key: 'item_code', label: 'Item Code', width: 130,
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{it.material_code ?? '—'}</span>,
+    searchValue: (it) => it.material_code ?? '',
+    sortFn: (a, b) => (a.material_code ?? '').localeCompare(b.material_code ?? ''),
+  },
+  {
+    key: 'description', label: 'Description', width: 260, minWidth: 180,
+    accessor: (it) => (it.description ?? '').trim() || it.material_name || '—',
+    searchValue: (it) => `${it.description ?? ''} ${it.material_name ?? ''}`.trim(),
+  },
+  {
+    key: 'qty', label: 'Qty', width: 80, align: 'right',
+    accessor: (it) => it.qty ?? 0,
+    searchValue: (it) => String(it.qty ?? 0),
+    sortFn: (a, b) => Number(a.qty ?? 0) - Number(b.qty ?? 0),
+  },
+  {
+    key: 'unit_price', label: 'Unit Price', width: 110, align: 'right',
+    accessor: (it) => fmtMoney(Number(it.unit_price_centi ?? 0), currency),
+    searchValue: (it) => String(it.unit_price_centi ?? 0),
+    sortFn: (a, b) => Number(a.unit_price_centi ?? 0) - Number(b.unit_price_centi ?? 0),
+  },
+  {
+    key: 'line_total', label: 'Line Total', width: 120, align: 'right',
+    accessor: (it) => <span style={{ fontWeight: 700, color: 'var(--c-burnt)' }}>{fmtMoney(Number(it.line_total_centi ?? 0), currency)}</span>,
+    searchValue: (it) => String(it.line_total_centi ?? 0),
+    sortFn: (a, b) => Number(a.line_total_centi ?? 0) - Number(b.line_total_centi ?? 0),
+  },
+];
+
+const ExpandedPiLines = ({ pi }: { pi: PiRow }) => {
+  const detail = usePurchaseInvoiceDetail(pi.id);
+  const currency = pi.currency ?? 'MYR';
+
+  if (detail.isLoading) {
+    return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>Loading lines…</div>;
+  }
+  if (detail.error) {
+    return (
+      <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--c-festive-b, #B8331F)' }}>
+        Failed to load lines: {detail.error instanceof Error ? detail.error.message : String(detail.error)}
+      </div>
+    );
+  }
+  const items = (detail.data?.items ?? []) as PiItem[];
+  if (items.length === 0) {
+    return <div style={{ padding: '8px 12px', fontSize: 'var(--fs-11)', color: 'var(--fg-muted)' }}>No line items.</div>;
+  }
+  let subtotal = 0;
+  for (const it of items) subtotal += Number(it.line_total_centi ?? 0);
+
+  const columns = buildPiDrilldownColumns(currency);
+
+  return (
+    <div style={{ padding: 'var(--space-2) var(--space-3) var(--space-3) 40px', background: 'var(--c-cream)' }}>
+      <DataGrid<PiItem>
+        rows={items}
+        columns={columns}
+        storageKey="pi-drilldown-grid.v1"
+        rowKey={(it) => it.id}
+        embedded
+        groupBanner={false}
+      />
+      <div style={{
+        display: 'flex', gap: 'var(--space-4)', justifyContent: 'flex-end',
+        alignItems: 'baseline', padding: '8px 8px 2px',
+        fontSize: 'var(--fs-11)', fontVariantNumeric: 'tabular-nums', color: 'var(--fg-muted)',
+      }}>
+        <span style={{
+          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-10)',
+          letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}>Subtotal</span>
+        <span>Total <strong style={{ color: 'var(--c-burnt)' }}>{fmtMoney(subtotal, currency)}</strong></span>
+      </div>
+    </div>
+  );
+};
+
 export const PurchaseInvoices = () => {
   const navigate = useNavigate();
   const { data, isLoading, error } = usePurchaseInvoices();
@@ -177,6 +268,11 @@ export const PurchaseInvoices = () => {
         rowStyle={(r) => r.status === 'CANCELLED'
           ? { opacity: 0.6, filter: 'grayscale(0.4)' }
           : undefined}
+        /* Click a row → reveal full line-item detail (mirrors the PO list). */
+        expandable={{
+          renderExpansion: (r) => <ExpandedPiLines pi={r} />,
+          rowExpansionKey: (r) => r.id,
+        }}
         contextMenu={(r) => {
           // Unified edit-lock (migration 0106): a PI is read-only once it has any
           // payment (paid_centi > 0) or is CANCELLED. Edit + Cancel are HIDDEN
