@@ -4,6 +4,38 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-003 — An SO became un-editable once its Processing Date elapsed
+
+**Symptom:** On a confirmed Sales Order whose Processing Date was yesterday or
+earlier, any Save (e.g. just postponing the Delivery Date for a customer) failed
+with "Processing Date cannot be in the past — pick today or a future date" — even
+though the user never touched the Processing Date. The order was effectively
+frozen the moment its Processing Date passed midnight.
+
+**Root cause:** Both the frontend Save validation (`SalesOrderDetail.tsx`
+`validateDates`) and the backend header PATCH (`mfg-sales-orders.ts`) rejected
+*any* past Processing/Delivery Date, with no check for whether the value had
+actually changed. So an elapsed-but-unchanged Processing Date tripped the guard on
+every subsequent edit.
+
+**Fix:** (commit `56bab1f`, on `main`)
+- **Frontend** (`SalesOrderDetail.tsx`): captured `originalProcessing` /
+  `originalDelivery` from the header; `validateDates` now only rejects a past date
+  when it *differs* from the stored value (grandfather). The Processing Date input
+  also locks (read-only, with a "Processing date has passed — locked." tooltip)
+  once it is in the past, since it is then a historical record.
+- **Backend** (`mfg-sales-orders.ts` header PATCH): moved the past-date guard to
+  after the `before` snapshot is fetched and compares the new value against the
+  stored `internal_expected_dd` / `customer_delivery_date` — only a genuinely NEW
+  past value is rejected.
+- The New SO form keeps the strict rule (a brand-new order can't legitimately have
+  a past Processing Date).
+
+**Caught by:** Owner report — postponing a customer's delivery date was blocked by
+a Processing-Date-in-the-past error. Verified live (edit + Save) on prod.
+
+---
+
 ## BUG-2026-06-01-002 — Columns / filter dropdowns closed when you tried to scroll their own list
 
 **Symptom:** Opening the DataGrid "Columns" picker (e.g. "COLUMNS (21/42)") and
