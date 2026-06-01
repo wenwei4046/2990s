@@ -497,7 +497,7 @@ export const DeliveryReturnDetail = () => {
             <thead>
               <tr>
                 <th>Item</th>
-                <th>Warehouse</th>
+                <th>Sales Location</th>
                 <th className={styles.tableRight}>Qty</th>
                 <th className={styles.tableRight}>Unit</th>
                 <th className={styles.tableRight}>Disc</th>

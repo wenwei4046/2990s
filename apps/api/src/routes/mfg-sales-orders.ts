@@ -1241,9 +1241,11 @@ mfgSalesOrders.post('/', async (c) => {
   });
 
   /* B2C auto-allocation — if stock is already on hand, the new SO's lines flip
-     to READY immediately and the header advances to READY_TO_SHIP. Best-effort:
-     a failure never sinks the SO create (status stays CONFIRMED). */
-  try { await recomputeSoStockAllocation(sb, docNo); }
+     to READY immediately and the header advances to READY_TO_SHIP. Runs a GLOBAL
+     re-walk (not scoped to this doc) so that if this higher-priority order steals
+     stock from a lower-priority one, the loser regresses from READY in the SAME
+     pass instead of lagging. Best-effort: a failure never sinks the SO create. */
+  try { await recomputeSoStockAllocation(sb); }
   catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-create failed:', e); }
 
   return c.json({ docNo }, 201);

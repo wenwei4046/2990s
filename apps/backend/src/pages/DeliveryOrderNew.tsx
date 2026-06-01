@@ -577,6 +577,22 @@ export const DeliveryOrderNew = () => {
                 <ChevronDown size={14} strokeWidth={1.75} className={styles.selectChevron} />
               </span>
             </label>
+            {/* Sales Location (Wei Siang 2026-06-01) — the dispatch warehouse the
+                goods ship from. Carried from the Sales Order; read-only here
+                (stock never crosses warehouses, so the DO can't re-pick it). */}
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Sales Location</span>
+              <span className={styles.fieldInput} style={{
+                display: 'inline-flex', alignItems: 'center', height: 26,
+                color: 'var(--fg-muted)',
+              }}
+                title={salesLocation
+                  ? 'Dispatch warehouse carried from the Sales Order'
+                  : 'Set on the Sales Order'}
+              >
+                {salesLocation || '—'}
+              </span>
+            </div>
           </div>
         </div>
       </section>

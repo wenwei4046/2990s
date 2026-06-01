@@ -1123,6 +1123,65 @@ grns.patch('/:id', async (c) => {
   const id = c.req.param('id');
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
+  const sb = c.get('supabase');
+  const user = c.get('user');
+
+  /* Warehouse relocation — a posted GRN already pushed its IN stock into the OLD
+     warehouse. If the operator changes the warehouse, just rewriting the header
+     field would strand the stock in the old warehouse while the header claims the
+     new one. So physically move it: OUT of the old warehouse + IN to the new one,
+     carrying the same cost + source-PO batch. Same downstream-consumption guard as
+     cancel — if the old-warehouse stock was already shipped/used, block (can't
+     relocate phantom qty). Best-effort allocation re-walk after, since per-
+     warehouse buckets changed. */
+  if (body.warehouseId !== undefined) {
+    const { data: cur } = await sb.from('grns')
+      .select('id, grn_number, status, warehouse_id').eq('id', id).maybeSingle();
+    const c0 = cur as { grn_number: string; status: string | null; warehouse_id: string | null } | null;
+    const oldWh = c0?.warehouse_id ?? null;
+    const newWh = (body.warehouseId as string | null) ?? null;
+    if (c0 && (c0.status ?? '').toUpperCase() === 'POSTED' && newWh && oldWh && newWh !== oldWh) {
+      const { data: lines } = await sb.from('grn_items')
+        .select('purchase_order_item_id, qty_accepted, material_code, material_name, unit_price_centi, item_group, variants')
+        .eq('grn_id', id);
+      const lineList = (lines ?? []) as Array<{
+        purchase_order_item_id: string | null; qty_accepted: number;
+        material_code: string; material_name: string | null; unit_price_centi: number | null;
+        item_group?: string | null; variants?: VariantAttrs | null;
+      }>;
+      // Guard: can't relocate stock that's already gone from the old warehouse.
+      const consumedLock = await grnReverseWouldGoNegative(sb, oldWh, lineList);
+      if (consumedLock) return c.json(consumedLock, 409);
+      const batchByItem = await resolvePoBatchByItem(sb, lineList.map((it) => it.purchase_order_item_id));
+      const movements = lineList
+        .filter((it) => (it.qty_accepted ?? 0) > 0)
+        .flatMap((it) => {
+          const variant_key = computeVariantKey(it.item_group, it.variants ?? null);
+          const batch_no = it.purchase_order_item_id ? (batchByItem.get(it.purchase_order_item_id) ?? null) : null;
+          const base = {
+            product_code: it.material_code, variant_key, product_name: it.material_name,
+            qty: it.qty_accepted, source_doc_type: 'GRN' as const, source_doc_id: id,
+            source_doc_no: c0.grn_number, batch_no, performed_by: user?.id,
+          };
+          return [
+            { ...base, movement_type: 'OUT' as const, warehouse_id: oldWh, notes: 'GRN warehouse changed — out of old warehouse' },
+            { ...base, movement_type: 'IN' as const, warehouse_id: newWh, unit_cost_sen: Number(it.unit_price_centi ?? 0), notes: 'GRN warehouse changed — into new warehouse' },
+          ];
+        });
+      if (movements.length > 0) {
+        try {
+          await writeMovements(sb, movements);
+          try {
+            const { recomputeSoStockAllocation } = await import('../lib/so-stock-allocation');
+            await recomputeSoStockAllocation(sb);
+          } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-grn-relocate failed:', e); }
+        } catch (e) {
+          return c.json({ error: 'relocate_failed', reason: e instanceof Error ? e.message : String(e) }, 500);
+        }
+      }
+    }
+  }
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const [from, to] of [
     ['supplierId', 'supplier_id'], ['receivedAt', 'received_at'],
@@ -1131,7 +1190,6 @@ grns.patch('/:id', async (c) => {
   ] as const) {
     if (body[from] !== undefined) updates[to] = body[from];
   }
-  const sb = c.get('supabase');
   const { data, error } = await sb.from('grns').update(updates).eq('id', id).select(HEADER).single();
   if (error) return c.json({ error: 'update_failed', reason: error.message }, 500);
   return c.json({ grn: data });
