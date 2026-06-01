@@ -1047,11 +1047,11 @@ const FabricAllowedSection = ({
   onSetAll: (codes: string[], on: boolean) => void;
 }) => {
   const withColours = series.filter((s) => (coloursBySeries.get(s.id) ?? []).length > 0);
-  const allCodes = withColours.flatMap((s) => (coloursBySeries.get(s.id) ?? []).map((c) => c.colourId));
-  const bulkBtn = (label: string, on: boolean) => (
+  // Per-series "All on / All off" — bulk-toggle just that series' colour codes.
+  const bulkBtn = (codes: string[], label: string, on: boolean) => (
     <button
       type="button"
-      onClick={() => onSetAll(allCodes, on)}
+      onClick={() => onSetAll(codes, on)}
       style={{
         padding: '2px 10px', borderRadius: 999, border: '1px solid var(--line)',
         background: 'transparent', color: 'var(--c-ink)', cursor: 'pointer',
@@ -1062,26 +1062,23 @@ const FabricAllowedSection = ({
   return (
     <div style={{ marginBottom: 'var(--space-4)' }}>
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)',
-      }}>
-        <span style={{
-          fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
-          letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
-        }}>Fabrics</span>
-        {allCodes.length > 0 && (
-          <span style={{ display: 'inline-flex', gap: 'var(--space-1)', marginLeft: 'auto' }}>
-            {bulkBtn('All on', true)}
-            {bulkBtn('All off', false)}
-          </span>
-        )}
-      </div>
+        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
+        letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
+        marginBottom: 'var(--space-2)',
+      }}>Fabrics</div>
       {withColours.length === 0 ? (
         <div style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
           No fabrics yet — add them in the Backend Fabric Converter.
         </div>
       ) : withColours.map((s) => (
         <div key={s.id} style={{ marginBottom: 'var(--space-3)' }}>
-          <div style={{ fontSize: 'var(--fs-12)', fontWeight: 600, color: 'var(--c-ink)', marginBottom: 'var(--space-1)' }}>{s.label}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-1)' }}>
+            <span style={{ fontSize: 'var(--fs-12)', fontWeight: 600, color: 'var(--c-ink)' }}>{s.label}</span>
+            <span style={{ display: 'inline-flex', gap: 'var(--space-1)', marginLeft: 'auto' }}>
+              {bulkBtn((coloursBySeries.get(s.id) ?? []).map((c) => c.colourId), 'All on', true)}
+              {bulkBtn((coloursBySeries.get(s.id) ?? []).map((c) => c.colourId), 'All off', false)}
+            </span>
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
             {(coloursBySeries.get(s.id) ?? []).map((c) => {
               const on = isTicked(c.colourId);
