@@ -143,7 +143,9 @@ describe('computeSofaSellingSen', () => {
       id: 'cmb',
       baseModel: '',
       modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
-      tier: 'PRICE_2',
+      // PRICE_1 — the base tier the whole sofa runs at (Chairman 2026-06-01);
+      // computeSofaSellingSen now queries combos at PRICE_1 to match production.
+      tier: 'PRICE_1',
       customerId: null,
       pricesByHeight: { '24': 380000 }, // CENTI
       label: null,
@@ -155,6 +157,38 @@ describe('computeSofaSellingSen', () => {
       { id: 'b', moduleId: 'L-RHF', x: 158, y: 0, rot: 0 },
     ];
     expect(computeSofaSellingSen(cells, '24', map, [combo])).toBe(380000);
+  });
+
+  /* Real production scenario (Annsa, 2026-06-02 bug). A Model can offer 1A
+     modules that have NO standalone SKU price — they are sold only as a
+     two-1A combo. The combo carries a price at SOME heights but not others.
+     This pins the two behaviours that together produced the field "no price":
+       1. at a height the combo IS priced → combo applies (the tier fix);
+       2. at a height the combo is NOT priced → no combo, and since the 1A
+          modules have no à-la-carte entry, the build legitimately prices 0
+          (the remaining DATA gap the Master Admin fills by setting that
+          height's combo price — NOT a code bug). */
+  it('1A-only build: combo applies where priced, falls through to 0 where not', () => {
+    const twoOneA: SofaComboRow = {
+      id: 'annsa-2x1a', baseModel: '',
+      modules: [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']],
+      tier: 'PRICE_1', customerId: null,
+      pricesByHeight: { '24': 249000, '28': null, '37': 249000 }, // 28 unpriced
+      label: null, effectiveFrom: '2026-01-01', deletedAt: null,
+    };
+    // Annsa's priced module SKUs are 1S/2S only — the 1A pieces have NO entry.
+    const annsaModules = { '1S': 100000, '2S': 100000 };
+    // At 37" each 1A is 95 + (37-24)*2.5 = 127.5cm wide, so cell B sits at 127.5
+    // to touch cell A → one connected group the 2-slot combo can cover.
+    const cells: Cell[] = [
+      { id: 'a', moduleId: '1A-LHF', x: 0,     y: 0, rot: 0 },
+      { id: 'b', moduleId: '1A-RHF', x: 127.5, y: 0, rot: 0 },
+    ];
+    expect(computeSofaSellingSen(cells, '37', annsaModules, [twoOneA])).toBe(249000); // combo applies
+    // At 28" the modules are narrower (105cm) so the same cells leave a gap →
+    // two separate 1-module groups, the combo can't cover either, and 1A has no
+    // SKU price → 0. (Even adjacent, 28 is unpriced on this combo → still 0.)
+    expect(computeSofaSellingSen(cells, '28', annsaModules, [twoOneA])).toBe(0);      // data gap, not a code bug
   });
 });
 

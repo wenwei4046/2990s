@@ -26,6 +26,7 @@ import {
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
@@ -206,6 +207,15 @@ const SOFA_INK = '#2C2C2A';
 // run is dimensionally identical to the rasterised art.
 const ART_BODY_UNITS = 70;
 
+/** Functional 1-seater variants (power / recliner / leg) carry a letter badge
+ *  (P / R / L) + a forward footrest baked into their art. They share a bundle
+ *  signature with the plain preset (1A→1S, 2A→2S), so a composite would
+ *  otherwise paint the generic non-functional art and DROP the badge. We keep
+ *  them off the PNG composite and re-draw the badge + footrest on the seamless
+ *  body instead. */
+const isFunctionalSeat = (id: string): boolean => /-[PRL](?:-|$)/.test(id);
+const functionalBadge = (id: string): string => id.match(/-([PRL])(?:-|$)/)?.[1] ?? '';
+
 interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }
 interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
 
@@ -222,7 +232,10 @@ type ActiveComposite =
  *  arms ONLY where a module actually has one — open / half-built ends stay
  *  open. Modules link on ADJACENCY; the run need NOT be a complete sofa. */
 const buildSeamlessRun = (cells: Cell[], depth: Depth, rot: Rot): SeamlessRun | null => {
-  if (cells.length < 2) return null;
+  // Caller decides when a single-cell run is wanted (e.g. a lone power seat,
+  // so its footrest draws below instead of squishing the seat); ≥2 is the
+  // normal seamless case.
+  if (cells.length < 1) return null;
   const horiz = rot % 180 === 0;
   const boxes: { c: Cell; m: SofaModuleSpec; b: Bbox }[] = [];
   for (const c of cells) {
@@ -322,7 +335,7 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number, resolveArt: 
       height={h}
       viewBox={`0 0 ${L} ${T}`}
       preserveAspectRatio="none"
-      style={{ display: 'block' }}
+      style={{ display: 'block', overflow: 'visible' }}
     >
       <rect x={0} y={0} width={L} height={T} rx={rx} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={swOuter} />
       <rect x={0} y={0} width={L} height={bandH} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
@@ -376,6 +389,23 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number, resolveArt: 
       {seams.map((x, i) => (
         <line key={`s${i}`} x1={x} y1={0} x2={x} y2={T} stroke={SOFA_INK} strokeWidth={swDash} strokeDasharray={dash} />
       ))}
+      {/* Functional-seat overlays — power "P" / recliner "R" / leg "L" badge +
+          a forward footrest, drawn on the seamless body so a power sofa keeps
+          its look once joined (the body is generic; the lone module's art bakes
+          these in). Footrest extends past the front edge (svg overflow:visible). */}
+      {ranges.map((r, i) => {
+        if (r.kind !== 'sofa' || !isFunctionalSeat(r.moduleId)) return null;
+        const seatL = r.armLeft ? r.start + armW : r.start;
+        const seatR = r.armRight ? r.end - armW : r.end;
+        const cx = (seatL + seatR) / 2;
+        const fw = (seatR - seatL) * 0.82;
+        return (
+          <Fragment key={`fn${i}`}>
+            <rect x={cx - fw / 2} y={T + T * 0.02} width={fw} height={T * 0.3} rx={T * 0.03} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={swOuter} />
+            <text x={cx} y={T * 0.66} fontSize={T * 0.32} fontWeight={800} fill={SOFA_INK} textAnchor="middle" fontFamily="system-ui, -apple-system, sans-serif">{functionalBadge(r.moduleId)}</text>
+          </Fragment>
+        );
+      })}
     </svg>
   );
 };
@@ -1058,9 +1088,12 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
       const allDragging = Array.from(runIds).every((id) => draftDelta.ids.includes(id));
       if (someDragging && !allDragging) return [];
     }
-    // Per-seat recliner overlays need the individual module cells, so a sofa
-    // with any recliner upgrade keeps its per-module rendering.
-    if (sofaCells.some((c) => (c.recliners ?? []).length > 0)) return [];
+    // NOTE: a sofa with per-seat recliner/power upgrades STILL goes seamless.
+    // The composite hides each covered cell's module art but NOT its per-seat
+    // overlays (wash / "P" badge / footrest), which render on top of the
+    // seamless body because recliner cells get a higher z-index than the
+    // composite (styles.cellRecliner). So power sofas link like any other run
+    // instead of falling back to separate boxes.
     // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
     // sync). Bail to per-module art on the off chance the rots are mixed.
     const rot = sofaCells[0]!.rot;
@@ -1077,7 +1110,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     //    one-arm seat (the "single 1A shows two arms" bug). A lone module
     //    always renders correctly from its own per-module art instead, and a
     //    1A + Console run now reaches the code-drawn path below so it links.
-    if (sofaCells.length >= 2 && analyzeSofa(sofaCells, depth).closed) {
+    //
+    //    Also skip the PNG when ANY seat is a functional variant (power "P" /
+    //    recliner "R" / leg "L"): those share a signature with the plain preset
+    //    (1A(P)→1S, 2×1A(P)→2S), so the PNG would paint the generic non-power
+    //    art and DROP the badge. They go to the code-drawn path, which re-draws
+    //    the badge + footrest on the seamless body.
+    const runHasFunctional = sofaCells.some((c) => isFunctionalSeat(c.moduleId));
+    if (sofaCells.length >= 2 && !runHasFunctional && analyzeSofa(sofaCells, depth).closed) {
       const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
       const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
       if (bundle && bbSofa) {
@@ -1096,8 +1136,16 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     //    so a half-built / open run still links with open ends. Covers the
     //    4-seater (1A + 2NA + 1A), centre-console (1A + Console + 1A), and the
     //    in-progress (1A + Console, 1A + 1NA, …) cases.
-    const run = buildSeamlessRun(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth, rot);
-    const bbRun = cellsBbox(displayCells.filter((c) => c.id != null && runIds.has(c.id)), depth);
+    //
+    //    EVERY straight run — INCLUDING a single module — takes this path, so
+    //    all compartments fill the cell identically. Per-module art crops to
+    //    each silhouette and uses a wider (width-scaled) arm, so seats looked
+    //    smaller / inconsistent next to the code-drawn ones (Chairman: "1S/1A
+    //    not full"). buildSeamlessRun returns null for non-linear shapes
+    //    (corner / L / free stool), which keep their per-module art.
+    const runFilter = displayCells.filter((c) => c.id != null && runIds.has(c.id));
+    const run = buildSeamlessRun(runFilter, depth, rot);
+    const bbRun = cellsBbox(runFilter, depth);
     if (run && bbRun) return [{ kind: 'generic' as const, key: i, bb: bbRun, rot, run, ids: runIds }];
     return [];
   });
@@ -1418,7 +1466,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
             return (
               <div
                 key={c.id}
-                className={`${styles.cell} ${isSelected ? styles.cellSelected : ''} ${inViolation ? styles.cellViolation : ''}`}
+                className={`${styles.cell} ${isSelected ? styles.cellSelected : ''} ${inViolation ? styles.cellViolation : ''} ${(c.recliners ?? []).length > 0 ? styles.cellRecliner : ''}`}
                 style={{ left: px, top: py, width: w, height: h }}
                 onPointerDown={(e) => onCellPointerDown(c.id!, e)}
                 onPointerMove={onCellPointerMove}
@@ -1638,7 +1686,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                   height: boxH,
                   pointerEvents: 'none',
                   zIndex: 1,
-                  overflow: 'hidden',
+                  // PNG path crops its oversized img via overflow:hidden; the
+                  // code-drawn path lets a functional seat's footrest extend
+                  // past the sofa's front edge, so it must NOT clip.
+                  overflow: comp.kind === 'png' ? 'hidden' : 'visible',
                 }}
               >
                 <div
@@ -1649,7 +1700,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     left: (boxW - natW) / 2,
                     top: (boxH - natH) / 2,
                     transform: `rotate(${rot}deg)`,
-                    overflow: 'hidden',
+                    overflow: comp.kind === 'png' ? 'hidden' : 'visible',
                   }}
                 >
                   {comp.kind === 'png' ? (() => {
@@ -1911,10 +1962,13 @@ function SaveQuickPickModal({
 /* ─── CreateComboModal ───────────────────────────────────────────────────
    Master Admin only (Phase 5). Turns the current build into a priced Combo —
    the INVISIBLE selling-price logic that auto-applies whenever a future build
-   matches this module-set. The Master Admin keys the SELLING price for the
-   current seat depth; the server auto-detects the COST = Σ the constituent
-   module SKUs' costs (Backend-overridable later). Stored in sofa_combo_pricing,
-   so it also appears on the Backend for cost review. */
+   matches this module-set. The Master Admin keys the SELLING price for EACH
+   seat height (same grid as the Backend Combo Pricing "New Combo" panel, minus
+   the module picker — modules are already fixed by the build). A blank size = no
+   combo there → that size falls back to the base price. The server auto-detects
+   the COST = Σ the constituent module SKUs' costs (Backend-overridable later).
+   Stored in sofa_combo_pricing, so it also appears on the Backend for cost
+   review. */
 function CreateComboModal({
   modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
 }: {
@@ -1927,22 +1981,40 @@ function CreateComboModal({
   onSaved: () => void;
 }) {
   const create = useCreateSofaCombo();
-  const [sellingRm, setSellingRm] = useState(String(Math.round(currentPriceCenti / 100)));
+  // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
+  // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
+  // "New Combo" panel uses, so this dialog offers every size that panel does.
+  const heightsCfg = useMaintenanceConfig('master');
+  const heights = heightsCfg.data?.data?.sofaSizes ?? COMBO_HEIGHTS_FALLBACK;
+  // Seed the current seat depth with the live à-la-carte total (the price the
+  // Master Admin is looking at); every other size starts blank — a blank size
+  // means "no combo here" → that size uses the base price.
+  const [prices, setPrices] = useState<Record<string, string>>(() => ({
+    [String(depth)]: String(Math.round(currentPriceCenti / 100)),
+  }));
 
   const submit = async () => {
-    const selling = Math.max(0, Math.round(Number(sellingRm)));
-    if (!selling) { alert('Enter a selling price.'); return; }
+    const sellingPricesByHeight: Record<string, number | null> = {};
+    let any = false;
+    for (const h of heights) {
+      const raw = (prices[h] ?? '').trim();
+      if (!raw) { sellingPricesByHeight[h] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) { alert(`Bad price at ${h}".`); return; }
+      sellingPricesByHeight[h] = Math.round(n * 100);
+      any = true;
+    }
+    if (!any) { alert('Enter a price for at least one seat height.'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
         baseModel,
         // Concrete build → each module is its own singleton OR-set slot.
         modules: modules.map((m) => [m]),
-        tier: null,   // wildcard — any fabric tier
-        // SELLING for the current seat depth (centi). COST is auto-detected
-        // server-side (Σ module SKU costs); pricesByHeight is intentionally
-        // omitted so the server fills it. Backend can add other heights later.
-        sellingPricesByHeight: { [String(depth)]: selling * 100 },
+        tier: 'PRICE_1',   // base tier — fabric tier is a separate flat add-on
+        // SELLING price per seat height (centi). COST is auto-detected
+        // server-side (Σ module SKU costs). Blank heights = null → base price.
+        sellingPricesByHeight,
         label: null,
         effectiveFrom: today,
         notes: 'Combo created from POS Customize',
@@ -1961,29 +2033,40 @@ function CreateComboModal({
     }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
-        padding: 24, width: '100%', maxWidth: 480,
+        padding: 24, width: '100%', maxWidth: 600,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
           Create Combo
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-          Sets a fixed selling price for this {modules.length}-compartment set at {depth}&quot; seat.
-          It applies automatically whenever a build matches these modules. Cost is filled
+          Sets a fixed selling price for this {modules.length}-compartment set at each
+          seat height. It applies automatically whenever a build matches these modules.
+          Leave a size blank to fall back to the base price there. Cost is filled
           automatically from the module prices — adjust it on the Backend if needed.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
-            Selling price (RM) · {depth}&quot; seat
+            Prices by seat height (RM)
           </span>
-          <input
-            autoFocus
-            inputMode="numeric"
-            value={sellingRm}
-            onChange={(e) => setSellingRm(e.target.value.replace(/[^0-9]/g, ''))}
-            onKeyDown={(e) => { if (e.key === 'Enter') { void submit(); } }}
-            style={inputStyle}
-          />
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
+              <div key={h}>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>
+                  {h}{/^\d/.test(h) ? '"' : ''}
+                </div>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={prices[h] ?? ''}
+                  onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
+                  placeholder="—"
+                  style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+            ))}
+          </div>
         </label>
         <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Modules: {modules.join(' · ')}
@@ -1998,6 +2081,10 @@ function CreateComboModal({
     </div>
   );
 }
+
+// Seat-height fallback if the Maintenance config fails to load (same default
+// the Backend Combo Pricing panel uses).
+const COMBO_HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
 
 const inputStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',
