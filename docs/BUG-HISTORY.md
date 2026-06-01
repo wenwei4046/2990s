@@ -4,6 +4,41 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-009 — A "grab" Delivery Order left its SO line stuck at PENDING after the goods had shipped
+
+**Symptom:** Normally a line goes READY (stock allocated/frozen) before a Delivery
+Order ships it. But when the operator force-opens a DO to *grab* stock that wasn't
+allocated yet (negative-balance grab), the line jumped straight out the door and its
+stock line stayed showing PENDING forever — even though the goods had physically
+left the building. The status looked permanently stuck.
+
+**Root cause:** The stock-line reconciler (`recomputeSoStockAllocation`) deliberately
+SKIPS any line that is already fully shipped (`deliverable_remaining ≤ 0 → continue`),
+so it never owns a shipped line's status — it just leaves whatever was there (PENDING).
+Nothing else ever flipped a shipped line to READY, so a grabbed line had no path off
+PENDING.
+
+**Fix:** (branch `fix/sofa-batch-readiness-view`)
+- `syncSoDeliveredFromDo` (`so-delivery-sync.ts`) now, after computing per-line
+  coverage, flips any SO line whose NET delivered (Σ DO − Σ DR) ≥ its ordered qty to
+  `stock_status = 'READY'` (and `stock_qty_ready = qty`). Reuses the existing READY
+  value — no DB constraint change.
+- This reconciler is the SOLE writer for fully-shipped lines; recompute (which always
+  runs just before it on every DO/DR mutation) owns every not-yet-shipped line. A
+  later Delivery Return drops the line back under qty → it leaves this jurisdiction
+  (net < qty here, untouched) and recompute re-derives its READY/PENDING from on-hand.
+  Bidirectional + idempotent (a `.neq('stock_status','READY')` guard makes re-runs a
+  no-op).
+
+**Design decision (Wei Siang, 2026-06-01):** Reuse READY rather than add a new
+"Shipped" status — keeps the change minimal and avoids touching the stock_status
+constraint. The shipped line simply reads READY instead of stuck PENDING.
+
+**Caught by:** Owner walkthrough of the grab-DO lifecycle ("开个 DO 抢货，by right 它
+就是会被分配货，这个 DO 是要变成 ready，然后再 freeze 掉的，它也是要补回去这个流程").
+
+---
+
 ## BUG-2026-06-01-008 — Sofa Sales Orders never went READY even when their batch was in stock
 
 **Symptom:** A sofa Sales Order whose procurement batch had actually been received
