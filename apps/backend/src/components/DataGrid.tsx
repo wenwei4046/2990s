@@ -239,12 +239,19 @@ function DataGridInner<T>({
      grid card's `overflow: hidden`, which otherwise clips the dropdown when the
      card is short (few rows). Anchor it to the toolbar button's live rect. */
   const columnsBtnRef = useRef<HTMLButtonElement>(null);
+  /* Ref on the popover panel so the scroll-to-close guard can tell an INSIDE
+     scroll (the operator scrolling the column list) from an OUTSIDE scroll
+     (the page/grid moving, which should dismiss the detached fixed popover). */
+  const columnsMenuRef = useRef<HTMLDivElement>(null);
   const [columnsMenuPos, setColumnsMenuPos] = useState<{ top: number; right: number } | null>(null);
   /* Per-column value filter (Commander 2026-05-29 — "没有 drop-down 菜单让我
      去做选择"). filters[colKey] = the set of allowed values; absent / empty =
      no filter on that column. filterMenu anchors the open dropdown. */
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [filterMenu, setFilterMenu] = useState<{ colKey: string; x: number; y: number } | null>(null);
+  /* Same inside-vs-outside scroll guard as the Columns popover — the filter
+     dropdown has its own scrollable value list (maxHeight 320 / overflow auto). */
+  const filterMenuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Refocus search when parent bumps focusSearchNonce ("Find" button).
@@ -287,13 +294,20 @@ function DataGridInner<T>({
   useEffect(() => {
     if (!columnsMenuOpen) return;
     const close = () => setColumnsMenuOpen(false);
+    /* Scrolling the menu's OWN list must not close the menu. We listen on the
+       capture phase so we still catch scrolls of any outer page container, but
+       skip the event when it originates inside the menu itself. */
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && columnsMenuRef.current?.contains(e.target)) return;
+      close();
+    };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('click', close);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('click', close);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('keydown', onKey);
     };
   }, [columnsMenuOpen]);
@@ -302,13 +316,19 @@ function DataGridInner<T>({
   useEffect(() => {
     if (!filterMenu) return;
     const close = () => setFilterMenu(null);
+    /* Same inside-scroll guard as the Columns menu: scrolling the filter
+       dropdown's own list shouldn't dismiss it. */
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && filterMenuRef.current?.contains(e.target)) return;
+      close();
+    };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     window.addEventListener('click', close);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('click', close);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('keydown', onKey);
     };
   }, [filterMenu]);
@@ -700,6 +720,7 @@ function DataGridInner<T>({
                 onClick={() => setColumnsMenuOpen(false)}
               />
               <div
+                ref={columnsMenuRef}
                 className={styles.columnsMenu}
                 style={columnsMenuPos ? { position: 'fixed', top: columnsMenuPos.top, right: columnsMenuPos.right } : undefined}
                 onClick={(e) => e.stopPropagation()}
@@ -985,6 +1006,7 @@ function DataGridInner<T>({
         const sel = filters[filterMenu.colKey] ?? [];
         return (
           <div
+            ref={filterMenuRef}
             className={styles.ctxMenu}
             style={{ top: filterMenu.y, left: filterMenu.x, maxHeight: 320, overflowY: 'auto', minWidth: 200 }}
             onClick={(e) => e.stopPropagation()}
