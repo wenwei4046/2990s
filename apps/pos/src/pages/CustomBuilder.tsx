@@ -31,6 +31,7 @@ import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
+import { renderCornerSofa, cornerCompositeFromCells, type CornerGeo } from '../lib/sofa-corner';
 import styles from './CustomBuilder.module.css';
 
 const ROOM_W_CM = 600;   // 6 m wide
@@ -224,7 +225,8 @@ interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot
  *  code-drawn run for ad-hoc straight shapes with no dedicated art. */
 type ActiveComposite =
   | { kind: 'png'; key: number; src: string; bb: Bbox; rot: Rot; compBbox: ArtBbox; ids: Set<string> }
-  | { kind: 'generic'; key: number; bb: Bbox; rot: Rot; run: SeamlessRun; ids: Set<string> };
+  | { kind: 'generic'; key: number; bb: Bbox; rot: Rot; run: SeamlessRun; ids: Set<string> }
+  | { kind: 'corner'; key: number; bb: Bbox; rot: Rot; geo: CornerGeo; ids: Set<string> };
 
 /** Analyse a group of cells (sofa modules + any consoles, free stools
  *  excluded) into a contiguous straight run, or null if it isn't one
@@ -1100,6 +1102,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     // seamless body because recliner cells get a higher z-index than the
     // composite (styles.cellRecliner). So power sofas link like any other run
     // instead of falling back to separate boxes.
+    // 0) A CORNER (Corner + 2/3-seater + 1-seater chaise) is an L with MIXED
+    //    cell rotations (the chaise turns 90°), so it must be handled before the
+    //    uniform-rot straight-run gate below. Draws the same connected L as the
+    //    Quick Pick preview so the canvas matches it. Uses the drag-aware
+    //    displayCells so the overlay tracks a whole-group drag.
+    const cornerCells = displayCells.filter((c) => c.id != null && runIds.has(c.id));
+    const cornerComp = cornerCompositeFromCells(cornerCells, depth);
+    if (cornerComp) return [{ kind: 'corner' as const, key: i, ...cornerComp, ids: runIds }];
     // Closed groups rotate as a whole (rotateGroup keeps every cell's rot in
     // sync). Bail to per-module art on the off chance the rots are mixed.
     const rot = sofaCells[0]!.rot;
@@ -1728,7 +1738,8 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                         }}
                       />
                     );
-                  })() : renderSeamlessSofa(comp.run, natW, natH, resolveModuleArtSrc)}
+                  })() : comp.kind === 'corner' ? renderCornerSofa(comp.geo)
+                    : renderSeamlessSofa(comp.run, natW, natH, resolveModuleArtSrc)}
                 </div>
               </div>
             );
