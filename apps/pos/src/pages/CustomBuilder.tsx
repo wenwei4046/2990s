@@ -26,6 +26,7 @@ import {
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
 import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
+import { useMaintenanceConfig } from '../lib/products/mfg-products-queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
@@ -1961,10 +1962,13 @@ function SaveQuickPickModal({
 /* ─── CreateComboModal ───────────────────────────────────────────────────
    Master Admin only (Phase 5). Turns the current build into a priced Combo —
    the INVISIBLE selling-price logic that auto-applies whenever a future build
-   matches this module-set. The Master Admin keys the SELLING price for the
-   current seat depth; the server auto-detects the COST = Σ the constituent
-   module SKUs' costs (Backend-overridable later). Stored in sofa_combo_pricing,
-   so it also appears on the Backend for cost review. */
+   matches this module-set. The Master Admin keys the SELLING price for EACH
+   seat height (same grid as the Backend Combo Pricing "New Combo" panel, minus
+   the module picker — modules are already fixed by the build). A blank size = no
+   combo there → that size falls back to the base price. The server auto-detects
+   the COST = Σ the constituent module SKUs' costs (Backend-overridable later).
+   Stored in sofa_combo_pricing, so it also appears on the Backend for cost
+   review. */
 function CreateComboModal({
   modules, depth, currentPriceCenti, baseModel, onClose, onSaved,
 }: {
@@ -1977,22 +1981,40 @@ function CreateComboModal({
   onSaved: () => void;
 }) {
   const create = useCreateSofaCombo();
-  const [sellingRm, setSellingRm] = useState(String(Math.round(currentPriceCenti / 100)));
+  // Seat-height columns mirror the live Maintenance pool (Products → Maintenance
+  // → Sofa → Sizes; key `sofaSizes`) — the SAME source the Backend Combo Pricing
+  // "New Combo" panel uses, so this dialog offers every size that panel does.
+  const heightsCfg = useMaintenanceConfig('master');
+  const heights = heightsCfg.data?.data?.sofaSizes ?? COMBO_HEIGHTS_FALLBACK;
+  // Seed the current seat depth with the live à-la-carte total (the price the
+  // Master Admin is looking at); every other size starts blank — a blank size
+  // means "no combo here" → that size uses the base price.
+  const [prices, setPrices] = useState<Record<string, string>>(() => ({
+    [String(depth)]: String(Math.round(currentPriceCenti / 100)),
+  }));
 
   const submit = async () => {
-    const selling = Math.max(0, Math.round(Number(sellingRm)));
-    if (!selling) { alert('Enter a selling price.'); return; }
+    const sellingPricesByHeight: Record<string, number | null> = {};
+    let any = false;
+    for (const h of heights) {
+      const raw = (prices[h] ?? '').trim();
+      if (!raw) { sellingPricesByHeight[h] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) { alert(`Bad price at ${h}".`); return; }
+      sellingPricesByHeight[h] = Math.round(n * 100);
+      any = true;
+    }
+    if (!any) { alert('Enter a price for at least one seat height.'); return; }
     const today = new Date().toISOString().slice(0, 10);
     try {
       await create.mutateAsync({
         baseModel,
         // Concrete build → each module is its own singleton OR-set slot.
         modules: modules.map((m) => [m]),
-        tier: null,   // wildcard — any fabric tier
-        // SELLING for the current seat depth (centi). COST is auto-detected
-        // server-side (Σ module SKU costs); pricesByHeight is intentionally
-        // omitted so the server fills it. Backend can add other heights later.
-        sellingPricesByHeight: { [String(depth)]: selling * 100 },
+        tier: 'PRICE_1',   // base tier — fabric tier is a separate flat add-on
+        // SELLING price per seat height (centi). COST is auto-detected
+        // server-side (Σ module SKU costs). Blank heights = null → base price.
+        sellingPricesByHeight,
         label: null,
         effectiveFrom: today,
         notes: 'Combo created from POS Customize',
@@ -2011,29 +2033,40 @@ function CreateComboModal({
     }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: 'var(--c-paper)', borderRadius: 'var(--radius-md)',
-        padding: 24, width: '100%', maxWidth: 480,
+        padding: 24, width: '100%', maxWidth: 600,
         display: 'flex', flexDirection: 'column', gap: 16,
       }}>
         <h3 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 'var(--fs-18)' }}>
           Create Combo
         </h3>
         <p style={{ margin: 0, fontSize: 'var(--fs-13)', color: 'var(--fg-soft)' }}>
-          Sets a fixed selling price for this {modules.length}-compartment set at {depth}&quot; seat.
-          It applies automatically whenever a build matches these modules. Cost is filled
+          Sets a fixed selling price for this {modules.length}-compartment set at each
+          seat height. It applies automatically whenever a build matches these modules.
+          Leave a size blank to fall back to the base price there. Cost is filled
           automatically from the module prices — adjust it on the Backend if needed.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 'var(--fs-12)', textTransform: 'uppercase', letterSpacing: 1, color: 'var(--fg-soft)' }}>
-            Selling price (RM) · {depth}&quot; seat
+            Prices by seat height (RM)
           </span>
-          <input
-            autoFocus
-            inputMode="numeric"
-            value={sellingRm}
-            onChange={(e) => setSellingRm(e.target.value.replace(/[^0-9]/g, ''))}
-            onKeyDown={(e) => { if (e.key === 'Enter') { void submit(); } }}
-            style={inputStyle}
-          />
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${heights.length}, 1fr)`, gap: 8 }}>
+            {heights.map((h) => (
+              <div key={h}>
+                <div style={{ fontSize: 'var(--fs-11)', color: 'var(--fg-muted)', textAlign: 'center' }}>
+                  {h}{/^\d/.test(h) ? '"' : ''}
+                </div>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={prices[h] ?? ''}
+                  onChange={(e) => setPrices((cur) => ({ ...cur, [h]: e.target.value }))}
+                  placeholder="—"
+                  style={{ ...inputStyle, textAlign: 'right', fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+            ))}
+          </div>
         </label>
         <div style={{ fontSize: 'var(--fs-12)', color: 'var(--fg-muted)' }}>
           Modules: {modules.join(' · ')}
@@ -2048,6 +2081,10 @@ function CreateComboModal({
     </div>
   );
 }
+
+// Seat-height fallback if the Maintenance config fails to load (same default
+// the Backend Combo Pricing panel uses).
+const COMBO_HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
 
 const inputStyle: CSSProperties = {
   fontFamily: 'var(--font-sans)',

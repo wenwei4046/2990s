@@ -25,7 +25,7 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Plus, Pencil, Trash2, History, X } from 'lucide-react';
 import { Button } from '@2990s/design-system';
-import { SOFA_MODULES, normalizeCompartmentCode, type SofaPriceTier, buildComboLabel } from '@2990s/shared';
+import { SOFA_MODULES, normalizeCompartmentCode, buildComboLabel } from '@2990s/shared';
 import {
   useSofaCombos,
   useCreateSofaCombo,
@@ -40,7 +40,10 @@ import { useMfgProducts, useMaintenanceConfig } from '../../lib/products/mfg-pro
 // → Sofa → Sizes; config key `sofaSizes`). This fallback only shows if that
 // config fails to load — same default the rest of the app uses.
 const HEIGHTS_FALLBACK = ['24', '26', '28', '30', '32', '35'];
-const TIERS: SofaPriceTier[] = ['PRICE_1', 'PRICE_2', 'PRICE_3'];
+// Combos always run at the base tier (PRICE_1). Chairman 2026-06-02: the sofa
+// has ONE base price; the fabric Price 1/2/3 difference is a separate flat
+// add-on, NOT a combo-base switch — so the combo carries no tier choice.
+const COMBO_TIER = 'PRICE_1' as const;
 
 const ICON_PROPS = { size: 14, strokeWidth: 1.75 } as const;
 
@@ -142,9 +145,9 @@ export const SofaComboTab = ({ readonly = false, mode }: ComboTabProps) => {
             margin: '4px 0 0',
             maxWidth: 720,
           }}>
-            Module-set combo deals with optional same-fabric-tier discount.
-            Append-only history; edits = a new row with a fresher effective date.
-            All combos apply to every customer (2990 B2C model).
+            Module-set combo deals — a fixed price for a module set, at each seat
+            height. Append-only history; edits = a new row with a fresher effective
+            date. All combos apply to every customer (2990 B2C model).
           </p>
         </div>
         {canAdd && (
@@ -283,7 +286,6 @@ function ComboCard({
         }}>
           {label}
         </span>
-        {rule.tier && <span style={chipStyleSoft}>{rule.tier}</span>}
         {canEdit && (
           <button
             type="button"
@@ -373,7 +375,6 @@ function ComposerModal({
   // OR-set per slot (PR combo-or-per-slot): ordered slots, each a SET of
   // alternative codes joined by OR. e.g. [['2A-LHF','2A-RHF'],['L-LHF','L-RHF']].
   const [modules, setModules] = useState<string[][]>(editing?.modules ?? []);
-  const [tier, setTier] = useState<SofaPriceTier | ''>(editing?.tier ?? 'PRICE_2');
   const [label, setLabel] = useState(editing?.label ?? '');
   const [effectiveFrom, setEffectiveFrom] = useState(editing?.effectiveFrom ?? todayIso());
   const [prices, setPrices] = useState<Record<string, string>>(() => {
@@ -432,7 +433,7 @@ function ComposerModal({
         await create.mutateAsync({
           baseModel,
           modules: orderedModules,
-          tier: tier || null,
+          tier: COMBO_TIER,  // base tier — fabric tier is a separate flat add-on
           customerId: null,  // B2C: always null = applies to all customers
           pricesByHeight,
           label: label || null,
@@ -538,18 +539,6 @@ function ComposerModal({
               </div>
             </div>
           )}
-        </Field>
-
-        <Field label="Tier">
-          <select
-            value={tier}
-            onChange={(e) => setTier(e.target.value as SofaPriceTier | '')}
-            style={selectStyle}
-            disabled={!!editing}
-          >
-            <option value="">— Any —</option>
-            {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
         </Field>
 
         <Field label="Prices by seat height (RM)">
@@ -747,16 +736,6 @@ const chipStyleStrong: CSSProperties = {
   padding: '2px 8px',
   borderRadius: 'var(--radius-sm)',
   border: '1px solid var(--line-strong)',
-};
-
-const chipStyleSoft: CSSProperties = {
-  fontFamily: 'var(--font-sans)',
-  fontSize: 'var(--fs-11)',
-  background: 'var(--c-cream)',
-  color: 'var(--fg-soft)',
-  padding: '2px 6px',
-  borderRadius: 'var(--radius-sm)',
-  border: '1px solid var(--line)',
 };
 
 const statusPillActive: CSSProperties = {
