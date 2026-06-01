@@ -44,6 +44,20 @@ describe('cornerCompositeFromCells', () => {
     expect(r!.geo.orientation).toBe('left');
     expect(r!.geo).toMatchObject({ W: 283, H: 210, T: 95, cornerW: 105, twoW: 178, twoCushions: 2 });
     expect(r!.bb).toMatchObject({ w: 283, h: 210 });
+    // 1B chaise → bench at the foot; 2A long arm → plain arm (no bench).
+    expect(r!.geo.chaiseBench).toBe(true);
+    expect(r!.geo.longArmBench).toBe(false);
+  });
+
+  it('1A chaise + 2B long arm → bench flags flip', () => {
+    const r = cornerCompositeFromCells([
+      { id: 'cnr', moduleId: 'CNR', x: 0, y: 0, rot: 0 },
+      { id: 'two', moduleId: '2B-RHF', x: 105, y: 0, rot: 0 },
+      { id: 'one', moduleId: '1A-LHF', x: 0, y: 95, rot: 270 },
+    ], D);
+    expect(r).not.toBeNull();
+    expect(r!.geo.chaiseBench).toBe(false);
+    expect(r!.geo.longArmBench).toBe(true);
   });
 
   it('chaise-right (mirror): same dims, flipped orientation', () => {

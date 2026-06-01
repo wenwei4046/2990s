@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { cellsBbox, findModule, moduleFootprint, type Cell, type Depth } from '@2990s/shared';
 import { measureArtBbox, getCachedArtBbox, ART_BBOX_FALLBACK } from '../lib/sofa-art';
-import { renderCornerSofa, type CornerGeo } from '../lib/sofa-corner';
+import { renderCornerSofa, cornerCompositeFromCells } from '../lib/sofa-corner';
 
 const ASSET_BASE = '/sofa-modules';
 
@@ -32,35 +32,6 @@ const lineV: CSSProperties = { flex: 1, width: 1.5, background: DIM_INK };
 const dimLabel: CSSProperties = { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'var(--bg, #fff9eb)', color: DIM_INK, fontFamily: 'var(--font-mono, monospace)', fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', padding: '2px 8px', borderRadius: 3, whiteSpace: 'nowrap', lineHeight: 1, border: `1.5px solid ${DIM_INK}` };
 const dimUnit: CSSProperties = { fontWeight: 400, fontSize: 10, marginLeft: 2, opacity: 0.6 };
 
-// Recognise the corner layout in a Quick Pick preview: exactly a Corner + a
-// 2/3-seater + a 1-seater chaise, laid out by cellsFromComboModules (corner +
-// long arm across the top, chaise dropping down; the chaise's rot encodes the
-// hand — 90 → right, 270 → left). Returns the natural-frame L geometry (cm) for
-// renderCornerSofa, or null for any other shape (straight rows, console preset,
-// single modules) which keep their PNG tiling.
-const detectCorner = (cells: Cell[], depth: Depth): CornerGeo | null => {
-  if (cells.length !== 3) return null;
-  const byGroup = (g: string) => cells.find((c) => findModule(c.moduleId)?.group === g);
-  const cnr = byGroup('Corner');
-  const two = byGroup('2-seater') ?? byGroup('3-seater');
-  const one = byGroup('1-seater');
-  if (!cnr || !two || !one) return null;
-  const cnrFp = moduleFootprint(findModule(cnr.moduleId)!, 0, depth);
-  const twoM = findModule(two.moduleId)!;
-  const twoFp = moduleFootprint(twoM, 0, depth);
-  const bb = cellsBbox(cells, depth);
-  if (!bb) return null;
-  return {
-    W: bb.w,
-    H: bb.h,
-    T: cnrFp.h,
-    cornerW: cnrFp.w,
-    twoW: twoFp.w,
-    twoCushions: Math.max(1, twoM.cushions),
-    orientation: one.rot === 90 ? 'right' : 'left',
-  };
-};
-
 /**
  * Read-only composed preview of a sofa cell layout, built from the individual
  * module PNGs (silhouette-bbox-fitted so they tile tightly). For Quick-Pick
@@ -83,8 +54,9 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
   if (!bb || bb.w <= 0 || bb.h <= 0) return null;
 
   // Corner layouts (corner + 2/3-seater + 1-seater) draw as one connected L
-  // instead of tiling per-module PNGs (which leave a step + internal arm).
-  const corner = detectCorner(cells, depth);
+  // instead of tiling per-module PNGs (which leave a step + internal arm). Same
+  // shared renderer as the canvas, so the two surfaces match (incl. 1B/2B bench).
+  const corner = cornerCompositeFromCells(cells, depth);
 
   return (
     <div
@@ -110,7 +82,7 @@ export const SofaCellsPreview = ({ cells, depth, className, showDims, anchorAspe
           : { width: `min(100cqw, calc(100cqh * ${bb.w} / ${bb.h}))`, height: 'auto' }),
       }}
     >
-      {corner && renderCornerSofa(corner)}
+      {corner && renderCornerSofa(corner.geo)}
       {!corner && cells.map((c, i) => {
         const m = findModule(c.moduleId);
         if (!m) return null;
