@@ -206,6 +206,15 @@ const SOFA_INK = '#2C2C2A';
 // run is dimensionally identical to the rasterised art.
 const ART_BODY_UNITS = 70;
 
+/** Functional 1-seater variants (power / recliner / leg) carry a letter badge
+ *  (P / R / L) + a forward footrest baked into their art. They share a bundle
+ *  signature with the plain preset (1A→1S, 2A→2S), so a composite would
+ *  otherwise paint the generic non-functional art and DROP the badge. We keep
+ *  them off the PNG composite and re-draw the badge + footrest on the seamless
+ *  body instead. */
+const isFunctionalSeat = (id: string): boolean => /-[PRL](?:-|$)/.test(id);
+const functionalBadge = (id: string): string => id.match(/-([PRL])(?:-|$)/)?.[1] ?? '';
+
 interface SeamlessSlot { moduleId: string; len: number; cushions: number; kind: 'sofa' | 'console'; armLeft: boolean; armRight: boolean }
 interface SeamlessRun { totalLen: number; thickness: number; slots: SeamlessSlot[] }
 
@@ -322,7 +331,7 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number, resolveArt: 
       height={h}
       viewBox={`0 0 ${L} ${T}`}
       preserveAspectRatio="none"
-      style={{ display: 'block' }}
+      style={{ display: 'block', overflow: 'visible' }}
     >
       <rect x={0} y={0} width={L} height={T} rx={rx} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={swOuter} />
       <rect x={0} y={0} width={L} height={bandH} fill={SOFA_BAND} stroke={SOFA_INK} strokeWidth={swInner} />
@@ -376,6 +385,23 @@ const renderSeamlessSofa = (run: SeamlessRun, w: number, h: number, resolveArt: 
       {seams.map((x, i) => (
         <line key={`s${i}`} x1={x} y1={0} x2={x} y2={T} stroke={SOFA_INK} strokeWidth={swDash} strokeDasharray={dash} />
       ))}
+      {/* Functional-seat overlays — power "P" / recliner "R" / leg "L" badge +
+          a forward footrest, drawn on the seamless body so a power sofa keeps
+          its look once joined (the body is generic; the lone module's art bakes
+          these in). Footrest extends past the front edge (svg overflow:visible). */}
+      {ranges.map((r, i) => {
+        if (r.kind !== 'sofa' || !isFunctionalSeat(r.moduleId)) return null;
+        const seatL = r.armLeft ? r.start + armW : r.start;
+        const seatR = r.armRight ? r.end - armW : r.end;
+        const cx = (seatL + seatR) / 2;
+        const fw = (seatR - seatL) * 0.82;
+        return (
+          <Fragment key={`fn${i}`}>
+            <rect x={cx - fw / 2} y={T + T * 0.02} width={fw} height={T * 0.3} rx={T * 0.03} fill={SOFA_SEAT} stroke={SOFA_INK} strokeWidth={swOuter} />
+            <text x={cx} y={T * 0.66} fontSize={T * 0.32} fontWeight={800} fill={SOFA_INK} textAnchor="middle" fontFamily="system-ui, -apple-system, sans-serif">{functionalBadge(r.moduleId)}</text>
+          </Fragment>
+        );
+      })}
     </svg>
   );
 };
@@ -1080,7 +1106,14 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
     //    one-arm seat (the "single 1A shows two arms" bug). A lone module
     //    always renders correctly from its own per-module art instead, and a
     //    1A + Console run now reaches the code-drawn path below so it links.
-    if (sofaCells.length >= 2 && analyzeSofa(sofaCells, depth).closed) {
+    //
+    //    Also skip the PNG when ANY seat is a functional variant (power "P" /
+    //    recliner "R" / leg "L"): those share a signature with the plain preset
+    //    (1A(P)→1S, 2×1A(P)→2S), so the PNG would paint the generic non-power
+    //    art and DROP the badge. They go to the code-drawn path, which re-draws
+    //    the badge + footrest on the seamless body.
+    const runHasFunctional = sofaCells.some((c) => isFunctionalSeat(c.moduleId));
+    if (sofaCells.length >= 2 && !runHasFunctional && analyzeSofa(sofaCells, depth).closed) {
       const bundle = g.bundle ?? detectBundle(sofaCells.map((c) => c.moduleId));
       const bbSofa = cellsBbox(displayCells.filter((c) => c.id != null && sofaIds.has(c.id)), depth);
       if (bundle && bbSofa) {
@@ -1641,7 +1674,10 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                   height: boxH,
                   pointerEvents: 'none',
                   zIndex: 1,
-                  overflow: 'hidden',
+                  // PNG path crops its oversized img via overflow:hidden; the
+                  // code-drawn path lets a functional seat's footrest extend
+                  // past the sofa's front edge, so it must NOT clip.
+                  overflow: comp.kind === 'png' ? 'hidden' : 'visible',
                 }}
               >
                 <div
@@ -1652,7 +1688,7 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
                     left: (boxW - natW) / 2,
                     top: (boxH - natH) / 2,
                     transform: `rotate(${rot}deg)`,
-                    overflow: 'hidden',
+                    overflow: comp.kind === 'png' ? 'hidden' : 'visible',
                   }}
                 >
                   {comp.kind === 'png' ? (() => {
