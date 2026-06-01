@@ -1521,6 +1521,17 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
      AND re-checked on Save (parity with the New SO form). */
   const today = new Date().toLocaleDateString('en-CA');
 
+  /* Owner 2026-06-01 — Grandfather an already-past date that the edit does not
+     change. The Processing Date is the day work started; once it has elapsed it
+     is a historical record, so we LOCK its input (read-only) and never block a
+     Save just because it sits in the past. The same grandfather (without the
+     lock) applies to the Delivery Date so an SO can still be postponed even if
+     its old delivery day has passed — only a freshly-typed past date is
+     rejected. */
+  const originalProcessing = header.internal_expected_dd ?? '';
+  const originalDelivery = header.customer_delivery_date ?? '';
+  const processingLocked = originalProcessing !== '' && originalProcessing < today;
+
   /* Returns the first blocking date error, or null when the dates are valid.
      Shared by the imperative validate() (page-level Save runs this BEFORE
      committing any line) and trySave (defence-in-depth on the header write). */
@@ -1529,10 +1540,10 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
       return 'Processing Date and Delivery Date must be set together.\n\n' +
         'Either fill in BOTH dates, or leave BOTH empty.';
     }
-    if (form.processingDate && form.processingDate < today) {
+    if (form.processingDate && form.processingDate < today && form.processingDate !== originalProcessing) {
       return 'Processing Date cannot be in the past — pick today or a future date.';
     }
-    if (form.customerDeliveryDate && form.customerDeliveryDate < today) {
+    if (form.customerDeliveryDate && form.customerDeliveryDate < today && form.customerDeliveryDate !== originalDelivery) {
       return 'Delivery Date cannot be in the past — pick today or a future date.';
     }
     return null;
@@ -1733,8 +1744,9 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Processing Date</span>
               <input type="date" className={styles.fieldInput} value={form.processingDate}
-                disabled={inputsDisabled}
-                min={today}
+                disabled={inputsDisabled || processingLocked}
+                title={processingLocked ? 'Processing date has passed — locked.' : undefined}
+                min={processingLocked ? undefined : today}
                 onChange={(e) => set('processingDate', e.target.value)}
                 style={datesXor && !form.processingDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>

@@ -1452,20 +1452,6 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   let body: Record<string, unknown>;
   try { body = (await c.req.json()) as Record<string, unknown>; } catch { return c.json({ error: 'invalid_json' }, 400); }
 
-  /* Commander 2026-05-28 — Processing Date + Delivery Date can only be today or
-     a future date. Reject a past value on edit too (today = Malaysia UTC+8). */
-  {
-    const todayMY = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-    const proc = body['internalExpectedDd'];
-    const deliv = body['customerDeliveryDate'];
-    if (typeof proc === 'string' && proc && proc < todayMY) {
-      return c.json({ error: 'processing_date_past', reason: 'Processing Date cannot be in the past — today or a future date only.' }, 400);
-    }
-    if (typeof deliv === 'string' && deliv && deliv < todayMY) {
-      return c.json({ error: 'delivery_date_past', reason: 'Delivery Date cannot be in the past — today or a future date only.' }, 400);
-    }
-  }
-
   const map: Array<[string, string]> = [
     ['debtorCode', 'debtor_code'], ['debtorName', 'debtor_name'], ['agent', 'agent'],
     ['salesLocation', 'sales_location'], ['ref', 'ref'], ['poDocNo', 'po_doc_no'],
@@ -1576,6 +1562,27 @@ mfgSalesOrders.patch('/:docNo', async (c) => {
   // in the audit log. Only fields actually in the patch body are compared.
   const beforeCols = map.map(([, snake]) => snake).concat(['status']).join(', ');
   const { data: before } = await sb.from('mfg_sales_orders').select(beforeCols).eq('doc_no', docNo).maybeSingle();
+
+  /* Commander 2026-05-28 / Owner 2026-06-01 — Processing & Delivery Date may
+     only be today or a future date, BUT an already-past value the edit does NOT
+     change is grandfathered through. The old rule rejected ANY past value, so an
+     SO whose Processing Date had simply elapsed could never be edited again
+     (e.g. to postpone the Delivery Date). Now only a genuinely NEW past value is
+     rejected — an unchanged elapsed date passes. today = Malaysia UTC+8. */
+  {
+    const beforeRow = (before as unknown as Record<string, unknown> | null);
+    const todayMY = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const proc = body['internalExpectedDd'];
+    const deliv = body['customerDeliveryDate'];
+    const origProc = (beforeRow?.['internal_expected_dd'] as string | null) ?? null;
+    const origDeliv = (beforeRow?.['customer_delivery_date'] as string | null) ?? null;
+    if (typeof proc === 'string' && proc && proc < todayMY && proc !== origProc) {
+      return c.json({ error: 'processing_date_past', reason: 'Processing Date cannot be in the past — today or a future date only.' }, 400);
+    }
+    if (typeof deliv === 'string' && deliv && deliv < todayMY && deliv !== origDeliv) {
+      return c.json({ error: 'delivery_date_past', reason: 'Delivery Date cannot be in the past — today or a future date only.' }, 400);
+    }
+  }
 
   /* Owner 2026-05-31 — Partial header lock. Once a non-cancelled DO / SI exists,
      the IDENTITY + VALUE fields that downstream documents snapshot (customer,
