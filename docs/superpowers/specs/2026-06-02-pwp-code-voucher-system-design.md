@@ -105,6 +105,7 @@ CREATE TABLE pwp_codes (
   source_doc_no      text,                          -- trigger SO (set at Confirm)
   redeemed_doc_no    text,                          -- reward SO that consumed it (set when USED)
   redeemed_item_code text,                          -- the reward SKU it paid for (audit)
+  customer_id        uuid REFERENCES customers(id) ON DELETE SET NULL,  -- C2-binding: set when the code turns AVAILABLE at the trigger SO; a cross-order code redeems ONLY for this customer (see §8.8)
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -136,15 +137,16 @@ Body: `{ cartLineKey, triggerItemCode, qty }`. Server:
 ### 5b. Free on remove — `DELETE /pwp-codes/reserve?cartLineKey=...`
 Delete all `RESERVED` codes for that `cart_line_key` (never touch `USED`/`AVAILABLE`).
 
-### 5c. Validate / redeem-preview — `GET /pwp-codes/:code?rewardItemCode=...`
-Returns `{ valid, reason, pwpPriceSen, rewardCategory }`:
+### 5c. Validate / redeem-preview — `GET /pwp-codes/:code?rewardItemCode=...&customerId=...`
+Returns `{ valid, reason, pwpPriceSen, rewardCategory, customerMatches }`:
 - valid iff code exists AND status ∈ {RESERVED (owned by caller's cart) , AVAILABLE} AND the reward product's model ∈ the code's `eligible_reward_model_ids` (or empty) AND the reward product's category === code's `reward_category` AND that reward SKU's `pwp_price_sen > 0`.
-- `pwpPriceSen` = the reward SKU's `pwp_price_sen` (per size). Used = false here (preview only).
+- `pwpPriceSen` = the reward SKU's `pwp_price_sen` (per size). `used = false` here (preview only).
+- `customerMatches`: for an AVAILABLE (cross-order) code, true iff the passed `customerId` (or name+phone) equals the code's `customer_id` (§8.8). When no customer passed yet (cart-stage Apply) → return the price anyway (optimistic); the handover gate (§6e) enforces the match once the customer is entered. RESERVED codes (same-cart) → `customerMatches` n/a (true).
 
 ### 5d. Consume at order Confirm — inside `POST /mfg-sales-orders`
 Replace/extend the current order-level PWP pass (`resolvePwp` over cart lines, ~L930):
 1. For each reward line carrying a `pwpCode` (from the cart line / handover variants): validate the code (5c rules) + the reward model eligibility. If valid → `pwpBaseSen = reward.pwp_price_sen` → priced PWP (existing `recomputeFromSnapshot(... pwpBaseSen)` path). Mark that code `USED` (atomic `UPDATE ... WHERE code=? AND status IN ('RESERVED','AVAILABLE')`; if 0 rows → already used → reprice full → drift).
-2. For RESERVED codes owned by this order's triggers that were NOT applied: set `status='AVAILABLE'`, `source_doc_no = this SO`. (Carried-forward voucher.)
+2. For RESERVED codes owned by this order's triggers that were NOT applied: set `status='AVAILABLE'`, `source_doc_no = this SO`, **`customer_id = this SO's customer`** (binds the voucher to the earner — §8.8). (Carried-forward voucher.)
 3. For RESERVED codes applied in this order: `status='USED'`, `source_doc_no = this SO`, `redeemed_doc_no = this SO`, `redeemed_item_code`.
 4. Anti-tamper: a reward line claiming PWP price with no valid/redeemable code → server prices full → drift → 400 (POS-tablet). Same drift gate as today.
 - **Atomicity:** the mark-USED must be a conditional UPDATE so two concurrent orders can't both consume one code.
@@ -174,6 +176,9 @@ The confirmation screen + printed SO (`apps/pos/src/pages/Confirmed.tsx` / `Sale
 ### 6d. `pos-handover-so.ts`
 Thread `pwpCode` into the SO item variants (alongside the existing `pwp` flag) so the server's consume step (5d) knows which code each reward line claims.
 
+### 6e. Handover customer-match gate (cross-order codes) — Chairman C2
+At the handover customer-entry step (`apps/pos/src/pages/Handover.tsx`, the "Next" after name/phone): if any reward line carries a **cross-order (AVAILABLE)** `pwpCode`, validate the entered customer against the code's `customer_id` (server check — extend `GET /pwp-codes/:code` to take a `customerId`/name+phone and return `customerMatches`). **Mismatch → block Next with "PWP code invalid for this customer" + revert that line to full price** (clear its `pwpCode`/`pwp` flag → LIVE TOTAL updates). **Match → proceed.** Same-cart (RESERVED) codes skip this gate (same order's customer). This is also re-checked server-side at Confirm (5d) — the handover gate is the UX; the server is authoritative.
+
 ---
 
 ## 7. Phase split
@@ -191,7 +196,12 @@ Thread `pwpCode` into the SO item variants (alongside the existing `pwp` flag) s
 5. **Abandoned carts:** RESERVED codes with no SO linger. Add a reaper (cron) OR free them when the cart is cleared. (Phase 1: free on cart clear + on logout; a TTL reaper can come later — `log()` the policy.)
 6. **Reward `pwp_price_sen = 0`** → code can't apply (no PWP price) → Apply Failed / toggle hidden.
 7. **Rule deleted/deactivated after codes generated:** the code snapshotted `reward_category` + `eligible_reward_model_ids`, so it still redeems (Chairman can decide if deactivating a rule should also invalidate outstanding codes — default: outstanding codes honour their snapshot).
-8. **Code entered cross-order that belongs to a different customer:** Phase 1 — any holder of the code can redeem (it's printed on their SO). If customer-binding is wanted, add `customer_id` to the code + check at redeem (flag as an open question).
+8. **Customer binding (LOCKED — Chairman 2026-06-02):** a cross-order (AVAILABLE) code is bound to the customer who earned it. `customer_id` is set when the code turns AVAILABLE at the trigger SO Confirm (customer is known by then). Redemption flow:
+   - (1) At add-to-cart, "Apply" / "Insert PWP Code" succeeds and shows the PWP price **even though no customer is entered yet** (optimistic — customer isn't collected until handover).
+   - (2) At handover, the salesperson fills the customer name / phone (first line) and clicks **Next** → the server validates the entered customer matches the code's `customer_id`.
+   - (3) **Mismatch → error "PWP code invalid for this customer" → the PWP price auto-reverts to full** (clear the code/PWP flag on that line). Cannot Continue until resolved.
+   - (4) **Match → no error, PWP price holds, Continue.**
+   - Same-cart (RESERVED→USED in ONE order) needs no match (it's the same order's customer). Match key = `customer_id` (resolve the handover customer to a `customers` row; fall back to name+phone match if the customer has no id yet).
 
 ---
 
@@ -216,7 +226,7 @@ Thread `pwpCode` into the SO item variants (alongside the existing `pwp` flag) s
 
 ## 11. Open questions for the implementer / Chairman
 1. **Abandoned RESERVED codes** — free on cart-clear/logout only (Phase 1), or add a TTL reaper cron? (Recommend: free on clear/logout now; reaper later.)
-2. **Customer-binding of AVAILABLE vouchers** — anyone with the code string can redeem (simple, Phase 1), or bind to `customer_id`? (Recommend: open redemption Phase 1; revisit.)
+2. ✅ **RESOLVED (Chairman 2026-06-02) — customer-bound.** See §8.8 + §6e: code binds to the earning customer at the trigger SO; cross-order redemption is validated at the handover "Next" step (mismatch → error + revert price to full). `pwp_codes.customer_id` added. Apply still works pre-customer (optimistic); the gate fires when the customer is entered.
 3. **Sofa Combo trigger (Phase 2)** — confirm the rule's sofa trigger references combo ids; confirm sofa-as-reward needs `pwp_price_sen` wired into the recompute's selling path.
 4. **One trigger matching multiple rules** — generate codes per matching rule (could over-issue). Acceptable, or restrict a trigger to one rule?
 
