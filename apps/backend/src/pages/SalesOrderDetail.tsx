@@ -511,6 +511,35 @@ export const SalesOrderDetail = () => {
     });
   }, []);
 
+  /* Fix A — Live header→line Delivery Date cascade. The backend already
+     re-cascades non-overridden lines on Save, but inside the edit view the
+     line rows didn't "jump" until that Save round-trip. This pushes the new
+     header date into every line draft that hasn't been manually overridden
+     the moment the user changes the header Delivery Date input — matching the
+     New SO behaviour. Overridden lines keep their own value untouched. The
+     pending add-draft (if any) also follows when it hasn't been overridden. */
+  const cascadeDeliveryDateToLines = useCallback((date: string) => {
+    const next = date || null;
+    setEditingDrafts((prev) => {
+      let changed = false;
+      const out: Record<string, SoLineDraft> = {};
+      for (const [id, d] of Object.entries(prev)) {
+        if (!d.lineDeliveryDateOverridden && d.lineDeliveryDate !== next) {
+          out[id] = { ...d, lineDeliveryDate: next };
+          changed = true;
+        } else {
+          out[id] = d;
+        }
+      }
+      return changed ? out : prev;
+    });
+    setAddingDraft((prev) =>
+      prev && !prev.lineDeliveryDateOverridden && prev.lineDeliveryDate !== next
+        ? { ...prev, lineDeliveryDate: next }
+        : prev,
+    );
+  }, []);
+
   /* Per-row delete. On a persisted line this fires the delete mutation
      immediately (and drops the row's draft on success) — deletes are not
      deferred to the page-level Save because there's no "undo a removed line"
@@ -923,6 +952,7 @@ export const SalesOrderDetail = () => {
         saving={updateHeader.isPending}
         locked={isLocked}
         isEditing={isEditing}
+        onDeliveryDateChange={cascadeDeliveryDateToLines}
       />
 
       {/* PR #140 — Commander 2026-05-26: "这个 multi address、customer PO
@@ -1263,6 +1293,11 @@ type CustomerCardProps = {
       card is disabled and the per-card Save button is hidden — the parent
       page renders Edit/Save/Cancel in its own header. */
   isEditing?: boolean;
+  /** Fix A — Live header→line cascade. Fires on every keystroke of the
+      Delivery Date input (not just Save) so the parent can immediately push
+      the new date into every line that hasn't been manually overridden. The
+      parent owns the line drafts, so the card just reports the new value. */
+  onDeliveryDateChange?: (date: string) => void;
 };
 
 /* Task #99 (UI perf) — Wrap the CustomerCard in memo so parent page state
@@ -1279,6 +1314,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
   saving: _saving,
   locked = false,
   isEditing = false,
+  onDeliveryDateChange,
 }, ref) => {
   // PR #39 — POS-aligned customer + address form. Maps:
   //   • address1, address2 → free-text lines (POS "Address line 1/2")
@@ -1755,7 +1791,7 @@ const CustomerCardInner = forwardRef<CustomerCardHandle, CustomerCardProps>(({
               <input type="date" className={styles.fieldInput} value={form.customerDeliveryDate}
                 disabled={inputsDisabled}
                 min={today}
-                onChange={(e) => set('customerDeliveryDate', e.target.value)}
+                onChange={(e) => { set('customerDeliveryDate', e.target.value); onDeliveryDateChange?.(e.target.value); }}
                 style={datesXor && !form.customerDeliveryDate ? { borderColor: 'var(--c-festive-b, #B8331F)' } : undefined} />
             </label>
             <label className={styles.field}>

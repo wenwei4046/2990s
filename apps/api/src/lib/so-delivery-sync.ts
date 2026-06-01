@@ -21,18 +21,33 @@ export type SoLineQty = { id: string; qty: number };
 export type DoLineQty = { soItemId: string | null; qty: number };
 
 /** Pure coverage decision. `soLines` must already EXCLUDE cancelled SO lines;
- *  `doLines` should EXCLUDE lines belonging to cancelled DOs. Returns true iff
- *  every SO line's delivered quantity (summed across DOs) meets or exceeds its
+ *  `doLines` should EXCLUDE lines belonging to cancelled DOs; `returnLines`
+ *  (optional) should EXCLUDE lines belonging to cancelled Delivery Returns.
+ *  Returns true iff every SO line's NET delivered quantity
+ *  (Σ delivered across DOs − Σ returned across DRs) meets or exceeds its
  *  ordered qty. An SO with no lines is never "fully covered" (nothing shipped
- *  ≠ delivered). */
-export function isSoFullyCovered(soLines: SoLineQty[], doLines: DoLineQty[]): boolean {
+ *  ≠ delivered).
+ *
+ *  Wei Siang 2026-06-01 (DR 3B): a Delivery Return brings goods back, so the
+ *  order is NO LONGER fully delivered — it owes that qty again and must
+ *  re-open (DELIVERED → READY_TO_SHIP) so a fresh DO can re-ship it. Netting
+ *  the return here is what drives that release in syncSoDeliveredFromDo. */
+export function isSoFullyCovered(
+  soLines: SoLineQty[],
+  doLines: DoLineQty[],
+  returnLines: DoLineQty[] = [],
+): boolean {
   if (soLines.length === 0) return false;
-  const deliveredByLine = new Map<string, number>();
+  const netByLine = new Map<string, number>();
   for (const d of doLines) {
     if (!d.soItemId) continue;
-    deliveredByLine.set(d.soItemId, (deliveredByLine.get(d.soItemId) ?? 0) + (d.qty ?? 0));
+    netByLine.set(d.soItemId, (netByLine.get(d.soItemId) ?? 0) + (d.qty ?? 0));
   }
-  return soLines.every((l) => (deliveredByLine.get(l.id) ?? 0) >= l.qty);
+  for (const r of returnLines) {
+    if (!r.soItemId) continue;
+    netByLine.set(r.soItemId, (netByLine.get(r.soItemId) ?? 0) - (r.qty ?? 0));
+  }
+  return soLines.every((l) => (netByLine.get(l.id) ?? 0) >= l.qty);
 }
 
 // SO statuses we may auto-advance to DELIVERED. Anything already at
@@ -86,15 +101,38 @@ export async function syncSoDeliveredFromDo(
       // Cumulative delivered qty per SO line across ALL non-cancelled DOs that
       // reference these SO items (a line may be split over several DOs). This is
       // re-derived live every call, so a cancelled DO drops out of the sum.
+      // Keep the DO line id so returns can be traced back to the SO line below.
       const { data: doItemsRaw } = await sb
         .from('delivery_order_items')
-        .select('so_item_id, qty, delivery_orders!inner(status)')
+        .select('id, so_item_id, qty, delivery_orders!inner(status)')
         .in('so_item_id', soLines.map((l) => l.id))
         .neq('delivery_orders.status', 'CANCELLED');
-      const doLines = ((doItemsRaw ?? []) as Array<{ so_item_id: string | null; qty: number }>)
-        .map((d) => ({ soItemId: d.so_item_id, qty: Number(d.qty) }));
+      const doItemRows = (doItemsRaw ?? []) as Array<{ id: string; so_item_id: string | null; qty: number }>;
+      const doLines = doItemRows.map((d) => ({ soItemId: d.so_item_id, qty: Number(d.qty) }));
 
-      const fullyCovered = isSoFullyCovered(soLines, doLines);
+      // DR 3B — Σ returned qty per SO line across all non-cancelled Delivery
+      // Returns. A DR line carries do_item_id (the DO line it returns), so map
+      // do_item_id → so_item_id via the active DO lines we just loaded, then sum
+      // qty_returned per SO line. Netting these out of coverage is what lets a
+      // return re-open a fully-delivered SO (DELIVERED → READY_TO_SHIP).
+      const doLineToSoItem = new Map<string, string | null>();
+      for (const d of doItemRows) doLineToSoItem.set(d.id, d.so_item_id);
+      const returnLines: DoLineQty[] = [];
+      const doLineIds = doItemRows.map((d) => d.id);
+      if (doLineIds.length > 0) {
+        const { data: drItemsRaw } = await sb
+          .from('delivery_return_items')
+          .select('do_item_id, qty_returned, delivery_returns!inner(status)')
+          .in('do_item_id', doLineIds)
+          .neq('delivery_returns.status', 'CANCELLED');
+        for (const r of (drItemsRaw ?? []) as Array<{ do_item_id: string | null; qty_returned: number }>) {
+          if (!r.do_item_id) continue;
+          const soItemId = doLineToSoItem.get(r.do_item_id) ?? null;
+          returnLines.push({ soItemId, qty: Number(r.qty_returned ?? 0) });
+        }
+      }
+
+      const fullyCovered = isSoFullyCovered(soLines, doLines, returnLines);
 
       // Decide the reconciled status. No-op when it already matches (idempotent).
       let target: string | null = null;
@@ -104,7 +142,7 @@ export async function syncSoDeliveredFromDo(
 
       const note = target === 'DELIVERED'
         ? 'Auto: Delivery Order fully covers this SO'
-        : 'Auto: Delivery Order no longer fully covers this SO (DO cancelled / reduced) — released';
+        : 'Auto: SO no longer fully delivered (DO cancelled / reduced, or goods returned) — released to re-ship';
       await sb.from('mfg_sales_orders')
         .update({ status: target, updated_at: new Date().toISOString() })
         .eq('doc_no', docNo);

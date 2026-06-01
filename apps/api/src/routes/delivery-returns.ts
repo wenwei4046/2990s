@@ -453,6 +453,64 @@ async function resyncInventoryForReturn(sb: any, deliveryReturnId: string, perfo
       await recomputeSoStockAllocation(sb);
     } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-dr-resync failed:', e); }
   }
+  /* DR 3B — the return qty just changed (line edited / deleted / cancelled), so
+     the SO's NET delivered (delivered − returned) changed too. Reconcile the
+     SO's stored delivery status: a return un-covers a fully-delivered SO and
+     releases it DELIVERED → READY_TO_SHIP so the operator can re-ship; a
+     cancelled/reduced return re-covers it back to DELIVERED. Run unconditionally
+     (not gated on inventory writes) so the status always tracks the lines. */
+  await reopenSoFromReturn(sb, deliveryReturnId, performedBy);
+}
+
+/* DR 3B (Wei Siang 2026-06-01) — reconcile the Sales Order(s) behind a Delivery
+   Return. A return brings goods back, so the SO is no longer fully delivered and
+   must re-open (DELIVERED → READY_TO_SHIP) to owe + re-ship that qty;
+   syncSoDeliveredFromDo now nets returns out of coverage, so calling it here is
+   what drives the release (and the reverse — re-advance to DELIVERED — when a
+   return is cancelled/reduced). Resolves the SO doc no(s) two ways: the DR
+   header's delivery_order_id → delivery_orders.so_doc_no (fast path), falling
+   back to tracing the DR lines' do_item_id → DO line → so_item → doc_no when the
+   header link is missing. Best-effort + idempotent; safe to call on every DR
+   mutation (create / add-line / edit / delete / cancel). */
+async function reopenSoFromReturn(
+  sb: any,
+  deliveryReturnId: string,
+  actorId?: string | null,
+): Promise<void> {
+  try {
+    const docs = new Set<string>();
+    const { data: drHdr } = await sb.from('delivery_returns')
+      .select('delivery_order_id').eq('id', deliveryReturnId).maybeSingle();
+    const doId = (drHdr as { delivery_order_id: string | null } | null)?.delivery_order_id ?? null;
+    if (doId) {
+      const { data: doHdr } = await sb.from('delivery_orders')
+        .select('so_doc_no').eq('id', doId).maybeSingle();
+      const so = (doHdr as { so_doc_no: string | null } | null)?.so_doc_no ?? null;
+      if (so) docs.add(so);
+    }
+    if (docs.size === 0) {
+      const { data: drItems } = await sb.from('delivery_return_items')
+        .select('do_item_id').eq('delivery_return_id', deliveryReturnId);
+      const doItemIds = [...new Set(((drItems ?? []) as Array<{ do_item_id: string | null }>)
+        .map((r) => r.do_item_id).filter((x): x is string => !!x))];
+      if (doItemIds.length > 0) {
+        const { data: doItems } = await sb.from('delivery_order_items')
+          .select('so_item_id').in('id', doItemIds);
+        const soItemIds = [...new Set(((doItems ?? []) as Array<{ so_item_id: string | null }>)
+          .map((r) => r.so_item_id).filter((x): x is string => !!x))];
+        if (soItemIds.length > 0) {
+          const { data: soItems } = await sb.from('mfg_sales_order_items')
+            .select('doc_no').in('id', soItemIds);
+          for (const r of (soItems ?? []) as Array<{ doc_no: string | null }>) {
+            if (r.doc_no) docs.add(r.doc_no);
+          }
+        }
+      }
+    }
+    if (docs.size === 0) return;
+    const { syncSoDeliveredFromDo } = await import('../lib/so-delivery-sync');
+    await syncSoDeliveredFromDo(sb, [...docs], actorId ?? null);
+  } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-delivered-sync] post-dr failed:', e); }
 }
 
 /* Commander 2026-05-30 (Phase B) — LINE-LEVEL, QUANTITY-BASED DO → Delivery
@@ -737,6 +795,11 @@ deliveryReturns.post('/', async (c) => {
     await recomputeSoStockAllocation(sb);
   } catch (e) { /* eslint-disable-next-line no-console */ console.error('[so-allocation] post-dr failed:', e); }
 
+  /* DR 3B (Wei Siang 2026-06-01) — returned goods mean the SO is no longer
+     fully delivered; re-open it (DELIVERED → READY_TO_SHIP) so a fresh DO can
+     re-ship the returned qty. Best-effort. */
+  await reopenSoFromReturn(sb, h.id, user.id);
+
   return c.json({ id: h.id, returnNumber: h.return_number }, 201);
 });
 
@@ -907,6 +970,11 @@ const convertDoLinesToReturn = async (c: any) => {
   // Goods received back → increase stock (idempotent).
   await increaseInventoryForReturn(sb, h.id, user.id);
 
+  /* DR 3B (Wei Siang 2026-06-01) — re-open the SO this return came from
+     (DELIVERED → READY_TO_SHIP) so the returned qty can be re-shipped on a
+     fresh DO. Best-effort. */
+  await reopenSoFromReturn(sb, h.id, user.id);
+
   return c.json({ id: h.id, returnNumber: h.return_number, lineCount: rows.length }, 201);
 };
 deliveryReturns.post('/from-do', convertDoLinesToReturn);
@@ -987,6 +1055,10 @@ deliveryReturns.post('/:id/items', async (c) => {
   const { data, error } = await sb.from('delivery_return_items').insert(row).select(ITEM).single();
   if (error) return c.json({ error: 'insert_failed', reason: error.message }, 500);
   await recomputeTotals(sb, id);
+  /* Adding a return line must put its goods back into stock, same as the line
+     edit/delete paths below — otherwise on-hand stays short by the added qty.
+     Idempotent + best-effort (resync targets net-IN = sum of current lines). */
+  try { await resyncInventoryForReturn(sb, id, c.get('user')?.id); } catch { /* best-effort */ }
   return c.json({ item: data }, 201);
 });
 

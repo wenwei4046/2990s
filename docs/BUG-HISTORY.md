@@ -4,6 +4,104 @@ Newest first. Each entry: what broke, root cause, fix (commit), how it was caugh
 
 ---
 
+## BUG-2026-06-01-007 — A Delivery Return left its Sales Order stuck at "Delivered"
+
+**Symptom:** When goods came back on a Delivery Return, the original Sales Order
+stayed marked DELIVERED — as if nothing had been returned. The order no longer
+"owed" those goods, so the operator could not raise a fresh Delivery Order to
+re-ship the returned items. (This is the return-for-replacement case — the customer
+is getting the goods again, not a refund.)
+
+**Root cause:** The header-status reconciler `syncSoDeliveredFromDo`
+(`so-delivery-sync.ts`) decided "fully delivered" purely from delivered DO
+quantities and never subtracted Delivery Return quantities. The Delivery Return
+create/convert paths also never asked the SO to re-check its status at all — so even
+a full return left the SO latched at DELIVERED.
+
+**Fix:** (branch `feat/dr-reopen-so-3b`)
+- `isSoFullyCovered` now takes a third `returnLines` argument and checks NET
+  delivered per SO line (Σ delivered − Σ returned ≥ ordered). A full return drops
+  net below ordered, so the line is no longer "fully covered."
+- `syncSoDeliveredFromDo` now loads non-cancelled Delivery Return quantities
+  (do_item_id → SO line) and feeds them in, making the decision bidirectional: a
+  return releases DELIVERED → READY_TO_SHIP; cancelling/reducing the return
+  re-advances it to DELIVERED.
+- `delivery-returns.ts` gained `reopenSoFromReturn`, wired to every DR mutation
+  (single create, bulk convert-from-DO, line edit/delete, cancel) so the SO status
+  always tracks the live return state.
+- Added 6 unit tests (full / partial / zero return, over-delivery absorption,
+  return-then-reship, null-line guards) — 14/14 pass.
+
+**Caught by:** Owner spec — a return must re-open the order so it can re-ship.
+Chose Option B (re-ship) over Option A (refund-and-done).
+
+---
+
+## BUG-2026-06-01-006 — Changing a posted GRN's warehouse stranded the stock
+
+**Symptom:** Editing a posted Goods Receipt's warehouse only rewrote the header
+field. The stock it had already received stayed sitting in the OLD warehouse while
+the GRN now claimed the new one — so inventory-by-warehouse was wrong and the SO
+allocator could pick from a warehouse that had nothing.
+
+**Root cause:** The GRN header PATCH wrote `warehouse_id` like any other field,
+with no inventory movement to physically relocate the received stock.
+
+**Fix:** (branch `feat/dr-reopen-so-3b`, `grns.ts` PATCH) When a POSTED GRN's
+warehouse changes, physically move the stock: an OUT of the old warehouse + an IN to
+the new one for every accepted line, carrying the same cost + source-PO batch. Same
+downstream-consumption guard as cancel — if the old-warehouse stock was already
+shipped/used, block with 409 (can't relocate phantom qty). Re-walks SO allocation
+after, since per-warehouse buckets changed.
+
+**Caught by:** Owner report — changing the GRN's warehouse should move the goods
+with it.
+
+---
+
+## BUG-2026-06-01-005 — A new high-priority SO didn't immediately regress the loser
+
+**Symptom:** When a new Sales Order claimed on-hand stock a lower-priority order had
+been counting on, the new order flipped to READY but the loser stayed at READY until
+some later event re-walked allocation — a stale "ready" that wasn't.
+
+**Root cause:** The SO-create allocation re-walk was scoped to just the new doc
+(`recomputeSoStockAllocation(sb, docNo)`), so it never touched the order that just
+lost its stock.
+
+**Fix:** (branch `feat/dr-reopen-so-3b`, `mfg-sales-orders.ts`) SO create now runs a
+GLOBAL re-walk (`recomputeSoStockAllocation(sb)`, no doc scope) so the loser
+regresses from READY in the same pass. (Sofa lines keep their exact-batch dye-lot
+lock — readiness still requires the full PO-batch qty to match, never a partial, to
+avoid colour-mismatch / 色差.)
+
+**Caught by:** Allocation-consistency review during the sofa-batch correction.
+
+---
+
+## BUG-2026-06-01-004 — SO delivery-date edit didn't cascade live; DO dispatch warehouse was hidden / inconsistently labeled
+
+**Symptom:**
+1. On the Edit Sales Order screen, changing the header Delivery Date did not update
+   the per-line delivery dates until after Save — the operator couldn't see the
+   effect while editing.
+2. The New Delivery Order form showed no dispatch-warehouse field at all, and the
+   detail pages labeled it inconsistently ("Warehouse" on the lines vs "Sales
+   Location" in the header).
+
+**Fix:** (branch `feat/dr-reopen-so-3b`)
+- `SalesOrderDetail.tsx`: a header Delivery Date change now cascades live to every
+  non-overridden line draft (and the add-line draft) in the edit view, before Save.
+- `DeliveryOrderNew.tsx`: added a read-only "Sales Location" field (the dispatch
+  warehouse carried from the SO; read-only because stock never crosses warehouses).
+- `DeliveryOrderDetail.tsx` + `DeliveryReturnDetail.tsx`: renamed the per-line
+  "Warehouse" column to "Sales Location" so the term matches the SO/DO header.
+
+**Caught by:** Owner requests — live date cascade, and "DO 看不到仓库 / 叫法不统一,
+统一叫 Sales Location".
+
+---
+
 ## BUG-2026-06-01-003 — An SO became un-editable once its Processing Date elapsed
 
 **Symptom:** On a confirmed Sales Order whose Processing Date was yesterday or
