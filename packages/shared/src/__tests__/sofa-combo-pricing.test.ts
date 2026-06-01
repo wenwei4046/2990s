@@ -9,6 +9,7 @@ import {
   comboSlotsKey,
   buildComboLabel,
   comboChargedPrices,
+  findDuplicateCombo,
   type SofaComboRow,
 } from '../sofa-combo-pricing';
 
@@ -354,5 +355,43 @@ describe('comboChargedPrices', () => {
   });
   it('null / undefined cost → just the set selling entries', () => {
     expect(comboChargedPrices({ '24': 380000 }, null)).toEqual({ '24': 380000 });
+  });
+});
+
+describe('findDuplicateCombo (combo dup guard)', () => {
+  const mk = (over: Partial<SofaComboRow>): SofaComboRow => ({
+    id: 'x', baseModel: 'Annsa', modules: [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']],
+    tier: 'PRICE_1', customerId: null, pricesByHeight: {}, label: null,
+    effectiveFrom: '2026-01-01', deletedAt: null, ...over,
+  });
+
+  it('matches an identical slot-set ignoring slot + intra-slot order', () => {
+    const existing = [mk({ id: 'a', modules: [['1A-RHF', '1A-LHF'], ['1A-LHF', '1A-RHF']] })];
+    const hit = findDuplicateCombo('Annsa', [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']], existing);
+    expect(hit?.id).toBe('a');
+  });
+
+  it('singleton build re-add is caught (the in-configurator path)', () => {
+    const existing = [mk({ id: 'b', modules: [['1A-LHF'], ['1A-RHF']] })];
+    expect(findDuplicateCombo('Annsa', [['1A-RHF'], ['1A-LHF']], existing)?.id).toBe('b');
+  });
+
+  it('different base model → no match', () => {
+    const existing = [mk({ id: 'c', baseModel: 'Lotti' })];
+    expect(findDuplicateCombo('Annsa', [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']], existing)).toBeNull();
+  });
+
+  it('different module-set → no match', () => {
+    const existing = [mk({ id: 'd', modules: [['2S']] })];
+    expect(findDuplicateCombo('Annsa', [['1S']], existing)).toBeNull();
+  });
+
+  it('soft-deleted rows are ignored', () => {
+    const existing = [mk({ id: 'e', deletedAt: '2026-02-01' })];
+    expect(findDuplicateCombo('Annsa', [['1A-LHF', '1A-RHF'], ['1A-LHF', '1A-RHF']], existing)).toBeNull();
+  });
+
+  it('empty list → null', () => {
+    expect(findDuplicateCombo('Annsa', [['1S']], [])).toBeNull();
   });
 });
