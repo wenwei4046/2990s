@@ -131,3 +131,48 @@ describe('resolvePwp', () => {
   });
 });
 
+// Chairman 2026-06-02 — MULTIPLE differentiated rules for the SAME category pair
+// (MATTRESS→BEDFRAME): "2990 AKKA unlocks Aria" + "2990 KETTA unlocks Orient".
+describe('resolvePwp — multiple differentiated rules', () => {
+  const RULE_A: PwpRule = { triggerCategory: 'MATTRESS', triggerEligibleModelIds: ['akka'], rewardCategory: 'BEDFRAME', eligibleRewardModelIds: ['aria'], qtyPerTrigger: 1 };
+  const RULE_B: PwpRule = { triggerCategory: 'MATTRESS', triggerEligibleModelIds: ['ketta'], rewardCategory: 'BEDFRAME', eligibleRewardModelIds: ['orient'], qtyPerTrigger: 1 };
+
+  it('each reward is granted by its own rule', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'akka'),
+      line(1, 'MATTRESS', 'ketta'),
+      line(2, 'BEDFRAME', 'aria', { pwp: true }),
+      line(3, 'BEDFRAME', 'orient', { pwp: true }),
+    ];
+    expect(grantedIdx([RULE_A, RULE_B], lines)).toEqual([2, 3]);
+  });
+
+  it('a reward is NOT granted when only the OTHER rule’s trigger was bought', () => {
+    // Bought AKKA (rule A trigger) but want Orient (rule B reward) → no.
+    const lines = [
+      line(0, 'MATTRESS', 'akka'),
+      line(1, 'BEDFRAME', 'orient', { pwp: true }),
+    ];
+    expect(grantedIdx([RULE_A, RULE_B], lines)).toEqual([]);
+  });
+
+  it('the matching reward IS granted; the mismatched one is not', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'akka'),
+      line(1, 'BEDFRAME', 'aria', { pwp: true }),   // rule A → granted
+      line(2, 'BEDFRAME', 'orient', { pwp: true }),  // rule B trigger absent → not granted
+    ];
+    expect(grantedIdx([RULE_A, RULE_B], lines)).toEqual([1]);
+  });
+
+  it('binds the reward to its rule’s trigger (triggerRef)', () => {
+    const lines = [
+      line(0, 'MATTRESS', 'akka', { name: '2990 AKKA-FIRM' }),
+      line(1, 'MATTRESS', 'ketta', { name: '2990 KETTA-SOFT' }),
+      line(2, 'BEDFRAME', 'orient', { pwp: true }),
+    ];
+    const grants = resolvePwp([RULE_A, RULE_B], lines);
+    expect(grants.find((g) => g.idx === 2)?.triggerRef?.name).toBe('2990 KETTA-SOFT');
+  });
+});
+
