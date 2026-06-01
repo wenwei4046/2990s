@@ -89,7 +89,7 @@ import {
   type ProductSupplierRow,
 } from '../lib/products/mfg-products-queries';
 import { useFabricTrackings } from '../lib/products/fabric-queries';
-import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useFabricLibrary, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow } from '../lib/queries';
+import { useDeliveryFeeConfig, useUpdateDeliveryFeeConfig, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useUpdateFabricTierAddonConfig, useUpdateFabricLibraryTier, useAddons, type AddonRow, type FabricLibraryRow } from '../lib/queries';
 import {
   useProductModels,
   useProductModel,
@@ -752,6 +752,20 @@ const ModelAllowedOptionsDrawer = ({
   const model = useProductModel(modelId);
   const updateModel = useUpdateProductModel();
   const masterCfg = useMaintenanceConfig('master');
+  // Fabric pool for the FABRICS section (sofa + bedframe). Synced from the
+  // Backend Fabric Converter (migration 0127): series = fabric_library, colours
+  // = fabric_colours. On/off is per colour, stored as allowed_options.fabrics.
+  const fabricLib = useFabricLibrary();
+  const fabricColours = useFabricColours();
+  const coloursBySeries = useMemo(() => {
+    const mp = new Map<string, { colourId: string; label: string }[]>();
+    for (const c of (fabricColours.data ?? [])) {
+      const arr = mp.get(c.fabricId) ?? [];
+      arr.push({ colourId: c.colourId, label: c.label });
+      mp.set(c.fabricId, arr);
+    }
+    return mp;
+  }, [fabricColours.data]);
 
   /* Draft of the allowed_options under edit. Initialised once when the row
      resolves; the chip toggles mutate this draft, Save writes it back. */
@@ -869,6 +883,15 @@ const ModelAllowedOptionsDrawer = ({
           pool={specialPool}
           isTicked={(v) => isTicked('specials', v)}
           onToggle={(v) => toggle('specials', v)}
+        />
+      )}
+
+      {(isSofa || isBedframe) && (
+        <FabricAllowedSection
+          series={(fabricLib.data ?? []).map((f) => ({ id: f.id, label: f.label }))}
+          coloursBySeries={coloursBySeries}
+          isTicked={(code) => isTicked('fabrics', code)}
+          onToggle={(code) => toggle('fabrics', code)}
         />
       )}
 
@@ -993,6 +1016,66 @@ const AllowedOptionsSection = ({
     </div>
   </div>
 );
+
+/* FABRICS section for the Modular drawer (Chairman 2026-06-01). On/off is per
+   COLOUR (the single authority), grouped under its SERIES header. The chip text
+   is the colour NAME (e.g. "Sand"); the toggle value is the colour CODE
+   (fabric_colours.colour_id, e.g. "CG-002") stored in allowed_options.fabrics. */
+const FabricAllowedSection = ({
+  series,
+  coloursBySeries,
+  isTicked,
+  onToggle,
+}: {
+  series: { id: string; label: string }[];
+  coloursBySeries: Map<string, { colourId: string; label: string }[]>;
+  isTicked: (code: string) => boolean;
+  onToggle: (code: string) => void;
+}) => {
+  const withColours = series.filter((s) => (coloursBySeries.get(s.id) ?? []).length > 0);
+  return (
+    <div style={{ marginBottom: 'var(--space-4)' }}>
+      <div style={{
+        fontFamily: 'var(--font-button)', fontSize: 'var(--fs-12)', fontWeight: 600,
+        letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-muted)',
+        marginBottom: 'var(--space-2)',
+      }}>Fabrics</div>
+      {withColours.length === 0 ? (
+        <div style={{ fontSize: 'var(--fs-13)', color: 'var(--fg-muted)' }}>
+          No fabrics yet — add them in the Backend Fabric Converter.
+        </div>
+      ) : withColours.map((s) => (
+        <div key={s.id} style={{ marginBottom: 'var(--space-3)' }}>
+          <div style={{ fontSize: 'var(--fs-12)', fontWeight: 600, color: 'var(--c-ink)', marginBottom: 'var(--space-1)' }}>{s.label}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+            {(coloursBySeries.get(s.id) ?? []).map((c) => {
+              const on = isTicked(c.colourId);
+              return (
+                <button
+                  key={c.colourId}
+                  type="button"
+                  onClick={() => onToggle(c.colourId)}
+                  title={c.colourId}
+                  style={{
+                    padding: '4px 12px', borderRadius: 999,
+                    border: `1px solid ${on ? 'var(--c-orange)' : 'var(--line)'}`,
+                    background: on ? 'var(--c-orange)' : 'var(--c-cream)',
+                    color: on ? 'var(--c-paper)' : 'var(--c-ink)',
+                    fontFamily: 'var(--font-sans)', fontSize: 'var(--fs-13)', fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
+                  }}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 /* ════════════════════════════════════════════════════════════════════════
    SKU Master tab

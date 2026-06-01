@@ -348,6 +348,28 @@ export const useFabricColours = () =>
     },
   });
 
+// Enabled fabric COLOUR codes for a Model (allowed_options.fabrics — the codes
+// ticked in the Modular drawer). Sofa reads them off useSofaCustomizerData;
+// this hook is the bedframe (and any-category) equivalent, joining mfg_products
+// → product_models. Returns [] for legacy UUID products (no Model link).
+export const useModelAllowedFabricCodes = (productId: string | undefined) =>
+  useQuery({
+    enabled: !!productId,
+    queryKey: ['model-allowed-fabrics', productId],
+    queryFn: async (): Promise<string[]> => {
+      if (!productId || !productId.startsWith('mfg-')) return [];
+      const { data, error } = await supabase
+        .from('mfg_products')
+        .select('product_models:model_id ( allowed_options )')
+        .eq('id', productId)
+        .maybeSingle();
+      if (error) throw error;
+      const modelRel = (data as { product_models?: { allowed_options?: { fabrics?: string[] } } | null } | null)
+        ?.product_models;
+      return modelRel?.allowed_options?.fabrics ?? [];
+    },
+  });
+
 // Per-Model fabric availability + surcharge.
 // mfg-{12hex} products have no rows in product_fabrics (UUID FK). Their
 // fabrics are configured via product_models.allowed_options.fabrics and
@@ -866,9 +888,10 @@ export interface SofaCustomizerData {
   legHeights:   string[];
   /** Special options ticked. */
   specials:     string[];
-  /** Fabric IDs commander ticked on this Model (from allowed_options.fabrics).
-   *  Empty = no fabrics configured → POS hides the fabric picker. Caller
-   *  joins against useFabricLibrary() to resolve label + surcharge. */
+  /** Fabric COLOUR codes ticked on this Model (allowed_options.fabrics, e.g.
+   *  'CG-002'). Empty = no fabrics enabled → picker shows "No fabrics enabled".
+   *  The Configurator maps these → their series via fabric_colours, then filters
+   *  the colour swatches to this set. */
   fabricIds:    string[];
   /** The Model row that resolved (so caller can show Model name / branding). */
   modelId:      string;

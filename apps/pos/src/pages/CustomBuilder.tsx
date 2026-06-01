@@ -25,7 +25,7 @@ import {
   type SofaProductPricing,
 } from '@2990s/shared';
 import { useCart, type SofaConfigSnapshot } from '../state/cart';
-import { useProductFabrics, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData } from '../lib/queries';
+import { useProductFabrics, useFabricLibrary, useFabricColours, useFabricTierAddonConfig, useCreateSofaCombo, useCreateSofaQuickPick, type SofaCustomizerData, type ProductFabricRow } from '../lib/queries';
 import { useStaff, isGlobalCurator } from '../lib/staff';
 import { useAddPersonalQuickPick } from '../lib/personal-quick-picks';
 import { FabricColourPicker, type FabricSelection } from '../components/FabricColourPicker';
@@ -904,10 +904,29 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
   }, [analyses]);
 
   const allClosed = analyses.every((a) => a.closed);
-  // Fabric + colour (spec 2026-05-24) — required before Add-to-Cart, surcharge
-  // folds onto each sofa line.
+  // Fabric + colour — required before Add-to-Cart; the tier Δ folds onto each
+  // sofa line. Fabrics are a SERIES/COLOUR library synced from the Backend
+  // Fabric Converter (migration 0127). mfg sofas read the Model's enabled colour
+  // codes from modelCustomizer.fabricIds (allowed_options.fabrics); legacy UUID
+  // products keep their product_fabrics rows. Empty → "No fabrics enabled".
+  const fabricLib = useFabricLibrary();
+  const fabricColours = useFabricColours();
   const productFabrics = useProductFabrics(productId);
   const addonCfgQ = useFabricTierAddonConfig();  // migration 0124 — fabric-tier Δ
+  const fabricCodes = useMemo<string[]>(
+    () => (productId?.startsWith('mfg-') ? (modelCustomizer?.fabricIds ?? []) : []),
+    [productId, modelCustomizer],
+  );
+  const fabricSeriesRows = useMemo<ProductFabricRow[]>(() => {
+    if (!productId?.startsWith('mfg-')) return productFabrics.data ?? [];
+    const enabled = new Set(fabricCodes);
+    const seriesWithColour = new Set(
+      (fabricColours.data ?? []).filter((c) => enabled.has(c.colourId)).map((c) => c.fabricId),
+    );
+    return (fabricLib.data ?? [])
+      .filter((f) => seriesWithColour.has(f.id))
+      .map((f) => ({ fabricId: f.id, active: f.active, surcharge: f.defaultSurcharge }));
+  }, [productId, productFabrics.data, fabricCodes, fabricColours.data, fabricLib.data]);
   const [fabricSel, setFabricSel] = useState<FabricSelection | null>(null);
   /* Commander 2026-05-28 — "Save as Quick Pick" modal. Lets the staff
      persist the current cell composition as a new Sofa Combo Pricing row
@@ -1145,12 +1164,13 @@ export const CustomBuilder = ({ productId, productName, pricing, depth, cells, s
           })()}
         </div>
         <FabricColourPicker
-          productFabrics={productFabrics.data ?? []}
+          productFabrics={fabricSeriesRows}
           fabricId={fabricSel?.fabricId ?? null}
           colourId={fabricSel?.colourId ?? null}
           onChange={setFabricSel}
           category="SOFA"
           addonConfig={addonCfgQ.data ?? null}
+          enabledColourIds={productId?.startsWith('mfg-') ? fabricCodes : null}
         />
       </aside>
 
