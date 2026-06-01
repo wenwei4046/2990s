@@ -294,8 +294,10 @@ describe('recomputeFromSnapshot — combo charges SELLING, not cost', () => {
   };
   // What loadActiveSofaCombos supplies = SELLING merged over cost: RM 3800.
   const combo = {
+    // PRICE_1 — the base tier the sofa runs at (Chairman 2026-06-01); the gate's
+    // computeSofaSellingSen queries combos at PRICE_1, matching production.
     id: 'cmb', baseModel: 'Booqit', modules: [['2A-LHF', '2A-RHF'], ['L-LHF', 'L-RHF']],
-    tier: 'PRICE_2' as const, customerId: null,
+    tier: 'PRICE_1' as const, customerId: null,
     pricesByHeight: { '24': 380000 }, // SELLING
     label: null, effectiveFrom: '2026-01-01', deletedAt: null,
   };

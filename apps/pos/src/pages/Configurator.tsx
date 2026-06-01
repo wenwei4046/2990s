@@ -534,11 +534,15 @@ export const Configurator = () => {
     seatUpgradeLabel: product.data?.seat_upgrade_label ?? null,
     seatUpgradeFootrest: product.data?.seat_upgrade_footrest ?? true,
     combos: sofaCombosQ.data ?? [],
-    /* fabricTier reads from the selected fabric's tier when available.
-       Today the POS fabric model doesn't carry a tier per row (combos with
-       tier=null match any tier, so the default is fine). When fabric tier
-       lands on productFabrics, wire it here. */
-    fabricTier: 'PRICE_2',
+    /* Combo + seat-base lookup tier. Chairman 2026-06-01: the whole sofa runs
+       at P1 — the module seat-height SELLING map is built at PRICE_1 (see
+       depthSellingMap above) and EVERY sofa_combo_pricing row is authored at
+       PRICE_1, so the combo match MUST query PRICE_1 too or no combo ever
+       applies (the bug: combos were queried at PRICE_2 and silently never
+       matched → 1A-only Quick Picks priced RM0). The fabric-tier difference is
+       a separate flat add-on (PR #407), NOT a base-tier switch, so this stays
+       fixed at PRICE_1. */
+    fabricTier: 'PRICE_1',
     comboHeight: activeDepth,
     /* Empty = wildcard match. The combos fed in are ALREADY scoped to this
        Model by useSofaCombos(base_model), and the server drift gate

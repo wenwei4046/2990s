@@ -377,7 +377,13 @@ export const computeSofaSellingSen = (
     bundles: [],
     reclinerUpgradePrice: 0,
     combos,
-    fabricTier: 'PRICE_2',
+    // Match combos at PRICE_1 — the base tier the whole sofa runs at (Chairman
+    // 2026-06-01). Module seat prices load at PRICE_1 and every combo is
+    // authored at PRICE_1, so the POS (Configurator sofaPricing) and this
+    // server drift gate MUST agree on PRICE_1; querying PRICE_2 here would make
+    // the server price à-la-carte while the POS applied the combo → false drift
+    // reject on POST /orders.
+    fabricTier: 'PRICE_1',
     comboHeight: String(depth),
     baseModel: '',
   };
